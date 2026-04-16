@@ -1,0 +1,38 @@
+name: Release Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.repository }}-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: 'Knauf-Group/ct-shared-workflows/.github/workflows/release-nextjs.yaml@v2.9.0'
+    with:
+      repo-name-override: agentic-karl
+      checkout-submodules: false
+      project-key-vault-name: kv-ct-ea-nonprod-rocket
+      project-shared-key-vault-name: kv-ct-shared-devops-001
+      acr-password-key-vault-secret-name: ea-nonprod-ACR-PASSWORD
+      acr-registry-name: acrcteanonprodacr
+      namespace: rocket-media
+      config-repository: Knauf-Group/ct-externalagency-configs
+      argocd-password-key-vault-secret-name: ea-nonprod-ARGOCD
+      argocd-domain: argocd-ea-non-prod.knauf.digital
+      version-badge-directory: './docs/versions'
+      deployment-config-directory: ./rocket-media/non-prod/services/agentic-karl
+      download-coverage-report: true
+      coverage-folder-path: ./coverage
+      test-workflow-file-name: test_pipeline.yaml
+    secrets:
+      azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}

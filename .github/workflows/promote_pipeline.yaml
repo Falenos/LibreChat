@@ -1,0 +1,47 @@
+name: Promote Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-and-destination-environment:
+        type: choice
+        description: 'Source and destination environments for promotion'
+        required: true
+        default: 'dev → prod'
+        options:
+          - 'dev → prod'
+      version:
+        description: 'The version to promote. Only used when the version to promote is not the current one in the source environment'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.repository }}-release
+  cancel-in-progress: false
+
+jobs:
+  promote-dev-to-prod:
+    if: ${{ inputs.source-and-destination-environment == 'dev → prod' }}
+    uses: 'Knauf-Group/ct-shared-workflows/.github/workflows/promote-app-kubernetes.yaml@v2.9.0'
+    with:
+      app-name: agentic-karl
+      version: ${{ inputs.version }}
+      source-environment-key-vault-name: kv-ct-ea-nonprod-rocket
+      source-environment-argocd-password-key-vault-secret-name: ea-nonprod-ARGOCD
+      source-environment-argocd-domain: argocd-ea-non-prod.knauf.digital
+      source-environment-acr-registry-name: acrcteanonprodacr
+      namespace: rocket-media
+      destination-environment-acr-registry-name: acrcteeaprodacr
+      destination-environment-config-repository: Knauf-Group/ct-externalagency-configs
+      destination-environment-config-repository-app-directory: ./rocket-media/prod/services/agentic-karl
+      destination-environment-key-vault-name: kv-ct-ea-prod-rocket
+      destination-environment-argocd-password-key-vault-secret-name: ea-prod-ARGOCD
+      destination-environment-argocd-domain: argocd-ea-prod.knauf.digital
+      destination-environment: prod
+      version-badge-directory: './docs/versions'
+    secrets:
+      azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}

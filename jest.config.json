@@ -1,0 +1,27 @@
+{
+  "testEnvironment": "@happy-dom/jest-environment",
+  "transform": {
+    "^.+\\.(ts|tsx)$": [
+      "ts-jest",
+      {
+        "tsconfig": "tsconfig.jest.json"
+      }
+    ]
+  },
+  "moduleNameMapper": {
+    "^@/(.*)$": "<rootDir>/src/$1",
+    "\\.(css|less|scss|sass)$": "<rootDir>/src/__mocks__/styleMock.ts",
+    "\\.(jpg|jpeg|png|gif|webp|avif|ico|bmp|svg)$": "<rootDir>/src/__mocks__/fileMock.ts"
+  },
+  "testPathIgnorePatterns": ["<rootDir>/node_modules/", "<rootDir>/.next/"],
+  "collectCoverageFrom": [
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.d.ts",
+    "!src/**/layout.tsx",
+    "!src/__mocks__/**",
+    "!src/setupTests.ts"
+  ],
+  "coverageDirectory": "coverage",
+  "coverageReporters": ["text", "lcov", "clover"],
+  "coverageProvider": "v8"
+}

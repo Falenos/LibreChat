@@ -1,0 +1,11 @@
+changelog:
+  categories:
+    - title: 'Breaking Changes :bomb:'
+      labels:
+        - major-release
+    - title: 'Bug Fixes :bug:'
+      labels:
+        - patch-release
+    - title: 'New Features :tada:'
+      labels:
+        - '*'

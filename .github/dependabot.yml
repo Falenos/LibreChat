@@ -1,0 +1,53 @@
+version: 2
+
+registries:
+  npm-knauf:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: ${{ secrets.PUSH_PAT }}
+  github-knauf:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{ secrets.PUSH_PAT }}
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    registries:
+      - github-knauf
+    schedule:
+      interval: weekly
+    target-branch: main
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  - package-ecosystem: 'npm'
+    directory: '/'
+    registries:
+      - npm-knauf
+    schedule:
+      interval: 'weekly'
+    target-branch: main
+    open-pull-requests-limit: 10
+    versioning-strategy: increase-if-necessary
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - 'version-update:semver-major'
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: main
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - 'version-update:semver-major'
