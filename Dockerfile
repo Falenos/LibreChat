@@ -48,9 +48,10 @@ RUN \
     npm cache clean --force
 
 # Node API setup
-EXPOSE 3080
+EXPOSE 3000
 ENV HOST=0.0.0.0
-CMD ["npm", "run", "backend"]
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["npm", "run", "frontend"]
 
 # Optional: for client with nginx routing
 # FROM nginx:stable-alpine AS nginx-client
