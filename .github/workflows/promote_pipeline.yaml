@@ -30,17 +30,17 @@ jobs:
     with:
       app-name: agentic-karl
       version: ${{ inputs.version }}
-      source-environment-key-vault-name: kv-ct-ea-nonprod-rocket
-      source-environment-argocd-password-key-vault-secret-name: ea-nonprod-ARGOCD
-      source-environment-argocd-domain: argocd-ea-non-prod.knauf.digital
-      source-environment-acr-registry-name: acrcteanonprodacr
-      namespace: rocket-media
-      destination-environment-acr-registry-name: acrcteeaprodacr
-      destination-environment-config-repository: Knauf-Group/ct-externalagency-configs
-      destination-environment-config-repository-app-directory: ./rocket-media/prod/services/agentic-karl
-      destination-environment-key-vault-name: kv-ct-ea-prod-rocket
-      destination-environment-argocd-password-key-vault-secret-name: ea-prod-ARGOCD
-      destination-environment-argocd-domain: argocd-ea-prod.knauf.digital
+      source-environment-key-vault-name: kv-ct-shared-tools
+      source-environment-argocd-password-key-vault-secret-name: shared-dev-ARGOCD
+      source-environment-argocd-domain: argocd-shared-dev.knauf.digital
+      source-environment-acr-registry-name: acrctshared001
+      namespace: tools-non-prod
+      destination-environment-acr-registry-name: acrctshared001
+      destination-environment-config-repository: Knauf-Group/ct-shared-deployment-configs
+      destination-environment-config-repository-app-directory: ./dev/services/agentic-karl/agentic-karl
+      destination-environment-key-vault-name: kv-ct-sharedprod-tools
+      destination-environment-argocd-password-key-vault-secret-name: shared-prod-ARGOCD
+      destination-environment-argocd-domain: argocd-shared-prod.knauf.digital
       destination-environment: prod
       version-badge-directory: './docs/versions'
     secrets:

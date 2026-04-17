@@ -26,7 +26,7 @@ jobs:
       checkout-submodules: false
       build-app: true
       lint-code: true
-      project-key-vault-name: kv-ct-ea-nonprod-rocket
+      project-key-vault-name: kv-ct-shared-tools
       test-command: 'npm run test:coverage'
       upload-coverage-report: true
       coverage-report-path: './coverage/lcov.info'
