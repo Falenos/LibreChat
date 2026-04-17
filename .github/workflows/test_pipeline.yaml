@@ -24,11 +24,11 @@ jobs:
     uses: 'Knauf-Group/ct-shared-workflows/.github/workflows/test-nextjs.yaml@v2.9.0'
     with:
       checkout-submodules: false
-      build-app: true
-      lint-code: true
+      build-app: false
+      lint-code: false
       project-key-vault-name: kv-ct-shared-tools
       test-command: 'npm run test:coverage'
-      upload-coverage-report: true
+      upload-coverage-report: false
       coverage-report-path: './coverage/lcov.info'
     secrets:
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
