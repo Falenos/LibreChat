@@ -51,7 +51,7 @@ RUN \
 EXPOSE 3000
 ENV HOST=0.0.0.0
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["npm", "run", "frontend"]
+CMD ["npm", "run", "backend"]
 
 # Optional: for client with nginx routing
 # FROM nginx:stable-alpine AS nginx-client
