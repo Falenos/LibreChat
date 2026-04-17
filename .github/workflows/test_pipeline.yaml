@@ -27,7 +27,7 @@ jobs:
       build-app: false
       lint-code: false
       project-key-vault-name: kv-ct-shared-tools
-      test-command: 'npm run test:coverage'
+      test-command: 'npm run test:all'
       upload-coverage-report: false
       coverage-report-path: './coverage/lcov.info'
     secrets:

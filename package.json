@@ -66,6 +66,7 @@
     "test:packages:data-provider": "cd packages/data-provider && npm run test:ci",
     "test:packages:data-schemas": "cd packages/data-schemas && npm run test:ci",
     "test:all": "npm run test:client && npm run test:api && npm run test:packages:api && npm run test:packages:data-provider && npm run test:packages:data-schemas",
+    "test:coverage": "echo 'no tests implemented yet'",
     "e2e:update": "playwright test --config=e2e/playwright.config.js --update-snapshots",
     "e2e:report": "npx playwright show-report e2e/playwright-report",
     "lint:fix": "eslint --fix \"{,!(node_modules|venv)/**/}*.{js,jsx,ts,tsx}\"",
