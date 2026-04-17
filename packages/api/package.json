@@ -58,7 +58,7 @@
     "@types/bun": "^1.2.15",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.2",
-    "@types/jest": "^29.5.2",
+    "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/multer": "^1.4.13",
     "@types/node": "^20.3.0",
