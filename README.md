@@ -1,5 +1,7 @@
 <p align="center">
   <a href="https://librechat.ai">
+[![Dev Version](./docs/versions/dev-version.svg)](https://argocd-shared-dev.knauf.digital/applications/argocd/agentic-karl)
+
     <img src="client/public/assets/logo.svg" height="256">
   </a>
   <h1 align="center">
