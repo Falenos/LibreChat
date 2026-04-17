@@ -28,7 +28,7 @@ jobs:
       lint-code: false
       project-key-vault-name: kv-ct-shared-tools
       test-command: 'npm run test:coverage'
-      upload-coverage-report: false
+      upload-coverage-report: true
       coverage-report-path: './coverage/lcov.info'
     secrets:
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
