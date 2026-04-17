@@ -51,7 +51,7 @@ RUN \
 EXPOSE 3080
 ENV HOST=0.0.0.0
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["npm", "run", "backend"]
+CMD ["npm", "run", "frontend"]
 
 # Optional: for client with nginx routing
 # FROM nginx:stable-alpine AS nginx-client
