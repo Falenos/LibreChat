@@ -31,7 +31,7 @@ jobs:
       argocd-domain: argocd-shared-dev.knauf.digital
       version-badge-directory: './docs/versions'
       deployment-config-directory: ./dev/services/agentic-karl/agentic-karl
-      download-coverage-report: false
+      download-coverage-report: true
       coverage-folder-path: ./coverage
       test-workflow-file-name: test_pipeline.yaml
     secrets:
