@@ -26,7 +26,7 @@ interface:
     externalUrl: '/eula'
     openNewTab: true
     modalAcceptance: true
-  modelSelect: false
+  modelSelect: true
   parameters: true
   presets: true
   prompts:
