@@ -193,7 +193,7 @@ knauf/                                           # client overlay (Tier 5)
 ├── README.md
 ├── common/
 │   ├── agents-types.ts                          # KnaufPersonality + Zod schema (mirrors upstream common/agents-types.ts)
-│   └── constants.ts                             # KARL_PERSONALITY_PREFIX, KARL_AUTOGENERATE_SPEC_NAME, KNAUF_API_BASE, …
+│   └── constants.ts                             # KARL_PERSONALITY_PREFIX, KARL_AUTOGENERATE_SPEC_NAME, KARL_DEFAULT_PERSONALITY_NAME
 ├── components/
 │   └── Agents/                                  # mirrors upstream components/SidePanel/Agents/
 │       ├── KnaufAgentConfig.tsx                 # mount-point seam target — body of upstream's AgentPanel
@@ -205,10 +205,12 @@ knauf/                                           # client overlay (Tier 5)
 │       ├── CapabilitySwitch.tsx                 # row + upstream <Switch>
 │       ├── VariablesPopover.tsx                 # + Variables popover (upstream specialVariables list)
 │       └── AutoGenerateButton.tsx               # ✦ Auto-generate / Polish & expand
-└── data-provider/
+└── data-provider/                              # mirrors upstream packages/data-provider/src/
+    ├── api-endpoints.ts                         # URL builders (apiBaseUrl-aware)
+    ├── data-service.ts                          # request.* wrappers + wire-format types
     └── Agents/                                  # mirrors upstream data-provider/Agents/
         ├── usePersonalities.ts                  # filter modelSpecs by KARL_PERSONALITY_PREFIX
-        └── useAutogeneratePrompt.ts             # POST /api/knauf/autogenerate-prompt
+        └── useAutogeneratePrompt.ts             # react-query mutation around dataService.postAutogeneratePrompt
 
 api/server/routes/knauf/                         # server overlay (additive, isolated)
 ├── index.js                                     # Express router
@@ -438,7 +440,7 @@ The overlay mirrors upstream's layer split (`components/`, `data-provider/`, `co
 
 What we landed (originally listed as "easy wins" — done now):
 
-- ✓ **Constants file** — [common/constants.ts](common/constants.ts) holds `KARL_PERSONALITY_PREFIX`, `KARL_DEFAULT_PERSONALITY_NAME`, `KARL_AUTOGENERATE_SPEC_NAME`, `KNAUF_API_BASE`, `KNAUF_AUTOGENERATE_ENDPOINT`. No more magic strings sprinkled across files.
+- ✓ **Constants file** — [common/constants.ts](common/constants.ts) holds the librechat.yaml-tied identifiers (`KARL_PERSONALITY_PREFIX`, `KARL_DEFAULT_PERSONALITY_NAME`, `KARL_AUTOGENERATE_SPEC_NAME`). HTTP route URLs live separately in [data-provider/api-endpoints.ts](data-provider/api-endpoints.ts), mirroring upstream's split between `api-endpoints.ts` (URL builders) and the rest. No more magic strings sprinkled across files.
 - ✓ **Capability registry** — [components/Agents/capabilities.ts](components/Agents/capabilities.ts) holds `KNAUF_CAPABILITIES` with `{ id, label, description, icon, isEnabled, readFromForm, applyToForm }`. KnaufAgentConfig iterates the registry; per-capability behaviour (the Browse-the-internet → `web_search` write) lives next to its UI metadata.
 - ✓ **Personality typed against a Zod schema** — [common/agents-types.ts](common/agents-types.ts) defines `knaufPersonalitySchema` and `KnaufPersonality`. `usePersonalities` calls `safeParse` on each modelSpec entry; warns in dev when an entry fails validation.
 - ✓ **YAML-gated capability visibility** — Each capability's `isEnabled(enabled[])` decides whether to render given upstream's `endpoints.agents.capabilities` array. Adding `execute_code` to YAML auto-shows a "Code interpreter" row once a registry entry exists.
