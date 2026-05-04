@@ -6,6 +6,12 @@ version: 1.3.8
 
 cache: true
 
+# Only expose tools we have server-side API keys for.
+# All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
+includedTools:
+  - "image_gen_oai"
+  - "calculator"
+
 memory:
   disabled: false
   personalize: true
@@ -18,7 +24,7 @@ memory:
     model: "gpt-5.4"
 
 interface:
-  customWelcome: 'Welcome to LibreChat! Enjoy your experience.'
+  customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
   privacyPolicy:
     externalUrl: '/privacy'
     openNewTab: true
@@ -27,7 +33,7 @@ interface:
     openNewTab: true
     modalAcceptance: true
   modelSelect: true
-  parameters: true
+  parameters: false
   presets: true
   prompts:
     use: true
@@ -37,27 +43,33 @@ interface:
   bookmarks: true
   memories: true
   multiConvo: true
+  # Hide the chat-input "Search the Web" badge (BYOK Serper/Firecrawl path).
+  # Web search is provided by the model via OpenAI's built-in web_search tool;
+  # users enable it through the model parameters toggle or via a Skill preset.
+  webSearch: false
+  # Hide the chat-input "Run Code" badge (LIBRECHAT_CODE_API_KEY BYOK path).
+  runCode: false
+  # Keep the chat-input "File Search" badge for ephemeral RAG over uploads.
+  fileSearch: true
   agents:
     use: true
     create: true
-    share: false
-    public: false
+    share: true
+    public: true
   peoplePicker:
     users: true
     groups: true
     roles: true
   marketplace:
-    use: false
+    use: true
   fileCitations: true
 
 registration:
   socialLogins: ['openid']
 
-actions:
-  allowedDomains:
-    - 'swapi.dev'
-    - 'librechat.ai'
-    - 'google.com'
+# Agent Actions are intentionally not exposed in the simplified flow.
+# Re-introduce `actions.allowedDomains` here when a curated integrations
+# catalogue (Confluence, Jira, SharePoint, ...) is shipped.
 
 fileConfig:
   endpoints:
@@ -65,6 +77,19 @@ fileConfig:
       fileLimit: 5
 
 endpoints:
+
+  # Restrict the agent builder to the simple, platform-managed capabilities.
+  # - file_search uses the platform RAG service (RAG_API_URL); no user keys.
+  # - tools allows curated built-in tools to be added later.
+  # Excluded on purpose:
+  #   web_search  -> handled at the model level via OpenAI's built-in tool
+  #                  (see modelSpecs below and the model parameters toggle).
+  #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
+  #                  -> hidden from end users to reduce configuration burden.
+  agents:
+    capabilities:
+      - file_search
+      - tools
 
   azureOpenAI:
     titleModel: 'gpt-4o'
@@ -94,9 +119,10 @@ modelSpecs:
   enforce: false
   prioritize: false
   list:
+    # General-purpose Karl. Default option, no extra capabilities enabled.
     - name: 'karl'
       label: 'KARL'
-      default: false
+      default: true
       description: 'KARL GPT for the Knauf Group'
       preset:
         endpoint: 'azureOpenAI'
@@ -106,7 +132,7 @@ modelSpecs:
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
-        promptPrefix: |
+        promptPrefix: &karl_prompt |
           You are a CorporateGPT named KARL for the Knauf Group (a multinational, family-owned company based in Iphofen, Germany, well known for drywall gypsum boards, founded in 1932).
           Use the context as your learned knowledge to better answer the user. In your response, follow these guidelines.
 
@@ -125,3 +151,118 @@ modelSpecs:
           Files: Do not suggest or offer to create, export, or generate any files other than images (including PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP/archives, audio, and video). Do not ask the user whether they want you to generate a file. If a user requests a non-image file, explain that file generation is not supported and provide the content inline in chat or concise steps for creating it using common tools. Only generate images when explicitly requested, using the available image tool; otherwise, respond as text within the chat.
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
+
+    # Web Researcher: enables OpenAI's built-in web_search tool at the model
+    # level. Setting useResponsesApi: true is required by Azure/OpenAI to
+    # expose the web_search tool (see packages/api/src/endpoints/openai/llm.ts).
+    - name: 'karl-web'
+      label: 'KARL · Web Researcher'
+      default: false
+      description: 'Searches the live web for up-to-date information and cites sources.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        web_search: true
+        useResponsesApi: true
+        greeting: |
+          Hi! I'm KARL with web search enabled. Ask me anything — I'll look it up and cite the sources I used.
+        promptPrefix: *karl_prompt
+
+    # Document Q&A: prompts the user to upload files; pair with the chat
+    # File Search badge or create an agent with knowledge files for full RAG.
+    - name: 'karl-docs'
+      label: 'KARL · Document Q&A'
+      default: false
+      description: 'Answers questions strictly from your uploaded documents.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        greeting: |
+          Hi! Upload your documents (drag & drop into the chat) and toggle File Search. I'll answer using only their content and cite the sources.
+        promptPrefix: *karl_prompt
+
+    # Writer & Editor: pure prompt skill for drafting and editing copy.
+    - name: 'karl-writer'
+      label: 'KARL · Writer & Editor'
+      default: false
+      description: 'Drafts and edits text in a clear, professional tone.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        greeting: |
+          Hi! I'm here to help you write and edit. Share a draft or tell me what you need.
+        promptPrefix: *karl_prompt
+
+    # Knauf personalities for the agent builder. Filtered client-side by the
+    # `karl-personality-` name prefix in
+    # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
+    # into the new agent's `model_parameters` at create time.
+    - name: 'karl-personality-precise'
+      label: 'Precise'
+      default: false
+      description: 'Sticks to facts. Short and exact.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        reasoning_effort: high
+        promptPrefix: *karl_prompt
+    - name: 'karl-personality-balanced'
+      label: 'Balanced'
+      default: false
+      description: 'Thoughtful and well-rounded.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        promptPrefix: *karl_prompt
+    - name: 'karl-personality-creative'
+      label: 'Creative'
+      default: false
+      description: 'Explores ideas. More expressive.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
+        reasoning_effort: low
+        additional_instructions: |
+          When the answer would benefit from breadth, surface multiple options
+          or angles before settling on one.
+        promptPrefix: *karl_prompt
+
+    # Internal modelSpec used by the agent builder's ✦ Autogenerate Prompt
+    # button. The route at api/server/routes/knauf/autogeneratePrompt.js
+    # picks this up by name. `preset.model` selects the deployment (kept on
+    # gpt-4o because instruction drafting doesn't benefit from heavy reasoning
+    # and gpt-4o is cheap+fast). `preset.promptPrefix` is the system message
+    # — admins can tune the drafter's style without a code deploy. The user
+    # message is built dynamically from the agent-builder state.
+    - name: 'karl-autogenerate-prompt'
+      label: 'KARL · Autogenerate Prompt (internal)'
+      default: false
+      description: 'Used by the agent builder to draft system instructions.'
+      preset:
+        endpoint: 'azureOpenAI'
+        model: 'gpt-4o'
+        max_completion_tokens: 800
+        promptPrefix: |
+          You are helping a non-technical user write the system instructions
+          for an AI agent on KARL, an internal AI platform at Knauf.
+
+          Your job: read the agent's name, what it's for, its personality, the
+          things it can do, and any draft the user has started — then return
+          friendly, concrete system instructions for that agent.
+
+          Style rules:
+          - Refer to the agent in the second person ("You are…").
+          - Plain English. No markdown headings or bullets — flowing short
+            paragraphs only.
+          - Under 180 words.
+          - Match the personality's tone (precise / balanced / creative).
+          - Naturally weave in when to use what the agent can do.
+          - If the user has provided a draft, keep their intent and voice;
+            polish and expand without changing the meaning.
+          - The input lists "Available variables" — substitution tokens like
+            {{current_date}} that the platform replaces at chat time. Use
+            them only when temporal awareness or audience framing genuinely
+            helps (e.g. "Today is {{current_date}}…" for a research agent).
+            Do not invent new tokens; do not include them as decoration.
+          - Return only the instructions text — no preamble, no quotes, no
+            markdown wrapping.
