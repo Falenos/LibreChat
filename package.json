@@ -61,7 +61,7 @@
     "e2e:login": "npx playwright codegen --save-storage=e2e/auth.json http://localhost:3080/login",
     "e2e:github": "act -W .github/workflows/playwright.yml --secret-file my.secrets",
     "test:client": "cd client && npm run test:ci",
-    "test:api": "cd api && npm run test:ci",
+    "test:api": "cd api && npm run test:ci -- --forceExit",
     "test:packages:api": "cd packages/api && npm run test:ci",
     "test:packages:data-provider": "cd packages/data-provider && npm run test:ci",
     "test:packages:data-schemas": "cd packages/data-schemas && npm run test:ci",
