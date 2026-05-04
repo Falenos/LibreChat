@@ -47,13 +47,13 @@ interface:
     use: true
     create: true
     share: true
-    public: false
+    public: true
   peoplePicker:
     users: true
     groups: true
     roles: true
   marketplace:
-    use: false
+    use: true
   fileCitations: true
 
 registration:
