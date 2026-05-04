@@ -1,13 +1,7 @@
 /**
- * Thin HTTP wrappers for Knauf-only routes. Mirrors upstream's
- * packages/data-provider/src/data-service.ts: each export combines an
- * `endpoints.*` URL builder with the shared `request` module so we
- * inherit the JSON content-type handling, the 401-refresh interceptor,
- * and the auth header set on the axios singleton.
- *
- * Wire-format types live here (alongside the call that owns them) so
- * the react-query hook becomes pure glue and consumers above it never
- * need to know how the body is shaped.
+ * Going through `request` keeps these calls on the same
+ * 401-refresh interceptor, JSON content-type handling, and Authorization
+ * header that upstream's dataService relies on.
  */
 import { request } from 'librechat-data-provider';
 import * as endpoints from './api-endpoints';
@@ -16,6 +10,7 @@ export interface AutogeneratePromptRequest {
   agent: {
     name: string;
     description: string;
+    category: string;
     personality: { label: string; description: string };
     capabilities: string[];
     knowledgeFileCount: number;
