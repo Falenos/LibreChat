@@ -1,4 +1,8 @@
-# Copilot Code Review Instructions — agentic-karl
+---
+applyTo: "**"
+---
+
+# Code Review — agentic-karl
 
 This is a thin fork of LibreChat. Reviews must enforce fork hygiene above all else.
 

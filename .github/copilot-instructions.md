@@ -73,19 +73,8 @@ npm run test:api       # API tests only (uses --forceExit)
 | `.env` | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch, auth providers |
 | `.nvmrc` | Node.js version (v24 for local dev; Dockerfile uses node:20 for production) |
 
-## CI Workflows
-
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| `test_pipeline.yaml` | PR to main | Runs all tests via shared workflow + SonarCloud |
-| `seam-validator.yml` | PR to main | Validates `[knauf]` markers ↔ SEAMS.md |
-| `upstream-release-watcher.yml` | Weekday cron + manual | Creates issues when upstream has new releases |
-| `release_pipeline.yaml` | Push to main | Docker build → ACR → ArgoCD |
-| `cleanup-gh-cache.yml` | PR close | Cleans GitHub Actions cache |
-
 ## Known Gotchas
 
-- **API tests hang without `--forceExit`** — open DB handles in test teardown (upstream issue)
 - **`packages/*` must be built before tests** — `Cannot find module 'librechat-data-provider'` means you need `npm run build:packages`
-- **API tests need ~4GB heap on CI** — `NODE_OPTIONS="--max-old-space-size=6144"` is set in the test pipeline
+- **API tests need `--forceExit`** — open DB handles in test teardown (upstream issue)
 - **Our `v*` tags overlap upstream's** — use `knauf/base-*` tags for upstream version tracking
