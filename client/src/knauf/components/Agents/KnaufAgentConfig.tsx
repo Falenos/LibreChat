@@ -36,7 +36,7 @@ import AgentTool from '~/components/SidePanel/Agents/AgentTool';
 import MCPTools from '~/components/SidePanel/Agents/MCPTools';
 import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
 import { useGetAgentFiles } from '~/data-provider';
-import { useLocalize, useVisibleTools } from '~/hooks';
+import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -94,6 +94,7 @@ export default function KnaufAgentConfig() {
   const fileMap = useFileMapContext();
   const { showToast } = useToastContext();
   const personalities = usePersonalities();
+  const { categories } = useAgentCategories();
   const autogenerate = useAutogeneratePrompt();
   // YAML-gated capabilities — `endpoints.agents.capabilities` from
   // librechat.yaml. Each capability in the registry decides via its
@@ -269,16 +270,25 @@ export default function KnaufAgentConfig() {
       const t = regularTools?.find((rt) => rt.pluginKey === id);
       return t?.name ?? id;
     });
+    const categoryValue = getValues('category') ?? '';
+    const categoryLabel =
+      categories.find((c) => c.value === categoryValue)?.label ?? categoryValue;
     autogenerate.mutate(
       {
-        name: getValues('name') ?? '',
-        description: getValues('description') ?? '',
-        personality: picked,
-        capabilityLabels,
-        knowledgeFileCount: knowledge_files.length,
+        agent: {
+          name: getValues('name') ?? '',
+          description: getValues('description') ?? '',
+          category: categoryLabel,
+          personality: {
+            label: picked?.label ?? '',
+            description: picked?.description ?? '',
+          },
+          capabilities: capabilityLabels,
+          knowledgeFileCount: knowledge_files.length,
+          tools: toolNames,
+          mcpServers: mcpServerNames ?? [],
+        },
         currentDraft: getValues('instructions') ?? '',
-        tools: toolNames,
-        mcpServers: mcpServerNames ?? [],
       },
       {
         onSuccess: ({ text }) =>

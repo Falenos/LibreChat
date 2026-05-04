@@ -21,7 +21,7 @@
  * rejected with a clear error.
  *
  * Request body: validated by `autogeneratePromptSchema` below. Nested:
- * `{ agent: { name, description, personality: { label, description },
+ * `{ agent: { name, description, category, personality: { label, description },
  *   capabilities, knowledgeFileCount, tools, mcpServers }, currentDraft }`.
  * Defence in depth — every string field is bounded so the prompt is a
  * fixed-shape input. The `tools` and `mcpServers` arrays carry display
@@ -50,6 +50,7 @@ const autogeneratePromptSchema = z.object({
   agent: z.object({
     name: z.string().max(256).default(''),
     description: z.string().max(512).default(''),
+    category: z.string().max(80).default(''),
     personality: z
       .object({
         label: z.string().max(64).default(''),
@@ -69,6 +70,7 @@ function buildUserMessage(input) {
   const { agent, currentDraft } = input;
   const name = agent.name.trim() || 'this agent';
   const description = agent.description.trim();
+  const category = agent.category.trim();
   const personalityLabel = agent.personality.label.trim();
   const personalityDescription = agent.personality.description.trim();
   const capabilities = agent.capabilities;
@@ -76,6 +78,7 @@ function buildUserMessage(input) {
   const tools = agent.tools;
   const mcpServers = agent.mcpServers;
 
+  const categoryLine = category ? `Category: ${category}` : '';
   const personalityLine = personalityLabel
     ? personalityDescription
       ? `Personality: ${personalityLabel} — ${personalityDescription}`
@@ -107,6 +110,7 @@ function buildUserMessage(input) {
   const lines = [
     `Agent name: ${name}`,
     descLine,
+    categoryLine,
     personalityLine,
     capLine,
     knowledgeLine,
