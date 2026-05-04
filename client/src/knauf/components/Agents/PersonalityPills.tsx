@@ -16,11 +16,11 @@ export default function PersonalityPills({
   personalities,
   value,
   onChange,
-}: {
+}: Readonly<{
   personalities: KnaufPersonality[];
   value: string;
   onChange: (name: string) => void;
-}) {
+}>) {
   if (personalities.length === 0) {
     return null;
   }

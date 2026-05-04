@@ -35,9 +35,9 @@ const variableOptions: VariableOption[] = Object.keys(specialVariables).map(
 
 export default function VariablesPopover({
   onPick,
-}: {
+}: Readonly<{
   onPick: (token: string) => void;
-}) {
+}>) {
   const localize = useLocalize();
 
   return (

@@ -16,7 +16,7 @@
  * early-return) is preserved verbatim. When upstream FileSearch.tsx changes,
  * this file is the merge surface — diff it line-by-line.
  */
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Folder } from 'lucide-react';
 import * as Ariakit from '@ariakit/react';
 import { SharePointIcon, AttachmentIcon, DropdownPopup } from '@librechat/client';
@@ -30,13 +30,17 @@ import FileRow from '~/components/Chat/Input/Files/FileRow';
 import { useGetStartupConfig } from '~/data-provider';
 import { isEphemeralAgent } from '~/common';
 
+const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+  <div className="flex flex-wrap gap-2">{children}</div>
+);
+
 function KnaufFileSearch({
   agent_id,
   files: _files,
-}: {
+}: Readonly<{
   agent_id: string;
   files?: [string, ExtendedFile][];
-}) {
+}>) {
   const localize = useLocalize();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<Map<string, ExtendedFile>>(new Map());
@@ -103,17 +107,10 @@ function KnaufFileSearch({
     fileInputRef.current?.click();
   };
 
-  const handleLocalFileClick = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-    fileInputRef.current?.click();
-  };
-
   const dropdownItems = [
     {
       label: localize('com_files_upload_local_machine'),
-      onClick: handleLocalFileClick,
+      onClick: handleButtonClick,
       icon: <Folder className="icon-md" />,
     },
     {
@@ -143,7 +140,7 @@ function KnaufFileSearch({
           setFiles={setFiles}
           agent_id={agent_id}
           tool_resource={EToolResources.file_search}
-          Wrapper={({ children }) => <div className="flex flex-wrap gap-2">{children}</div>}
+          Wrapper={FileRowWrapper}
         />
         <div>
           {sharePointEnabled ? (

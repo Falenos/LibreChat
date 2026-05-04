@@ -23,11 +23,11 @@ import { useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
 import { isEphemeralAgent, type AgentForm } from '~/common';
-import { processAgentOption } from '~/utils';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
 import {
   cn,
   defaultTextProps,
+  processAgentOption,
   removeFocusOutlines,
 } from '~/utils';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
@@ -549,9 +549,9 @@ export default function KnaufAgentConfig() {
  */
 function CapabilityRow({
   capability,
-}: {
+}: Readonly<{
   capability: (typeof KNAUF_CAPABILITIES)[number];
-}) {
+}>) {
   const { control, getValues, setValue } = useFormContext<AgentForm>();
   // Subscribe to the form fields the registry might inspect, so this row
   // re-renders when the underlying state changes.

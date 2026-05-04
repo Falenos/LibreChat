@@ -13,20 +13,32 @@ export default function AutoGenerateButton({
   drafting,
   disabled,
   onClick,
-}: {
+}: Readonly<{
   hasDraft: boolean;
   drafting: boolean;
   disabled?: boolean;
   onClick?: () => void;
-}) {
+}>) {
   // Short labels that fit comfortably even when the side panel is at its
   // narrow setting. The Sparkles icon plus the title attribute carry the
   // long-form meaning when needed.
-  const label = drafting
-    ? 'Drafting…'
-    : hasDraft
-      ? 'Polish'
-      : 'Generate';
+  let label: string;
+  if (drafting) {
+    label = 'Drafting…';
+  } else if (hasDraft) {
+    label = 'Polish';
+  } else {
+    label = 'Generate';
+  }
+
+  let title: string;
+  if (drafting) {
+    title = 'Drafting…';
+  } else if (hasDraft) {
+    title = 'Polish what you wrote, using the personality and skills above.';
+  } else {
+    title = 'KARL will draft instructions for you. You can keep editing after.';
+  }
 
   const inert = drafting || disabled;
 
@@ -35,13 +47,7 @@ export default function AutoGenerateButton({
       type="button"
       onClick={onClick}
       disabled={inert}
-      title={
-        drafting
-          ? 'Drafting…'
-          : hasDraft
-            ? 'Polish what you wrote, using the personality and skills above.'
-            : 'KARL will draft instructions for you. You can keep editing after.'
-      }
+      title={title}
       className={cn(
         'flex h-7 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border-medium bg-surface-secondary px-2 text-sm text-text-primary transition-colors',
         inert ? 'cursor-not-allowed opacity-70' : 'hover:bg-surface-tertiary',

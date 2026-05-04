@@ -9,18 +9,17 @@
  */
 import * as HoverCard from '@radix-ui/react-hover-card';
 
-export default function KnaufInfoBadge({ tip }: { tip: string }) {
+export default function KnaufInfoBadge({ tip }: Readonly<{ tip: string }>) {
   return (
     <HoverCard.Root openDelay={120} closeDelay={80}>
       <HoverCard.Trigger asChild>
-        <span
-          role="img"
+        <button
+          type="button"
           aria-label="Info"
-          tabIndex={0}
           className="inline-flex h-3.5 w-3.5 cursor-help select-none items-center justify-center rounded-full border border-border-light text-[9px] font-bold leading-none text-text-secondary transition-colors hover:border-text-primary hover:text-text-primary focus:border-text-primary focus:text-text-primary focus:outline-none"
         >
           i
-        </span>
+        </button>
       </HoverCard.Trigger>
       <HoverCard.Portal>
         <HoverCard.Content

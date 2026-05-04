@@ -16,12 +16,12 @@ export default function KnaufSection({
   info,
   action,
   children,
-}: {
+}: Readonly<{
   title: string;
   info?: string;
   action?: ReactNode;
   children: ReactNode;
-}) {
+}>) {
   return (
     <div className="mb-6">
       <div className="mb-2 flex items-center justify-between gap-2">
