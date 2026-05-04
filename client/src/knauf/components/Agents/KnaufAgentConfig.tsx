@@ -40,6 +40,7 @@ import { useLocalize, useVisibleTools } from '~/hooks';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
+import KnaufInfoBadge from './KnaufInfoBadge';
 import KnaufSection from './KnaufSection';
 import PersonalityPills from './PersonalityPills';
 import VariablesPopover from './VariablesPopover';
@@ -367,7 +368,7 @@ export default function KnaufAgentConfig() {
           agent list once that comes online. */}
       <KnaufSection
         title={localize('com_ui_category')}
-        info="Categorises the agent for browsing and filtering. 'General' is the default; pick a more specific bucket if it fits."
+        info="Helps you find this agent later by topic. Pick the bucket that fits best, or leave it on General."
       >
         <AgentCategorySelector />
       </KnaufSection>
@@ -375,7 +376,7 @@ export default function KnaufAgentConfig() {
       {/* Personality */}
       <KnaufSection
         title="Personality"
-        info="Sets the agent’s tone — Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended. Each personality is a model preset configured in librechat.yaml."
+        info="Sets the agent's tone. Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended."
       >
         <PersonalityPills
           personalities={personalities}
@@ -390,7 +391,7 @@ export default function KnaufAgentConfig() {
       {visibleCapabilities.length > 0 ? (
         <KnaufSection
           title="What it can do"
-          info="Capabilities the agent uses while replying. Browse the internet activates the model’s built-in web search via OpenAI’s Responses API — no separate search-provider key needed. Other capabilities appear here when enabled in librechat.yaml."
+          info="Extra abilities the agent can use while replying, like searching the web for fresh information. Toggle each one on or off."
         >
           <div className="flex flex-col gap-2">
             {visibleCapabilities.map((cap) => (
@@ -405,7 +406,7 @@ export default function KnaufAgentConfig() {
           upstream FileSearch that omits the inner heading + checkbox. */}
       <KnaufSection
         title="Data Knowledge"
-        info="Reference documents the agent can search at chat time. Uploading a file enables document search; removing the last one disables it."
+        info="Documents the agent can read to answer questions. Upload files here. Search turns on automatically once you add the first one, and off again when you remove the last."
       >
         <KnaufFileSearch agent_id={agent_id} files={knowledge_files} />
       </KnaufSection>
@@ -416,7 +417,7 @@ export default function KnaufAgentConfig() {
       {availableMCPServers != null && availableMCPServers.length > 0 ? (
         <KnaufSection
           title="MCP servers"
-          info="Connect this agent to Model Context Protocol servers configured for the workspace. Each enabled server exposes its tools to the agent."
+          info="Connect this agent to extra services that give it access to tools or data outside the chat. Pick the ones you want it to use."
         >
           <MCPTools
             agentId={agent_id}
@@ -443,7 +444,7 @@ export default function KnaufAgentConfig() {
       {toolsEnabled ? (
         <KnaufSection
           title="Tools"
-          info="Built-in tools the agent can call while replying — currently the curated set registered for the agents endpoint."
+          info="Things the agent can do while replying, like creating an image or running a calculation. Pick the ones you want it to be able to use."
         >
           {regularTools === undefined ? (
             <div className="text-xs text-text-secondary">Loading tools…</div>
@@ -483,9 +484,10 @@ export default function KnaufAgentConfig() {
         <div className="mb-2 flex items-center gap-2">
           <label
             htmlFor="knauf-agent-instructions"
-            className={cn(labelClass, 'mb-0 min-w-0 flex-grow truncate')}
+            className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
           >
-            {localize('com_ui_instructions')}
+            <span className="truncate">{localize('com_ui_instructions')}</span>
+            <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. You can write this yourself, or click Generate to have AI draft it. Once you have something written the button changes to Polish, so AI can tighten it up." />
           </label>
           <AutoGenerateButton
             hasDraft={(instructions ?? '').trim().length > 0}
