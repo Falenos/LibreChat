@@ -31,9 +31,9 @@ jobs:
             const { data: releases } = await github.rest.repos.listReleases({
               owner: 'danny-avila', repo: 'LibreChat', per_page: 5,
             });
-            const latest = releases[0];
+            const latest = releases.find(r => !r.prerelease && !r.draft);
             if (!latest) {
-              core.info('No upstream releases found');
+              core.info('No stable upstream releases found');
               return;
             }
 
