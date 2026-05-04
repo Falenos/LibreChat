@@ -186,6 +186,10 @@ const startServer = async () => {
   app.use('/api/tags', routes.tags);
   app.use('/api/mcp', routes.mcp);
 
+  // [knauf] Tier 5 mount-point — Knauf-only routes (additive, isolated under /api/knauf).
+  app.use('/api/knauf', require('./routes/knauf'));
+  // End [knauf]
+
   /** 404 for unmatched API routes */
   app.use('/api', apiNotFound);
 
