@@ -2,38 +2,40 @@
 
 ## What This Repo Is
 
-A **thin fork** of [LibreChat](https://github.com/danny-avila/LibreChat) maintained by Knauf. We track upstream releases and apply minimal, well-documented modifications. The goal is to stay as close to upstream as possible to make merges painless.
+A **thin fork** of [LibreChat](https://github.com/danny-avila/LibreChat) maintained by Knauf. We track upstream releases and apply minimal, well-documented modifications.
 
-- **Upstream remote:** `https://github.com/danny-avila/LibreChat.git`
-- **Current base:** see `SEAMS.md` for the tracked upstream version
-- **Our tags:** `knauf/base-*` (upstream baseline), `v*` (our releases)
+- **Upstream:** `https://github.com/danny-avila/LibreChat.git` — see `SEAMS.md` for tracked version
+- **Tags:** `knauf/base-*` (upstream baseline), `v*` (our releases)
 
 ## Thin Fork Rules
 
 1. **Never modify upstream files without marking them.** Add a `// [knauf] <reason>` comment at the modification site.
 2. **Every `[knauf]` marker must have a matching entry in `SEAMS.md`** (Inline Modifications table).
-3. **Prefer the extension system over inline modifications.** LibreChat supports `api/extend/` and `client/src/extend/` override directories with module aliases.
+3. **Prefer the lowest-risk tier that can express the change.** Tier ladder: config (`librechat.yaml`/.env) → MCP/Actions → asset overlay → `knauf/` directories → inline `[knauf]` markers → full file override (last resort).
 4. **Net-new Knauf code goes in `knauf/` directories:** `api/knauf/`, `client/src/knauf/`, `packages/knauf/`.
 5. **Knauf-specific dependencies go in `packages/knauf/package.json`**, not in the root or other workspace `package.json` files.
 
-## Extension System
+## Customization Tiers (Lowest Risk First)
 
-LibreChat uses module aliasing for overrides:
+| Tier | Approach | Merge Risk |
+|---|---|---|
+| **0** Config | `librechat.yaml`, `.env`, Admin API | None |
+| **1** MCP/Actions | Custom tools via MCP servers or OpenAPI Actions | None |
+| **2** Asset Overlay | Logos, favicons via Docker layer | None |
+| **3** Knauf Code | `packages/knauf/`, `api/knauf/`, `client/src/knauf/` | Minimal |
+| **4c** Inline Mods | `[knauf]`-marked changes (≤20 lines), tracked in `SEAMS.md` | Medium |
+| **4d** File Override | Module aliasing — full file replacement. **Last resort.** | High |
 
-- **Backend:** `api/extend/` — aliases defined in `api/package.json` (`_moduleAliases`) and `api/babel.config.js` (`module-resolver` plugin). Both must stay in sync.
-- **Frontend:** `client/src/extend/` — aliases in `client/vite.config.ts` (`resolve.alias`).
-- **Always prefer extending** over modifying upstream files. Extensions don't create merge conflicts.
+> ⚠️ This repo does **not** use `api/extend/` or `client/src/extend/` module aliasing from cst-karl-webui. That pattern (86 overrides, 47 aliases) is what we're avoiding.
 
 ## Project Structure
 
 ```
 agentic-karl/
 ├── api/                    # Express backend
-│   ├── extend/             # Backend extension overrides
 │   └── knauf/              # Knauf net-new backend code
 ├── client/                 # React frontend (Vite)
 │   └── src/
-│       ├── extend/         # Frontend extension overrides
 │       └── knauf/          # Knauf net-new frontend code
 ├── packages/
 │   ├── data-provider/      # Shared data types + React Query hooks

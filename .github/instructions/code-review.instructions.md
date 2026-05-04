@@ -17,12 +17,11 @@ This is a thin fork of LibreChat. Reviews must enforce fork hygiene above all el
 ## Important — Flag When Seen
 
 - **New dependency in root or workspace `package.json` instead of `packages/knauf/package.json`.** Knauf-specific dependencies belong in the Knauf package to avoid polluting upstream lockfile.
-- **Extension alias changed without syncing all three locations.** Backend aliases must match in both `api/package.json` (`_moduleAliases`) and `api/babel.config.js` (`module-resolver`). Frontend aliases live in `client/vite.config.ts` (`resolve.alias`).
-- **Direct modification when extension would work.** If the change can be achieved via `api/extend/` or `client/src/extend/` override, prefer that over modifying the upstream file.
+- **Tier escalation without justification.** If a change can be achieved via config (`librechat.yaml`/`.env`), MCP, or `knauf/` directories, it should not be an inline `[knauf]` modification. If inline, it should not be a full file override.
 - **New test file missing from workspace test aggregation.** If adding a new test workspace, ensure it's wired into `test:all` and `test:coverage` in root `package.json`.
 
 ## Informational — Mention If Relevant
 
-- **Large upstream file modifications.** If a PR touches many lines in upstream files, suggest breaking into smaller seams or using the extension system instead.
-- **Missing test coverage for Knauf code.** New code in `knauf/` directories or `extend/` overrides should have tests.
+- **Large upstream file modifications.** If a PR touches many lines in upstream files, suggest breaking into smaller seams or extracting to `knauf/` directories.
+- **Missing test coverage for Knauf code.** New code in `knauf/` directories or inline `[knauf]` modifications should have tests.
 - **`packages/knauf/` changes without `npm install`.** Adding dependencies to `packages/knauf/package.json` requires running `npm install` to update the lockfile.
