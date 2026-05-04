@@ -29,6 +29,6 @@ jobs:
       project-key-vault-name: kv-ct-shared-tools
       test-command: 'npm run build:packages && NODE_OPTIONS="--max-old-space-size=6144" npm run test:coverage'
       upload-coverage-report: true
-      coverage-report-path: './coverage/lcov.info'
+      coverage-report-path: './client/coverage/lcov.info'
     secrets:
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
