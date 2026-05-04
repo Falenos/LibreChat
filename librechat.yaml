@@ -46,7 +46,7 @@ interface:
   agents:
     use: true
     create: true
-    share: false
+    share: true
     public: false
   peoplePicker:
     users: true
