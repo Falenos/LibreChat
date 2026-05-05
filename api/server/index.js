@@ -186,7 +186,7 @@ const startServer = async () => {
   app.use('/api/tags', routes.tags);
   app.use('/api/mcp', routes.mcp);
 
-  // [knauf] Tier 4c mount-point — Knauf-only routes (additive, isolated under /api/knauf).
+  // [knauf] mount-point — Knauf-only routes (additive, isolated under /api/knauf).
   app.use('/api/knauf', require('./routes/knauf'));
   // End [knauf]
 

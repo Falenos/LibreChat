@@ -6,7 +6,7 @@
  * api/server/routes/knauf/autogeneratePrompt.js) are duplicated by hand —
  * the runtimes don't share TypeScript and we don't have a Knauf workspace
  * package yet to host shared constants. Worth that migration once the
- * `packages/knauf/` workspace lands (see CUSTOMIZATION_STRATEGY Tier 4).
+ * `packages/knauf/` workspace lands.
  */
 
 /** Prefix for personality modelSpecs in librechat.yaml `modelSpecs.list`. */
