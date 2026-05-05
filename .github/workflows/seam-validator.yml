@@ -61,7 +61,7 @@ jobs:
           # 3. Check every SEAMS.md inline entry points to a real file with a marker
           if [ -f SEAMS.md ]; then
             echo "### Manifest → Source Check" >> $GITHUB_STEP_SUMMARY
-            SEAM_PATHS=$(awk '/^## Inline Modifications/{found=1; next} found && /^## /{exit} found' SEAMS.md | grep -oP '(?<=\| `)[^`]+(?=`)' || true)
+            SEAM_PATHS=$(awk '/^## Inline Modifications/{found=1; next} found && /^## /{exit} found && /^\| `/' SEAMS.md | awk -F'`' '{print $2}' || true)
             while IFS= read -r path; do
               [ -z "$path" ] && continue
               if [ ! -f "$path" ]; then
