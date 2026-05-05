@@ -19,6 +19,15 @@ import AdminSettings from './AdminSettings';
 import DeleteButton from './DeleteButton';
 import { Panel } from '~/common';
 
+// [knauf] The simplified Knauf builder intentionally hides:
+//   - Advanced panel entry point (graph editing — too much surface for
+//     non-technical users).
+//   - Duplicate agent button next to Save (same rationale).
+// Flip either back to `false` to restore upstream behaviour.
+const KNAUF_HIDE_ADVANCED = true;
+const KNAUF_HIDE_DUPLICATE = true;
+// End [knauf]
+
 export default function AgentFooter({
   activePanel,
   createMutation,
@@ -77,7 +86,11 @@ export default function AgentFooter({
 
   return (
     <div className="mb-1 flex w-full flex-col gap-2">
-      {showButtons && <AdvancedButton setActivePanel={setActivePanel} />}
+      {/* [knauf] AdvancedButton hidden — see KNAUF_HIDE_ADVANCED above. */}
+      {!KNAUF_HIDE_ADVANCED && showButtons && (
+        <AdvancedButton setActivePanel={setActivePanel} />
+      )}
+      {/* End [knauf] */}
       {showButtons && agent_id && <VersionButton setActivePanel={setActivePanel} />}
       {user?.role === SystemRoles.ADMIN && showButtons && <AdminSettings />}
       {/* Context Button */}
@@ -119,8 +132,11 @@ export default function AgentFooter({
               </button>
             </GenericGrantAccessDialog>
           )}
-        {(agent?.author === user?.id || user?.role === SystemRoles.ADMIN || canEditThisAgent) &&
+        {/* [knauf] DuplicateAgent hidden — see KNAUF_HIDE_DUPLICATE above. */}
+        {!KNAUF_HIDE_DUPLICATE &&
+          (agent?.author === user?.id || user?.role === SystemRoles.ADMIN || canEditThisAgent) &&
           !permissionsLoading && <DuplicateAgent agent_id={agent_id} />}
+        {/* End [knauf] */}
         {/* Submit Button */}
         <button
           className="btn btn-primary focus:shadow-outline flex h-9 w-full items-center justify-center px-4 py-2 font-semibold text-white hover:bg-green-600 focus:border-green-500"
