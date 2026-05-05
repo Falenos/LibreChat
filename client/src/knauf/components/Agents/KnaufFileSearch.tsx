@@ -1,5 +1,5 @@
 /**
- * [knauf] Tier 5 fork of upstream
+ * [knauf] Tier 3 fork of upstream
  * client/src/components/SidePanel/Agents/FileSearch.tsx.
  *
  * Three intentional changes vs upstream:
