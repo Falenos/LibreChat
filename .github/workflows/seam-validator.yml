@@ -34,20 +34,27 @@ jobs:
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
 
+          # Helper: log error to stdout, GH annotation, AND step summary
+          log_error() {
+            local file="$1" msg="$2"
+            echo "❌ $msg"
+            echo "::error file=$file::$msg"
+            echo "❌ \`$file\`: $msg" >> $GITHUB_STEP_SUMMARY
+            ERRORS=$((ERRORS + 1))
+          }
+
           # 2. Check every marker file is listed in SEAMS.md
           echo "### Marker → Manifest Check" >> $GITHUB_STEP_SUMMARY
           if [ -f SEAMS.md ]; then
             while IFS= read -r file; do
               [ -z "$file" ] && continue
               if ! grep -q "$file" SEAMS.md; then
-                echo "❌ \`$file\` has \`[knauf]\` marker but is NOT in SEAMS.md" >> $GITHUB_STEP_SUMMARY
-                ERRORS=$((ERRORS + 1))
+                log_error "$file" "has [knauf] marker but is NOT in SEAMS.md"
               fi
             done <<< "$MARKER_FILES"
           else
             if [ -n "$MARKER_FILES" ]; then
-              echo "❌ SEAMS.md does not exist but \`[knauf]\` markers found" >> $GITHUB_STEP_SUMMARY
-              ERRORS=$((ERRORS + 1))
+              log_error "SEAMS.md" "does not exist but [knauf] markers found"
             fi
           fi
 
@@ -58,11 +65,9 @@ jobs:
             while IFS= read -r path; do
               [ -z "$path" ] && continue
               if [ ! -f "$path" ]; then
-                echo "❌ SEAMS.md lists \`$path\` but file does not exist (deleted or renamed?)" >> $GITHUB_STEP_SUMMARY
-                ERRORS=$((ERRORS + 1))
+                log_error "$path" "listed in SEAMS.md but file does not exist (deleted or renamed?)"
               elif ! grep -q '\[knauf\]' "$path" 2>/dev/null; then
-                echo "❌ SEAMS.md lists \`$path\` but file has no \`[knauf]\` marker" >> $GITHUB_STEP_SUMMARY
-                ERRORS=$((ERRORS + 1))
+                log_error "$path" "listed in SEAMS.md but has no [knauf] marker"
               fi
             done <<< "$SEAM_PATHS"
           fi
@@ -79,6 +84,7 @@ jobs:
           echo "- **Validation errors:** $ERRORS" >> $GITHUB_STEP_SUMMARY
 
           if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::Seam validation failed with $ERRORS error(s). See job summary."
+            echo ""
+            echo "::error::Seam validation failed with $ERRORS error(s). Every [knauf] marker needs a SEAMS.md entry and vice versa."
             exit 1
           fi
