@@ -90,9 +90,9 @@ jobs:
                 }
               } catch {}
 
-              // Estimate merge conflict
+              // Estimate merge conflict (modern two-arg form returns exit 1 on conflicts)
               try {
-                execSync(`git merge-tree $(git merge-base HEAD ${latest.tag_name}) HEAD ${latest.tag_name} 2>/dev/null`);
+                execSync(`git merge-tree --write-tree HEAD ${latest.tag_name} 2>/dev/null`);
                 impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
               } catch {
                 impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
