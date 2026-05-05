@@ -260,3 +260,4 @@ router.post('/', express.json({ limit: '32kb' }), async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildUserMessage = buildUserMessage;
