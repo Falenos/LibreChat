@@ -28,13 +28,13 @@ jobs:
             const { execSync } = require('child_process');
             const fs = require('fs');
 
-            // Get latest upstream release
+            // Get latest upstream release (LibreChat marks all releases as prerelease, so filter by tag pattern instead)
             const { data: releases } = await github.rest.repos.listReleases({
-              owner: 'danny-avila', repo: 'LibreChat', per_page: 5,
+              owner: 'danny-avila', repo: 'LibreChat', per_page: 20,
             });
-            const latest = releases.find(r => !r.prerelease && !r.draft);
+            const latest = releases.find(r => !r.draft && /^v\d+\.\d+\.\d+$/.test(r.tag_name));
             if (!latest) {
-              core.info('No stable upstream releases found');
+              core.info('No matching upstream release found');
               return;
             }
 
