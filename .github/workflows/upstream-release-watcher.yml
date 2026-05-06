@@ -71,12 +71,22 @@ jobs:
               } catch { lastSynced = null; }
             }
 
-            // Analyze impact on seam files (populate as [knauf] markers are added)
+            // Parse seam files from SEAMS.md "Inline Modifications" table
             let impactReport = '';
             if (lastSynced) {
-              const seamFiles = [
-                // Add seam file paths here as [knauf] markers are introduced
-              ];
+              const seamFiles = [];
+              try {
+                const seamsContent = fs.readFileSync('SEAMS.md', 'utf8');
+                // Match file paths in the first column of the Inline Modifications table (backtick-wrapped)
+                const inlineSection = seamsContent.split('## Inline Modifications')[1]?.split('##')[0] || '';
+                const filePattern = /^\|\s*`([^`]+)`\s*\|/gm;
+                let m;
+                while ((m = filePattern.exec(inlineSection)) !== null) {
+                  if (m[1] !== 'File') seamFiles.push(m[1]); // skip header row
+                }
+              } catch {
+                core.info('Could not parse seam files from SEAMS.md');
+              }
 
               for (const file of seamFiles) {
                 try {
@@ -94,7 +104,7 @@ jobs:
               }
 
               if (seamFiles.length === 0) {
-                impactReport += 'No seam files registered yet. Add paths to `seamFiles` array as `[knauf]` markers are introduced.\n';
+                impactReport += 'No seam files found in SEAMS.md Inline Modifications table.\n';
               }
 
               // Check for renames near seam files
