@@ -107,13 +107,25 @@ jobs:
                 }
               } catch {}
 
-              // Estimate merge conflict (modern two-arg form returns exit 1 on conflicts)
+              // Estimate merge conflict against main (not HEAD, which may be a feature branch in CI)
               try {
-                execSync(`git merge-tree --write-tree HEAD ${latest.tag_name} 2>/dev/null`);
+                execSync(`git merge-tree --write-tree origin/main ${latest.tag_name} 2>/dev/null`);
                 impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
               } catch {
                 impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
               }
+
+              // Show overall diff stats so the issue is informative even without seam files
+              try {
+                const diffStat = execSync(
+                  `git diff --stat ${lastSynced}..${latest.tag_name} 2>/dev/null`
+                ).toString().trim();
+                if (diffStat) {
+                  const lines = diffStat.split('\n');
+                  const summary = lines[lines.length - 1]; // e.g. "42 files changed, 500 insertions(+), 200 deletions(-)"
+                  impactReport += `\n### Upstream Changes\n\n${summary}\n`;
+                }
+              } catch {}
             }
 
             await github.rest.issues.create({
