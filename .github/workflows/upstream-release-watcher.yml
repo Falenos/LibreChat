@@ -1,0 +1,123 @@
+name: Upstream Release Watcher
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/danny-avila/LibreChat.git || true
+          git fetch upstream --tags
+
+      - name: Check for new releases and analyze impact
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+
+            // Get latest upstream release
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: 'danny-avila', repo: 'LibreChat', per_page: 5,
+            });
+            const latest = releases.find(r => !r.prerelease && !r.draft);
+            if (!latest) {
+              core.info('No stable upstream releases found');
+              return;
+            }
+
+            // Skip if already tracked
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: 'upstream-sync', state: 'all',
+            });
+            if (issues.find(i => i.title.includes(latest.tag_name))) {
+              core.info(`Already tracking ${latest.tag_name}`);
+              return;
+            }
+
+            // Determine last synced tag (knauf/base-* namespace to avoid collision with our v* tags)
+            let lastSynced;
+            try {
+              lastSynced = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
+                .toString().trim();
+            } catch { lastSynced = null; }
+
+            // Analyze impact on seam files (populate as [knauf] markers are added)
+            let impactReport = '';
+            if (lastSynced) {
+              const seamFiles = [
+                // Add seam file paths here as [knauf] markers are introduced
+              ];
+
+              for (const file of seamFiles) {
+                try {
+                  const status = execSync(
+                    `git diff --name-status ${lastSynced}..${latest.tag_name} -- "${file}" 2>/dev/null`
+                  ).toString().trim();
+                  if (status) {
+                    impactReport += `- ⚠️ **${file}**: \`${status.split('\t')[0]}\` (modified/renamed/deleted)\n`;
+                  } else {
+                    impactReport += `- ✅ **${file}**: unchanged\n`;
+                  }
+                } catch {
+                  impactReport += `- ❓ **${file}**: unable to determine\n`;
+                }
+              }
+
+              if (seamFiles.length === 0) {
+                impactReport += 'No seam files registered yet. Add paths to `seamFiles` array as `[knauf]` markers are introduced.\n';
+              }
+
+              // Check for renames near seam files
+              try {
+                const renames = execSync(
+                  `git diff --find-renames --diff-filter=R --name-status ${lastSynced}..${latest.tag_name} -- api/ client/ packages/ 2>/dev/null`
+                ).toString().trim();
+                if (renames) {
+                  impactReport += `\n### File Renames Detected\n\`\`\`\n${renames}\n\`\`\`\n`;
+                }
+              } catch {}
+
+              // Estimate merge conflict (modern two-arg form returns exit 1 on conflicts)
+              try {
+                execSync(`git merge-tree --write-tree HEAD ${latest.tag_name} 2>/dev/null`);
+                impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
+              } catch {
+                impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
+              }
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `Upstream sync: LibreChat ${latest.tag_name}`,
+              labels: ['upstream-sync'],
+              body: `## LibreChat ${latest.tag_name}\n\n` +
+                `**Published:** ${latest.published_at}\n` +
+                `**Release notes:** ${latest.html_url}\n` +
+                `**Last synced tag:** ${lastSynced || 'unknown'}\n\n` +
+                `### Seam Impact Analysis\n\n${impactReport || 'Unable to analyze (no previous sync tag found).'}\n\n` +
+                `### Merge Checklist\n` +
+                `- [ ] Create branch: \`chore/upstream-${latest.tag_name}\`\n` +
+                `- [ ] Merge: \`git merge --no-ff ${latest.tag_name}\`\n` +
+                `- [ ] Resolve conflicts at \`[knauf]\` markers\n` +
+                `- [ ] Update SEAMS.md if paths/symbols changed\n` +
+                `- [ ] Seam validator green\n` +
+                `- [ ] Build + tests green\n` +
+                `- [ ] Seam smoke tests green\n` +
+                `- [ ] Staging deploy + sign-off\n` +
+                `- [ ] Merge to main`,
+            });
+
+            core.info(`Created tracking issue for ${latest.tag_name}`);

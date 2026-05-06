@@ -8,7 +8,7 @@
  *   • AgentFooter (bottom) handles Save / Delete / Cancel
  *   • VersionPanel mounts via AgentPanelSwitch
  *   • AgentAvatar (upstream) handles real avatar upload
- *   • KnaufFileSearch (Tier 5 fork of upstream FileSearch) handles
+ *   • KnaufFileSearch (fork of upstream FileSearch) handles
  *     knowledge file upload + listing inside the Data Knowledge section
  *
  * Knauf overlay renders the V6-shaped middle of the form, in order:
@@ -412,7 +412,7 @@ export default function KnaufAgentConfig() {
       ) : null}
 
       {/* Data Knowledge — file presence drives `file_search` automatically
-          (see the sync effect above). KnaufFileSearch is a Tier 5 fork of
+          (see the sync effect above). KnaufFileSearch is a fork of
           upstream FileSearch that omits the inner heading + checkbox. */}
       <KnaufSection
         title="Data Knowledge"

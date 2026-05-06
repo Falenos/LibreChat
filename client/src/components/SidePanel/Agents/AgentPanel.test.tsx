@@ -146,6 +146,15 @@ jest.mock('./AgentConfig', () => ({
   default: () => <div>{`Agent Config`}</div>,
 }));
 
+// [knauf] Mock KnaufAgentConfig to cut the deep import chain
+// (KnaufAgentConfig → Providers → Prompts → UnknownIcon → IconContext)
+// that fails because the ~/common/types mock strips IconContext.
+jest.mock('~/knauf/components/Agents/KnaufAgentConfig', () => ({
+  __esModule: true,
+  default: () => <div>{`Agent Config`}</div>,
+}));
+// End [knauf]
+
 jest.mock('./AgentSelect', () => ({
   __esModule: true,
   default: () => <div>{`Agent Select`}</div>,

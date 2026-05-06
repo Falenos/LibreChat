@@ -1,10 +1,10 @@
-# Knauf client overlay (Tier 5)
+# Knauf client overlay
 
-Knauf-specific React code that runs inside the upstream LibreChat tree. See [CUSTOMIZATION_STRATEGY.md](../../../../CUSTOMIZATION_STRATEGY.md) Tier 5 for the discipline this folder follows.
+Knauf-specific React code that runs inside the upstream LibreChat tree. See [Copilot instructions](../../../../.github/copilot-instructions.md) for the customization tier definitions this folder follows. Full strategy in workspace notes (`notes/technical-depth/extendability/fork-management-strategy.md`).
 
 ## What has changed in LibreChat source code
 
-Three `[knauf]` markers in upstream files. The first two are single-line **mount-point seams** (the lowest-cost Tier 5 pattern) — every line of Knauf logic lives outside upstream. The third is a small inline gate that hides the Advanced footer button.
+Three `[knauf]` markers in upstream files (inline modifications). The first two are single-line **mount-point seams** — every line of Knauf logic lives outside upstream. The third is a small inline gate that hides the Advanced footer button.
 
 | Upstream file | Line | Change | What it does |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Three `[knauf]` markers in upstream files. The first two are single-line **mount
 | Model picker | Provider/model dropdowns | **Hidden** — Personality drives the model |
 | Personality | (not present) | **New** — pills sourced from `modelSpecs.list` filtered by `karl-personality-*` prefix; each pill optionally shows the model in a small caption (only when personalities span multiple models). On change, writes `model` + `model_parameters` to the form. |
 | Capabilities | 5+ separate sections (CodeForm, SearchForm, FileContext, Artifacts, FileSearch) | **Reduced** — capability registry (`KNAUF_CAPABILITIES` in [components/Agents/capabilities.ts](components/Agents/capabilities.ts)). Today: one row, "Browse the internet", which writes `web_search: true` + `useResponsesApi: true` into `model_parameters`. |
-| Data Knowledge | `<FileSearch>` (with inner `<FileSearchCheckbox>` toggle, gated by `fileSearchEnabled`) | **`<KnaufFileSearch>`** (Tier 5 fork — drops the inner heading + checkbox). The `file_search` form field is driven implicitly by `knowledge_files.length > 0`; no separate toggle. |
+| Data Knowledge | `<FileSearch>` (with inner `<FileSearchCheckbox>` toggle, gated by `fileSearchEnabled`) | **`<KnaufFileSearch>`** (fork — drops the inner heading + checkbox). The `file_search` form field is driven implicitly by `knowledge_files.length > 0`; no separate toggle. |
 | MCP servers | `<MCPTools>` + `<MCPToolSelectDialog>` | **Same** — rendered inside a Knauf section when `availableMCPServers.length > 0`. |
 | Tools | `<AgentTool>` list + `<ToolSelectDialog>` (`<Action>` rows alongside) | **Tools shown** — `<AgentTool>` rows + "Add Tools" button (loading skeleton while `regularTools` resolves). **Actions hidden** — deliberately not surfaced (see [librechat.yaml](../../../../librechat.yaml) comment). |
 | Instructions | `<Instructions>` (with upstream's variables popover) | **Knauf variant** — same `Controller`-bound textarea, same upstream `specialVariables` list, but adds a ✦ Autogenerate button that calls `/api/knauf/autogenerate-prompt` and a `<VariablesPopover>` that inserts the canonical tokens. |
@@ -189,7 +189,7 @@ Three `[knauf]` markers total. The overlay uses LibreChat's native theme tokens 
 The overlay mirrors upstream's layer split (`components/`, `data-provider/`, `common/`) so anyone navigating the LibreChat tree finds Knauf code in the place they'd expect to find equivalent upstream code.
 
 ```
-knauf/                                           # client overlay (Tier 5)
+knauf/                                           # client overlay
 ├── README.md
 ├── common/
 │   ├── agents-types.ts                          # KnaufPersonality + Zod schema (mirrors upstream common/agents-types.ts)
@@ -197,7 +197,7 @@ knauf/                                           # client overlay (Tier 5)
 ├── components/
 │   └── Agents/                                  # mirrors upstream components/SidePanel/Agents/
 │       ├── KnaufAgentConfig.tsx                 # mount-point seam target — body of upstream's AgentPanel
-│       ├── KnaufFileSearch.tsx                  # Tier 5 fork of upstream FileSearch (no inner heading/checkbox)
+│       ├── KnaufFileSearch.tsx                  # fork of upstream FileSearch (no inner heading/checkbox)
 │       ├── capabilities.ts                      # KNAUF_CAPABILITIES registry (entries with icon + applyToForm)
 │       ├── KnaufSection.tsx                     # label + info badge + optional action slot
 │       ├── KnaufInfoBadge.tsx                   # Radix HoverCard tooltip
@@ -377,7 +377,7 @@ The `+ Variables` popover sources its tokens from `librechat-data-provider`'s ex
 ## Rules of engagement
 
 - **Never** import from this folder back into upstream code outside the documented mount points above.
-- **Never** put branding (logos, favicons, colours) here — that's Tier 2 ([Dockerfile.knauf](../../../../Dockerfile.knauf) + [assets/knauf/](../../../../assets/knauf/)). The overlay uses LibreChat's native theme tokens — no Knauf colour layer.
+- **Never** put branding (logos, favicons, colours) here — that belongs in [Dockerfile.knauf](../../../../Dockerfile.knauf) + [assets/knauf/](../../../../assets/knauf/). The overlay uses LibreChat's native theme tokens — no Knauf colour layer.
 - **Never** add Knauf-only npm dependencies to [client/package.json](../../../package.json). Use the (future) `packages/knauf/` workspace.
 - When wrapping an upstream component, keep the same default export name and prop signature so the seam stays a one-line import swap.
 - All Tailwind colour utilities should use LibreChat's native tokens (`bg-surface-secondary`, `text-text-primary`, `border-border-medium`, etc.). Don't introduce Knauf-namespaced CSS variables, and don't reach for `bg-brand-purple` — keep the overlay neutral so it matches the rest of the side panel chrome.
@@ -447,7 +447,7 @@ What we landed (originally listed as "easy wins" — done now):
 
 Still on the wishlist:
 
-- **Cross-runtime constants** — `KARL_AUTOGENERATE_SPEC_NAME` lives in both `common/constants.ts` (client) and `api/server/routes/knauf/autogeneratePrompt.js` (server). Hand-synced today; would deduplicate via a future `packages/knauf/` workspace (Tier 4).
+- **Cross-runtime constants** — `KARL_AUTOGENERATE_SPEC_NAME` lives in both `common/constants.ts` (client) and `api/server/routes/knauf/autogeneratePrompt.js` (server). Hand-synced today; would deduplicate via a future `packages/knauf/` workspace.
 - **Feature subfolders within `components/Agents/`** — once we add share-scope (Phase 5) or per-agent chat-upload persistence (Phase 6), the folder will have ~10 files and benefit from a sub-grouping (e.g., `components/Agents/personality/`, `components/Agents/capabilities/`). Defer until that file count actually arrives.
 - **Tests** — `usePersonalities` is purely deterministic given a startup-config object; perfect Jest target. `applyToForm` for each capability entry is a pure function over a mock `setValue`. None written yet.
 
@@ -504,7 +504,7 @@ flowchart TD
 | `AgentFooter` (Save / Delete / Cancel) | upstream | **Inline gate** | One-line `KNAUF_HIDE_ADVANCED` constant + conditional render around `<AdvancedButton>`. Save / Delete / Cancel chrome unchanged. |
 | `AgentAvatar` (upload UI) | upstream | **No** | Used directly inside `KnaufAgentConfig`. |
 | `AgentCategorySelector` (combobox) | upstream | **No** | Used directly inside `KnaufAgentConfig`'s Category section. |
-| `FileSearch` (knowledge upload) | upstream | **Forked → `KnaufFileSearch`** | Tier 5 fork omitting the inner `<label>` heading and `<FileSearchCheckbox>`. The form's `file_search` field is mirrored from `knowledge_files.length > 0` by an effect in `KnaufAgentConfig`. |
+| `FileSearch` (knowledge upload) | upstream | **Forked → `KnaufFileSearch`** | Fork omitting the inner `<label>` heading and `<FileSearchCheckbox>`. The form's `file_search` field is mirrored from `knowledge_files.length > 0` by an effect in `KnaufAgentConfig`. |
 | `Instructions` (textarea + Variables) | upstream | **Replaced inside `KnaufAgentConfig`** | We render our own textarea bound to `form.instructions`, with a Knauf `<VariablesPopover>` (sources upstream's `specialVariables`) and the ✦ Autogenerate button. The upstream `Instructions.tsx` component is no longer rendered. |
 | `Personality` (V6 concept) | doesn't exist upstream | **New** | Knauf-only section sourced from `modelSpecs.list` filtered by `karl-personality-` prefix. |
 | `Capability rows` | upstream renders 5+ separate forms | **Reduced to a registry** | Knauf `capabilities.ts` registry. Today: one row (Browse the internet). |

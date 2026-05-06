@@ -1,0 +1,6 @@
+{
+  "name": "@knauf/knauf",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Knauf-specific shared code (isolated from upstream lockfile)"
+}
