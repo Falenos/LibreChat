@@ -19,13 +19,14 @@ jobs:
       - name: Fetch upstream
         run: |
           git remote add upstream https://github.com/danny-avila/LibreChat.git || true
-          git fetch upstream --tags
+          git fetch upstream --no-tags
 
       - name: Check for new releases and analyze impact
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const { execSync } = require('child_process');
+            const fs = require('fs');
 
             // Get latest upstream release
             const { data: releases } = await github.rest.repos.listReleases({
@@ -47,12 +48,28 @@ jobs:
               return;
             }
 
-            // Determine last synced tag (knauf/base-* namespace to avoid collision with our v* tags)
-            let lastSynced;
+            // Fetch only the specific upstream release tag (force-update to handle v* collision with our tags)
             try {
-              lastSynced = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
-                .toString().trim();
-            } catch { lastSynced = null; }
+              execSync(`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/${latest.tag_name}`);
+            } catch (e) {
+              core.warning(`Could not fetch upstream tag ${latest.tag_name}: ${e.message}`);
+            }
+
+            // Read last synced base tag from SEAMS.md (source of truth for fork base version)
+            let lastSynced = null;
+            try {
+              const seams = fs.readFileSync('SEAMS.md', 'utf8');
+              const match = seams.match(/\|\s*Base tag\s*\|\s*`([^`]+)`/);
+              if (match) lastSynced = match[1];
+            } catch {
+              core.info('Could not read SEAMS.md, falling back to git describe');
+            }
+            if (!lastSynced) {
+              try {
+                lastSynced = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
+                  .toString().trim();
+              } catch { lastSynced = null; }
+            }
 
             // Analyze impact on seam files (populate as [knauf] markers are added)
             let impactReport = '';
