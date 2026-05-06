@@ -161,7 +161,8 @@ jobs:
                 `### Seam Impact Analysis\n\n${impactReport || 'Unable to analyze (no previous sync tag found).'}\n\n` +
                 `### Merge Checklist\n` +
                 `- [ ] Create branch: \`chore/upstream-${latest.tag_name}\`\n` +
-                `- [ ] Merge: \`git merge --no-ff ${latest.tag_name}\`\n` +
+                `- [ ] Fetch tag: \`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/${latest.tag_name}\`\n` +
+                `- [ ] Merge: \`git merge --no-ff --allow-unrelated-histories ${latest.tag_name}\`\n` +
                 `- [ ] Resolve conflicts at \`[knauf]\` markers\n` +
                 `- [ ] Update SEAMS.md if paths/symbols changed\n` +
                 `- [ ] Seam validator green\n` +
