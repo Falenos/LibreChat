@@ -117,12 +117,24 @@ jobs:
                 }
               } catch {}
 
-              // Estimate merge conflict against main (not HEAD, which may be a feature branch in CI)
-              try {
-                execSync(`git merge-tree --write-tree origin/main ${latest.tag_name} 2>/dev/null`);
-                impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
-              } catch {
-                impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
+              // Estimate merge conflict — check for shared history first (fork may have disconnected history)
+              const hasCommonAncestor = (() => {
+                try {
+                  execSync(`git merge-base origin/main ${latest.tag_name} 2>/dev/null`);
+                  return true;
+                } catch { return false; }
+              })();
+
+              if (hasCommonAncestor) {
+                try {
+                  execSync(`git merge-tree --write-tree origin/main ${latest.tag_name} 2>/dev/null`);
+                  impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
+                } catch {
+                  impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
+                }
+              } else {
+                impactReport += `\n### Merge Estimate\n\nFork history is disconnected from upstream — \`git merge-tree\` cannot predict conflicts. ` +
+                  `Use the seam impact analysis above and review the diff stats below to assess risk.\n`;
               }
 
               // Show overall diff stats so the issue is informative even without seam files
