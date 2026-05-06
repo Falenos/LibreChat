@@ -266,12 +266,14 @@ describe('AgentFooter', () => {
     test('renders with standard components based on default state', () => {
       render(<AgentFooter {...defaultProps} />);
       expect(screen.getByText('Save')).toBeInTheDocument();
-      expect(screen.getByTestId('advanced-button')).toBeInTheDocument();
+      // [knauf] Advanced and Duplicate buttons are hidden by KNAUF_HIDE_ADVANCED / KNAUF_HIDE_DUPLICATE
+      expect(screen.queryByTestId('advanced-button')).not.toBeInTheDocument();
       expect(screen.getByTestId('version-button')).toBeInTheDocument();
       expect(screen.getByTestId('delete-button')).toBeInTheDocument();
       expect(screen.queryByTestId('admin-settings')).not.toBeInTheDocument();
       expect(screen.getByTestId('grant-access-dialog-agent')).toBeInTheDocument();
-      expect(screen.getByTestId('duplicate-button')).toBeInTheDocument();
+      expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
+      // End [knauf]
       expect(screen.queryByTestId('spinner')).not.toBeInTheDocument();
     });
 
@@ -421,7 +423,9 @@ describe('AgentFooter', () => {
       expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
     });
 
-    test('shows duplicate button for non-owner with EDIT permission', () => {
+    // [knauf] Duplicate button is always hidden (KNAUF_HIDE_DUPLICATE).
+    // Upstream tests for duplicate visibility are converted to expect absence.
+    test('hides duplicate button regardless of EDIT permission (knauf override)', () => {
       mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.different));
       mockUseWatch.mockImplementation(({ name }) => {
         if (name === 'agent') {
@@ -444,8 +448,9 @@ describe('AgentFooter', () => {
         permissionBits: 2,
       });
       render(<AgentFooter {...defaultProps} />);
-      expect(screen.getByTestId('duplicate-button')).toBeInTheDocument();
+      expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
     });
+    // End [knauf]
 
     test('hides duplicate button for non-owner with only VIEW permission', () => {
       mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.different));
@@ -473,7 +478,8 @@ describe('AgentFooter', () => {
       expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
     });
 
-    test('shows duplicate button for admin who is not the author', () => {
+    // [knauf] Duplicate button hidden by KNAUF_HIDE_DUPLICATE regardless of admin status
+    test('hides duplicate button for admin (knauf override)', () => {
       mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
       mockUseWatch.mockImplementation(({ name }) => {
         if (name === 'agent') {
@@ -496,8 +502,9 @@ describe('AgentFooter', () => {
         permissionBits: 0,
       });
       render(<AgentFooter {...defaultProps} />);
-      expect(screen.getByTestId('duplicate-button')).toBeInTheDocument();
+      expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
     });
+    // End [knauf]
   });
 
   describe('Edge Cases', () => {
