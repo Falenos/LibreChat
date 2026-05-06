@@ -19,21 +19,22 @@ jobs:
       - name: Fetch upstream
         run: |
           git remote add upstream https://github.com/danny-avila/LibreChat.git || true
-          git fetch upstream --tags
+          git fetch upstream --no-tags
 
       - name: Check for new releases and analyze impact
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const { execSync } = require('child_process');
+            const fs = require('fs');
 
-            // Get latest upstream release
+            // Get latest upstream release (LibreChat marks all releases as prerelease, so filter by tag pattern instead)
             const { data: releases } = await github.rest.repos.listReleases({
-              owner: 'danny-avila', repo: 'LibreChat', per_page: 5,
+              owner: 'danny-avila', repo: 'LibreChat', per_page: 20,
             });
-            const latest = releases.find(r => !r.prerelease && !r.draft);
+            const latest = releases.find(r => !r.draft && /^v\d+\.\d+\.\d+$/.test(r.tag_name));
             if (!latest) {
-              core.info('No stable upstream releases found');
+              core.info('No matching upstream release found');
               return;
             }
 
@@ -47,19 +48,45 @@ jobs:
               return;
             }
 
-            // Determine last synced tag (knauf/base-* namespace to avoid collision with our v* tags)
-            let lastSynced;
+            // Fetch only the specific upstream release tag (force-update to handle v* collision with our tags)
             try {
-              lastSynced = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
-                .toString().trim();
-            } catch { lastSynced = null; }
+              execSync(`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/${latest.tag_name}`);
+            } catch (e) {
+              core.warning(`Could not fetch upstream tag ${latest.tag_name}: ${e.message}`);
+            }
 
-            // Analyze impact on seam files (populate as [knauf] markers are added)
+            // Read last synced base tag from SEAMS.md (source of truth for fork base version)
+            let lastSynced = null;
+            try {
+              const seams = fs.readFileSync('SEAMS.md', 'utf8');
+              const match = seams.match(/\|\s*Base tag\s*\|\s*`([^`]+)`/);
+              if (match) lastSynced = match[1];
+            } catch {
+              core.info('Could not read SEAMS.md, falling back to git describe');
+            }
+            if (!lastSynced) {
+              try {
+                lastSynced = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
+                  .toString().trim();
+              } catch { lastSynced = null; }
+            }
+
+            // Parse seam files from SEAMS.md "Inline Modifications" table
             let impactReport = '';
             if (lastSynced) {
-              const seamFiles = [
-                // Add seam file paths here as [knauf] markers are introduced
-              ];
+              const seamFiles = [];
+              try {
+                const seamsContent = fs.readFileSync('SEAMS.md', 'utf8');
+                // Match file paths in the first column of the Inline Modifications table (backtick-wrapped)
+                const inlineSection = seamsContent.split('## Inline Modifications')[1]?.split('##')[0] || '';
+                const filePattern = /^\|\s*`([^`]+)`\s*\|/gm;
+                let m;
+                while ((m = filePattern.exec(inlineSection)) !== null) {
+                  if (m[1] !== 'File') seamFiles.push(m[1]); // skip header row
+                }
+              } catch {
+                core.info('Could not parse seam files from SEAMS.md');
+              }
 
               for (const file of seamFiles) {
                 try {
@@ -77,7 +104,7 @@ jobs:
               }
 
               if (seamFiles.length === 0) {
-                impactReport += 'No seam files registered yet. Add paths to `seamFiles` array as `[knauf]` markers are introduced.\n';
+                impactReport += 'No seam files found in SEAMS.md Inline Modifications table.\n';
               }
 
               // Check for renames near seam files
@@ -90,13 +117,37 @@ jobs:
                 }
               } catch {}
 
-              // Estimate merge conflict (modern two-arg form returns exit 1 on conflicts)
-              try {
-                execSync(`git merge-tree --write-tree HEAD ${latest.tag_name} 2>/dev/null`);
-                impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
-              } catch {
-                impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
+              // Estimate merge conflict — check for shared history first (fork may have disconnected history)
+              const hasCommonAncestor = (() => {
+                try {
+                  execSync(`git merge-base origin/main ${latest.tag_name} 2>/dev/null`);
+                  return true;
+                } catch { return false; }
+              })();
+
+              if (hasCommonAncestor) {
+                try {
+                  execSync(`git merge-tree --write-tree origin/main ${latest.tag_name} 2>/dev/null`);
+                  impactReport += `\n### Merge Estimate: ✅ Clean merge expected\n`;
+                } catch {
+                  impactReport += `\n### Merge Estimate: ⚠️ Conflicts likely — review carefully\n`;
+                }
+              } else {
+                impactReport += `\n### Merge Estimate\n\nFork history is disconnected from upstream — \`git merge-tree\` cannot predict conflicts. ` +
+                  `Use the seam impact analysis above and review the diff stats below to assess risk.\n`;
               }
+
+              // Show overall diff stats so the issue is informative even without seam files
+              try {
+                const diffStat = execSync(
+                  `git diff --stat ${lastSynced}..${latest.tag_name} 2>/dev/null`
+                ).toString().trim();
+                if (diffStat) {
+                  const lines = diffStat.split('\n');
+                  const summary = lines[lines.length - 1]; // e.g. "42 files changed, 500 insertions(+), 200 deletions(-)"
+                  impactReport += `\n### Upstream Changes\n\n${summary}\n`;
+                }
+              } catch {}
             }
 
             await github.rest.issues.create({
@@ -110,7 +161,8 @@ jobs:
                 `### Seam Impact Analysis\n\n${impactReport || 'Unable to analyze (no previous sync tag found).'}\n\n` +
                 `### Merge Checklist\n` +
                 `- [ ] Create branch: \`chore/upstream-${latest.tag_name}\`\n` +
-                `- [ ] Merge: \`git merge --no-ff ${latest.tag_name}\`\n` +
+                `- [ ] Fetch tag: \`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/${latest.tag_name}\`\n` +
+                `- [ ] Merge: \`git merge --no-ff --allow-unrelated-histories ${latest.tag_name}\`\n` +
                 `- [ ] Resolve conflicts at \`[knauf]\` markers\n` +
                 `- [ ] Update SEAMS.md if paths/symbols changed\n` +
                 `- [ ] Seam validator green\n` +
