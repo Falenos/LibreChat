@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // @ts-nocheck
 /*
- * scripts/seams.js
+ * knauf/scripts/seams.js
  *
  * Authors and validates the [knauf] seam manifest in SEAMS.md.
  *
@@ -590,7 +590,7 @@ async function cmdWrite(flags) {
   console.log('');
 
   if (flags['dry-run']) {
-    console.log(`${C.yellow}Drift detected. Run \`node scripts/seams.js write\` to apply.${C.reset}`);
+    console.log(`${C.yellow}Drift detected. Run \`node knauf/scripts/seams.js write\` to apply.${C.reset}`);
     return 1;
   }
 
@@ -624,7 +624,7 @@ function cmdCheck(flags) {
   const newSplit = splitAutoBlock(result.newMd);
   console.log(unifiedDiff(split.autoBlock, newSplit.autoBlock, 'SEAMS.md (Inline Modifications)'));
   console.log('');
-  console.log(`${C.red}SEAMS.md is out of sync. Run \`node scripts/seams.js write\`.${C.reset}`);
+  console.log(`${C.red}SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\`.${C.reset}`);
   return 1;
 }
 
@@ -662,7 +662,7 @@ function cmdDiffCheck(flags) {
   }
   console.log(
     `\n${C.dim}If the change is intentional, add a paired [knauf]/End [knauf] block at the seam ` +
-    `and run \`node scripts/seams.js write\`. If the file is Knauf-only, move it under a knauf/ directory.${C.reset}`,
+    `and run \`node knauf/scripts/seams.js write\`. If the file is Knauf-only, move it under a knauf/ directory.${C.reset}`,
   );
   return 1;
 }
@@ -675,7 +675,7 @@ function fail(msg) {
 }
 
 function usage() {
-  return `Usage: node scripts/seams.js <command> [flags]
+  return `Usage: node knauf/scripts/seams.js <command> [flags]
 
 Commands:
   scan        list discovered [knauf] seams
