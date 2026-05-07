@@ -4,9 +4,11 @@
 
 | Field | Value |
 |---|---|
-| LibreChat version | `v0.8.5-rc1` |
-| Base tag | `knauf/base-v0.8.5-rc1` |
-| Last synced | 2026-05-04 |
+| LibreChat tag | `v0.8.5` |
+| Base tag | `knauf/base-v0.8.5` |
+| Last synced | 2026-05-07 |
+
+The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watcher.yml`](.github/workflows/upstream-release-watcher.yml) to compute `upstream/<base>..upstream/<latest>` diffs. It must be a real tag in `danny-avila/LibreChat`. The `Base tag` row is the Knauf-side anchor used by humans to identify the merge commit on the fork.
 
 ## Inline Modifications
 
