@@ -1,0 +1,45 @@
+version: 2
+
+registries:
+  npm-knauf:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: ${{ secrets.PUSH_PAT }}
+  github-knauf:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{ secrets.PUSH_PAT }}
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    registries:
+      - github-knauf
+    schedule:
+      interval: weekly
+    target-branch: main
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  # Only watch Knauf-owned packages — upstream deps are LibreChat's
+  # responsibility and get updated during upstream syncs.
+  - package-ecosystem: 'npm'
+    directory: '/packages/knauf'
+    registries:
+      - npm-knauf
+    schedule:
+      interval: 'weekly'
+    target-branch: main
+    open-pull-requests-limit: 10
+    versioning-strategy: increase-if-necessary
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - 'version-update:semver-major'
+
+  # Docker ecosystem removed — Dockerfiles are upstream LibreChat's.
+  # Base image updates come via upstream syncs.

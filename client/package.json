@@ -12,7 +12,7 @@
     "dev": "cross-env NODE_ENV=development vite",
     "preview-prod": "cross-env NODE_ENV=development vite preview",
     "test": "cross-env NODE_ENV=development jest --watch",
-    "test:ci": "cross-env NODE_ENV=development jest --ci --logHeapUsage",
+    "test:ci": "cross-env NODE_ENV=development jest --ci --silent",
     "b:test": "NODE_ENV=test bunx jest --watch",
     "b:build": "NODE_ENV=production bun --bun vite build",
     "b:dev": "NODE_ENV=development bunx vite"
@@ -128,7 +128,7 @@
     "@testing-library/jest-dom": "^5.16.5",
     "@testing-library/react": "^14.0.0",
     "@testing-library/user-event": "^14.4.3",
-    "@types/jest": "^29.5.14",
+    "@types/jest": "^30.0.0",
     "@types/js-cookie": "^3.0.6",
     "@types/lodash": "^4.17.15",
     "@types/node": "^20.19.35",

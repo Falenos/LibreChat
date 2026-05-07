@@ -29,7 +29,9 @@ import { useAgentPanelContext } from '~/Providers/AgentPanelContext';
 import AgentPanelSkeleton from './AgentPanelSkeleton';
 import AdvancedPanel from './Advanced/AdvancedPanel';
 import { Panel, isEphemeralAgent } from '~/common';
-import AgentConfig from './AgentConfig';
+// [knauf] seam — V6 builder body replaces upstream's AgentConfig.
+import AgentConfig from '~/knauf/components/Agents/KnaufAgentConfig';
+// End [knauf] 
 import AgentSelect from './AgentSelect';
 import AgentFooter from './AgentFooter';
 import ModelPanel from './ModelPanel';

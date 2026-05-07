@@ -1,41 +1,30 @@
-# Pull Request Template
+### 📝 Description
 
-⚠️ Before Submitting a PR, Please Review:
-- Please ensure that you have thoroughly read and understood the [Contributing Docs](https://github.com/danny-avila/LibreChat/blob/main/.github/CONTRIBUTING.md) before submitting your Pull Request.
+<!--
+A brief description of the changes introduced by this PR.
+Make sure to provide enough context so reviewers can understand your decisions better.
+If needed, you can include images or screenshots.
+-->
 
-⚠️ Documentation Updates Notice:
-- Kindly note that documentation updates are managed in this repository: [librechat.ai](https://github.com/LibreChat-AI/librechat.ai)
+### 🎫 Related tickets
 
-## Summary
+- [TICKET_NUMBER](https://knaufjira.atlassian.net/browse/TICKET_NUMBER)
 
-Please provide a brief summary of your changes and the related issue. Include any motivation and context that is relevant to your changes. If there are any dependencies necessary for your changes, please list them here.
+### 📦 Dependencies
 
-## Change Type
+- `ADDED_PACKAGE_NAME`: Added for X reason.
+- `UPDATED_PACKAGE_NAME`: Updated for X reason.
+- `REMOVED_PACKAGE_NAME`: Removed for X reason.
 
-Please delete any irrelevant options.
+### 🔧 Environment variables
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] This change requires a documentation update
-- [ ] Translation update
+- `ADDED_ENVIRONMENT_VARIABLE`: Added for X reason.
+- `REMOVED_ENVIRONMENT_VARIABLE`: Removed for X reason.
 
-## Testing
+### 🌍 Environment repository PR's (If you added new environment variables)
 
-Please describe your test process and include instructions so that we can reproduce your test. If there are any important variables for your testing configuration, list them here.
+- [ENVs PR](https://github.com/Knauf-Group/ct-externalagency-configs)
 
-### **Test Configuration**:
-
-## Checklist
-
-Please delete any irrelevant options.
-
-- [ ] My code adheres to this project's style guidelines
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented in any complex areas of my code
-- [ ] I have made pertinent documentation changes
-- [ ] My changes do not introduce new warnings
-- [ ] I have written tests demonstrating that my changes are effective or that my feature works
-- [ ] Local unit tests pass with my changes
-- [ ] Any changes dependent on mine have been merged and published in downstream modules.
-- [ ] A pull request for updating the documentation has been submitted.
+<!--
+NOTE: Do not forget to ask approval to one of DevOps team members, since they're responsible for those repositories.
+-->

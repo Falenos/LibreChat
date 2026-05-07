@@ -1,45 +1,60 @@
-# Long-lived GitNexus image for DigitalOcean droplet deployment.
-#
-# This image does NOT bake in the index data. Indexes are mounted from
-# the host at /indexes/<repo>/.gitnexus/ and registered at container
-# startup. A fresh index only requires rsync + container restart — no
-# image rebuild on every push.
+# v0.8.5-rc1
 
-FROM node:24-slim
+# Base node image
+FROM node:20-alpine AS node
 
-ARG GITNEXUS_VERSION=1.5.3
+RUN apk upgrade --no-cache
+RUN apk add --no-cache jemalloc
+RUN apk add --no-cache python3 py3-pip uv
 
-# 1. Build native addons with Bookworm toolchain, then remove build tools.
-#    curl stays for the docker healthcheck; Caddy lives in its own container.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ curl \
-    && npm install -g gitnexus@${GITNEXUS_VERSION} \
-    && apt-get purge -y --auto-remove python3 make g++ \
-    && rm -rf /var/lib/apt/lists/* /root/.npm
+# Set environment variable to use jemalloc
+ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 
-# 2. Upgrade libstdc++ from Trixie — @ladybugdb/core prebuilt binary needs
-#    GLIBCXX_3.4.32 which Bookworm (3.4.31) doesn't ship.
-RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list \
-    && apt-get update \
-    && apt-get install -y -t trixie libstdc++6 \
-    && rm /etc/apt/sources.list.d/trixie.list \
-    && rm -rf /var/lib/apt/lists/*
+# Add `uv` for extended MCP support
+COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/local/bin/uvx /bin/
+RUN uv --version
 
-# 3. Pre-install LadybugDB FTS + vector extensions so ~/.kuzu/extension/
-#    is baked into the image. Workaround for upstream GitNexus 1.5.3 bug.
-COPY install-extensions.js /tmp/install-extensions.js
-RUN node /tmp/install-extensions.js && rm -rf /tmp/install-extensions.js /tmp/lbug-ext-install
+# Set configurable max-old-space-size with default
+ARG NODE_MAX_OLD_SPACE_SIZE=6144
 
-# 4. Patch lbug-adapter.js to also LOAD EXTENSION vector after FTS.
-RUN LBUG_ADAPTER=/usr/local/lib/node_modules/gitnexus/dist/mcp/core/lbug-adapter.js \
-    && grep -q "LOAD EXTENSION fts" "$LBUG_ADAPTER" \
-    && sed -i "s|await available\[0\]\.query('LOAD EXTENSION fts');|await available[0].query('LOAD EXTENSION fts'); try { await available[0].query('LOAD EXTENSION vector'); } catch (e) { /* vector extension may not be installed */ }|g" "$LBUG_ADAPTER" \
-    && grep -c "LOAD EXTENSION vector" "$LBUG_ADAPTER" \
-    && echo "lbug-adapter.js patched to load vector extension"
+RUN mkdir -p /app && chown node:node /app
+WORKDIR /app
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+USER node
 
-EXPOSE 4747
+COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node api/package.json ./api/package.json
+COPY --chown=node:node client/package.json ./client/package.json
+COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
+COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
+COPY --chown=node:node packages/api/package.json ./packages/api/package.json
 
-ENTRYPOINT ["/entrypoint.sh"]
+RUN \
+    # Allow mounting of these files, which have no default
+    touch .env ; \
+    # Create directories for the volumes to inherit the correct permissions
+    mkdir -p /app/client/public/images /app/logs /app/uploads ; \
+    npm config set fetch-retry-maxtimeout 600000 ; \
+    npm config set fetch-retries 5 ; \
+    npm config set fetch-retry-mintimeout 15000 ; \
+    npm ci --no-audit
+
+COPY --chown=node:node . .
+
+RUN \
+    # React client build with configurable memory
+    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
+    npm prune --production; \
+    npm cache clean --force
+
+# Node API setup
+EXPOSE 3080
+ENV HOST=0.0.0.0
+CMD ["npm", "run", "backend"]
+
+# Optional: for client with nginx routing
+# FROM nginx:stable-alpine AS nginx-client
+# WORKDIR /usr/share/nginx/html
+# COPY --from=node /app/client/dist /usr/share/nginx/html
+# COPY client/nginx.conf /etc/nginx/conf.d/default.conf
+# ENTRYPOINT ["nginx", "-g", "daemon off;"]
