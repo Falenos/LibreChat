@@ -12,13 +12,15 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 ## Inline Modifications
 
+<!-- seams:auto:begin -->
 | File | Symbol/Anchor | Lines | Purpose | Tests |
 |---|---|---|---|---|
 | `api/server/index.js` | `app.use('/api/knauf', ...)` | 189–191 | Mount-point — Knauf-only Express router under `/api/knauf` | `api/server/routes/knauf/autogeneratePrompt.spec.js` |
 | `client/src/components/SidePanel/Agents/AgentPanel.tsx` | `import AgentConfig` | 32–34 | Import swap — replaces upstream `AgentConfig` with `KnaufAgentConfig` | Manual (builder renders correctly) |
 | `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE` | 22–29, 89–93, 135–139 | Inline gate — hides Advanced panel button and Duplicate agent button for simplified builder | `AgentFooter.spec.tsx` |
-| `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 447–449, 499–501 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
-| `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 148–155 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
+| `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
+| `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
+<!-- seams:auto:end -->
 
 ## Configuration
 

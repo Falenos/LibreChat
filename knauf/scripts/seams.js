@@ -33,7 +33,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const readline = require('readline');
 
-const REPO_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SEAMS_PATH = path.join(REPO_ROOT, 'SEAMS.md');
 const SENTINEL_BEGIN = '<!-- seams:auto:begin -->';
 const SENTINEL_END = '<!-- seams:auto:end -->';
