@@ -34,7 +34,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | File | Upstream Imports | Coupling Risk | Tests |
 |---|---|---|---|
 | `api/server/routes/knauf/index.js` | `express` | Low — additive router | — |
-| `api/server/routes/knauf/autogeneratePrompt.js` | `requireJwtAuth`, `getResponseSender` | Medium — uses upstream middleware + Azure OpenAI client | `autogeneratePrompt.spec.js` |
+| `api/server/routes/knauf/autogeneratePrompt.js` | `requireJwtAuth`, `getProviderConfig`, `initializeModel` (`@librechat/agents`) | Low/Medium — upstream middleware + the same single-entry-point `initializeModel` the agent graph uses (provider-agnostic, no provider-specific deps) | `autogeneratePrompt.spec.js` |
 | `client/src/knauf/components/Agents/KnaufAgentConfig.tsx` | `~/{hooks,components}/*` (12+ upstream imports) | High — builds on upstream form context, hooks, components | Manual |
 | `client/src/knauf/components/Agents/KnaufFileSearch.tsx` | `~/{hooks,components}/*` | Medium — fork of upstream `FileSearch`, drops checkbox | Manual |
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |

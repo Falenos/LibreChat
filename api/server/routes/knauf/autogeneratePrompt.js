@@ -10,15 +10,14 @@
  * provider (`endpoint`), the model/deployment, max_completion_tokens, and
  * promptPrefix (= the system message).
  *
- * Provider routing: instead of hardcoding the Azure SDK, we walk the same
- * `providerConfigMap` / `getProviderConfig({ provider, appConfig })` path
- * that `packages/api/src/agents/initialize.ts:327-345` uses for every chat
- * turn. The resolved `getOptions` returns a langchain-shaped `llmConfig`
- * (API key resolved from env, Azure deployment mapped, headers merged) that
- * we feed straight into `ChatOpenAI` / `AzureChatOpenAI`. Net effect: any
- * OpenAI-compatible endpoint configured in the YAML works without code
- * changes here. Anthropic/Google/Bedrock-shaped llmConfig is detected and
- * rejected with a clear error.
+ * Provider routing: we walk the same `getProviderConfig({ provider,
+ * appConfig })` path that `packages/api/src/agents/initialize.ts` uses for
+ * every chat turn to resolve credentials, then hand the resulting
+ * `llmConfig` to `@librechat/agents`'s `initializeModel` — the same single
+ * entry point the agent graph and summarization node use to build a chat
+ * model. Net effect: any provider configured in the YAML (azureOpenAI,
+ * openAI, anthropic, google, bedrock, custom, ...) works without pulling
+ * provider-specific deps into this file.
  *
  * Request body: validated by `autogeneratePromptSchema` below. Nested:
  * `{ agent: { name, description, category, personality: { label, description },
@@ -35,10 +34,10 @@
  */
 const express = require('express');
 const { z } = require('zod');
-const { ChatOpenAI, AzureChatOpenAI } = require('@langchain/openai');
 const { HumanMessage, SystemMessage } = require('@langchain/core/messages');
 const { logger, getTenantId } = require('@librechat/data-schemas');
 const { getProviderConfig } = require('@librechat/api');
+const { initializeModel } = require('@librechat/agents');
 const { specialVariables } = require('librechat-data-provider');
 const { getAppConfig } = require('~/server/services/Config');
 const { requireJwtAuth } = require('~/server/middleware');
@@ -195,36 +194,39 @@ router.post('/', express.json({ limit: '32kb' }), async (req, res) => {
 
     const llmConfig = options?.llmConfig ?? {};
 
-    // 3. Construct a langchain client. We support OpenAI-compatible providers
-    //    only (azureOpenAI, openAI, custom xAI/deepseek/openrouter — they all
-    //    flow through `getOpenAIConfig` and return ChatOpenAI-shaped options).
-    //    Anthropic/Google/Bedrock-shaped configs lack the OpenAI key fields and
-    //    are rejected up-front rather than crashing the langchain constructor.
-    const isAzure = Boolean(llmConfig.azureOpenAIApiInstanceName);
-    const hasOpenAIKey = Boolean(llmConfig.apiKey || llmConfig.openAIApiKey);
-    if (!isAzure && !hasOpenAIKey) {
-      logger.warn(
-        `[knauf autogenerate-prompt] provider '${provider}' did not produce an OpenAI-compatible llmConfig`,
-      );
-      return res
-        .status(500)
-        .json({ message: 'Autogenerate is not configured on this deployment.' });
-    }
-
+    // 3. Build the chat model via `@librechat/agents`'s `initializeModel` —
+    //    the single entry point the agent graph and summarization node use.
+    //    It dispatches on `provider` to the right LangChain class
+    //    (ChatOpenAI / AzureChatOpenAI / ChatAnthropic / ChatVertexAI /
+    //    ChatBedrockConverse / …) and applies provider-specific field
+    //    assignments, so this route works for any endpoint configured in
+    //    `librechat.yaml` modelSpecs without provider-specific deps here.
     const maxCompletionTokens = spec.preset.max_completion_tokens;
     const modelKwargs = { ...(llmConfig.modelKwargs ?? {}) };
     if (typeof maxCompletionTokens === 'number') {
       modelKwargs.max_completion_tokens = maxCompletionTokens;
     }
 
-    const ClientCtor = isAzure ? AzureChatOpenAI : ChatOpenAI;
-    const client = new ClientCtor({
-      ...llmConfig,
-      streaming: false,
-      disableStreaming: true,
-      modelKwargs,
-      configuration: options.configOptions,
-    });
+    let client;
+    try {
+      client = initializeModel({
+        provider,
+        clientOptions: {
+          ...llmConfig,
+          streaming: false,
+          disableStreaming: true,
+          modelKwargs,
+          configuration: options.configOptions,
+        },
+      });
+    } catch (initErr) {
+      logger.warn(
+        `[knauf autogenerate-prompt] initializeModel failed for provider '${provider}': ${initErr?.message}`,
+      );
+      return res
+        .status(500)
+        .json({ message: 'Autogenerate is not configured on this deployment.' });
+    }
 
     // 4. Compose system + user messages.
     const systemMsg =
