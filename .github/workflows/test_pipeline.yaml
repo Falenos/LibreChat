@@ -27,7 +27,7 @@ jobs:
       build-app: false
       lint-code: false
       project-key-vault-name: kv-ct-shared-tools
-      test-command: 'export NODE_OPTIONS="--max-old-space-size=8192" && npm run build:packages && npm run test:coverage'
+      test-command: 'export NODE_OPTIONS="--max-old-space-size=6144" && npm run build:packages && npm run test:coverage'
       upload-coverage-report: true
       coverage-report-path: './client/coverage/lcov.info'
     secrets:
