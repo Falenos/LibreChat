@@ -15,7 +15,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/
 RUN uv --version
 
 # Set configurable max-old-space-size with default
-ARG NODE_MAX_OLD_SPACE_SIZE=6144
+ARG NODE_MAX_OLD_SPACE_SIZE=8192
 
 RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
