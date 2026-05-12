@@ -29,7 +29,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | Interface toggles, agent config, model specs, welcome text |
 | `.env`           | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
 | `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
-| `package.json`   | `"mongodb": "^6.14.2"` | add it to peerDependencies |
+| `packages/api/package.json` | `"mongodb": "^6.14.2"` moved from `devDependencies` → `peerDependencies` | Fixes production `MODULE_NOT_FOUND` crash — `mongodb` was externalized by rollup but not declared as a peer, so prod installs omitted it |
+| `api/package.json` | `"mongodb": "^6.14.2"` added to `dependencies` | Peer dep fulfillment — ensures `mongodb` is present in production `node_modules` so `@librechat/api` dist can resolve it |
 
 ## Net-New Files
 
