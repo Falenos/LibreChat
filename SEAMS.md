@@ -29,7 +29,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | Interface toggles, agent config, model specs, welcome text |
 | `.env`           | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
 | `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
-| `package.json`   | `"mongodb": "^6.14.2"` | remove from devDependencies and add it to peerDependencies |
+| `package.json`   | `"mongodb": "^6.14.2"` | add it to peerDependencies |
 
 ## Net-New Files
 
