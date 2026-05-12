@@ -1,7 +1,9 @@
 name: Seam Validator
 on:
   pull_request:
-    branches: [main]
+    # chore/upstream-* covers PRs from sub-branches into the long-running upstream
+    # integration branch — see UPSTREAM_SYNC.md branching strategy.
+    branches: [main, 'chore/upstream-*']
 
 permissions:
   contents: read
@@ -11,80 +13,56 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Need the PR base commit to compute the diff for the diff-check step.
+          fetch-depth: 0
 
-      - name: Validate seam manifest
+      - name: Manifest sync check
+        id: manifest
         run: |
           set -euo pipefail
-          ERRORS=0
-
-          echo "## Seam Validation Report" >> $GITHUB_STEP_SUMMARY
-
-          # 1. Find all [knauf] markers in source (excluding knauf/ dirs, node_modules, SEAMS.md)
-          MARKER_FILES=$(grep -rln '\[knauf\]' \
-            --include='*.js' --include='*.ts' --include='*.tsx' --include='*.jsx' --include='*.css' \
-            --exclude-dir='knauf' --exclude-dir='node_modules' --exclude='SEAMS.md' \
-            api/ client/ packages/ 2>/dev/null | sort -u || true)
-
-          echo "### Source Markers" >> $GITHUB_STEP_SUMMARY
-          if [ -z "$MARKER_FILES" ]; then
-            echo "No \`[knauf]\` markers found in source." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "$MARKER_FILES" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          # Helper: log error to stdout, GH annotation, AND step summary
-          log_error() {
-            local file="$1" msg="$2"
-            echo "❌ $msg"
-            echo "::error file=$file::$msg"
-            echo "❌ \`$file\`: $msg" >> $GITHUB_STEP_SUMMARY
-            ERRORS=$((ERRORS + 1))
-          }
-
-          # 2. Check every marker file is listed in SEAMS.md
-          echo "### Marker → Manifest Check" >> $GITHUB_STEP_SUMMARY
-          if [ -f SEAMS.md ]; then
-            while IFS= read -r file; do
-              [ -z "$file" ] && continue
-              if ! grep -q "$file" SEAMS.md; then
-                log_error "$file" "has [knauf] marker but is NOT in SEAMS.md"
-              fi
-            done <<< "$MARKER_FILES"
-          else
-            if [ -n "$MARKER_FILES" ]; then
-              log_error "SEAMS.md" "does not exist but [knauf] markers found"
-            fi
-          fi
-
-          # 3. Check every SEAMS.md inline entry points to a real file with a marker
-          if [ -f SEAMS.md ]; then
-            echo "### Manifest → Source Check" >> $GITHUB_STEP_SUMMARY
-            SEAM_PATHS=$(awk '/^## Inline Modifications/{found=1; next} found && /^## /{exit} found && /^\| `/' SEAMS.md | awk -F'`' '{print $2}' || true)
-            while IFS= read -r path; do
-              [ -z "$path" ] && continue
-              if [ ! -f "$path" ]; then
-                log_error "$path" "listed in SEAMS.md but file does not exist (deleted or renamed?)"
-              elif ! grep -q '\[knauf\]' "$path" 2>/dev/null; then
-                log_error "$path" "listed in SEAMS.md but has no [knauf] marker"
-              fi
-            done <<< "$SEAM_PATHS"
-          fi
-
-          # 4. Report counts
-          MARKER_COUNT=0
-          if [ -n "$MARKER_FILES" ]; then
-            MARKER_COUNT=$(echo "$MARKER_FILES" | grep -c . || true)
-          fi
-          KNAUF_FILES=$(find api/knauf client/src/knauf packages/knauf -type f -not -name '.gitkeep' 2>/dev/null | wc -l || echo 0)
-          echo "### Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Files with inline markers:** $MARKER_COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "- **Net-new knauf/ files:** $KNAUF_FILES" >> $GITHUB_STEP_SUMMARY
-          echo "- **Validation errors:** $ERRORS" >> $GITHUB_STEP_SUMMARY
-
-          if [ "$ERRORS" -gt 0 ]; then
+          {
+            echo "## Seam Validation Report"
             echo ""
-            echo "::error::Seam validation failed with $ERRORS error(s). Every [knauf] marker needs a SEAMS.md entry and vice versa."
-            exit 1
+            echo "### Manifest sync (\`knauf/scripts/seams.js check\`)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if node knauf/scripts/seams.js check --all > seams-check.log 2>&1; then
+            echo "✅ SEAMS.md is in sync with [knauf] markers." >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log
+          else
+            rc=$?
+            echo "❌ SEAMS.md is out of sync." >> "$GITHUB_STEP_SUMMARY"
+            echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log
+            echo "::error::SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\` locally and commit."
+            exit "$rc"
+          fi
+
+      - name: Untagged upstream modifications check
+        id: diffcheck
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          {
+            echo ""
+            echo "### Diff check vs PR base (\`knauf/scripts/seams.js diff-check\`)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if node knauf/scripts/seams.js diff-check --base="$BASE_SHA" > seams-diff.log 2>&1; then
+            echo "✅ All modified upstream files carry [knauf] markers." >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log
+          else
+            rc=$?
+            echo "❌ One or more upstream files were modified without a [knauf] marker." >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log
+            echo "::error::Modified upstream files lack [knauf] markers. See CUSTOMIZATION_STRATEGY.md tier 5."
+            exit "$rc"
           fi
