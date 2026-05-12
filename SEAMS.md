@@ -24,11 +24,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 ## Configuration
 
-| File | Purpose |
-|---|---|
+| File             | Purpose |
+|------------------|---|
 | `librechat.yaml` | Interface toggles, agent config, model specs, welcome text |
-| `.env` | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
-| `Dockerfile` | `# [knauf] Keep workspace runtime deps...` | 
+| `.env`           | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
+| `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
+| `package.json`   | `"mongodb": "^6.14.2"` | remove from devDependencies and add it to peerDependencies |
 
 ## Net-New Files
 
