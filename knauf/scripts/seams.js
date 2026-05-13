@@ -105,9 +105,11 @@ function classifyFile(p) {
   if (IGNORE_PREFIXES.some((d) => norm.startsWith(d))) return 'ignore';
   if (norm.includes('/node_modules/')) return 'ignore';
 
+  // Top-level knauf/ is Knauf tooling/docs — not runtime code, not tracked as a seam.
+  if (norm.startsWith('knauf/')) return 'meta';
+
   if (KNAUF_DIRS.some((d) => norm.startsWith(d))) return 'knauf-only';
-  // Defensive: any path component named `knauf` (matches the
-  // `--exclude-dir='knauf'` semantics of the original validator grep).
+  // Defensive: any path component named `knauf` inside api/, client/, packages/, etc.
   if (/(^|\/)knauf\//.test(norm)) return 'knauf-only';
 
   if (CONFIG_FILES.has(norm)) return 'config';
