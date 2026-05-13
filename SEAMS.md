@@ -25,10 +25,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 ## Configuration
 
-| File | Purpose |
-|---|---|
+| File             | Purpose |
+|------------------|---|
 | `librechat.yaml` | Interface toggles, agent config, model specs, welcome text |
-| `.env` | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
+| `.env`           | Azure OpenAI keys, MongoDB URI, RAG API URL, MeiliSearch config |
+| `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
+| `packages/api/package.json` | `"mongodb": "^6.14.2"` moved from `devDependencies` → `peerDependencies` | Fixes production `MODULE_NOT_FOUND` crash — `mongodb` was externalized by rollup but not declared as a peer, so prod installs omitted it |
+| `api/package.json` | `"mongodb": "^6.14.2"` added to `dependencies` | Peer dep fulfillment — ensures `mongodb` is present in production `node_modules` so `@librechat/api` dist can resolve it |
 
 ## Net-New Files
 
@@ -36,7 +39,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | File | Upstream Imports | Coupling Risk | Tests |
 |---|---|---|---|
 | `api/server/routes/knauf/index.js` | `express` | Low — additive router | — |
-| `api/server/routes/knauf/autogeneratePrompt.js` | `requireJwtAuth`, `getResponseSender` | Medium — uses upstream middleware + Azure OpenAI client | `autogeneratePrompt.spec.js` |
+| `api/server/routes/knauf/autogeneratePrompt.js` | `requireJwtAuth`, `getProviderConfig`, `initializeModel` (`@librechat/agents`) | Low/Medium — upstream middleware + the same single-entry-point `initializeModel` the agent graph uses (provider-agnostic, no provider-specific deps) | `autogeneratePrompt.spec.js` |
 | `client/src/knauf/components/Agents/KnaufAgentConfig.tsx` | `~/{hooks,components}/*` (12+ upstream imports) | High — builds on upstream form context, hooks, components | Manual |
 | `client/src/knauf/components/Agents/KnaufFileSearch.tsx` | `~/{hooks,components}/*` | Medium — fork of upstream `FileSearch`, drops checkbox | Manual |
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |

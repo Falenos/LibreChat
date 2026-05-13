@@ -18,9 +18,8 @@ jest.mock('@librechat/data-schemas', () => ({
   getTenantId: jest.fn().mockReturnValue('tenant-1'),
 }));
 
-jest.mock('@langchain/openai', () => ({
-  ChatOpenAI: jest.fn(),
-  AzureChatOpenAI: jest.fn(),
+jest.mock('@librechat/agents', () => ({
+  initializeModel: jest.fn(),
 }));
 
 jest.mock('@langchain/core/messages', () => ({
@@ -41,7 +40,7 @@ const express = require('express');
 const request = require('supertest');
 const { getAppConfig } = require('~/server/services/Config');
 const { getProviderConfig } = require('@librechat/api');
-const { ChatOpenAI } = require('@langchain/openai');
+const { initializeModel } = require('@librechat/agents');
 
 const router = require('./autogeneratePrompt');
 const { buildUserMessage } = require('./autogeneratePrompt');
@@ -183,7 +182,7 @@ describe('POST /', () => {
     getAppConfig.mockResolvedValue(makeConfig());
     getProviderConfig.mockReturnValue({ getOptions: makeGetOptions() });
     const mockInvoke = jest.fn().mockResolvedValue({ content: '   ' });
-    ChatOpenAI.mockImplementation(() => ({ invoke: mockInvoke }));
+    initializeModel.mockReturnValue({ invoke: mockInvoke });
 
     const res = await request(app).post('/').send(VALID_BODY);
     expect(res.status).toBe(502);
@@ -194,7 +193,7 @@ describe('POST /', () => {
     getAppConfig.mockResolvedValue(makeConfig());
     getProviderConfig.mockReturnValue({ getOptions: makeGetOptions() });
     const mockInvoke = jest.fn().mockResolvedValue({ content: 'You are a sales expert.' });
-    ChatOpenAI.mockImplementation(() => ({ invoke: mockInvoke }));
+    initializeModel.mockReturnValue({ invoke: mockInvoke });
 
     const res = await request(app)
       .post('/')
@@ -202,5 +201,16 @@ describe('POST /', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.text).toBe('You are a sales expert.');
+    // Lock in the provider-agnostic contract: we feed the YAML-resolved
+    // provider straight to @librechat/agents' single entry point.
+    expect(initializeModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'openAI',
+        clientOptions: expect.objectContaining({
+          streaming: false,
+          disableStreaming: true,
+        }),
+      }),
+    );
   });
 });
