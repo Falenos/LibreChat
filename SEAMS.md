@@ -20,6 +20,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE` | 22–29, 89–93, 135–139 | Inline gate — hides Advanced panel button and Duplicate agent button for simplified builder | `AgentFooter.spec.tsx` |
 | `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
 | `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
+| `Dockerfile` | — | 13–16, 32–34 | uv binary for extended MCP server support | — |
+| `Dockerfile.multi` | — | 72–75 | uv binary for extended MCP server support | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -31,6 +33,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 ## Net-New Files
 
+<!-- seams:new:begin -->
 | File | Upstream Imports | Coupling Risk | Tests |
 |---|---|---|---|
 | `api/server/routes/knauf/index.js` | `express` | Low — additive router | — |
@@ -40,6 +43,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |
 | `client/src/knauf/data-provider/*.ts` | `librechat-data-provider` types | Low — pure data layer, no upstream modifications | `usePersonalities.spec.ts` |
 | `client/src/knauf/common/*.ts` | `librechat-data-provider` types | Low — shared constants and types | `agents-types.spec.ts` |
+| `knauf/scripts/seams.js` | — | Low — tooling only, no runtime coupling | — |
+<!-- seams:new:end -->
 
 ## Static Assets
 

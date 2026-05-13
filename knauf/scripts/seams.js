@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// @ts-nocheck
 /*
  * knauf/scripts/seams.js
  *
@@ -37,8 +36,12 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SEAMS_PATH = path.join(REPO_ROOT, 'SEAMS.md');
 const SENTINEL_BEGIN = '<!-- seams:auto:begin -->';
 const SENTINEL_END = '<!-- seams:auto:end -->';
+const SENTINEL_NEW_BEGIN = '<!-- seams:new:begin -->';
+const SENTINEL_NEW_END = '<!-- seams:new:end -->';
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.css']);
+// Dockerfiles have no standard extension; match by base name.
+const DOCKERFILE_RE = /^Dockerfile(\..*)?$/;
 
 const TTY = process.stdout.isTTY;
 const C = {
@@ -77,10 +80,7 @@ const KNAUF_DIRS = [
   'assets/knauf/',
 ];
 
-const CONFIG_FILES = new Set([
-  'librechat.yaml',
-  'docker-compose.override.yml',
-]);
+const CONFIG_FILES = new Set(['librechat.yaml', 'docker-compose.override.yml']);
 
 const UPSTREAM_PREFIXES = [
   'api/',
@@ -112,12 +112,23 @@ function classifyFile(p) {
 
   if (CONFIG_FILES.has(norm)) return 'config';
   if (norm.startsWith('.env')) return 'config';
-  if (/^Dockerfile(\.|$)/.test(norm)) return 'config';
+  // Root-level Dockerfiles are upstream files modified inline — require [knauf] markers.
+  if (DOCKERFILE_RE.test(norm)) return 'upstream';
 
   if (META_PREFIXES.some((d) => norm.startsWith(d))) return 'meta';
   if (LOCKFILES.has(norm)) return 'meta';
   // Top-level markdown / config files (CLAUDE.md, README.md, AGENTS.md, SEAMS.md, etc.)
-  if (!norm.includes('/') && (norm.endsWith('.md') || norm === 'turbo.json' || norm === '.prettierrc' || norm === '.gitignore' || norm === '.gitattributes' || norm === '.nvmrc' || norm === '.dockerignore' || norm === 'LICENSE')) {
+  if (
+    !norm.includes('/') &&
+    (norm.endsWith('.md') ||
+      norm === 'turbo.json' ||
+      norm === '.prettierrc' ||
+      norm === '.gitignore' ||
+      norm === '.gitattributes' ||
+      norm === '.nvmrc' ||
+      norm === '.dockerignore' ||
+      norm === 'LICENSE')
+  ) {
     return 'meta';
   }
   // Top-level package.json is meta (it's repo glue, not upstream code)
@@ -178,24 +189,41 @@ function walkAll() {
     if (!fs.existsSync(abs)) continue;
     walkDir(abs, files);
   }
+  // Root-level Dockerfiles are upstream-class and may carry inline [knauf] edits.
+  for (const ent of fs.readdirSync(REPO_ROOT, { withFileTypes: true })) {
+    if (ent.isFile() && DOCKERFILE_RE.test(ent.name)) {
+      files.push(path.join(REPO_ROOT, ent.name));
+    }
+  }
   return files
     .map((abs) => path.relative(REPO_ROOT, abs).replace(/\\/g, '/'))
-    .filter((rel) => SOURCE_EXTENSIONS.has(path.extname(rel)));
+    .filter((rel) => isSourceFile(rel));
 }
 
 function walkDir(dir, out) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (e) {
+  } catch (_e) {
     return;
   }
   for (const ent of entries) {
-    if (ent.name === 'node_modules' || ent.name === 'dist' || ent.name === 'build' || ent.name === '.turbo') continue;
+    if (
+      ent.name === 'node_modules' ||
+      ent.name === 'dist' ||
+      ent.name === 'build' ||
+      ent.name === '.turbo'
+    )
+      continue;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) walkDir(full, out);
     else if (ent.isFile()) out.push(full);
   }
+}
+
+function isSourceFile(f) {
+  if (SOURCE_EXTENSIONS.has(path.extname(f))) return true;
+  return DOCKERFILE_RE.test(path.basename(f));
 }
 
 // ---------- marker scanning ----------
@@ -208,7 +236,7 @@ function scanFile(rel) {
   let content;
   try {
     content = fs.readFileSync(abs, 'utf8');
-  } catch (e) {
+  } catch (_e) {
     return { seams: [], unpaired: [], missing: true };
   }
   const lines = content.split('\n');
@@ -421,14 +449,16 @@ function renderTable(rows) {
   if (rows.length === 0) {
     return `\n${header}\n`;
   }
-  const body = rows.map((r) => {
-    const file = '`' + r.file + '`';
-    const symbol = r.symbol || PLACEHOLDER;
-    const lines = r.lines || PLACEHOLDER;
-    const purpose = r.purpose || PLACEHOLDER;
-    const tests = r.tests || PLACEHOLDER;
-    return `| ${file} | ${symbol} | ${lines} | ${purpose} | ${tests} |`;
-  }).join('\n');
+  const body = rows
+    .map((r) => {
+      const file = '`' + r.file + '`';
+      const symbol = r.symbol || PLACEHOLDER;
+      const lines = r.lines || PLACEHOLDER;
+      const purpose = r.purpose || PLACEHOLDER;
+      const tests = r.tests || PLACEHOLDER;
+      return `| ${file} | ${symbol} | ${lines} | ${purpose} | ${tests} |`;
+    })
+    .join('\n');
   return `\n${header}\n${body}\n`;
 }
 
@@ -465,14 +495,27 @@ function lcsDiff(a, b) {
     }
   }
   const ops = [];
-  let i = 0, j = 0;
+  let i = 0,
+    j = 0;
   while (i < n && j < m) {
-    if (a[i] === b[j]) { ops.push({ kind: 'eq', line: a[i] }); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ kind: 'del', line: a[i] }); i++; }
-    else { ops.push({ kind: 'add', line: b[j] }); j++; }
+    if (a[i] === b[j]) {
+      ops.push({ kind: 'eq', line: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ kind: 'del', line: a[i] });
+      i++;
+    } else {
+      ops.push({ kind: 'add', line: b[j] });
+      j++;
+    }
   }
-  while (i < n) { ops.push({ kind: 'del', line: a[i++] }); }
-  while (j < m) { ops.push({ kind: 'add', line: b[j++] }); }
+  while (i < n) {
+    ops.push({ kind: 'del', line: a[i++] });
+  }
+  while (j < m) {
+    ops.push({ kind: 'add', line: b[j++] });
+  }
   return ops;
 }
 
@@ -501,6 +544,85 @@ function writeAtomic(filePath, content) {
   fs.renameSync(tmp, filePath);
 }
 
+// ---------- net-new files ----------
+
+function splitNewBlock(md) {
+  const ib = md.indexOf(SENTINEL_NEW_BEGIN);
+  const ie = md.indexOf(SENTINEL_NEW_END);
+  if (ib === -1 || ie === -1 || ie < ib) return { before: md, newBlock: null, after: '' };
+  return {
+    before: md.slice(0, ib + SENTINEL_NEW_BEGIN.length),
+    newBlock: md.slice(ib + SENTINEL_NEW_BEGIN.length, ie),
+    after: md.slice(ie),
+  };
+}
+
+function parseNewFileRows(newBlock) {
+  if (!newBlock) return [];
+  const rows = [];
+  for (const raw of newBlock.split('\n')) {
+    const line = raw.trim();
+    if (!line.startsWith('|')) continue;
+    if (/^\|\s*-+\s*\|/.test(line)) continue;
+    if (/^\|\s*File\s*\|/.test(line)) continue;
+    const cells = splitTableCells(line);
+    if (cells.length < 4) continue;
+    const file = stripBackticks(cells[0]);
+    if (!file) continue;
+    rows.push({ file, imports: cells[1], risk: cells[2], tests: cells[3] });
+  }
+  return rows;
+}
+
+function isFileRegisteredInNewTable(file, rows) {
+  const norm = file.replace(/\\/g, '/');
+  for (const row of rows) {
+    const pattern = row.file;
+    if (pattern === norm) return true;
+    if (pattern.includes('*')) {
+      const starIdx = pattern.indexOf('*');
+      const prefix = pattern.slice(0, starIdx);
+      const suffix = pattern.slice(starIdx + 1);
+      if (norm.startsWith(prefix) && norm.endsWith(suffix)) return true;
+    }
+  }
+  return false;
+}
+
+function addedKnaufFiles(base) {
+  let out;
+  try {
+    out = git(`diff --name-only --diff-filter=A ${base}`);
+  } catch (e) {
+    fail(`git diff (added files) failed: ${e.message}`);
+  }
+  return out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((f) => classifyFile(f) === 'knauf-only');
+}
+
+function mergeNewFileRows(existing, added) {
+  const newRows = added
+    .filter((f) => !isFileRegisteredInNewTable(f, existing))
+    .map((f) => ({ file: f, imports: PLACEHOLDER, risk: PLACEHOLDER, tests: PLACEHOLDER }))
+    .sort((a, b) => a.file.localeCompare(b.file));
+  return [...existing, ...newRows];
+}
+
+function renderNewFilesTable(rows) {
+  const header = '| File | Upstream Imports | Coupling Risk | Tests |\n|---|---|---|---|';
+  if (rows.length === 0) return `\n${header}\n`;
+  const body = rows
+    .map(
+      (r) =>
+        `| \`${r.file}\` | ${r.imports || PLACEHOLDER} | ${r.risk || PLACEHOLDER} | ${r.tests || PLACEHOLDER} |`,
+    )
+    .join('\n');
+  return `\n${header}\n${body}\n`;
+}
+
 // ---------- subcommands ----------
 
 function resolveScope(flags) {
@@ -514,7 +636,7 @@ function discoverSeams(files) {
   const unpaired = [];
   for (const f of files) {
     if (classifyFile(f) !== 'upstream') continue;
-    if (!SOURCE_EXTENSIONS.has(path.extname(f))) continue;
+    if (!isSourceFile(f)) continue;
     const r = scanFile(f);
     seams.push(...r.seams);
     unpaired.push(...r.unpaired);
@@ -526,13 +648,20 @@ function cmdScan(flags) {
   const scope = resolveScope(flags);
   const { seams, unpaired } = discoverSeams(scope.files);
   if (flags.json) {
-    process.stdout.write(JSON.stringify({ scope: scope.mode, base: scope.base || null, seams, unpaired }, null, 2) + '\n');
+    process.stdout.write(
+      JSON.stringify({ scope: scope.mode, base: scope.base || null, seams, unpaired }, null, 2) +
+        '\n',
+    );
     return 0;
   }
-  console.log(`${C.bold}Seams discovered (${scope.mode}${scope.base ? ' base=' + scope.base.slice(0, 8) : ''}):${C.reset}`);
+  console.log(
+    `${C.bold}Seams discovered (${scope.mode}${scope.base ? ' base=' + scope.base.slice(0, 8) : ''}):${C.reset}`,
+  );
   if (seams.length === 0) console.log(`  ${C.dim}(none)${C.reset}`);
   for (const s of seams) {
-    console.log(`  ${C.cyan}${s.file}${C.reset}:${s.startLine}-${s.endLine}  ${s.description || C.dim + '(no description)' + C.reset}`);
+    console.log(
+      `  ${C.cyan}${s.file}${C.reset}:${s.startLine}-${s.endLine}  ${s.description || C.dim + '(no description)' + C.reset}`,
+    );
   }
   if (unpaired.length > 0) {
     console.log(`\n${C.yellow}Unpaired markers:${C.reset}`);
@@ -541,24 +670,42 @@ function cmdScan(flags) {
   return 0;
 }
 
-function buildNewMd(currentMd, discoveredSeams) {
-  const split = splitAutoBlock(currentMd);
-  if (split.autoBlock === null) {
+function buildNewMd(currentMd, discoveredSeams, addedKnaufList = []) {
+  // Step 1: update Inline Modifications block
+  const inlineSplit = splitAutoBlock(currentMd);
+  if (inlineSplit.autoBlock === null) {
     fail(
       'SEAMS.md is missing the seams:auto sentinels. ' +
-      `Wrap the Inline Modifications table body with:\n  ${SENTINEL_BEGIN}\n  ...\n  ${SENTINEL_END}`,
+        `Wrap the Inline Modifications table body with:\n  ${SENTINEL_BEGIN}\n  ...\n  ${SENTINEL_END}`,
     );
   }
-  const existingRows = parseAutoBlockRows(split.autoBlock);
+  const existingRows = parseAutoBlockRows(inlineSplit.autoBlock);
   const discoveredRows = aggregateRows(discoveredSeams);
   const merged = mergeRows(existingRows, discoveredRows);
   const newAuto = renderTable(merged);
+  let newMd = inlineSplit.before + newAuto + inlineSplit.after;
+
+  // Step 2: update Net-New Files block (only when sentinels are present)
+  let unregisteredNewFiles = [];
+  const newFileSplit = splitNewBlock(newMd);
+  if (newFileSplit.newBlock !== null && addedKnaufList.length > 0) {
+    const existingNewRows = parseNewFileRows(newFileSplit.newBlock);
+    unregisteredNewFiles = addedKnaufList.filter(
+      (f) => !isFileRegisteredInNewTable(f, existingNewRows),
+    );
+    if (unregisteredNewFiles.length > 0) {
+      const mergedNew = mergeNewFileRows(existingNewRows, addedKnaufList);
+      newMd = newFileSplit.before + renderNewFilesTable(mergedNew) + newFileSplit.after;
+    }
+  }
+
   return {
     oldMd: currentMd,
-    newMd: split.before + newAuto + split.after,
+    newMd,
     existingRows,
     discoveredRows,
     mergedRows: merged,
+    unregisteredNewFiles,
   };
 }
 
@@ -570,8 +717,11 @@ async function cmdWrite(flags) {
   // global manifest. The scope flag only affects which warnings we surface.
   const allDiscovered = flags.all ? seams : discoverSeams(walkAll()).seams;
 
+  // Detect added knauf-only files from the diff to update Net-New Files.
+  const added = flags.all ? [] : addedKnaufFiles(scope.base || resolveDiffBase(flags.base));
+
   const currentMd = readSeamsMd();
-  const result = buildNewMd(currentMd, allDiscovered);
+  const result = buildNewMd(currentMd, allDiscovered, added);
 
   if (unpaired.length > 0) {
     console.log(`${C.yellow}Warning: unpaired [knauf] markers (won't be in the table):${C.reset}`);
@@ -584,13 +734,35 @@ async function cmdWrite(flags) {
     return 0;
   }
 
-  const split = splitAutoBlock(result.oldMd);
-  const newSplit = splitAutoBlock(result.newMd);
-  console.log(unifiedDiff(split.autoBlock, newSplit.autoBlock, 'SEAMS.md (Inline Modifications)'));
-  console.log('');
+  const inlineSplit = splitAutoBlock(result.oldMd);
+  const newInlineSplit = splitAutoBlock(result.newMd);
+  if (hasNonContextChanges(inlineSplit.autoBlock, newInlineSplit.autoBlock)) {
+    console.log(
+      unifiedDiff(
+        inlineSplit.autoBlock,
+        newInlineSplit.autoBlock,
+        'SEAMS.md (Inline Modifications)',
+      ),
+    );
+    console.log('');
+  }
+
+  const netNewSplit = splitNewBlock(result.oldMd);
+  const newNetNewSplit = splitNewBlock(result.newMd);
+  if (
+    netNewSplit.newBlock !== null &&
+    hasNonContextChanges(netNewSplit.newBlock, newNetNewSplit.newBlock)
+  ) {
+    console.log(
+      unifiedDiff(netNewSplit.newBlock, newNetNewSplit.newBlock, 'SEAMS.md (Net-New Files)'),
+    );
+    console.log('');
+  }
 
   if (flags['dry-run']) {
-    console.log(`${C.yellow}Drift detected. Run \`node knauf/scripts/seams.js write\` to apply.${C.reset}`);
+    console.log(
+      `${C.yellow}Drift detected. Run \`node knauf/scripts/seams.js write\` to apply.${C.reset}`,
+    );
     return 1;
   }
 
@@ -612,7 +784,7 @@ async function cmdWrite(flags) {
   return 0;
 }
 
-function cmdCheck(flags) {
+function cmdCheck(_flags) {
   const seams = discoverSeams(walkAll()).seams;
   const currentMd = readSeamsMd();
   const result = buildNewMd(currentMd, seams);
@@ -624,7 +796,9 @@ function cmdCheck(flags) {
   const newSplit = splitAutoBlock(result.newMd);
   console.log(unifiedDiff(split.autoBlock, newSplit.autoBlock, 'SEAMS.md (Inline Modifications)'));
   console.log('');
-  console.log(`${C.red}SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\`.${C.reset}`);
+  console.log(
+    `${C.red}SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\`.${C.reset}`,
+  );
   return 1;
 }
 
@@ -635,36 +809,82 @@ function cmdDiffCheck(flags) {
 
   for (const f of changed) {
     if (classifyFile(f) !== 'upstream') continue;
-    // Only code files need [knauf] markers. Matches the original validator's
-    // grep filter: `--include='*.js' --include='*.ts' --include='*.tsx'
-    // --include='*.jsx' --include='*.css'`. Documentation, JSON fixtures,
-    // images, etc. inside upstream directories are not seams.
-    if (!SOURCE_EXTENSIONS.has(path.extname(f))) continue;
+    // Only code/Dockerfile files need [knauf] markers.
+    if (!isSourceFile(f)) continue;
     // Only check files that still exist (deleted upstream files don't need tags).
     const abs = path.join(REPO_ROOT, f);
     if (!fs.existsSync(abs)) continue;
     if (!fileHasMarker(f)) offenders.push(f);
   }
 
-  console.log(`${C.bold}Diff-check (base ${base.slice(0, 12)}):${C.reset} ${changed.length} changed file(s)`);
+  // Detect added knauf-only files not registered in Net-New Files.
+  const added = addedKnaufFiles(base);
+  const currentMd = readSeamsMd();
+  const newFileSplit = splitNewBlock(currentMd);
+  const existingNewRows =
+    newFileSplit.newBlock !== null ? parseNewFileRows(newFileSplit.newBlock) : [];
+  const unregistered = added.filter((f) => !isFileRegisteredInNewTable(f, existingNewRows));
 
-  if (offenders.length === 0) {
+  console.log(
+    `${C.bold}Diff-check (base ${base.slice(0, 12)}):${C.reset} ${changed.length} changed file(s)`,
+  );
+
+  if (offenders.length === 0 && unregistered.length === 0) {
     console.log(`${C.green}All modified upstream files have [knauf] markers.${C.reset}`);
+    if (added.length > 0) {
+      console.log(
+        `${C.green}All added knauf-only files are registered in Net-New Files.${C.reset}`,
+      );
+    }
     return 0;
   }
 
-  console.log(`\n${C.red}${offenders.length} upstream-class file(s) modified without a [knauf] marker:${C.reset}`);
-  for (const f of offenders) {
-    console.log(`  ${C.red}✗${C.reset} ${f}`);
-    if (process.env.GITHUB_ACTIONS) {
-      console.log(`::error file=${f}::modified upstream file has no [knauf] marker. See CUSTOMIZATION_STRATEGY.md.`);
+  let exitCode = 0;
+
+  if (offenders.length > 0) {
+    exitCode = 1;
+    console.log(
+      `\n${C.red}${offenders.length} upstream-class file(s) modified without a [knauf] marker:${C.reset}`,
+    );
+    for (const f of offenders) {
+      console.log(`  ${C.red}✗${C.reset} ${f}`);
+      if (process.env.GITHUB_ACTIONS) {
+        console.log(
+          `::error file=${f}::modified upstream file has no [knauf] marker. See CUSTOMIZATION_STRATEGY.md.`,
+        );
+      }
+    }
+    console.log(
+      `\n${C.dim}If the change is intentional, add a paired [knauf]/End [knauf] block at the seam ` +
+        `and run \`node knauf/scripts/seams.js write\`. If the file is Knauf-only, move it under a knauf/ directory.${C.reset}`,
+    );
+  }
+
+  if (unregistered.length > 0) {
+    exitCode = 1;
+    console.log(
+      `\n${C.yellow}${unregistered.length} added knauf-only file(s) not in Net-New Files table:${C.reset}`,
+    );
+    for (const f of unregistered) {
+      console.log(`  ${C.yellow}+${C.reset} ${f}`);
+      if (process.env.GITHUB_ACTIONS) {
+        console.log(
+          `::warning file=${f}::new knauf-only file not registered in SEAMS.md Net-New Files. Run \`node knauf/scripts/seams.js write\`.`,
+        );
+      }
+    }
+    if (newFileSplit.newBlock === null) {
+      console.log(
+        `\n${C.dim}Add ${SENTINEL_NEW_BEGIN} / ${SENTINEL_NEW_END} sentinels around the Net-New Files table in SEAMS.md to enable auto-registration.${C.reset}`,
+      );
+    } else {
+      console.log(
+        `\n${C.dim}Run \`node knauf/scripts/seams.js write\` to register them.${C.reset}`,
+      );
     }
   }
-  console.log(
-    `\n${C.dim}If the change is intentional, add a paired [knauf]/End [knauf] block at the seam ` +
-    `and run \`node knauf/scripts/seams.js write\`. If the file is Knauf-only, move it under a knauf/ directory.${C.reset}`,
-  );
-  return 1;
+
+  return exitCode;
 }
 
 // ---------- entry ----------
