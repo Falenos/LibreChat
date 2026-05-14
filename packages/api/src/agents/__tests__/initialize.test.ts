@@ -11,15 +11,32 @@ jest.mock('winston', () => ({
     debug: jest.fn(),
     warn: jest.fn(),
     error: jest.fn(),
+    info: jest.fn(),
   })),
-  format: {
-    combine: jest.fn(),
-    colorize: jest.fn(),
-    simple: jest.fn(),
-  },
+  // [knauf] full mock surface matching api/test/__mocks__/logger.js so
+  // @librechat/data-schemas dist code (winston.cjs + parsers.cjs) loads
+  // without throwing at module-init — see SEAMS.md
+  format: Object.assign(
+    jest.fn((fn) => () => ({ transform: fn })),
+    {
+      combine: jest.fn(),
+      colorize: jest.fn(),
+      simple: jest.fn(),
+      label: jest.fn(),
+      timestamp: jest.fn(),
+      printf: jest.fn(),
+      errors: jest.fn(),
+      splat: jest.fn(),
+      json: jest.fn(),
+    },
+  ),
+  addColors: jest.fn(),
   transports: {
     Console: jest.fn(),
+    DailyRotateFile: jest.fn(),
+    File: jest.fn(),
   },
+  // End [knauf]
 }));
 
 const mockExtractLibreChatParams = jest.fn();
