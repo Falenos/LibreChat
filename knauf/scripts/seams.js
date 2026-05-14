@@ -29,10 +29,41 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 const readline = require('readline');
+const { parseArgs: nodeParseArgs } = require('node:util');
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
+// Minimum Node version. The script uses util.parseArgs (18.3+), node:test (18+),
+// and crypto.randomBytes (always). Fail fast with a clear message instead of a
+// confusing late error.
+const MIN_NODE_MAJOR = 18;
+{
+  const major = Number(process.versions.node.split('.')[0]);
+  if (major < MIN_NODE_MAJOR) {
+    console.error(
+      `error: seams.js requires Node ${MIN_NODE_MAJOR}+ (you have ${process.versions.node}).`,
+    );
+    process.exit(2);
+  }
+}
+
+// Resolve the repo root by walking up from this file until we find a .git
+// directory. Falls back to the historical two-levels-up assumption so the
+// script keeps working if it's ever run outside a git repo (CI tarball etc.).
+function findRepoRoot(startDir) {
+  let dir = startDir;
+  // Limit the walk to ~10 levels to avoid runaway loops on broken filesystems.
+  for (let i = 0; i < 10; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(startDir, '..', '..');
+}
+
+const REPO_ROOT = findRepoRoot(__dirname);
 const SEAMS_PATH = path.join(REPO_ROOT, 'SEAMS.md');
 const SENTINEL_BEGIN = '<!-- seams:auto:begin -->';
 const SENTINEL_END = '<!-- seams:auto:end -->';
@@ -43,31 +74,49 @@ const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.css']);
 // Dockerfiles have no standard extension; match by base name.
 const DOCKERFILE_RE = /^Dockerfile(\..*)?$/;
 
-const TTY = process.stdout.isTTY;
+// Color output is enabled iff: stdout is a TTY, NO_COLOR is not set, and
+// --no-color was not passed. FORCE_COLOR=1 overrides the TTY check (useful
+// when piping through tee, less -R, or CI log viewers that handle ANSI).
+// https://no-color.org / https://force-color.org
+function colorsEnabled() {
+  if (process.argv.includes('--no-color')) return false;
+  if (process.env.NO_COLOR) return false;
+  if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
+  return !!process.stdout.isTTY;
+}
+const USE_COLOR = colorsEnabled();
 const C = {
-  red: TTY ? '\x1b[31m' : '',
-  green: TTY ? '\x1b[32m' : '',
-  yellow: TTY ? '\x1b[33m' : '',
-  cyan: TTY ? '\x1b[36m' : '',
-  dim: TTY ? '\x1b[2m' : '',
-  bold: TTY ? '\x1b[1m' : '',
-  reset: TTY ? '\x1b[0m' : '',
+  red: USE_COLOR ? '\x1b[31m' : '',
+  green: USE_COLOR ? '\x1b[32m' : '',
+  yellow: USE_COLOR ? '\x1b[33m' : '',
+  cyan: USE_COLOR ? '\x1b[36m' : '',
+  dim: USE_COLOR ? '\x1b[2m' : '',
+  bold: USE_COLOR ? '\x1b[1m' : '',
+  reset: USE_COLOR ? '\x1b[0m' : '',
 };
 
 // ---------- argv ----------
 
+// Wraps Node's util.parseArgs. strict: false keeps the old "accept anything"
+// behavior while gaining: typed values (booleans don't become "true" strings),
+// proper handling of `--flag value` AND `--flag=value`, and a `--` terminator.
 function parseArgv(argv) {
-  const args = { _: [], flags: {} };
-  for (const a of argv) {
-    if (a.startsWith('--')) {
-      const eq = a.indexOf('=');
-      if (eq === -1) args.flags[a.slice(2)] = true;
-      else args.flags[a.slice(2, eq)] = a.slice(eq + 1);
-    } else {
-      args._.push(a);
-    }
-  }
-  return args;
+  const { values, positionals } = nodeParseArgs({
+    args: argv,
+    allowPositionals: true,
+    strict: false,
+    options: {
+      diff: { type: 'boolean' },
+      all: { type: 'boolean' },
+      base: { type: 'string' },
+      json: { type: 'boolean' },
+      'dry-run': { type: 'boolean' },
+      yes: { type: 'boolean' },
+      help: { type: 'boolean' },
+      'no-color': { type: 'boolean' },
+    },
+  });
+  return { _: positionals, flags: values };
 }
 
 // ---------- file classification ----------
@@ -92,8 +141,21 @@ const UPSTREAM_PREFIXES = [
 ];
 
 const META_PREFIXES = ['.github/', '.husky/', '.vscode/', '.do/', '.devcontainer/'];
-const IGNORE_PREFIXES = ['node_modules/', 'dist/', 'build/', '.turbo/', '.git/'];
+// IGNORE_PREFIXES: top-level directories whose contents are never code-of-record.
+// We test prefix-match AND `/node_modules/` anywhere-substring (for nested
+// workspace node_modules) in classifyFile.
+const IGNORE_PREFIXES = ['dist/', 'build/', '.turbo/', '.git/'];
 const LOCKFILES = new Set(['bun.lock', 'package-lock.json', 'yarn.lock']);
+const ROOT_META_FILES = new Set([
+  'package.json',
+  'turbo.json',
+  '.prettierrc',
+  '.gitignore',
+  '.gitattributes',
+  '.nvmrc',
+  '.dockerignore',
+  'LICENSE',
+]);
 
 /**
  * Returns one of: 'knauf-only', 'config', 'meta', 'upstream', 'ignore'.
@@ -102,8 +164,10 @@ const LOCKFILES = new Set(['bun.lock', 'package-lock.json', 'yarn.lock']);
 function classifyFile(p) {
   const norm = p.replace(/\\/g, '/');
 
+  // node_modules check covers both top-level (`node_modules/foo/...`) and
+  // nested-workspace (`client/node_modules/foo/...`) cases.
+  if (norm.startsWith('node_modules/') || norm.includes('/node_modules/')) return 'ignore';
   if (IGNORE_PREFIXES.some((d) => norm.startsWith(d))) return 'ignore';
-  if (norm.includes('/node_modules/')) return 'ignore';
 
   // Top-level knauf/ is Knauf tooling/docs — not runtime code, not tracked as a seam.
   if (norm.startsWith('knauf/')) return 'meta';
@@ -119,24 +183,9 @@ function classifyFile(p) {
 
   if (META_PREFIXES.some((d) => norm.startsWith(d))) return 'meta';
   if (LOCKFILES.has(norm)) return 'meta';
-  // Top-level markdown / config files (CLAUDE.md, README.md, AGENTS.md, SEAMS.md, etc.)
-  if (
-    !norm.includes('/') &&
-    (norm.endsWith('.md') ||
-      norm === 'turbo.json' ||
-      norm === '.prettierrc' ||
-      norm === '.gitignore' ||
-      norm === '.gitattributes' ||
-      norm === '.nvmrc' ||
-      norm === '.dockerignore' ||
-      norm === 'LICENSE')
-  ) {
-    return 'meta';
-  }
-  // Top-level package.json is meta (it's repo glue, not upstream code)
-  if (norm === 'package.json') return 'meta';
-  // scripts/ is local tooling
-  if (norm.startsWith('scripts/')) return 'meta';
+  // Top-level markdown is always meta (CLAUDE.md, README.md, AGENTS.md, SEAMS.md, etc.).
+  if (!norm.includes('/') && norm.endsWith('.md')) return 'meta';
+  if (ROOT_META_FILES.has(norm)) return 'meta';
 
   if (UPSTREAM_PREFIXES.some((d) => norm.startsWith(d))) return 'upstream';
 
@@ -146,21 +195,61 @@ function classifyFile(p) {
 
 // ---------- git ----------
 
+// spawnSync with argv array — bypasses the shell entirely so refs like
+// `HEAD; rm -rf ~` can't be injected via `--base=<ref>`. All callers must
+// pass `args` as an array, never a template string.
 function git(args, opts = {}) {
-  return execSync(`git ${args}`, {
+  if (!Array.isArray(args)) {
+    throw new TypeError(`git() requires an args array, got ${typeof args}`);
+  }
+  const r = spawnSync('git', args, {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', opts.quiet ? 'ignore' : 'pipe'],
-    ...opts,
   });
+  if (r.error) throw r.error;
+  if (r.status !== 0) {
+    const stderr = (r.stderr || '').trim();
+    const err = new Error(`git ${args.join(' ')} exited ${r.status}${stderr ? `: ${stderr}` : ''}`);
+    err.status = r.status;
+    throw err;
+  }
+  return r.stdout;
+}
+
+// Resolve the repo's default branch. Order:
+//   1. SEAMS_BASE_REF env var (explicit override — wins everywhere)
+//   2. `origin/HEAD` symbolic ref (canonical "what's the default")
+//   3. First of `main`, `master` that exists locally (fork / detached clones)
+//   4. Hard fallback to `main` (preserves old behavior)
+function resolveDefaultBranch() {
+  if (process.env.SEAMS_BASE_REF) return process.env.SEAMS_BASE_REF.trim();
+  try {
+    const out = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+      quiet: true,
+    }).trim();
+    if (out) return out.replace(/^origin\//, '') || 'main';
+  } catch (_e) {
+    /* fall through */
+  }
+  for (const ref of ['main', 'master']) {
+    try {
+      git(['rev-parse', '--verify', '--quiet', ref], { quiet: true });
+      return ref;
+    } catch (_e) {
+      /* try next */
+    }
+  }
+  return 'main';
 }
 
 function resolveDiffBase(explicit) {
-  if (explicit) return explicit.trim();
+  if (explicit) return String(explicit).trim();
+  const branch = resolveDefaultBranch();
   try {
-    return git('merge-base main HEAD').trim();
+    return git(['merge-base', branch, 'HEAD']).trim();
   } catch (e) {
-    fail(`could not resolve diff base (git merge-base main HEAD failed): ${e.message}`);
+    fail(`could not resolve diff base (git merge-base ${branch} HEAD failed): ${e.message}`);
   }
 }
 
@@ -171,7 +260,7 @@ function changedFiles(base) {
   // result matches a PR-style three-dot diff against `<base>`.
   let out;
   try {
-    out = git(`diff --name-only --diff-filter=ACMR ${base}`);
+    out = git(['diff', '--name-only', '--diff-filter=ACMR', base]);
   } catch (e) {
     fail(`git diff failed against base ${base}: ${e.message}`);
   }
@@ -230,8 +319,55 @@ function isSourceFile(f) {
 
 // ---------- marker scanning ----------
 
-const OPEN_RE = /(?:\/\/|\/\*|\{\/\*|#)\s*\[knauf\]\s*([^\n*]*?)(?:\*\/\}?|$)/;
-const CLOSE_RE = /(?:\/\/|\/\*|\{\/\*|#)\s*End\s+\[knauf\][^\n]*/;
+// Comment-syntax registry keyed by file extension (without the dot). A file's
+// markers must use a comment style its language actually supports. This stops
+// `# [knauf]` from being recognized in a .tsx file or `// [knauf]` in a
+// Dockerfile — both of which would either be syntax errors or live inside a
+// string literal.
+const COMMENT_TOKENS = {
+  js: ['//', '/*', '{/*'],
+  jsx: ['//', '/*', '{/*'],
+  ts: ['//', '/*', '{/*'],
+  tsx: ['//', '/*', '{/*'],
+  mjs: ['//', '/*'],
+  cjs: ['//', '/*'],
+  css: ['/*'],
+  yml: ['#'],
+  yaml: ['#'],
+  html: ['<!--'],
+  htm: ['<!--'],
+  mdx: ['<!--', '{/*'],
+};
+const DOCKERFILE_TOKENS = ['#'];
+// Fallback when extension is unknown — keep the union, matches pre-refactor behavior.
+const FALLBACK_TOKENS = ['//', '/*', '{/*', '#', '<!--'];
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function commentTokensFor(rel) {
+  const base = path.basename(rel);
+  if (DOCKERFILE_RE.test(base)) return DOCKERFILE_TOKENS;
+  const ext = path.extname(rel).slice(1).toLowerCase();
+  return COMMENT_TOKENS[ext] || FALLBACK_TOKENS;
+}
+
+// Build per-file regexes. Three patterns:
+//   openRe       — exact `[knauf]`, optional description, anchored to EOL.
+//   closeRe      — exact `End [knauf]`.
+//   looksLikeRe  — anything that looks like an attempted marker (wrong case,
+//                  whitespace inside brackets, missing close bracket).
+//                  Used only when openRe/closeRe didn't match.
+function buildPatternsFor(rel) {
+  const tokens = commentTokensFor(rel);
+  const alt = tokens.map(escapeRe).join('|');
+  return {
+    openRe: new RegExp(`(?:${alt})\\s*\\[knauf\\](?:\\s+(.*))?$`),
+    closeRe: new RegExp(`(?:${alt})\\s*End\\s+\\[knauf\\]`),
+    looksLikeRe: new RegExp(`(?:${alt})\\s*\\[[^\\]]*[Kk][Nn][Aa][Uu][Ff][^\\]]*(?:\\]|$)`),
+  };
+}
 
 function scanFile(rel) {
   const abs = path.join(REPO_ROOT, rel);
@@ -241,6 +377,7 @@ function scanFile(rel) {
   } catch (_e) {
     return { seams: [], unpaired: [], missing: true };
   }
+  const { openRe, closeRe, looksLikeRe } = buildPatternsFor(rel);
   const lines = content.split('\n');
   const seams = [];
   const unpaired = [];
@@ -248,7 +385,9 @@ function scanFile(rel) {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (CLOSE_RE.test(line)) {
+
+    // Close first — otherwise `// End [knauf]` could also satisfy "looks like".
+    if (closeRe.test(line)) {
       const open = stack.pop();
       if (open) {
         seams.push({
@@ -262,11 +401,28 @@ function scanFile(rel) {
       }
       continue;
     }
-    const m = line.match(OPEN_RE);
+
+    const m = line.match(openRe);
     if (m) {
-      // Skip if the marker is "End [knauf]" — already handled above.
-      if (/End\s+\[knauf\]/.test(line)) continue;
-      stack.push({ line: i + 1, description: cleanDescription(m[1]) });
+      if (stack.length > 0) {
+        // Nested opens aren't valid in this model. Surface it so it doesn't
+        // silently confuse the stack pairing. We still push so the inner close
+        // pairs with this open; the outer one ends up as `open-without-close`.
+        unpaired.push({
+          file: rel,
+          line: i + 1,
+          kind: 'nested-open',
+          openedAt: stack[stack.length - 1].line,
+        });
+      }
+      stack.push({ line: i + 1, description: cleanDescription(m[1] || '') });
+      continue;
+    }
+
+    // Catch near-miss markers: `[Knauf]`, `[ knauf ]`, `[knauf` (no closing
+    // bracket), `[knauf-foo]`. These would otherwise pass diff-check silently.
+    if (looksLikeRe.test(line)) {
+      unpaired.push({ file: rel, line: i + 1, kind: 'malformed-marker' });
     }
   }
   for (const open of stack) {
@@ -275,13 +431,15 @@ function scanFile(rel) {
   return { seams, unpaired, missing: false };
 }
 
+// Strip the comment-close shell from a captured description. We only remove
+// tokens that complete the comment syntax of the host language; everything
+// else (including leading em-dashes, colons, and trailing punctuation) is the
+// author's content and stays put.
 function cleanDescription(raw) {
   if (!raw) return '';
   return raw
-    .replace(/\*+\/?$/, '')
-    .replace(/\}\s*$/, '')
-    .replace(/^[\s:.\-—]+/, '')
-    .replace(/[\s*\-—:]+$/, '')
+    .replace(/\s*-->\s*$/, '') // HTML/JSX-style close
+    .replace(/\s*\*\/\}?\s*$/, '') // /* ... */ or {/* ... */}
     .trim();
 }
 
@@ -367,19 +525,35 @@ function splitAutoBlock(md) {
 /**
  * Parse the auto-block table rows into objects keyed by file.
  * Preserves row order so unchanged rows stay where the editor put them.
+ *
+ * **Strict mode:** A line that starts with `|` and isn't the header or
+ * separator IS an attempt at a data row. If it has the wrong column count or
+ * an empty File cell, we throw — never silently skip. Silently skipping a
+ * malformed hand-edit would cause `mergeRows` to treat every row as "new" and
+ * destroy the human-curated columns on the next `write`.
  */
 function parseAutoBlockRows(autoBlock) {
   if (!autoBlock) return [];
   const rows = [];
-  for (const raw of autoBlock.split('\n')) {
+  const blockLines = autoBlock.split('\n');
+  for (let i = 0; i < blockLines.length; i++) {
+    const raw = blockLines[i];
     const line = raw.trim();
     if (!line.startsWith('|')) continue;
     if (/^\|\s*-+\s*\|/.test(line)) continue; // markdown header separator
     if (/^\|\s*File\s*\|/.test(line)) continue; // header row
     const cells = splitTableCells(line);
-    if (cells.length < 5) continue;
+    if (cells.length !== 5) {
+      throw new Error(
+        `SEAMS.md Inline Modifications: row at block line ${i + 1} has ${cells.length} cell(s), expected 5. Row: "${line}"`,
+      );
+    }
     const file = stripBackticks(cells[0]);
-    if (!file) continue;
+    if (!file) {
+      throw new Error(
+        `SEAMS.md Inline Modifications: row at block line ${i + 1} has empty File cell. Row: "${line}"`,
+      );
+    }
     rows.push({
       file,
       symbol: cells[1],
@@ -521,7 +695,7 @@ function lcsDiff(a, b) {
   return ops;
 }
 
-function hasNonContextChanges(oldText, newText) {
+function differs(oldText, newText) {
   return oldText !== newText;
 }
 
@@ -541,7 +715,10 @@ function promptYesNo(question) {
 
 function writeAtomic(filePath, content) {
   const dir = path.dirname(filePath);
-  const tmp = path.join(dir, `.${path.basename(filePath)}.tmp-${process.pid}`);
+  // pid + random suffix prevents collisions if two invocations from the same
+  // process (or container) race against each other.
+  const suffix = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  const tmp = path.join(dir, `.${path.basename(filePath)}.tmp-${suffix}`);
   fs.writeFileSync(tmp, content, 'utf8');
   fs.renameSync(tmp, filePath);
 }
@@ -562,15 +739,25 @@ function splitNewBlock(md) {
 function parseNewFileRows(newBlock) {
   if (!newBlock) return [];
   const rows = [];
-  for (const raw of newBlock.split('\n')) {
+  const blockLines = newBlock.split('\n');
+  for (let i = 0; i < blockLines.length; i++) {
+    const raw = blockLines[i];
     const line = raw.trim();
     if (!line.startsWith('|')) continue;
     if (/^\|\s*-+\s*\|/.test(line)) continue;
     if (/^\|\s*File\s*\|/.test(line)) continue;
     const cells = splitTableCells(line);
-    if (cells.length < 4) continue;
+    if (cells.length !== 4) {
+      throw new Error(
+        `SEAMS.md Net-New Files: row at block line ${i + 1} has ${cells.length} cell(s), expected 4. Row: "${line}"`,
+      );
+    }
     const file = stripBackticks(cells[0]);
-    if (!file) continue;
+    if (!file) {
+      throw new Error(
+        `SEAMS.md Net-New Files: row at block line ${i + 1} has empty File cell. Row: "${line}"`,
+      );
+    }
     rows.push({ file, imports: cells[1], risk: cells[2], tests: cells[3] });
   }
   return rows;
@@ -594,7 +781,7 @@ function isFileRegisteredInNewTable(file, rows) {
 function addedKnaufFiles(base) {
   let out;
   try {
-    out = git(`diff --name-only --diff-filter=A ${base}`);
+    out = git(['diff', '--name-only', '--diff-filter=A', base]);
   } catch (e) {
     fail(`git diff (added files) failed: ${e.message}`);
   }
@@ -684,6 +871,12 @@ function buildNewMd(currentMd, discoveredSeams, addedKnaufList = []) {
   const existingRows = parseAutoBlockRows(inlineSplit.autoBlock);
   const discoveredRows = aggregateRows(discoveredSeams);
   const merged = mergeRows(existingRows, discoveredRows);
+  // A row is "removed" when an existing manifest entry's file no longer has
+  // any [knauf] markers. Surfacing this matters: silently dropping rows lets
+  // an accidentally-deleted marker erase a seam from the manifest with no
+  // trace in the SEAMS.md diff beyond a row disappearing.
+  const mergedFiles = new Set(merged.map((r) => r.file));
+  const removedRows = existingRows.filter((r) => !mergedFiles.has(r.file));
   const newAuto = renderTable(merged);
   let newMd = inlineSplit.before + newAuto + inlineSplit.after;
 
@@ -707,20 +900,23 @@ function buildNewMd(currentMd, discoveredSeams, addedKnaufList = []) {
     existingRows,
     discoveredRows,
     mergedRows: merged,
+    removedRows,
     unregisteredNewFiles,
   };
 }
 
 async function cmdWrite(flags) {
-  const scope = resolveScope(flags);
-  const { seams, unpaired } = discoverSeams(flags.all ? walkAll() : scope.files);
-
-  // Always operate on the full repo for write/check — the SEAMS.md table is a
-  // global manifest. The scope flag only affects which warnings we surface.
-  const allDiscovered = flags.all ? seams : discoverSeams(walkAll()).seams;
-
-  // Detect added knauf-only files from the diff to update Net-New Files.
-  const added = flags.all ? [] : addedKnaufFiles(scope.base || resolveDiffBase(flags.base));
+  // `write` always operates on the whole repo — the SEAMS.md manifest is global.
+  // `--diff` / `--all` are not honored here; see `usage()`. Only `--base` matters
+  // (for picking up added knauf-only files in the Net-New Files block).
+  if (flags.diff || flags.all) {
+    console.error(
+      `${C.yellow}warning:${C.reset} \`write\` ignores --diff/--all; it always scans the whole repo. ` +
+        `Use \`scan\` for scoped output.`,
+    );
+  }
+  const { seams: allDiscovered, unpaired } = discoverSeams(walkAll());
+  const added = addedKnaufFiles(resolveDiffBase(flags.base));
 
   const currentMd = readSeamsMd();
   const result = buildNewMd(currentMd, allDiscovered, added);
@@ -731,14 +927,25 @@ async function cmdWrite(flags) {
     console.log('');
   }
 
-  if (!hasNonContextChanges(result.oldMd, result.newMd)) {
+  if (result.removedRows.length > 0) {
+    console.log(
+      `${C.yellow}Warning: ${result.removedRows.length} row(s) will be removed (file no longer has [knauf] markers):${C.reset}`,
+    );
+    for (const r of result.removedRows) console.log(`  ${C.red}- ${r.file}${C.reset}`);
+    console.log(
+      `${C.dim}If a marker was accidentally deleted, restore it before running write. ` +
+        `Otherwise this is the intended seam removal.${C.reset}\n`,
+    );
+  }
+
+  if (!differs(result.oldMd, result.newMd)) {
     console.log(`${C.green}SEAMS.md is up to date.${C.reset}`);
     return 0;
   }
 
   const inlineSplit = splitAutoBlock(result.oldMd);
   const newInlineSplit = splitAutoBlock(result.newMd);
-  if (hasNonContextChanges(inlineSplit.autoBlock, newInlineSplit.autoBlock)) {
+  if (differs(inlineSplit.autoBlock, newInlineSplit.autoBlock)) {
     console.log(
       unifiedDiff(
         inlineSplit.autoBlock,
@@ -751,10 +958,7 @@ async function cmdWrite(flags) {
 
   const netNewSplit = splitNewBlock(result.oldMd);
   const newNetNewSplit = splitNewBlock(result.newMd);
-  if (
-    netNewSplit.newBlock !== null &&
-    hasNonContextChanges(netNewSplit.newBlock, newNetNewSplit.newBlock)
-  ) {
+  if (netNewSplit.newBlock !== null && differs(netNewSplit.newBlock, newNetNewSplit.newBlock)) {
     console.log(
       unifiedDiff(netNewSplit.newBlock, newNetNewSplit.newBlock, 'SEAMS.md (Net-New Files)'),
     );
@@ -786,11 +990,29 @@ async function cmdWrite(flags) {
   return 0;
 }
 
-function cmdCheck(_flags) {
+function cmdCheck(flags) {
+  if (flags.diff || flags.all) {
+    console.error(
+      `${C.yellow}warning:${C.reset} \`check\` ignores --diff/--all; it always scans the whole repo.`,
+    );
+  }
   const seams = discoverSeams(walkAll()).seams;
   const currentMd = readSeamsMd();
   const result = buildNewMd(currentMd, seams);
-  if (!hasNonContextChanges(result.oldMd, result.newMd)) {
+  const inSync = !differs(result.oldMd, result.newMd);
+
+  if (flags.json) {
+    const payload = {
+      command: 'check',
+      inSync,
+      removedRows: result.removedRows.map((r) => r.file),
+      unregisteredNewFiles: result.unregisteredNewFiles || [],
+    };
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    return inSync ? 0 : 1;
+  }
+
+  if (inSync) {
     console.log(`${C.green}SEAMS.md is in sync with [knauf] markers.${C.reset}`);
     return 0;
   }
@@ -801,6 +1023,11 @@ function cmdCheck(_flags) {
   console.log(
     `${C.red}SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\`.${C.reset}`,
   );
+  if (process.env.GITHUB_ACTIONS) {
+    console.log(
+      '::error file=SEAMS.md::SEAMS.md is out of sync with [knauf] markers. Run `node knauf/scripts/seams.js write` locally and commit.',
+    );
+  }
   return 1;
 }
 
@@ -826,6 +1053,18 @@ function cmdDiffCheck(flags) {
   const existingNewRows =
     newFileSplit.newBlock !== null ? parseNewFileRows(newFileSplit.newBlock) : [];
   const unregistered = added.filter((f) => !isFileRegisteredInNewTable(f, existingNewRows));
+
+  if (flags.json) {
+    const payload = {
+      command: 'diff-check',
+      base,
+      changedFileCount: changed.length,
+      untaggedUpstreamFiles: offenders,
+      unregisteredNewFiles: unregistered,
+    };
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    return offenders.length === 0 && unregistered.length === 0 ? 0 : 1;
+  }
 
   console.log(
     `${C.bold}Diff-check (base ${base.slice(0, 12)}):${C.reset} ${changed.length} changed file(s)`,
@@ -899,44 +1138,90 @@ function fail(msg) {
 function usage() {
   return `Usage: node knauf/scripts/seams.js <command> [flags]
 
-Commands:
-  scan        list discovered [knauf] seams
-  write       interactive update of SEAMS.md
-  check       exit 1 if SEAMS.md is out of sync
-  diff-check  exit 1 if any modified upstream file lacks a [knauf] marker
+Commands and the flags they honor:
+  scan         list discovered [knauf] seams
+                 --diff               default; changed files vs merge-base of default branch
+                 --all                scan the whole repo
+                 --base=<ref>         override the diff base (commit, tag, branch)
+                 --json               emit JSON instead of human output
+  write        interactive update of SEAMS.md (always whole-repo)
+                 --base=<ref>         override the diff base used to detect added knauf-only files
+                 --dry-run            preview only, exit 1 on drift
+                 --yes                skip the approval prompt
+  check        exit 1 if SEAMS.md is out of sync (always whole-repo)
+  diff-check   exit 1 if any modified upstream file lacks a [knauf] marker
+                 --base=<ref>         override the diff base
 
-Flags:
-  --diff           changed files vs merge-base of main (default for scan)
-  --all            scan whole repo (default for write/check)
-  --base=<ref>     override the diff base
-  --json           scan: emit JSON
-  --dry-run        write: preview only, exit 1 on drift
-  --yes            write: skip the approval prompt`;
+Environment:
+  SEAMS_BASE_REF   override the default branch used for merge-base lookups
+                   (otherwise: origin/HEAD, then main, then master).
+  GITHUB_ACTIONS   when set, check/diff-check emit ::error annotations.
+
+Exit codes:
+  0  success / no drift
+  1  drift detected (check, diff-check, --dry-run)
+  2  internal error (git failure, parser failure, missing files)`;
 }
 
-(async () => {
-  const args = parseArgv(process.argv.slice(2));
+async function main(argv) {
+  const args = parseArgv(argv);
   const cmd = args._[0];
 
   if (!cmd || args.flags.help) {
     console.log(usage());
-    process.exit(cmd ? 0 : 2);
+    return cmd ? 0 : 2;
   }
 
   try {
-    let code = 0;
-    if (cmd === 'scan') code = cmdScan(args.flags);
-    else if (cmd === 'write') code = await cmdWrite(args.flags);
-    else if (cmd === 'check') code = cmdCheck(args.flags);
-    else if (cmd === 'diff-check') code = cmdDiffCheck(args.flags);
-    else {
-      console.error(`unknown command: ${cmd}\n`);
-      console.error(usage());
-      process.exit(2);
-    }
-    process.exit(code);
+    if (cmd === 'scan') return cmdScan(args.flags);
+    if (cmd === 'write') return await cmdWrite(args.flags);
+    if (cmd === 'check') return cmdCheck(args.flags);
+    if (cmd === 'diff-check') return cmdDiffCheck(args.flags);
+    console.error(`unknown command: ${cmd}\n`);
+    console.error(usage());
+    return 2;
   } catch (e) {
     if (e && e.code === 'ENOENT') fail(`missing file or command: ${e.message}`);
     fail(e && e.message ? e.message : String(e));
   }
-})();
+}
+
+// Only run as a CLI when invoked directly. Required so the spec file can
+// require() this module without triggering the command dispatcher.
+if (require.main === module) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (e) => {
+      console.error(e && e.stack ? e.stack : e);
+      process.exit(2);
+    },
+  );
+}
+
+// Test surface: pure-ish functions that don't touch git or stdin.
+// The CLI dispatch lives behind `main`. Anything not listed here is
+// considered internal — tests should not depend on it.
+module.exports = {
+  main,
+  parseArgv,
+  classifyFile,
+  isSourceFile,
+  scanFile,
+  cleanDescription,
+  aggregateRows,
+  mergeRows,
+  splitAutoBlock,
+  splitNewBlock,
+  parseAutoBlockRows,
+  parseNewFileRows,
+  splitTableCells,
+  stripBackticks,
+  isFileRegisteredInNewTable,
+  mergeNewFileRows,
+  renderTable,
+  renderNewFilesTable,
+  buildNewMd,
+  lcsDiff,
+  unifiedDiff,
+  resolveDefaultBranch,
+};
