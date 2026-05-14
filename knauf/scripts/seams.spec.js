@@ -17,7 +17,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
 const seams = require('./seams.js');
@@ -138,20 +137,8 @@ test('cleanDescription · empty input returns empty string', () => {
 
 // ---------------- scanFile ----------------
 
-function withTempFile(name, content, fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seams-spec-'));
-  const repoRel = path.join(dir, name);
-  fs.mkdirSync(path.dirname(repoRel), { recursive: true });
-  fs.writeFileSync(repoRel, content, 'utf8');
-  // scanFile expects a path relative to REPO_ROOT. Since we can't easily
-  // redirect REPO_ROOT, we read the file directly with the same regex
-  // logic. Instead, write the file *inside* the repo under a known fixture
-  // location and read it relative.
-  return { dir, repoRel, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
-}
-
-// scanFile is REPO_ROOT-relative — easier to drive it with real fixture
-// files placed inside the actual repo's fixtures directory.
+// scanFile is REPO_ROOT-relative, so fixtures need to live inside the repo.
+// We write them under knauf/scripts/__fixtures__/ and clean up in test.after().
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const FIXTURE_DIR = path.join(REPO_ROOT, 'knauf', 'scripts', '__fixtures__');
 
