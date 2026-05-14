@@ -2,7 +2,7 @@
 
 **Status:** Design only. Not approved, not implemented. This document exists so the migration can be scoped and reviewed before a single line of code moves.
 
-**Owner:** TBD — needs sign-off from whoever owns the agent-authoring workflow (see [.claude/skills/fork-management/seam-authoring.md](../../.claude/skills/fork-management/seam-authoring.md)) and the upstream-sync ritual.
+**Owner:** TBD — needs sign-off from whoever owns the agent-authoring workflow (see [.claude/skills/seam-manifest/SKILL.md](../../../.claude/skills/seam-manifest/SKILL.md)) and the upstream-sync ritual.
 
 **Effort estimate:** ~1 week of focused work spread across 3 PRs. Single-PR delivery is not advised — the change touches every contributor's mental model.
 
@@ -116,7 +116,7 @@ PR 2a — *renderer*:
 - `seams.js check` now also confirms `SEAMS.md` matches `render(seams.yaml)`.
 
 PR 2b — *flip authoring*:
-- Update [.claude/skills/fork-management/seam-authoring.md](../../../.claude/skills/fork-management/seam-authoring.md): the agent edits `seams.yaml`, never `SEAMS.md` directly.
+- Update [.claude/skills/seam-manifest/SKILL.md](../../../.claude/skills/seam-manifest/SKILL.md): the agent edits `seams.yaml`, never `SEAMS.md` directly.
 - Update CLAUDE.md and the upstream-sync guide.
 - Deprecate the sentinel comments in `SEAMS.md` (they're harmless but no longer load-bearing).
 - `seams.js write` becomes `seams.js sync` — adds/updates yaml entries from discovered markers, prompts for human-curated columns.
@@ -141,7 +141,7 @@ Exit criteria: `lib/manifest.js` is now just `lib/render-md.js`. Net: -300 lines
 | Breakage | Mitigation |
 |---|---|
 | Every contributor's muscle memory ("edit SEAMS.md") | Phase 2b lands with a loud CHANGELOG entry, a banner in the README, and `seams.js write` failing loudly if you try to edit md by hand (until Phase 3) |
-| The agent skill doc | Rewritten as part of PR 2b. The agent's `seam-authoring.md` becomes simpler — yaml is easier to edit programmatically than markdown tables |
+| The agent skill doc | Rewritten as part of PR 2b. The `seam-manifest` SKILL.md becomes simpler — yaml is easier to edit programmatically than markdown tables |
 | CI workflow | `seams check` already gates SEAMS.md/yaml consistency once Phase 2 lands. The existing [.github/workflows/seam-validator.yml](../../../.github/workflows/seam-validator.yml) needs one line changed (the file it watches) |
 | Upstream-sync ritual ([knauf/docs/guides/upstream-sync.md](../guides/upstream-sync.md)) | Update during PR 2b. The line-number-shift step now edits structured `lines: [[200, 202]]` arrays instead of `200–202` strings — easier for humans, trivial for tools |
 | External consumers of SEAMS.md | The md still exists; it's just generated. Read paths don't change |
