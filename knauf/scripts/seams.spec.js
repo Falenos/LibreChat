@@ -507,20 +507,37 @@ test('isFileRegisteredInNewTable · exact path match', () => {
   );
 });
 
-test('isFileRegisteredInNewTable · single-star wildcard prefix+suffix', () => {
+test('isFileRegisteredInNewTable · single-star wildcard respects slash boundary', () => {
   const rows = [{ file: 'client/src/knauf/components/Agents/*.tsx' }];
   assert.equal(
     seams.isFileRegisteredInNewTable('client/src/knauf/components/Agents/Anything.tsx', rows),
     true,
   );
+  // `*` is "no slashes" — nested directories must NOT match.
   assert.equal(
     seams.isFileRegisteredInNewTable('client/src/knauf/components/Agents/Sub/Deep.tsx', rows),
-    true, // current matcher allows this — documents existing behavior
+    false,
   );
   assert.equal(
     seams.isFileRegisteredInNewTable('client/src/knauf/components/Agents/Anything.ts', rows),
     false,
   );
+});
+
+test('isFileRegisteredInNewTable · double-star wildcard crosses slashes', () => {
+  const rows = [{ file: 'client/src/knauf/**/*.tsx' }];
+  assert.equal(seams.isFileRegisteredInNewTable('client/src/knauf/components/Foo.tsx', rows), true);
+  assert.equal(
+    seams.isFileRegisteredInNewTable('client/src/knauf/components/sub/deep/Bar.tsx', rows),
+    true,
+  );
+});
+
+test('isFileRegisteredInNewTable · regex metas in path are escaped', () => {
+  // A literal `.` in a pattern must NOT match any character.
+  const rows = [{ file: 'client/src/knauf/foo.bar.ts' }];
+  assert.equal(seams.isFileRegisteredInNewTable('client/src/knauf/foo.bar.ts', rows), true);
+  assert.equal(seams.isFileRegisteredInNewTable('client/src/knauf/fooxbarxts', rows), false);
 });
 
 // ---------------- mergeNewFileRows ----------------
@@ -631,6 +648,116 @@ test('buildNewMd · detects drift when discovered lines differ', () => {
   const r = seams.buildNewMd(md, discovered, []);
   assert.notEqual(r.oldMd, r.newMd);
   assert.match(r.newMd, /200–202/);
+});
+
+// ---------------- lib/ direct-import smoke tests ------------------------
+// These confirm each module in lib/ can be required independently and
+// exposes its public surface. The bulk of the assertions live in the
+// re-export-driven tests above; these only guard against accidental
+// internal-only exports or circular-import breakage.
+
+test('lib/classify · loads with classifyFile + isSourceFile', () => {
+  const m = require('./lib/classify.js');
+  assert.equal(typeof m.classifyFile, 'function');
+  assert.equal(typeof m.isSourceFile, 'function');
+  assert.equal(m.classifyFile('api/server/index.js'), 'upstream');
+});
+
+test('lib/glob · compile + matches handle ** correctly', () => {
+  const { matches, compile } = require('./lib/glob.js');
+  assert.equal(typeof compile, 'function');
+  assert.equal(matches('a/**/b.ts', 'a/x/y/b.ts'), true);
+  assert.equal(matches('a/*.ts', 'a/b.ts'), true);
+  assert.equal(matches('a/*.ts', 'a/sub/b.ts'), false);
+});
+
+test('lib/diff · buildHunks produces hunks only around changes', () => {
+  const { lcsDiff, buildHunks } = require('./lib/diff.js');
+  const a = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  const b = ['1', '2', '3', '4', 'X', '6', '7', '8', '9'];
+  const ops = lcsDiff(a, b);
+  const hunks = buildHunks(ops);
+  assert.equal(hunks.length, 1);
+  // Hunk should contain the change plus 3 lines of context on each side.
+  const kinds = hunks[0].ops.map((o) => o.kind);
+  assert.ok(kinds.includes('del'));
+  assert.ok(kinds.includes('add'));
+});
+
+test('lib/diff · unifiedDiff emits @@ hunk header', () => {
+  const { unifiedDiff } = require('./lib/diff.js');
+  const out = unifiedDiff('a\nb\nc\n', 'a\nX\nc\n', 'fixture');
+  assert.match(out, /^--- a\/fixture/m);
+  assert.match(out, /^\+\+\+ b\/fixture/m);
+  assert.match(out, /^@@ -\d+,\d+ \+\d+,\d+ @@/m);
+});
+
+test('lib/manifest · readSeamsMd is a function', () => {
+  const m = require('./lib/manifest.js');
+  assert.equal(typeof m.readSeamsMd, 'function');
+  assert.equal(typeof m.splitAutoBlock, 'function');
+  assert.equal(typeof m.PLACEHOLDER, 'string');
+});
+
+test('lib/merge · aggregateRows + mergeRows are pure', () => {
+  const { aggregateRows, mergeRows } = require('./lib/merge.js');
+  const agg = aggregateRows([{ file: 'a.tsx', startLine: 1, endLine: 2, description: 'd' }]);
+  assert.equal(agg.length, 1);
+  assert.equal(agg[0].lines, '1–2');
+  const merged = mergeRows([], agg);
+  assert.equal(merged.length, 1);
+});
+
+test('lib/io · makePalette returns the expected keys', () => {
+  const { makePalette } = require('./lib/io.js');
+  const p = makePalette();
+  for (const k of ['red', 'green', 'yellow', 'cyan', 'dim', 'bold', 'reset']) {
+    assert.ok(k in p, `palette missing ${k}`);
+  }
+});
+
+test('lib/git · makeGit factory returns the expected surface', () => {
+  const { makeGit } = require('./lib/git.js');
+  const g = makeGit(process.cwd());
+  for (const k of [
+    'git',
+    'resolveDefaultBranch',
+    'resolveDiffBase',
+    'changedFiles',
+    'addedFiles',
+  ]) {
+    assert.equal(typeof g[k], 'function', `makeGit missing ${k}`);
+  }
+});
+
+test('lib/walk · makeWalker factory returns walkAll', () => {
+  const { makeWalker } = require('./lib/walk.js');
+  const w = makeWalker(process.cwd());
+  assert.equal(typeof w.walkAll, 'function');
+});
+
+test('lib/scan · makeScanner factory returns scanFile + fileHasMarker', () => {
+  const { makeScanner } = require('./lib/scan.js');
+  const s = makeScanner(process.cwd());
+  assert.equal(typeof s.scanFile, 'function');
+  assert.equal(typeof s.fileHasMarker, 'function');
+});
+
+test('seams.config · exposes the documented schema', () => {
+  const cfg = require('./seams.config.js');
+  for (const k of [
+    'knaufDirs',
+    'configFiles',
+    'upstreamPrefixes',
+    'metaPrefixes',
+    'ignorePrefixes',
+    'lockfiles',
+    'rootMetaFiles',
+    'sourceExtensions',
+    'dockerfileRe',
+  ]) {
+    assert.ok(k in cfg, `config missing key: ${k}`);
+  }
 });
 
 // ---------------- cleanup ----------------

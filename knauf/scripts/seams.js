@@ -1,42 +1,29 @@
 #!/usr/bin/env node
-/*
- * knauf/scripts/seams.js
- *
- * Authors and validates the [knauf] seam manifest in SEAMS.md.
- *
- * Subcommands:
- *   scan        list discovered seams (default scope: --diff)
- *   write       interactive update of the Inline Modifications table
- *   check       exit 1 if SEAMS.md is out of sync with discovered seams
- *   diff-check  exit 1 if any modified upstream-class file lacks a [knauf] marker
- *
- * Scope flags (scan/write/check):
- *   --diff           changed files vs `git merge-base main HEAD` (default)
- *   --all            scan the whole repo
- *   --base=<ref>     override the diff base
- *
- * Write flags:
- *   --dry-run        print the diff, never prompt, never write (exit 1 on drift)
- *   --yes            skip the approval prompt
- *
- * Exit codes:
- *   0  success / no drift
- *   1  drift detected (check, dry-run, diff-check)
- *   2  internal error (git failure, parser failure, missing files)
- */
+// @ts-check
+//
+// knauf/scripts/seams.js — CLI entry for the [knauf] seam manifest tool
+//
+// Authors and validates the [knauf] seam manifest in SEAMS.md.
+//
+// Subcommands:
+//   scan        list discovered seams (default scope: --diff)
+//   write       interactive update of SEAMS.md
+//   check       exit 1 if SEAMS.md is out of sync (always whole-repo)
+//   diff-check  exit 1 if any modified upstream file lacks a [knauf] marker
+//
+// See `seams.js --help` for flags and environment variables.
+//
+// Architecture: this file is the CLI shell. All real work lives in lib/.
+// Pure functions are re-exported at the bottom so the spec can require them.
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { spawnSync } = require('child_process');
-const readline = require('readline');
 const { parseArgs: nodeParseArgs } = require('node:util');
 
-// Minimum Node version. The script uses util.parseArgs (18.3+), node:test (18+),
-// and crypto.randomBytes (always). Fail fast with a clear message instead of a
-// confusing late error.
+// ---------- Node version guard ----------
+
 const MIN_NODE_MAJOR = 18;
 {
   const major = Number(process.versions.node.split('.')[0]);
@@ -48,12 +35,10 @@ const MIN_NODE_MAJOR = 18;
   }
 }
 
-// Resolve the repo root by walking up from this file until we find a .git
-// directory. Falls back to the historical two-levels-up assumption so the
-// script keeps working if it's ever run outside a git repo (CI tarball etc.).
+// ---------- repo root resolution ----------
+
 function findRepoRoot(startDir) {
   let dir = startDir;
-  // Limit the walk to ~10 levels to avoid runaway loops on broken filesystems.
   for (let i = 0; i < 10; i++) {
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     const parent = path.dirname(dir);
@@ -65,41 +50,46 @@ function findRepoRoot(startDir) {
 
 const REPO_ROOT = findRepoRoot(__dirname);
 const SEAMS_PATH = path.join(REPO_ROOT, 'SEAMS.md');
-const SENTINEL_BEGIN = '<!-- seams:auto:begin -->';
-const SENTINEL_END = '<!-- seams:auto:end -->';
-const SENTINEL_NEW_BEGIN = '<!-- seams:new:begin -->';
-const SENTINEL_NEW_END = '<!-- seams:new:end -->';
 
-const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.css']);
-// Dockerfiles have no standard extension; match by base name.
-const DOCKERFILE_RE = /^Dockerfile(\..*)?$/;
+// ---------- lib imports ----------
 
-// Color output is enabled iff: stdout is a TTY, NO_COLOR is not set, and
-// --no-color was not passed. FORCE_COLOR=1 overrides the TTY check (useful
-// when piping through tee, less -R, or CI log viewers that handle ANSI).
-// https://no-color.org / https://force-color.org
-function colorsEnabled() {
-  if (process.argv.includes('--no-color')) return false;
-  if (process.env.NO_COLOR) return false;
-  if (process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') return true;
-  return !!process.stdout.isTTY;
+const { classifyFile, isSourceFile } = require('./lib/classify.js');
+const { makeGit } = require('./lib/git.js');
+// makeScanner returns a bound `scanFile`/`fileHasMarker` pair; cleanDescription is
+// the pure standalone we re-export for the spec.
+const { makeScanner, cleanDescription } = require('./lib/scan.js');
+const { makeWalker } = require('./lib/walk.js');
+const { isFileRegisteredInNewTable } = require('./lib/glob.js');
+const { lcsDiff, unifiedDiff, differs } = require('./lib/diff.js');
+const { writeAtomic, promptYesNo, makePalette } = require('./lib/io.js');
+const {
+  SENTINEL_BEGIN,
+  SENTINEL_END,
+  readSeamsMd,
+  splitAutoBlock,
+  splitNewBlock,
+  splitTableCells,
+  stripBackticks,
+  parseAutoBlockRows,
+  parseNewFileRows,
+  renderTable,
+  renderNewFilesTable,
+} = require('./lib/manifest.js');
+const { aggregateRows, rowGroup, mergeRows, mergeNewFileRows } = require('./lib/merge.js');
+
+// ---------- bound helpers (lib factories that need REPO_ROOT / fail) ----------
+
+const C = makePalette();
+function fail(msg) {
+  console.error(`${C.red}error:${C.reset} ${msg}`);
+  process.exit(2);
 }
-const USE_COLOR = colorsEnabled();
-const C = {
-  red: USE_COLOR ? '\x1b[31m' : '',
-  green: USE_COLOR ? '\x1b[32m' : '',
-  yellow: USE_COLOR ? '\x1b[33m' : '',
-  cyan: USE_COLOR ? '\x1b[36m' : '',
-  dim: USE_COLOR ? '\x1b[2m' : '',
-  bold: USE_COLOR ? '\x1b[1m' : '',
-  reset: USE_COLOR ? '\x1b[0m' : '',
-};
+const { resolveDefaultBranch, resolveDiffBase, changedFiles, addedFiles } = makeGit(REPO_ROOT);
+const { scanFile, fileHasMarker } = makeScanner(REPO_ROOT);
+const { walkAll } = makeWalker(REPO_ROOT);
 
 // ---------- argv ----------
 
-// Wraps Node's util.parseArgs. strict: false keeps the old "accept anything"
-// behavior while gaining: typed values (booleans don't become "true" strings),
-// proper handling of `--flag value` AND `--flag=value`, and a `--` terminator.
 function parseArgv(argv) {
   const { values, positionals } = nodeParseArgs({
     args: argv,
@@ -119,705 +109,24 @@ function parseArgv(argv) {
   return { _: positionals, flags: values };
 }
 
-// ---------- file classification ----------
-
-const KNAUF_DIRS = [
-  'api/knauf/',
-  'api/server/routes/knauf/',
-  'client/src/knauf/',
-  'packages/knauf/',
-  'assets/knauf/',
-];
-
-const CONFIG_FILES = new Set(['librechat.yaml', 'docker-compose.override.yml']);
-
-const UPSTREAM_PREFIXES = [
-  'api/',
-  'client/',
-  'packages/api/',
-  'packages/client/',
-  'packages/data-provider/',
-  'packages/data-schemas/',
-];
-
-const META_PREFIXES = ['.github/', '.husky/', '.vscode/', '.do/', '.devcontainer/'];
-// IGNORE_PREFIXES: top-level directories whose contents are never code-of-record.
-// We test prefix-match AND `/node_modules/` anywhere-substring (for nested
-// workspace node_modules) in classifyFile.
-const IGNORE_PREFIXES = ['dist/', 'build/', '.turbo/', '.git/'];
-const LOCKFILES = new Set(['bun.lock', 'package-lock.json', 'yarn.lock']);
-const ROOT_META_FILES = new Set([
-  'package.json',
-  'turbo.json',
-  '.prettierrc',
-  '.gitignore',
-  '.gitattributes',
-  '.nvmrc',
-  '.dockerignore',
-  'LICENSE',
-]);
-
-/**
- * Returns one of: 'knauf-only', 'config', 'meta', 'upstream', 'ignore'.
- * The 'upstream' class is the only one that requires a [knauf] marker when modified.
- */
-function classifyFile(p) {
-  const norm = p.replace(/\\/g, '/');
-
-  // node_modules check covers both top-level (`node_modules/foo/...`) and
-  // nested-workspace (`client/node_modules/foo/...`) cases.
-  if (norm.startsWith('node_modules/') || norm.includes('/node_modules/')) return 'ignore';
-  if (IGNORE_PREFIXES.some((d) => norm.startsWith(d))) return 'ignore';
-
-  // Top-level knauf/ is Knauf tooling/docs — not runtime code, not tracked as a seam.
-  if (norm.startsWith('knauf/')) return 'meta';
-
-  if (KNAUF_DIRS.some((d) => norm.startsWith(d))) return 'knauf-only';
-  // Defensive: any path component named `knauf` inside api/, client/, packages/, etc.
-  if (/(^|\/)knauf\//.test(norm)) return 'knauf-only';
-
-  if (CONFIG_FILES.has(norm)) return 'config';
-  if (norm.startsWith('.env')) return 'config';
-  // Root-level Dockerfiles are upstream files modified inline — require [knauf] markers.
-  if (DOCKERFILE_RE.test(norm)) return 'upstream';
-
-  if (META_PREFIXES.some((d) => norm.startsWith(d))) return 'meta';
-  if (LOCKFILES.has(norm)) return 'meta';
-  // Top-level markdown is always meta (CLAUDE.md, README.md, AGENTS.md, SEAMS.md, etc.).
-  if (!norm.includes('/') && norm.endsWith('.md')) return 'meta';
-  if (ROOT_META_FILES.has(norm)) return 'meta';
-
-  if (UPSTREAM_PREFIXES.some((d) => norm.startsWith(d))) return 'upstream';
-
-  // Unknown top-level files default to meta — won't trigger the tag requirement.
-  return 'meta';
-}
-
-// ---------- git ----------
-
-// spawnSync with argv array — bypasses the shell entirely so refs like
-// `HEAD; rm -rf ~` can't be injected via `--base=<ref>`. All callers must
-// pass `args` as an array, never a template string.
-function git(args, opts = {}) {
-  if (!Array.isArray(args)) {
-    throw new TypeError(`git() requires an args array, got ${typeof args}`);
-  }
-  const r = spawnSync('git', args, {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', opts.quiet ? 'ignore' : 'pipe'],
-  });
-  if (r.error) throw r.error;
-  if (r.status !== 0) {
-    const stderr = (r.stderr || '').trim();
-    const err = new Error(`git ${args.join(' ')} exited ${r.status}${stderr ? `: ${stderr}` : ''}`);
-    err.status = r.status;
-    throw err;
-  }
-  return r.stdout;
-}
-
-// Resolve the repo's default branch. Order:
-//   1. SEAMS_BASE_REF env var (explicit override — wins everywhere)
-//   2. `origin/HEAD` symbolic ref (canonical "what's the default")
-//   3. First of `main`, `master` that exists locally (fork / detached clones)
-//   4. Hard fallback to `main` (preserves old behavior)
-function resolveDefaultBranch() {
-  if (process.env.SEAMS_BASE_REF) return process.env.SEAMS_BASE_REF.trim();
-  try {
-    const out = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
-      quiet: true,
-    }).trim();
-    if (out) return out.replace(/^origin\//, '') || 'main';
-  } catch (_e) {
-    /* fall through */
-  }
-  for (const ref of ['main', 'master']) {
-    try {
-      git(['rev-parse', '--verify', '--quiet', ref], { quiet: true });
-      return ref;
-    } catch (_e) {
-      /* try next */
-    }
-  }
-  return 'main';
-}
-
-function resolveDiffBase(explicit) {
-  if (explicit) return String(explicit).trim();
-  const branch = resolveDefaultBranch();
-  try {
-    return git(['merge-base', branch, 'HEAD']).trim();
-  } catch (e) {
-    fail(`could not resolve diff base (git merge-base ${branch} HEAD failed): ${e.message}`);
-  }
-}
-
-function changedFiles(base) {
-  // `git diff --name-only <base>` (no `..` or `...`) means "working tree vs base",
-  // which is the union of committed + staged + unstaged changes. Locally this
-  // catches uncommitted edits; in CI the working tree equals HEAD, so the
-  // result matches a PR-style three-dot diff against `<base>`.
-  let out;
-  try {
-    out = git(['diff', '--name-only', '--diff-filter=ACMR', base]);
-  } catch (e) {
-    fail(`git diff failed against base ${base}: ${e.message}`);
-  }
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-}
-
-// ---------- file walk (--all mode) ----------
-
-function walkAll() {
-  const roots = ['api', 'client', 'packages'];
-  const files = [];
-  for (const root of roots) {
-    const abs = path.join(REPO_ROOT, root);
-    if (!fs.existsSync(abs)) continue;
-    walkDir(abs, files);
-  }
-  // Root-level Dockerfiles are upstream-class and may carry inline [knauf] edits.
-  for (const ent of fs.readdirSync(REPO_ROOT, { withFileTypes: true })) {
-    if (ent.isFile() && DOCKERFILE_RE.test(ent.name)) {
-      files.push(path.join(REPO_ROOT, ent.name));
-    }
-  }
-  return files
-    .map((abs) => path.relative(REPO_ROOT, abs).replace(/\\/g, '/'))
-    .filter((rel) => isSourceFile(rel));
-}
-
-function walkDir(dir, out) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (_e) {
-    return;
-  }
-  for (const ent of entries) {
-    if (
-      ent.name === 'node_modules' ||
-      ent.name === 'dist' ||
-      ent.name === 'build' ||
-      ent.name === '.turbo'
-    )
-      continue;
-    const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) walkDir(full, out);
-    else if (ent.isFile()) out.push(full);
-  }
-}
-
-function isSourceFile(f) {
-  if (SOURCE_EXTENSIONS.has(path.extname(f))) return true;
-  return DOCKERFILE_RE.test(path.basename(f));
-}
-
-// ---------- marker scanning ----------
-
-// Comment-syntax registry keyed by file extension (without the dot). A file's
-// markers must use a comment style its language actually supports. This stops
-// `# [knauf]` from being recognized in a .tsx file or `// [knauf]` in a
-// Dockerfile — both of which would either be syntax errors or live inside a
-// string literal.
-const COMMENT_TOKENS = {
-  js: ['//', '/*', '{/*'],
-  jsx: ['//', '/*', '{/*'],
-  ts: ['//', '/*', '{/*'],
-  tsx: ['//', '/*', '{/*'],
-  mjs: ['//', '/*'],
-  cjs: ['//', '/*'],
-  css: ['/*'],
-  yml: ['#'],
-  yaml: ['#'],
-  html: ['<!--'],
-  htm: ['<!--'],
-  mdx: ['<!--', '{/*'],
-};
-const DOCKERFILE_TOKENS = ['#'];
-// Fallback when extension is unknown — keep the union, matches pre-refactor behavior.
-const FALLBACK_TOKENS = ['//', '/*', '{/*', '#', '<!--'];
-
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function commentTokensFor(rel) {
-  const base = path.basename(rel);
-  if (DOCKERFILE_RE.test(base)) return DOCKERFILE_TOKENS;
-  const ext = path.extname(rel).slice(1).toLowerCase();
-  return COMMENT_TOKENS[ext] || FALLBACK_TOKENS;
-}
-
-// Build per-file regexes. Three patterns:
-//   openRe       — exact `[knauf]`, optional description, anchored to EOL.
-//   closeRe      — exact `End [knauf]`.
-//   looksLikeRe  — anything that looks like an attempted marker (wrong case,
-//                  whitespace inside brackets, missing close bracket).
-//                  Used only when openRe/closeRe didn't match.
-function buildPatternsFor(rel) {
-  const tokens = commentTokensFor(rel);
-  const alt = tokens.map(escapeRe).join('|');
-  return {
-    openRe: new RegExp(`(?:${alt})\\s*\\[knauf\\](?:\\s+(.*))?$`),
-    closeRe: new RegExp(`(?:${alt})\\s*End\\s+\\[knauf\\]`),
-    looksLikeRe: new RegExp(`(?:${alt})\\s*\\[[^\\]]*[Kk][Nn][Aa][Uu][Ff][^\\]]*(?:\\]|$)`),
-  };
-}
-
-function scanFile(rel) {
-  const abs = path.join(REPO_ROOT, rel);
-  let content;
-  try {
-    content = fs.readFileSync(abs, 'utf8');
-  } catch (_e) {
-    return { seams: [], unpaired: [], missing: true };
-  }
-  const { openRe, closeRe, looksLikeRe } = buildPatternsFor(rel);
-  const lines = content.split('\n');
-  const seams = [];
-  const unpaired = [];
-  const stack = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Close first — otherwise `// End [knauf]` could also satisfy "looks like".
-    if (closeRe.test(line)) {
-      const open = stack.pop();
-      if (open) {
-        seams.push({
-          file: rel,
-          startLine: open.line,
-          endLine: i + 1,
-          description: open.description,
-        });
-      } else {
-        unpaired.push({ file: rel, line: i + 1, kind: 'close-without-open' });
-      }
-      continue;
-    }
-
-    const m = line.match(openRe);
-    if (m) {
-      if (stack.length > 0) {
-        // Nested opens aren't valid in this model. Surface it so it doesn't
-        // silently confuse the stack pairing. We still push so the inner close
-        // pairs with this open; the outer one ends up as `open-without-close`.
-        unpaired.push({
-          file: rel,
-          line: i + 1,
-          kind: 'nested-open',
-          openedAt: stack[stack.length - 1].line,
-        });
-      }
-      stack.push({ line: i + 1, description: cleanDescription(m[1] || '') });
-      continue;
-    }
-
-    // Catch near-miss markers: `[Knauf]`, `[ knauf ]`, `[knauf` (no closing
-    // bracket), `[knauf-foo]`. These would otherwise pass diff-check silently.
-    if (looksLikeRe.test(line)) {
-      unpaired.push({ file: rel, line: i + 1, kind: 'malformed-marker' });
-    }
-  }
-  for (const open of stack) {
-    unpaired.push({ file: rel, line: open.line, kind: 'open-without-close' });
-  }
-  return { seams, unpaired, missing: false };
-}
-
-// Strip the comment-close shell from a captured description. We only remove
-// tokens that complete the comment syntax of the host language; everything
-// else (including leading em-dashes, colons, and trailing punctuation) is the
-// author's content and stays put.
-function cleanDescription(raw) {
-  if (!raw) return '';
-  return raw
-    .replace(/\s*-->\s*$/, '') // HTML/JSX-style close
-    .replace(/\s*\*\/\}?\s*$/, '') // /* ... */ or {/* ... */}
-    .trim();
-}
-
-function fileHasMarker(rel) {
-  const abs = path.join(REPO_ROOT, rel);
-  let content;
-  try {
-    content = fs.readFileSync(abs, 'utf8');
-  } catch {
-    return false;
-  }
-  return /\[knauf\]/.test(content);
-}
-
-// ---------- row aggregation ----------
-
-/**
- * Collapse multiple seams in the same file into one row (matching the
- * existing SEAMS.md convention where comma-separated ranges share a row).
- */
-function aggregateRows(seams) {
-  const byFile = new Map();
-  for (const s of seams) {
-    if (!byFile.has(s.file)) byFile.set(s.file, []);
-    byFile.get(s.file).push(s);
-  }
-  const rows = [];
-  for (const [file, list] of byFile) {
-    list.sort((a, b) => a.startLine - b.startLine);
-    const ranges = list.map((s) => `${s.startLine}–${s.endLine}`).join(', ');
-    // Use only the first marker's description as a starting Purpose for new rows.
-    // Subsequent markers in the same file are usually continuations — letting
-    // a human pick the canonical description avoids noisy concatenation.
-    const purpose = (list.find((s) => s.description) || {}).description || PLACEHOLDER;
-    rows.push({ file, lines: ranges, purpose });
-  }
-  return rows;
-}
-
-// ---------- group/sort for new rows ----------
-
-function rowGroup(file) {
-  if (/\.spec\.(jsx?|tsx?)$|\.test\.(jsx?|tsx?)$|__tests__/.test(file)) return 2;
-  if (file.startsWith('api/')) return 0;
-  if (file.startsWith('client/')) return 1;
-  return 3;
-}
-
-function compareNewRows(a, b) {
-  const ga = rowGroup(a.file);
-  const gb = rowGroup(b.file);
-  if (ga !== gb) return ga - gb;
-  return a.file.localeCompare(b.file);
-}
-
-// ---------- SEAMS.md parsing ----------
-
-function readSeamsMd() {
-  if (!fs.existsSync(SEAMS_PATH)) {
-    fail(`SEAMS.md not found at ${SEAMS_PATH}`);
-  }
-  return fs.readFileSync(SEAMS_PATH, 'utf8');
-}
-
-/**
- * Returns { before, autoBlock, after } where autoBlock is the text *between*
- * the sentinel comments (not including them). If sentinels are missing,
- * returns { before: full, autoBlock: null, after: '' } so callers can decide
- * whether to error or insert sentinels.
- */
-function splitAutoBlock(md) {
-  const ib = md.indexOf(SENTINEL_BEGIN);
-  const ie = md.indexOf(SENTINEL_END);
-  if (ib === -1 || ie === -1 || ie < ib) {
-    return { before: md, autoBlock: null, after: '' };
-  }
-  const before = md.slice(0, ib + SENTINEL_BEGIN.length);
-  const autoBlock = md.slice(ib + SENTINEL_BEGIN.length, ie);
-  const after = md.slice(ie);
-  return { before, autoBlock, after };
-}
-
-/**
- * Parse the auto-block table rows into objects keyed by file.
- * Preserves row order so unchanged rows stay where the editor put them.
- *
- * **Strict mode:** A line that starts with `|` and isn't the header or
- * separator IS an attempt at a data row. If it has the wrong column count or
- * an empty File cell, we throw — never silently skip. Silently skipping a
- * malformed hand-edit would cause `mergeRows` to treat every row as "new" and
- * destroy the human-curated columns on the next `write`.
- */
-function parseAutoBlockRows(autoBlock) {
-  if (!autoBlock) return [];
-  const rows = [];
-  const blockLines = autoBlock.split('\n');
-  for (let i = 0; i < blockLines.length; i++) {
-    const raw = blockLines[i];
-    const line = raw.trim();
-    if (!line.startsWith('|')) continue;
-    if (/^\|\s*-+\s*\|/.test(line)) continue; // markdown header separator
-    if (/^\|\s*File\s*\|/.test(line)) continue; // header row
-    const cells = splitTableCells(line);
-    if (cells.length !== 5) {
-      throw new Error(
-        `SEAMS.md Inline Modifications: row at block line ${i + 1} has ${cells.length} cell(s), expected 5. Row: "${line}"`,
-      );
-    }
-    const file = stripBackticks(cells[0]);
-    if (!file) {
-      throw new Error(
-        `SEAMS.md Inline Modifications: row at block line ${i + 1} has empty File cell. Row: "${line}"`,
-      );
-    }
-    rows.push({
-      file,
-      symbol: cells[1],
-      lines: cells[2],
-      purpose: cells[3],
-      tests: cells[4],
-    });
-  }
-  return rows;
-}
-
-function splitTableCells(line) {
-  const inner = line.replace(/^\|/, '').replace(/\|$/, '');
-  return inner.split('|').map((c) => c.trim());
-}
-
-function stripBackticks(s) {
-  return s.replace(/^`/, '').replace(/`$/, '').trim();
-}
-
-// ---------- merge: existing rows + discovered seams ----------
-
-const PLACEHOLDER = '—';
-
-function mergeRows(existing, discovered) {
-  const discoveredByFile = new Map(discovered.map((r) => [r.file, r]));
-  const existingByFile = new Map(existing.map((r) => [r.file, r]));
-
-  // Pass 1: walk existing rows in order. Keep rows whose file still has markers
-  // and update *only* the Lines column. Symbol/Anchor, Purpose, and Tests are
-  // human-curated and never overwritten on a row that already exists. Drop
-  // rows whose file lost its markers.
-  const merged = [];
-  for (const row of existing) {
-    const d = discoveredByFile.get(row.file);
-    if (!d) continue;
-    merged.push({
-      file: row.file,
-      symbol: row.symbol || PLACEHOLDER,
-      lines: d.lines,
-      purpose: row.purpose || PLACEHOLDER,
-      tests: row.tests || PLACEHOLDER,
-    });
-  }
-
-  // Pass 2: append rows for newly-discovered files (not in existing). For these,
-  // pre-fill Purpose with the *first* marker's description as a starting point
-  // for the human author; Symbol/Anchor and Tests stay as placeholders.
-  const newRows = [];
-  for (const d of discovered) {
-    if (existingByFile.has(d.file)) continue;
-    newRows.push({
-      file: d.file,
-      symbol: PLACEHOLDER,
-      lines: d.lines,
-      purpose: d.purpose || PLACEHOLDER,
-      tests: rowGroup(d.file) === 2 ? 'Self' : PLACEHOLDER,
-    });
-  }
-  newRows.sort(compareNewRows);
-
-  return [...merged, ...newRows];
-}
-
-// ---------- render ----------
-
-function renderTable(rows) {
-  const header = '| File | Symbol/Anchor | Lines | Purpose | Tests |\n|---|---|---|---|---|';
-  if (rows.length === 0) {
-    return `\n${header}\n`;
-  }
-  const body = rows
-    .map((r) => {
-      const file = '`' + r.file + '`';
-      const symbol = r.symbol || PLACEHOLDER;
-      const lines = r.lines || PLACEHOLDER;
-      const purpose = r.purpose || PLACEHOLDER;
-      const tests = r.tests || PLACEHOLDER;
-      return `| ${file} | ${symbol} | ${lines} | ${purpose} | ${tests} |`;
-    })
-    .join('\n');
-  return `\n${header}\n${body}\n`;
-}
-
-// ---------- diff rendering ----------
-
-function unifiedDiff(oldText, newText, label = 'SEAMS.md') {
-  const oldLines = oldText.split('\n');
-  const newLines = newText.split('\n');
-  const ops = lcsDiff(oldLines, newLines);
-  const out = [];
-  out.push(`${C.bold}--- a/${label}${C.reset}`);
-  out.push(`${C.bold}+++ b/${label}${C.reset}`);
-  for (const op of ops) {
-    if (op.kind === 'eq') {
-      out.push(`${C.dim} ${op.line}${C.reset}`);
-    } else if (op.kind === 'del') {
-      out.push(`${C.red}-${op.line}${C.reset}`);
-    } else if (op.kind === 'add') {
-      out.push(`${C.green}+${op.line}${C.reset}`);
-    }
-  }
-  return out.join('\n');
-}
-
-function lcsDiff(a, b) {
-  const n = a.length;
-  const m = b.length;
-  // For modest input sizes (auto-block is dozens of lines) the O(n*m) LCS is fine.
-  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      if (a[i] === b[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
-      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-  const ops = [];
-  let i = 0,
-    j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      ops.push({ kind: 'eq', line: a[i] });
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push({ kind: 'del', line: a[i] });
-      i++;
-    } else {
-      ops.push({ kind: 'add', line: b[j] });
-      j++;
-    }
-  }
-  while (i < n) {
-    ops.push({ kind: 'del', line: a[i++] });
-  }
-  while (j < m) {
-    ops.push({ kind: 'add', line: b[j++] });
-  }
-  return ops;
-}
-
-function differs(oldText, newText) {
-  return oldText !== newText;
-}
-
-// ---------- prompt ----------
-
-function promptYesNo(question) {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`${question} [y/N] `, (answer) => {
-      rl.close();
-      resolve(/^y(es)?$/i.test(answer.trim()));
-    });
-  });
-}
-
-// ---------- file write (atomic) ----------
-
-function writeAtomic(filePath, content) {
-  const dir = path.dirname(filePath);
-  // pid + random suffix prevents collisions if two invocations from the same
-  // process (or container) race against each other.
-  const suffix = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  const tmp = path.join(dir, `.${path.basename(filePath)}.tmp-${suffix}`);
-  fs.writeFileSync(tmp, content, 'utf8');
-  fs.renameSync(tmp, filePath);
-}
-
-// ---------- net-new files ----------
-
-function splitNewBlock(md) {
-  const ib = md.indexOf(SENTINEL_NEW_BEGIN);
-  const ie = md.indexOf(SENTINEL_NEW_END);
-  if (ib === -1 || ie === -1 || ie < ib) return { before: md, newBlock: null, after: '' };
-  return {
-    before: md.slice(0, ib + SENTINEL_NEW_BEGIN.length),
-    newBlock: md.slice(ib + SENTINEL_NEW_BEGIN.length, ie),
-    after: md.slice(ie),
-  };
-}
-
-function parseNewFileRows(newBlock) {
-  if (!newBlock) return [];
-  const rows = [];
-  const blockLines = newBlock.split('\n');
-  for (let i = 0; i < blockLines.length; i++) {
-    const raw = blockLines[i];
-    const line = raw.trim();
-    if (!line.startsWith('|')) continue;
-    if (/^\|\s*-+\s*\|/.test(line)) continue;
-    if (/^\|\s*File\s*\|/.test(line)) continue;
-    const cells = splitTableCells(line);
-    if (cells.length !== 4) {
-      throw new Error(
-        `SEAMS.md Net-New Files: row at block line ${i + 1} has ${cells.length} cell(s), expected 4. Row: "${line}"`,
-      );
-    }
-    const file = stripBackticks(cells[0]);
-    if (!file) {
-      throw new Error(
-        `SEAMS.md Net-New Files: row at block line ${i + 1} has empty File cell. Row: "${line}"`,
-      );
-    }
-    rows.push({ file, imports: cells[1], risk: cells[2], tests: cells[3] });
-  }
-  return rows;
-}
-
-function isFileRegisteredInNewTable(file, rows) {
-  const norm = file.replace(/\\/g, '/');
-  for (const row of rows) {
-    const pattern = row.file;
-    if (pattern === norm) return true;
-    if (pattern.includes('*')) {
-      const starIdx = pattern.indexOf('*');
-      const prefix = pattern.slice(0, starIdx);
-      const suffix = pattern.slice(starIdx + 1);
-      if (norm.startsWith(prefix) && norm.endsWith(suffix)) return true;
-    }
-  }
-  return false;
-}
-
-function addedKnaufFiles(base) {
-  let out;
-  try {
-    out = git(['diff', '--name-only', '--diff-filter=A', base]);
-  } catch (e) {
-    fail(`git diff (added files) failed: ${e.message}`);
-  }
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .filter((f) => classifyFile(f) === 'knauf-only');
-}
-
-function mergeNewFileRows(existing, added) {
-  const newRows = added
-    .filter((f) => !isFileRegisteredInNewTable(f, existing))
-    .map((f) => ({ file: f, imports: PLACEHOLDER, risk: PLACEHOLDER, tests: PLACEHOLDER }))
-    .sort((a, b) => a.file.localeCompare(b.file));
-  return [...existing, ...newRows];
-}
-
-function renderNewFilesTable(rows) {
-  const header = '| File | Upstream Imports | Coupling Risk | Tests |\n|---|---|---|---|';
-  if (rows.length === 0) return `\n${header}\n`;
-  const body = rows
-    .map(
-      (r) =>
-        `| \`${r.file}\` | ${r.imports || PLACEHOLDER} | ${r.risk || PLACEHOLDER} | ${r.tests || PLACEHOLDER} |`,
-    )
-    .join('\n');
-  return `\n${header}\n${body}\n`;
-}
-
-// ---------- subcommands ----------
+// ---------- discovery / orchestration ----------
 
 function resolveScope(flags) {
   if (flags.all) return { mode: 'all', files: walkAll() };
-  const base = resolveDiffBase(flags.base);
-  return { mode: 'diff', base, files: changedFiles(base) };
+  const base = resolveDiffBaseOr(flags.base);
+  return { mode: 'diff', base, files: changedFiles(base, fail) };
+}
+
+// resolveDiffBase calls fail() on error, which exits the process — so the
+// return value is always a string by the time this returns. The non-null
+// assertion below tells the type checker that.
+function resolveDiffBaseOr(explicit) {
+  const r = resolveDiffBase(explicit, fail);
+  return /** @type {string} */ (r);
+}
+
+function addedKnaufFiles(base) {
+  return addedFiles(base, fail).filter((f) => classifyFile(f) === 'knauf-only');
 }
 
 function discoverSeams(files) {
@@ -832,6 +141,48 @@ function discoverSeams(files) {
   }
   return { seams, unpaired };
 }
+
+function buildNewMd(currentMd, discoveredSeams, addedKnaufList = []) {
+  const inlineSplit = splitAutoBlock(currentMd);
+  if (inlineSplit.autoBlock === null) {
+    fail(
+      'SEAMS.md is missing the seams:auto sentinels. ' +
+        `Wrap the Inline Modifications table body with:\n  ${SENTINEL_BEGIN}\n  ...\n  ${SENTINEL_END}`,
+    );
+  }
+  const existingRows = parseAutoBlockRows(inlineSplit.autoBlock);
+  const discoveredRows = aggregateRows(discoveredSeams);
+  const merged = mergeRows(existingRows, discoveredRows);
+  const mergedFiles = new Set(merged.map((r) => r.file));
+  const removedRows = existingRows.filter((r) => !mergedFiles.has(r.file));
+  const newAuto = renderTable(merged);
+  let newMd = inlineSplit.before + newAuto + inlineSplit.after;
+
+  let unregisteredNewFiles = [];
+  const newFileSplit = splitNewBlock(newMd);
+  if (newFileSplit.newBlock !== null && addedKnaufList.length > 0) {
+    const existingNewRows = parseNewFileRows(newFileSplit.newBlock);
+    unregisteredNewFiles = addedKnaufList.filter(
+      (f) => !isFileRegisteredInNewTable(f, existingNewRows),
+    );
+    if (unregisteredNewFiles.length > 0) {
+      const mergedNew = mergeNewFileRows(existingNewRows, addedKnaufList);
+      newMd = newFileSplit.before + renderNewFilesTable(mergedNew) + newFileSplit.after;
+    }
+  }
+
+  return {
+    oldMd: currentMd,
+    newMd,
+    existingRows,
+    discoveredRows,
+    mergedRows: merged,
+    removedRows,
+    unregisteredNewFiles,
+  };
+}
+
+// ---------- subcommands ----------
 
 function cmdScan(flags) {
   const scope = resolveScope(flags);
@@ -859,56 +210,7 @@ function cmdScan(flags) {
   return 0;
 }
 
-function buildNewMd(currentMd, discoveredSeams, addedKnaufList = []) {
-  // Step 1: update Inline Modifications block
-  const inlineSplit = splitAutoBlock(currentMd);
-  if (inlineSplit.autoBlock === null) {
-    fail(
-      'SEAMS.md is missing the seams:auto sentinels. ' +
-        `Wrap the Inline Modifications table body with:\n  ${SENTINEL_BEGIN}\n  ...\n  ${SENTINEL_END}`,
-    );
-  }
-  const existingRows = parseAutoBlockRows(inlineSplit.autoBlock);
-  const discoveredRows = aggregateRows(discoveredSeams);
-  const merged = mergeRows(existingRows, discoveredRows);
-  // A row is "removed" when an existing manifest entry's file no longer has
-  // any [knauf] markers. Surfacing this matters: silently dropping rows lets
-  // an accidentally-deleted marker erase a seam from the manifest with no
-  // trace in the SEAMS.md diff beyond a row disappearing.
-  const mergedFiles = new Set(merged.map((r) => r.file));
-  const removedRows = existingRows.filter((r) => !mergedFiles.has(r.file));
-  const newAuto = renderTable(merged);
-  let newMd = inlineSplit.before + newAuto + inlineSplit.after;
-
-  // Step 2: update Net-New Files block (only when sentinels are present)
-  let unregisteredNewFiles = [];
-  const newFileSplit = splitNewBlock(newMd);
-  if (newFileSplit.newBlock !== null && addedKnaufList.length > 0) {
-    const existingNewRows = parseNewFileRows(newFileSplit.newBlock);
-    unregisteredNewFiles = addedKnaufList.filter(
-      (f) => !isFileRegisteredInNewTable(f, existingNewRows),
-    );
-    if (unregisteredNewFiles.length > 0) {
-      const mergedNew = mergeNewFileRows(existingNewRows, addedKnaufList);
-      newMd = newFileSplit.before + renderNewFilesTable(mergedNew) + newFileSplit.after;
-    }
-  }
-
-  return {
-    oldMd: currentMd,
-    newMd,
-    existingRows,
-    discoveredRows,
-    mergedRows: merged,
-    removedRows,
-    unregisteredNewFiles,
-  };
-}
-
 async function cmdWrite(flags) {
-  // `write` always operates on the whole repo — the SEAMS.md manifest is global.
-  // `--diff` / `--all` are not honored here; see `usage()`. Only `--base` matters
-  // (for picking up added knauf-only files in the Net-New Files block).
   if (flags.diff || flags.all) {
     console.error(
       `${C.yellow}warning:${C.reset} \`write\` ignores --diff/--all; it always scans the whole repo. ` +
@@ -916,9 +218,9 @@ async function cmdWrite(flags) {
     );
   }
   const { seams: allDiscovered, unpaired } = discoverSeams(walkAll());
-  const added = addedKnaufFiles(resolveDiffBase(flags.base));
+  const added = addedKnaufFiles(resolveDiffBaseOr(flags.base));
 
-  const currentMd = readSeamsMd();
+  const currentMd = readSeamsMd(SEAMS_PATH, fail);
   const result = buildNewMd(currentMd, allDiscovered, added);
 
   if (unpaired.length > 0) {
@@ -951,6 +253,7 @@ async function cmdWrite(flags) {
         inlineSplit.autoBlock,
         newInlineSplit.autoBlock,
         'SEAMS.md (Inline Modifications)',
+        C,
       ),
     );
     console.log('');
@@ -960,7 +263,7 @@ async function cmdWrite(flags) {
   const newNetNewSplit = splitNewBlock(result.newMd);
   if (netNewSplit.newBlock !== null && differs(netNewSplit.newBlock, newNetNewSplit.newBlock)) {
     console.log(
-      unifiedDiff(netNewSplit.newBlock, newNetNewSplit.newBlock, 'SEAMS.md (Net-New Files)'),
+      unifiedDiff(netNewSplit.newBlock, newNetNewSplit.newBlock, 'SEAMS.md (Net-New Files)', C),
     );
     console.log('');
   }
@@ -974,12 +277,9 @@ async function cmdWrite(flags) {
 
   let approved = !!flags.yes;
   if (!approved) {
-    if (!process.stdin.isTTY) {
-      fail('write requires an interactive terminal (or pass --yes).');
-    }
+    if (!process.stdin.isTTY) fail('write requires an interactive terminal (or pass --yes).');
     approved = await promptYesNo('Apply these changes to SEAMS.md?');
   }
-
   if (!approved) {
     console.log(`${C.dim}No changes written.${C.reset}`);
     return 0;
@@ -997,7 +297,7 @@ function cmdCheck(flags) {
     );
   }
   const seams = discoverSeams(walkAll()).seams;
-  const currentMd = readSeamsMd();
+  const currentMd = readSeamsMd(SEAMS_PATH, fail);
   const result = buildNewMd(currentMd, seams);
   const inSync = !differs(result.oldMd, result.newMd);
 
@@ -1018,7 +318,9 @@ function cmdCheck(flags) {
   }
   const split = splitAutoBlock(result.oldMd);
   const newSplit = splitAutoBlock(result.newMd);
-  console.log(unifiedDiff(split.autoBlock, newSplit.autoBlock, 'SEAMS.md (Inline Modifications)'));
+  console.log(
+    unifiedDiff(split.autoBlock, newSplit.autoBlock, 'SEAMS.md (Inline Modifications)', C),
+  );
   console.log('');
   console.log(
     `${C.red}SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\`.${C.reset}`,
@@ -1032,23 +334,20 @@ function cmdCheck(flags) {
 }
 
 function cmdDiffCheck(flags) {
-  const base = resolveDiffBase(flags.base);
-  const changed = changedFiles(base);
+  const base = resolveDiffBaseOr(flags.base);
+  const changed = changedFiles(base, fail);
   const offenders = [];
 
   for (const f of changed) {
     if (classifyFile(f) !== 'upstream') continue;
-    // Only code/Dockerfile files need [knauf] markers.
     if (!isSourceFile(f)) continue;
-    // Only check files that still exist (deleted upstream files don't need tags).
     const abs = path.join(REPO_ROOT, f);
     if (!fs.existsSync(abs)) continue;
     if (!fileHasMarker(f)) offenders.push(f);
   }
 
-  // Detect added knauf-only files not registered in Net-New Files.
   const added = addedKnaufFiles(base);
-  const currentMd = readSeamsMd();
+  const currentMd = readSeamsMd(SEAMS_PATH, fail);
   const newFileSplit = splitNewBlock(currentMd);
   const existingNewRows =
     newFileSplit.newBlock !== null ? parseNewFileRows(newFileSplit.newBlock) : [];
@@ -1116,7 +415,7 @@ function cmdDiffCheck(flags) {
     }
     if (newFileSplit.newBlock === null) {
       console.log(
-        `\n${C.dim}Add ${SENTINEL_NEW_BEGIN} / ${SENTINEL_NEW_END} sentinels around the Net-New Files table in SEAMS.md to enable auto-registration.${C.reset}`,
+        `\n${C.dim}Add the seams:new sentinels around the Net-New Files table in SEAMS.md to enable auto-registration.${C.reset}`,
       );
     } else {
       console.log(
@@ -1128,12 +427,7 @@ function cmdDiffCheck(flags) {
   return exitCode;
 }
 
-// ---------- entry ----------
-
-function fail(msg) {
-  console.error(`${C.red}error:${C.reset} ${msg}`);
-  process.exit(2);
-}
+// ---------- usage / dispatch ----------
 
 function usage() {
   return `Usage: node knauf/scripts/seams.js <command> [flags]
@@ -1149,13 +443,17 @@ Commands and the flags they honor:
                  --dry-run            preview only, exit 1 on drift
                  --yes                skip the approval prompt
   check        exit 1 if SEAMS.md is out of sync (always whole-repo)
+                 --json               emit JSON instead of human output
   diff-check   exit 1 if any modified upstream file lacks a [knauf] marker
                  --base=<ref>         override the diff base
+                 --json               emit JSON instead of human output
 
 Environment:
   SEAMS_BASE_REF   override the default branch used for merge-base lookups
                    (otherwise: origin/HEAD, then main, then master).
   GITHUB_ACTIONS   when set, check/diff-check emit ::error annotations.
+  NO_COLOR         disable ANSI colors (https://no-color.org).
+  FORCE_COLOR      enable ANSI colors even on non-TTY (https://force-color.org).
 
 Exit codes:
   0  success / no drift
@@ -1181,13 +479,14 @@ async function main(argv) {
     console.error(usage());
     return 2;
   } catch (e) {
-    if (e && e.code === 'ENOENT') fail(`missing file or command: ${e.message}`);
-    fail(e && e.message ? e.message : String(e));
+    const err = /** @type {NodeJS.ErrnoException} */ (e);
+    if (err && err.code === 'ENOENT') fail(`missing file or command: ${err.message}`);
+    fail(err && err.message ? err.message : String(err));
   }
 }
 
-// Only run as a CLI when invoked directly. Required so the spec file can
-// require() this module without triggering the command dispatcher.
+// ---------- entry ----------
+
 if (require.main === module) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
@@ -1198,30 +497,38 @@ if (require.main === module) {
   );
 }
 
-// Test surface: pure-ish functions that don't touch git or stdin.
-// The CLI dispatch lives behind `main`. Anything not listed here is
-// considered internal — tests should not depend on it.
+// Re-exports for the spec. Each lib module is its own canonical home; this
+// surface is back-compat scaffolding so the existing spec keeps working.
 module.exports = {
   main,
   parseArgv,
+  buildNewMd,
+  // classify
   classifyFile,
   isSourceFile,
+  // scan
   scanFile,
   cleanDescription,
-  aggregateRows,
-  mergeRows,
+  // manifest
   splitAutoBlock,
   splitNewBlock,
   parseAutoBlockRows,
   parseNewFileRows,
   splitTableCells,
   stripBackticks,
-  isFileRegisteredInNewTable,
-  mergeNewFileRows,
   renderTable,
   renderNewFilesTable,
-  buildNewMd,
+  // merge
+  aggregateRows,
+  mergeRows,
+  mergeNewFileRows,
+  rowGroup,
+  // glob
+  isFileRegisteredInNewTable,
+  // diff
   lcsDiff,
   unifiedDiff,
+  differs,
+  // git
   resolveDefaultBranch,
 };

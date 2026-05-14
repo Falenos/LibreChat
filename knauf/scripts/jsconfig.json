@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/jsconfig",
+  "compilerOptions": {
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["**/*.js"],
+  "exclude": ["__fixtures__/**"]
+}
