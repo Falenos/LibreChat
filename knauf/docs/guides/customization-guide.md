@@ -1,4 +1,4 @@
-# Making Changes
+# Customization Guide
 
 > **The Core Rule:** Default to the lowest tier that can express the change. Escalate only when the lower tiers genuinely cannot.
 
@@ -14,6 +14,8 @@ Walk down to the first "yes". Stop there.
 | **1 — MCP / Action** | It's a new tool, integration, or external capability |
 | **2 — Asset Overlay** | It's a logo, favicon, or static branding asset |
 | **3 — Knauf Code** | It's entirely new Knauf code with no upstream file changes |
+| **4a — Proxy** | An Nginx/HAProxy rule can intercept the request without source changes |
+| **4b — Build Transform** | A Vite/Babel plugin can apply the change at build time |
 | **4c — Inline Markers** | It needs ≤30 lines of change in 1–3 upstream files |
 | **4d — File Override** | Last resort: the entire upstream file must be replaced |
 
@@ -65,7 +67,7 @@ packages/knauf/              Shared workspace (types, schemas, constants)
 
 ### Tier 4c: Inline `[knauf]` Markers
 
-Small, targeted changes in upstream files. Mark every modification and track it in [SEAMS.md](../../SEAMS.md).
+Small, targeted changes in upstream files. Mark every modification and track it in [SEAMS.md](../../../SEAMS.md).
 
 **Size rules:**
 
@@ -157,27 +159,26 @@ Fill all five columns — never leave `—` placeholders:
 
 ## Repository Layout
 
-`✅` exists today · `❌` planned, not yet created
+Top-level structure. Tier 3 code lives inside `knauf/`-named subdirectories of `api/`, `client/src/`, and `packages/`. The seam validator treats anything outside those paths as upstream-class.
 
 ```
 agentic-karl/
-├── .github/workflows/
-│   ├── release_pipeline.yaml        ✅  CD: build → ACR → ArgoCD
-│   ├── test_pipeline.yaml           ✅  CI: test (ct-shared-workflows@v2.9.0)
-│   ├── upstream-release-watcher.yml ✅  Polls upstream, creates sync issues
-│   └── seam-validator.yml           ✅  Validates [knauf] ↔ SEAMS.md
-├── api/
-│   ├── knauf/                       ✅  Reserved (.gitkeep)
-│   └── server/
-│       ├── index.js                 ✅  Tier 4c seam — Knauf router mount-point
-│       └── routes/knauf/           ✅  Tier 3 — autogeneratePrompt route
-├── client/src/
-│   ├── components/SidePanel/Agents/ ✅  Tier 4c seams — AgentPanel, AgentFooter
-│   └── knauf/                       ✅  Tier 3 — KnaufAgentConfig, KnaufFileSearch, etc.
-├── packages/knauf/                  ✅  Workspace stub (src/ not yet created)
-├── knauf/scripts/seams.js           ✅  Seam manifest tooling
-├── Dockerfile.knauf                 ❌  Tier 2 — branding overlay
-├── librechat.yaml                   ✅  Tier 0 — all Knauf config
-├── SEAMS.md                         ✅  Manifest — every modification tracked
-└── overlay-allowlist.yml            ❌  CI allowlist for overlay paths
+├── .github/workflows/   CI: test, seam validator, release, upstream watcher
+├── api/                 Upstream backend (+ api/server/routes/knauf/ for Tier 3 routes)
+├── client/              Upstream frontend (+ client/src/knauf/ for Tier 3 components)
+├── packages/            Workspace packages (+ packages/knauf/ for shared Knauf code)
+├── knauf/               Knauf-only meta: docs, scripts (seams.js), MIGRATION
+├── librechat.yaml       Tier 0 — all Knauf config
+├── SEAMS.md             Manifest — every [knauf] marker tracked
+├── Dockerfile           Upstream + one [knauf] seam (embeds librechat.yaml)
+└── Dockerfile.knauf     Planned — Tier 2 branding overlay (not yet created)
 ```
+
+For an up-to-date list of every tracked seam, read [SEAMS.md](../../../SEAMS.md) directly.
+
+---
+
+## Related
+
+- [upstream-sync.md](upstream-sync.md) — the merge ritual that uses the markers and SEAMS.md you authored
+- [testing-and-rollback.md](../reference/testing-and-rollback.md) — seam-test patterns and emergency rollback

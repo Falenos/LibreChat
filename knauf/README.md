@@ -2,15 +2,6 @@
 
 Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https://github.com/danny-avila/LibreChat).
 
-## What's here
-
-| Directory / File | Purpose |
-|---|---|
-| `docs/` | Fork management documentation |
-| `scripts/seams.js` | Seam manifest validator (`check`, `scan`, `diff-check`) |
-| `MIGRATION.md` | How this repo was created and why we re-forked |
-
----
 
 ## Context
 
@@ -22,9 +13,29 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 ---
 
+
 ## The Core Rule
 
 > **Default to the lowest tier that can express the change. Escalate only when the lower tiers genuinely cannot.**
+
+---
+
+## What's here
+
+| Directory / File | Purpose |
+|---|---|
+| `docs/` | Fork management documentation |
+| `scripts/seams.js` | Seam manifest validator (`check`, `scan`, `diff-check`) |
+| `docs/migration.md` | How this repo was created and why we re-forked |
+
+---
+
+## Where to start
+
+1. **Making a change?** Walk the tier ladder in [customization-guide](docs/guides/customization-guide.md). Stop at the lowest tier that works.
+2. **Touching an upstream file?** Wrap the change in `[knauf]` markers and register it in [SEAMS.md](../SEAMS.md). Marker syntax + table format are in the customization guide.
+3. **Before opening the PR:** run `node knauf/scripts/seams.js check` and `node knauf/scripts/seams.js diff-check`. Both must exit 0.
+4. **Picking up an upstream-sync issue?** Follow [upstream-sync](docs/guides/upstream-sync.md).
 
 ---
 

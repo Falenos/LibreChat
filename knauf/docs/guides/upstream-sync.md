@@ -1,12 +1,12 @@
 # upstream-sync — Merging LibreChat upstream into Knauf
 
-This is the live ritual for picking up an `upstream-sync` issue (opened weekday mornings by [`upstream-release-watcher.yml`](../../.github/workflows/upstream-release-watcher.yml)) and landing the corresponding LibreChat release into `Knauf-Group/agentic-karl-v2`.
+This is the live ritual for picking up an `upstream-sync` issue (opened weekday mornings by [`upstream-release-watcher.yml`](../../../.github/workflows/upstream-release-watcher.yml)) and landing the corresponding LibreChat release into `Knauf-Group/agentic-karl-v2`.
 
 ---
 
 ## How upstream sync works in this repo
 
-`Knauf-Group/agentic-karl-v2` has native shared ancestry with `danny-avila/LibreChat` anchored at `v0.8.5`. `git merge upstream/<tag>` produces normal 3-way merges with no special setup — no replace refs, no preflight to fetch a graft, no `--allow-unrelated-histories`. See [`../MIGRATION.md`](../MIGRATION.md) for the one-time event that established this state.
+`Knauf-Group/agentic-karl-v2` has native shared ancestry with `danny-avila/LibreChat` anchored at `v0.8.5`. `git merge upstream/<tag>` produces normal 3-way merges with no special setup — no replace refs, no preflight to fetch a graft, no `--allow-unrelated-histories`. See [`migration.md`](../migration.md) for the one-time event that established this state.
 
 Upstream `v*` tags are fetched into the `upstream/v*` namespace so they don't collide with Knauf's own `v*` release tags. Baseline anchors (the Knauf-side merge commits) are tagged `knauf/base-vX.Y.Z`.
 
@@ -53,7 +53,7 @@ Stack sub-branches off the integration branch only when the merge is large enoug
 
 ## Per-merge ritual
 
-Triggered by a new `upstream-sync` issue. The issue body lists which [SEAMS.md](../../SEAMS.md) seam files upstream touched and the predicted conflict set.
+Triggered by a new `upstream-sync` issue. The issue body lists which [SEAMS.md](../../../SEAMS.md) seam files upstream touched and the predicted conflict set.
 
 ### 1. Open the integration branch
 
@@ -124,9 +124,11 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 ---
 
-## Cross-references
+## Related
 
-- [SEAMS.md](../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
-- [../MIGRATION.md](../MIGRATION.md) — the one-time event that established native shared ancestry
-- [upstream-release-watcher.yml](../../.github/workflows/upstream-release-watcher.yml) — the cron job that opens the `upstream-sync` issue
-- [seam-validator.yml](../../.github/workflows/seam-validator.yml) — PR gate enforcing SEAMS.md ↔ source consistency
+- [customization-guide.md](customization-guide.md) — marker format + SEAMS.md authoring
+- [testing-and-rollback.md](../reference/testing-and-rollback.md) — verification + revert procedure
+- [SEAMS.md](../../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
+- [migration.md](../migration.md) — the one-time event that established native shared ancestry
+- [upstream-release-watcher.yml](../../../.github/workflows/upstream-release-watcher.yml) — cron job that opens the `upstream-sync` issue
+- [seam-validator.yml](../../../.github/workflows/seam-validator.yml) — PR gate enforcing SEAMS.md ↔ source consistency

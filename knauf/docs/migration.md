@@ -1,6 +1,6 @@
 # MIGRATION.md — How `agentic-karl-v2` was created
 
-This is the historical record of the one-time event that created `Knauf-Group/agentic-karl-v2` from the legacy `Knauf-Group/agentic-karl` repo. It is **not** a runbook for any future operation. The forward-looking process for syncing upstream releases lives in [`docs/upstream-sync.md`](docs/upstream-sync.md).
+This is the historical record of the one-time event that created `Knauf-Group/agentic-karl-v2` from the legacy `Knauf-Group/agentic-karl` repo. It is **not** a runbook for any future operation. The forward-looking process for syncing upstream releases lives in [`guides/upstream-sync.md`](guides/upstream-sync.md).
 
 ## Why this migration happened
 

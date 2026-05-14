@@ -28,10 +28,6 @@ npm run test:api           # api tests only
 npm run test:client        # client tests only
 npm run e2e:ci             # Playwright (no test cases yet)
 
-# Lint
-npm run lint
-npm run lint:fix
-npm run format
 
 # Seam tooling
 node knauf/scripts/seams.js check --all               # validate before every PR
@@ -78,3 +74,9 @@ Hard stops — reject in code review.
 | **`REACT_APP_THEME_*` env prefix unset** | Adding `'REACT_APP_'` to `envPrefix` in `vite.config.ts` is a Tier 4c seam not yet applied. Theme color env vars do not function. |
 | **`packages/knauf/src/` empty** | The workspace is ready but no shared Knauf code has been extracted yet. |
 | **Smoke tests not authored** | Playwright config exists but has no test cases. First merges rely on manual staging verification. |
+
+---
+
+## Related
+
+- [customization-guide.md](../guides/customization-guide.md) — where a change belongs and how to track it

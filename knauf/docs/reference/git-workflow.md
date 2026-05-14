@@ -4,38 +4,15 @@
 
 ## Merge Protocol
 
-```bash
-# 1. Create integration branch
-git checkout main && git checkout -b chore/upstream-v0.X.Y
+See [upstream-sync.md](../guides/upstream-sync.md) for the full ritual (branching strategy, per-step checklist, tagging).
 
-# 2. Fetch and merge (NEVER rebase)
-git fetch upstream --tags
-git merge --no-ff upstream/v0.X.Y
+Summary: branch from `main`, run `git merge --no-ff upstream/<tag>` (never rebase), resolve conflicts at `[knauf]` markers using SEAMS.md as the index, validate with `seams.js check`, build + test + staging deploy, then PR to `main` with `--no-ff`.
 
-# 3. Resolve conflicts
-#    - At [knauf] markers → re-apply the marked change in the new context
-#    - In knauf/ dirs     → should not happen (Knauf-owned)
-#    - In librechat.yaml  → should not happen (Knauf-owned)
-#    - Binary assets      → git checkout --ours
-#    - Lockfiles          → delete and regenerate: rm package-lock.json && npm install
-#    - DELETED/RENAMED seam files → check if feature moved; update SEAMS.md
+**Why merge, not rebase:** atomic revert via `git revert <merge-commit>`; conflicts resolved once; `git bisect` distinguishes upstream vs Knauf.
 
-# 4. Verify SEAMS.md still accurate
-node knauf/scripts/seams.js check --all
+**Lockfile conflicts:** delete `package-lock.json`, run `npm install` to regenerate.
 
-# 5. Build and test
-npm ci && npm run build:packages && npm run frontend && npm run test:coverage
-
-# 6. PR → CI green → staging deploy → sign-off → merge to main
-```
-
-**Why merge, not rebase:** Atomic revert via `git revert <merge-commit>`. Conflicts resolved once. `git bisect` distinguishes upstream vs Knauf.
-
-**Lockfile conflicts:** Delete `package-lock.json`, run `npm install` to regenerate.
-
-**Deleted seam files:** If upstream removes a file with a `[knauf]` marker, the seam validator catches it — SEAMS.md entry points to a non-existent file → CI fails.
-
-For the full upstream sync ritual (branching strategy, per-step checklist, tagging), see [upstream-sync.md](upstream-sync.md).
+**Deleted seam files:** if upstream removes a file with a `[knauf]` marker, the seam validator catches it — SEAMS.md entry points to a non-existent file → CI fails.
 
 ---
 
@@ -68,18 +45,18 @@ Skipping a release makes the next one cost 2×. Every skipped release increases 
 
 ### Upstream Release Watcher
 
-Detects new LibreChat releases and creates a tracking issue with impact analysis. Implemented in [.github/workflows/upstream-release-watcher.yml](../../.github/workflows/upstream-release-watcher.yml).
+Detects new LibreChat releases and creates a tracking issue with impact analysis. Implemented in [.github/workflows/upstream-release-watcher.yml](../../../.github/workflows/upstream-release-watcher.yml).
 
 **How it works:**
 1. Fires on weekdays at 08:00 UTC (and on manual dispatch)
-2. Reads `LibreChat tag` from [SEAMS.md](../../SEAMS.md) to get the current baseline
+2. Reads `LibreChat tag` from [SEAMS.md](../../../SEAMS.md) to get the current baseline
 3. Fetches upstream tags into the `upstream/` namespace
 4. If new release found: computes seam file impact, detects renames, estimates merge conflicts via `git merge-tree`
 5. Creates a GitHub issue with the impact report and merge checklist
 
 ### Seam Manifest Validator
 
-Runs on every PR to `main` and `chore/upstream-*`. Implemented in [.github/workflows/seam-validator.yml](../../.github/workflows/seam-validator.yml).
+Runs on every PR to `main` and `chore/upstream-*`. Implemented in [.github/workflows/seam-validator.yml](../../../.github/workflows/seam-validator.yml).
 
 ```yaml
 - name: Manifest sync check
@@ -93,7 +70,7 @@ Only `upstream`-class files (under `api/`, `client/`, `packages/{api,client,data
 
 ### PR CI Pipeline
 
-Implemented in [.github/workflows/test_pipeline.yaml](../../.github/workflows/test_pipeline.yaml). Delegates to `ct-shared-workflows@v2.9.0`.
+Implemented in [.github/workflows/test_pipeline.yaml](../../../.github/workflows/test_pipeline.yaml). Delegates to `ct-shared-workflows@v2.9.0`.
 
 Runs: `npm run build:packages && NODE_OPTIONS="--max-old-space-size=6144" npm run test:coverage`
 
@@ -110,3 +87,10 @@ Five test suites: `test:client:coverage`, `test:api`, `test:packages:api`, `test
 | `seam-validator.yml` | PR to `main` | Validate `[knauf]` ↔ SEAMS.md via `seams.js` |
 | `combine_prs.yml` | Manual dispatch | Batch Dependabot PRs |
 | Dependabot | Weekly | npm / Docker / Actions dependency PRs |
+
+---
+
+## Related
+
+- [upstream-sync.md](../guides/upstream-sync.md) — full merge ritual
+- [quick-start.md](quick-start.md) — commands cheat-sheet

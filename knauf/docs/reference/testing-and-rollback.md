@@ -116,3 +116,9 @@ After any upstream merge reaches staging/production, monitor for 24h:
 | Frontend JS errors | New errors = UI seam broken | Error tracking |
 | API 4xx/5xx rate | Spike = backend seam broken | Application logs / APM |
 | Agent builder load | Failure = import seam broken | Manual check |
+
+---
+
+## Related
+
+- [customization-guide.md](../guides/customization-guide.md) — marker format and SEAMS.md authoring
