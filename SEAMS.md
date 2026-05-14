@@ -21,6 +21,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
 | `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
 | `Dockerfile` | `COPY librechat.yaml` | 31–33 | Embeds librechat.yaml at build time — Knauf config, not shipped by upstream | Manual |
+| `api/test/__mocks__/logger.js` | `mockFormatFunction` | 2–5 | Return a factory `(fn) => () => ({ transform: fn })` so `winston.format(fn)()` matches the shape `@librechat/data-schemas/dist/config/winston.cjs` expects; the upstream `(fn) => fn` mock causes `info.level` undefined throws when the data-schemas dist code calls `parsers.redactFormat()` at module-load | `api/config/__tests__/parsers.spec.js` |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -45,7 +46,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |
 | `client/src/knauf/data-provider/*.ts` | `librechat-data-provider` types | Low — pure data layer, no upstream modifications | `usePersonalities.spec.ts` |
 | `client/src/knauf/common/*.ts` | `librechat-data-provider` types | Low — shared constants and types | `agents-types.spec.ts` |
-| `knauf/scripts/seams.js` | — | Low — tooling only, no runtime coupling | — |
 <!-- seams:new:end -->
 
 ## Static Assets
