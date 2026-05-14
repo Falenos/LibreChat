@@ -142,7 +142,7 @@ helm/**/.values.yaml
 # rather than `/.claude/` so the un-ignore lines below can take effect — git
 # does not honor exceptions inside a fully-ignored directory.
 /.claude/*
-!/.claude/skills/
+/.claude/skills/
 /.codex/
 /.cursor/
 /.copilot/
