@@ -33,8 +33,8 @@ import {
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
 import AgentCategorySelector from '~/components/SidePanel/Agents/AgentCategorySelector';
 import AgentTool from '~/components/SidePanel/Agents/AgentTool';
-import MCPTools from '~/components/SidePanel/Agents/MCPTools';
 import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
+import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import AutoGenerateButton from './AutoGenerateButton';
@@ -429,11 +429,7 @@ export default function KnaufAgentConfig() {
           title="MCP servers"
           info="Connect this agent to extra services that give it access to tools or data outside the chat. Pick the ones you want it to use."
         >
-          <MCPTools
-            agentId={agent_id}
-            mcpServerNames={mcpServerNames}
-            setShowMCPToolDialog={setShowMCPToolDialog}
-          />
+          <KnaufMCPTools agentId={agent_id} mcpServerNames={mcpServerNames} />
           <button
             type="button"
             onClick={() => setShowMCPToolDialog(true)}
