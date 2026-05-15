@@ -1,0 +1,68 @@
+name: Seam Validator
+on:
+  pull_request:
+    # chore/upstream-* covers PRs from sub-branches into the long-running upstream
+    # integration branch — see UPSTREAM_SYNC.md branching strategy.
+    branches: [main, 'chore/upstream-*']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Need the PR base commit to compute the diff for the diff-check step.
+          fetch-depth: 0
+
+      - name: Manifest sync check
+        id: manifest
+        run: |
+          set -euo pipefail
+          {
+            echo "## Seam Validation Report"
+            echo ""
+            echo "### Manifest sync (\`knauf/scripts/seams.js check\`)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if node knauf/scripts/seams.js check --all > seams-check.log 2>&1; then
+            echo "✅ SEAMS.md is in sync with [knauf] markers." >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log
+          else
+            rc=$?
+            echo "❌ SEAMS.md is out of sync." >> "$GITHUB_STEP_SUMMARY"
+            echo '```diff' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-check.log
+            echo "::error::SEAMS.md is out of sync. Run \`node knauf/scripts/seams.js write\` locally and commit."
+            exit "$rc"
+          fi
+
+      - name: Untagged upstream modifications check
+        id: diffcheck
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          {
+            echo ""
+            echo "### Diff check vs PR base (\`knauf/scripts/seams.js diff-check\`)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if node knauf/scripts/seams.js diff-check --base="$BASE_SHA" > seams-diff.log 2>&1; then
+            echo "✅ All modified upstream files carry [knauf] markers." >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log
+          else
+            rc=$?
+            echo "❌ One or more upstream files were modified without a [knauf] marker." >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat seams-diff.log
+            echo "::error::Modified upstream files lack [knauf] markers. See CUSTOMIZATION_STRATEGY.md tier 5."
+            exit "$rc"
+          fi

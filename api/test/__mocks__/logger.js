@@ -1,5 +1,8 @@
 jest.mock('winston', () => {
-  const mockFormatFunction = jest.fn((fn) => fn);
+  // [knauf] return a factory so `winston.format(fn)()` is safe;
+  // matches the shape @librechat/data-schemas/dist/config/winston expects.
+  const mockFormatFunction = jest.fn((fn) => () => ({ transform: fn }));
+  // End [knauf]
 
   mockFormatFunction.colorize = jest.fn();
   mockFormatFunction.combine = jest.fn();
@@ -56,5 +59,6 @@ jest.mock('~/config/parsers', () => {
     redactMessage: jest.fn(),
     redactFormat: jest.fn(),
     debugTraverse: jest.fn(),
+    formatConsoleMeta: jest.fn(() => ''),
   };
 });

@@ -1,4 +1,4 @@
-# v0.8.5-rc1
+# v0.8.5
 
 # Base node image
 FROM node:20-alpine AS node
@@ -10,12 +10,12 @@ RUN apk add --no-cache python3 py3-pip uv
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 
-# Add `uv` for extended MCP support
 COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/local/bin/uvx /bin/
 RUN uv --version
 
 # Set configurable max-old-space-size with default
-ARG NODE_MAX_OLD_SPACE_SIZE=6144
+# [knauf] The default is set to 8GB to accommodate larger builds and runtime needs, especially for the React client build.
+ARG NODE_MAX_OLD_SPACE_SIZE=8192
 
 RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
@@ -28,7 +28,9 @@ COPY --chown=node:node client/package.json ./client/package.json
 COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
 COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
 COPY --chown=node:node packages/api/package.json ./packages/api/package.json
+# [knauf] embed librechat.yaml at build time — Knauf config, not shipped by upstream
 COPY --chown=node:node librechat.yaml ./librechat.yaml
+# End [knauf]
 
 RUN \
     # Allow mounting of these files, which have no default

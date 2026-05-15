@@ -1,0 +1,222 @@
+name: Upstream Release Watcher
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/danny-avila/LibreChat.git || true
+          git fetch upstream --no-tags
+
+      - name: Check for new releases and analyze impact
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const fs = require('fs');
+
+            // Get latest upstream release. LibreChat sometimes flags real releases
+            // as `prerelease`, so filter by tag pattern instead of the prerelease flag.
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: 'danny-avila', repo: 'LibreChat', per_page: 20,
+            });
+            const latest = releases.find(r => !r.draft && /^v\d+\.\d+\.\d+$/.test(r.tag_name));
+            if (!latest) {
+              core.info('No matching upstream release found');
+              return;
+            }
+
+            // Skip if already tracked.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: 'upstream-sync', state: 'all',
+            });
+            if (issues.find(i => i.title.includes(latest.tag_name))) {
+              core.info(`Already tracking ${latest.tag_name}`);
+              return;
+            }
+
+            // Read both the Knauf base tag (for human display) and the upstream baseline
+            // (for the seam-impact diff and conflict prediction) from SEAMS.md.
+            let knaufBaseTag = null;
+            let upstreamBaseTag = null;
+            try {
+              const seams = fs.readFileSync('SEAMS.md', 'utf8');
+              const knaufMatch = seams.match(/\|\s*Base tag\s*\|\s*`([^`]+)`/);
+              if (knaufMatch) knaufBaseTag = knaufMatch[1];
+              const upstreamMatch = seams.match(/\|\s*LibreChat tag\s*\|\s*`([^`]+)`/);
+              if (upstreamMatch) upstreamBaseTag = upstreamMatch[1];
+            } catch {
+              core.info('Could not read SEAMS.md');
+            }
+            if (!knaufBaseTag) {
+              try {
+                knaufBaseTag = execSync('git describe --tags --abbrev=0 --match "knauf/base-*" origin/main 2>/dev/null')
+                  .toString().trim();
+              } catch { knaufBaseTag = null; }
+            }
+
+            // Fetch upstream tags into the upstream/ namespace so they never clobber
+            // Knauf's own v* release tags. Both refs must exist for the seam-impact diff
+            // and the merge-tree conflict prediction: upstream/<base>..upstream/<latest>.
+            try {
+              execSync(`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/upstream/${latest.tag_name}`);
+            } catch (e) {
+              core.warning(`Could not fetch upstream tag ${latest.tag_name}: ${e.message}`);
+            }
+            if (upstreamBaseTag) {
+              try {
+                execSync(`git fetch upstream +refs/tags/${upstreamBaseTag}:refs/tags/upstream/${upstreamBaseTag}`);
+              } catch (e) {
+                core.warning(`Could not fetch upstream baseline ${upstreamBaseTag}: ${e.message}`);
+              }
+            }
+
+            // Diff range for the seam impact analysis. We want "what did UPSTREAM change
+            // between the last synced upstream tag and the new upstream tag", not
+            // "Knauf tree vs. upstream tree" (which would always show seam files as
+            // changed because of the [knauf] markers).
+            const diffBase = upstreamBaseTag ? `upstream/${upstreamBaseTag}` : knaufBaseTag;
+            const diffHead = `upstream/${latest.tag_name}`;
+
+            // Parse seam files from SEAMS.md "Inline Modifications" table.
+            const seamFiles = [];
+            try {
+              const seamsContent = fs.readFileSync('SEAMS.md', 'utf8');
+              const inlineSection = seamsContent.split('## Inline Modifications')[1]?.split('##')[0] || '';
+              const filePattern = /^\|\s*`([^`]+)`\s*\|/gm;
+              let m;
+              while ((m = filePattern.exec(inlineSection)) !== null) {
+                if (m[1] !== 'File') seamFiles.push(m[1]); // skip header row
+              }
+            } catch {
+              core.info('Could not parse seam files from SEAMS.md');
+            }
+
+            let impactReport = '';
+            if (diffBase) {
+              for (const file of seamFiles) {
+                try {
+                  const status = execSync(
+                    `git diff --name-status ${diffBase}..${diffHead} -- "${file}" 2>/dev/null`
+                  ).toString().trim();
+                  if (status) {
+                    impactReport += `- ⚠️ **${file}**: \`${status.split('\t')[0]}\` (modified/renamed/deleted)\n`;
+                  } else {
+                    impactReport += `- ✅ **${file}**: unchanged\n`;
+                  }
+                } catch {
+                  impactReport += `- ❓ **${file}**: unable to determine\n`;
+                }
+              }
+
+              if (seamFiles.length === 0) {
+                impactReport += 'No seam files found in SEAMS.md Inline Modifications table.\n';
+              }
+
+              // Check for renames near seam files.
+              try {
+                const renames = execSync(
+                  `git diff --find-renames --diff-filter=R --name-status ${diffBase}..${diffHead} -- api/ client/ packages/ 2>/dev/null`
+                ).toString().trim();
+                if (renames) {
+                  impactReport += `\n### File Renames Detected\n\`\`\`\n${renames}\n\`\`\`\n`;
+                }
+              } catch {}
+
+              // Predict merge conflicts via `git merge-tree --name-only`. With native
+              // shared ancestry from the bridging merge (see MIGRATION.md), this always
+              // has a real merge-base and produces meaningful output. The first line is
+              // the resulting tree SHA on a clean merge, or it precedes a list of
+              // conflicting filenames on a conflicting merge.
+              const mergeEstimate = (() => {
+                try {
+                  const out = execSync(
+                    `git merge-tree --name-only origin/main ${diffHead} 2>/dev/null`,
+                    { encoding: 'utf8' }
+                  ).trim();
+                  const lines = out.split('\n').filter(Boolean);
+                  if (lines.length <= 1) {
+                    return { clean: true, files: [] };
+                  }
+                  return { clean: false, files: lines.slice(1) };
+                } catch {
+                  return { clean: false, files: [], unknown: true };
+                }
+              })();
+
+              let conflictReport = '';
+              if (mergeEstimate.clean) {
+                conflictReport = '✅ **Clean merge expected** — no conflicts predicted.\n';
+              } else if (mergeEstimate.unknown) {
+                conflictReport = '❓ Unable to compute merge estimate.\n';
+              } else {
+                const seamSet = new Set(seamFiles);
+                const seamConflicts = mergeEstimate.files.filter(f => seamSet.has(f));
+                const nonSeamConflicts = mergeEstimate.files.filter(f => !seamSet.has(f));
+
+                conflictReport = `⚠️ **Conflicts predicted in ${mergeEstimate.files.length} file(s):**\n\n`;
+                if (seamConflicts.length) {
+                  conflictReport += `**Seam conflicts** (expected — resolve at [knauf] markers):\n`;
+                  for (const f of seamConflicts) conflictReport += `- ⚠️ \`${f}\`\n`;
+                  conflictReport += '\n';
+                }
+                if (nonSeamConflicts.length) {
+                  conflictReport += `**Non-seam conflicts** (investigate before merging):\n`;
+                  for (const f of nonSeamConflicts) conflictReport += `- \`${f}\`\n`;
+                }
+              }
+
+              impactReport += `\n### Merge Estimate\n\n${conflictReport}`;
+
+              // Show overall diff stats so the issue is informative even without seam files.
+              try {
+                const diffStat = execSync(
+                  `git diff --stat ${diffBase}..${diffHead} 2>/dev/null`
+                ).toString().trim();
+                if (diffStat) {
+                  const lines = diffStat.split('\n');
+                  const summary = lines[lines.length - 1]; // e.g. "42 files changed, 500 insertions(+), 200 deletions(-)"
+                  impactReport += `\n### Upstream Changes (${upstreamBaseTag || 'baseline unknown'} → ${latest.tag_name})\n\n${summary}\n`;
+                }
+              } catch {}
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `Upstream sync: LibreChat ${latest.tag_name}`,
+              labels: ['upstream-sync'],
+              body: `## LibreChat ${latest.tag_name}\n\n` +
+                `**Published:** ${latest.published_at}\n` +
+                `**Release notes:** ${latest.html_url}\n` +
+                `**Last synced (LibreChat):** ${upstreamBaseTag || 'unknown'}\n` +
+                `**Last synced (Knauf base tag):** ${knaufBaseTag || 'unknown'}\n\n` +
+                `### Seam Impact Analysis\n\n${impactReport || 'Unable to analyze (no previous sync tag found).'}\n\n` +
+                `### Merge Checklist\n\n` +
+                `Full ritual: see [UPSTREAM_SYNC.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/UPSTREAM_SYNC.md). Upstream \`v*\` tags are fetched into \`upstream/v*\` so they don't collide with Knauf's own \`v*\` release tags; baseline anchors are tagged \`knauf/base-v*\`.\n\n` +
+                `- [ ] Create branch from origin/main: \`git checkout -b chore/upstream-${latest.tag_name} origin/main\`\n` +
+                `- [ ] Fetch upstream tag: \`git fetch upstream +refs/tags/${latest.tag_name}:refs/tags/upstream/${latest.tag_name}\`\n` +
+                `- [ ] Merge: \`git merge --no-ff upstream/${latest.tag_name}\`\n` +
+                `- [ ] Resolve conflicts at \`[knauf]\` markers\n` +
+                `- [ ] Update SEAMS.md if paths/symbols changed (bump \`LibreChat tag\`, \`Base tag\`, \`Last synced\`)\n` +
+                `- [ ] Seam validator green\n` +
+                `- [ ] Build + tests green\n` +
+                `- [ ] Seam smoke tests green\n` +
+                `- [ ] Staging deploy + sign-off\n` +
+                `- [ ] Merge to main`,
+            });
+
+            core.info(`Created tracking issue for ${latest.tag_name}`);

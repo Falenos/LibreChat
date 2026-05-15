@@ -1,11 +1,10 @@
-/** v0.8.5-rc1 */
+/** v0.8.5 */
 module.exports = {
   roots: ['<rootDir>/src'],
   testEnvironment: 'jsdom',
   testEnvironmentOptions: {
     url: 'http://localhost:3080',
   },
-  collectCoverage: true,
   collectCoverageFrom: [
     'src/**/*.{js,jsx,ts,tsx}',
     '!<rootDir>/node_modules/',

@@ -87,6 +87,12 @@ endpoints:
   #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
   #                  -> hidden from end users to reduce configuration burden.
   agents:
+    # Default steps budget for a single agent run (LangGraph recursion limit).
+    # Each LLM call + tool call pair costs ~2 steps. 25 allows ~12 tool calls
+    # before the agent is forced to produce a final answer.
+    # maxRecursionLimit is the hard cap — it clamps even per-agent DB overrides.
+    recursionLimit: 25
+    maxRecursionLimit: 50
     capabilities:
       - file_search
       - tools
