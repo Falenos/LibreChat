@@ -126,9 +126,8 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 ## Related
 
-- [customization-guide.md](customization-guide.md) — marker format + SEAMS.md authoring
+- [code-change-protocol.md](../reference/code-change-protocol.md) — marker format + SEAMS.md authoring
 - [testing-and-rollback.md](../reference/testing-and-rollback.md) — verification + revert procedure
 - [SEAMS.md](../../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
 - [migration.md](../migration.md) — the one-time event that established native shared ancestry
 - [upstream-release-watcher.yml](../../../.github/workflows/upstream-release-watcher.yml) — cron job that opens the `upstream-sync` issue
-- [seam-validator.yml](../../../.github/workflows/seam-validator.yml) — PR gate enforcing SEAMS.md ↔ source consistency

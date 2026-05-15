@@ -11,7 +11,7 @@ This is a thin fork of LibreChat (`danny-avila/LibreChat`). Every modification t
 
 Read `SEAMS.md` before doing anything else — it is the live inventory of every existing seam and shows the exact auto-sentinel format you must follow.
 
-> If you hit a decision the tier table below doesn't resolve, consult `knauf/docs/guides/customization-guide.md` for the full tier rationale and decision framework. Don't read it proactively.
+> If you hit a decision the tier table below doesn't resolve, consult `knauf/docs/reference/code-change-protocol.md` for the full tier rationale and decision framework. Don't read it proactively.
 
 ---
 
@@ -28,7 +28,7 @@ Walk the ladder from the top. Stop at the first "yes".
 | Must it modify ≤30 lines in 1–3 upstream files? | **Tier 4c** — `[knauf]` inline markers |
 | Must it replace an entire upstream file? | **Tier 4d** — last resort, justify in SEAMS.md |
 
-If stuck, check `knauf/docs/guides/customization-guide.md` for the full tier rationale and decision framework.
+If stuck, check `knauf/docs/reference/code-change-protocol.md` for the full tier rationale and decision framework.
 
 ---
 
