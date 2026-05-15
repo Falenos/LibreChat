@@ -79,4 +79,4 @@ Hard stops — reject in code review.
 
 ## Related
 
-- [customization-guide.md](../guides/customization-guide.md) — where a change belongs and how to track it
+- [customization.md](customization.md) — where a change belongs and how to track it

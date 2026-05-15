@@ -1,4 +1,4 @@
-# Customization Guide
+# Customization Tiers
 
 > **The Core Rule:** Default to the lowest tier that can express the change. Escalate only when the lower tiers genuinely cannot.
 
@@ -180,5 +180,5 @@ For an up-to-date list of every tracked seam, read [SEAMS.md](../../../SEAMS.md)
 
 ## Related
 
-- [upstream-sync.md](upstream-sync.md) — the merge ritual that uses the markers and SEAMS.md you authored
-- [testing-and-rollback.md](../reference/testing-and-rollback.md) — seam-test patterns and emergency rollback
+- [upstream-sync.md](../guides/upstream-sync.md) — the merge ritual that uses the markers and SEAMS.md you authored
+- [testing-and-rollback.md](testing-and-rollback.md) — seam-test patterns and emergency rollback

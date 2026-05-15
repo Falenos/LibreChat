@@ -32,8 +32,8 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 ## Where to start
 
-1. **Making a change?** Walk the tier ladder in [customization-guide](docs/guides/customization-guide.md). Stop at the lowest tier that works.
-2. **Touching an upstream file?** Wrap the change in `[knauf]` markers and register it in [SEAMS.md](../SEAMS.md). Marker syntax + table format are in the customization guide.
+1. **Making a change?** Walk the tier ladder in [customization](docs/reference/customization.md). Stop at the lowest tier that works.
+2. **Touching an upstream file?** Wrap the change in `[knauf]` markers and register it in [SEAMS.md](../SEAMS.md). Marker syntax + table format are in the customization reference.
 3. **Before opening the PR:** run `node knauf/scripts/seams.js check` and `node knauf/scripts/seams.js diff-check`. Both must exit 0.
 4. **Picking up an upstream-sync issue?** Follow [upstream-sync](docs/guides/upstream-sync.md).
 
@@ -45,13 +45,13 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 | Doc | When to read it |
 |---|---|
-| [docs/guides/customization-guide.md](docs/guides/customization-guide.md) | Deciding where a change belongs + how to track it in SEAMS.md |
 | [docs/guides/upstream-sync.md](docs/guides/upstream-sync.md) | Step-by-step ritual for picking up an upstream sync issue |
 
 ### Reference
 
 | Doc | When to read it |
 |---|---|
+| [docs/reference/customization.md](docs/reference/customization.md) | Tier ladder for deciding where a change belongs + marker / SEAMS.md format |
 | [docs/reference/quick-start.md](docs/reference/quick-start.md) | Commands cheat-sheet, anti-patterns, known limitations |
 | [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, best practices, CI automation |
 | [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md) | Seam tests, emergency rollback |

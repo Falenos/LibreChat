@@ -126,7 +126,7 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 ## Related
 
-- [customization-guide.md](customization-guide.md) — marker format + SEAMS.md authoring
+- [customization.md](../reference/customization.md) — marker format + SEAMS.md authoring
 - [testing-and-rollback.md](../reference/testing-and-rollback.md) — verification + revert procedure
 - [SEAMS.md](../../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
 - [migration.md](../migration.md) — the one-time event that established native shared ancestry
