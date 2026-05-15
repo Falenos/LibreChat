@@ -10,6 +10,11 @@
  *      renders a single "Add MCP server" button outside this component
  *      that opens the same MCPToolSelectDialog.
  *
+ * Wrapper className: the outer "mb-1" is not a margin reduction. Upstream
+ * wraps everything in "mb-4" and uses an inner "mb-1" div for the server
+ * list; we drop the outer wrapper (KnaufSection already supplies "mb-6"
+ * spacing) and keep the upstream inner "mb-1" as the new top-level div.
+ *
  * Without this fork the user sees the section title twice and two
  * buttons that open the same dialog. Everything else (server row
  * variants, MCP_SERVERS access gate) is preserved verbatim. When

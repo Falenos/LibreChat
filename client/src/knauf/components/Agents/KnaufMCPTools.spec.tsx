@@ -81,7 +81,7 @@ describe('KnaufMCPTools', () => {
 
   it('does not render the upstream MCPTools heading or inner button', () => {
     /**
-     * Regression guard for KK20-XXX: the duplicate "MCP servers" label and
+     * Regression guard for KK20-115: the duplicate "MCP servers" label and
      * the duplicate "Add MCP Server Tools" button reappear if anyone ports
      * upstream's MCPTools internals back into this fork. KnaufAgentConfig
      * already provides the section title and the single "Add MCP server"
