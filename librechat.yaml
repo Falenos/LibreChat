@@ -59,10 +59,13 @@ interface:
     use: true
   fileCitations: true
   mcpServers:
-    use: true       # all users may attach centrally-defined MCP servers
-    create: false   # only admins configure MCP server definitions
-    share: false
-    public: false
+    use: true       # activates the MCP_SERVERS permission type for all roles
+    # create / share / public intentionally omitted — they are role-driven
+    # via packages/data-provider/src/roles.ts: ADMIN gets create+share+public,
+    # USER gets none. Setting them here would override BOTH roles (the YAML
+    # loop in packages/api/src/app/permissions.ts iterates USER + ADMIN and
+    # the explicit config value beats the role default), which would also
+    # lock admins out of creating MCP server definitions.
 
 registration:
   socialLogins: ['openid']
