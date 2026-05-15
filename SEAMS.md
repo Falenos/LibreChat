@@ -20,6 +20,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE` | 22–29, 89–93, 135–139 | Inline gate — hides Advanced panel button and Duplicate agent button for simplified builder | `AgentFooter.spec.tsx` |
 | `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
 | `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
+| `Dockerfile` | `COPY librechat.yaml` | 31–33 | Embeds librechat.yaml at build time — Knauf config, not shipped by upstream | Manual |
+| `api/test/__mocks__/logger.js` | `mockFormatFunction` | 2–5 | Return a factory `(fn) => () => ({ transform: fn })` so `winston.format(fn)()` matches the shape `@librechat/data-schemas/dist/config/winston.cjs` expects; the upstream `(fn) => fn` mock causes `info.level` undefined throws when the data-schemas dist code calls `parsers.redactFormat()` at module-load | `api/config/__tests__/parsers.spec.js` |
+| `packages/api/src/agents/__tests__/memory.test.ts` | `jest.mock('winston', ...)` | 15–38 | Replace plain-object `format` with a callable factory + full method surface (printf, timestamp, errors, splat, json, addColors, transports.DailyRotateFile) so `@librechat/data-schemas` dist loads at module-init when this spec pulls in `~/agents/memory` | Self |
+| `packages/api/src/agents/__tests__/run-summarization.test.ts` | `jest.mock('winston', ...)` | 14–37 | Same mock-shape fix as memory.test.ts — `winston.format` callable, full method surface — so data-schemas dist loads via `~/agents/run` import | Self |
+| `packages/api/src/agents/__tests__/initialize.test.ts` | `jest.mock('winston', ...)` | 16–39 | Same mock-shape fix as memory.test.ts — data-schemas dist is pulled in via `src/utils/axios` and needs the full callable-format surface | Self |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -34,6 +39,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 ## Net-New Files
 
+<!-- seams:new:begin -->
 | File | Upstream Imports | Coupling Risk | Tests |
 |---|---|---|---|
 | `api/server/routes/knauf/index.js` | `express` | Low — additive router | — |
@@ -43,6 +49,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |
 | `client/src/knauf/data-provider/*.ts` | `librechat-data-provider` types | Low — pure data layer, no upstream modifications | `usePersonalities.spec.ts` |
 | `client/src/knauf/common/*.ts` | `librechat-data-provider` types | Low — shared constants and types | `agents-types.spec.ts` |
+<!-- seams:new:end -->
 
 ## Static Assets
 

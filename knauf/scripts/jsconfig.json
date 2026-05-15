@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/jsconfig",
+  "compilerOptions": {
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "maxNodeModuleJsDepth": 0
+  },
+  "files": [
+    "seams.js",
+    "seams.config.js",
+    "seams.spec.js",
+    "lib/classify.js",
+    "lib/diff.js",
+    "lib/git.js",
+    "lib/glob.js",
+    "lib/io.js",
+    "lib/manifest.js",
+    "lib/merge.js",
+    "lib/scan.js",
+    "lib/walk.js"
+  ]
+}

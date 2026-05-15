@@ -136,7 +136,13 @@ helm/**/.values.yaml
 *.cert
 
 # AI Assistants
-/.claude/
+# Ignore everything inside .claude/ by default — it contains per-user settings
+# (.claude/settings.local.json) and private notes (.claude/notes/). The
+# team-shared skills are unignored below. Pattern note: we use `/.claude/*`
+# rather than `/.claude/` so the un-ignore lines below can take effect — git
+# does not honor exceptions inside a fully-ignored directory.
+/.claude/*
+/.claude/skills/
 /.codex/
 /.cursor/
 /.copilot/
