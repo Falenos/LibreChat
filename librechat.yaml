@@ -58,6 +58,11 @@ interface:
   marketplace:
     use: true
   fileCitations: true
+  mcpServers:
+    use: true       # all users may attach centrally-defined MCP servers
+    create: false   # only admins configure MCP server definitions
+    share: false
+    public: false
 
 registration:
   socialLogins: ['openid']
