@@ -1,6 +1,6 @@
 # knauf/
 
-Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https://github.com/danny-avila/LibreChat).
+Knauf-specific layer for `agentic-karl` — a thin fork of [LibreChat](https://github.com/danny-avila/LibreChat).
 
 
 ## Context
@@ -9,7 +9,7 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 **Why we fork.** We need to layer enterprise features, integrations, and UX adaptations that go beyond what configuration alone can provide.
 
-**Why agentic-karl-v2 exists.** Two predecessors (`cst-karl-webui` with 86 module-aliased override files, `agentic-karl` with 127 untracked commits) had accumulated enough drift that upstream sync was impossible in practice. This repo was re-forked with native shared ancestry at upstream `v0.8.5`, using the thin fork pattern below. Every customization is either a config value, a net-new file in a `knauf/` directory, or a tracked `[knauf]` marker.
+**Why agentic-karl exists.** Two predecessors (`cst-karl-webui` with 86 module-aliased override files, `agentic-karl-old`) had accumulated enough drift that upstream sync was hard in practice. This repo was re-forked with native shared ancestry at upstream `v0.8.5`, using the thin fork pattern below. Every customization is either a config value, a net-new file in a `knauf/` directory, or a tracked `[knauf]` marker.
 
 ---
 
@@ -20,22 +20,51 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 ---
 
-## What's here
+## Local development
 
-| Directory / File | Purpose |
-|---|---|
-| `docs/` | Fork management documentation |
-| `scripts/seams.js` | Seam manifest validator (`check`, `scan`, `diff-check`) |
-| `docs/migration.md` | How this repo was created and why we re-forked |
+```bash
+# Install
+nvm use            # Node v24, per .nvmrc
+npm ci
+
+# Build
+npm run build:packages     # data-provider, data-schemas, api, client-package — run first
+npm run frontend           # full client build
+npm run build              # turbo build across all workspaces
+
+# Supporting services (mongo, meilisearch, vectordb, rag_api — not the api service)
+docker compose up -d mongodb meilisearch vectordb rag_api
+
+# Dev (two terminals — backend on host, frontend on host)
+npm run backend:dev        # nodemon Express on :3080
+npm run frontend:dev       # Vite dev server on :3090, proxies to :3080
+
+# Test
+npm run test:api           # api tests
+npm run test:client        # client tests
+npm run e2e:ci             # Playwright (no test cases yet)
+```
 
 ---
 
-## Where to start
+## Making a change — the process
 
-1. **Making a change?** Walk the tier ladder in [customization](docs/reference/customization.md). Stop at the lowest tier that works.
-2. **Touching an upstream file?** Wrap the change in `[knauf]` markers and register it in [SEAMS.md](../SEAMS.md). Marker syntax + table format are in the customization reference.
-3. **Before opening the PR:** run `node knauf/scripts/seams.js check` and `node knauf/scripts/seams.js diff-check`. Both must exit 0.
-4. **Picking up an upstream-sync issue?** Follow [upstream-sync](docs/guides/upstream-sync.md).
+Follow this order. Each step assumes the previous one is complete.
+
+1. **Read the protocol.** Open [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md). The tier ladder decides where your change goes; the Anti-Patterns and Refusals sections list what reviewers will reject.
+2. **Pick the lowest tier that works.** Walk the Decision Framework: Tier 0 config → Tier 1 MCP/Action → Tier 2 asset overlay → Tier 3 net-new Knauf code → Tier 4a/b/c/d upstream modification. Stop at the first "yes".
+3. **If Tier 4c (inline `[knauf]` marker):** wrap the change in `[knauf] <reason> ... End [knauf]` and add a row to [SEAMS.md](../SEAMS.md). Easiest path: invoke the `seam-manifest` skill at [.agents/skills/seam-manifest](../.agents/skills/seam-manifest) — it handles the marker, the SEAMS.md row, and re-runs the validator. Manual reference: [code-change-protocol.md § Tracking Changes](docs/reference/code-change-protocol.md#tracking-changes-tier-4c).
+4. **Run the seam tooling before opening the PR:**
+   ```bash
+   node knauf/scripts/seams.js check --all                 # validate SEAMS.md ↔ markers
+   node knauf/scripts/seams.js scan --all                  # list every seam found in source
+   node knauf/scripts/seams.js diff-check --base=<sha>     # check the PR diff for untagged upstream mods
+   ```
+   `check` and `diff-check` are the CI merge gate; both must exit 0.
+5. **Write a seam test.** Every `[knauf]` marker needs a corresponding test — see [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md). Untested seams fail silently when upstream refactors.
+6. **If you're working with AI:** the two skills at [.agents/skills/](../.agents/skills/) wrap steps 2–4. Invoke [`fork-management`](../.agents/skills/fork-management) *before* the change (tier selection + anti-pattern checks) and [`seam-manifest`](../.agents/skills/seam-manifest) *after* adding or editing a `[knauf]` marker or net-new `knauf/`-directory file (runs the seam tooling and authors the SEAMS.md row). Don't relitigate the tier choice once a skill has done it.
+
+**Picking up an upstream-sync issue instead?** Skip the steps above and follow [docs/guides/upstream-sync.md](docs/guides/upstream-sync.md).
 
 ---
 
@@ -51,8 +80,9 @@ Knauf-specific layer for `agentic-karl-v2` — a thin fork of [LibreChat](https:
 
 | Doc | When to read it |
 |---|---|
-| [docs/reference/customization.md](docs/reference/customization.md) | Tier ladder for deciding where a change belongs + marker / SEAMS.md format |
-| [docs/reference/quick-start.md](docs/reference/quick-start.md) | Commands cheat-sheet, anti-patterns, known limitations |
-| [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, best practices, CI automation |
+| [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md) | Tier ladder, marker / SEAMS.md format, anti-patterns, refusals |
+| [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, CI automation |
 | [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md) | Seam tests, emergency rollback |
 | [docs/migration.md](docs/migration.md) | Historical record: how this repo was created, why we re-forked |
+
+---

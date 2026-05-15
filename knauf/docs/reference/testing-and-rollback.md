@@ -121,4 +121,4 @@ After any upstream merge reaches staging/production, monitor for 24h:
 
 ## Related
 
-- [customization.md](customization.md) — marker format and SEAMS.md authoring
+- [code-change-protocol.md](code-change-protocol.md) — marker format and SEAMS.md authoring

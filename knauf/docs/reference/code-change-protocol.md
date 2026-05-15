@@ -1,4 +1,4 @@
-# Customization Tiers
+# Code Change Protocol
 
 > **The Core Rule:** Default to the lowest tier that can express the change. Escalate only when the lower tiers genuinely cannot.
 
@@ -175,6 +175,36 @@ agentic-karl/
 ```
 
 For an up-to-date list of every tracked seam, read [SEAMS.md](../../../SEAMS.md) directly.
+
+---
+
+## Anti-Patterns
+
+Patterns that work but increase maintenance cost disproportionately. Default to avoiding them; document the justification when you don't.
+
+| ✕ | Why |
+|---|---|
+| **Building custom auth/permission infrastructure** | LibreChat has `PermissionTypes`, `useHasAccess`, `requireCapability`, per-role config, admin APIs. Use them. |
+| **Defaulting to module aliasing** | Full-file ownership for small changes. Use only when explicitly justified. |
+| **Modifying upstream without `[knauf]` markers** | Invisible during merge — creates hidden merge obligations. |
+| **`git rebase` for upstream sync** | Re-resolves conflicts on every rebase, loses merge history. Use `merge --no-ff`. |
+| **Assuming env vars are runtime** | Vite bakes `REACT_APP_*` at build time. Changing theme = rebuild + redeploy. |
+| **Seams without tests** | Every `[knauf]` marker needs a corresponding test. Untested seams fail silently on upstream refactor. |
+| **Overengineering for hypothetical needs** | Document the option. Implement when the need materializes. |
+
+---
+
+## Refusals
+
+Hard stops — reject in code review.
+
+| ✕ | Why |
+|---|---|
+| **Pulling `:latest`** | Pin to versioned upstream tags. `docker-compose.yml` currently pulls `:latest` — that is a known issue, not a precedent. |
+| **Parallel flag system** | Don't build a second feature-flag system alongside LibreChat's `PermissionTypes`. |
+| **Skipping upstream merges** | The next one costs 2×. Every skipped release increases drift exponentially. |
+| **Custom dependency machinery** | Don't invent `knauf-dependencies.json` with a post-install merge script. Use `packages/knauf/package.json`. |
+| **Merging without CI green** | Seam validator + tests are the merge gate. No exceptions. |
 
 ---
 

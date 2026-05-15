@@ -93,4 +93,4 @@ Five test suites: `test:client:coverage`, `test:api`, `test:packages:api`, `test
 ## Related
 
 - [upstream-sync.md](../guides/upstream-sync.md) — full merge ritual
-- [quick-start.md](quick-start.md) — commands cheat-sheet
+- [../../README.md](../../README.md) — local development commands
