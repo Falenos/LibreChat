@@ -24,12 +24,7 @@ import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
 import { isEphemeralAgent, type AgentForm } from '~/common';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
-import {
-  cn,
-  defaultTextProps,
-  processAgentOption,
-  removeFocusOutlines,
-} from '~/utils';
+import { cn, defaultTextProps, processAgentOption, removeFocusOutlines } from '~/utils';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
 import AgentCategorySelector from '~/components/SidePanel/Agents/AgentCategorySelector';
 import AgentTool from '~/components/SidePanel/Agents/AgentTool';
@@ -99,12 +94,7 @@ export default function KnaufAgentConfig() {
   // YAML-gated capabilities — `endpoints.agents.capabilities` from
   // librechat.yaml. Each capability in the registry decides via its
   // `isEnabled` whether to render given this list.
-  const {
-    agentsConfig,
-    regularTools,
-    availableMCPServers,
-    mcpServersMap,
-  } = useAgentPanelContext();
+  const { agentsConfig, regularTools, availableMCPServers, mcpServersMap } = useAgentPanelContext();
   const enabledCapabilities = useMemo(
     () => (agentsConfig?.capabilities ?? []) as ReadonlyArray<string>,
     [agentsConfig?.capabilities],
@@ -128,11 +118,7 @@ export default function KnaufAgentConfig() {
   const model = useWatch({ control, name: 'model' });
   const instructions = useWatch({ control, name: 'instructions' });
   const tools = useWatch({ control, name: 'tools' });
-  const { toolIds, mcpServerNames } = useVisibleTools(
-    tools,
-    regularTools,
-    mcpServersMap,
-  );
+  const { toolIds, mcpServerNames } = useVisibleTools(tools, regularTools, mcpServersMap);
 
   const { data: agentFiles = [] } = useGetAgentFiles(agent_id);
 
@@ -147,9 +133,7 @@ export default function KnaufAgentConfig() {
   const knowledge_files = useMemo(() => {
     if (typeof agent === 'string' || agent?.id !== agent_id) return [];
     if (agent?.knowledge_files) return agent.knowledge_files;
-    const processed = agent
-      ? processAgentOption({ agent, fileMap: mergedFileMap })
-      : null;
+    const processed = agent ? processAgentOption({ agent, fileMap: mergedFileMap }) : null;
     return processed?.knowledge_files ?? [];
   }, [agent, agent_id, mergedFileMap]);
 
@@ -171,9 +155,11 @@ export default function KnaufAgentConfig() {
     setValue('file_search', shouldEnable as never, { shouldDirty: false });
   }, [agent_id, knowledge_files.length, getValues, setValue]);
 
-  // ── Personality (UI-only field; derived/applied to model + parameters) ────
-  // Default selection: the conventional balanced personality if available,
-  // else the first.
+  // ── Personality ───────────────────────────────────────────────────────────
+  // Single source of truth: the form's `spec` field (hydrated by
+  // AgentSelect.resetAgentForm from `agent.spec`, persisted on save via
+  // composeAgentUpdatePayload). Local useState created a bidirectional sync
+  // with `spec` that ping-ponged the pill on every click.
   const defaultPersonalityName = useMemo(() => {
     if (personalities.length === 0) return '';
     return (
@@ -182,9 +168,10 @@ export default function KnaufAgentConfig() {
     );
   }, [personalities]);
 
-  // Try to derive the selected personality from the form's current model
-  // — only on first load with a non-empty model. Otherwise default.
-  const initialPersonality = useMemo(() => {
+  const storedPersonality = useWatch({ control, name: 'spec' }) ?? '';
+
+  // Derive-from-model fallback for legacy agents without a saved spec.
+  const derivedPersonality = useMemo(() => {
     if (personalities.length === 0) return '';
     if (!model) return defaultPersonalityName;
     const match = personalities.find(
@@ -193,19 +180,24 @@ export default function KnaufAgentConfig() {
     return (match ?? personalities[0]).name;
   }, [personalities, model, defaultPersonalityName]);
 
-  const [personality, setPersonality] = useState<string>('');
+  const personality =
+    storedPersonality && personalities.some((p) => p.name === storedPersonality)
+      ? storedPersonality
+      : derivedPersonality;
 
-  // First-time hydration: once personalities resolve, pick a sensible default.
+  // One-time hydration for legacy agents: write the derived pick into the
+  // form so save persists it. shouldDirty: false — opening a legacy agent
+  // shouldn't look unsaved.
   useEffect(() => {
-    if (!personality && initialPersonality) {
-      setPersonality(initialPersonality);
+    if (!storedPersonality && derivedPersonality) {
+      setValue('spec', derivedPersonality, { shouldDirty: false });
     }
-  }, [personality, initialPersonality]);
+  }, [storedPersonality, derivedPersonality, setValue]);
 
-  // Apply the selected personality's preset to the form (model + parameters).
-  useEffect(() => {
-    if (!personality) return;
-    const picked = personalities.find((p) => p.name === personality);
+  const handlePersonalityChange = (name: string) => {
+    if (name === getValues('spec')) return;
+    setValue('spec', name, { shouldDirty: true });
+    const picked = personalities.find((p) => p.name === name);
     const next = presetToFormValues(picked);
     if (!next) return;
 
@@ -219,17 +211,12 @@ export default function KnaufAgentConfig() {
     // through unknown — AgentModelParameters' TS shape doesn't list every
     // model-level key Azure accepts (e.g. reasoning_effort, web_search),
     // but the runtime field is permissive.
-    const current = (getValues('model_parameters') ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const current = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
     const merged = { ...current, ...next.params };
-    setValue(
-      'model_parameters',
-      merged as unknown as AgentForm['model_parameters'],
-      { shouldDirty: true },
-    );
-  }, [personality, personalities, setValue, getValues]);
+    setValue('model_parameters', merged as unknown as AgentForm['model_parameters'], {
+      shouldDirty: true,
+    });
+  };
 
   // ── Instructions: Variables popover + ✦ Autogenerate ──────────────────────
   const insertVariable = (token: string) => {
@@ -271,8 +258,7 @@ export default function KnaufAgentConfig() {
       return t?.name ?? id;
     });
     const categoryValue = getValues('category') ?? '';
-    const categoryLabel =
-      categories.find((c) => c.value === categoryValue)?.label ?? categoryValue;
+    const categoryLabel = categories.find((c) => c.value === categoryValue)?.label ?? categoryValue;
     autogenerate.mutate(
       {
         agent: {
@@ -291,8 +277,7 @@ export default function KnaufAgentConfig() {
         currentDraft: getValues('instructions') ?? '',
       },
       {
-        onSuccess: ({ text }) =>
-          setValue('instructions', text, { shouldDirty: true }),
+        onSuccess: ({ text }) => setValue('instructions', text, { shouldDirty: true }),
         onError: (err) =>
           showToast({
             status: 'error',
@@ -315,236 +300,239 @@ export default function KnaufAgentConfig() {
 
   return (
     <>
-    <div className="h-auto pt-1">
-      {/* Avatar (upstream — handles real upload) */}
-      <div className="mb-6">
-        <AgentAvatar avatar={typeof agent === 'string' ? null : agent?.avatar ?? null} />
-        <label className={labelClass} htmlFor="knauf-agent-name">
-          {localize('com_ui_name')}
-          <span className="text-red-500"> *</span>
-        </label>
-        <Controller
-          name="name"
-          control={control}
-          rules={{ required: localize('com_ui_agent_name_is_required') }}
-          render={({ field, fieldState: { error } }) => (
-            <>
+      <div className="h-auto pt-1">
+        {/* Avatar (upstream — handles real upload) */}
+        <div className="mb-6">
+          <AgentAvatar avatar={typeof agent === 'string' ? null : (agent?.avatar ?? null)} />
+          <label className={labelClass} htmlFor="knauf-agent-name">
+            {localize('com_ui_name')}
+            <span className="text-red-500"> *</span>
+          </label>
+          <Controller
+            name="name"
+            control={control}
+            rules={{ required: localize('com_ui_agent_name_is_required') }}
+            render={({ field, fieldState: { error } }) => (
+              <>
+                <input
+                  {...field}
+                  value={field.value ?? ''}
+                  maxLength={256}
+                  className={inputClass}
+                  id="knauf-agent-name"
+                  type="text"
+                  placeholder={localize('com_agents_name_placeholder')}
+                  aria-label="Agent name"
+                />
+                {error ? (
+                  <div className="mt-1 text-sm text-red-500" role="alert">
+                    {error.message}
+                  </div>
+                ) : null}
+              </>
+            )}
+          />
+        </div>
+
+        {/* Description */}
+        <div className="mb-6">
+          <label className={labelClass} htmlFor="knauf-agent-desc">
+            {localize('com_ui_description')}
+          </label>
+          <Controller
+            name="description"
+            control={control}
+            render={({ field }) => (
               <input
                 {...field}
                 value={field.value ?? ''}
-                maxLength={256}
+                maxLength={512}
                 className={inputClass}
-                id="knauf-agent-name"
+                id="knauf-agent-desc"
                 type="text"
-                placeholder={localize('com_agents_name_placeholder')}
-                aria-label="Agent name"
+                placeholder={localize('com_agents_description_placeholder')}
+                aria-label="Agent description"
               />
-              {error ? (
-                <div className="mt-1 text-sm text-red-500" role="alert">
-                  {error.message}
-                </div>
-              ) : null}
-            </>
-          )}
-        />
-      </div>
+            )}
+          />
+        </div>
 
-      {/* Description */}
-      <div className="mb-6">
-        <label className={labelClass} htmlFor="knauf-agent-desc">
-          {localize('com_ui_description')}
-        </label>
-        <Controller
-          name="description"
-          control={control}
-          render={({ field }) => (
-            <input
-              {...field}
-              value={field.value ?? ''}
-              maxLength={512}
-              className={inputClass}
-              id="knauf-agent-desc"
-              type="text"
-              placeholder={localize('com_agents_description_placeholder')}
-              aria-label="Agent description"
-            />
-          )}
-        />
-      </div>
-
-      {/* Category — same upstream component as the native builder, drives
+        {/* Category — same upstream component as the native builder, drives
           the agent's `category` field. Marketplace stays hidden, but
           categorisation is still useful for sorting / filtering in the
           agent list once that comes online. */}
-      <KnaufSection
-        title={localize('com_ui_category')}
-        info="Helps you find this agent later by topic. Pick the bucket that fits best, or leave it on General."
-      >
-        <AgentCategorySelector />
-      </KnaufSection>
+        <KnaufSection
+          title={localize('com_ui_category')}
+          info="Helps you find this agent later by topic. Pick the bucket that fits best, or leave it on General."
+        >
+          <AgentCategorySelector />
+        </KnaufSection>
 
-      {/* Personality */}
-      <KnaufSection
-        title="Personality"
-        info="Sets the agent's tone. Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended."
-      >
-        <PersonalityPills
-          personalities={personalities}
-          value={personality}
-          onChange={setPersonality}
-        />
-      </KnaufSection>
+        {/* Personality */}
+        <KnaufSection
+          title="Personality"
+          info="Sets the agent's tone. Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended."
+        >
+          <PersonalityPills
+            personalities={personalities}
+            value={personality}
+            onChange={handlePersonalityChange}
+          />
+        </KnaufSection>
 
-      {/* What it can do — capability rows are sourced from the registry
+        {/* What it can do — capability rows are sourced from the registry
           (capabilities.ts) and filtered by `endpoints.agents.capabilities`
           in librechat.yaml. Adding a row is one entry in capabilities.ts. */}
-      {visibleCapabilities.length > 0 ? (
-        <KnaufSection
-          title="What it can do"
-          info="Extra abilities the agent can use while replying, like searching the web for fresh information. Toggle each one on or off."
-        >
-          <div className="flex flex-col gap-2">
-            {visibleCapabilities.map((cap) => (
-              <CapabilityRow key={cap.id} capability={cap} />
-            ))}
-          </div>
-        </KnaufSection>
-      ) : null}
+        {visibleCapabilities.length > 0 ? (
+          <KnaufSection
+            title="What it can do"
+            info="Extra abilities the agent can use while replying, like searching the web for fresh information. Toggle each one on or off."
+          >
+            <div className="flex flex-col gap-2">
+              {visibleCapabilities.map((cap) => (
+                <CapabilityRow key={cap.id} capability={cap} />
+              ))}
+            </div>
+          </KnaufSection>
+        ) : null}
 
-      {/* Data Knowledge — file presence drives `file_search` automatically
+        {/* Data Knowledge — file presence drives `file_search` automatically
           (see the sync effect above). KnaufFileSearch is a fork of
           upstream FileSearch that omits the inner heading + checkbox. */}
-      <KnaufSection
-        title="Data Knowledge"
-        info="Documents the agent can read to answer questions. Upload files here. Search turns on automatically once you add the first one, and off again when you remove the last."
-      >
-        <KnaufFileSearch agent_id={agent_id} files={knowledge_files} />
-      </KnaufSection>
+        <KnaufSection
+          title="Data Knowledge"
+          info="Documents the agent can read to answer questions. Upload files here. Search turns on automatically once you add the first one, and off again when you remove the last."
+        >
+          <KnaufFileSearch agent_id={agent_id} files={knowledge_files} />
+        </KnaufSection>
 
-      {/* MCP servers — only renders when at least one MCP server is
+        {/* MCP servers — only renders when at least one MCP server is
           configured in librechat.yaml. Reuses upstream MCPTools list +
           MCPToolSelectDialog so we inherit any future MCP UX changes. */}
-      {availableMCPServers != null && availableMCPServers.length > 0 ? (
-        <KnaufSection
-          title="MCP servers"
-          info="Connect this agent to extra services that give it access to tools or data outside the chat. Pick the ones you want it to use."
-        >
-          <KnaufMCPTools agentId={agent_id} mcpServerNames={mcpServerNames} />
-          <button
-            type="button"
-            onClick={() => setShowMCPToolDialog(true)}
-            className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
-            aria-haspopup="dialog"
+        {availableMCPServers != null && availableMCPServers.length > 0 ? (
+          <KnaufSection
+            title="MCP servers"
+            info="Connect this agent to extra services that give it access to tools or data outside the chat. Pick the ones you want it to use."
           >
-            <div className="flex w-full items-center justify-center gap-2">
-              {localize('com_ui_add_mcp_server')}
-            </div>
-          </button>
-        </KnaufSection>
-      ) : null}
+            <KnaufMCPTools agentId={agent_id} mcpServerNames={mcpServerNames} />
+            <button
+              type="button"
+              onClick={() => setShowMCPToolDialog(true)}
+              className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
+              aria-haspopup="dialog"
+            >
+              <div className="flex w-full items-center justify-center gap-2">
+                {localize('com_ui_add_mcp_server')}
+              </div>
+            </button>
+          </KnaufSection>
+        ) : null}
 
-      {/* Tools — picks from the curated tools registered for the agents
+        {/* Tools — picks from the curated tools registered for the agents
           endpoint. Gated by `endpoints.agents.capabilities` containing
           `tools` in librechat.yaml. Actions are intentionally not
           surfaced here (see the comment in librechat.yaml). */}
-      {toolsEnabled ? (
-        <KnaufSection
-          title="Tools"
-          info="Things the agent can do while replying, like creating an image or running a calculation. Pick the ones you want it to be able to use."
-        >
-          {regularTools === undefined ? (
-            <div className="text-xs text-text-secondary">Loading tools…</div>
-          ) : (
-            <>
-              <div className="mb-1">
-                {toolIds.map((toolId, i) => {
-                  const tool = regularTools.find((t) => t.pluginKey === toolId);
-                  if (!tool) return null;
-                  return (
-                    <AgentTool
-                      key={`${toolId}-${i}-${agent_id}`}
-                      tool={toolId}
-                      regularTools={regularTools}
-                      agent_id={agent_id}
-                    />
-                  );
-                })}
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowToolDialog(true)}
-                className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
-                aria-haspopup="dialog"
-              >
-                <div className="flex w-full items-center justify-center gap-2">
-                  {localize('com_assistants_add_tools')}
-                </div>
-              </button>
-            </>
-          )}
-        </KnaufSection>
-      ) : null}
-
-      {/* Instructions */}
-      <div className="mb-6">
-        <div className="mb-2 flex items-center gap-2">
-          <label
-            htmlFor="knauf-agent-instructions"
-            className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
+        {toolsEnabled ? (
+          <KnaufSection
+            title="Tools"
+            info="Things the agent can do while replying, like creating an image or running a calculation. Pick the ones you want it to be able to use."
           >
-            <span className="truncate">{localize('com_ui_instructions')}</span>
-            <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. You can write this yourself, or click Generate to have AI draft it. Once you have something written the button changes to Polish, so AI can tighten it up." />
-          </label>
-          <AutoGenerateButton
-            hasDraft={(instructions ?? '').trim().length > 0}
-            drafting={autogenerate.isLoading}
-            onClick={onAutogenerate}
-          />
-          <VariablesPopover onPick={insertVariable} />
-        </div>
-        <Controller
-          name="instructions"
-          control={control}
-          render={({ field }) => (
-            <textarea
-              {...field}
-              value={field.value ?? ''}
-              ref={(el) => {
-                field.ref(el);
-                textareaRef.current = el;
-              }}
-              rows={6}
-              placeholder="What should this agent do? Describe its role, voice, and any guardrails."
-              className={cn(inputClass, 'min-h-[140px] resize-y leading-relaxed')}
-              aria-label="Agent instructions"
-            />
-          )}
-        />
-        <div className="mt-1 flex items-center justify-end text-xs text-text-tertiary">
-          <span>{(instructions ?? '').length} characters</span>
-        </div>
-      </div>
+            {regularTools === undefined ? (
+              <div className="text-xs text-text-secondary">{localize('com_ui_loading')}</div>
+            ) : (
+              <>
+                <div className="mb-1">
+                  {toolIds.map((toolId, i) => {
+                    const tool = regularTools.find((t) => t.pluginKey === toolId);
+                    if (!tool) return null;
+                    return (
+                      <AgentTool
+                        key={`${toolId}-${i}-${agent_id}`}
+                        tool={toolId}
+                        regularTools={regularTools}
+                        agent_id={agent_id}
+                      />
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowToolDialog(true)}
+                  className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
+                  aria-haspopup="dialog"
+                >
+                  <div className="flex w-full items-center justify-center gap-2">
+                    {localize('com_assistants_add_tools')}
+                  </div>
+                </button>
+              </>
+            )}
+          </KnaufSection>
+        ) : null}
 
-      {/* Model parameters are managed by personality + capability toggles.
+        {/* Instructions */}
+        <div className="mb-6">
+          <div className="mb-2 flex items-center gap-2">
+            <label
+              htmlFor="knauf-agent-instructions"
+              className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
+            >
+              <span className="truncate">{localize('com_ui_instructions')}</span>
+              <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. You can write this yourself, or click Generate to have AI draft it. Once you have something written the button changes to Polish, so AI can tighten it up." />
+            </label>
+            <AutoGenerateButton
+              hasDraft={(instructions ?? '').trim().length > 0}
+              drafting={autogenerate.isLoading}
+              onClick={onAutogenerate}
+            />
+            <VariablesPopover onPick={insertVariable} />
+          </div>
+          <Controller
+            name="instructions"
+            control={control}
+            render={({ field }) => (
+              <textarea
+                {...field}
+                value={field.value ?? ''}
+                ref={(el) => {
+                  field.ref(el);
+                  textareaRef.current = el;
+                }}
+                rows={6}
+                placeholder="What should this agent do? Describe its role, voice, and any guardrails."
+                className={cn(inputClass, 'min-h-[140px] resize-y leading-relaxed')}
+                aria-label="Agent instructions"
+              />
+            )}
+          />
+          <div className="mt-1 flex items-center justify-end text-xs text-text-tertiary">
+            <span>
+              {(instructions ?? '').length}
+              {' characters'}
+            </span>
+          </div>
+        </div>
+
+        {/* Model parameters are managed by personality + capability toggles.
           We never render the model picker; values flow into the form via
           setValue calls above. */}
-    </div>
-    {toolsEnabled && (
-      <ToolSelectDialog
-        isOpen={showToolDialog}
-        setIsOpen={setShowToolDialog}
-        endpoint={EModelEndpoint.agents}
-      />
-    )}
-    {availableMCPServers != null && availableMCPServers.length > 0 && (
-      <MCPToolSelectDialog
-        agentId={agent_id}
-        isOpen={showMCPToolDialog}
-        mcpServerNames={mcpServerNames}
-        setIsOpen={setShowMCPToolDialog}
-        endpoint={EModelEndpoint.agents}
-      />
-    )}
+      </div>
+      {toolsEnabled && (
+        <ToolSelectDialog
+          isOpen={showToolDialog}
+          setIsOpen={setShowToolDialog}
+          endpoint={EModelEndpoint.agents}
+        />
+      )}
+      {availableMCPServers != null && availableMCPServers.length > 0 && (
+        <MCPToolSelectDialog
+          agentId={agent_id}
+          isOpen={showMCPToolDialog}
+          mcpServerNames={mcpServerNames}
+          setIsOpen={setShowMCPToolDialog}
+          endpoint={EModelEndpoint.agents}
+        />
+      )}
     </>
   );
 }
