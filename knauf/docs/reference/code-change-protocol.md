@@ -157,6 +157,16 @@ Fill all five columns — never leave `—` placeholders:
 
 ---
 
+## Schema / Type Extensions
+
+When a Tier 4c change adds a new field to an upstream-owned **persisted entity** — a Mongoose schema under `packages/data-schemas/src/schema/` or a TypeScript type under `packages/data-schemas/src/types/` or `packages/data-provider/src/types/` — the field's *name* needs a rule, not just a `[knauf]` marker. The marker is on Knauf code; it can't catch a future upstream field with the same name landing on the same entity.
+
+| Case | Name | Why |
+|---|---|---|
+| **Mirroring an upstream concept onto a new entity** — the same field already exists upstream on a sibling entity, and we're extending the pattern. Example: `Agent.spec` mirrors `Conversation.spec`. | **No prefix.** | If upstream later adds the same field themselves, the merge is a no-op rather than a rename. |
+| **Fork-only field with no upstream analogue** — Knauf-only concept upstream is unlikely to ship under the same name (audit IDs, fork-specific permission flags, Knauf workflow state). | **`knauf_` prefix required.** | Prevents future-upstream collision and is visually self-documenting at every call site. Renaming a persisted field post-launch costs a data migration. |
+---
+
 ## Repository Layout
 
 Top-level structure. Tier 3 code lives inside `knauf/`-named subdirectories of `api/`, `client/src/`, and `packages/`. The seam validator treats anything outside those paths as upstream-class.
