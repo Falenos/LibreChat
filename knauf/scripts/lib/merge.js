@@ -3,10 +3,18 @@
 // merge.js — combine existing manifest rows with newly-discovered seams
 //
 // The central design rule:
-//   • `Lines` is auto-managed (always overwritten by discovery)
-//   • `Symbol/Anchor`, `Purpose`, `Tests` are human-curated (never overwritten)
+//   • `Symbol/Anchor`, `Lines`, `Purpose`, `Tests`, `Ticket` are human-curated
+//     (preserved when present; tool only fills them when the row is being
+//     created from a new discovery)
 //   • A row whose file lost its markers is dropped — surfaced as `removed`
 //   • A newly-discovered file becomes a row with a placeholder description
+//
+// The Lines column used to be auto-overwritten on every `check`. Under the
+// append-only-per-ticket convention a single file legitimately has multiple
+// rows (one per ticket), each with its own anchor range — there's no
+// single "correct" Lines value the tool can derive from discovery, so Lines
+// is now human-authored too. Drift after prettier reformat is accepted; the
+// next time the file is touched, the row's Lines should be corrected by hand.
 
 'use strict';
 
@@ -48,22 +56,24 @@ function mergeRows(existing, discovered) {
   const discoveredByFile = new Map(discovered.map((r) => [r.file, r]));
   const existingByFile = new Map(existing.map((r) => [r.file, r]));
 
-  // Pass 1: keep rows whose file still has markers; update only Lines.
+  // Pass 1: keep every row whose file still has at least one marker. Preserve
+  // every column — the append-only convention means humans own all of them,
+  // including Lines.
   const merged = [];
   for (const row of existing) {
-    const d = discoveredByFile.get(row.file);
-    if (!d) continue;
+    if (!discoveredByFile.has(row.file)) continue;
     merged.push({
       file: row.file,
       symbol: row.symbol || PLACEHOLDER,
-      lines: d.lines,
+      lines: row.lines || PLACEHOLDER,
       purpose: row.purpose || PLACEHOLDER,
       tests: row.tests || PLACEHOLDER,
+      ticket: row.ticket || PLACEHOLDER,
     });
   }
 
-  // Pass 2: append rows for newly-discovered files. Pre-fill Purpose with the
-  // first marker's description as a starting point for the human author.
+  // Pass 2: append rows for newly-discovered files. Pre-fill Purpose and Lines
+  // from the scan as a starting point — humans replace these on next edit.
   const newRows = [];
   for (const d of discovered) {
     if (existingByFile.has(d.file)) continue;
@@ -73,6 +83,7 @@ function mergeRows(existing, discovered) {
       lines: d.lines,
       purpose: d.purpose || PLACEHOLDER,
       tests: rowGroup(d.file) === 2 ? 'Self' : PLACEHOLDER,
+      ticket: PLACEHOLDER,
     });
   }
   newRows.sort(compareNewRows);
@@ -84,7 +95,13 @@ function mergeNewFileRows(existing, added) {
   const existingByFile = new Map(existing.map((r) => [r.file, r]));
   const newRows = added
     .filter((f) => !existingByFile.has(f))
-    .map((f) => ({ file: f, imports: PLACEHOLDER, risk: PLACEHOLDER, tests: PLACEHOLDER }))
+    .map((f) => ({
+      file: f,
+      imports: PLACEHOLDER,
+      risk: PLACEHOLDER,
+      tests: PLACEHOLDER,
+      ticket: PLACEHOLDER,
+    }))
     .sort((a, b) => a.file.localeCompare(b.file));
   return [...existing, ...newRows];
 }
