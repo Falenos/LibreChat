@@ -154,19 +154,28 @@ describe('Conversations – favorites CellMeasurerCache key invalidation', () =>
     expect(cache.has(0, 0)).toBe(false);
   });
 
-  it('should invalidate the cached favorites height when marketplace visibility changes', () => {
+  // [knauf] Marketplace moved to the main sidebar (KK20-124 / FEAT-02).
+  // Conversations.tsx now hard-codes showAgentMarketplace=false, so changes
+  // to the underlying useShowMarketplace hook value no longer participate
+  // in the favorites CellMeasurerCache key — and must not invalidate it.
+  // This test pins that seam behavior; if the [knauf] block in
+  // Conversations.tsx is removed, this assertion flips.
+  it('should NOT invalidate the cached favorites height when marketplace visibility changes (Knauf seam)', () => {
     mockFavoritesState.favorites = [{ model: 'gpt-4', endpoint: 'openAI' }];
     const { rerender } = render(<Wrapper />);
     const cache = mockCapturedCache!;
 
     cache.set(0, 0, 300, 48);
     expect(cache.has(0, 0)).toBe(true);
+    expect(cache.getHeight(0, 0)).toBe(48);
 
     mockShowMarketplace = false;
     rerender(<Wrapper />);
 
-    expect(cache.has(0, 0)).toBe(false);
+    expect(cache.has(0, 0)).toBe(true);
+    expect(cache.getHeight(0, 0)).toBe(48);
   });
+  // End [knauf]
 
   it('should retain the cached favorites height when content state is unchanged', () => {
     mockFavoritesState.favorites = [{ model: 'gpt-4', endpoint: 'openAI' }];

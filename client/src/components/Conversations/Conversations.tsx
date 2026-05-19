@@ -166,7 +166,13 @@ const Conversations: FC<ConversationsProps> = ({
   const { favorites, isLoading: isFavoritesLoading } = useFavorites();
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
   const convoHeight = isSmallScreen ? 44 : 34;
-  const showAgentMarketplace = useShowMarketplace();
+  // [knauf] Marketplace moved to the main sidebar (KK20-124 / FEAT-02).
+  // Force the favorites-section gate to false so the marketplace card
+  // doesn't surface in the chat history panel. The sidebar entry is added
+  // in useUnifiedSidebarLinks.ts.
+  useShowMarketplace();
+  const showAgentMarketplace = false;
+  // End [knauf]
 
   const favoritesContentKeyRef = useRef('');
 

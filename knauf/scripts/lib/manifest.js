@@ -81,9 +81,9 @@ function parseAutoBlockRows(autoBlock) {
     if (/^\|\s*-+\s*\|/.test(line)) continue;
     if (/^\|\s*File\s*\|/.test(line)) continue;
     const cells = splitTableCells(line);
-    if (cells.length !== 5) {
+    if (cells.length !== 6) {
       throw new Error(
-        `SEAMS.md Inline Modifications: row at block line ${i + 1} has ${cells.length} cell(s), expected 5. Row: "${line}"`,
+        `SEAMS.md Inline Modifications: row at block line ${i + 1} has ${cells.length} cell(s), expected 6. Row: "${line}"`,
       );
     }
     const file = stripBackticks(cells[0]);
@@ -98,6 +98,7 @@ function parseAutoBlockRows(autoBlock) {
       lines: cells[2],
       purpose: cells[3],
       tests: cells[4],
+      ticket: cells[5],
     });
   }
   return rows;
@@ -113,9 +114,9 @@ function parseNewFileRows(newBlock) {
     if (/^\|\s*-+\s*\|/.test(line)) continue;
     if (/^\|\s*File\s*\|/.test(line)) continue;
     const cells = splitTableCells(line);
-    if (cells.length !== 4) {
+    if (cells.length !== 5) {
       throw new Error(
-        `SEAMS.md Net-New Files: row at block line ${i + 1} has ${cells.length} cell(s), expected 4. Row: "${line}"`,
+        `SEAMS.md Net-New Files: row at block line ${i + 1} has ${cells.length} cell(s), expected 5. Row: "${line}"`,
       );
     }
     const file = stripBackticks(cells[0]);
@@ -124,7 +125,7 @@ function parseNewFileRows(newBlock) {
         `SEAMS.md Net-New Files: row at block line ${i + 1} has empty File cell. Row: "${line}"`,
       );
     }
-    rows.push({ file, imports: cells[1], risk: cells[2], tests: cells[3] });
+    rows.push({ file, imports: cells[1], risk: cells[2], tests: cells[3], ticket: cells[4] });
   }
   return rows;
 }
@@ -132,24 +133,26 @@ function parseNewFileRows(newBlock) {
 // ---------- render tables ----------
 
 function renderTable(rows) {
-  const header = '| File | Symbol/Anchor | Lines | Purpose | Tests |\n|---|---|---|---|---|';
+  const header =
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |\n|---|---|---|---|---|---|';
   if (rows.length === 0) return `\n${header}\n`;
   const body = rows
     .map((r) => {
       const file = '`' + r.file + '`';
-      return `| ${file} | ${r.symbol || PLACEHOLDER} | ${r.lines || PLACEHOLDER} | ${r.purpose || PLACEHOLDER} | ${r.tests || PLACEHOLDER} |`;
+      return `| ${file} | ${r.symbol || PLACEHOLDER} | ${r.lines || PLACEHOLDER} | ${r.purpose || PLACEHOLDER} | ${r.tests || PLACEHOLDER} | ${r.ticket || PLACEHOLDER} |`;
     })
     .join('\n');
   return `\n${header}\n${body}\n`;
 }
 
 function renderNewFilesTable(rows) {
-  const header = '| File | Upstream Imports | Coupling Risk | Tests |\n|---|---|---|---|';
+  const header =
+    '| File | Upstream Imports | Coupling Risk | Tests | Ticket |\n|---|---|---|---|---|';
   if (rows.length === 0) return `\n${header}\n`;
   const body = rows
     .map(
       (r) =>
-        `| \`${r.file}\` | ${r.imports || PLACEHOLDER} | ${r.risk || PLACEHOLDER} | ${r.tests || PLACEHOLDER} |`,
+        `| \`${r.file}\` | ${r.imports || PLACEHOLDER} | ${r.risk || PLACEHOLDER} | ${r.tests || PLACEHOLDER} | ${r.ticket || PLACEHOLDER} |`,
     )
     .join('\n');
   return `\n${header}\n${body}\n`;

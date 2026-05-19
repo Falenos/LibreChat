@@ -46,9 +46,10 @@ Build or configure the MCP server externally. Declare in `librechat.yaml` under 
 
 Once you've picked the tier, **invoke the `seam-manifest` skill**. It owns the entire SEAMS.md authoring loop:
 
+- the **append-only-per-ticket** convention (each ticket adds its own row(s); prior rows are never edited; a single file can legitimately appear in multiple rows, one per ticket)
 - the `scan` / `check` / `diff-check` workflow
 - what `seams.js` reports vs what the agent must write
-- per-section row format (Inline Modifications, Net-New Files, Configuration, Static Assets)
+- per-section row format (Inline Modifications, Net-New Files, Configuration, Static Assets) — including the `Ticket` column
 - marker syntax and the depth/case/comment-token rules
 - seam-test patterns
 
@@ -61,6 +62,19 @@ Quick recap of what tier maps to which SEAMS.md section, so you know what to exp
 | Tier 4c | Inline Modifications | A `[knauf]` / `End [knauf]` block in source + one row inside `<!-- seams:auto:begin --> / <!-- seams:auto:end -->` |
 
 The hard rule that lives in `seam-manifest` and is repeated here only because it is the most common mistake: **never run `seams.js write`**. The agent authors rows directly with the Edit tool. The tool only validates.
+
+### Tier 4c — adding a field to a persisted upstream entity
+
+When a Tier 4c marker adds a new field to a Mongoose schema (`packages/data-schemas/src/schema/`) or to the TypeScript type that describes a persisted entity (`packages/data-schemas/src/types/`, `packages/data-provider/src/types/`), the field's **name** needs a rule, not just the marker. The `[knauf]` block is on our code; it can't catch a future upstream field landing under the same name on the same entity.
+
+| Case | Name |
+|---|---|
+| Mirroring an upstream concept onto a new entity (the same field already exists upstream on a sibling entity, e.g. `Agent.spec` mirrors `Conversation.spec`) | **No prefix.** A future upstream merge becomes a no-op rather than a rename. |
+| Fork-only field with no upstream analogue (audit IDs, Knauf-specific permission flags, Knauf workflow state) | **`knauf_` prefix required.** Prevents future-upstream collision; visually self-documenting at every call site. |
+
+Out of scope (no prefix): form-only/UI-only TS fields that never persist (`avatar_action`, `avatar_preview`); net-new Knauf entities under `packages/knauf/` (already path-isolated). Zod validators inherit the rule from the type they validate.
+
+When in doubt, prefix — the cost of a `knauf_` prefix is cosmetic; renaming a persisted field post-launch costs a data migration. Full rationale in `knauf/docs/reference/code-change-protocol.md` (Schema / Type Extensions).
 
 ---
 
@@ -99,7 +113,8 @@ npm run test:client                       # or relevant workspace suite
 
 Then verify manually:
 - [ ] All `[knauf]` markers have a paired `End [knauf]`
-- [ ] All new SEAMS.md rows have `Symbol/Anchor`, `Lines`, `Purpose`, and `Tests` filled (no `—` on new rows)
+- [ ] All new SEAMS.md rows have `Symbol/Anchor`, `Lines`, `Purpose`, `Tests`, and `Ticket` filled (no `—` on new rows, except `Ticket` for pre-convention rows)
+- [ ] New rows were **appended** to the table; no prior rows were edited or rewrapped
 - [ ] Seam test written and passes
 - [ ] Net-New Files section updated if any `knauf/` files were created
 - [ ] Configuration section updated if any infrastructure files changed

@@ -272,6 +272,9 @@ export type Agent = {
   support_contact?: SupportContact;
   /** Per-tool configuration options (deferred loading, allowed callers, etc.) */
   tool_options?: AgentToolOptions;
+  // [knauf] Persist chosen modelSpec name on the agent (mirrors Conversation.spec). UI round-trip only — not consumed by chat completion. BUG-01.
+  spec?: string | null;
+  // End [knauf]
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -297,6 +300,9 @@ export type AgentCreateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  // [knauf] Carry spec through AgentCreateParams. BUG-01.
+  | 'spec'
+  // End [knauf]
 >;
 
 export type AgentUpdateParams = {
@@ -321,6 +327,9 @@ export type AgentUpdateParams = {
   | 'category'
   | 'support_contact'
   | 'tool_options'
+  // [knauf] Carry spec through AgentUpdateParams. BUG-01.
+  | 'spec'
+  // End [knauf]
 >;
 
 export type AgentListParams = {
