@@ -18,7 +18,7 @@
  *   MCP servers (when configured), Tools, Instructions (with Variables
  *   popover + ✦ Autogenerate).
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
@@ -115,7 +115,6 @@ export default function KnaufAgentConfig() {
   const { control, setValue, getValues } = useFormContext<AgentForm>();
   const agent = useWatch({ control, name: 'agent' });
   const agent_id = useWatch({ control, name: 'id' });
-  const model = useWatch({ control, name: 'model' });
   const instructions = useWatch({ control, name: 'instructions' });
   const tools = useWatch({ control, name: 'tools' });
   const { toolIds, mcpServerNames } = useVisibleTools(tools, regularTools, mcpServersMap);
@@ -158,8 +157,13 @@ export default function KnaufAgentConfig() {
   // ── Personality ───────────────────────────────────────────────────────────
   // Single source of truth: the form's `spec` field (hydrated by
   // AgentSelect.resetAgentForm from `agent.spec`, persisted on save via
-  // composeAgentUpdatePayload). Local useState created a bidirectional sync
-  // with `spec` that ping-ponged the pill on every click.
+  // composeAgentUpdatePayload).
+  //
+  // We do NOT derive personality from `model` — all three Karl personalities
+  // share the same Azure deployment (gpt-5.4 in librechat.yaml), so a
+  // model-based lookup always returns the first match (Precise). For any
+  // agent without an explicit stored spec, fall back to Balanced visually
+  // and only commit when the user actually clicks a pill.
   const defaultPersonalityName = useMemo(() => {
     if (personalities.length === 0) return '';
     return (
@@ -170,52 +174,55 @@ export default function KnaufAgentConfig() {
 
   const storedPersonality = useWatch({ control, name: 'spec' }) ?? '';
 
-  // Derive-from-model fallback for legacy agents without a saved spec.
-  const derivedPersonality = useMemo(() => {
-    if (personalities.length === 0) return '';
-    if (!model) return defaultPersonalityName;
-    const match = personalities.find(
-      (p) => typeof p.preset.model === 'string' && p.preset.model === model,
-    );
-    return (match ?? personalities[0]).name;
-  }, [personalities, model, defaultPersonalityName]);
-
   const personality =
     storedPersonality && personalities.some((p) => p.name === storedPersonality)
       ? storedPersonality
-      : derivedPersonality;
+      : defaultPersonalityName;
 
-  // One-time hydration for legacy agents: write the derived pick into the
-  // form so save persists it. shouldDirty: false — opening a legacy agent
-  // shouldn't look unsaved.
+  const applyPersonality = useCallback(
+    (name: string, opts: { shouldDirty: boolean }) => {
+      const picked = personalities.find((p) => p.name === name);
+      const next = presetToFormValues(picked);
+      if (!next) return;
+      setValue('spec', name, { shouldDirty: opts.shouldDirty });
+      if (next.model && next.model !== getValues('model')) {
+        setValue('model', next.model, { shouldDirty: opts.shouldDirty });
+        setValue('provider', 'azureOpenAI', { shouldDirty: opts.shouldDirty });
+      }
+      // Merge personality params into existing model_parameters, preserving
+      // any web_search / useResponsesApi the user toggled separately. Cast
+      // through unknown — AgentModelParameters' TS shape doesn't list every
+      // model-level key Azure accepts (e.g. reasoning_effort, web_search),
+      // but the runtime field is permissive.
+      const current = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
+      const merged = { ...current, ...next.params };
+      setValue('model_parameters', merged as unknown as AgentForm['model_parameters'], {
+        shouldDirty: opts.shouldDirty,
+      });
+    },
+    [personalities, setValue, getValues],
+  );
+
+  // Auto-apply the default personality's preset (model + params) ONLY for
+  // ephemeral drafts (new agents not yet saved). This guarantees a newly
+  // created agent gets a system prompt + reasoning settings without forcing
+  // the user to click a pill. We deliberately skip this for saved agents
+  // without a stored spec — applying the preset there would clobber any
+  // custom `promptPrefix` the user had set on the agent. Self-throttles via
+  // storedPersonality: once spec is populated, the effect short-circuits.
   useEffect(() => {
-    if (!storedPersonality && derivedPersonality) {
-      setValue('spec', derivedPersonality, { shouldDirty: false });
-    }
-  }, [storedPersonality, derivedPersonality, setValue]);
+    if (!isEphemeralAgent(agent_id)) return;
+    if (storedPersonality) return;
+    if (!defaultPersonalityName) return;
+    applyPersonality(defaultPersonalityName, { shouldDirty: false });
+  }, [agent_id, storedPersonality, defaultPersonalityName, applyPersonality]);
 
   const handlePersonalityChange = (name: string) => {
-    if (name === getValues('spec')) return;
-    setValue('spec', name, { shouldDirty: true });
-    const picked = personalities.find((p) => p.name === name);
-    const next = presetToFormValues(picked);
-    if (!next) return;
-
-    if (next.model && next.model !== getValues('model')) {
-      setValue('model', next.model, { shouldDirty: true });
-      setValue('provider', 'azureOpenAI', { shouldDirty: true });
-    }
-
-    // Merge personality params into existing model_parameters, preserving
-    // any web_search / useResponsesApi the user toggled separately. Cast
-    // through unknown — AgentModelParameters' TS shape doesn't list every
-    // model-level key Azure accepts (e.g. reasoning_effort, web_search),
-    // but the runtime field is permissive.
-    const current = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
-    const merged = { ...current, ...next.params };
-    setValue('model_parameters', merged as unknown as AgentForm['model_parameters'], {
-      shouldDirty: true,
-    });
+    // Always re-apply the preset, even if `spec` already matches — this
+    // ensures legacy agents (where spec was never persisted) and freshly
+    // hydrated drafts both end up with the correct model_parameters when
+    // the user explicitly picks a pill. Mark dirty so the save round-trips.
+    applyPersonality(name, { shouldDirty: true });
   };
 
   // ── Instructions: Variables popover + ✦ Autogenerate ──────────────────────
