@@ -155,9 +155,50 @@ jest.mock('../DuplicateAgent', () => ({
   ),
 }));
 
+// [knauf] Stub upstream Switch primitive so we can interact with the
+// admin-only "simplified view" toggle. KK20-125 / FEAT-03.
 jest.mock('@librechat/client', () => ({
   Spinner: () => <div data-testid="spinner" />,
+  Switch: ({
+    id,
+    checked,
+    onCheckedChange,
+    ...rest
+  }: {
+    id?: string;
+    checked?: boolean;
+    onCheckedChange?: (next: boolean) => void;
+    [key: string]: unknown;
+  }) => (
+    <input
+      type="checkbox"
+      id={id}
+      data-testid={(rest['data-testid'] as string) ?? 'switch'}
+      checked={!!checked}
+      onChange={(e) => onCheckedChange?.(e.target.checked)}
+    />
+  ),
 }));
+// End [knauf]
+
+// [knauf] Mock the Knauf admin builder-mode atom + Recoil hook used by
+// AgentFooter to derive the hide-Advanced / hide-Duplicate gates.
+// Default value is 'simplified' so the existing test suite (which was
+// written against the constant-true gates) keeps passing without
+// touching every assertion. KK20-125 / FEAT-03.
+let mockBuilderMode: 'detailed' | 'simplified' = 'simplified';
+const mockSetBuilderMode = jest.fn((next: 'detailed' | 'simplified') => {
+  mockBuilderMode = next;
+});
+
+jest.mock('recoil', () => ({
+  useRecoilState: () => [mockBuilderMode, mockSetBuilderMode],
+}));
+
+jest.mock('~/knauf/store/builderMode', () => ({
+  knaufAdminBuilderModeAtom: { key: 'mock-knaufAdminBuilderMode' },
+}));
+// End [knauf]
 
 jest.mock('~/components/Sharing', () => ({
   GenericGrantAccessDialog: ({
@@ -260,6 +301,12 @@ describe('AgentFooter', () => {
       isLoading: false,
       permissionBits: 0,
     });
+    // [knauf] Reset builder-mode mock to the "simplified" default so legacy
+    // assertions (Advanced/Duplicate buttons absent) keep passing.
+    // KK20-125 / FEAT-03.
+    mockBuilderMode = 'simplified';
+    mockSetBuilderMode.mockClear();
+    // End [knauf]
   });
 
   describe('Main Functionality', () => {
@@ -523,4 +570,87 @@ describe('AgentFooter', () => {
       expect(screen.getByText('Save')).toBeInTheDocument();
     });
   });
+
+  // [knauf] Admin/simplified toggle (KK20-125 / FEAT-03). Pins the seam:
+  // admin in 'detailed' mode sees Advanced + Duplicate buttons + the
+  // toggle Switch; everyone else (including admins toggled to
+  // 'simplified') sees the simplified footer.
+  describe('Knauf admin/simplified builder toggle', () => {
+    test('admin in detailed mode shows the Advanced and Duplicate buttons + the toggle Switch', () => {
+      mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
+      mockBuilderMode = 'detailed';
+      mockUseWatch.mockImplementation(({ name }) => {
+        if (name === 'agent') {
+          return {
+            _id: 'agent-db-123',
+            name: 'Test Agent',
+            author: mockUsers.admin.id,
+          };
+        }
+        if (name === 'id') {
+          return 'agent-123';
+        }
+        return undefined;
+      });
+
+      render(<AgentFooter {...defaultProps} />);
+
+      expect(screen.getByTestId('advanced-button')).toBeInTheDocument();
+      expect(screen.getByTestId('duplicate-button')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-settings')).toBeInTheDocument();
+      expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toBeInTheDocument();
+      // Switch reflects the persisted mode: detailed === unchecked.
+      expect(
+        (screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement).checked,
+      ).toBe(false);
+    });
+
+    test('admin in simplified mode hides Advanced/Duplicate but still shows the toggle Switch', () => {
+      mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
+      mockBuilderMode = 'simplified';
+
+      render(<AgentFooter {...defaultProps} />);
+
+      expect(screen.queryByTestId('advanced-button')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
+      expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toBeInTheDocument();
+      expect(
+        (screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement).checked,
+      ).toBe(true);
+    });
+
+    test('non-admin users never see the toggle Switch and always see the simplified footer', () => {
+      mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.regular));
+      mockBuilderMode = 'detailed'; // even if storage somehow holds the admin default
+
+      render(<AgentFooter {...defaultProps} />);
+
+      expect(screen.queryByTestId('advanced-button')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('admin-settings')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('knauf-admin-builder-mode-switch')).not.toBeInTheDocument();
+    });
+
+    test('toggling the Switch calls setBuilderMode with the opposite value', () => {
+      mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
+      mockBuilderMode = 'detailed';
+
+      render(<AgentFooter {...defaultProps} />);
+      const toggle = screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement;
+
+      toggle.click();
+      expect(mockSetBuilderMode).toHaveBeenCalledWith('simplified');
+    });
+
+    test('toggle is not visible when the builder is not the active panel', () => {
+      mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
+      mockBuilderMode = 'detailed';
+
+      render(<AgentFooter {...defaultProps} activePanel={Panel.advanced} />);
+
+      expect(screen.queryByTestId('knauf-admin-builder-mode-switch')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('advanced-button')).not.toBeInTheDocument();
+    });
+  });
+  // End [knauf]
 });

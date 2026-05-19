@@ -16,10 +16,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | File | Symbol/Anchor | Lines | Purpose | Tests |
 |---|---|---|---|---|
 | `api/server/index.js` | `app.use('/api/knauf', ...)` | 189–191 | Mount-point — Knauf-only Express router under `/api/knauf` | `api/server/routes/knauf/autogeneratePrompt.spec.js` |
-| `client/src/components/SidePanel/Agents/AgentPanel.tsx` | `import AgentConfig` | 32–34 | Import swap — replaces upstream `AgentConfig` with `KnaufAgentConfig` | Manual (builder renders correctly) |
-| `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE` | 22–29, 89–93, 135–139 | Inline gate — hides Advanced panel button and Duplicate agent button for simplified builder | `AgentFooter.spec.tsx` |
-| `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
-| `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
+| `client/src/components/SidePanel/Agents/AgentPanel.tsx` | `import AgentConfig` | 32–36 | Import swap — replaces upstream `AgentConfig` with `AgentConfigSwitch`, a Knauf-only router that picks between upstream `AgentConfig` (admin detailed) and `KnaufAgentConfig` (everyone else, and admins toggled to simplified). KK20-125 / FEAT-03 | Manual (builder renders correctly per role) |
+| `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE`, `knauf-admin-builder-mode-switch` | 21–31, 50–57, 100–102, 104–122, 163–167 | Inline gate + UI: simplification flags are now computed at runtime from role + persisted builder mode (admins in detailed mode see Advanced + Duplicate); a new admin-only `Switch` between detailed (upstream) and simplified (Knauf) views is rendered inline. KK20-125 / FEAT-03 | `AgentFooter.spec.tsx` |
+| `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions + builder-mode mock | 158–182, 184–201, 304–309, 316–323, 473–500, 528–554, 574–655 | Test adaptation — mocks the Recoil `useRecoilState` and Knauf builder-mode atom + `Switch` primitive; pins the runtime gate behaviour (Advanced/Duplicate absent in admin-simplified and non-admin paths; present in admin-detailed) and exercises the toggle interaction | Self |
+| `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` + `AgentConfigSwitch` mocks | 149–163 | Test adaptation — mocks both the original `KnaufAgentConfig` and the new `AgentConfigSwitch` router (KK20-125) to cut the deep import chain that breaks IconContext | Self |
 | `Dockerfile` | `COPY librechat.yaml` | 31–33 | Embeds librechat.yaml at build time — Knauf config, not shipped by upstream | Manual |
 | `api/test/__mocks__/logger.js` | `mockFormatFunction` | 2–5 | Return a factory `(fn) => () => ({ transform: fn })` so `winston.format(fn)()` matches the shape `@librechat/data-schemas/dist/config/winston.cjs` expects; the upstream `(fn) => fn` mock causes `info.level` undefined throws when the data-schemas dist code calls `parsers.redactFormat()` at module-load | `api/config/__tests__/parsers.spec.js` |
 | `packages/api/src/agents/__tests__/memory.test.ts` | `jest.mock('winston', ...)` | 15–38 | Replace plain-object `format` with a callable factory + full method surface (printf, timestamp, errors, splat, json, addColors, transports.DailyRotateFile) so `@librechat/data-schemas` dist loads at module-init when this spec pulls in `~/agents/memory` | Self |
@@ -36,6 +36,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
 | `packages/api/package.json` | `"mongodb": "^6.14.2"` moved from `devDependencies` → `peerDependencies` | Fixes production `MODULE_NOT_FOUND` crash — `mongodb` was externalized by rollup but not declared as a peer, so prod installs omitted it |
 | `api/package.json` | `"mongodb": "^6.14.2"` added to `dependencies` | Peer dep fulfillment — ensures `mongodb` is present in production `node_modules` so `@librechat/api` dist can resolve it |
+| `client/src/locales/en/translation.json` | `com_knauf_*` namespace — Knauf-only i18n keys added inline to the upstream locale JSON (JSON has no comment syntax, so no `[knauf]` marker is possible). Current keys: `com_knauf_builder_simplified_view` (KK20-125 / FEAT-03, admin builder toggle label). Future Knauf-only keys must reuse the `com_knauf_*` prefix so they are greppable and namespaced away from upstream |
 
 ## Net-New Files
 
@@ -49,6 +50,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |
 | `client/src/knauf/data-provider/*.ts` | `librechat-data-provider` types | Low — pure data layer, no upstream modifications | `usePersonalities.spec.ts` |
 | `client/src/knauf/common/*.ts` | `librechat-data-provider` types | Low — shared constants and types | `agents-types.spec.ts` |
+| `client/src/knauf/store/builderMode.ts` | `~/store/utils` (`atomWithLocalStorage` helper) | Low — pure Recoil atom with localStorage persistence; no upstream contract surface | `builderMode.spec.ts` |
+| `client/src/knauf/store/builderMode.spec.ts` | Subject only (`./builderMode`) | Low — smoke test pinning the localStorage key + atom default | Self |
+| `client/src/knauf/components/Agents/AgentConfigSwitch.tsx` | `recoil`, `librechat-data-provider` (`SystemRoles`), `~/components/SidePanel/Agents/AgentConfig` (upstream builder), `~/hooks/AuthContext`, `./KnaufAgentConfig`, `~/knauf/store/builderMode` | Medium — renders upstream `AgentConfig` directly; an upstream rename or default-export change would surface here as a wrapper-side import error | `AgentConfigSwitch.knauf.spec.tsx` |
+| `client/src/knauf/components/Agents/AgentConfigSwitch.knauf.spec.tsx` | Subject under test + mocks for upstream auth/Recoil/AgentConfig | Low — test-only | Self |
 <!-- seams:new:end -->
 
 ## Static Assets
