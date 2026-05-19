@@ -1,5 +1,5 @@
-import { Globe } from 'lucide-react';
-import { Spinner } from '@librechat/client';
+import { Globe, LayoutDashboard, List } from 'lucide-react';
+import { Button, Spinner } from '@librechat/client';
 import { useWatch, useFormContext } from 'react-hook-form';
 import {
   SystemRoles,
@@ -26,7 +26,6 @@ import { Panel } from '~/common';
 // + Duplicate Agent); everyone else (including admins toggled to
 // 'simplified') keeps the simplified-builder hiding behaviour.
 import { useRecoilState } from 'recoil';
-import { Switch } from '@librechat/client';
 import { knaufAdminBuilderModeAtom } from '~/knauf/store/builderMode';
 // End [knauf]
 
@@ -97,29 +96,46 @@ export default function AgentFooter({
 
   return (
     <div className="mb-1 flex w-full flex-col gap-2">
+      {/* [knauf] Admin-only toggle between detailed (upstream) and simplified
+          (Knauf) builder views. KK20-125 / FEAT-03. Rendered as a full-width
+          Button styled like Version / Admin Settings so it sits flush with
+          the rest of the footer button stack — clicking flips the mode.
+          Icon + label are *action-oriented*: they describe the mode the
+          user will land in after clicking, not the mode they are in now.
+          When currently simplified, the button shows LayoutDashboard +
+          "Detailed view"; when currently detailed, it shows a simpler
+          List icon + "Simplified view". `aria-pressed` still carries the
+          *current* state (true when simplified is active) for assistive
+          tech. */}
+      {isAdmin && showButtons && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="btn btn-neutral border-token-border-light relative h-9 w-full gap-1 rounded-lg font-medium"
+          onClick={() => setBuilderMode(builderMode === 'simplified' ? 'detailed' : 'simplified')}
+          aria-pressed={builderMode === 'simplified'}
+          aria-label={
+            builderMode === 'simplified'
+              ? localize('com_knauf_builder_detailed_view')
+              : localize('com_knauf_builder_simplified_view')
+          }
+          data-testid="knauf-admin-builder-mode-switch"
+        >
+          {builderMode === 'simplified' ? (
+            <LayoutDashboard className="h-4 w-4 cursor-pointer" aria-hidden="true" />
+          ) : (
+            <List className="h-4 w-4 cursor-pointer" aria-hidden="true" />
+          )}
+          {builderMode === 'simplified'
+            ? localize('com_knauf_builder_detailed_view')
+            : localize('com_knauf_builder_simplified_view')}
+        </Button>
+      )}
+      {/* End [knauf] */}
       {/* [knauf] AdvancedButton hidden — see KNAUF_HIDE_ADVANCED above. */}
       {!KNAUF_HIDE_ADVANCED && showButtons && <AdvancedButton setActivePanel={setActivePanel} />}
       {/* End [knauf] */}
       {showButtons && agent_id && <VersionButton setActivePanel={setActivePanel} />}
-      {/* [knauf] Admin-only toggle between detailed (upstream) and simplified
-          (Knauf) builder views. KK20-125 / FEAT-03. Visible only when the
-          builder is the active panel so it sits with the other admin
-          controls. */}
-      {isAdmin && showButtons && (
-        <div className="flex items-center justify-end gap-2">
-          <label htmlFor="knauf-admin-builder-mode-switch" className="text-sm text-text-secondary">
-            {localize('com_knauf_builder_simplified_view')}
-          </label>
-          <Switch
-            id="knauf-admin-builder-mode-switch"
-            data-testid="knauf-admin-builder-mode-switch"
-            checked={builderMode === 'simplified'}
-            onCheckedChange={(checked) => setBuilderMode(checked ? 'simplified' : 'detailed')}
-            aria-label={localize('com_knauf_builder_simplified_view')}
-          />
-        </div>
-      )}
-      {/* End [knauf] */}
       {user?.role === SystemRoles.ADMIN && showButtons && <AdminSettings />}
       {/* Context Button */}
       <div className="flex items-center justify-end gap-2">

@@ -155,28 +155,24 @@ jest.mock('../DuplicateAgent', () => ({
   ),
 }));
 
-// [knauf] Stub upstream Switch primitive so we can interact with the
-// admin-only "simplified view" toggle. KK20-125 / FEAT-03.
+// [knauf] Stub upstream Button + Spinner primitives. The admin-only
+// "simplified view" toggle is rendered as a Button (styled like
+// Version / Admin Settings) — clicking it flips the builder mode.
+// Switch is no longer used by AgentFooter. KK20-125 / FEAT-03.
 jest.mock('@librechat/client', () => ({
   Spinner: () => <div data-testid="spinner" />,
-  Switch: ({
-    id,
-    checked,
-    onCheckedChange,
+  Button: ({
+    children,
+    onClick,
     ...rest
   }: {
-    id?: string;
-    checked?: boolean;
-    onCheckedChange?: (next: boolean) => void;
+    children?: React.ReactNode;
+    onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
     [key: string]: unknown;
   }) => (
-    <input
-      type="checkbox"
-      id={id}
-      data-testid={(rest['data-testid'] as string) ?? 'switch'}
-      checked={!!checked}
-      onChange={(e) => onCheckedChange?.(e.target.checked)}
-    />
+    <button type="button" onClick={onClick} {...(rest as Record<string, unknown>)}>
+      {children}
+    </button>
   ),
 }));
 // End [knauf]
@@ -599,10 +595,11 @@ describe('AgentFooter', () => {
       expect(screen.getByTestId('duplicate-button')).toBeInTheDocument();
       expect(screen.getByTestId('admin-settings')).toBeInTheDocument();
       expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toBeInTheDocument();
-      // Switch reflects the persisted mode: detailed === unchecked.
-      expect(
-        (screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement).checked,
-      ).toBe(false);
+      // Button reflects the persisted mode via aria-pressed: detailed === false.
+      expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      );
     });
 
     test('admin in simplified mode hides Advanced/Duplicate but still shows the toggle Switch', () => {
@@ -614,9 +611,10 @@ describe('AgentFooter', () => {
       expect(screen.queryByTestId('advanced-button')).not.toBeInTheDocument();
       expect(screen.queryByTestId('duplicate-button')).not.toBeInTheDocument();
       expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toBeInTheDocument();
-      expect(
-        (screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement).checked,
-      ).toBe(true);
+      expect(screen.getByTestId('knauf-admin-builder-mode-switch')).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
     });
 
     test('non-admin users never see the toggle Switch and always see the simplified footer', () => {
@@ -631,12 +629,12 @@ describe('AgentFooter', () => {
       expect(screen.queryByTestId('knauf-admin-builder-mode-switch')).not.toBeInTheDocument();
     });
 
-    test('toggling the Switch calls setBuilderMode with the opposite value', () => {
+    test('clicking the toggle button calls setBuilderMode with the opposite value', () => {
       mockUseAuthContext.mockReturnValue(createAuthContext(mockUsers.admin));
       mockBuilderMode = 'detailed';
 
       render(<AgentFooter {...defaultProps} />);
-      const toggle = screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLInputElement;
+      const toggle = screen.getByTestId('knauf-admin-builder-mode-switch') as HTMLButtonElement;
 
       toggle.click();
       expect(mockSetBuilderMode).toHaveBeenCalledWith('simplified');
