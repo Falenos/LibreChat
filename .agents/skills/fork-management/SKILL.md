@@ -62,6 +62,19 @@ Quick recap of what tier maps to which SEAMS.md section, so you know what to exp
 
 The hard rule that lives in `seam-manifest` and is repeated here only because it is the most common mistake: **never run `seams.js write`**. The agent authors rows directly with the Edit tool. The tool only validates.
 
+### Tier 4c — adding a field to a persisted upstream entity
+
+When a Tier 4c marker adds a new field to a Mongoose schema (`packages/data-schemas/src/schema/`) or to the TypeScript type that describes a persisted entity (`packages/data-schemas/src/types/`, `packages/data-provider/src/types/`), the field's **name** needs a rule, not just the marker. The `[knauf]` block is on our code; it can't catch a future upstream field landing under the same name on the same entity.
+
+| Case | Name |
+|---|---|
+| Mirroring an upstream concept onto a new entity (the same field already exists upstream on a sibling entity, e.g. `Agent.spec` mirrors `Conversation.spec`) | **No prefix.** A future upstream merge becomes a no-op rather than a rename. |
+| Fork-only field with no upstream analogue (audit IDs, Knauf-specific permission flags, Knauf workflow state) | **`knauf_` prefix required.** Prevents future-upstream collision; visually self-documenting at every call site. |
+
+Out of scope (no prefix): form-only/UI-only TS fields that never persist (`avatar_action`, `avatar_preview`); net-new Knauf entities under `packages/knauf/` (already path-isolated). Zod validators inherit the rule from the type they validate.
+
+When in doubt, prefix — the cost of a `knauf_` prefix is cosmetic; renaming a persisted field post-launch costs a data migration. Full rationale in `knauf/docs/reference/code-change-protocol.md` (Schema / Type Extensions).
+
 ---
 
 ## Phase 3 — Infrastructure file tracking
