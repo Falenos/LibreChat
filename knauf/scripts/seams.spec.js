@@ -333,33 +333,33 @@ test('scanFile · JSX {/* [knauf] */} block matches', () => {
 test('parseAutoBlockRows · throws on row with wrong column count', () => {
   const block = [
     '',
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '| `a.tsx` | `A` | only-three | columns |', // 4 cells, not 5
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '| `a.tsx` | `A` | only-four | columns | here |', // 5 cells, not 6
     '',
   ].join('\n');
   assert.throws(
     () => seams.parseAutoBlockRows(block),
-    /Inline Modifications.*has 4 cell\(s\), expected 5/,
+    /Inline Modifications.*has 5 cell\(s\), expected 6/,
   );
 });
 
 test('parseAutoBlockRows · throws on empty File cell', () => {
   const block = [
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '|  | `X` | 1–2 | p | t |',
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '|  | `X` | 1–2 | p | t | — |',
   ].join('\n');
   assert.throws(() => seams.parseAutoBlockRows(block), /empty File cell/);
 });
 
 test('parseNewFileRows · throws on row with wrong column count', () => {
   const block = [
-    '| File | Upstream Imports | Coupling Risk | Tests |',
-    '|---|---|---|---|',
-    '| `a.ts` | imp | risk |', // 3 cells, not 4
+    '| File | Upstream Imports | Coupling Risk | Tests | Ticket |',
+    '|---|---|---|---|---|',
+    '| `a.ts` | imp | risk | t |', // 4 cells, not 5
   ].join('\n');
-  assert.throws(() => seams.parseNewFileRows(block), /Net-New Files.*has 3 cell\(s\), expected 4/);
+  assert.throws(() => seams.parseNewFileRows(block), /Net-New Files.*has 4 cell\(s\), expected 5/);
 });
 
 // ---------------- aggregateRows ----------------
@@ -383,7 +383,7 @@ test('aggregateRows · empty input returns empty array', () => {
 
 // ---------------- mergeRows ----------------
 
-test('mergeRows · preserves human-curated Purpose/Symbol/Tests, updates Lines only', () => {
+test('mergeRows · preserves every human-curated column, including Lines and Ticket', () => {
   const existing = [
     {
       file: 'a.tsx',
@@ -391,15 +391,49 @@ test('mergeRows · preserves human-curated Purpose/Symbol/Tests, updates Lines o
       lines: '10–12',
       purpose: 'human-written purpose',
       tests: 'a.spec.tsx',
+      ticket: 'KK20-125',
     },
   ];
   const discovered = [{ file: 'a.tsx', lines: '50–55', purpose: 'discovered purpose' }];
   const merged = seams.mergeRows(existing, discovered);
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].lines, '50–55'); // updated
-  assert.equal(merged[0].purpose, 'human-written purpose'); // preserved
-  assert.equal(merged[0].symbol, '`MyComp`'); // preserved
-  assert.equal(merged[0].tests, 'a.spec.tsx'); // preserved
+  // Append-only convention: tool does not overwrite Lines once human-authored.
+  assert.equal(merged[0].lines, '10–12');
+  assert.equal(merged[0].purpose, 'human-written purpose');
+  assert.equal(merged[0].symbol, '`MyComp`');
+  assert.equal(merged[0].tests, 'a.spec.tsx');
+  assert.equal(merged[0].ticket, 'KK20-125');
+});
+
+test('mergeRows · keeps multiple rows for the same file (per-ticket append-only)', () => {
+  // Two tickets each authored a row pointing at the same upstream file. The
+  // merge must keep both rows, with their distinct symbols/lines/tickets,
+  // when discovery confirms the file still has markers.
+  const existing = [
+    {
+      file: 'AgentFooter.tsx',
+      symbol: '`KNAUF_HIDE_ADVANCED`',
+      lines: '22–29',
+      purpose: 'hide advanced',
+      tests: 'spec',
+      ticket: 'KK20-120',
+    },
+    {
+      file: 'AgentFooter.tsx',
+      symbol: '`knauf-admin-builder-mode-switch`',
+      lines: '99–134',
+      purpose: 'admin toggle',
+      tests: 'spec',
+      ticket: 'KK20-125',
+    },
+  ];
+  const discovered = [{ file: 'AgentFooter.tsx', lines: '22–29, 99–134', purpose: 'agg' }];
+  const merged = seams.mergeRows(existing, discovered);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].ticket, 'KK20-120');
+  assert.equal(merged[1].ticket, 'KK20-125');
+  assert.equal(merged[0].lines, '22–29');
+  assert.equal(merged[1].lines, '99–134');
 });
 
 test('mergeRows · drops rows whose file no longer has markers', () => {
@@ -454,17 +488,19 @@ test('splitAutoBlock · captures content between sentinels exactly', () => {
 test('parseAutoBlockRows · skips header and separator rows', () => {
   const block = [
     '',
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '| `a.tsx` | `A` | 1–2 | purpose-a | test-a |',
-    '| `b.tsx` | `B` | 3–4 | purpose-b | test-b |',
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '| `a.tsx` | `A` | 1–2 | purpose-a | test-a | KK20-001 |',
+    '| `b.tsx` | `B` | 3–4 | purpose-b | test-b | — |',
     '',
   ].join('\n');
   const rows = seams.parseAutoBlockRows(block);
   assert.equal(rows.length, 2);
   assert.equal(rows[0].file, 'a.tsx');
   assert.equal(rows[0].symbol, '`A`');
+  assert.equal(rows[0].ticket, 'KK20-001');
   assert.equal(rows[1].file, 'b.tsx');
+  assert.equal(rows[1].ticket, '—');
 });
 
 test('parseAutoBlockRows · null input returns empty array', () => {
@@ -590,9 +626,9 @@ test('buildNewMd · idempotent when discovered seams already match the manifest'
   // no blank lines. The fixture must match that exactly for idempotency.
   const md = [
     '<!-- seams:auto:begin -->',
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '| `api/server/index.js` | `app.use` | 189–191 | Mount point | `spec.js` |',
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '| `api/server/index.js` | `app.use` | 189–191 | Mount point | `spec.js` | KK20-001 |',
     '<!-- seams:auto:end -->',
   ].join('\n');
   const discovered = [
@@ -607,10 +643,10 @@ test('buildNewMd · reports removed rows when a file lost its markers', () => {
   // Manifest has two rows; we discover only one — the other should be flagged.
   const md = [
     '<!-- seams:auto:begin -->',
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '| `kept.tsx` | `K` | 1–2 | p | t |',
-    '| `gone.tsx` | `G` | 5–7 | p | t |',
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '| `kept.tsx` | `K` | 1–2 | p | t | — |',
+    '| `gone.tsx` | `G` | 5–7 | p | t | — |',
     '<!-- seams:auto:end -->',
   ].join('\n');
   const discovered = [{ file: 'kept.tsx', startLine: 1, endLine: 2, description: 'p' }];
@@ -619,22 +655,25 @@ test('buildNewMd · reports removed rows when a file lost its markers', () => {
   assert.equal(r.removedRows[0].file, 'gone.tsx');
 });
 
-test('buildNewMd · detects drift when discovered lines differ', () => {
+test('buildNewMd · preserves human-authored Lines even when discovery drifts', () => {
+  // Append-only convention: Lines is written by humans at commit time and
+  // accepted to drift after upstream/prettier reformats. `check` no longer
+  // re-derives Lines from discovery, so this is a no-op.
   const md = [
     '<!-- seams:auto:begin -->',
-    '',
-    '| File | Symbol/Anchor | Lines | Purpose | Tests |',
-    '|---|---|---|---|---|',
-    '| `api/server/index.js` | `app.use` | 189–191 | Mount point | `spec.js` |',
-    '',
+    '| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |',
+    '|---|---|---|---|---|---|',
+    '| `api/server/index.js` | `app.use` | 189–191 | Mount point | `spec.js` | KK20-001 |',
     '<!-- seams:auto:end -->',
   ].join('\n');
   const discovered = [
     { file: 'api/server/index.js', startLine: 200, endLine: 202, description: 'Mount point' },
   ];
   const r = seams.buildNewMd(md, discovered, []);
-  assert.notEqual(r.oldMd, r.newMd);
-  assert.match(r.newMd, /200–202/);
+  // Lines column preserved — no rewrite to 200–202.
+  assert.equal(r.oldMd, r.newMd);
+  assert.match(r.newMd, /189–191/);
+  assert.doesNotMatch(r.newMd, /200–202/);
 });
 
 // ---------------- lib/ direct-import smoke tests ------------------------

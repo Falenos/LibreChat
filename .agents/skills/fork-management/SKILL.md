@@ -46,9 +46,10 @@ Build or configure the MCP server externally. Declare in `librechat.yaml` under 
 
 Once you've picked the tier, **invoke the `seam-manifest` skill**. It owns the entire SEAMS.md authoring loop:
 
+- the **append-only-per-ticket** convention (each ticket adds its own row(s); prior rows are never edited; a single file can legitimately appear in multiple rows, one per ticket)
 - the `scan` / `check` / `diff-check` workflow
 - what `seams.js` reports vs what the agent must write
-- per-section row format (Inline Modifications, Net-New Files, Configuration, Static Assets)
+- per-section row format (Inline Modifications, Net-New Files, Configuration, Static Assets) — including the `Ticket` column
 - marker syntax and the depth/case/comment-token rules
 - seam-test patterns
 
@@ -112,7 +113,8 @@ npm run test:client                       # or relevant workspace suite
 
 Then verify manually:
 - [ ] All `[knauf]` markers have a paired `End [knauf]`
-- [ ] All new SEAMS.md rows have `Symbol/Anchor`, `Lines`, `Purpose`, and `Tests` filled (no `—` on new rows)
+- [ ] All new SEAMS.md rows have `Symbol/Anchor`, `Lines`, `Purpose`, `Tests`, and `Ticket` filled (no `—` on new rows, except `Ticket` for pre-convention rows)
+- [ ] New rows were **appended** to the table; no prior rows were edited or rewrapped
 - [ ] Seam test written and passes
 - [ ] Net-New Files section updated if any `knauf/` files were created
 - [ ] Configuration section updated if any infrastructure files changed

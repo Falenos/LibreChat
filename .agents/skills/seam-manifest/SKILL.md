@@ -7,7 +7,10 @@ description: INVOKE THIS SKILL after you've added or modified a [knauf] seam, ad
 
 The `[knauf]` seam manifest in `SEAMS.md` is the contract between this fork and upstream LibreChat. This skill manages it.
 
-**One rule above all others: the agent never runs `seams.js write`.** That subcommand exists as a human escape hatch. The agent's loop is **tool reports → agent reads source → agent writes SEAMS.md → tool validates**.
+**Two rules above all others:**
+
+1. **Append-only per ticket.** Each Jira ticket appends its own row(s) for the files it touched. Prior rows are never edited. A single upstream file legitimately appears in multiple rows, one per ticket that introduced seams in it. This is what keeps SEAMS.md merge-conflict-free across concurrent feature branches — combined with `SEAMS.md merge=union` in `.gitattributes`, Git auto-merges concurrent appends without conflict markers.
+2. **The agent never runs `seams.js write`.** That subcommand exists as a human escape hatch. The agent's loop is **tool reports → agent reads source → agent appends to SEAMS.md → tool validates**.
 
 ---
 
@@ -21,7 +24,7 @@ The tool (`node knauf/scripts/seams.js`) is good at mechanical work: finding mar
 |---|---|
 | `scan --diff` | Markers in changed files: file, line range, raw description, plus any unpaired/malformed/nested |
 | `scan --diff --json` | Same, machine-readable (use this in scripts) |
-| `check` | "in sync" or a unified diff showing where the `Lines` column doesn't match reality |
+| `check` | "in sync" or a unified diff showing rows missing for marker-bearing files / rows whose file lost all its markers. Does NOT auto-update the `Lines` column under append-only — drift after a prettier reformat is accepted |
 | `check --json` | `{ inSync, removedRows, unregisteredNewFiles }` |
 | `diff-check` | Upstream files modified without a `[knauf]` marker; new `knauf/` files missing from Net-New Files |
 | `diff-check --json` | `{ base, untaggedUpstreamFiles, unregisteredNewFiles }` |
@@ -32,8 +35,10 @@ The tool (`node knauf/scripts/seams.js`) is good at mechanical work: finding mar
 |---|---|
 | **The marker itself** (`// [knauf] <reason>` in the source file) | Requires understanding why the change wouldn't fit a lower tier |
 | **`Symbol/Anchor`** | Requires reading the file and naming the nearest meaningful identifier (function, JSX component, constant) |
+| **`Lines`** | Read from the file at commit time — the line range covering the marker(s) for *this row's anchor only*, not every `[knauf]` block in the file. Drift after later prettier reformats is accepted; the tool no longer rewrites this column |
 | **`Purpose`** | One-line semantic description of what the seam does and why |
 | **`Tests`** | Knowing where this codebase keeps tests and which spec asserts the seam's behavior |
+| **`Ticket`** | The Jira ID this change is anchored to — `KK20-XXX`. If the change predates the convention, leave it as `—`; if the change has no Jira ticket, stop and use the `knauf-change-workflow` skill to draft one |
 | **The seam test itself** | A behavior anchor that fails when the seam is removed or its upstream dependency renamed |
 | **Net-New `Upstream Imports`** | Read the file's import block |
 | **Net-New `Coupling Risk`** | Low / Medium / High judgment based on how the file ties into upstream contracts |
@@ -74,17 +79,17 @@ For each unregistered file, **read its import block**:
   - **Medium** — uses upstream hooks, components, or middleware but doesn't extend their contracts.
   - **High** — builds on upstream form context, deep hook chains, or component internals. First to break on an upstream refactor.
 
-### 3. Write the row directly into SEAMS.md
+### 3. Append the row directly into SEAMS.md
 
-Open `SEAMS.md` with the Edit tool. Find the right block by its HTML-comment sentinels. Add the row **inside** the sentinels — not before, not after.
+Open `SEAMS.md` with the Edit tool. Find the right block by its HTML-comment sentinels. **Append** the row at the bottom of the table inside the sentinels — never edit a row another ticket wrote, never replace a row, never rewrap rows. If your ticket touches a file that already has a row, add a *second* row pointing at the same file with the symbol/lines specific to *your* change.
 
 **Inline Modifications** (Tier 4c — upstream file with inline markers):
 
 ```markdown
 <!-- seams:auto:begin -->
-| File | Symbol/Anchor | Lines | Purpose | Tests |
-|---|---|---|---|---|
-| `path/to/upstream/file.tsx` | `KNAUF_HIDE_ADVANCED` | 22–29, 89–93 | Inline gate — hides Advanced panel for simplified builder | `AgentFooter.spec.tsx` |
+| File | Symbol/Anchor | Lines | Purpose | Tests | Ticket |
+|---|---|---|---|---|---|
+| `path/to/upstream/file.tsx` | `KNAUF_HIDE_ADVANCED` | 22–29, 89–93 | Inline gate — hides Advanced panel for simplified builder | `AgentFooter.spec.tsx` | KK20-125 |
 <!-- seams:auto:end -->
 ```
 
@@ -92,9 +97,9 @@ Open `SEAMS.md` with the Edit tool. Find the right block by its HTML-comment sen
 
 ```markdown
 <!-- seams:new:begin -->
-| File | Upstream Imports | Coupling Risk | Tests |
-|---|---|---|---|
-| `client/src/knauf/components/Agents/MyComp.tsx` | `~/{hooks,components}/*` | Medium | `MyComp.spec.tsx` |
+| File | Upstream Imports | Coupling Risk | Tests | Ticket |
+|---|---|---|---|---|
+| `client/src/knauf/components/Agents/MyComp.tsx` | `~/{hooks,components}/*` | Medium | `MyComp.spec.tsx` | KK20-125 |
 <!-- seams:new:end -->
 ```
 
@@ -112,10 +117,11 @@ Open `SEAMS.md` with the Edit tool. Find the right block by its HTML-comment sen
 
 #### Formatting rules that look minor but break things
 
-- **En-dash, not hyphen** in the `Lines` column: `189–191`, not `189-191`. The renderer uses the en-dash; a hyphen produces drift on the next `check`.
+- **En-dash, not hyphen** in the `Lines` column: `189–191`, not `189-191`. A hyphen will be picked up by the next person reading the table as drift.
 - **Backtick-wrap the File cell** exactly: `` `path/to/file` `` — including for net-new globs like `` `client/src/knauf/components/Agents/*.tsx` ``.
-- **No `—` placeholders** on new rows. Every column has content the first time the row exists.
-- **Five columns** for Inline Modifications, **four** for Net-New Files. The parser throws with a line number if you miscount.
+- **No `—` placeholders** on new rows for Symbol/Lines/Purpose/Tests. Every functional column has content the first time the row exists. `Ticket` may be `—` only if the change predates the Jira convention.
+- **Six columns** for Inline Modifications, **five** for Net-New Files. The parser throws with a line number if you miscount.
+- **Append at the end of the block.** Don't insert your row in the middle; concurrent appends from other branches merge cleanly only when each branch adds to the tail.
 
 ### 4. Re-run the tool until it exits 0
 
@@ -125,14 +131,14 @@ node knauf/scripts/seams.js diff-check   # must exit 0
 ```
 
 If `check` exits 1 with a unified diff:
-- It's showing what the renderer *would* produce vs what you wrote. The mismatch is your row.
-- Most common cause: `Lines` value off by one, or a hyphen instead of en-dash. Read the file, count from the line carrying the opening `[knauf]` marker to the line carrying `End [knauf]`. Both endpoints inclusive.
+- It's showing what the renderer *would* produce vs what you wrote. The mismatch is structural — either a row references a file that no longer has any `[knauf]` markers, or a file has markers but no row at all. `check` does not flag Lines drift under the append-only convention.
+- Fix by either adding the missing row, or — if the marker was intentionally deleted — removing the now-orphaned row.
 
 If `diff-check` exits 1:
 - "upstream file has no marker" — you forgot to wrap the edit. Add `[knauf]` / `End [knauf]` around the modified lines, redo from step 1.
 - "new knauf-only file not registered" — your row's File pattern doesn't match the path. Globs use `*` (no slashes) or `**` (slashes ok). Exact paths must match exactly.
 
-**Never run `seams.js write` to "fix" failing checks.** It overwrites the rows you just authored with placeholders.
+**Never run `seams.js write` to "fix" failing checks.** It overwrites the rows you just authored with placeholders, and it doesn't understand the per-ticket multi-row structure.
 
 ---
 
@@ -196,12 +202,14 @@ Place the spec alongside the file it tests, or in a companion `<file>.knauf.spec
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `check` exits 1 but the row "looks right" | Hyphen instead of en-dash in `Lines`, or missing backticks on File cell, or off-by-one line count | Read the file, count from the opening `[knauf]` line to the `End [knauf]` line, use `–` (U+2013) |
+| `check` exits 1 with "removed row" diff | A file your row references no longer has any `[knauf]` markers in source | Restore the marker if the row's seam is still needed, or drop the row if the seam was intentionally removed |
+| `check` exits 1 with "new row" diff | An upstream file gained `[knauf]` markers without a corresponding row | Append a row pointing at the file with your ticket in the Ticket column |
+| Parser throws "has N cell(s), expected 6/5" | You appended a row but miscounted columns | Inline Modifications = 6 columns (File / Symbol/Anchor / Lines / Purpose / Tests / Ticket); Net-New Files = 5 columns (File / Upstream Imports / Coupling Risk / Tests / Ticket) |
 | `diff-check` says file is unregistered after I added the row | Glob pattern doesn't match (`*` doesn't cross `/`), or wrong path | Read the path the tool printed verbatim; if you want to match across directories use `**` |
 | `scan --diff` reports `malformed-marker` | Wrong case or whitespace in brackets | Lowercase, no spaces: `[knauf]` |
 | `scan --diff` reports `nested-open` | A `[knauf]` was opened before the previous one closed | Add the missing `End [knauf]`, or refactor to a single block |
 | `scan --diff` reports `open-without-close` for a marker that has its close | Wrong comment syntax for the file type (e.g. `//` in a Dockerfile) | Use the host language's comment style; see "Writing the marker in source" |
-| Row vanished from SEAMS.md after `write` ran | A marker was deleted from the source file, so the row was dropped | Restore the marker, OR confirm the seam removal was intentional (`cmdWrite` prints a warning listing removed rows) |
+| My row collided with another branch's edit during merge | Someone (you or them) edited an existing row instead of appending a new one | Resolve by keeping both rows (one per ticket). The `merge=union` driver in `.gitattributes` only saves you when both sides *append* — rewrites still surface as conflicts |
 
 ---
 
