@@ -37,6 +37,11 @@ const inputClass = cn(
   removeFocusOutlines,
 );
 
+// [knauf] Gate for the upstream Support Contact block (see JSX site for rationale).
+// Widened to `boolean` so Sonar/ESLint don't flag the intentional dead-code branch
+// as a constant-truthiness expression. KK20-125 / FEAT-03.
+const SHOW_LIBRECHAT_SUPPORT_CONTACT = false as boolean;
+
 export default function AgentConfig() {
   const localize = useLocalize();
   const fileMap = useFileMapContext();
@@ -392,10 +397,10 @@ export default function AgentConfig() {
         {/* [knauf] Support Contact (Optional) section hidden — hidden even
             in the admin detailed view (which is the only audience for this
             upstream builder). KK20-125 / FEAT-03. The block is preserved
-            under a `{false && …}` gate so the upstream JSX shape stays
-            mergeable; if upstream restructures this section the diff
-            still applies here. */}
-        {false && (
+            under a runtime gate (see `SHOW_LIBRECHAT_SUPPORT_CONTACT` above)
+            so the upstream JSX shape stays mergeable; if upstream restructures
+            this section the diff still applies here. */}
+        {SHOW_LIBRECHAT_SUPPORT_CONTACT && (
           <div className="mb-4">
             <div className="mb-1.5 flex items-center gap-2">
               <span>
