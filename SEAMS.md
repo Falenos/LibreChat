@@ -25,6 +25,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/agents/__tests__/memory.test.ts` | `jest.mock('winston', ...)` | 15–38 | Replace plain-object `format` with a callable factory + full method surface (printf, timestamp, errors, splat, json, addColors, transports.DailyRotateFile) so `@librechat/data-schemas` dist loads at module-init when this spec pulls in `~/agents/memory` | Self |
 | `packages/api/src/agents/__tests__/run-summarization.test.ts` | `jest.mock('winston', ...)` | 14–37 | Same mock-shape fix as memory.test.ts — `winston.format` callable, full method surface — so data-schemas dist loads via `~/agents/run` import | Self |
 | `packages/api/src/agents/__tests__/initialize.test.ts` | `jest.mock('winston', ...)` | 16–39 | Same mock-shape fix as memory.test.ts — data-schemas dist is pulled in via `src/utils/axios` and needs the full callable-format surface | Self |
+| `client/src/hooks/Nav/useUnifiedSidebarLinks.ts` | `useUnifiedSidebarLinks` | 4–11, 29–32, 74–84, 88–90 | Inject a primary-nav marketplace `NavLink` immediately after the Conversations link, gated by `useShowMarketplace`. `onClick` navigates to `/agents`; no side-panel `Component`, since `NavIconButton` honours `link.onClick` directly. Promotes the marketplace from the hidden Favorites card to a top-level sidebar entry (KK20-124 / FEAT-02) | `client/src/knauf/hooks/Nav/useUnifiedSidebarLinks.knauf.spec.tsx` |
+| `client/src/components/Nav/Favorites/FavoritesList.tsx` | `FavoritesList` | 131–137 | Force `showAgentMarketplace = false` so the favorites-section marketplace skeleton/card no longer renders. Existing gates downstream (lines 344, 352, 366, 375) all key off this constant. Pairs with the sidebar promotion in `useUnifiedSidebarLinks.ts` (KK20-124) | `FavoritesList.spec.tsx` |
+| `client/src/components/Conversations/Conversations.tsx` | `Conversations` | 169–175 | Force `showAgentMarketplace = false` so the favorites CellMeasurerCache key and section-visibility logic (lines 182, 184, 267) no longer keep the marketplace alive in the chat-history panel. Pairs with the sidebar promotion (KK20-124) | `Conversations.test.tsx` |
+| `client/src/components/Conversations/__tests__/Conversations.test.tsx` | `[knauf] should NOT invalidate` | 157–178 | Test adaptation — pins the seam behavior: with `showAgentMarketplace` hard-coded to false, marketplace visibility no longer participates in the favorites cache key, so the cache must NOT be invalidated when the underlying hook value flips (KK20-124) | Self |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -49,6 +53,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/*.tsx` | Various upstream hooks/components | Low-Medium — UI-only, no upstream file modifications | `agents-types.spec.ts`, `usePersonalities.spec.ts` |
 | `client/src/knauf/data-provider/*.ts` | `librechat-data-provider` types | Low — pure data layer, no upstream modifications | `usePersonalities.spec.ts` |
 | `client/src/knauf/common/*.ts` | `librechat-data-provider` types | Low — shared constants and types | `agents-types.spec.ts` |
+| `client/src/knauf/hooks/Nav/useUnifiedSidebarLinks.knauf.spec.tsx` | `~/hooks/Nav/useUnifiedSidebarLinks` (subject under test); all transitive upstream deps mocked | Low — test-only; mocks every upstream dependency so it pins the seam without bleeding into upstream contracts | Self |
 <!-- seams:new:end -->
 
 ## Static Assets

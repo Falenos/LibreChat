@@ -128,7 +128,13 @@ export default function FavoritesList({
   const search = useRecoilValue(store.search);
   const getConversation = useGetConversation(0);
   const { favorites, reorderFavorites, isLoading: isFavoritesLoading } = useFavorites();
-  const showAgentMarketplace = useShowMarketplace();
+  // [knauf] Marketplace moved to the main sidebar (KK20-124 / FEAT-02).
+  // Force the favorites-section gate to false so the marketplace card
+  // doesn't render in two places. The sidebar entry is added in
+  // useUnifiedSidebarLinks.ts.
+  useShowMarketplace();
+  const showAgentMarketplace = false;
+  // End [knauf]
 
   const { newConversation } = useNewConvo();
   const assistantsMap = useAssistantsMapContext();
