@@ -116,6 +116,12 @@ const agentSchema = new Schema<IAgent>(
       type: String,
       index: true,
     },
+    // [knauf] Persist chosen modelSpec name on the agent (mirrors Conversation.spec at packages/data-schemas/src/schema/defaults.ts). UI round-trip only — not consumed by chat completion. Lays groundwork for FEAT-04 / FEAT-05. BUG-01.
+    spec: {
+      type: String,
+      default: undefined,
+    },
+    // End [knauf]
   },
   {
     timestamps: true,

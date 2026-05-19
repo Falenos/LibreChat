@@ -50,4 +50,7 @@ export type AgentForm = {
   avatar_file?: File | null;
   avatar_preview?: string | null;
   avatar_action?: 'upload' | 'reset' | null;
+  // [knauf] Form-level spec field so setValue('spec', …) is typed. Mirrors Conversation.spec. BUG-01.
+  spec?: string | null;
+  // End [knauf]
 } & TAgentCapabilities;

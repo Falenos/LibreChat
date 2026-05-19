@@ -51,11 +51,20 @@ export const agentSupportContactSchema = z
 export const graphEdgeSchema = z.object({
   from: z.union([z.string(), z.array(z.string())]),
   to: z.union([z.string(), z.array(z.string())]),
-  description: z.string().optional().transform((v) => (v === '' ? undefined : v)),
+  description: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
   edgeType: z.enum(['handoff', 'direct']).optional(),
-  prompt: z.union([z.string(), z.function()]).optional().transform((v) => (v === '' ? undefined : v)),
+  prompt: z
+    .union([z.string(), z.function()])
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
   excludeResults: z.boolean().optional(),
-  promptKey: z.string().optional().transform((v) => (v === '' ? undefined : v)),
+  promptKey: z
+    .string()
+    .optional()
+    .transform((v) => (v === '' ? undefined : v)),
 });
 
 /** Per-tool options schema (defer_loading, allowed_callers) */
@@ -87,6 +96,9 @@ export const agentBaseSchema = z.object({
   tool_options: agentToolOptionsSchema,
   support_contact: agentSupportContactSchema,
   category: z.string().optional(),
+  // [knauf] Accept spec through agent create/update payloads. UI round-trip only — not consumed by chat completion. BUG-01.
+  spec: z.string().nullable().optional(),
+  // End [knauf]
 });
 
 /** Create schema extends base with required fields for creation */

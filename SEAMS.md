@@ -16,7 +16,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | File | Symbol/Anchor | Lines | Purpose | Tests |
 |---|---|---|---|---|
 | `api/server/index.js` | `app.use('/api/knauf', ...)` | 189–191 | Mount-point — Knauf-only Express router under `/api/knauf` | `api/server/routes/knauf/autogeneratePrompt.spec.js` |
-| `client/src/components/SidePanel/Agents/AgentPanel.tsx` | `import AgentConfig` | 32–34 | Import swap — replaces upstream `AgentConfig` with `KnaufAgentConfig` | Manual (builder renders correctly) |
+| `client/src/components/SidePanel/Agents/AgentPanel.tsx` | `import AgentConfig`, `composeAgentUpdatePayload` | 32–34, 81–83, 109–111 | Import swap — replaces upstream `AgentConfig` with `KnaufAgentConfig`; forwards `spec` field through PATCH/POST agent payloads (BUG-01) | Manual (builder renders correctly), `AgentPanel.test.tsx` |
 | `client/src/components/SidePanel/Agents/AgentFooter.tsx` | `KNAUF_HIDE_ADVANCED`, `KNAUF_HIDE_DUPLICATE` | 22–29, 89–93, 135–139 | Inline gate — hides Advanced panel button and Duplicate agent button for simplified builder | `AgentFooter.spec.tsx` |
 | `client/src/components/SidePanel/Agents/__tests__/AgentFooter.spec.tsx` | `[knauf]` assertions | 269–276, 426–453, 481–507 | Test adaptation — expects Advanced/Duplicate buttons to be absent (matches seam behavior) | Self |
 | `client/src/components/SidePanel/Agents/AgentPanel.test.tsx` | `KnaufAgentConfig` mock | 149–156 | Test adaptation — mocks KnaufAgentConfig to cut deep import chain that breaks IconContext | Self |
@@ -29,6 +29,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Nav/Favorites/FavoritesList.tsx` | `FavoritesList` | 131–137 | Force `showAgentMarketplace = false` so the favorites-section marketplace skeleton/card no longer renders. Existing gates downstream (lines 344, 352, 366, 375) all key off this constant. Pairs with the sidebar promotion in `useUnifiedSidebarLinks.ts` (KK20-124) | `FavoritesList.spec.tsx` |
 | `client/src/components/Conversations/Conversations.tsx` | `Conversations` | 169–175 | Force `showAgentMarketplace = false` so the favorites CellMeasurerCache key and section-visibility logic (lines 182, 184, 267) no longer keep the marketplace alive in the chat-history panel. Pairs with the sidebar promotion (KK20-124) | `Conversations.test.tsx` |
 | `client/src/components/Conversations/__tests__/Conversations.test.tsx` | `[knauf] should NOT invalidate` | 157–178 | Test adaptation — pins the seam behavior: with `showAgentMarketplace` hard-coded to false, marketplace visibility no longer participates in the favorites cache key, so the cache must NOT be invalidated when the underlying hook value flips (KK20-124) | Self |
+| `client/src/common/agents-types.ts` | `AgentForm.spec` | 53–55 | Form-level spec field so setValue('spec', …) is typed. Mirrors Conversation.spec. BUG-01. | Self (TS compile) |
+| `client/src/components/SidePanel/Agents/AgentSelect.tsx` | `resetAgentForm` | 87–89 | Hydrate persisted spec on agent reload — the per-field loop below skips keys not in defaultAgentFormValues. Without this the pill falls back to derive-from-model. BUG-01. | Manual (pill round-trips on agent switch) |
+| `packages/api/src/agents/validation.ts` | `agentBaseSchema.spec` | 99–101 | Accept spec through agent create/update payloads. UI round-trip only — not consumed by chat completion. BUG-01. | Self (Zod) |
+| `packages/data-provider/src/types/assistants.ts` | `Agent.spec`, `AgentCreateParams.spec`, `AgentUpdateParams.spec` | 275–277, 303–305, 330–332 | Persist chosen modelSpec name on the agent (mirrors Conversation.spec). UI round-trip only — not consumed by chat completion. BUG-01. | Self (TS compile) |
+| `packages/data-schemas/src/schema/agent.ts` | `agentSchema.spec` | 119–124 | Persist chosen modelSpec name on the agent (mirrors Conversation.spec at packages/data-schemas/src/schema/defaults.ts). UI round-trip only — not consumed by chat completion. Lays groundwork for FEAT-04 / FEAT-05. BUG-01. | Self (schema integrity) |
+| `packages/data-schemas/src/types/agent.ts` | `IAgent.spec` | 45–47 | Companion TS type for the spec schema field — see schema/agent.ts. BUG-01. | Self (TS compile) |
 <!-- seams:auto:end -->
 
 ## Configuration

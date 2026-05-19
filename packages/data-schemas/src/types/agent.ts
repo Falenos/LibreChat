@@ -42,4 +42,7 @@ export interface IAgent extends Omit<Document, 'model'> {
   /** Per-tool configuration (defer_loading, allowed_callers) */
   tool_options?: AgentToolOptions;
   tenantId?: string;
+  // [knauf] Companion TS type for the spec schema field — see schema/agent.ts. BUG-01.
+  spec?: string;
+  // End [knauf]
 }

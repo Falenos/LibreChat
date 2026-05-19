@@ -84,6 +84,9 @@ function AgentSelect({
         avatar_file: null,
         avatar_preview: fullAgent.avatar?.filepath ?? '',
         avatar_action: null,
+        // [knauf] Hydrate persisted spec on agent reload — the per-field loop below skips keys not in defaultAgentFormValues. Without this the pill falls back to derive-from-model. BUG-01.
+        spec: fullAgent.spec ?? null,
+        // End [knauf]
       };
 
       Object.entries(fullAgent).forEach(([name, value]) => {

@@ -31,7 +31,7 @@ import AdvancedPanel from './Advanced/AdvancedPanel';
 import { Panel, isEphemeralAgent } from '~/common';
 // [knauf] seam — V6 builder body replaces upstream's AgentConfig.
 import AgentConfig from '~/knauf/components/Agents/KnaufAgentConfig';
-// End [knauf] 
+// End [knauf]
 import AgentSelect from './AgentSelect';
 import AgentFooter from './AgentFooter';
 import ModelPanel from './ModelPanel';
@@ -78,6 +78,9 @@ export function composeAgentUpdatePayload(data: AgentForm, agent_id?: string | n
     support_contact,
     tool_options,
     avatar_action: avatarActionState,
+    // [knauf] Forward spec so the persisted modelSpec choice round-trips on save. BUG-01.
+    spec,
+    // End [knauf]
   } = data;
 
   const shouldResetAvatar =
@@ -103,6 +106,9 @@ export function composeAgentUpdatePayload(data: AgentForm, agent_id?: string | n
       category,
       support_contact,
       tool_options,
+      // [knauf] Include spec in the payload sent to PATCH /agents/:id. BUG-01.
+      spec: spec ?? null,
+      // End [knauf]
       ...(shouldResetAvatar ? { avatar: null } : {}),
     },
     provider,
