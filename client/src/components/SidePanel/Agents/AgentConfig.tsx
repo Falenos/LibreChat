@@ -389,104 +389,112 @@ export default function AgentConfig() {
             </div>
           </div>
         </div>
-        {/* Support Contact (Optional) */}
-        <div className="mb-4">
-          <div className="mb-1.5 flex items-center gap-2">
-            <span>
-              <label className="text-token-text-primary block text-sm font-medium">
-                {localize('com_ui_support_contact')}
-              </label>
-            </span>
-          </div>
-          <div className="space-y-3">
-            {/* Support Contact Name */}
-            <div className="flex flex-col">
-              <label
-                className="mb-1 flex items-center justify-between"
-                htmlFor="support-contact-name"
-              >
-                <span className="text-sm">{localize('com_ui_support_contact_name')}</span>
-              </label>
-              <Controller
-                name="support_contact.name"
-                control={control}
-                rules={{
-                  minLength: {
-                    value: 3,
-                    message: localize('com_ui_support_contact_name_min_length', { minLength: 3 }),
-                  },
-                }}
-                render={({ field, fieldState: { error } }) => (
-                  <>
-                    <input
-                      {...field}
-                      value={field.value ?? ''}
-                      className={cn(inputClass, error ? 'border-2 border-red-500' : '')}
-                      id="support-contact-name"
-                      type="text"
-                      placeholder={localize('com_ui_support_contact_name_placeholder')}
-                      aria-label="Support contact name"
-                      aria-invalid={error ? 'true' : 'false'}
-                      aria-describedby={error ? 'support-contact-name-error' : undefined}
-                    />
-                    {error && (
-                      <span
-                        id="support-contact-name-error"
-                        className="text-sm text-red-500 transition duration-300 ease-in-out"
-                        role="alert"
-                        aria-live="polite"
-                      >
-                        {error.message}
-                      </span>
-                    )}
-                  </>
-                )}
-              />
+        {/* [knauf] Support Contact (Optional) section hidden — hidden even
+            in the admin detailed view (which is the only audience for this
+            upstream builder). KK20-125 / FEAT-03. The block is preserved
+            under a `{false && …}` gate so the upstream JSX shape stays
+            mergeable; if upstream restructures this section the diff
+            still applies here. */}
+        {false && (
+          <div className="mb-4">
+            <div className="mb-1.5 flex items-center gap-2">
+              <span>
+                <label className="text-token-text-primary block text-sm font-medium">
+                  {localize('com_ui_support_contact')}
+                </label>
+              </span>
             </div>
-            {/* Support Contact Email */}
-            <div className="flex flex-col">
-              <label
-                className="mb-1 flex items-center justify-between"
-                htmlFor="support-contact-email"
-              >
-                <span className="text-sm">{localize('com_ui_support_contact_email')}</span>
-              </label>
-              <Controller
-                name="support_contact.email"
-                control={control}
-                rules={{
-                  validate: (value) =>
-                    validateEmail(value ?? '', localize('com_ui_support_contact_email_invalid')),
-                }}
-                render={({ field, fieldState: { error } }) => (
-                  <>
-                    <input
-                      {...field}
-                      value={field.value ?? ''}
-                      className={cn(inputClass, error ? 'border-2 border-red-500' : '')}
-                      id="support-contact-email"
-                      type="email"
-                      placeholder={localize('com_ui_support_contact_email_placeholder')}
-                      aria-label="Support contact email"
-                      aria-invalid={error ? 'true' : 'false'}
-                      aria-describedby={error ? 'support-contact-email-error' : undefined}
-                    />
-                    {error && (
-                      <span
-                        id="support-contact-email-error"
-                        className="text-sm text-red-500 transition duration-300 ease-in-out"
-                        role="alert"
-                        aria-live="polite"
-                      >
-                        {error.message}
-                      </span>
-                    )}
-                  </>
-                )}
-              />
+            <div className="space-y-3">
+              {/* Support Contact Name */}
+              <div className="flex flex-col">
+                <label
+                  className="mb-1 flex items-center justify-between"
+                  htmlFor="support-contact-name"
+                >
+                  <span className="text-sm">{localize('com_ui_support_contact_name')}</span>
+                </label>
+                <Controller
+                  name="support_contact.name"
+                  control={control}
+                  rules={{
+                    minLength: {
+                      value: 3,
+                      message: localize('com_ui_support_contact_name_min_length', { minLength: 3 }),
+                    },
+                  }}
+                  render={({ field, fieldState: { error } }) => (
+                    <>
+                      <input
+                        {...field}
+                        value={field.value ?? ''}
+                        className={cn(inputClass, error ? 'border-2 border-red-500' : '')}
+                        id="support-contact-name"
+                        type="text"
+                        placeholder={localize('com_ui_support_contact_name_placeholder')}
+                        aria-label="Support contact name"
+                        aria-invalid={error ? 'true' : 'false'}
+                        aria-describedby={error ? 'support-contact-name-error' : undefined}
+                      />
+                      {error && (
+                        <span
+                          id="support-contact-name-error"
+                          className="text-sm text-red-500 transition duration-300 ease-in-out"
+                          role="alert"
+                          aria-live="polite"
+                        >
+                          {error.message}
+                        </span>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
+              {/* Support Contact Email */}
+              <div className="flex flex-col">
+                <label
+                  className="mb-1 flex items-center justify-between"
+                  htmlFor="support-contact-email"
+                >
+                  <span className="text-sm">{localize('com_ui_support_contact_email')}</span>
+                </label>
+                <Controller
+                  name="support_contact.email"
+                  control={control}
+                  rules={{
+                    validate: (value) =>
+                      validateEmail(value ?? '', localize('com_ui_support_contact_email_invalid')),
+                  }}
+                  render={({ field, fieldState: { error } }) => (
+                    <>
+                      <input
+                        {...field}
+                        value={field.value ?? ''}
+                        className={cn(inputClass, error ? 'border-2 border-red-500' : '')}
+                        id="support-contact-email"
+                        type="email"
+                        placeholder={localize('com_ui_support_contact_email_placeholder')}
+                        aria-label="Support contact email"
+                        aria-invalid={error ? 'true' : 'false'}
+                        aria-describedby={error ? 'support-contact-email-error' : undefined}
+                      />
+                      {error && (
+                        <span
+                          id="support-contact-email-error"
+                          className="text-sm text-red-500 transition duration-300 ease-in-out"
+                          role="alert"
+                          aria-live="polite"
+                        >
+                          {error.message}
+                        </span>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
             </div>
           </div>
-        </div>
+        )}
+        {/* End [knauf] */}
       </div>
       <ToolSelectDialog
         isOpen={showToolDialog}
