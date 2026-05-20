@@ -151,7 +151,18 @@ function ExpandedPanel({
   // End [knauf]
 
   const toggleLabel = expanded ? 'com_nav_close_sidebar' : 'com_nav_open_sidebar';
-  const toggleClick = expanded ? onCollapse : onExpand;
+  // [knauf] Toggling the sidebar always resets the active panel to chat history,
+  // so re-opening after a marketplace click (which has no panel content) lands
+  // on conversations instead of an empty panel. KK20-124 follow-up / FEAT-02.
+  const toggleClick = useCallback(() => {
+    setActive(DEFAULT_PANEL);
+    if (expanded) {
+      onCollapse?.();
+    } else {
+      onExpand?.();
+    }
+  }, [expanded, onCollapse, onExpand, setActive]);
+  // End [knauf]
 
   return (
     <div className="flex h-full flex-shrink-0 flex-col gap-2 border-r border-border-light bg-surface-primary-alt px-2 py-2">
