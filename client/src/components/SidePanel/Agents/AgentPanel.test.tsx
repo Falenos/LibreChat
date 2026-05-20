@@ -146,10 +146,17 @@ jest.mock('./AgentConfig', () => ({
   default: () => <div>{`Agent Config`}</div>,
 }));
 
-// [knauf] Mock KnaufAgentConfig to cut the deep import chain
-// (KnaufAgentConfig → Providers → Prompts → UnknownIcon → IconContext)
-// that fails because the ~/common/types mock strips IconContext.
+// [knauf] Mock KnaufAgentConfig + AgentConfigSwitch to cut the deep
+// import chain (Knauf builders → Providers → Prompts → UnknownIcon →
+// IconContext) that fails because the ~/common/types mock strips
+// IconContext. AgentPanel.tsx now imports `AgentConfigSwitch` (KK20-125
+// / FEAT-03 router) instead of `KnaufAgentConfig` directly, so the
+// switch is the effective render target.
 jest.mock('~/knauf/components/Agents/KnaufAgentConfig', () => ({
+  __esModule: true,
+  default: () => <div>{`Agent Config`}</div>,
+}));
+jest.mock('~/knauf/components/Agents/AgentConfigSwitch', () => ({
   __esModule: true,
   default: () => <div>{`Agent Config`}</div>,
 }));

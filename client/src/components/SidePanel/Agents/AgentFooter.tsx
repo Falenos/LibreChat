@@ -1,5 +1,5 @@
-import { Globe } from 'lucide-react';
-import { Spinner } from '@librechat/client';
+import { Globe, LayoutDashboard, List } from 'lucide-react';
+import { Button, Spinner } from '@librechat/client';
 import { useWatch, useFormContext } from 'react-hook-form';
 import {
   SystemRoles,
@@ -18,14 +18,15 @@ import DuplicateAgent from './DuplicateAgent';
 import AdminSettings from './AdminSettings';
 import DeleteButton from './DeleteButton';
 import { Panel } from '~/common';
-
-// [knauf] The simplified Knauf builder intentionally hides:
-//   - Advanced panel entry point (graph editing — too much surface for
-//     non-technical users).
-//   - Duplicate agent button next to Save (same rationale).
-// Flip either back to `false` to restore upstream behaviour.
-const KNAUF_HIDE_ADVANCED = true;
-const KNAUF_HIDE_DUPLICATE = true;
+// [knauf] Builder simplification (KK20-125 / FEAT-03).
+// The two HIDE flags below used to be module-level constants. They are now
+// computed at runtime inside the component because their value depends on
+// the logged-in user's role and the persisted admin builder mode. Admins
+// in 'detailed' mode see the full upstream footer (Advanced panel button
+// + Duplicate Agent); everyone else (including admins toggled to
+// 'simplified') keeps the simplified-builder hiding behaviour.
+import { useRecoilState } from 'recoil';
+import { knaufAdminBuilderModeAtom } from '~/knauf/store/builderMode';
 // End [knauf]
 
 export default function AgentFooter({
@@ -44,6 +45,15 @@ export default function AgentFooter({
 }) {
   const localize = useLocalize();
   const { user } = useAuthContext();
+
+  // [knauf] Derive simplification gates from role + persisted builder mode.
+  // KK20-125 / FEAT-03 — see import-block comment.
+  const isAdmin = user?.role === SystemRoles.ADMIN;
+  const [builderMode, setBuilderMode] = useRecoilState(knaufAdminBuilderModeAtom);
+  const isAdminDetailed = isAdmin && builderMode === 'detailed';
+  const KNAUF_HIDE_ADVANCED = !isAdminDetailed;
+  const KNAUF_HIDE_DUPLICATE = !isAdminDetailed;
+  // End [knauf]
 
   const methods = useFormContext<AgentForm>();
 
@@ -86,10 +96,44 @@ export default function AgentFooter({
 
   return (
     <div className="mb-1 flex w-full flex-col gap-2">
-      {/* [knauf] AdvancedButton hidden — see KNAUF_HIDE_ADVANCED above. */}
-      {!KNAUF_HIDE_ADVANCED && showButtons && (
-        <AdvancedButton setActivePanel={setActivePanel} />
+      {/* [knauf] Admin-only toggle between detailed (upstream) and simplified
+          (Knauf) builder views. KK20-125 / FEAT-03. Rendered as a full-width
+          Button styled like Version / Admin Settings so it sits flush with
+          the rest of the footer button stack — clicking flips the mode.
+          Icon + label are *action-oriented*: they describe the mode the
+          user will land in after clicking, not the mode they are in now.
+          When currently simplified, the button shows LayoutDashboard +
+          "Detailed view"; when currently detailed, it shows a simpler
+          List icon + "Simplified view". `aria-pressed` still carries the
+          *current* state (true when simplified is active) for assistive
+          tech. */}
+      {isAdmin && showButtons && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="btn btn-neutral border-token-border-light relative h-9 w-full gap-1 rounded-lg font-medium"
+          onClick={() => setBuilderMode(builderMode === 'simplified' ? 'detailed' : 'simplified')}
+          aria-pressed={builderMode === 'simplified'}
+          aria-label={
+            builderMode === 'simplified'
+              ? localize('com_knauf_builder_detailed_view')
+              : localize('com_knauf_builder_simplified_view')
+          }
+          data-testid="knauf-admin-builder-mode-switch"
+        >
+          {builderMode === 'simplified' ? (
+            <LayoutDashboard className="h-4 w-4 cursor-pointer" aria-hidden="true" />
+          ) : (
+            <List className="h-4 w-4 cursor-pointer" aria-hidden="true" />
+          )}
+          {builderMode === 'simplified'
+            ? localize('com_knauf_builder_detailed_view')
+            : localize('com_knauf_builder_simplified_view')}
+        </Button>
       )}
+      {/* End [knauf] */}
+      {/* [knauf] AdvancedButton hidden — see KNAUF_HIDE_ADVANCED above. */}
+      {!KNAUF_HIDE_ADVANCED && showButtons && <AdvancedButton setActivePanel={setActivePanel} />}
       {/* End [knauf] */}
       {showButtons && agent_id && <VersionButton setActivePanel={setActivePanel} />}
       {user?.role === SystemRoles.ADMIN && showButtons && <AdminSettings />}

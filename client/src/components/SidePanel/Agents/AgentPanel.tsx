@@ -29,8 +29,10 @@ import { useAgentPanelContext } from '~/Providers/AgentPanelContext';
 import AgentPanelSkeleton from './AgentPanelSkeleton';
 import AdvancedPanel from './Advanced/AdvancedPanel';
 import { Panel, isEphemeralAgent } from '~/common';
-// [knauf] seam — V6 builder body replaces upstream's AgentConfig.
-import AgentConfig from '~/knauf/components/Agents/KnaufAgentConfig';
+// [knauf] seam — V6 builder body is the role+mode-aware router that
+// picks between upstream AgentConfig (admin detailed) and KnaufAgentConfig
+// (everyone else, and admins toggled to simplified). KK20-125 / FEAT-03.
+import AgentConfig from '~/knauf/components/Agents/AgentConfigSwitch';
 // End [knauf]
 import AgentSelect from './AgentSelect';
 import AgentFooter from './AgentFooter';
