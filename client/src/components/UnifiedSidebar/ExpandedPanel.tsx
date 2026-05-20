@@ -80,10 +80,14 @@ const NavIconButton = memo(function NavIconButton({
       if (link.onClick) {
         link.onClick(e);
         // [knauf] Honour the active-panel system for onClick-style links too,
-        // so the marketplace icon highlights on click like every other entry
-        // (KK20-124 follow-up / FEAT-02).
+        // and collapse the side panel since onClick links navigate to a full-page
+        // route (e.g. marketplace -> /agents) and shouldn't keep the panel open.
+        // KK20-124 follow-up / FEAT-02.
         if (!isActive) {
           setActive(link.id);
+        }
+        if (expanded) {
+          onCollapse?.();
         }
         // End [knauf]
         return;
