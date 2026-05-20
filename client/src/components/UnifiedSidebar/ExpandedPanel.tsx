@@ -80,10 +80,14 @@ const NavIconButton = memo(function NavIconButton({
       if (link.onClick) {
         link.onClick(e);
         // [knauf] Honour the active-panel system for onClick-style links too,
-        // so the marketplace icon highlights on click like every other entry
-        // (KK20-124 follow-up / FEAT-02).
+        // and collapse the side panel since onClick links navigate to a full-page
+        // route (e.g. marketplace -> /agents) and shouldn't keep the panel open.
+        // KK20-124 follow-up / FEAT-02.
         if (!isActive) {
           setActive(link.id);
+        }
+        if (expanded) {
+          onCollapse?.();
         }
         // End [knauf]
         return;
@@ -147,7 +151,18 @@ function ExpandedPanel({
   // End [knauf]
 
   const toggleLabel = expanded ? 'com_nav_close_sidebar' : 'com_nav_open_sidebar';
-  const toggleClick = expanded ? onCollapse : onExpand;
+  // [knauf] Toggling the sidebar always resets the active panel to chat history,
+  // so re-opening after a marketplace click (which has no panel content) lands
+  // on conversations instead of an empty panel. KK20-124 follow-up / FEAT-02.
+  const toggleClick = useCallback(() => {
+    setActive(DEFAULT_PANEL);
+    if (expanded) {
+      onCollapse?.();
+    } else {
+      onExpand?.();
+    }
+  }, [expanded, onCollapse, onExpand, setActive]);
+  // End [knauf]
 
   return (
     <div className="flex h-full flex-shrink-0 flex-col gap-2 border-r border-border-light bg-surface-primary-alt px-2 py-2">
