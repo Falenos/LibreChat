@@ -79,6 +79,13 @@ const NavIconButton = memo(function NavIconButton({
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (link.onClick) {
         link.onClick(e);
+        // [knauf] Honour the active-panel system for onClick-style links too,
+        // so the marketplace icon highlights on click like every other entry
+        // (KK20-124 follow-up / FEAT-02).
+        if (!isActive) {
+          setActive(link.id);
+        }
+        // End [knauf]
         return;
       }
       if (isActive && expanded) {
@@ -133,6 +140,12 @@ function ExpandedPanel({
   const { active, setActive } = useActivePanel();
   const effectiveActive = resolveActivePanel(active, links);
 
+  // [knauf] Marketplace is rendered in the top group (below New Chat, above the
+  // divider) instead of among the side-panel icons. KK20-124 follow-up / FEAT-02.
+  const marketplaceLink = links.find((l) => l.id === 'marketplace');
+  const otherLinks = marketplaceLink ? links.filter((l) => l.id !== 'marketplace') : links;
+  // End [knauf]
+
   const toggleLabel = expanded ? 'com_nav_close_sidebar' : 'com_nav_open_sidebar';
   const toggleClick = expanded ? onCollapse : onExpand;
 
@@ -157,9 +170,21 @@ function ExpandedPanel({
         }
       />
       <NewChatButton setActive={setActive} />
+      {/* [knauf] Marketplace lives in the top group with close-sidebar + new-chat. KK20-124 follow-up. */}
+      {marketplaceLink && (
+        <NavIconButton
+          link={marketplaceLink}
+          isActive={marketplaceLink.id === effectiveActive}
+          expanded={expanded ?? true}
+          setActive={setActive}
+          onExpand={onExpand}
+          onCollapse={onCollapse}
+        />
+      )}
+      {/* End [knauf] */}
       <div className="mx-2 border-b border-border-light" />
       <div className="flex flex-col gap-1 overflow-y-auto">
-        {links.map((link) => (
+        {otherLinks.map((link) => (
           <NavIconButton
             key={link.id}
             link={link}
