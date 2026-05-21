@@ -35,7 +35,7 @@ import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import * as HoverCard from '@radix-ui/react-hover-card';
 import { Switch } from '@librechat/client';
-import { Brain, Zap } from 'lucide-react';
+import { Brain, Check, Copy, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -343,6 +343,7 @@ export default function KnaufAgentConfig() {
               </>
             )}
           />
+          {agent_id && !isEphemeralAgent(agent_id) ? <KnaufAgentIdRow agentId={agent_id} /> : null}
         </div>
 
         {/* Description */}
@@ -685,5 +686,44 @@ function PersonalityHeaderToggles() {
         disabled={fastMode}
       />
     </>
+  );
+}
+
+const AGENT_ID_LABEL = 'Agent ID';
+const AGENT_ID_COPY_TITLE = 'Copy agent ID';
+const AGENT_ID_COPIED_TITLE = 'Copied!';
+
+/**
+ * Small read-only display of the agent's id beneath the Name field, with a
+ * click-to-copy button. Lets admins copy the id into librechat.yaml's
+ * `interface.knauf.defaultAgentId`. Only renders for saved (non-ephemeral)
+ * agents. (KK20-128)
+ */
+function KnaufAgentIdRow({ agentId }: Readonly<{ agentId: string }>) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    navigator.clipboard.writeText(agentId).then(
+      () => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      },
+      () => undefined,
+    );
+  }, [agentId]);
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
+      <span className="font-medium">{AGENT_ID_LABEL}:</span>
+      <code className="truncate font-mono text-[11px]">{agentId}</code>
+      <button
+        type="button"
+        onClick={onCopy}
+        aria-label={copied ? AGENT_ID_COPIED_TITLE : AGENT_ID_COPY_TITLE}
+        title={copied ? AGENT_ID_COPIED_TITLE : AGENT_ID_COPY_TITLE}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary"
+      >
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </div>
   );
 }
