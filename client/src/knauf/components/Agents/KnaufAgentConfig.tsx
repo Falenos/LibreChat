@@ -18,8 +18,9 @@
  *   MCP servers (when configured), Tools, Instructions (with Variables
  *   popover + ✦ Autogenerate).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useToastContext } from '@librechat/client';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import type { LucideProps } from 'lucide-react';
+import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
 import { isEphemeralAgent, type AgentForm } from '~/common';
@@ -32,6 +33,8 @@ import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
 import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
+import * as HoverCard from '@radix-ui/react-hover-card';
+import { Brain, Check, Copy, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -339,6 +342,7 @@ export default function KnaufAgentConfig() {
               </>
             )}
           />
+          {agent_id && !isEphemeralAgent(agent_id) ? <KnaufAgentIdRow agentId={agent_id} /> : null}
         </div>
 
         {/* Description */}
@@ -375,10 +379,15 @@ export default function KnaufAgentConfig() {
           <AgentCategorySelector />
         </KnaufSection>
 
-        {/* Personality */}
+        {/* Personality — pills control tone + implicit reasoning depth
+          (Precise=high, Balanced=medium, Creative=low). Fast Mode is the
+          slim toggle in the section header that skips reasoning entirely
+          (the cost-ceiling fourth option). Both write into model_parameters;
+          the server reads them in packages/api/src/agents/run.ts. (KK20-128) */}
         <KnaufSection
           title="Personality"
-          info="Sets the agent's tone. Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended."
+          info="Sets tone and reasoning depth. Precise/Balanced/Creative control how the agent writes; the Fast Mode toggle on the right skips reasoning entirely for quicker, cheaper answers."
+          action={<PersonalityHeaderToggles />}
         >
           <PersonalityPills
             personalities={personalities}
@@ -569,5 +578,154 @@ function CapabilityRow({
       checked={checked}
       onChange={(next) => capability.applyToForm(next, { getValues, setValue })}
     />
+  );
+}
+
+/**
+ * Slim header toggle for a `model_parameters` boolean flag. Lives in the
+ * KnaufSection `action` slot: no row, no border, no visible label — just an
+ * icon + Switch with a HoverCard tooltip carrying the label + description.
+ * Both Fast Mode and Show reasoning render through this. (KK20-128)
+ */
+function ReasoningHeaderToggle({
+  flag,
+  icon: Icon,
+  label,
+  description,
+  disabled,
+}: Readonly<{
+  flag: 'knauf_fast_mode' | 'knauf_show_reasoning';
+  icon: ComponentType<LucideProps>;
+  label: string;
+  description: string;
+  disabled?: boolean;
+}>) {
+  const { control, getValues, setValue } = useFormContext<AgentForm>();
+  const params = useWatch({ control, name: 'model_parameters' }) as
+    | Record<string, unknown>
+    | undefined;
+  const checked = params?.[flag] === true;
+  return (
+    <HoverCard.Root openDelay={120} closeDelay={80}>
+      <HoverCard.Trigger asChild>
+        <span
+          className={cn('inline-flex items-center gap-1.5', disabled ? 'opacity-60' : undefined)}
+        >
+          <Icon
+            size={14}
+            className={cn(
+              'transition-colors',
+              checked ? 'text-text-primary' : 'text-text-secondary',
+            )}
+            aria-hidden
+          />
+          <Switch
+            checked={checked}
+            disabled={disabled}
+            onCheckedChange={(next) => {
+              const current = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
+              setValue(
+                'model_parameters',
+                { ...current, [flag]: !!next } as unknown as AgentForm['model_parameters'],
+                { shouldDirty: true },
+              );
+            }}
+            aria-label={label}
+          />
+        </span>
+      </HoverCard.Trigger>
+      <HoverCard.Portal>
+        <HoverCard.Content
+          side="top"
+          sideOffset={6}
+          align="end"
+          collisionPadding={8}
+          className="z-[1100] max-w-[260px] rounded-md border border-border-light bg-surface-primary px-3 py-2 text-xs leading-snug text-text-secondary shadow-lg"
+        >
+          <div className="mb-0.5 text-sm font-medium text-text-primary">{label}</div>
+          {description}
+          <HoverCard.Arrow className="fill-border-light" />
+        </HoverCard.Content>
+      </HoverCard.Portal>
+    </HoverCard.Root>
+  );
+}
+
+/**
+ * Two slim header toggles for the Personality section: Fast Mode (⚡) and
+ * Show reasoning steps (🧠). Show reasoning is disabled whenever Fast Mode
+ * is on, since Fast Mode strips reasoning server-side regardless.
+ */
+function PersonalityHeaderToggles() {
+  const localize = useLocalize();
+  const { control } = useFormContext<AgentForm>();
+  const params = useWatch({ control, name: 'model_parameters' }) as
+    | Record<string, unknown>
+    | undefined;
+  const fastMode = params?.knauf_fast_mode === true;
+  return (
+    <>
+      <ReasoningHeaderToggle
+        flag="knauf_fast_mode"
+        icon={Zap}
+        label={localize('com_knauf_fast_mode_label')}
+        description={localize('com_knauf_fast_mode_description')}
+      />
+      <ReasoningHeaderToggle
+        flag="knauf_show_reasoning"
+        icon={Brain}
+        label={localize('com_knauf_show_reasoning_label')}
+        description={localize('com_knauf_show_reasoning_description')}
+        disabled={fastMode}
+      />
+    </>
+  );
+}
+
+/**
+ * Small read-only display of the agent's id beneath the Name field, with a
+ * click-to-copy button. Lets admins copy the id into librechat.yaml's
+ * `interface.knauf.defaultAgentId`. Only renders for saved (non-ephemeral)
+ * agents. (KK20-128)
+ */
+function KnaufAgentIdRow({ agentId }: Readonly<{ agentId: string }>) {
+  const localize = useLocalize();
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current != null) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+  const onCopy = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    navigator.clipboard.writeText(agentId).then(
+      () => {
+        if (timeoutRef.current != null) {
+          clearTimeout(timeoutRef.current);
+        }
+        setCopied(true);
+        timeoutRef.current = setTimeout(() => setCopied(false), 1500);
+      },
+      () => undefined,
+    );
+  }, [agentId]);
+  const buttonTitle = copied ? localize('com_ui_copied') : localize('com_knauf_copy_agent_id');
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
+      <span className="font-medium">{localize('com_knauf_agent_id')}:</span>
+      <code className="truncate font-mono text-[11px]">{agentId}</code>
+      <button
+        type="button"
+        onClick={onCopy}
+        aria-label={buttonTitle}
+        title={buttonTitle}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary"
+      >
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </div>
   );
 }

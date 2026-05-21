@@ -744,6 +744,17 @@ export const interfaceSchema = z
         public: z.boolean().optional(),
       })
       .optional(),
+    // [knauf] Knauf-specific interface options, namespaced under their own
+    // key so future Knauf additions don't collide with upstream `interface.*`
+    // fields. Currently carries `defaultAgentId` (the locked-default agent in
+    // the Knauf chat header picker) — empty / unset means no admin default
+    // (KK20-128).
+    knauf: z
+      .object({
+        defaultAgentId: z.string().optional(),
+      })
+      .optional(),
+    // End [knauf]
   })
   .default({
     modelSelect: true,

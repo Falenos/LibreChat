@@ -34,7 +34,7 @@ interface:
     modalAcceptance: true
   modelSelect: true
   parameters: false
-  presets: true
+  presets: false
   prompts:
     use: true
     create: true
@@ -42,7 +42,15 @@ interface:
     public: false
   bookmarks: true
   memories: true
-  multiConvo: true
+  multiConvo: false
+  # Knauf-specific interface options, namespaced to avoid colliding with
+  # future upstream `interface.*` fields. `defaultAgentId` is the agent ID
+  # surfaced as the locked-default in the Knauf chat header picker (KK20-128).
+  # If absent or invalid the picker still renders, just without a locked
+  # default. Admins find the ID via the agent builder (see the "Agent ID"
+  # line below the agent name).
+  knauf:
+    defaultAgentId: ''
   webSearch: false
   runCode: false
   fileSearch: true
@@ -181,6 +189,7 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
+        reasoning_effort: medium
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'

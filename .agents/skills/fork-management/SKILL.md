@@ -13,6 +13,8 @@ Read `SEAMS.md` before doing anything else — it is the live inventory of every
 
 > If you hit a decision the tier table below doesn't resolve, consult `knauf/docs/reference/code-change-protocol.md` for the full tier rationale and decision framework. Don't read it proactively.
 
+If the change touches React/TypeScript in `client/` or `packages/`, also invoke the [`knauf-coding-style`](../knauf-coding-style/SKILL.md) skill once you've picked the tier — it codifies the i18n flow, list-rendering patterns, useRef-for-unstable-closures pattern, Knauf-namespaced schema additions, and other style rules you'll otherwise re-learn through review.
+
 ---
 
 ## Phase 1 — Choose the tier
