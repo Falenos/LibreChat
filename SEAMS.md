@@ -460,6 +460,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/upstream-releases/v0.8.7.md` | None (markdown doc; advisory relative links to `../../../SEAMS.md`, `../../../librechat.yaml`, `../../../packages/data-provider/src/config.ts`, `../../../api/server/services/Files/retention.js`, `../../../client/src/components/Chat/Input/ChatForm.tsx`, `../proposals/pii-masking-and-anonymization.md`, `../implementation-plans/`, and the sibling v0.8.6 doc) | Low — release-notes record for the v0.8.7 upstream merge; no runtime coupling. Advisory links break loudly on file moves | Docs only | — |
 | `client/src/knauf/hooks/Files/useUploadBeforeUnloadGuard.ts` | `react` (useEffect) only | Low — no upstream imports; self-contained hook that registers a `beforeunload` guard while an upload is in flight | `client/src/knauf/hooks/Files/useUploadBeforeUnloadGuard.knauf.spec.ts` | KK20-227 |
 | `client/src/knauf/hooks/Files/useUploadBeforeUnloadGuard.knauf.spec.ts` | `@testing-library/react` + the hook under test | Low — unit test, extends no upstream contract | Self | KK20-227 |
+| `knauf/docs/proposals/load-testing-one-pager.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
+| `knauf/docs/proposals/load-testing-strategy-plan.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
