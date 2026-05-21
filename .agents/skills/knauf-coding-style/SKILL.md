@@ -161,21 +161,26 @@ import type { Agent, TStartupConfig } from 'librechat-data-provider';
 const handle = (e: React.MouseEvent) => { /* … */ };
 ```
 
-**Reuse upstream prop types when replacing or wrapping an upstream component.** If `ModelSelector` takes `ModelSelectorProps`, your `KnaufModelSelector` does too — that way an upstream rename surfaces as a TS error at your import site, not a runtime drift months later.
+**Reuse upstream prop types when replacing or wrapping an upstream component, but wrap them in `Readonly<>`.** If `ModelSelector` takes `ModelSelectorProps`, your `KnaufModelSelector` does too — that way an upstream rename surfaces as a TS error at your import site, not a runtime drift months later. SonarCloud's `readonly props` rule (S6759) cares about the declared type at the destructure site, and the upstream interface isn't `Readonly`, so the wrapper is required.
 
 ```tsx
-// Good
+// Good — upstream alignment + Readonly wrapper.
 import type { ModelSelectorProps } from '~/common';
 
-export default function KnaufModelSelector({ startupConfig }: ModelSelectorProps) { … }
+export default function KnaufModelSelector({
+  startupConfig,
+}: Readonly<ModelSelectorProps>) { … }
 
 // Acceptable for net-new components — but inline shapes don't catch upstream drift.
 function KnaufThing({ x }: Readonly<{ x: string }>) { … }
+
+// Bad — reusing the upstream type without the wrapper still trips S6759.
+function KnaufModelSelector({ startupConfig }: ModelSelectorProps) { … }
 ```
 
 **One import statement per source module.** ANTI_PATTERNS already enforces this. Add it to your muscle memory: before adding `import { Foo } from 'X'`, grep the file for `'X'` and merge into the existing line.
 
-**`Readonly<{…}>` on every new React prop type.** ANTI_PATTERNS rule; SonarQube rule too. No exceptions for "it's a tiny component."
+**`Readonly<{…}>` on every new React prop type.** ANTI_PATTERNS rule; SonarQube rule too. No exceptions for "it's a tiny component" and no exceptions for "I'm reusing an imported interface."
 
 ---
 

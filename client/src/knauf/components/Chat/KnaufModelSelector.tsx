@@ -56,7 +56,7 @@ function getKnaufDefaultAgentId(interfaceConfig: unknown): string {
 /** Pinned alphabetical sort locale — pinned so cross-user/cross-tenant ordering is stable. */
 const SORT_LOCALE = 'en';
 
-export default function KnaufModelSelector({ startupConfig }: ModelSelectorProps) {
+export default function KnaufModelSelector({ startupConfig }: Readonly<ModelSelectorProps>) {
   const interfaceConfig = startupConfig?.interface ?? defaultInterface;
   /**
    * Diverges intentionally from upstream `ModelSelector`, which keeps the
