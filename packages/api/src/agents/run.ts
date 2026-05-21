@@ -28,6 +28,38 @@ import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { resolveHeaders, createSafeUser } from '~/utils/env';
 import { isUserProvided } from '~/utils/common';
 
+// [knauf] Agent-level reasoning overrides (KK20-128). Knauf UI writes
+// `knauf_fast_mode` / `knauf_show_reasoning` into `agent.model_parameters`;
+// this helper interprets them as Azure-side reasoning controls and strips the
+// marker keys so they don't reach the provider. Fast Mode wins when both are
+// set (cost ceiling). Exported for direct unit testing.
+//
+// `getOpenAILLMConfig` already ran during initialize with `useResponsesApi`
+// still undefined, so it took the legacy branch and left `reasoning_effort`
+// flat. The Azure Responses API expects `reasoning: { effort, summary }`,
+// so when Show reasoning is on we rebuild the object ourselves.
+export function applyKnaufResponseStyle(cfg: Record<string, unknown>): void {
+  const knaufShowReasoning = cfg.knauf_show_reasoning === true;
+  const knaufFast = cfg.knauf_fast_mode === true;
+  if (knaufShowReasoning) {
+    cfg.useResponsesApi = true;
+    const existingReasoning = (cfg.reasoning as Record<string, unknown> | undefined) ?? {};
+    const effort = existingReasoning.effort ?? cfg.reasoning_effort ?? 'medium';
+    const summary = existingReasoning.summary ?? cfg.reasoning_summary ?? 'auto';
+    cfg.reasoning = { effort, summary };
+    delete cfg.reasoning_effort;
+    delete cfg.reasoning_summary;
+  }
+  if (knaufFast) {
+    delete cfg.reasoning_effort;
+    delete cfg.reasoning_summary;
+    delete cfg.reasoning;
+  }
+  delete cfg.knauf_fast_mode;
+  delete cfg.knauf_show_reasoning;
+}
+// End [knauf]
+
 /** Expected shape of JSON tool search results */
 interface ToolSearchJsonResult {
   found?: number;
@@ -532,6 +564,9 @@ export async function createRun({
       },
       agent.model_parameters,
     );
+    // [knauf] KK20-128 — translate agent-level reasoning overrides.
+    applyKnaufResponseStyle(llmConfig as Record<string, unknown>);
+    // End [knauf]
 
     const systemMessage = Object.values(agent.toolContextMap ?? {})
       .join('\n')

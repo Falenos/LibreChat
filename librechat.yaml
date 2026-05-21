@@ -181,6 +181,7 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
+        reasoning_effort: medium
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'

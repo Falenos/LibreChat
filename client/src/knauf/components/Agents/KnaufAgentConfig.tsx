@@ -18,7 +18,8 @@
  *   MCP servers (when configured), Tools, Instructions (with Variables
  *   popover + ✦ Autogenerate).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import type { LucideProps } from 'lucide-react';
 import { useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
@@ -32,6 +33,9 @@ import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
 import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
+import * as HoverCard from '@radix-ui/react-hover-card';
+import { Switch } from '@librechat/client';
+import { Brain, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -375,10 +379,15 @@ export default function KnaufAgentConfig() {
           <AgentCategorySelector />
         </KnaufSection>
 
-        {/* Personality */}
+        {/* Personality — pills control tone + implicit reasoning depth
+          (Precise=high, Balanced=medium, Creative=low). Fast Mode is the
+          slim toggle in the section header that skips reasoning entirely
+          (the cost-ceiling fourth option). Both write into model_parameters;
+          the server reads them in packages/api/src/agents/run.ts. (KK20-128) */}
         <KnaufSection
           title="Personality"
-          info="Sets the agent's tone. Precise sticks to the facts, Balanced is the everyday default, Creative is more open-ended."
+          info="Sets tone and reasoning depth. Precise/Balanced/Creative control how the agent writes; the Fast Mode toggle on the right skips reasoning entirely for quicker, cheaper answers."
+          action={<PersonalityHeaderToggles />}
         >
           <PersonalityPills
             personalities={personalities}
@@ -569,5 +578,112 @@ function CapabilityRow({
       checked={checked}
       onChange={(next) => capability.applyToForm(next, { getValues, setValue })}
     />
+  );
+}
+
+const FAST_MODE_LABEL = 'Fast Mode';
+const FAST_MODE_DESCRIPTION =
+  'Skip the reasoning step for quicker, cheaper answers. Best when you don’t need deep analysis.';
+const SHOW_REASONING_LABEL = 'Show reasoning steps';
+const SHOW_REASONING_DESCRIPTION =
+  'Show how the agent worked out its answer. Useful when you want to see the model’s thinking, not just the conclusion.';
+
+/**
+ * Slim header toggle for a `model_parameters` boolean flag. Lives in the
+ * KnaufSection `action` slot: no row, no border, no visible label — just an
+ * icon + Switch with a HoverCard tooltip carrying the label + description.
+ * Both Fast Mode and Show reasoning render through this. (KK20-128)
+ */
+function ReasoningHeaderToggle({
+  flag,
+  icon: Icon,
+  label,
+  description,
+  disabled,
+}: Readonly<{
+  flag: 'knauf_fast_mode' | 'knauf_show_reasoning';
+  icon: ComponentType<LucideProps>;
+  label: string;
+  description: string;
+  disabled?: boolean;
+}>) {
+  const { control, getValues, setValue } = useFormContext<AgentForm>();
+  const params = useWatch({ control, name: 'model_parameters' }) as
+    | Record<string, unknown>
+    | undefined;
+  const checked = params?.[flag] === true;
+  return (
+    <HoverCard.Root openDelay={120} closeDelay={80}>
+      <HoverCard.Trigger asChild>
+        <span
+          className={cn('inline-flex items-center gap-1.5', disabled ? 'opacity-60' : undefined)}
+        >
+          <Icon
+            size={14}
+            className={cn(
+              'transition-colors',
+              checked ? 'text-text-primary' : 'text-text-secondary',
+            )}
+            aria-hidden
+          />
+          <Switch
+            checked={checked}
+            disabled={disabled}
+            onCheckedChange={(next) => {
+              const current = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
+              setValue(
+                'model_parameters',
+                { ...current, [flag]: !!next } as unknown as AgentForm['model_parameters'],
+                { shouldDirty: true },
+              );
+            }}
+            aria-label={label}
+          />
+        </span>
+      </HoverCard.Trigger>
+      <HoverCard.Portal>
+        <HoverCard.Content
+          side="top"
+          sideOffset={6}
+          align="end"
+          collisionPadding={8}
+          className="z-[1100] max-w-[260px] rounded-md border border-border-light bg-surface-primary px-3 py-2 text-xs leading-snug text-text-secondary shadow-lg"
+        >
+          <div className="mb-0.5 text-sm font-medium text-text-primary">{label}</div>
+          {description}
+          <HoverCard.Arrow className="fill-border-light" />
+        </HoverCard.Content>
+      </HoverCard.Portal>
+    </HoverCard.Root>
+  );
+}
+
+/**
+ * Two slim header toggles for the Personality section: Fast Mode (⚡) and
+ * Show reasoning steps (🧠). Show reasoning is disabled whenever Fast Mode
+ * is on, since Fast Mode strips reasoning server-side regardless.
+ */
+function PersonalityHeaderToggles() {
+  const { control } = useFormContext<AgentForm>();
+  const params = useWatch({ control, name: 'model_parameters' }) as
+    | Record<string, unknown>
+    | undefined;
+  const fastMode = params?.knauf_fast_mode === true;
+  return (
+    <>
+      <ReasoningHeaderToggle
+        flag="knauf_fast_mode"
+        icon={Zap}
+        label={FAST_MODE_LABEL}
+        description={FAST_MODE_DESCRIPTION}
+      />
+      <ReasoningHeaderToggle
+        flag="knauf_show_reasoning"
+        icon={Brain}
+        label={SHOW_REASONING_LABEL}
+        description={SHOW_REASONING_DESCRIPTION}
+        disabled={fastMode}
+      />
+    </>
   );
 }

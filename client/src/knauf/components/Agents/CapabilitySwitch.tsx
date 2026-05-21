@@ -14,20 +14,27 @@ export default function CapabilitySwitch({
   description,
   checked,
   onChange,
+  disabled,
 }: Readonly<{
   icon: ComponentType<LucideProps>;
   label: string;
   description: string;
   checked: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
 }>) {
   const switchId = useId();
   return (
     <label
       htmlFor={switchId}
       className={cn(
-        'flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-colors hover:bg-surface-secondary',
-        checked ? 'border-border-medium' : 'border-border-light hover:border-border-medium',
+        'flex items-center gap-3 rounded-md border px-3 py-2.5 transition-colors',
+        disabled
+          ? 'cursor-not-allowed border-border-light opacity-60'
+          : cn(
+              'cursor-pointer hover:bg-surface-secondary',
+              checked ? 'border-border-medium' : 'border-border-light hover:border-border-medium',
+            ),
       )}
     >
       <div
@@ -49,6 +56,7 @@ export default function CapabilitySwitch({
         checked={checked}
         onCheckedChange={(next) => onChange(!!next)}
         aria-label={label}
+        disabled={disabled}
         className="flex-shrink-0"
       />
     </label>
