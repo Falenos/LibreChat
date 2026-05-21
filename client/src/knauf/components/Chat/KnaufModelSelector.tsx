@@ -373,8 +373,7 @@ const KnaufAgentRow = memo(function KnaufAgentRow({
         <span className="ml-1 rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
           {localize('com_knauf_default_badge')}
         </span>
-      ) : null}
-      {!isDefault ? (
+      ) : (
         <button
           type="button"
           onClick={handlePinClick}
@@ -389,7 +388,7 @@ const KnaufAgentRow = memo(function KnaufAgentRow({
         >
           {pinned ? <PinOff size={14} /> : <Pin size={14} />}
         </button>
-      ) : null}
+      )}
     </CustomMenuItem>
   );
 });

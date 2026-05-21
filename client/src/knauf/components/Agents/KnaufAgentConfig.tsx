@@ -20,7 +20,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import type { LucideProps } from 'lucide-react';
-import { useToastContext } from '@librechat/client';
+import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import { EModelEndpoint } from 'librechat-data-provider';
 import { isEphemeralAgent, type AgentForm } from '~/common';
@@ -34,7 +34,6 @@ import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import * as HoverCard from '@radix-ui/react-hover-card';
-import { Switch } from '@librechat/client';
 import { Brain, Check, Copy, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
