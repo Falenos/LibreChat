@@ -582,13 +582,6 @@ function CapabilityRow({
   );
 }
 
-const FAST_MODE_LABEL = 'Fast Mode';
-const FAST_MODE_DESCRIPTION =
-  'Skip the reasoning step for quicker, cheaper answers. Best when you don’t need deep analysis.';
-const SHOW_REASONING_LABEL = 'Show reasoning steps';
-const SHOW_REASONING_DESCRIPTION =
-  'Show how the agent worked out its answer. Useful when you want to see the model’s thinking, not just the conclusion.';
-
 /**
  * Slim header toggle for a `model_parameters` boolean flag. Lives in the
  * KnaufSection `action` slot: no row, no border, no visible label — just an
@@ -665,6 +658,7 @@ function ReasoningHeaderToggle({
  * is on, since Fast Mode strips reasoning server-side regardless.
  */
 function PersonalityHeaderToggles() {
+  const localize = useLocalize();
   const { control } = useFormContext<AgentForm>();
   const params = useWatch({ control, name: 'model_parameters' }) as
     | Record<string, unknown>
@@ -675,23 +669,19 @@ function PersonalityHeaderToggles() {
       <ReasoningHeaderToggle
         flag="knauf_fast_mode"
         icon={Zap}
-        label={FAST_MODE_LABEL}
-        description={FAST_MODE_DESCRIPTION}
+        label={localize('com_knauf_fast_mode_label')}
+        description={localize('com_knauf_fast_mode_description')}
       />
       <ReasoningHeaderToggle
         flag="knauf_show_reasoning"
         icon={Brain}
-        label={SHOW_REASONING_LABEL}
-        description={SHOW_REASONING_DESCRIPTION}
+        label={localize('com_knauf_show_reasoning_label')}
+        description={localize('com_knauf_show_reasoning_description')}
         disabled={fastMode}
       />
     </>
   );
 }
-
-const AGENT_ID_LABEL = 'Agent ID';
-const AGENT_ID_COPY_TITLE = 'Copy agent ID';
-const AGENT_ID_COPIED_TITLE = 'Copied!';
 
 /**
  * Small read-only display of the agent's id beneath the Name field, with a
@@ -700,26 +690,39 @@ const AGENT_ID_COPIED_TITLE = 'Copied!';
  * agents. (KK20-128)
  */
 function KnaufAgentIdRow({ agentId }: Readonly<{ agentId: string }>) {
+  const localize = useLocalize();
   const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current != null) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
   const onCopy = useCallback(() => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return;
     navigator.clipboard.writeText(agentId).then(
       () => {
+        if (timeoutRef.current != null) {
+          clearTimeout(timeoutRef.current);
+        }
         setCopied(true);
-        window.setTimeout(() => setCopied(false), 1500);
+        timeoutRef.current = setTimeout(() => setCopied(false), 1500);
       },
       () => undefined,
     );
   }, [agentId]);
+  const buttonTitle = copied ? localize('com_ui_copied') : localize('com_knauf_copy_agent_id');
   return (
     <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
-      <span className="font-medium">{AGENT_ID_LABEL}:</span>
+      <span className="font-medium">{localize('com_knauf_agent_id')}:</span>
       <code className="truncate font-mono text-[11px]">{agentId}</code>
       <button
         type="button"
         onClick={onCopy}
-        aria-label={copied ? AGENT_ID_COPIED_TITLE : AGENT_ID_COPY_TITLE}
-        title={copied ? AGENT_ID_COPIED_TITLE : AGENT_ID_COPY_TITLE}
+        aria-label={buttonTitle}
+        title={buttonTitle}
         className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary"
       >
         {copied ? <Check size={14} /> : <Copy size={14} />}
