@@ -453,36 +453,36 @@ export default function KnaufAgentConfig() {
             title="Tools"
             info="Things the agent can do while replying, like creating an image or running a calculation. Pick the ones you want it to be able to use."
           >
-            {regularTools === undefined ? (
-              <div className="text-xs text-text-secondary">{localize('com_ui_loading')}</div>
-            ) : (
-              <>
-                <div className="mb-1">
-                  {toolIds.map((toolId, i) => {
-                    const tool = regularTools.find((t) => t.pluginKey === toolId);
-                    if (!tool) return null;
-                    return (
-                      <AgentTool
-                        key={`${toolId}-${i}-${agent_id}`}
-                        tool={toolId}
-                        regularTools={regularTools}
-                        agent_id={agent_id}
-                      />
-                    );
-                  })}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowToolDialog(true)}
-                  className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
-                  aria-haspopup="dialog"
-                >
-                  <div className="flex w-full items-center justify-center gap-2">
-                    {localize('com_assistants_add_tools')}
-                  </div>
-                </button>
-              </>
-            )}
+            {/* Render tool rows unconditionally — matches upstream AgentConfig.
+                A loading gate here would hide a just-added tool until the
+                `regularTools` query resolves, leaving the user staring at a
+                loading message that only clears when they navigate away and
+                back. Rows for IDs not yet in `regularTools` are skipped and
+                fill in once the query settles. */}
+            <div className="mb-1">
+              {toolIds.map((toolId, i) => {
+                const tool = regularTools?.find((t) => t.pluginKey === toolId);
+                if (!tool) return null;
+                return (
+                  <AgentTool
+                    key={`${toolId}-${i}-${agent_id}`}
+                    tool={toolId}
+                    regularTools={regularTools}
+                    agent_id={agent_id}
+                  />
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowToolDialog(true)}
+              className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg font-medium"
+              aria-haspopup="dialog"
+            >
+              <div className="flex w-full items-center justify-center gap-2">
+                {localize('com_assistants_add_tools')}
+              </div>
+            </button>
           </KnaufSection>
         ) : null}
 

@@ -18,12 +18,14 @@
  */
 import { memo, useMemo, useCallback, useEffect, useRef, type MouseEvent } from 'react';
 import * as Ariakit from '@ariakit/react';
+import { useRecoilValue } from 'recoil';
 import type { Agent } from 'librechat-data-provider';
 import { EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
 import { TooltipAnchor } from '@librechat/client';
 import { Pin, PinOff } from 'lucide-react';
 import type { ModelSelectorProps } from '~/common';
 import { useFavorites, useLocalize } from '~/hooks';
+import store from '~/store';
 import { cn, renderAgentAvatar } from '~/utils';
 import {
   ModelSelectorProvider,
@@ -90,6 +92,23 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
     onOpenChange,
     keyDialogEndpoint,
   } = useModelSelectorContext();
+  /**
+   * Own the Ariakit menu store at this layer (instead of letting CustomMenu
+   * own it) so we can call `.hide()` on sidebar toggles. Ariakit's
+   * autoUpdate only observes resize+scroll on the trigger; sibling-driven
+   * CSS transitions that slide the chat header horizontally are invisible
+   * to it, so an open popover keeps a stale transform and clips off the
+   * left edge. Closing the menu on sidebar toggle forces a fresh re-measure
+   * on the next click.
+   */
+  const menuStore = Ariakit.useMenuStore({
+    showTimeout: 100,
+    placement: 'bottom-start',
+  });
+  const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
+  useEffect(() => {
+    menuStore.hide();
+  }, [sidebarExpanded, menuStore]);
   /**
    * Lift `useFavorites()` to the parent so each `KnaufAgentRow` doesn't
    * create its own atom subscription, query, and toast context (was N+1 hook
@@ -253,6 +272,7 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
   return (
     <div className="relative flex w-full max-w-md flex-col items-center gap-2">
       <CustomMenu
+        store={menuStore}
         onSearch={setSearchValue}
         combobox={<input id="agent-search" placeholder=" " />}
         comboboxLabel={localize('com_knauf_search_agents')}
