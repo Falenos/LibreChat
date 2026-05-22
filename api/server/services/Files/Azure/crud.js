@@ -41,6 +41,15 @@ let userDelegationKey = null;
 let userDelegationKeyExpiry = null;
 const DELEGATION_KEY_REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
+// Module-level singletons for the Managed Identity / User Delegation SAS
+// path. Both the BlobServiceClient and the credential carry caches (the
+// credential holds the AAD token cache) that must be reused across requests
+// — recreating per request cold-starts both caches and adds an AAD
+// round-trip in the worst case. Keyed on account name so a runtime
+// reconfiguration to a different storage account picks up cleanly.
+let _miAccountName = null;
+let _miBlobServiceClient = null;
+
 if (process.env.AZURE_URL_EXPIRY_SECONDS !== undefined) {
   const parsed = parseInt(process.env.AZURE_URL_EXPIRY_SECONDS, 10);
   if (!isNaN(parsed) && parsed > 0) {
@@ -61,8 +70,46 @@ if (process.env.AZURE_REFRESH_EXPIRY_MS) {
 }
 // End [knauf]
 
-// [knauf] KK20-167 — Net-new helpers below (getUserDelegationKey,
-// getSignedAzureURL) underpin Managed-Identity and Account-Key signing.
+// [knauf] KK20-167 — Net-new helpers below (getManagedIdentityBlobServiceClient,
+// getUserDelegationKey, getSignedAzureURL) underpin Managed-Identity and
+// Account-Key signing.
+
+/**
+ * Returns the shared {@link BlobServiceClient} for the Managed Identity / User
+ * Delegation SAS path. Lazily constructs the client and credential once per
+ * account name and reuses them across requests so the credential's AAD token
+ * cache survives — recreating these per request adds a token round-trip in
+ * the worst case.
+ *
+ * In production we explicitly use `ManagedIdentityCredential` (AKS pod
+ * identity / workload identity). `DefaultAzureCredential` walks a chain that
+ * includes env vars, Azure CLI, VS Code, etc., which is friendly in dev but
+ * dangerous in prod (it can silently fall through to an unexpected identity).
+ *
+ * @param {string} accountName - The Azure Storage account name.
+ * @returns {Promise<import('@azure/storage-blob').BlobServiceClient>}
+ */
+async function getManagedIdentityBlobServiceClient(accountName) {
+  if (_miBlobServiceClient && _miAccountName === accountName) {
+    return _miBlobServiceClient;
+  }
+  const identity = await import('@azure/identity');
+  const credential =
+    process.env.NODE_ENV === 'production'
+      ? new identity.ManagedIdentityCredential()
+      : new identity.DefaultAzureCredential();
+  _miBlobServiceClient = new BlobServiceClient(
+    `https://${accountName}.blob.core.windows.net`,
+    credential,
+  );
+  _miAccountName = accountName;
+  // Invalidate the delegation-key cache when the storage account changes so we
+  // don't sign blobs in account A with a key minted for account B.
+  userDelegationKey = null;
+  userDelegationKeyExpiry = null;
+  return _miBlobServiceClient;
+}
+
 /**
  * Obtains and caches a User Delegation Key from Azure Blob Storage for use with
  * Managed Identity (User Delegation SAS) URL signing. The key is cached for its
@@ -145,39 +192,25 @@ async function getSignedAzureURL({ blobPath, containerName = AZURE_CONTAINER_NAM
     }
 
     if (accountName) {
-      try {
-        const { DefaultAzureCredential } = await import('@azure/identity');
-        const credential = new DefaultAzureCredential();
-        const blobServiceClient = new BlobServiceClient(
-          `https://${accountName}.blob.core.windows.net`,
-          credential,
-        );
+      const blobServiceClient = await getManagedIdentityBlobServiceClient(accountName);
+      const delegationKey = await getUserDelegationKey(blobServiceClient);
+      const containerClient = blobServiceClient.getContainerClient(containerName);
+      const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
 
-        const delegationKey = await getUserDelegationKey(blobServiceClient);
-        const containerClient = blobServiceClient.getContainerClient(containerName);
-        const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
+      const sasToken = generateBlobSASQueryParameters(
+        {
+          containerName,
+          blobName: blobPath,
+          permissions: BlobSASPermissions.parse('r'),
+          protocol: SASProtocol.Https,
+          startsOn,
+          expiresOn,
+        },
+        delegationKey,
+        accountName,
+      ).toString();
 
-        const sasToken = generateBlobSASQueryParameters(
-          {
-            containerName,
-            blobName: blobPath,
-            permissions: BlobSASPermissions.parse('r'),
-            protocol: SASProtocol.Https,
-            startsOn,
-            expiresOn,
-          },
-          delegationKey,
-          accountName,
-        ).toString();
-
-        return `${blockBlobClient.url}?${sasToken}`;
-      } catch (credentialError) {
-        logger.error(
-          '[getSignedAzureURL] User Delegation signing failed. Ensure you are running on Azure with Managed Identity or use a connection string:',
-          credentialError.message,
-        );
-        throw credentialError;
-      }
+      return `${blockBlobClient.url}?${sasToken}`;
     }
 
     throw new Error(
@@ -358,16 +391,21 @@ async function streamFileToAzure({
     const fileStream = fs.createReadStream(filePath);
 
     const blobContentType = mime.getType(fileName);
-    await blockBlobClient.uploadStream(fileStream, undefined, undefined, {
-      blobHTTPHeaders: {
-        blobContentType,
+    await blockBlobClient.uploadStream(
+      fileStream,
+      undefined, // Use default concurrency (5)
+      undefined, // Use default buffer size (8MB)
+      {
+        blobHTTPHeaders: {
+          blobContentType,
+        },
+        onProgress: (progress) => {
+          logger.debug(
+            `[streamFileToAzure] Upload progress: ${progress.loadedBytes} bytes of ${stats.size}`,
+          );
+        },
       },
-      onProgress: (progress) => {
-        logger.debug(
-          `[streamFileToAzure] Upload progress: ${progress.loadedBytes} bytes of ${stats.size}`,
-        );
-      },
-    });
+    );
 
     // [knauf] KK20-167 — sign when private (same shape as saveBufferToAzure).
     if (!isPublicAccess()) {
@@ -464,7 +502,11 @@ async function getAzureFileStream(_req, fileURL) {
 function needsRefreshAzure(signedUrl, bufferSeconds) {
   try {
     const url = new URL(signedUrl);
-    const hasSasToken = url.searchParams.has('se');
+    // Use `sig` (the cryptographic SAS signature) — not `se` (just the expiry
+    // timestamp) — as the SAS-token presence check. A hand-crafted URL could
+    // include `se` without a signature; only `sig` proves the URL was signed.
+    // Mirrors S3's `X-Amz-Signature` check.
+    const hasSasToken = url.searchParams.has('sig');
 
     // Private access required but URL is plain → needs signing
     if (!isPublicAccess() && !hasSasToken) {
@@ -497,7 +539,7 @@ function needsRefreshAzure(signedUrl, bufferSeconds) {
     const bufferTime = new Date(now.getTime() + bufferSeconds * 1000);
     return expiresAtDate <= bufferTime;
   } catch (error) {
-    logger.error('[needsRefreshAzure] Error checking URL expiration:', error);
+    logger.error(`[needsRefreshAzure] Error checking URL expiration for "${signedUrl}":`, error);
     return true;
   }
 }
@@ -663,10 +705,12 @@ async function refreshAzureUrl(fileObj, bufferSeconds = 3600) {
       logger.warn(`[refreshAzureUrl] Unable to refresh Azure URL: ${fileObj.filepath}`);
       return fileObj.filepath;
     }
-    logger.debug(`[refreshAzureUrl] Refreshed Azure URL`);
+    logger.debug(`[refreshAzureUrl] Refreshed URL for ${fileObj.file_id ?? '(unknown file_id)'}`);
     return newUrl;
   } catch (error) {
-    logger.error(`[refreshAzureUrl] Error refreshing Azure URL: ${error.message}`);
+    logger.error(
+      `[refreshAzureUrl] Error refreshing Azure URL for ${fileObj.file_id ?? '(unknown file_id)'}: ${error.message}`,
+    );
     return fileObj.filepath;
   }
 }
