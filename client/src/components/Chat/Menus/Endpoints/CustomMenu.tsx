@@ -12,6 +12,17 @@ export interface CustomMenuProps extends Ariakit.MenuButtonProps<'div'> {
   comboboxLabel?: string;
   trigger?: Ariakit.MenuButtonProps['render'];
   defaultOpen?: boolean;
+  // [knauf] Optional placement override so callers can anchor the popover
+  // (e.g. a top-of-chat agent picker needs 'bottom-start' to avoid the
+  // left-edge clip the default 'left' placement produced for KK20-128).
+  // Defaults preserve the original `parent ? 'right' : 'left'` behaviour.
+  placement?: Ariakit.MenuStoreProps['placement'];
+  // [knauf] Optional externally-created menu store. KnaufModelSelector hands
+  // one in so it can call `.hide()` when the layout shifts (sidebar toggle)
+  // — Ariakit's autoUpdate doesn't observe sibling layout shifts, so the
+  // popover otherwise keeps a stale transform. When omitted, CustomMenu
+  // creates its own store as before (upstream behaviour preserved).
+  store?: Ariakit.MenuStore;
 }
 
 export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(function CustomMenu(
@@ -26,6 +37,8 @@ export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(func
     comboboxLabel,
     trigger,
     defaultOpen,
+    placement,
+    store,
     ...props
   },
   ref,
@@ -33,11 +46,16 @@ export const CustomMenu = React.forwardRef<HTMLDivElement, CustomMenuProps>(func
   const parent = Ariakit.useMenuContext();
   const searchable = searchValue != null || !!onSearch || !!combobox;
 
-  const menuStore = Ariakit.useMenuStore({
+  const internalStore = Ariakit.useMenuStore({
     showTimeout: 100,
-    placement: parent ? 'right' : 'left',
+    // [knauf] Honour the caller's `placement` when provided; fall back to the
+    // upstream default so existing callers (endpoints menu, etc.) are unaffected.
+    placement: placement ?? (parent ? 'right' : 'left'),
     defaultOpen: defaultOpen,
   });
+  // [knauf] Prefer a caller-provided store; only fall back to the internal one
+  // (which is what every upstream caller still relies on).
+  const menuStore = store ?? internalStore;
 
   const element = (
     <Ariakit.MenuProvider store={menuStore} values={values} setValues={onValuesChange}>

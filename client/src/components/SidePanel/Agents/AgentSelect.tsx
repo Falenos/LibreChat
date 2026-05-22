@@ -1,7 +1,8 @@
 import { EarthIcon } from 'lucide-react';
 import { ControlCombobox } from '@librechat/client';
-import { memo, useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useFormContext, Controller } from 'react-hook-form';
+import { useRecoilValue } from 'recoil';
 import { AgentCapabilities, defaultAgentFormValues } from 'librechat-data-provider';
 import type { UseMutationResult, QueryObserverResult } from '@tanstack/react-query';
 import type { Agent, AgentCreateParams } from 'librechat-data-provider';
@@ -9,6 +10,7 @@ import type { TAgentCapabilities, AgentForm } from '~/common';
 import { cn, createProviderOption, processAgentOption, getDefaultAgentFormValues } from '~/utils';
 import { useLocalize, useAgentDefaultPermissionLevel } from '~/hooks';
 import { useListAgentsQuery } from '~/data-provider';
+import store from '~/store';
 
 const keys = new Set(Object.keys(defaultAgentFormValues));
 
@@ -191,12 +193,28 @@ function AgentSelect({
 
   const createAgent = localize('com_ui_create_new_agent');
 
+  // [knauf] KK20-128 follow-up. ControlCombobox is in @librechat/client and
+  // we can't easily reach its internal Ariakit select store, so we can't
+  // call hide() on a sidebar toggle. Instead, when the sidebar collapse/
+  // expand transition (~300ms) settles, bump a remount key on the wrapper
+  // so the combobox unmounts (closing any open popover) and remounts. The
+  // next click then re-anchors against the now-settled trigger position.
+  // Without this the popover keeps a stale transform from before the
+  // sidebar's CSS transition and clips off the left edge.
+  const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
+  const [comboboxRemountKey, setComboboxRemountKey] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setComboboxRemountKey((k) => k + 1), 320);
+    return () => clearTimeout(t);
+  }, [sidebarExpanded]);
+
   return (
     <Controller
       name="agent"
       control={control}
       render={({ field }) => (
         <ControlCombobox
+          key={comboboxRemountKey}
           containerClassName="px-0"
           selectedValue={(field?.value?.value ?? '') + ''}
           displayValue={field?.value?.label ?? ''}
