@@ -83,6 +83,7 @@ Follow this order. Each step assumes the previous one is complete.
 | [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md) | Tier ladder, marker / SEAMS.md format, anti-patterns, refusals |
 | [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, CI automation |
 | [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md) | Seam tests, emergency rollback |
+| [docs/reference/azure-blob-storage.md](docs/reference/azure-blob-storage.md) | How file storage works on Azure — SAS-token anatomy, refresh chain, TTL math, signing modes, before/after diagrams |
 | [docs/migration.md](docs/migration.md) | Historical record: how this repo was created, why we re-forked |
 
 ### Implementation plans

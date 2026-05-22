@@ -3,6 +3,7 @@
 This doc is the running record of KARL's file-storage strategy on Azure: how it works, what's been landed (locally + upstream), what's still open, and where each piece lives in the code.
 
 Related docs:
+- [**`../reference/azure-blob-storage.md`**](../reference/azure-blob-storage.md) — **how it works**. Architecture, flows, SAS-token anatomy, TTL math, refresh chain, signing modes, before/after diagrams. Start there for understanding; come back here for status + rollout.
 - [`../reference/code-change-protocol.md`](../reference/code-change-protocol.md) — tier ladder referenced in the Tier 5 / SEAMS decisions below.
 - [`../guides/upstream-sync.md`](../guides/upstream-sync.md) — how the Tier 5 overlay gets retired if/when upstream adopts equivalent behavior.
 - [`../../../SEAMS.md`](../../../SEAMS.md) — `[knauf]` marker index that this rollout appends rows to.
@@ -230,8 +231,6 @@ Low-priority polish that didn't justify its own commit on this PR:
 
 - [ ] Replace `blobPath.includes(req.user.id)` in `deleteFileFromAzure` with an exact-segment match (`blobPath.split('/').includes(req.user.id)`). Pre-existing upstream code; the substring check passes for pathologically-named users. Pure defense-in-depth.
 - [ ] Wall-clock-verify the refresh-on-`/api/files`-list path end-to-end in dev: upload a file, wait `AZURE_URL_EXPIRY_SECONDS + 1m`, hit `GET /api/files`, confirm the persisted `filepath` got rewritten with a fresh `se=`. Code is in place; just needs an actual 5-minute wait.
-- [ ] Promote-pipeline workflow sanity check: confirm `ct-shared-workflows@v2.9.0`'s `promote-app-kubernetes` actually substitutes `dev` → `prod` in `destination-environment-config-repository-app-directory` (currently hard-coded to `./dev/services/agentic-karl/agentic-karl` in our `promote_pipeline.yaml`). Spot-check the first promote run after the deployment-configs PR-2 lands.
-- [ ] Document in [UPSTREAM_SYNC.md](../../../UPSTREAM_SYNC.md) which upstream Azure files this overlay shadows so future syncs surface the conflict surface early.
 
 ---
 
