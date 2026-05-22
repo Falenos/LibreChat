@@ -50,7 +50,7 @@ Last updated: 2026-05-22, after end-to-end smoke test against real Azure storage
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Critical to understand:** per-user isolation is enforced at **Layer 3 only**. The userId in the blob path (`files/uploads/<userId>/...`) is a **naming convention**, not Azure-enforced. Anyone holding a valid SAS for a blob can read it — security depends on the backend correctly signing only blobs the requesting user owns, and SAS TTL bounding leak damage to 5 minutes.
+**Critical to understand:** per-user isolation is enforced at **Layer 3 only**. The userId in the blob path (`files/uploads/<userId>/...`) is a **naming convention**. Anyone holding a valid SAS for a blob can read it — security depends on the backend correctly signing only blobs the requesting user owns, and SAS TTL bounding leak damage to 5 minutes.
 
 ---
 
@@ -106,7 +106,17 @@ The Knauf fork carries an overlay on top of upstream's Azure Blob files that add
 | `packages/data-provider/src/config.ts` | `CacheKeys.AZURE_EXPIRY_INTERVAL` enum |
 | `api/test/server/services/Files/Azure/crud.test.js` | New file — 24 unit tests covering signing, refresh, extractor, guards |
 
-Test coverage: 24/24 unit tests in `api/test/server/services/Files/Azure/crud.test.js` pass.
+Test coverage: **38/38 unit tests** in `api/test/server/services/Files/Azure/crud.test.js` pass. Coverage spans:
+
+- `needsRefreshAzure` — SAS-token detection via `sig` (not `se`), expiry math, public/private-mode behavior, invalid-URL handling
+- `extractBlobPathFromAzureUrl` — virtual-hosted-style, path-style (Azurite), SAS-bearing URLs, container override, legacy-container fallback, invalid URLs
+- `getNewAzureURL` — invalid URL, public mode, path-parts guard, **explicit `containerName` for multi-container deployments**
+- `getSignedAzureURL` — both configuration-error branches, `sig`/`sp=r`/`spr=https` presence, default TTL
+- `getAzureURL` — signing-when-private parity with S3, plain URL when public
+- `deleteFileFromAzure` — happy path (strips SAS from filepath), 404 swallowing, user-id mismatch rejection, non-404 rethrow
+- `refreshAzureFileUrls` — empty input, non-azure files skipped, malformed entries don't crash the batch
+- `refreshAzureUrl` — null/undefined fileObj, non-azure source passthrough, no-refresh-needed passthrough
+- **Managed Identity signing path** — `DefaultAzureCredential` outside production, `ManagedIdentityCredential` in production, BlobServiceClient + credential reused across concurrent requests (singleton invariant)
 
 Verified end-to-end against `karlblob.blob.core.windows.net` (CT-SANDBOX dev storage account):
 
@@ -122,9 +132,28 @@ Verified end-to-end against `karlblob.blob.core.windows.net` (CT-SANDBOX dev sto
 
 ---
 
+## Recently completed (in PR branch, since the original plan was drafted)
+
+Tracked here so the "Still pending" list below reflects *what's actually next*, not what's already shipped.
+
+- ✅ **Post-review hardening on `crud.js`** (commit 3 of #46):
+  - `needsRefreshAzure` now detects SAS via `sig` (the cryptographic signature) not `se` (just the expiry timestamp) — defense-in-depth fix mirroring S3's `X-Amz-Signature` check.
+  - `BlobServiceClient` + credential hoisted to module-level singletons on the Managed Identity path, keyed on account name. Eliminated the per-request credential reconstruction that cold-started the AAD token cache.
+  - `ManagedIdentityCredential` used explicitly in production (`NODE_ENV === 'production'`); `DefaultAzureCredential` kept for dev. No more silent fall-through to Azure CLI / env-var identities in prod.
+  - `uploadStream` inline comments (`Use default concurrency (5)` / `Use default buffer size (8MB)`) restored.
+  - `needsRefreshAzure` and `refreshAzureUrl` log lines now include the offending URL / `file_id` for prod-incident debuggability.
+  - Inner `try/catch` removed in the MI branch (was double-logging the same error).
+- ✅ **Final cleanups + expanded tests** (commit 4 of #46):
+  - `isNaN` → `Number.isNaN` (no more global-isNaN coercion footgun).
+  - `getUserDelegationKey` collapses concurrent first-callers via promise-based memoization (the resolved-value cache had a benign race; the promise cache resolves it).
+  - `getNewAzureURL` now accepts an optional `containerName` argument so multi-container deployments can refresh URLs without rewriting them into the default container.
+  - **Test count 24 → 38**. New coverage for: `deleteFileFromAzure` (happy path, 404 swallow, user-id mismatch, non-404 rethrow); `refreshAzureFileUrls` (empty list, non-azure files skipped, malformed entries); `refreshAzureUrl` (null fileObj, non-azure passthrough, no-refresh passthrough); `getNewAzureURL` containerName override for multi-container; Managed Identity signing in production AND development (validates `ManagedIdentityCredential` vs `DefaultAzureCredential` selection); BlobServiceClient + credential singleton (one credential constructed for N concurrent signed-URL requests).
+
+---
+
 ## Still pending
 
-Ordered by dependency / blast radius.
+Ordered by dependency / blast radius. Items in **A–C** unblock prod rollout; **D–G** are follow-up work.
 
 ### A. Track upstream parity
 
@@ -195,10 +224,14 @@ Required by Knauf's compliance posture before prod-rollout:
 - [ ] **Storage account key rotation policy** (Azure Policy) — automatic rotation every 90 days. Only relevant if we keep the key path enabled for disaster recovery.
 - [ ] **Tag the storage account** with cost-center + owner — required by Knauf cloud governance.
 
-### G. Production env hygiene
+### G. Small cleanups (post-merge follow-up ticket)
 
-- [ ] `.env` in this repo currently has secrets committed (already flagged in [CLAUDE.md](../../../CLAUDE.md)). Migrate to sealed-secrets / Key Vault references injected by ArgoCD. Especially the Azure connection string / future `AZURE_STORAGE_ACCOUNT_NAME`.
-- [ ] Document in [UPSTREAM_SYNC.md](../../../UPSTREAM_SYNC.md) which upstream Azure files this overlay shadows so future syncs flag the conflict surface early.
+Low-priority polish that didn't justify its own commit on this PR:
+
+- [ ] Replace `blobPath.includes(req.user.id)` in `deleteFileFromAzure` with an exact-segment match (`blobPath.split('/').includes(req.user.id)`). Pre-existing upstream code; the substring check passes for pathologically-named users. Pure defense-in-depth.
+- [ ] Wall-clock-verify the refresh-on-`/api/files`-list path end-to-end in dev: upload a file, wait `AZURE_URL_EXPIRY_SECONDS + 1m`, hit `GET /api/files`, confirm the persisted `filepath` got rewritten with a fresh `se=`. Code is in place; just needs an actual 5-minute wait.
+- [ ] Promote-pipeline workflow sanity check: confirm `ct-shared-workflows@v2.9.0`'s `promote-app-kubernetes` actually substitutes `dev` → `prod` in `destination-environment-config-repository-app-directory` (currently hard-coded to `./dev/services/agentic-karl/agentic-karl` in our `promote_pipeline.yaml`). Spot-check the first promote run after the deployment-configs PR-2 lands.
+- [ ] Document in [UPSTREAM_SYNC.md](../../../UPSTREAM_SYNC.md) which upstream Azure files this overlay shadows so future syncs surface the conflict surface early.
 
 ---
 
@@ -357,18 +390,6 @@ Independent of the deployment-configs PRs, these land in the fork itself:
         - Add Private Endpoint from AKS subnet
         - Enable diagnostic logs → Log Analytics
         - Drop the SMB karlshare volume from values.yaml (last cutover)
-```
-
-### One workflow oddity to be aware of
-
-[`.github/workflows/promote_pipeline.yaml:40`](../../../.github/workflows/promote_pipeline.yaml#L40) has:
-
-```yaml
-destination-environment-config-repository-app-directory: ./dev/services/agentic-karl/agentic-karl
-```
-
-The directory still says `./dev/...` even though `destination-environment: prod`. The upstream `ct-shared-workflows@v2.9.0` workflow probably substitutes `dev` → `prod` based on the `destination-environment` value, so this is likely cosmetic — but worth a quick spot-check the first time a promote runs after these Azure changes land, to make sure the right values.yaml is being updated.
-
 ---
 
 ## Critical file map

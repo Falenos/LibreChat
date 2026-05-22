@@ -21,6 +21,7 @@ const { logger } = require('@librechat/data-schemas');
 // equivalent behavior.
 const { FileSources } = require('librechat-data-provider');
 const { getAzureContainerClient, deleteRagFile } = require('@librechat/api');
+const { DefaultAzureCredential, ManagedIdentityCredential } = require('@azure/identity');
 
 const defaultBasePath = 'images';
 const { AZURE_CONTAINER_NAME = 'files' } = process.env;
@@ -37,8 +38,11 @@ const DEFAULT_AZURE_URL_EXPIRY_SECONDS = 5 * 60;
 let azureUrlExpirySeconds = DEFAULT_AZURE_URL_EXPIRY_SECONDS;
 let azureRefreshExpiryMs = null;
 
-let userDelegationKey = null;
-let userDelegationKeyExpiry = null;
+// Delegation-key cache. Stored as `{ promise, expiresOn }` rather than the
+// resolved key so concurrent first-callers all await the *same* in-flight
+// fetch — without this, N concurrent first requests each fire an AAD
+// round-trip and the last writer wins (benign but wasteful).
+let _delegationKeyState = null;
 const DELEGATION_KEY_REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
 // Module-level singletons for the Managed Identity / User Delegation SAS
@@ -52,7 +56,7 @@ let _miBlobServiceClient = null;
 
 if (process.env.AZURE_URL_EXPIRY_SECONDS !== undefined) {
   const parsed = parseInt(process.env.AZURE_URL_EXPIRY_SECONDS, 10);
-  if (!isNaN(parsed) && parsed > 0) {
+  if (!Number.isNaN(parsed) && parsed > 0) {
     azureUrlExpirySeconds = Math.min(parsed, 7 * 24 * 60 * 60);
   } else {
     logger.warn(
@@ -63,7 +67,7 @@ if (process.env.AZURE_URL_EXPIRY_SECONDS !== undefined) {
 
 if (process.env.AZURE_REFRESH_EXPIRY_MS) {
   const parsed = parseInt(process.env.AZURE_REFRESH_EXPIRY_MS, 10);
-  if (!isNaN(parsed) && parsed > 0) {
+  if (!Number.isNaN(parsed) && parsed > 0) {
     azureRefreshExpiryMs = parsed;
     logger.info(`[Azure] Using custom refresh expiry time: ${azureRefreshExpiryMs}ms`);
   }
@@ -89,15 +93,14 @@ if (process.env.AZURE_REFRESH_EXPIRY_MS) {
  * @param {string} accountName - The Azure Storage account name.
  * @returns {Promise<import('@azure/storage-blob').BlobServiceClient>}
  */
-async function getManagedIdentityBlobServiceClient(accountName) {
+function getManagedIdentityBlobServiceClient(accountName) {
   if (_miBlobServiceClient && _miAccountName === accountName) {
     return _miBlobServiceClient;
   }
-  const identity = await import('@azure/identity');
   const credential =
     process.env.NODE_ENV === 'production'
-      ? new identity.ManagedIdentityCredential()
-      : new identity.DefaultAzureCredential();
+      ? new ManagedIdentityCredential()
+      : new DefaultAzureCredential();
   _miBlobServiceClient = new BlobServiceClient(
     `https://${accountName}.blob.core.windows.net`,
     credential,
@@ -105,37 +108,49 @@ async function getManagedIdentityBlobServiceClient(accountName) {
   _miAccountName = accountName;
   // Invalidate the delegation-key cache when the storage account changes so we
   // don't sign blobs in account A with a key minted for account B.
-  userDelegationKey = null;
-  userDelegationKeyExpiry = null;
+  _delegationKeyState = null;
   return _miBlobServiceClient;
 }
 
 /**
  * Obtains and caches a User Delegation Key from Azure Blob Storage for use with
  * Managed Identity (User Delegation SAS) URL signing. The key is cached for its
- * full 7-day lifespan and proactively refreshed within a 5-minute buffer of expiry.
+ * full 7-day lifespan and proactively refreshed within a 5-minute buffer of
+ * expiry.
+ *
+ * Concurrency: caches the in-flight Promise (not the resolved key), so N
+ * concurrent first-callers all await the same fetch instead of each firing
+ * their own AAD round-trip.
  *
  * @param {import('@azure/storage-blob').BlobServiceClient} blobServiceClient
  * @returns {Promise<import('@azure/storage-blob').UserDelegationKey>}
  */
-async function getUserDelegationKey(blobServiceClient) {
-  const now = new Date();
-
-  if (userDelegationKey && userDelegationKeyExpiry) {
-    const timeUntilExpiry = userDelegationKeyExpiry.getTime() - now.getTime();
+function getUserDelegationKey(blobServiceClient) {
+  if (_delegationKeyState) {
+    const timeUntilExpiry = _delegationKeyState.expiresOn.getTime() - Date.now();
     if (timeUntilExpiry > DELEGATION_KEY_REFRESH_BUFFER_MS) {
-      return userDelegationKey;
+      return _delegationKeyState.promise;
     }
+    // Within the refresh buffer — drop the stale entry and re-fetch below.
+    _delegationKeyState = null;
   }
 
-  const startsOn = now;
-  const expiresOn = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
+  const startsOn = new Date();
+  const expiresOn = new Date(startsOn.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-  userDelegationKey = await blobServiceClient.getUserDelegationKey(startsOn, expiresOn);
-  userDelegationKeyExpiry = expiresOn;
-
-  logger.info('[Azure] User delegation key obtained, expires:', expiresOn.toISOString());
-  return userDelegationKey;
+  const promise = blobServiceClient.getUserDelegationKey(startsOn, expiresOn).then(
+    (key) => {
+      logger.info('[Azure] User delegation key obtained, expires:', expiresOn.toISOString());
+      return key;
+    },
+    (err) => {
+      // Don't cache a rejected promise — drop the slot so the next caller retries.
+      _delegationKeyState = null;
+      throw err;
+    },
+  );
+  _delegationKeyState = { promise, expiresOn };
+  return promise;
 }
 
 /**
@@ -595,12 +610,17 @@ function extractBlobPathFromAzureUrl(fileUrl, containerName) {
  * when public access is configured.
  *
  * @param {string} currentURL - The existing Azure Blob file URL that may need to be refreshed or signed.
+ * @param {string} [containerName] - The container name to extract against and resign within. When
+ *   omitted, falls back to `AZURE_CONTAINER_NAME` (read at call time, default `'files'`). Pass
+ *   the original blob's container when supporting multi-container deployments, otherwise refresh
+ *   silently rewrites the URL into the default container's namespace.
  * @returns {Promise<string | undefined>} A promise that resolves to the new URL,
  *   or `undefined` if the blob path cannot be extracted.
  */
-async function getNewAzureURL(currentURL) {
+async function getNewAzureURL(currentURL, containerName) {
   try {
-    const blobPath = extractBlobPathFromAzureUrl(currentURL);
+    const container = containerName ?? process.env.AZURE_CONTAINER_NAME ?? 'files';
+    const blobPath = extractBlobPathFromAzureUrl(currentURL, container);
     if (!blobPath) {
       return;
     }
@@ -614,11 +634,11 @@ async function getNewAzureURL(currentURL) {
     }
 
     if (!isPublicAccess()) {
-      return await getSignedAzureURL({ blobPath });
+      return await getSignedAzureURL({ blobPath, containerName: container });
     }
 
     // Return plain URL for public access
-    const containerClient = await getAzureContainerClient();
+    const containerClient = await getAzureContainerClient(container);
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     return blockBlobClient.url;
   } catch (error) {
