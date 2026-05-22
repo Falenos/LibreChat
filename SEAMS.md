@@ -57,6 +57,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/files/files.js` | `refreshAzureFileUrls`, `getFileURLRefreshCacheTime` imports + `fileUrlRefreshBySource` dispatch | 32–36, 41–52, 56–69 | DI dispatch for per-source URL refresh on the `/api/files` list route (S3 + Azure). | Manual (GET /api/files refreshes near-expiry URLs) | KK20-167 |
 | `api/server/controllers/UserController.js` | `needsRefreshAzure`/`getNewAzureURL` import, `avatarNeedsRefreshBySource`/`getNewAvatarUrlBySource` DI maps, refactored avatar refresh body | 23–36, 54–72 | Per-source DI dispatch for user-avatar SAS refresh; generalises upstream's S3-only branch. | Manual (user avatar refreshes after TTL) | KK20-167 |
 | `api/server/controllers/agents/v1.js` | `refreshAzureUrl` import + `urlRefreshersBySource` map | 45–52 | DI map for agent-avatar SAS refresh in `getAgentHandler`; consumed by `refreshListAvatars` and the per-agent refresh path. | Manual (agent avatar refreshes after TTL) | KK20-167 |
+| `api/test/server/services/Files/Azure/crud.test.js` | top-of-file SAS test suite | 1–15 | Net-new Knauf-authored test suite at an upstream-class path (Jest discovery alongside source). 24 cases pinning SAS token contents (sig / sp=r / spr=https), default TTL, extractor on virtual-hosted + path-style URLs, signing-when-private parity, missing/malformed-config fail-loud paths. | Self | KK20-167 |
 <!-- seams:auto:end -->
 
 ## Configuration

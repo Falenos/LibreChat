@@ -1,3 +1,10 @@
+// [knauf] KK20-167 — Tier 5 overlay tests for the SAS-signed Azure Blob
+// implementation in `api/server/services/Files/Azure/crud.js`. Pins SAS token
+// contents (sig / sp=r / spr=https), default TTL, extractor behavior on
+// virtual-hosted and path-style URLs, fail-loud config errors, and the
+// signing-when-private parity in getAzureURL. Lives at an upstream-class path
+// because Jest discovers tests alongside the code they exercise; retire with
+// the overlay if upstream adopts equivalent native behavior.
 const {
   needsRefreshAzure,
   extractBlobPathFromAzureUrl,
@@ -5,6 +12,7 @@ const {
   getSignedAzureURL,
   getAzureURL,
 } = require('../../../../../server/services/Files/Azure/crud');
+// End [knauf]
 
 jest.mock('@librechat/data-schemas', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },

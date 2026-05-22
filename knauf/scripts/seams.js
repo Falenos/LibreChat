@@ -390,7 +390,7 @@ function cmdDiffCheck(flags) {
       console.log(`  ${C.red}✗${C.reset} ${f}`);
       if (process.env.GITHUB_ACTIONS) {
         console.log(
-          `::error file=${f}::modified upstream file has no [knauf] marker. See CUSTOMIZATION_STRATEGY.md.`,
+          `::error file=${f}::modified upstream file has no [knauf] marker. See knauf/docs/reference/code-change-protocol.md.`,
         );
       }
     }
