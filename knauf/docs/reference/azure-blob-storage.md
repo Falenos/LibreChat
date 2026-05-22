@@ -35,18 +35,18 @@ sequenceDiagram
   participant M as MongoDB
 
   U->>K: POST /api/files (multipart upload)
-  K->>SMB: write /app/client/public/images/<uid>/<file>
-  Note over K,SMB: persists across pod restarts<br/>(SMB share survives the pod)
-  K->>M: insert files doc { filepath: "/uploads/<uid>/<file>", source: "local" }
-  K-->>U: 200 { filepath, ... }
+  K->>SMB: write /app/client/public/images/userId/file
+  Note over K,SMB: SMB share persists across pod restarts
+  K->>M: insert files doc — source=local, filepath=/uploads/userId/file
+  K-->>U: 200 with filepath
 
-  Note over U,SMB: ---- Later: client wants to view the file ----
+  Note over U,SMB: Later — client wants to view the file
 
   U->>K: GET /api/files/download/:userId/:file_id
   K->>K: fileAccess middleware (authz)
-  K->>SMB: read /app/client/public/images/<uid>/<file>
+  K->>SMB: read /app/client/public/images/userId/file
   SMB-->>K: binary stream
-  K-->>U: streams the binary back
+  K-->>U: proxies the binary back
 ```
 
 What hurts:
@@ -61,19 +61,19 @@ sequenceDiagram
   autonumber
   participant U as Browser
   participant K as KARL pod
-  participant AZ as Azure Blob (private container)
+  participant AZ as Azure Blob (private)
   participant M as MongoDB
 
   U->>K: POST /api/files (multipart upload)
-  K->>AZ: PUT blob /files/uploads/<uid>/<file>  (auth: shared key / MI)
+  K->>AZ: PUT blob files/uploads/userId/file (auth — shared key or MI)
   K->>K: sign a SAS URL for the blob (5 min TTL)
-  K->>M: insert files doc { filepath: "https://…/blob?sig=…&se=…", source: "azure_blob" }
-  K-->>U: 200 { filepath, ... }
+  K->>M: insert files doc — source=azure_blob, filepath is the signed URL
+  K-->>U: 200 with filepath
 
-  Note over U,AZ: ---- Later: client wants to view the file ----
+  Note over U,AZ: Later — client wants to view the file
 
-  U->>AZ: GET https://…/blob?sig=…&se=…  (direct, no KARL in the path)
-  AZ->>AZ: validate SAS: signature OK? not expired? read-only?
+  U->>AZ: GET the SAS URL directly — KARL is not in the path
+  AZ->>AZ: validate SAS — signature OK, not expired, read-only
   AZ-->>U: binary stream
 ```
 
@@ -124,22 +124,22 @@ sequenceDiagram
   participant AZ as Azure Blob
   participant M as MongoDB
 
-  U->>R: POST /api/files (multipart, file)
-  R->>P: processFileUpload({ req, file, ... })
-  P->>P: getFileStrategy(appConfig) → "azure_blob"
-  P->>S: uploadFileToAzure({ req, file, file_id, basePath })
-  S->>S: streamFileToAzure(filePath, fileName, ...)
-  S->>AZ: containerClient.createIfNotExists({ access: undefined })
-  S->>AZ: blockBlobClient.uploadStream(fileStream)
-  Note right of S: binary lands in Azure;<br/>private container = blob is invisible<br/>without a SAS
-  S->>S: getSignedAzureURL({ blobPath, containerName })
-  S->>AZ: (Managed Identity path only)<br/>getUserDelegationKey(now, now+7d)
+  U->>R: POST /api/files (multipart upload)
+  R->>P: processFileUpload (req, file)
+  P->>P: getFileStrategy returns "azure_blob"
+  P->>S: uploadFileToAzure (req, file, file_id, basePath)
+  S->>S: streamFileToAzure (filePath, fileName)
+  S->>AZ: createIfNotExists — private container
+  S->>AZ: blockBlobClient.uploadStream
+  Note right of S: binary lands in the private container — invisible without a SAS
+  S->>S: getSignedAzureURL (blobPath, containerName)
+  S->>AZ: getUserDelegationKey (Managed Identity path only)
   AZ-->>S: UserDelegationKey
-  S->>S: generateBlobSASQueryParameters(...)<br/>{ permissions: r, protocol: https, st, se }
-  S-->>P: signed URL (https://…?sig=…&se=…)
-  P->>M: db.files.insert({ filepath, source: "azure_blob", ... })
+  S->>S: generateBlobSASQueryParameters — permissions=r, protocol=https, st, se
+  S-->>P: signed URL with sig and se query params
+  P->>M: db.files.insert — filepath is the signed URL
   P-->>R: file record
-  R-->>U: 200 { filepath: signed URL }
+  R-->>U: 200 with signed URL as filepath
 ```
 
 Key steps the diagram glosses over:
@@ -157,18 +157,18 @@ Key steps the diagram glosses over:
 ```mermaid
 sequenceDiagram
   autonumber
-  participant B as <img src="…">
+  participant B as Browser (img src)
   participant AZ as Azure Blob
 
-  B->>AZ: GET https://karlblob.blob.core.windows.net/files/uploads/u/f.pdf?sv=…&se=…&sig=…
+  B->>AZ: GET the SAS URL — host blob.core.windows.net, query has sv, st, se, sp, spr, sig
   AZ->>AZ: parse SAS query
-  AZ->>AZ: check now < se ? (not expired)
-  AZ->>AZ: check protocol matches spr ? (HTTPS only)
+  AZ->>AZ: check now is before se — not expired
+  AZ->>AZ: check protocol matches spr — HTTPS only
   AZ->>AZ: recompute HMAC over canonical string + account key
   AZ->>AZ: compare with sig param
-  alt Signature OK + within TTL
-    AZ-->>B: 200, binary stream
-  else Expired or invalid
+  alt Signature OK and within TTL
+    AZ-->>B: 200 — binary stream
+  else Expired or invalid signature
     AZ-->>B: 403 AuthenticationFailed
   end
 ```
@@ -200,21 +200,21 @@ That's the **refresh chain**.
 
 ```mermaid
 flowchart TD
-  A["GET /api/files<br/>(or similar list endpoint)"] --> B{Cache key:<br/><i>userId:agents_avatar_refresh</i><br/>HIT?}
-  B -- hit --> C["Skip refresh<br/>(cache says 'I did this recently')"]
-  B -- miss --> D[refreshAzureFileUrls / refreshListAvatars]
-  D --> E[for each file in the user's list]
-  E --> F{"needsRefreshAzure(filepath)"}
-  F -- not an Azure URL --> G["Skip<br/>(leave OAuth/legacy URLs alone)"]
-  F -- not signed but<br/>private mode --> H[Need a fresh sig]
-  F -- signed, not<br/>near expiry --> I[Skip — still valid]
-  F -- signed,<br/>near expiry --> H
-  H --> J[getNewAzureURL: extract blob path,<br/>re-sign via getSignedAzureURL]
-  J --> K[batchUpdateFiles<br/>persist new filepath in Mongo]
-  K --> L[Set cache entry<br/>TTL = half the URL TTL]
+  A["GET /api/files (or similar list endpoint)"] --> B{"Cache key userId:agents_avatar_refresh — HIT"}
+  B -- hit --> C["Skip refresh — cache says 'done recently'"]
+  B -- miss --> D["refreshAzureFileUrls / refreshListAvatars"]
+  D --> E["for each file in the user's list"]
+  E --> F{"needsRefreshAzure on the filepath"}
+  F -- "not an Azure URL" --> G["Skip — leave OAuth or legacy URLs alone"]
+  F -- "not signed but private mode" --> H["Needs a fresh sig"]
+  F -- "signed, not near expiry" --> I["Skip — still valid"]
+  F -- "signed, near expiry" --> H
+  H --> J["getNewAzureURL — extract blob path, re-sign via getSignedAzureURL"]
+  J --> K["batchUpdateFiles — persist new filepath in Mongo"]
+  K --> L["Set cache entry — TTL = half the URL TTL"]
   G --> L
   I --> L
-  L --> M[Return files to client<br/>with fresh signed URLs]
+  L --> M["Return files to client with fresh signed URLs"]
 ```
 
 Three knobs hold this together:
@@ -266,22 +266,22 @@ This is what `getFileURLRefreshCacheTime(strategy)` does — pick the cache TTL 
 
 ```mermaid
 flowchart LR
-  A[getSignedAzureURL] --> B{which env var<br/>is set?}
-  B -- AZURE_STORAGE_CONNECTION_STRING --> C[parse conn string]
-  C --> D[StorageSharedKeyCredential<br/>account name + account key]
-  D --> E[generateBlobSASQueryParameters<br/>signed with shared key]
-  E --> Z[return SAS URL]
+  A["getSignedAzureURL"] --> B{"Which env var is set"}
+  B -- "AZURE_STORAGE_CONNECTION_STRING" --> C["Parse connection string"]
+  C --> D["StorageSharedKeyCredential — account name + account key"]
+  D --> E["generateBlobSASQueryParameters — signed with shared key"]
+  E --> Z["Return SAS URL"]
 
-  B -- AZURE_STORAGE_ACCOUNT_NAME --> F[getManagedIdentityBlobServiceClient<br/>singleton, keyed on account name]
-  F --> G{NODE_ENV?}
-  G -- production --> H[new ManagedIdentityCredential]
-  G -- not production --> I[new DefaultAzureCredential<br/>chain: env → MI → CLI → IDE]
-  H --> J[getUserDelegationKey<br/>cached promise, ~7-day TTL]
+  B -- "AZURE_STORAGE_ACCOUNT_NAME" --> F["getManagedIdentityBlobServiceClient — singleton, keyed on account name"]
+  F --> G{"NODE_ENV"}
+  G -- "production" --> H["new ManagedIdentityCredential"]
+  G -- "anything else" --> I["new DefaultAzureCredential — chain env → MI → CLI → IDE"]
+  H --> J["getUserDelegationKey — cached promise, ~7-day TTL"]
   I --> J
-  J --> K[generateBlobSASQueryParameters<br/>signed with delegation key]
+  J --> K["generateBlobSASQueryParameters — signed with delegation key"]
   K --> Z
 
-  B -- neither --> X[throw: Azure storage not configured]
+  B -- "neither" --> X["throw — Azure storage not configured"]
 ```
 
 Why two modes:
@@ -301,27 +301,27 @@ Once you understand the flows, this diagram says it all:
 
 ```mermaid
 flowchart TB
-  subgraph "Layer 1 — Storage account (Azure-side)"
-    A1["Container = Private<br/>(no anonymous access)"]
-    A2["Account key access<br/>→ MI in prod"]
+  subgraph L1["Layer 1 — Storage account (Azure-side)"]
+    A1["Container is Private — no anonymous access"]
+    A2["Account-key access today, Managed Identity in prod"]
   end
 
-  subgraph "Layer 2 — SAS token (per-blob, per-request)"
-    B1["sp=r (read only)"]
-    B2["spr=https (HTTPS only)"]
-    B3["se = st + 300s (5 min TTL)"]
-    B4["sr=b (single blob)"]
-    B5["sig = HMAC(canonical string, key)<br/>→ tamper-evident"]
+  subgraph L2["Layer 2 — SAS token (per-blob, per-request)"]
+    B1["sp=r — read only"]
+    B2["spr=https — HTTPS only"]
+    B3["se = st + 300s — 5 min TTL"]
+    B4["sr=b — single blob, not container"]
+    B5["sig = HMAC over canonical string + key — tamper-evident"]
   end
 
-  subgraph "Layer 3 — Backend authz (application-side)"
-    C1["fileAccess middleware<br/>verifies file.user === req.user.id"]
-    C2["SAS only signed for blobs<br/>the requester owns"]
-    C3["Okta/OpenID identifies req.user.id"]
+  subgraph L3["Layer 3 — Backend authz (application-side)"]
+    C1["fileAccess middleware — file.user matches req.user.id"]
+    C2["SAS only signed for blobs the requester owns"]
+    C3["Okta or OpenID identifies req.user.id"]
   end
 
-  A1 --> B1
-  B5 --> C1
+  L1 --> L2
+  L2 --> L3
 ```
 
 **The blob path's userId (`files/uploads/<userId>/...`) is a naming convention, not Azure-enforced.** Per-user isolation lives at Layer 3 — if the backend correctly signs only blobs the requesting user owns, and SAS TTL is short enough to bound leak damage, this is the same pattern Slack/GitHub/etc. use for hosted assets. If KARL's `fileAccess` middleware is bypassed (it shouldn't be), Azure can't catch it.
