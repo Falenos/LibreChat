@@ -42,6 +42,14 @@ const { filterFile } = require('~/server/services/Files/process');
 const { getCachedTools } = require('~/server/services/Config');
 const { resolveConfigServers } = require('~/server/services/MCP');
 const { getMCPServersRegistry } = require('~/config');
+// [knauf] KK20-167 — Azure-backed agent-avatar URL refresh, dispatched by
+// source via urlRefreshersBySource (used in getAgentHandler).
+const { refreshAzureUrl } = require('~/server/services/Files/Azure/crud');
+const urlRefreshersBySource = {
+  [FileSources.s3]: refreshS3Url,
+  [FileSources.azure_blob]: refreshAzureUrl,
+};
+// End [knauf]
 const { getLogStores } = require('~/cache');
 const db = require('~/models');
 
@@ -283,14 +291,13 @@ const getAgentHandler = async (req, res, expandProperties = false) => {
 
     agent.version = agent.versions ? agent.versions.length : 0;
 
-    if (agent.avatar && agent.avatar?.source === FileSources.s3) {
+    const refreshFn = agent.avatar && urlRefreshersBySource[agent.avatar.source];
+    if (refreshFn) {
       try {
-        agent.avatar = {
-          ...agent.avatar,
-          filepath: await refreshS3Url(agent.avatar),
-        };
+        const newPath = await refreshFn(agent.avatar);
+        agent.avatar = { ...agent.avatar, filepath: newPath };
       } catch (e) {
-        logger.warn('[/Agents/:id] Failed to refresh S3 URL', e);
+        logger.warn('[/Agents/:id] Failed to refresh signed URL', e);
       }
     }
 
@@ -744,6 +751,7 @@ const getListAgentsHandler = async (req, res) => {
           agents: fullList?.data ?? [],
           userId,
           refreshS3Url,
+          refreshAzureUrl,
           updateAgent: db.updateAgent,
         });
         cachedRefresh = { urlCache };
@@ -752,7 +760,7 @@ const getListAgentsHandler = async (req, res) => {
         logger.error('[/Agents] Error refreshing avatars for full list: %o', err);
       }
     } else {
-      logger.debug('[/Agents] S3 avatar refresh already checked, skipping');
+      logger.debug('[/Agents] Avatar refresh already checked, skipping');
     }
 
     // Use the new ACL-aware function
@@ -776,12 +784,7 @@ const getListAgentsHandler = async (req, res) => {
         if (agent?._id && publicSet.has(agent._id.toString())) {
           agent.isPublic = true;
         }
-        if (
-          urlCache &&
-          agent?.id &&
-          agent?.avatar?.source === FileSources.s3 &&
-          urlCache[agent.id]
-        ) {
+        if (urlCache && agent?.id && agent?.avatar && urlCache[agent.id]) {
           agent.avatar = { ...agent.avatar, filepath: urlCache[agent.id] };
         }
       } catch (e) {

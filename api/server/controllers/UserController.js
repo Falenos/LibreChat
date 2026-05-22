@@ -20,6 +20,20 @@ const { verifyOTPOrBackupCode } = require('~/server/services/twoFactorService');
 const { verifyEmail, resendVerificationEmail } = require('~/server/services/AuthService');
 const { getMCPManager, getFlowStateManager, getMCPServersRegistry } = require('~/config');
 const { invalidateCachedTools } = require('~/server/services/Config/getCachedTools');
+// [knauf] KK20-167 — Azure URL refresh helpers + DI dispatch by file strategy.
+// `needsRefresh` and `getNewS3URL` are already imported from `@librechat/api`
+// at the top of this file; the maps below wire both providers symmetrically.
+const { needsRefreshAzure, getNewAzureURL } = require('~/server/services/Files/Azure/crud');
+
+const avatarNeedsRefreshBySource = {
+  [FileSources.s3]: (url) => needsRefresh(url, 3600),
+  [FileSources.azure_blob]: (url) => needsRefreshAzure(url, 3600),
+};
+const getNewAvatarUrlBySource = {
+  [FileSources.s3]: getNewS3URL,
+  [FileSources.azure_blob]: getNewAzureURL,
+};
+// End [knauf]
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getAppConfig } = require('~/server/services/Config');
 const { getLogStores } = require('~/cache');
@@ -36,20 +50,27 @@ const getUserController = async (req, res) => {
   delete userData.password;
   delete userData.totpSecret;
   delete userData.backupCodes;
-  if (appConfig.fileStrategy === FileSources.s3 && userData.avatar) {
-    const avatarNeedsRefresh = needsRefresh(userData.avatar, 3600);
-    if (!avatarNeedsRefresh) {
+
+  // [knauf] KK20-167 — DI-dispatched signed-URL avatar refresh (S3 + Azure).
+  // Replaces the upstream-only `if (fileStrategy === FileSources.s3)` branch.
+  const strategy = appConfig.fileStrategy;
+  const checkNeedsRefresh = avatarNeedsRefreshBySource[strategy];
+  const getNewAvatarUrl = getNewAvatarUrlBySource[strategy];
+  if (checkNeedsRefresh && getNewAvatarUrl && userData.avatar) {
+    if (!checkNeedsRefresh(userData.avatar)) {
       return res.status(200).send(userData);
     }
     const originalAvatar = userData.avatar;
     try {
-      userData.avatar = await getNewS3URL(userData.avatar);
+      userData.avatar = await getNewAvatarUrl(userData.avatar);
       await db.updateUser(userData.id, { avatar: userData.avatar });
     } catch (error) {
       userData.avatar = originalAvatar;
-      logger.error('Error getting new S3 URL for avatar:', error);
+      logger.error(`Error refreshing ${strategy} avatar URL:`, error);
     }
   }
+  // End [knauf]
+
   res.status(200).send(userData);
 };
 

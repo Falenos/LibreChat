@@ -122,15 +122,17 @@ async function processAzureAvatar({
       basePath,
       containerName,
     });
-    const isManual = manual === 'true';
-    const url = `${downloadURL}?manual=${isManual}`;
 
-    // Only update user record if this is a user avatar (manual === 'true')
+    // [knauf] KK20-167 — saveBufferToAzure now returns a signed SAS URL.
+    // Dropping the `?manual=…` cache-buster the upstream path appended; the
+    // SAS query string itself (sig/se/st) already makes each refresh unique.
+    const isManual = manual === 'true';
     if (isManual && !agentId) {
-      await updateUser(userId, { avatar: url });
+      await updateUser(userId, { avatar: downloadURL });
     }
 
-    return url;
+    return downloadURL;
+    // End [knauf]
   } catch (error) {
     logger.error('[processAzureAvatar] Error uploading profile picture to Azure:', error);
     throw error;
