@@ -514,9 +514,44 @@ async function getAzureFileStream(_req, fileURL) {
  *   should be considered in need of refresh.
  * @returns {boolean} `true` if the URL should be refreshed, `false` if it is still valid.
  */
+/**
+ * Lightweight structural check for whether a URL belongs to Azure Blob Storage.
+ *
+ * Catches the standard public-cloud, sovereign-cloud, and Azurite emulator
+ * hostnames without trying to match against the configured account name (which
+ * would require runtime env reads at every call). False negatives are safe —
+ * worst case we skip a refresh that should have fired. False positives are
+ * costly — we'd attempt to re-sign a URL that isn't ours and either persist
+ * `undefined` or rewrite an unrelated URL into our container's namespace.
+ *
+ * @param {URL} parsedUrl - A pre-parsed URL instance.
+ * @returns {boolean}
+ */
+function isAzureBlobUrl(parsedUrl) {
+  const h = parsedUrl.hostname;
+  // Standard + sovereign-cloud Azure: <account>.blob.core.windows.net,
+  // *.blob.core.usgovcloudapi.net, *.blob.core.chinacloudapi.cn, etc.
+  // Also modern: *.blob.storage.azure.net.
+  if (h.includes('.blob.')) {
+    return true;
+  }
+  // Azurite emulator default endpoint
+  if ((h === '127.0.0.1' || h === 'localhost') && parsedUrl.port === '10000') {
+    return true;
+  }
+  return false;
+}
+
 function needsRefreshAzure(signedUrl, bufferSeconds) {
   try {
     const url = new URL(signedUrl);
+    // Not an Azure Blob URL — leave it alone. User avatars are plain strings
+    // with no source metadata, so a Google/OAuth provider URL or a legacy
+    // `/uploads/` path can end up here. Mirrors S3's `X-Amz-Signature` check:
+    // refresh only URLs we own.
+    if (!isAzureBlobUrl(url)) {
+      return false;
+    }
     // Use `sig` (the cryptographic SAS signature) — not `se` (just the expiry
     // timestamp) — as the SAS-token presence check. A hand-crafted URL could
     // include `se` without a signature; only `sig` proves the URL was signed.
@@ -751,5 +786,6 @@ module.exports = {
   refreshAzureUrl,
   getNewAzureURL,
   extractBlobPathFromAzureUrl,
+  isAzureBlobUrl,
   // End [knauf]
 };

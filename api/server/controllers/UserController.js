@@ -53,6 +53,11 @@ const getUserController = async (req, res) => {
 
   // [knauf] KK20-167 — DI-dispatched signed-URL avatar refresh (S3 + Azure).
   // Replaces the upstream-only `if (fileStrategy === FileSources.s3)` branch.
+  // User avatars are plain strings with no `source` field, so `getNewAvatarUrl`
+  // can return `undefined` when the avatar URL isn't actually in the configured
+  // storage backend (OAuth provider avatars, legacy /uploads/ paths, S3 URLs
+  // after migrating to Azure, etc.). Guard the persist so we never overwrite a
+  // working avatar with `undefined`.
   const strategy = appConfig.fileStrategy;
   const checkNeedsRefresh = avatarNeedsRefreshBySource[strategy];
   const getNewAvatarUrl = getNewAvatarUrlBySource[strategy];
@@ -62,7 +67,13 @@ const getUserController = async (req, res) => {
     }
     const originalAvatar = userData.avatar;
     try {
-      userData.avatar = await getNewAvatarUrl(userData.avatar);
+      const refreshed = await getNewAvatarUrl(userData.avatar);
+      if (!refreshed) {
+        // Not a refreshable URL for this provider (or refresh helper rejected
+        // the input). Keep the existing avatar — do not persist `undefined`.
+        return res.status(200).send(userData);
+      }
+      userData.avatar = refreshed;
       await db.updateUser(userData.id, { avatar: userData.avatar });
     } catch (error) {
       userData.avatar = originalAvatar;
