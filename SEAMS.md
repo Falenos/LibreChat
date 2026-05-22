@@ -58,6 +58,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/UserController.js` | `needsRefreshAzure`/`getNewAzureURL` import, `avatarNeedsRefreshBySource`/`getNewAvatarUrlBySource` DI maps, refactored avatar refresh body | 23–36, 54–72 | Per-source DI dispatch for user-avatar SAS refresh; generalises upstream's S3-only branch. | Manual (user avatar refreshes after TTL) | KK20-167 |
 | `api/server/controllers/agents/v1.js` | `refreshAzureUrl` import + `urlRefreshersBySource` map | 45–52 | DI map for agent-avatar SAS refresh in `getAgentHandler`; consumed by `refreshListAvatars` and the per-agent refresh path. | Manual (agent avatar refreshes after TTL) | KK20-167 |
 | `api/test/server/services/Files/Azure/crud.test.js` | top-of-file SAS test suite | 1–15 | Net-new Knauf-authored test suite at an upstream-class path (Jest discovery alongside source). 24 cases pinning SAS token contents (sig / sp=r / spr=https), default TTL, extractor on virtual-hosted + path-style URLs, signing-when-private parity, missing/malformed-config fail-loud paths. | Self | KK20-167 |
+| `packages/data-schemas/src/methods/file.ts` | `batchUpdateFiles` log message | 326–331 | Replace the hardcoded "Updated N files with new S3 URLs" log with strategy-neutral wording — the function now serves the Azure refresh chain too. | Self (text-only) | KK20-167 |
 <!-- seams:auto:end -->
 
 ## Configuration

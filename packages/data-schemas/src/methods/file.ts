@@ -324,7 +324,12 @@ export function createFileMethods(mongoose: typeof import('mongoose')) {
     }));
 
     const result = await tenantSafeBulkWrite(File, bulkOperations);
-    logger.info(`Updated ${result.modifiedCount} files with new S3 URLs`);
+    // [knauf] KK20-167 — log text was hardcoded "S3 URLs" back when only the
+    // S3 refresh chain called this. It now also serves the Azure refresh
+    // chain (`refreshAzureFileUrls`), so the message was misleading on the
+    // Azure path. Strategy-neutral wording. Tiny upstream-aligned fix.
+    logger.info(`Updated ${result.modifiedCount} files with refreshed signed URLs`);
+    // End [knauf]
   }
 
   /**
