@@ -68,9 +68,16 @@ function ToolSelectDialog({
 
   const handleInstall = (pluginAction: TPluginAction) => {
     const addFunction = () => {
-      const installedToolIds: string[] = getValues('tools') || [];
-      installedToolIds.push(pluginAction.pluginKey);
-      setValue('tools', Array.from(new Set(installedToolIds)));
+      // [knauf] KK20-128 follow-up. Upstream mutated the live array returned
+      // by getValues('tools') via `.push(...)` before calling setValue. That
+      // mutation pre-poisoned RHF's internal value so the form-state subject
+      // sometimes failed to notify `useWatch` subscribers — newly-added tools
+      // wouldn't render in the simplified Knauf builder until a Save or a
+      // remount. We now build a fresh array from a copy and pass shouldDirty
+      // + shouldTouch so subscribers are unconditionally notified.
+      const existing = getValues('tools') ?? [];
+      const next = Array.from(new Set([...existing, pluginAction.pluginKey]));
+      setValue('tools', next, { shouldDirty: true, shouldTouch: true });
     };
 
     if (!pluginAction.auth) {
@@ -93,8 +100,9 @@ function ToolSelectDialog({
       {
         onError: (error: unknown) => handleInstallError(error as TError),
         onSuccess: () => {
-          const remainingToolIds = getValues('tools')?.filter((id) => id !== toolId) || [];
-          setValue('tools', remainingToolIds);
+          // [knauf] Same RHF notification reasoning as handleInstall above.
+          const remainingToolIds = (getValues('tools') ?? []).filter((id) => id !== toolId);
+          setValue('tools', remainingToolIds, { shouldDirty: true, shouldTouch: true });
         },
       },
     );
