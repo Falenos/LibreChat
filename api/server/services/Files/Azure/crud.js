@@ -101,10 +101,15 @@ function getManagedIdentityBlobServiceClient(accountName) {
     process.env.NODE_ENV === 'production'
       ? new ManagedIdentityCredential()
       : new DefaultAzureCredential();
-  _miBlobServiceClient = new BlobServiceClient(
-    `https://${accountName}.blob.core.windows.net`,
-    credential,
-  );
+  // [knauf] KK20-167 — Default to the public-cloud blob endpoint, but honour
+  // an explicit AZURE_STORAGE_BLOB_ENDPOINT override so sovereign clouds
+  // (Azure Gov, Azure China) and custom-domain deployments work too. The
+  // hardcoded `core.windows.net` suffix would otherwise break MI signing in
+  // those environments.
+  const endpoint =
+    process.env.AZURE_STORAGE_BLOB_ENDPOINT || `https://${accountName}.blob.core.windows.net`;
+  _miBlobServiceClient = new BlobServiceClient(endpoint, credential);
+  // End [knauf]
   _miAccountName = accountName;
   // Invalidate the delegation-key cache when the storage account changes so we
   // don't sign blobs in account A with a key minted for account B.
@@ -539,6 +544,21 @@ function isAzureBlobUrl(parsedUrl) {
   if ((h === '127.0.0.1' || h === 'localhost') && parsedUrl.port === '10000') {
     return true;
   }
+  // [knauf] KK20-167 — Custom blob endpoint (Azure Blob behind a CNAME,
+  // sovereign cloud with a non-default suffix, etc.) configured via
+  // AZURE_STORAGE_BLOB_ENDPOINT. Read at call time so a runtime config flip
+  // is picked up. Without this, URLs from such deployments never refresh.
+  const customEndpoint = process.env.AZURE_STORAGE_BLOB_ENDPOINT;
+  if (customEndpoint) {
+    try {
+      if (new URL(customEndpoint).hostname === h) {
+        return true;
+      }
+    } catch {
+      // Malformed env value — ignore. Signing path surfaces it loudly if used.
+    }
+  }
+  // End [knauf]
   return false;
 }
 

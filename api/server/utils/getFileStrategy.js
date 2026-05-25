@@ -57,8 +57,12 @@ function getFileStrategy(appConfig, { isAvatar = false, isImage = false, context
 
 // [knauf] KK20-167 — Shared half-TTL refresh-cache helper. Selects the
 // refresh-cache duration based on the configured file strategy's URL TTL,
-// floored at one minute. Used by /api/files to decide whether to re-sign
-// stored URLs that are about to expire.
+// floored at one minute, and clamped to the 7-day maximum both signers
+// enforce. Without the clamp, an oversized *_URL_EXPIRY_SECONDS env value
+// would make the refresh-cache outlive the actual signed URL — `/files`
+// and `/Agents` would skip refresh and serve expired URLs for the cache
+// window. Used by /api/files to decide whether to re-sign stored URLs.
+const MAX_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 /**
  * Calculates the cache duration for signed file URL refresh checks.
  * Uses half the URL expiry time to ensure URLs are refreshed before they expire,
@@ -69,12 +73,14 @@ function getFileStrategy(appConfig, { isAvatar = false, isImage = false, context
  */
 function getFileURLRefreshCacheTime(fileStrategy) {
   if (fileStrategy === FileSources.s3) {
-    const expirySeconds = parseInt(process.env.S3_URL_EXPIRY_SECONDS, 10) || 120;
+    const raw = parseInt(process.env.S3_URL_EXPIRY_SECONDS, 10) || 120;
+    const expirySeconds = Math.min(raw, MAX_SIGNED_URL_TTL_SECONDS);
     // Check for refresh at half the URL expiry time: (expirySeconds * 1000ms) / 2 => expirySeconds * 500
     return Math.max(expirySeconds * 500, Time.ONE_MINUTE);
   }
   if (fileStrategy === FileSources.azure_blob) {
-    const expirySeconds = parseInt(process.env.AZURE_URL_EXPIRY_SECONDS, 10) || 300;
+    const raw = parseInt(process.env.AZURE_URL_EXPIRY_SECONDS, 10) || 300;
+    const expirySeconds = Math.min(raw, MAX_SIGNED_URL_TTL_SECONDS);
     // Check for refresh at half the URL expiry time: (expirySeconds * 1000ms) / 2 => expirySeconds * 500
     return Math.max(expirySeconds * 500, Time.ONE_MINUTE);
   }

@@ -124,14 +124,32 @@ async function processAzureAvatar({
     });
 
     // [knauf] KK20-167 — saveBufferToAzure now returns a signed SAS URL.
-    // Dropping the `?manual=…` cache-buster the upstream path appended; the
-    // SAS query string itself (sig/se/st) already makes each refresh unique.
+    // The `manual=true` marker is *not* a cache-buster — it's a semantic flag
+    // that downstream social-login strategies (samlStrategy / OpenID / OAuth)
+    // check via `user.avatar?.includes('manual=true')` to skip overwriting
+    // manually-uploaded avatars on profile-sync flows. Preserve it on top of
+    // the SAS query string using the URL API.
     const isManual = manual === 'true';
+    const finalURL = (() => {
+      if (!isManual) {
+        return downloadURL;
+      }
+      try {
+        const u = new URL(downloadURL);
+        u.searchParams.set('manual', 'true');
+        return u.toString();
+      } catch {
+        return downloadURL.includes('?')
+          ? `${downloadURL}&manual=true`
+          : `${downloadURL}?manual=true`;
+      }
+    })();
+
     if (isManual && !agentId) {
-      await updateUser(userId, { avatar: downloadURL });
+      await updateUser(userId, { avatar: finalURL });
     }
 
-    return downloadURL;
+    return finalURL;
     // End [knauf]
   } catch (error) {
     logger.error('[processAzureAvatar] Error uploading profile picture to Azure:', error);
