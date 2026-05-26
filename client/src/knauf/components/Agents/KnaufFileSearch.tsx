@@ -2,7 +2,7 @@
  * [knauf] fork of upstream
  * client/src/components/SidePanel/Agents/FileSearch.tsx.
  *
- * Three intentional changes vs upstream:
+ * Four intentional changes vs upstream:
  *   1. Inner "<label>" heading reading com_assistants_file_search — dropped;
  *      the enclosing KnaufSection already provides the section title.
  *   2. <FileSearchCheckbox /> — dropped; KnaufAgentConfig drives the
@@ -11,6 +11,10 @@
  *      on isEphemeralAgent. Upstream gates on both, but the Knauf builder
  *      derives file_search from file presence, so requiring it for the
  *      first upload would be a chicken-and-egg lock.
+ *   4. Upload is allowed on unsaved (ephemeral) agents. Each upload entry
+ *      awaits useEnsureAgentSaved() first, which transparently creates the
+ *      agent using whatever the user has typed into the form, then opens
+ *      the picker with the real agent_id. KK20-123.
  *
  * Everything else (file row, SharePoint dropdown, endpointFileConfig.disabled
  * early-return) is preserved verbatim. When upstream FileSearch.tsx changes,
@@ -28,7 +32,7 @@ import { useAgentFileConfig, useLocalize, useLazyEffect } from '~/hooks';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import { useGetStartupConfig } from '~/data-provider';
-import { isEphemeralAgent } from '~/common';
+import { useEnsureAgentSaved } from './useEnsureAgentSaved';
 
 const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
   <div className="flex flex-wrap gap-2">{children}</div>
@@ -86,7 +90,8 @@ function KnaufFileSearch({
   const isUploadDisabled = endpointFileConfig?.disabled ?? false;
 
   const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
-  const disabledUploadButton = isEphemeralAgent(agent_id);
+  const { ensureAgentSaved, isSaving } = useEnsureAgentSaved();
+  const disabledUploadButton = isSaving;
 
   const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
     try {
@@ -100,11 +105,25 @@ function KnaufFileSearch({
     return null;
   }
 
-  const handleButtonClick = () => {
+  const handleButtonClick = async () => {
+    const id = await ensureAgentSaved();
+    if (!id) {
+      return;
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    fileInputRef.current?.click();
+    // rAF defers the picker open until React has committed the new
+    // agent_id prop, so handleFileChange's closure sees the real id.
+    requestAnimationFrame(() => fileInputRef.current?.click());
+  };
+
+  const handleSharePointDropdownClick = async () => {
+    const id = await ensureAgentSaved();
+    if (!id) {
+      return;
+    }
+    setIsSharePointDialogOpen(true);
   };
 
   const dropdownItems = [
@@ -115,7 +134,7 @@ function KnaufFileSearch({
     },
     {
       label: localize('com_files_upload_sharepoint'),
-      onClick: () => setIsSharePointDialogOpen(true),
+      onClick: handleSharePointDropdownClick,
       icon: <SharePointIcon className="icon-md" />,
     },
   ];
@@ -177,11 +196,6 @@ function KnaufFileSearch({
             onChange={handleFileChange}
           />
         </div>
-        {agent_id ? null : (
-          <div className="text-xs text-text-secondary">
-            {localize('com_agents_file_search_disabled')}
-          </div>
-        )}
       </div>
 
       <SharePointPickerDialog
