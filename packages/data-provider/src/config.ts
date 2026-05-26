@@ -1572,6 +1572,12 @@ export enum CacheKeys {
    * Key for s3 check intervals per user
    */
   S3_EXPIRY_INTERVAL = 'S3_EXPIRY_INTERVAL',
+  // [knauf] KK20-167 — paired with api/cache/getLogStores.js for Azure URL refresh.
+  /**
+   * Key for Azure Blob check intervals per user
+   */
+  AZURE_EXPIRY_INTERVAL = 'AZURE_EXPIRY_INTERVAL',
+  // End [knauf]
   /**
    * key for open id exchanged tokens
    */

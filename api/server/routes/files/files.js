@@ -8,7 +8,6 @@ const {
   verifyAgentUploadPermission,
 } = require('@librechat/api');
 const {
-  Time,
   isUUID,
   CacheKeys,
   FileSources,
@@ -30,6 +29,11 @@ const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { checkPermission } = require('~/server/services/PermissionService');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
+// [knauf] KK20-167 — SAS-signed Azure Blob refresh chain and the shared
+// half-TTL refresh-cache helper. Pairs with fileUrlRefreshBySource below.
+const { refreshAzureFileUrls } = require('~/server/services/Files/Azure/crud');
+const { getFileURLRefreshCacheTime } = require('~/server/utils/getFileStrategy');
+// End [knauf]
 const { hasAccessToFilesViaAgent } = require('~/server/services/Files');
 const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
@@ -38,20 +42,41 @@ const db = require('~/models');
 
 const router = express.Router();
 
+/**
+ * Dispatch table for refreshing signed file URLs by storage source.
+ * Adding a new provider only requires another entry here.
+ */
+const fileUrlRefreshBySource = {
+  [FileSources.s3]: {
+    cacheKey: CacheKeys.S3_EXPIRY_INTERVAL,
+    refreshFiles: refreshS3FileUrls,
+  },
+  [FileSources.azure_blob]: {
+    cacheKey: CacheKeys.AZURE_EXPIRY_INTERVAL,
+    refreshFiles: refreshAzureFileUrls,
+  },
+};
+
 router.get('/', async (req, res) => {
   try {
     const appConfig = req.config;
     const files = await db.getFiles({ user: req.user.id });
-    if (appConfig.fileStrategy === FileSources.s3) {
+    const refresher = fileUrlRefreshBySource[appConfig.fileStrategy];
+    if (refresher) {
       try {
-        const cache = getLogStores(CacheKeys.S3_EXPIRY_INTERVAL);
+        const cache = getLogStores(refresher.cacheKey);
         const alreadyChecked = await cache.get(req.user.id);
         if (!alreadyChecked) {
-          await refreshS3FileUrls(files, db.batchUpdateFiles);
-          await cache.set(req.user.id, true, Time.THIRTY_MINUTES);
+          await refresher.refreshFiles(files, db.batchUpdateFiles);
+          const cacheTime = getFileURLRefreshCacheTime(appConfig.fileStrategy);
+          await cache.set(req.user.id, true, cacheTime);
         }
       } catch (error) {
-        logger.warn('[/files] Error refreshing S3 file URLs:', error);
+        logger.warn(
+          '[/files] Error refreshing file URLs for strategy:',
+          appConfig.fileStrategy,
+          error,
+        );
       }
     }
     res.status(200).send(files);
