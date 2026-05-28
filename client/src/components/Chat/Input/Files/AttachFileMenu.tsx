@@ -161,7 +161,11 @@ const AttachFileMenu = ({
         isAzureWithResponsesApi
       ) {
         items.push({
-          label: localize('com_ui_upload_provider'),
+          // [knauf] Use the generic "Upload files" label instead of upstream's
+          // "Upload to Provider" — Knauf users don't think in
+          // provider/endpoint terms, and the item already accepts images +
+          // PDFs / docs (handled by the FileUploadType chosen below).
+          label: localize('com_ui_upload_files'),
           onClick: () => {
             setToolResource(undefined);
             let fileType: Exclude<FileUploadType, 'image' | 'document'> = 'image_document';
@@ -199,7 +203,19 @@ const AttachFileMenu = ({
         });
       }
 
-      if (capabilities.fileSearchEnabled && fileSearchAllowedByAgent) {
+      // [knauf] Hide the "Upload for File Search" item from the chat paperclip
+      // menu. File-search uploads are still supported, but only through the
+      // agent builder's Data Knowledge panel (KnaufFileSearch) — adding files
+      // from chat would create an ad-hoc RAG corpus tied to the conversation,
+      // which conflicts with the Knauf model where knowledge is curated per
+      // agent. The upstream gate is preserved below for reference / easy
+      // un-hiding; flip KNAUF_SHOW_FILE_SEARCH_IN_CHAT to true to restore.
+      const KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false;
+      if (
+        KNAUF_SHOW_FILE_SEARCH_IN_CHAT &&
+        capabilities.fileSearchEnabled &&
+        fileSearchAllowedByAgent
+      ) {
         items.push({
           label: localize('com_ui_upload_file_search'),
           onClick: () => {

@@ -42,9 +42,7 @@ export interface KnaufCapability {
    * that are model-level (not gated by `endpoints.agents.capabilities`)
    * return true unconditionally.
    */
-  isEnabled: (
-    enabled: ReadonlyArray<AgentCapabilitiesEnum | string>,
-  ) => boolean;
+  isEnabled: (enabled: ReadonlyArray<AgentCapabilitiesEnum | string>) => boolean;
   /** Read whether this capability is on, given the form's current values. */
   readFromForm: (helpers: FormHelpers) => boolean;
   /** Toggle this capability — write the necessary form fields. */
@@ -64,16 +62,12 @@ const browseInternet: KnaufCapability = {
   description: 'Search the web and read pages for fresh information.',
   icon: Globe,
   isEnabled: () => true,
-  readFromForm: ({ getValues }) =>
-    !!getValues(AgentCapabilities.web_search as keyof AgentForm),
+  readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.web_search as keyof AgentForm),
   applyToForm: (next, { getValues, setValue }) => {
     setValue(AgentCapabilities.web_search as keyof AgentForm, next as never, {
       shouldDirty: true,
     });
-    const params = (getValues('model_parameters') ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const params = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
     if (next) {
       setValue(
         'model_parameters',
@@ -87,12 +81,17 @@ const browseInternet: KnaufCapability = {
     } else {
       const cleaned = { ...params };
       delete cleaned.web_search;
-      delete cleaned.useResponsesApi;
-      setValue(
-        'model_parameters',
-        cleaned as unknown as AgentForm['model_parameters'],
-        { shouldDirty: true },
-      );
+      // Intentionally do NOT strip `useResponsesApi` here. It's the platform
+      // default for Knauf agents (baked into each `karl-personality-*`
+      // preset in librechat.yaml) because Azure OpenAI requires Responses
+      // API to accept direct PDF/text upload — see the
+      // `documentSupportedProviders` allow-list in
+      // packages/data-provider/src/schemas.ts and the gate at
+      // AttachFileMenu.tsx:158. Stripping it on web_search toggle-off would
+      // silently downgrade the chat paperclip menu to "Upload Image" only.
+      setValue('model_parameters', cleaned as unknown as AgentForm['model_parameters'], {
+        shouldDirty: true,
+      });
     }
   },
 };
@@ -117,6 +116,4 @@ const browseInternet: KnaufCapability = {
  *       setValue(AgentCapabilities.execute_code, next),
  *   };
  */
-export const KNAUF_CAPABILITIES: ReadonlyArray<KnaufCapability> = [
-  browseInternet,
-];
+export const KNAUF_CAPABILITIES: ReadonlyArray<KnaufCapability> = [browseInternet];

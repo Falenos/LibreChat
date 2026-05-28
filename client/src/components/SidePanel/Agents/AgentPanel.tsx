@@ -34,6 +34,10 @@ import { Panel, isEphemeralAgent } from '~/common';
 // (everyone else, and admins toggled to simplified). KK20-125 / FEAT-03.
 import AgentConfig from '~/knauf/components/Agents/AgentConfigSwitch';
 // End [knauf]
+// [knauf] KK20-123 — pending-files drain hook. See the create.onSuccess
+// wrap below for the upload-then-transition gate.
+import { useDrainPendingKnaufFiles } from '~/knauf/data-provider/Agents/useDrainPendingKnaufFiles';
+// End [knauf]
 import AgentSelect from './AgentSelect';
 import AgentFooter from './AgentFooter';
 import ModelPanel from './ModelPanel';
@@ -326,6 +330,12 @@ export default function AgentPanel() {
     [endpointsConfig, allowedProviders],
   );
 
+  // [knauf] KK20-123 — drain handle for queued knowledge files; awaited
+  // inside `create.onSuccess` below so the panel only transitions from
+  // Create to Edit AFTER uploads have settled (success or failure).
+  const drainPendingKnaufFiles = useDrainPendingKnaufFiles();
+  // End [knauf]
+
   /* Mutations */
   const update = useUpdateAgentMutation({
     onMutate: () => {
@@ -383,6 +393,19 @@ export default function AgentPanel() {
 
   const create = useCreateAgentMutation({
     onSuccess: async (data) => {
+      // [knauf] KK20-123 — wait for queued knowledge-file uploads to
+      // settle BEFORE flipping `current_agent_id`. The transition from
+      // Create to Edit mode is driven by `setCurrentAgentId` firing
+      // (the AgentConfig subtree unmounts via the
+      // `!agentQuery.isInitialLoading` guard at ~line 550, then remounts
+      // in Edit mode); by awaiting our Knauf drain first, the panel
+      // stays in Create mode with the file cards visible while uploads
+      // run, then flips once they settle. Promise.allSettled inside the
+      // drain means a single failed file doesn't block the transition
+      // — failed entries survive in the Knauf pendingFiles atom and
+      // surface as red retry cards in Edit mode.
+      await drainPendingKnaufFiles(data.id);
+      // End [knauf]
       setCurrentAgentId(data.id);
       showToast({
         message: `${localize('com_assistants_create_success')} ${

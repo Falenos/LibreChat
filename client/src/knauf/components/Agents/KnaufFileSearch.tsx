@@ -7,32 +7,50 @@
  *      the enclosing KnaufSection already provides the section title.
  *   2. <FileSearchCheckbox /> — dropped; KnaufAgentConfig drives the
  *      `file_search` form field implicitly from knowledge_files presence.
- *   3. Upload button no longer gated on the file_search form field, only
- *      on isEphemeralAgent. Upstream gates on both, but the Knauf builder
- *      derives file_search from file presence, so requiring it for the
- *      first upload would be a chicken-and-egg lock.
- *   4. Upload is allowed on unsaved (ephemeral) agents. Each upload entry
- *      awaits useEnsureAgentSaved() first, which transparently creates the
- *      agent using whatever the user has typed into the form, then opens
- *      the picker with the real agent_id. KK20-123.
+ *   3. Upload button no longer gated on the file_search form field. Upstream
+ *      gates on both, but the Knauf builder derives file_search from file
+ *      presence, so requiring it for the first upload would be a
+ *      chicken-and-egg lock.
+ *   4. KK20-123 — uploads are allowed on unsaved (ephemeral) agents. Local
+ *      files picked before save are queued in `knaufPendingAgentFilesAtom`
+ *      (Recoil, scoped by `knaufPendingForAgentIdAtom`) and rendered
+ *      alongside real knowledge files via the same `FileContainer`
+ *      primitive. The primary drain happens in AgentPanel's create
+ *      mutation `onSuccess`: it awaits `useDrainPendingKnaufFiles(newId)`
+ *      BEFORE calling `setCurrentAgentId`, so the panel transitions from
+ *      Create to Edit only after every queued upload has settled. Failed
+ *      files surface in Edit mode as red retry cards; clicking re-fires
+ *      this file's local drain effect (handles the retry path through
+ *      upstream's `handleFiles` pipeline).
  *
  * Everything else (file row, SharePoint dropdown, endpointFileConfig.disabled
  * early-return) is preserved verbatim. When upstream FileSearch.tsx changes,
  * this file is the merge surface — diff it line-by-line.
  */
-import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react';
 import { Folder } from 'lucide-react';
 import * as Ariakit from '@ariakit/react';
-import { SharePointIcon, AttachmentIcon, DropdownPopup } from '@librechat/client';
+import { useRecoilState } from 'recoil';
+import { SharePointIcon, AttachmentIcon, DropdownPopup, useToastContext } from '@librechat/client';
 import { EModelEndpoint, EToolResources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
+import { isEphemeralAgent } from '~/common';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useFileHandlingNoChatContext } from '~/hooks/Files/useFileHandling';
 import { useAgentFileConfig, useLocalize, useLazyEffect } from '~/hooks';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
+import FileContainer from '~/components/Chat/Input/Files/FileContainer';
 import { useGetStartupConfig } from '~/data-provider';
-import { useEnsureAgentSaved } from './useEnsureAgentSaved';
+import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
 
 const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
   <div className="flex flex-wrap gap-2">{children}</div>
@@ -46,8 +64,23 @@ function KnaufFileSearch({
   files?: [string, ExtendedFile][];
 }>) {
   const localize = useLocalize();
+  const { showToast } = useToastContext();
+  // Read the pending-files atom directly. KnaufAgentConfig also subscribes
+  // (for the clear-on-foreign-agent effect) but each component reads from
+  // Recoil independently — no prop threading needed.
+  const [pendingFiles, setPendingFiles] = useRecoilState(knaufPendingAgentFilesAtom);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<Map<string, ExtendedFile>>(new Map());
+  /**
+   * KK20-123 — mirror of `files` for off-render reconciliation. The drain
+   * effect's `.then()` runs after `handleFiles` has called `setFiles(...)`
+   * to write the uploaded entries; we need to read the *latest* Map at that
+   * moment, not the closure value captured when the effect first scheduled.
+   */
+  const filesRef = useRef(files);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
   const fileHandlingState = useMemo(() => ({ files, setFiles, conversation: null }), [files]);
   const [isPopoverActive, setIsPopoverActive] = useState(false);
   const [isSharePointDialogOpen, setIsSharePointDialogOpen] = useState(false);
@@ -56,7 +89,7 @@ function KnaufFileSearch({
   const { endpointFileConfig, providerValue, endpointType } = useAgentFileConfig();
   const endpointOverride = providerValue || EModelEndpoint.agents;
 
-  const { handleFileChange } = useFileHandlingNoChatContext(
+  const { handleFileChange, handleFiles } = useFileHandlingNoChatContext(
     {
       additionalMetadata: { agent_id, tool_resource: EToolResources.file_search },
       endpointOverride,
@@ -77,8 +110,31 @@ function KnaufFileSearch({
       fileHandlingState,
     );
 
+  /**
+   * KK20-123 — once the agent transitions from ephemeral to saved, drain
+   * any queued local files through the normal upload pipeline with the
+   * new `agent_id` baked into the upload metadata. We `Array.from` the
+   * Map values (the underlying `handleFiles` accepts `File[]`), then clear
+   * the queue. Individual failures surface as the same toasts upstream's
+   * `useFileHandling` already wires up; the user can re-pick the failed
+   * file to retry. The ref guards against re-firing if the effect re-runs
+   * for some other reason while uploads are in-flight. It is also read by
+   * the `useLazyEffect` below to suppress the `_files`-prop re-sync while
+   * a drain is in progress (see KK20-123 comment in that effect).
+   */
+  const inFlightUploadRef = useRef(false);
+
   useLazyEffect(
     () => {
+      // KK20-123 — refuse to re-sync `files` from `_files` while we're
+      // draining pendingFiles into the just-saved agent. Without this guard
+      // the 750 ms-delayed setFiles wipes the in-flight uploads as soon as
+      // `resetAgentForm()` lands the (file-less) new agent on the form,
+      // briefly transiting `_files` through `[]`. The ref flips false in
+      // the drain effect's `.finally()` once `handleFiles` settles; by
+      // then `_files` will eventually catch up via the agent refetch and
+      // a future invocation of this effect re-syncs cleanly.
+      if (inFlightUploadRef.current) return;
       if (_files) {
         setFiles(new Map(_files));
       }
@@ -87,11 +143,102 @@ function KnaufFileSearch({
     750,
   );
 
-  const isUploadDisabled = endpointFileConfig?.disabled ?? false;
+  /**
+   * KK20-123 — drain queued pending files through the upload pipeline once
+   * the agent is real. We do NOT clear `pendingFiles` up-front: each entry
+   * stays around (flipped `queued → uploading`) so its `File` object
+   * survives in case the upload fails and we need to retry. After
+   * `handleFiles` settles we reconcile against the latest `files` Map:
+   * pending entries whose (name, size) match an uploaded entry are
+   * removed; anything still uploading flips to `error` and the user gets a
+   * toast inviting them to click the failed card to retry.
+   */
+  useEffect(() => {
+    if (!agent_id || isEphemeralAgent(agent_id)) return;
+    if (inFlightUploadRef.current) return;
 
+    const queuedEntries = Array.from(pendingFiles.entries()).filter(
+      ([, entry]) => entry.status === 'queued',
+    );
+    if (queuedEntries.length === 0) return;
+
+    inFlightUploadRef.current = true;
+
+    setPendingFiles((prev) => {
+      const next = new Map(prev);
+      for (const [tempId] of queuedEntries) {
+        const existing = next.get(tempId);
+        if (existing) next.set(tempId, { ...existing, status: 'uploading' });
+      }
+      return next;
+    });
+
+    const queuedFiles = queuedEntries.map(([, entry]) => entry.file);
+
+    Promise.resolve(handleFiles(queuedFiles))
+      .then(() => {
+        setPendingFiles((prev) => {
+          const next = new Map(prev);
+          for (const [tempId, entry] of prev) {
+            if (entry.status !== 'uploading') continue;
+            const matched = Array.from(filesRef.current.values()).some(
+              (f) =>
+                f.filename === entry.file.name &&
+                ((f as { bytes?: number }).bytes === entry.file.size ||
+                  (f as { size?: number }).size === entry.file.size),
+            );
+            if (matched) {
+              next.delete(tempId);
+            } else {
+              next.set(tempId, { ...entry, status: 'error' });
+              showToast({
+                message: localize('com_knauf_pending_upload_failed', { 0: entry.file.name }),
+                status: 'error',
+              });
+            }
+          }
+          return next;
+        });
+      })
+      .finally(() => {
+        inFlightUploadRef.current = false;
+      });
+  }, [agent_id, pendingFiles, setPendingFiles, handleFiles, showToast, localize]);
+
+  const isUploadDisabled = endpointFileConfig?.disabled ?? false;
+  if (isUploadDisabled) {
+    return null;
+  }
+
+  const ephemeral = isEphemeralAgent(agent_id);
   const sharePointEnabled = startupConfig?.sharePointFilePickerEnabled;
-  const { ensureAgentSaved, isSaving } = useEnsureAgentSaved();
-  const disabledUploadButton = isSaving;
+
+  /**
+   * Local-file pick: on ephemeral, queue the File objects in
+   * `pendingFiles` and let the post-save effect upload them. On a saved
+   * agent, fall straight through to upstream's `handleFileChange`.
+   */
+  const onLocalFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (!ephemeral) {
+      handleFileChange(event);
+      return;
+    }
+    const picked = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (picked.length === 0) return;
+    setPendingFiles((prev) => {
+      const next = new Map(prev);
+      for (const file of picked) {
+        // Pending entries are keyed by an opaque temp id (filename:size:lastModified)
+        // — collision-stable enough that re-picking the same file replaces
+        // the queued entry (including any prior `error` state) rather than
+        // duplicating it.
+        const tempId = `pending:${file.name}:${file.size}:${file.lastModified}`;
+        next.set(tempId, { file, status: 'queued' });
+      }
+      return next;
+    });
+  };
 
   const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
     try {
@@ -101,28 +248,15 @@ function KnaufFileSearch({
       console.error('SharePoint file processing error:', error);
     }
   };
-  if (isUploadDisabled) {
-    return null;
-  }
 
-  const handleButtonClick = async () => {
-    const id = await ensureAgentSaved();
-    if (!id) {
-      return;
-    }
+  const handleButtonClick = () => {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+      fileInputRef.current.click();
     }
-    // rAF defers the picker open until React has committed the new
-    // agent_id prop, so handleFileChange's closure sees the real id.
-    requestAnimationFrame(() => fileInputRef.current?.click());
   };
 
-  const handleSharePointDropdownClick = async () => {
-    const id = await ensureAgentSaved();
-    if (!id) {
-      return;
-    }
+  const handleSharePointDropdownClick = () => {
     setIsSharePointDialogOpen(true);
   };
 
@@ -140,16 +274,42 @@ function KnaufFileSearch({
   ];
 
   const menuTrigger = (
-    <Ariakit.MenuButton
-      disabled={disabledUploadButton}
-      className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg text-sm font-medium"
-    >
+    <Ariakit.MenuButton className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg text-sm font-medium">
       <div className="flex w-full items-center justify-center gap-1">
         <AttachmentIcon className="text-token-text-primary h-4 w-4" />
         {localize('com_ui_upload_file_search')}
       </div>
     </Ariakit.MenuButton>
   );
+
+  const removePending = (tempId: string) => {
+    setPendingFiles((prev) => {
+      if (!prev.has(tempId)) return prev;
+      const next = new Map(prev);
+      next.delete(tempId);
+      return next;
+    });
+  };
+
+  /**
+   * KK20-123 — flip a failed pending entry back to `queued`. The drain
+   * effect re-fires on the next render because `pendingFiles` changes and
+   * the queued-filter has a fresh entry to process. Plain function (not
+   * useCallback) because it sits after an early return and the closure
+   * isn't passed to a memoized child — wrapping it in a hook would
+   * violate the rules-of-hooks order.
+   */
+  const retryPending = (tempId: string) => {
+    setPendingFiles((prev) => {
+      const entry = prev.get(tempId);
+      if (!entry || entry.status !== 'error') return prev;
+      const next = new Map(prev);
+      next.set(tempId, { ...entry, status: 'queued' });
+      return next;
+    });
+  };
+
+  const retryLabel = localize('com_knauf_retry_upload');
 
   return (
     <div className="w-full">
@@ -161,6 +321,40 @@ function KnaufFileSearch({
           tool_resource={EToolResources.file_search}
           Wrapper={FileRowWrapper}
         />
+        {pendingFiles.size > 0 ? (
+          <FileRowWrapper>
+            {Array.from(pendingFiles.entries()).map(([tempId, entry]) => {
+              const isError = entry.status === 'error';
+              const isUploading = entry.status === 'uploading';
+              // Reuse upstream's existing in-icon Spinner via FilePreview's
+              // `progress < 1` branch (see FilePreview.tsx:24-30). Passing
+              // `progress: 0.5` while uploading mirrors how the real
+              // ExtendedFile entries render mid-upload — same visual
+              // language, no custom overlay needed.
+              return (
+                <FileContainer
+                  key={tempId}
+                  file={{
+                    filename: entry.file.name,
+                    type: entry.file.type,
+                    progress: isUploading ? 0.5 : 1,
+                  }}
+                  containerClassName={isError ? 'ring-1 ring-red-500/60 rounded-2xl' : undefined}
+                  buttonClassName={isError ? 'cursor-pointer' : undefined}
+                  onClick={
+                    isError
+                      ? () => {
+                          retryPending(tempId);
+                          showToast({ message: retryLabel, status: 'info' });
+                        }
+                      : undefined
+                  }
+                  onDelete={isUploading ? undefined : () => removePending(tempId)}
+                />
+              );
+            })}
+          </FileRowWrapper>
+        ) : null}
         <div>
           {sharePointEnabled ? (
             <DropdownPopup
@@ -176,7 +370,6 @@ function KnaufFileSearch({
           ) : (
             <button
               type="button"
-              disabled={disabledUploadButton}
               className="btn btn-neutral border-token-border-light relative h-9 w-full rounded-lg text-sm font-medium"
               onClick={handleButtonClick}
             >
@@ -192,8 +385,7 @@ function KnaufFileSearch({
             style={{ display: 'none' }}
             tabIndex={-1}
             ref={fileInputRef}
-            disabled={disabledUploadButton}
-            onChange={handleFileChange}
+            onChange={onLocalFileInputChange}
           />
         </div>
       </div>
@@ -202,7 +394,6 @@ function KnaufFileSearch({
         isOpen={isSharePointDialogOpen}
         onOpenChange={setIsSharePointDialogOpen}
         onFilesSelected={handleSharePointFilesSelected}
-        disabled={disabledUploadButton}
         isDownloading={isProcessing}
         downloadProgress={downloadProgress}
         maxSelectionCount={endpointFileConfig?.fileLimit}
