@@ -404,6 +404,7 @@
   "com_knauf_builder_detailed_view": "Detailed view",
   "com_knauf_builder_simplified_view": "Simplified view",
   "com_knauf_copy_agent_id": "Copy agent ID",
+  "com_knauf_create_image": "Create image",
   "com_knauf_default_badge": "Default",
   "com_knauf_fast_mode_description": "Skip the reasoning step for quicker, cheaper answers. Best when you don't need deep analysis.",
   "com_knauf_fast_mode_label": "Fast Mode",

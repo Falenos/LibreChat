@@ -71,6 +71,16 @@ export async function loadEphemeralAgent(
   if (ephemeralAgent?.web_search === true || modelSpec?.webSearch === true) {
     tools.push(Tools.web_search);
   }
+  // [knauf] Image generation tool — surfaced in the agent-chat composer as
+  // a pinnable chip backed by `image_gen` on TEphemeralAgent. The backend
+  // tool toolkit auto-pairs `image_edit_oai` at request time (see
+  // packages/api/src/tools/toolkits/oai.ts), so we only push the gen tool.
+  // Literal string used because image_gen_oai is registered in the tools
+  // registry, not the AgentCapabilities/Tools enum.
+  if (ephemeralAgent?.image_gen === true) {
+    tools.push('image_gen_oai');
+  }
+  // End [knauf]
 
   const addedServers = new Set<string>();
   if (mcpServers.size > 0) {
@@ -154,6 +164,19 @@ export async function loadAgent(
   if (!agent) {
     return null;
   }
+
+  // [knauf] Per-chat gate for image_gen_oai. Agents that include the tool
+  // are expected to opt-in per conversation — admin-installed image gen
+  // does not fire silently. When the user hasn't enabled the toggle for
+  // this conversation (ephemeralAgent.image_gen !== true), strip the tool
+  // (and its companion image_edit_oai, which the OAI toolkit auto-pairs).
+  // Front-end gate hides the toggle for agents that don't have the tool,
+  // so this branch is a no-op for those.
+  const wantsImageGen = req.body?.ephemeralAgent?.image_gen === true;
+  if (agent.tools && agent.tools.includes('image_gen_oai') && !wantsImageGen) {
+    agent.tools = agent.tools.filter((t) => t !== 'image_gen_oai' && t !== 'image_edit_oai');
+  }
+  // End [knauf]
 
   // Set version count from versions array length
   const agentWithVersion = agent as Agent & { versions?: unknown[]; version?: number };
