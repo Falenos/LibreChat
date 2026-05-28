@@ -746,11 +746,19 @@ export const interfaceSchema = z
       .optional(),
     // [knauf] Knauf-specific interface options, namespaced under their own
     // key so future Knauf additions don't collide with upstream `interface.*`
-    // fields. Currently carries `defaultAgentId` (the locked-default agent in
-    // the Knauf chat header picker) — empty / unset means no admin default
-    // (KK20-128).
+    // fields.
     knauf: z
       .object({
+        /**
+         * @deprecated KK20-123 — superseded by the per-agent `isDefault` flag
+         * on the agent record (set via the admin "Set as default" toggle in
+         * the agent builder). The runtime reads `isDefault` directly from the
+         * agents map; this YAML value is only consulted by the one-time
+         * startup migration in `api/server/services/start/migration.js` to
+         * seed the DB flag for existing deployments. Kept in the schema so
+         * existing librechat.yaml files don't fail validation. Originally
+         * KK20-128.
+         */
         defaultAgentId: z.string().optional(),
       })
       .optional(),

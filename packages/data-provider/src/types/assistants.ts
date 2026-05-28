@@ -275,6 +275,10 @@ export type Agent = {
   // [knauf] Persist chosen modelSpec name on the agent (mirrors Conversation.spec). UI round-trip only — not consumed by chat completion. BUG-01.
   spec?: string | null;
   // End [knauf]
+  // [knauf] KK20-123 — system-wide default-agent flag. At most one agent has
+  // `isDefault: true` at a time; the picker reads this to pick the locked default.
+  isDefault?: boolean;
+  // End [knauf]
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -329,6 +333,9 @@ export type AgentUpdateParams = {
   | 'tool_options'
   // [knauf] Carry spec through AgentUpdateParams. BUG-01.
   | 'spec'
+  // End [knauf]
+  // [knauf] Carry isDefault through AgentUpdateParams. KK20-123.
+  | 'isDefault'
   // End [knauf]
 >;
 

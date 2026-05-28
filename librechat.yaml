@@ -52,11 +52,15 @@ interface:
   memories: true
   multiConvo: false
   # Knauf-specific interface options, namespaced to avoid colliding with
-  # future upstream `interface.*` fields. `defaultAgentId` is the agent ID
-  # surfaced as the locked-default in the Knauf chat header picker (KK20-128).
-  # If absent or invalid the picker still renders, just without a locked
-  # default. Admins find the ID via the agent builder (see the "Agent ID"
-  # line below the agent name).
+  # future upstream `interface.*` fields.
+  #
+  # `defaultAgentId` is DEPRECATED as of KK20-123. The runtime now reads the
+  # per-agent `isDefault` flag set via the agent builder's admin-only
+  # "Set as default" toggle. The value below is only consulted by a one-shot
+  # startup migration (api/server/services/start/migration.js) that seeds the
+  # DB flag on first boot after upgrade; once any agent has `isDefault: true`,
+  # this key is ignored. Keep it here (or as an empty string) to avoid yaml
+  # validation churn — it will be removed in a future release.
   knauf:
     defaultAgentId: ''
   webSearch: false
@@ -181,6 +185,15 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
+    # Each personality preset enables `useResponsesApi` so new agents get the
+    # "Upload to Provider" item in the chat paperclip menu by default (so
+    # users can attach PDFs / text files directly to the model). Azure
+    # OpenAI is excluded from the document-supported providers allow-list
+    # except when Responses API is on — see
+    # packages/data-provider/src/schemas.ts (documentSupportedProviders)
+    # and the menu gate at AttachFileMenu.tsx:158. Once set on an agent the
+    # flag is preserved across toggling `web_search` on/off
+    # (capabilities.ts → browseInternet).
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -189,6 +202,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: high
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-balanced'
       label: 'Balanced'
@@ -198,6 +212,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: medium
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'
@@ -207,6 +222,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: low
+        useResponsesApi: true
         additional_instructions: |
           When the answer would benefit from breadth, surface multiple options
           or angles before settling on one.

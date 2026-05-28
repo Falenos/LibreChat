@@ -122,6 +122,17 @@ const agentSchema = new Schema<IAgent>(
       default: undefined,
     },
     // End [knauf]
+    // [knauf] KK20-123 — system-wide default agent flag. At most one agent has
+    // `isDefault: true` at a time; the exclusivity invariant is enforced by the
+    // PATCH /api/agents/:id handler (admin-only, unsets all others before
+    // setting target). Replaces the old yaml-based `interface.knauf.defaultAgentId`
+    // copy-paste flow — see KnaufModelSelector.tsx for the runtime consumer.
+    isDefault: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    // End [knauf]
   },
   {
     timestamps: true,

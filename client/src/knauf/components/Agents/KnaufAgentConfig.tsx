@@ -22,8 +22,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType }
 import type { LucideProps } from 'lucide-react';
 import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
-import { EModelEndpoint } from 'librechat-data-provider';
-import { isEphemeralAgent, type AgentForm } from '~/common';
+import { EModelEndpoint, SystemRoles } from 'librechat-data-provider';
+import { isEphemeralAgent, type AgentForm, type TAgentOption } from '~/common';
+import { useAuthContext } from '~/hooks/AuthContext';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
 import { cn, defaultTextProps, processAgentOption, removeFocusOutlines } from '~/utils';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
@@ -34,7 +35,7 @@ import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import * as HoverCard from '@radix-ui/react-hover-card';
-import { Brain, Check, Copy, Zap } from 'lucide-react';
+import { Brain, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -49,6 +50,7 @@ import {
   usePersonalities,
   type KnaufPersonality,
 } from '~/knauf/data-provider/Agents/usePersonalities';
+import { useSetDefaultAgentMutation } from '~/knauf/data-provider/Agents/useSetDefaultAgentMutation';
 
 const labelClass = 'mb-2 text-token-text-primary block text-sm font-medium';
 const inputClass = cn(
@@ -342,7 +344,7 @@ export default function KnaufAgentConfig() {
               </>
             )}
           />
-          {agent_id && !isEphemeralAgent(agent_id) ? <KnaufAgentIdRow agentId={agent_id} /> : null}
+          <KnaufAdminDefaultAgentRow agent_id={agent_id} agent={agent} />
         </div>
 
         {/* Description */}
@@ -683,49 +685,68 @@ function PersonalityHeaderToggles() {
 }
 
 /**
- * Small read-only display of the agent's id beneath the Name field, with a
- * click-to-copy button. Lets admins copy the id into librechat.yaml's
- * `interface.knauf.defaultAgentId`. Only renders for saved (non-ephemeral)
- * agents. (KK20-128)
+ * Admin-only "Set as default agent" toggle beneath the Name field.
+ *
+ * KK20-123 — replaces the read-only agent-id copy row that used to live here.
+ * Admins flip the system-wide default-agent flag with a switch instead of
+ * pasting the id into librechat.yaml. Hidden entirely from non-admins and
+ * from the ephemeral pre-save state (the agent must exist server-side
+ * before we can PATCH `isDefault`). The mutation invalidates the agents
+ * query so the chat-header picker re-derives the locked default.
  */
-function KnaufAgentIdRow({ agentId }: Readonly<{ agentId: string }>) {
+function KnaufAdminDefaultAgentRow({
+  agent_id,
+  agent,
+}: Readonly<{ agent_id: string | undefined; agent: TAgentOption | undefined }>) {
   const localize = useLocalize();
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current != null) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-  const onCopy = useCallback(() => {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-    navigator.clipboard.writeText(agentId).then(
-      () => {
-        if (timeoutRef.current != null) {
-          clearTimeout(timeoutRef.current);
-        }
-        setCopied(true);
-        timeoutRef.current = setTimeout(() => setCopied(false), 1500);
+  const { user } = useAuthContext();
+  const { showToast } = useToastContext();
+  const setDefault = useSetDefaultAgentMutation();
+
+  const isAdmin = user?.role === SystemRoles.ADMIN;
+  const isSaved = !!agent_id && !isEphemeralAgent(agent_id);
+  const currentIsDefault = agent?.id === agent_id ? !!agent?.isDefault : false;
+
+  if (!isAdmin || !isSaved || !agent_id) return null;
+
+  const handleToggle = (next: boolean) => {
+    setDefault.mutate(
+      { agent_id, isDefault: next },
+      {
+        onSuccess: () => {
+          showToast({
+            message: localize(
+              next ? 'com_knauf_default_agent_set' : 'com_knauf_default_agent_unset',
+            ),
+            status: 'success',
+          });
+        },
+        onError: () => {
+          showToast({
+            message: localize('com_ui_error'),
+            status: 'error',
+          });
+        },
       },
-      () => undefined,
     );
-  }, [agentId]);
-  const buttonTitle = copied ? localize('com_ui_copied') : localize('com_knauf_copy_agent_id');
+  };
+
   return (
-    <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
-      <span className="font-medium">{localize('com_knauf_agent_id')}:</span>
-      <code className="truncate font-mono text-[11px]">{agentId}</code>
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label={buttonTitle}
-        title={buttonTitle}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary"
-      >
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-      </button>
+    <div className="mt-3 flex items-start justify-between gap-3 rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+      <div className="flex flex-col">
+        <span className="text-sm font-medium text-text-primary">
+          {localize('com_knauf_set_as_default_agent')}
+        </span>
+        <span className="mt-0.5 text-xs text-text-secondary">
+          {localize('com_knauf_default_agent_help')}
+        </span>
+      </div>
+      <Switch
+        checked={currentIsDefault}
+        onCheckedChange={handleToggle}
+        disabled={setDefault.isLoading}
+        aria-label={localize('com_knauf_set_as_default_agent')}
+      />
     </div>
   );
 }

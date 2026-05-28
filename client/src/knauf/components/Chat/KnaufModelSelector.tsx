@@ -8,8 +8,11 @@
  *     Personality lives inside the agent builder now (KK20-128 phase 1).
  *   - "Pinned" section at the top, mirroring the sidebar Favorites store
  *     (same `useFavorites()` hook, so pinning here also shows in the sidebar).
- *   - The admin-configured `interface.defaultAgentId` always appears first
- *     in Pinned, with no unpin affordance.
+ *   - The admin-configured default agent (the one with `isDefault: true` on
+ *     its record, set via the agent builder's "Set as default" toggle) always
+ *     appears first in Pinned, with no unpin affordance. KK20-123 replaced
+ *     the deprecated `interface.knauf.defaultAgentId` yaml indirection with
+ *     this per-agent flag — single source of truth, no prop drilling.
  *   - Pin/unpin icon on hover-right of every agent row.
  *
  * Reuses upstream `ModelSelectorChatProvider` + `ModelSelectorProvider` for
@@ -20,7 +23,7 @@ import { memo, useMemo, useCallback, useEffect, useRef, type MouseEvent } from '
 import * as Ariakit from '@ariakit/react';
 import { useRecoilValue } from 'recoil';
 import type { Agent } from 'librechat-data-provider';
-import { EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
+import { Constants, EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
 import { TooltipAnchor } from '@librechat/client';
 import { Pin, PinOff } from 'lucide-react';
 import type { ModelSelectorProps } from '~/common';
@@ -41,20 +44,6 @@ import DialogManager from '~/components/Chat/Menus/Endpoints/DialogManager';
 
 const defaultInterface = getConfigDefaults().interface;
 
-/**
- * Local mirror of the Knauf-namespaced interface extension declared in
- * packages/data-provider/src/config.ts. Used here as a typed accessor so
- * we don't rely on `interfaceConfig` carrying the field at the TypeScript
- * level — `data-provider/dist` may be one build behind the source. Drop
- * this helper after `npm run build:packages` lands.
- */
-type KnaufInterfaceExtension = { knauf?: { defaultAgentId?: string } };
-function getKnaufDefaultAgentId(interfaceConfig: unknown): string {
-  return (
-    (interfaceConfig as KnaufInterfaceExtension | null | undefined)?.knauf?.defaultAgentId ?? ''
-  );
-}
-
 /** Pinned alphabetical sort locale — pinned so cross-user/cross-tenant ordering is stable. */
 const SORT_LOCALE = 'en';
 
@@ -72,13 +61,13 @@ export default function KnaufModelSelector({ startupConfig }: Readonly<ModelSele
   return (
     <ModelSelectorChatProvider>
       <ModelSelectorProvider startupConfig={startupConfig}>
-        <KnaufModelSelectorContent defaultAgentId={getKnaufDefaultAgentId(interfaceConfig)} />
+        <KnaufModelSelectorContent />
       </ModelSelectorProvider>
     </ModelSelectorChatProvider>
   );
 }
 
-function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId: string }>) {
+function KnaufModelSelectorContent() {
   const localize = useLocalize();
   const {
     agentsMap,
@@ -154,11 +143,18 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
     [favorites],
   );
 
-  /** The locked-default agent (if configured AND accessible). */
-  const defaultAgent = useMemo(() => {
-    if (!defaultAgentId) return null;
-    return agentsMap?.[defaultAgentId] ?? null;
-  }, [defaultAgentId, agentsMap]);
+  /**
+   * The locked-default agent: the (at most one) record with `isDefault: true`.
+   * KK20-123 — single source of truth on the agent itself; admins toggle it
+   * via the agent builder. Returns null if no admin has set a default.
+   */
+  const defaultAgent = useMemo<Agent | null>(() => {
+    if (!agentsMap) return null;
+    for (const agent of Object.values(agentsMap)) {
+      if (agent?.isDefault) return agent;
+    }
+    return null;
+  }, [agentsMap]);
 
   /**
    * Pinned agents = default (if any) + favorites that are NOT the default
@@ -227,23 +223,25 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
   }, []);
 
   /**
-   * Auto-bind the locked-default agent on a truly fresh chat (no endpoint and
-   * no model yet). Re-fires whenever the conversation resets back to an
-   * empty state — e.g. when the user opens a new chat — but the guard below
-   * short-circuits as soon as a selection exists, so it never overrides a
-   * user's later choice.
+   * Auto-bind the locked-default agent **once per picker mount**, as soon
+   * as we have an `agentsEndpoint` + `defaultAgent` and the chat is
+   * brand-new. KK20-123 — the default agent must win over
+   * `modelSpecs.default` from librechat.yaml (e.g. the `karl` spec) on app
+   * entry, but only there: after the user picks a different agent, or
+   * clicks New Chat to start a fresh conversation, the modelSpec default
+   * (or whatever they picked) should win. The one-shot ref guarantees we
+   * never snap back to the default after the first auto-bind, no matter
+   * how many times `selectedValues` or `conversationId` re-fire.
    */
+  const conversationId = useRecoilValue(store.conversationIdByIndex(0));
+  const isFreshChat = !conversationId || conversationId === Constants.NEW_CONVO;
+  const hasAutoBoundDefaultRef = useRef(false);
   useEffect(() => {
-    if (!defaultAgent || !agentsEndpoint) return;
-    if (selectedValues.endpoint || selectedValues.model) return;
+    if (hasAutoBoundDefaultRef.current) return;
+    if (!defaultAgent || !agentsEndpoint || !isFreshChat) return;
     handleSelectModel(agentsEndpoint, defaultAgent.id);
-  }, [
-    defaultAgent,
-    agentsEndpoint,
-    selectedValues.endpoint,
-    selectedValues.model,
-    handleSelectModel,
-  ]);
+    hasAutoBoundDefaultRef.current = true;
+  }, [defaultAgent, agentsEndpoint, isFreshChat, handleSelectModel]);
 
   const triggerLabel = selectedAgent?.name ?? localize('com_ui_select_agent');
   const triggerIcon = selectedAgent ? renderAgentAvatar(selectedAgent, { size: 'icon' }) : null;

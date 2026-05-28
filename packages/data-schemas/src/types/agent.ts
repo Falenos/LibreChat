@@ -45,4 +45,7 @@ export interface IAgent extends Omit<Document, 'model'> {
   // [knauf] Companion TS type for the spec schema field — see schema/agent.ts. BUG-01.
   spec?: string;
   // End [knauf]
+  // [knauf] KK20-123 — companion type for the system-wide default-agent flag. See schema/agent.ts.
+  isDefault?: boolean;
+  // End [knauf]
 }

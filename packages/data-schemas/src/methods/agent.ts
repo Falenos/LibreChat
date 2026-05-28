@@ -711,6 +711,13 @@ export function createAgentMethods(mongoose: typeof import('mongoose'), deps: Ag
       category: 1,
       support_contact: 1,
       is_promoted: 1,
+      // [knauf] KK20-123 — surface the system-wide default-agent flag on the
+      // list response so the chat-header picker (KnaufModelSelector) can find
+      // the locked default in agentsMap without a separate fetch. Without
+      // this the picker falls back to "Select agent" on app entry and the
+      // modelSpecs.default (e.g. `karl`) wins the conversation.
+      isDefault: 1,
+      // End [knauf]
     }).sort({ updatedAt: -1, _id: 1 });
 
     if (isPaginated && normalizedLimit) {
