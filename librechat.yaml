@@ -6,6 +6,14 @@ version: 1.3.8
 
 cache: true
 
+# Route all file uploads (avatars, images, attachments, file_search) to
+# Azure Blob Storage with SAS-signed URLs. Behavior of `azure_blob` here
+# depends on the Knauf overlay (KK20-167) that adds short-lived signed
+# URLs + refresh-on-expiry on top of upstream's Azure file strategy.
+# Required env: AZURE_STORAGE_CONNECTION_STRING (or AZURE_STORAGE_ACCOUNT_NAME
+# for Managed Identity), AZURE_CONTAINER_NAME, AZURE_STORAGE_PUBLIC_ACCESS=false.
+fileStrategy: "azure_blob"
+
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
 includedTools:

@@ -9,6 +9,13 @@ export { MAX_AVATAR_REFRESH_AGENTS, AVATAR_REFRESH_BATCH_SIZE };
 
 export type RefreshS3UrlFn = (avatar: AgentAvatar) => Promise<string | undefined>;
 
+// [knauf] KK20-167 — Generic refresher type so refreshListAvatars can accept
+// an Azure refresher alongside the upstream S3-only one without duplicating
+// the dispatch loop. Stays compatible with the upstream type shape.
+/** Generic signed URL refresh function, agnostic to storage provider */
+export type RefreshUrlFn = (avatar: AgentAvatar) => Promise<string | undefined>;
+// End [knauf]
+
 export type UpdateAgentFn = (
   searchParams: { id: string },
   updateData: { avatar: AgentAvatar },
@@ -19,6 +26,11 @@ export type RefreshListAvatarsParams = {
   agents: Agent[];
   userId: string;
   refreshS3Url: RefreshS3UrlFn;
+  // [knauf] KK20-167 — optional Azure refresher; refreshListAvatars iterates
+  // over agents and dispatches per `avatar.source`.
+  /** Optional Azure Blob URL refresher; when provided, Azure-backed avatars are also refreshed */
+  refreshAzureUrl?: RefreshUrlFn;
+  // End [knauf]
   updateAgent: UpdateAgentFn;
 };
 
@@ -48,6 +60,9 @@ export const refreshListAvatars = async ({
   agents,
   userId,
   refreshS3Url,
+  // [knauf] KK20-167 — Azure refresher destructured; loop below dispatches by source.
+  refreshAzureUrl,
+  // End [knauf]
   updateAgent,
 }: RefreshListAvatarsParams): Promise<RefreshStats> => {
   const stats: RefreshStats = {
@@ -69,25 +84,34 @@ export const refreshListAvatars = async ({
   for (let i = 0; i < agents.length; i += AVATAR_REFRESH_BATCH_SIZE) {
     const batch = agents.slice(i, i + AVATAR_REFRESH_BATCH_SIZE);
 
+    // [knauf] KK20-167 — Dispatch refresh by avatar.source (S3 vs Azure Blob)
+    // instead of the upstream S3-only path. Renames internal log lines from
+    // "S3 avatar" to "avatar" to match the now-multi-provider semantics.
     await Promise.all(
       batch.map(async (agent) => {
-        if (agent?.avatar?.source !== FileSources.s3 || !agent?.avatar?.filepath) {
+        const source = agent?.avatar?.source;
+        const isS3 = source === FileSources.s3;
+        const isAzure = source === FileSources.azure_blob && !!refreshAzureUrl;
+
+        if ((!isS3 && !isAzure) || !agent?.avatar?.filepath) {
           stats.not_s3++;
           return;
         }
 
         if (!agent?.id) {
           logger.debug(
-            '[refreshListAvatars] Skipping S3 avatar refresh for agent: %s, ID is not set',
+            '[refreshListAvatars] Skipping avatar refresh for agent: %s, ID is not set',
             agent._id,
           );
           stats.no_id++;
           return;
         }
 
+        const refreshFn = isS3 ? refreshS3Url : refreshAzureUrl!;
+
         try {
-          logger.debug('[refreshListAvatars] Refreshing S3 avatar for agent: %s', agent._id);
-          const newPath = await refreshS3Url(agent.avatar);
+          logger.debug('[refreshListAvatars] Refreshing avatar for agent: %s', agent._id);
+          const newPath = await refreshFn(agent.avatar);
 
           if (!newPath || newPath === agent.avatar.filepath) {
             stats.no_change++;
@@ -108,11 +132,12 @@ export const refreshListAvatars = async ({
             stats.persist_error++;
           }
         } catch (err) {
-          logger.error('[refreshListAvatars] S3 avatar refresh error: %o', err);
+          logger.error('[refreshListAvatars] Avatar refresh error: %o', err);
           stats.s3_error++;
         }
       }),
     );
+    // End [knauf]
   }
 
   const { urlCache: _urlCache, ...loggableStats } = stats;
