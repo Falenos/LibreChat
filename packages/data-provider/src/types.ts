@@ -102,6 +102,12 @@ export type TEphemeralAgent = {
   file_search?: boolean;
   execute_code?: boolean;
   artifacts?: string;
+  // [knauf] Per-conversation toggle that promotes `image_gen_oai` into the
+  // synthetic agent's tools at request time (see loadEphemeralAgent in
+  // packages/api/src/agents/load.ts). Mirrors the web_search/file_search
+  // ephemeral-agent pattern; surfaced as a pinnable agent-chat tool.
+  image_gen?: boolean;
+  // End [knauf]
 };
 
 export type TPayload = Partial<TMessage> &

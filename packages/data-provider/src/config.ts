@@ -1971,6 +1971,10 @@ export enum LocalStorageKeys {
   LAST_WEB_SEARCH_TOGGLE_ = 'LAST_WEB_SEARCH_TOGGLE_',
   /** Last checked toggle for File Search per conversation ID */
   LAST_FILE_SEARCH_TOGGLE_ = 'LAST_FILE_SEARCH_TOGGLE_',
+  // [knauf] Per-conversation toggle for the image_gen_oai tool, surfaced as
+  // a pinnable agent-chat chip. See `image_gen` on TEphemeralAgent.
+  LAST_IMAGE_GEN_TOGGLE_ = 'LAST_IMAGE_GEN_TOGGLE_',
+  // End [knauf]
   /** Last checked toggle for Artifacts per conversation ID */
   LAST_ARTIFACTS_TOGGLE_ = 'LAST_ARTIFACTS_TOGGLE_',
   /** Key for the last selected agent provider */

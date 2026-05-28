@@ -405,6 +405,8 @@
   "com_knauf_default_agent_help": "Sets this agent as the locked default for everyone. Only one agent can be the default at a time.",
   "com_knauf_default_agent_set": "Default agent updated",
   "com_knauf_default_agent_unset": "Default agent cleared",
+  "com_knauf_copy_agent_id": "Copy agent ID",
+  "com_knauf_create_image": "Create image",
   "com_knauf_default_badge": "Default",
   "com_knauf_fast_mode_description": "Skip the reasoning step for quicker, cheaper answers. Best when you don't need deep analysis.",
   "com_knauf_fast_mode_label": "Fast Mode",
