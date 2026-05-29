@@ -21,6 +21,11 @@ import FileSearch from './FileSearch';
 import Artifacts from './Artifacts';
 import MCPSelect from './MCPSelect';
 import WebSearch from './WebSearch';
+// [knauf] KK20-168 — chip rendered alongside the upstream chip cluster so
+// it lands to the right of the Settings2 icon next to File Search. See
+// the matching `[knauf]` block below.
+import KnaufImageGenTools from '~/knauf/components/Chat/KnaufImageGenTools';
+// End [knauf]
 import store from '~/store';
 
 interface BadgeRowProps {
@@ -373,6 +378,14 @@ function BadgeRow({
             <WebSearch />
             <CodeInterpreter />
             <FileSearch />
+            {/* [knauf] Image-gen chip mounted next to FileSearch so the
+                rendered order is paperclip → Settings2 → upstream chips →
+                Create image. The component returns null unless the chip is
+                pinned/toggled and the policy in `useImageGenAvailable`
+                allows it; agentId/spec come from BadgeRowContext via the
+                component, not via props. */}
+            <KnaufImageGenTools agentId={null} conversationId={conversationId} spec={specName} />
+            {/* End [knauf] */}
             <Artifacts />
             <MCPSelect />
           </>
