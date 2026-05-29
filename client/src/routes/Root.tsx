@@ -22,6 +22,9 @@ import { UnifiedSidebar } from '~/components/UnifiedSidebar';
 import { TermsAndConditionsModal } from '~/components/ui';
 import { useHealthCheck } from '~/data-provider';
 import { Banner } from '~/components/Banners';
+// [knauf] Mount post-login OneTrust and Adobe Analytics consent controller. (NO-TICKET)
+import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
+// End [knauf]
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
@@ -65,6 +68,9 @@ export default function Root() {
 
   return (
     <SetConvoProvider>
+      {/* [knauf] OneTrust prompts after login; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
+      <KnaufConsentAnalytics />
+      {/* End [knauf] */}
       <FileMapContext.Provider value={fileMap}>
         <AssistantsMapContext.Provider value={assistantsMap}>
           <AgentsMapContext.Provider value={agentsMap}>
