@@ -170,6 +170,7 @@ modelSpecs:
       description: 'KARL GPT for the Knauf Group'
       preset:
         endpoint: 'azureOpenAI'
+        model: 'gpt-5.4'
         # Use the Azure Responses API so the chat composer's paperclip
         # menu surfaces "Upload files" (image + PDF) instead of the
         # image-only fallback. Azure is excluded from the
@@ -178,9 +179,6 @@ modelSpecs:
         # an azureOpenAI chat is gated specifically on this flag — same
         # mechanism the karl-personality-* specs already use.
         useResponsesApi: true
-        agentOptions:
-          model: 'gpt-5.4'
-          agent: 'functions'
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
