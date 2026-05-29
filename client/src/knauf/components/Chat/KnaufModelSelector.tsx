@@ -8,12 +8,11 @@
  *     Personality lives inside the agent builder now (KK20-128 phase 1).
  *   - "Pinned" section at the top, mirroring the sidebar Favorites store
  *     (same `useFavorites()` hook, so pinning here also shows in the sidebar).
- *   - The admin-configured default agent (the one with `isDefault: true` on
- *     its record, set via the agent builder's "Set as default" toggle) always
- *     appears first in Pinned, with no unpin affordance. KK20-123 replaced
- *     the deprecated `interface.knauf.defaultAgentId` yaml indirection with
- *     this per-agent flag — single source of truth, no prop drilling.
  *   - Pin/unpin icon on hover-right of every agent row.
+ *
+ * The default conversation on a fresh chat is whichever modelSpec is marked
+ * `default: true` in librechat.yaml (today: `karl`) — that's upstream's
+ * mechanism; this picker doesn't override it.
  *
  * Reuses upstream `ModelSelectorChatProvider` + `ModelSelectorProvider` for
  * the agent map, selection handler, search debounce, and Ariakit
@@ -144,39 +143,18 @@ function KnaufModelSelectorContent() {
   );
 
   /**
-   * The locked-default agent: the (at most one) record with `isDefault: true`.
-   * KK20-123 — single source of truth on the agent itself; admins toggle it
-   * via the agent builder. Returns null if no admin has set a default.
-   */
-  const defaultAgent = useMemo<Agent | null>(() => {
-    if (!agentsMap) return null;
-    for (const agent of Object.values(agentsMap)) {
-      if (agent?.isDefault) return agent;
-    }
-    return null;
-  }, [agentsMap]);
-
-  /**
-   * Pinned agents = default (if any) + favorites that are NOT the default
-   * and that exist in the agentsMap. De-dupes accidental double-pin of
-   * the default; orphan favorites (deleted agents) are filtered out.
+   * Pinned agents = favorites that exist in the agentsMap. Orphan favorites
+   * (deleted agents) are filtered out.
    */
   const pinnedAgents = useMemo<Agent[]>(() => {
-    const seen = new Set<string>();
     const list: Agent[] = [];
-    if (defaultAgent) {
-      list.push(defaultAgent);
-      seen.add(defaultAgent.id);
-    }
     for (const id of favoritedAgentIds) {
-      if (seen.has(id)) continue;
       const agent = agentsMap?.[id];
       if (!agent) continue;
       list.push(agent);
-      seen.add(id);
     }
     return list;
-  }, [defaultAgent, favoritedAgentIds, agentsMap]);
+  }, [favoritedAgentIds, agentsMap]);
 
   /** Set of pinned agent IDs — recomputed only when the favorites array changes. */
   const pinnedAgentIdSet = useMemo(() => new Set(favoritedAgentIds), [favoritedAgentIds]);
@@ -194,13 +172,13 @@ function KnaufModelSelectorContent() {
       .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', SORT_LOCALE));
   }, [allAgents, pinnedAgents, searchValue]);
 
-  /** Currently-selected agent (for trigger label) — fall back to default. */
+  /** Currently-selected agent (for trigger label). */
   const selectedAgent = useMemo<Agent | null>(() => {
     if (selectedValues.model && agentsMap?.[selectedValues.model]) {
       return agentsMap[selectedValues.model] ?? null;
     }
-    return defaultAgent;
-  }, [selectedValues.model, agentsMap, defaultAgent]);
+    return null;
+  }, [selectedValues.model, agentsMap]);
 
   /**
    * Stable handlers passed to each row. They read latest favorite-mutator
@@ -221,27 +199,6 @@ function KnaufModelSelectorContent() {
       addFavoriteRef.current(agentId);
     }
   }, []);
-
-  /**
-   * Auto-bind the locked-default agent **once per picker mount**, as soon
-   * as we have an `agentsEndpoint` + `defaultAgent` and the chat is
-   * brand-new. KK20-123 — the default agent must win over
-   * `modelSpecs.default` from librechat.yaml (e.g. the `karl` spec) on app
-   * entry, but only there: after the user picks a different agent, or
-   * clicks New Chat to start a fresh conversation, the modelSpec default
-   * (or whatever they picked) should win. The one-shot ref guarantees we
-   * never snap back to the default after the first auto-bind, no matter
-   * how many times `selectedValues` or `conversationId` re-fire.
-   */
-  const conversationId = useRecoilValue(store.conversationIdByIndex(0));
-  const isFreshChat = !conversationId || conversationId === Constants.NEW_CONVO;
-  const hasAutoBoundDefaultRef = useRef(false);
-  useEffect(() => {
-    if (hasAutoBoundDefaultRef.current) return;
-    if (!defaultAgent || !agentsEndpoint || !isFreshChat) return;
-    handleSelectModel(agentsEndpoint, defaultAgent.id);
-    hasAutoBoundDefaultRef.current = true;
-  }, [defaultAgent, agentsEndpoint, isFreshChat, handleSelectModel]);
 
   const triggerLabel = selectedAgent?.name ?? localize('com_ui_select_agent');
   const triggerIcon = selectedAgent ? renderAgentAvatar(selectedAgent, { size: 'icon' }) : null;
@@ -284,7 +241,6 @@ function KnaufModelSelectorContent() {
                 key={agent.id}
                 agent={agent}
                 isSelected={selectedValues.model === agent.id}
-                isDefault={agent.id === defaultAgent?.id}
                 pinned={pinnedAgentIdSet.has(agent.id)}
                 onSelect={onAgentSelect}
                 onTogglePin={onTogglePin}
@@ -310,7 +266,6 @@ function KnaufModelSelectorContent() {
                 key={agent.id}
                 agent={agent}
                 isSelected={selectedValues.model === agent.id}
-                isDefault={false}
                 pinned={pinnedAgentIdSet.has(agent.id)}
                 onSelect={onAgentSelect}
                 onTogglePin={onTogglePin}
@@ -338,24 +293,22 @@ function SectionLabel({ children }: Readonly<{ children: string }>) {
 }
 
 /**
- * Single agent row inside the dropdown. Renders avatar + name, an optional
- * "Default" badge, the selected-state background, and a pin/unpin button
- * (always visible when pinned; revealed on row hover/focus when unpinned).
- * The default-locked agent has no pin button. All favorite state and
- * mutators live on the parent — this component only receives the booleans
- * it needs, so `memo()` actually skips re-renders for unchanged rows.
+ * Single agent row inside the dropdown. Renders avatar + name, the
+ * selected-state background, and a pin/unpin button (always visible when
+ * pinned; revealed on row hover/focus when unpinned). All favorite state
+ * and mutators live on the parent — this component only receives the
+ * booleans it needs, so `memo()` actually skips re-renders for unchanged
+ * rows.
  */
 const KnaufAgentRow = memo(function KnaufAgentRow({
   agent,
   isSelected,
-  isDefault,
   pinned,
   onSelect,
   onTogglePin,
 }: Readonly<{
   agent: Agent;
   isSelected: boolean;
-  isDefault: boolean;
   pinned: boolean;
   onSelect: (agentId: string) => void;
   onTogglePin: (agentId: string, currentlyPinned: boolean) => void;
@@ -387,26 +340,20 @@ const KnaufAgentRow = memo(function KnaufAgentRow({
         {renderAgentAvatar(agent, { size: 'icon' })}
       </div>
       <span className="min-w-0 flex-1 truncate">{agent.name ?? agent.id}</span>
-      {isDefault ? (
-        <span className="ml-1 rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
-          {localize('com_knauf_default_badge')}
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={handlePinClick}
-          aria-label={pinTitle}
-          title={pinTitle}
-          className={cn(
-            'ml-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary',
-            pinned
-              ? 'opacity-100'
-              : 'opacity-0 focus:opacity-100 group-hover:opacity-100 group-data-[active-item]:opacity-100',
-          )}
-        >
-          {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handlePinClick}
+        aria-label={pinTitle}
+        title={pinTitle}
+        className={cn(
+          'ml-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary',
+          pinned
+            ? 'opacity-100'
+            : 'opacity-0 focus:opacity-100 group-hover:opacity-100 group-data-[active-item]:opacity-100',
+        )}
+      >
+        {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+      </button>
     </CustomMenuItem>
   );
 });

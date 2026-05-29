@@ -53,24 +53,15 @@ interface:
   multiConvo: false
   # Knauf-specific interface options, namespaced to avoid colliding with
   # future upstream `interface.*` fields.
-  #
-  # `defaultAgentId` is DEPRECATED as of KK20-123. The runtime now reads the
-  # per-agent `isDefault` flag set via the agent builder's admin-only
-  # "Set as default" toggle. The value below is only consulted by a one-shot
-  # startup migration (api/server/services/start/migration.js) that seeds the
-  # DB flag on first boot after upgrade; once any agent has `isDefault: true`,
-  # this key is ignored. Keep it here (or as an empty string) to avoid yaml
-  # validation churn — it will be removed in a future release.
   knauf:
-    defaultAgentId: ''
     # Per-conversation image-generation chip (Settings2 popover next to the
-    # paperclip + pinnable composer chip). `true` enables the chip on
-    # custom-agent chats whose agent has `image_gen_oai` installed AND on
-    # default Knauf model spec chats (no custom agent). `false` is a hard
-    # global kill switch. Backend gate in loadEphemeralAgent / loadAgent
-    # still enforces per-chat opt-in via ephemeralAgent.image_gen — flipping
-    # this flag to false does not remove the tool from `includedTools` or
-    # affect agents already calling it programmatically. KK20-168.
+    # paperclip + pinnable composer chip) on default Knauf model spec chats.
+    # `true` (default) shows the chip on default-spec chats; users toggle
+    # per send. `false` hides it. Custom-agent chats have no chip — admin
+    # install of `image_gen_oai` on the agent record is the admission
+    # control there, and the tool fires every turn regardless of this flag.
+    # Flipping to `false` does not remove the tool from `includedTools` or
+    # affect custom agents that already have it installed. KK20-168.
     imageGen: true
   webSearch: false
   runCode: false

@@ -750,26 +750,14 @@ export const interfaceSchema = z
     knauf: z
       .object({
         /**
-         * @deprecated KK20-123 — superseded by the per-agent `isDefault` flag
-         * on the agent record (set via the admin "Set as default" toggle in
-         * the agent builder). The runtime reads `isDefault` directly from the
-         * agents map; this YAML value is only consulted by the one-time
-         * startup migration in `api/server/services/start/migration.js` to
-         * seed the DB flag for existing deployments. Kept in the schema so
-         * existing librechat.yaml files don't fail validation. Originally
-         * KK20-128.
-         */
-        defaultAgentId: z.string().optional(),
-        /**
          * Global kill switch for the per-conversation image-generation chip
-         * (mounted by ChatForm.tsx, rendered by KnaufImageGenTools). When
-         * `false`, the chip is hidden everywhere — on custom agents that have
-         * `image_gen_oai` installed *and* on default Knauf model spec chats.
-         * When `true` (default), per-conversation visibility falls back to
-         * the policy in `useImageGenAvailable`: custom agent must have the
-         * tool installed; default-spec chats are universally eligible. The
-         * backend gate in `loadEphemeralAgent`/`loadAgent` still enforces
-         * per-chat opt-in via `ephemeralAgent.image_gen`. KK20-168.
+         * mounted by ChatForm.tsx and rendered by KnaufImageGenTools. When
+         * `false`, the chip is hidden on the default-spec branch (custom-
+         * agent chats have no chip to hide — admin install on the agent
+         * record is their admission control). When `true` (default), the
+         * per-branch policy in `useImageGenAvailable` decides visibility.
+         * The backend gate in `loadEphemeralAgent` still enforces per-chat
+         * opt-in via `ephemeralAgent.image_gen`. KK20-168.
          */
         imageGen: z.boolean().optional(),
       })

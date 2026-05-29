@@ -1,6 +1,5 @@
 const { z } = require('zod');
 const fs = require('fs').promises;
-const mongoose = require('mongoose');
 const { nanoid } = require('nanoid');
 const { logger } = require('@librechat/data-schemas');
 const {
@@ -21,7 +20,6 @@ const {
   Constants,
   FileSources,
   ResourceType,
-  SystemRoles,
   AccessRoleIds,
   PrincipalType,
   EToolResources,
@@ -375,25 +373,6 @@ const updateAgentHandler = async (req, res) => {
     if (avatarField === null) {
       updateData.avatar = avatarField;
     }
-
-    // [knauf] KK20-123 — system-wide default-agent flag. Admin-only;
-    // non-admin callers silently lose the field rather than 403 so a
-    // regular PATCH that happens to include it (e.g. an older client
-    // sending stale form state) doesn't break. When the flag is being
-    // turned on, the previous default is unset first so at most one
-    // agent has `isDefault: true` at any time.
-    if (Object.prototype.hasOwnProperty.call(updateData, 'isDefault')) {
-      if (req.user?.role !== SystemRoles.ADMIN) {
-        delete updateData.isDefault;
-      } else if (updateData.isDefault === true) {
-        const AgentModel = mongoose.models.Agent;
-        await AgentModel.updateMany(
-          { id: { $ne: id }, isDefault: true },
-          { $set: { isDefault: false } },
-        );
-      }
-    }
-    // End [knauf]
 
     if (updateData.edges?.length) {
       const { id: userId, role: userRole } = req.user;

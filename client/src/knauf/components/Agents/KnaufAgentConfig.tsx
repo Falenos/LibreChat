@@ -23,9 +23,8 @@ import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { LucideProps } from 'lucide-react';
 import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
-import { EModelEndpoint, SystemRoles } from 'librechat-data-provider';
-import { isEphemeralAgent, type AgentForm, type TAgentOption } from '~/common';
-import { useAuthContext } from '~/hooks/AuthContext';
+import { EModelEndpoint } from 'librechat-data-provider';
+import { isEphemeralAgent, type AgentForm } from '~/common';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
 import { cn, defaultTextProps, processAgentOption, removeFocusOutlines } from '~/utils';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
@@ -51,7 +50,6 @@ import {
   usePersonalities,
   type KnaufPersonality,
 } from '~/knauf/data-provider/Agents/usePersonalities';
-import { useSetDefaultAgentMutation } from '~/knauf/data-provider/Agents/useSetDefaultAgentMutation';
 import {
   knaufPendingAgentFilesAtom,
   knaufPendingForAgentIdAtom,
@@ -439,7 +437,6 @@ export default function KnaufAgentConfig() {
               </>
             )}
           />
-          <KnaufAdminDefaultAgentRow agent_id={agent_id} agent={agent} />
         </div>
 
         {/* Description */}
@@ -776,72 +773,5 @@ function PersonalityHeaderToggles() {
         disabled={fastMode}
       />
     </>
-  );
-}
-
-/**
- * Admin-only "Set as default agent" toggle beneath the Name field.
- *
- * KK20-123 — replaces the read-only agent-id copy row that used to live here.
- * Admins flip the system-wide default-agent flag with a switch instead of
- * pasting the id into librechat.yaml. Hidden entirely from non-admins and
- * from the ephemeral pre-save state (the agent must exist server-side
- * before we can PATCH `isDefault`). The mutation invalidates the agents
- * query so the chat-header picker re-derives the locked default.
- */
-function KnaufAdminDefaultAgentRow({
-  agent_id,
-  agent,
-}: Readonly<{ agent_id: string | undefined; agent: TAgentOption | undefined }>) {
-  const localize = useLocalize();
-  const { user } = useAuthContext();
-  const { showToast } = useToastContext();
-  const setDefault = useSetDefaultAgentMutation();
-
-  const isAdmin = user?.role === SystemRoles.ADMIN;
-  const isSaved = !!agent_id && !isEphemeralAgent(agent_id);
-  const currentIsDefault = agent?.id === agent_id ? !!agent?.isDefault : false;
-
-  if (!isAdmin || !isSaved || !agent_id) return null;
-
-  const handleToggle = (next: boolean) => {
-    setDefault.mutate(
-      { agent_id, isDefault: next },
-      {
-        onSuccess: () => {
-          showToast({
-            message: localize(
-              next ? 'com_knauf_default_agent_set' : 'com_knauf_default_agent_unset',
-            ),
-            status: 'success',
-          });
-        },
-        onError: () => {
-          showToast({
-            message: localize('com_ui_error'),
-            status: 'error',
-          });
-        },
-      },
-    );
-  };
-
-  return (
-    <div className="mt-3 flex items-start justify-between gap-3 rounded-md border border-border-light bg-surface-secondary px-3 py-2">
-      <div className="flex flex-col">
-        <span className="text-sm font-medium text-text-primary">
-          {localize('com_knauf_set_as_default_agent')}
-        </span>
-        <span className="mt-0.5 text-xs text-text-secondary">
-          {localize('com_knauf_default_agent_help')}
-        </span>
-      </div>
-      <Switch
-        checked={currentIsDefault}
-        onCheckedChange={handleToggle}
-        disabled={setDefault.isLoading}
-        aria-label={localize('com_knauf_set_as_default_agent')}
-      />
-    </div>
   );
 }

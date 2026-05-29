@@ -99,11 +99,6 @@ export const agentBaseSchema = z.object({
   // [knauf] Accept spec through agent create/update payloads. UI round-trip only — not consumed by chat completion. BUG-01.
   spec: z.string().nullable().optional(),
   // End [knauf]
-  // [knauf] Accept isDefault through agent update payloads (KK20-123). Admin-only;
-  // the PATCH /api/agents/:id handler strips this field for non-admin callers and
-  // enforces single-row exclusivity before persisting.
-  isDefault: z.boolean().optional(),
-  // End [knauf]
 });
 
 /** Create schema extends base with required fields for creation */
