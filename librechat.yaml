@@ -63,6 +63,15 @@ interface:
   # validation churn — it will be removed in a future release.
   knauf:
     defaultAgentId: ''
+    # Per-conversation image-generation chip (Settings2 popover next to the
+    # paperclip + pinnable composer chip). `true` enables the chip on
+    # custom-agent chats whose agent has `image_gen_oai` installed AND on
+    # default Knauf model spec chats (no custom agent). `false` is a hard
+    # global kill switch. Backend gate in loadEphemeralAgent / loadAgent
+    # still enforces per-chat opt-in via ephemeralAgent.image_gen — flipping
+    # this flag to false does not remove the tool from `includedTools` or
+    # affect agents already calling it programmatically. KK20-168.
+    imageGen: true
   webSearch: false
   runCode: false
   fileSearch: true

@@ -1,11 +1,14 @@
 /**
- * [knauf] Per-chat image-generation toggle for persistent-agent chats.
+ * [knauf] Per-chat image-generation toggle.
  *
- * Visibility: only when the active agent's stored tools include
- * `image_gen_oai`. Default state per conversation is OFF — the user must
- * explicitly enable image gen each chat (matches the product owner's
- * spec). The backend gate in loadAgent strips `image_gen_oai` and
- * `image_edit_oai` from the resolved agent tools when this toggle is OFF.
+ * Visibility is delegated to `useImageGenAvailable`, which encodes the
+ * three-branch policy: global kill switch via `interface.knauf.imageGen`,
+ * custom-agent branch requires `image_gen_oai` in the agent's `tools`,
+ * default-spec branch is universally eligible when a Knauf model spec is
+ * active. Default per-conversation state is OFF — the user must explicitly
+ * enable image gen each chat. The backend gate in `loadAgent` /
+ * `loadEphemeralAgent` strips `image_gen_oai` / `image_edit_oai` when the
+ * per-chat toggle is OFF.
  *
  * UX mirrors upstream's File Search: a Settings2 icon next to the
  * paperclip opens a popover with one "Create image" row + pin button.
@@ -18,17 +21,18 @@ import { ImageIcon, Settings2 } from 'lucide-react';
 import { CheckboxButton, DropdownPopup, PinIcon, TooltipAnchor } from '@librechat/client';
 import { LocalStorageKeys } from 'librechat-data-provider';
 import { useToolToggle, useLocalize } from '~/hooks';
-import { useGetAgentByIdQuery } from '~/data-provider';
+import { useImageGenAvailable } from '~/knauf/hooks/Chat/useImageGenAvailable';
 import { cn } from '~/utils';
 
 interface KnaufImageGenToolsProps {
   agentId?: string | null;
   conversationId?: string | null;
+  spec?: string | null;
 }
 
-function KnaufImageGenTools({ agentId, conversationId }: Readonly<KnaufImageGenToolsProps>) {
+function KnaufImageGenTools({ agentId, conversationId, spec }: Readonly<KnaufImageGenToolsProps>) {
   const localize = useLocalize();
-  const { data: agent } = useGetAgentByIdQuery(agentId ?? null);
+  const available = useImageGenAvailable({ agentId, spec });
 
   // Hook order must stay stable across renders — call the toggle hook before
   // any conditional early-return below.
@@ -47,9 +51,7 @@ function KnaufImageGenTools({ agentId, conversationId }: Readonly<KnaufImageGenT
     debouncedChange({ value: !enabled });
   }, [debouncedChange, enabled]);
 
-  // Visibility gate — render nothing unless the agent has the tool.
-  const hasImageGen = !!agent?.tools?.includes('image_gen_oai');
-  if (!hasImageGen) {
+  if (!available) {
     return null;
   }
 

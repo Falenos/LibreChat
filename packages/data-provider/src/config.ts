@@ -760,6 +760,18 @@ export const interfaceSchema = z
          * KK20-128.
          */
         defaultAgentId: z.string().optional(),
+        /**
+         * Global kill switch for the per-conversation image-generation chip
+         * (mounted by ChatForm.tsx, rendered by KnaufImageGenTools). When
+         * `false`, the chip is hidden everywhere — on custom agents that have
+         * `image_gen_oai` installed *and* on default Knauf model spec chats.
+         * When `true` (default), per-conversation visibility falls back to
+         * the policy in `useImageGenAvailable`: custom agent must have the
+         * tool installed; default-spec chats are universally eligible. The
+         * backend gate in `loadEphemeralAgent`/`loadAgent` still enforces
+         * per-chat opt-in via `ephemeralAgent.image_gen`. KK20-168.
+         */
+        imageGen: z.boolean().optional(),
       })
       .optional(),
     // End [knauf]

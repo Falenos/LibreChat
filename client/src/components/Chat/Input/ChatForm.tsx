@@ -35,8 +35,10 @@ import SendButton from './SendButton';
 import EditBadges from './EditBadges';
 import BadgeRow from './BadgeRow';
 import Mention from './Mention';
-// [knauf] Per-chat image-gen toggle, rendered only in persistent-agent
-// chats where the agent has the image_gen_oai tool. See KnaufImageGenTools.
+// [knauf] Per-chat image-gen toggle. Visibility (custom agent vs default
+// Knauf model spec chat vs global kill switch) is decided by
+// useImageGenAvailable inside the component — ChatForm mounts it
+// unconditionally so the policy lives in one place.
 import KnaufImageGenTools from '~/knauf/components/Chat/KnaufImageGenTools';
 // End [knauf]
 import store from '~/store';
@@ -348,13 +350,15 @@ const ChatForm = memo(function ChatForm({
                   setFilesLoading={setFilesLoading}
                 />
               </div>
-              {/* [knauf] Image-gen popover + pinnable chip, agent-chat only. */}
-              {isAgentsEndpoint(endpoint) && (
-                <KnaufImageGenTools
-                  agentId={conversation?.agent_id}
-                  conversationId={conversationId}
-                />
-              )}
+              {/* [knauf] Image-gen popover + pinnable chip. Mounted
+                  unconditionally; visibility is delegated to
+                  useImageGenAvailable, which handles custom-agent + default-
+                  spec + global kill switch in one place. */}
+              <KnaufImageGenTools
+                agentId={conversation?.agent_id}
+                conversationId={conversationId}
+                spec={conversation?.spec}
+              />
               {/* End [knauf] */}
               <BadgeRow
                 showEphemeralBadges={
