@@ -6,9 +6,10 @@
  * Policy:
  *   1. `interface.knauf.imageGen === false` in `librechat.yaml` is a hard
  *      global kill switch — chip hidden everywhere.
- *   2. On a custom (persistent) agent chat, the chip is available iff the
- *      agent has `image_gen_oai` in its `tools` array (admin opt-in via
- *      the agent builder).
+ *   2. On a custom (persistent) agent chat, the chip is NEVER shown. If
+ *      the admin installed `image_gen_oai` on the agent the tool is
+ *      always active — no per-chat opt-in. The backend treats stored
+ *      tools as authoritative on this branch (no strip in `loadAgent`).
  *   3. On a default-spec chat (no custom agent — `agent_id` absent or
  *      ephemeral) the chip is universally available so long as the
  *      conversation is on a Knauf model spec (`conversation.spec` set).
@@ -19,9 +20,7 @@
  */
 import { useMemo } from 'react';
 import { isEphemeralAgentId } from 'librechat-data-provider';
-import { useGetStartupConfig, useGetAgentByIdQuery } from '~/data-provider';
-
-const IMAGE_GEN_TOOL = 'image_gen_oai';
+import { useGetStartupConfig } from '~/data-provider';
 
 interface UseImageGenAvailableArgs {
   agentId?: string | null;
@@ -31,17 +30,16 @@ interface UseImageGenAvailableArgs {
 export function useImageGenAvailable({ agentId, spec }: UseImageGenAvailableArgs): boolean {
   const { data: startupConfig } = useGetStartupConfig();
   const isCustomAgent = !!agentId && !isEphemeralAgentId(agentId);
-  const { data: agent } = useGetAgentByIdQuery(isCustomAgent ? agentId : null);
 
   return useMemo(() => {
     if (startupConfig?.interface?.knauf?.imageGen === false) {
       return false;
     }
     if (isCustomAgent) {
-      return !!agent?.tools?.includes(IMAGE_GEN_TOOL);
+      return false;
     }
     return !!spec;
-  }, [startupConfig?.interface?.knauf?.imageGen, isCustomAgent, agent?.tools, spec]);
+  }, [startupConfig?.interface?.knauf?.imageGen, isCustomAgent, spec]);
 }
 
 export default useImageGenAvailable;

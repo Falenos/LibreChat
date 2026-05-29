@@ -2,7 +2,7 @@
 
 Companion to the [SEAMS.md](../../../SEAMS.md) entries under ticket KK20-168. Those rows capture *where* the inline seams live; this doc explains *why* the toggle is structured the way it is, and lays out what a true non-agent extension would require.
 
-> If you're skimming for one answer: **the "image generation toggle" is two separate gates**, with a third global kill switch on top. An admin enables `image_gen_oai` on the agent record in MongoDB; a user then toggles it per conversation via a chip in the composer. The chip is also reachable on default Knauf model spec chats (no custom agent) so the feature does not require a custom agent. `interface.knauf.imageGen` is the global kill switch — flip it to `false` and the chip disappears everywhere.
+> If you're skimming for one answer: **there are two surfaces.** On a default Knauf model spec chat (no custom agent), the user toggles image gen per conversation via a chip in the composer. On a custom agent chat, the chip is hidden — if the admin installed `image_gen_oai` on the agent, the tool fires unconditionally. `interface.knauf.imageGen` is a global kill switch that hides the chip on the default-spec surface.
 
 ---
 
@@ -45,22 +45,18 @@ State machinery:
 [useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts) is the single source of truth for "should the chip appear here?" Both the mount in `ChatForm.tsx` and the chip itself consult it. Three branches:
 
 1. **Global kill switch.** `interface.knauf.imageGen === false` returns `false` everywhere. Default is `true` (the librechat.yaml seed) — admins flip it to `false` to disable the surface without removing `image_gen_oai` from `includedTools`.
-2. **Custom-agent branch.** When `agentId` is set and not the ephemeral marker, the hook reads the agent record via `useGetAgentByIdQuery` and returns `true` iff `agent.tools.includes('image_gen_oai')`. This is the original KK20-168 behaviour: admin install on the agent record is the per-agent admission control.
+2. **Custom-agent branch — always hidden.** When `agentId` is set and not the ephemeral marker, the hook returns `false`. Custom-agent chats never show the chip. If the admin installed `image_gen_oai` on the agent, the tool fires unconditionally — no per-chat opt-in, no toggle. See §2.4 for the backend consequence.
 3. **Default-spec branch.** When `agentId` is absent (or ephemeral) and `conversation.spec` is set, the hook returns `true`. Any Knauf model spec chat (`karl`, personality presets, etc.) qualifies; off-spec chats do not. The backend gate (§2.4) still enforces per-chat opt-in via `ephemeralAgent.image_gen`, so the chip being visible does not mean the model gets the tool.
 
-### 2.4 Backend gate — `loadAgent` / `loadEphemeralAgent`
+### 2.4 Backend gate — `loadEphemeralAgent` only
 
-[packages/api/src/agents/load.ts](../../../packages/api/src/agents/load.ts) is the load-bearing seam. It is two branches, one per agent kind:
+[packages/api/src/agents/load.ts](../../../packages/api/src/agents/load.ts) carries one `[knauf]` block, on the ephemeral branch:
 
-**Ephemeral (default chat with `agent: 'functions'`).** `loadEphemeralAgent` builds a synthetic agent from request body fields. Around line 80, it pushes `image_gen_oai` onto the tool list **only when** `req.body.ephemeralAgent.image_gen === true`. Without the flag, the synthetic agent has no image gen tool. This branch is what makes the default-spec chat path work — the user toggles the chip, the request body carries the flag, and the synthetic agent gets the tool.
+**Ephemeral (default chat with `agent: 'functions'`).** `loadEphemeralAgent` builds a synthetic agent from request body fields. Around line 80, it pushes `image_gen_oai` onto the tool list **only when** `req.body.ephemeralAgent.image_gen === true`. Without the flag, the synthetic agent has no image gen tool. This is what makes the default-spec chat path work — the user toggles the chip, the request body carries the flag, and the synthetic agent gets the tool.
 
-**Persistent (custom agent created in the builder).** `loadAgent` fetches the agent from MongoDB. Around line 176, if the stored `tools` array contains `image_gen_oai` *and* the request's `ephemeralAgent.image_gen` is not strictly true, it **strips** both `image_gen_oai` and `image_edit_oai` from the resolved agent. The admin-installed tool is shadow-removed for that one conversation turn.
+**Custom (persistent) agent.** `loadAgent` fetches the agent from MongoDB and passes its stored `tools` through unchanged. Admin-installed `image_gen_oai` therefore fires every turn — there is no per-chat gate on this path. This is the intended product behaviour: installing the tool on a custom agent is the per-agent commitment; the chat-time toggle is reserved for the default-spec branch where the chip is the only admission control.
 
-The two branches converge on the same invariant: **the tool reaches the LLM iff `ephemeralAgent.image_gen === true` in the request body.** Admin install is necessary but not sufficient on the persistent branch; per-chat toggle is the actual on/off switch at request time on both branches.
-
-Why both UI and backend gates? The UI gate is convenience — don't show a control the agent doesn't have. The backend strip is defense in depth — a malicious client could omit the flag while still calling an agent that has `image_gen_oai` installed, and without the strip the LLM would see the tool. Today both gates default to "off", so the only way to invoke image gen is by going through the chip.
-
-Test coverage lives in [packages/api/src/agents/load.image-gen.knauf.spec.ts](../../../packages/api/src/agents/load.image-gen.knauf.spec.ts) (backend, six cases) and [useImageGenAvailable.spec.ts](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.spec.ts) (front-end, nine cases covering all three branches).
+Test coverage lives in [packages/api/src/agents/load.image-gen.knauf.spec.ts](../../../packages/api/src/agents/load.image-gen.knauf.spec.ts) (backend, 5 cases — 3 pinning custom-agent pass-through + 2 ephemeral-branch cases) and [useImageGenAvailable.spec.ts](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.spec.ts) (front-end, 9 cases covering all three branches).
 
 ### 2.5 The tool implementation itself
 
@@ -75,19 +71,19 @@ Test coverage lives in [packages/api/src/agents/load.image-gen.knauf.spec.ts](..
 ```mermaid
 sequenceDiagram
   autonumber
-  participant U as User
+  participant U as User (default-spec chat)
   participant CF as ChatForm + KnaufImageGenTools
   participant H as useImageGenAvailable
   participant R as Recoil<br/>ephemeralAgentByConvoId
   participant LS as localStorage<br/>LAST_IMAGE_GEN_TOGGLE_
   participant API as Backend route<br/>(agents controller)
-  participant L as loadAgent / loadEphemeralAgent
+  participant L as loadEphemeralAgent
   participant LLM as Azure OpenAI<br/>(via agents runtime)
   participant T as OpenAIImageTools<br/>(image_gen_oai)
 
   Note over U,CF: 1. Chip visibility check
   CF->>H: useImageGenAvailable(agentId, spec)
-  H-->>CF: true (custom agent has tool, OR default spec, OR kill switch off)
+  H-->>CF: true (no custom agent, spec set, kill switch off)
 
   Note over U,CF: 2. User pins + toggles
   U->>CF: clicks Settings2 → "Create image" pin
@@ -100,22 +96,12 @@ sequenceDiagram
   U->>CF: types prompt + send
   CF->>API: POST /api/agents/...<br/>body: { ephemeralAgent: { image_gen: true }, ... }
 
-  Note over API,L: 4. Backend gate
-  API->>L: loadAgent(agent_id, req)
-  alt persistent agent
-    L->>L: agent.tools has image_gen_oai?
-    alt ephemeralAgent.image_gen === true
-      L-->>API: keep image_gen_oai (+ image_edit_oai)
-    else flag absent / false
-      L-->>API: strip image_gen_oai + image_edit_oai
-    end
-  else ephemeral (default-spec) chat
-    L->>L: ephemeralAgent.image_gen === true?
-    alt yes
-      L-->>API: push image_gen_oai into synthetic tools
-    else no
-      L-->>API: synthetic tools omit image gen
-    end
+  Note over API,L: 4. Backend gate (ephemeral branch only)
+  API->>L: loadEphemeralAgent(req)
+  alt ephemeralAgent.image_gen === true
+    L-->>API: push image_gen_oai into synthetic tools
+  else flag absent / false
+    L-->>API: synthetic tools omit image gen
   end
 
   Note over API,T: 5. Model call
@@ -125,6 +111,8 @@ sequenceDiagram
   T-->>LLM: image URL / attachment
   LLM-->>API: assistant message with image part
   API-->>U: streamed response
+
+  Note over U,T: Custom-agent chats: chip hidden; if `image_gen_oai`<br/>is in the stored tools, the tool fires every turn —<br/>loadAgent passes the tools array through unchanged.
 ```
 
 ### 3.2 Decision flow — does `image_gen_oai` reach the model?
@@ -132,20 +120,17 @@ sequenceDiagram
 ```mermaid
 flowchart TD
   A[Incoming chat request] --> K{interface.knauf.imageGen<br/>=== false?}
-  K -->|yes| Z0[Chip hidden everywhere<br/>regardless of branch]
+  K -->|yes| Z0[Chip hidden.<br/>Default-spec path can't enable image gen.<br/>Custom-agent path unaffected — see below.]
   K -->|no / undefined| B{agent_id present<br/>and non-ephemeral?}
-  B -->|yes — custom agent| C{agent.tools includes<br/>image_gen_oai?}
-  C -->|no| Z1[Chip hidden.<br/>Tool not present in stored tools.]
-  C -->|yes| D{ephemeralAgent.image_gen<br/>=== true?}
-  D -->|no| E[Strip image_gen_oai<br/>+ image_edit_oai]
-  D -->|yes| F[Keep image_gen_oai<br/>+ image_edit_oai]
+  B -->|yes — custom agent| C[Chip hidden.<br/>loadAgent passes stored tools through.]
+  C --> P{agent.tools includes<br/>image_gen_oai?}
+  P -->|yes| N[Model can call image gen<br/>every turn]
+  P -->|no| M[Model sees: no image tool]
   B -->|no — default spec| G{conversation.spec<br/>set?}
   G -->|no| Z2[Chip hidden.<br/>Off-spec chat.]
   G -->|yes| H{ephemeralAgent.image_gen<br/>=== true?}
   H -->|no| Z3[Synthetic tools<br/>omit image gen]
   H -->|yes| I[Push image_gen_oai<br/>onto synthetic tools]
-  E --> M[Model sees: no image tool]
-  F --> N[Model can call image gen]
   Z3 --> M
   I --> N
 ```
@@ -169,18 +154,17 @@ flowchart LR
     C5[localStorage<br/>LAST_IMAGE_GEN_TOGGLE_]
   end
   subgraph Server[Server - Node + Express]
-    S1[loadAgent<br/>strip when flag off]
+    S1[loadAgent<br/>passes tools through unchanged]
     S2[loadEphemeralAgent<br/>push when flag on]
     S3[OpenAIImageTools.js<br/>throws unless isAgent]
   end
   Y1 -->|startupConfig| H1
-  A1 -->|GET /api/agents/:id<br/>useGetAgentByIdQuery| H1
+  A1 -->|stored tools<br/>fire unconditionally| S1
   C1 -.mounts.-> C2
   C2 --> H1
   C2 --> C3
   C3 <--> C4
   C3 <--> C5
-  C4 -->|body.ephemeralAgent.image_gen| S1
   C4 -->|body.ephemeralAgent.image_gen| S2
   S1 --> S3
   S2 --> S3
@@ -188,21 +172,22 @@ flowchart LR
 
 ---
 
-## 4. Default Karl spec branch — how it ships
+## 4. The two surfaces — what ships
 
-The default-spec branch is the change this PR ships on top of the original KK20-168 work. It does not require a custom agent — any conversation on a Knauf model spec (`karl`, personality presets) is eligible. The three pieces:
+Image generation has two surfaces, by design:
 
-**Front end.** The chip mount in [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx) is now unconditional and forwards `conversation?.spec` alongside `agent_id`. The chip itself consults [useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts), which returns `true` on the default-spec branch when `spec` is set and the global kill switch is not flipped. No per-agent tool installation is needed for this branch.
+**Default Karl spec chat (chip).** Any conversation on a Knauf model spec (`karl`, personality presets) with no custom agent selected. The chip in the composer is the admission control — user toggles per send, request body carries `ephemeralAgent.image_gen`, [loadEphemeralAgent](../../../packages/api/src/agents/load.ts) pushes `image_gen_oai` onto the synthetic tool list. Mount in [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx) is unconditional and forwards `conversation?.spec`; visibility is decided by [useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts). The hook returns `true` for this branch when `spec` is set and the global kill switch is not flipped.
 
-**Config.** A new `interface.knauf.imageGen: true` seeded in [librechat.yaml](../../../librechat.yaml) and a matching `imageGen: z.boolean().optional()` field added to the Knauf-namespaced interface block in [packages/data-provider/src/config.ts](../../../packages/data-provider/src/config.ts). Flipping the yaml value to `false` hides the chip on every surface — custom-agent chats included — without removing `image_gen_oai` from `includedTools` or affecting agents that call it programmatically. Default is `true`; the schema treats undefined as enabled.
+**Custom agent chat (no chip, tool fires unconditionally).** An admin equips a custom agent with `image_gen_oai` via the upstream agent builder. There is no chip, no per-chat opt-in. [loadAgent](../../../packages/api/src/agents/load.ts) passes the stored tools through unchanged, so the LLM sees `image_gen_oai` every turn. The product call: installing the tool on a custom agent is the deliberate per-agent commitment; the chat-time toggle is reserved for the default-spec branch where the chip is the only admission control.
 
-**Back end.** No changes. [loadEphemeralAgent](../../../packages/api/src/agents/load.ts) already pushes `image_gen_oai` onto the synthetic tool list when `ephemeralAgent.image_gen === true`. The existing parallel handling for `web_search`, `file_search`, `execute_code` proves the path: any spec-driven ephemeral conversation reaches `loadEphemeralAgent` via [agents/build.js](../../../api/server/services/Endpoints/agents/build.js) (`agent_id` falls back to `EPHEMERAL_AGENT_ID` when the endpoint is not the agents endpoint, then `loadAgent` dispatches to `loadEphemeralAgent` for ephemeral IDs).
+**Config seam — `interface.knauf.imageGen`.** Seeded `true` in [librechat.yaml](../../../librechat.yaml), declared on the Knauf-namespaced interface block in [packages/data-provider/src/config.ts](../../../packages/data-provider/src/config.ts). Flipping the yaml value to `false` hides the chip on the default-spec surface (custom-agent chats are unaffected — they have no chip to hide). Removing `image_gen_oai` from `includedTools` is the harder kill that takes the tool away from custom agents too.
 
 Implications worth flagging:
 
-- **Cost surface.** Image gen is opt-in per send — toggling the chip is a deliberate user action and each generation is a paid call. The chip is now default-visible on every default-spec chat; the risk is normalisation driving usage up. Worth a PMO talking point.
+- **Cost surface — custom agents.** Image gen fires on every chat with a custom agent that has `image_gen_oai` installed. There is no per-conversation gate. Admins should reserve the install for agents where image gen is a deliberate first-class capability.
+- **Cost surface — default-spec.** Per-send opt-in via the chip. Each generation is a paid call. The chip is default-visible on every default-spec chat; risk of normalising usage upward is real.
 - **Permissions.** The chip is not role-gated. If image gen should be admin-only or role-gated, the policy belongs in `useImageGenAvailable` (one place to add it). See `FEAT-03` in [CLAUDE.local.md](../../../CLAUDE.local.md) for the broader admin/user split.
-- **Upstream-sync risk.** `interface.knauf.imageGen` lives under the existing Knauf-namespaced sub-schema, parallel to `defaultAgentId`. Upstream cannot collide with it. The ChatForm mount predicate is wrapped in a `[knauf]` block and tracked in SEAMS.md.
+- **Upstream-sync risk.** `interface.knauf.imageGen` lives under the existing Knauf-namespaced sub-schema. Upstream cannot collide with it. The ChatForm mount predicate and `loadEphemeralAgent` push are wrapped in `[knauf]` blocks and tracked in SEAMS.md.
 
 ---
 
@@ -235,21 +220,21 @@ Order of operations, smallest to largest:
 
 ## 6. Comparison
 
-| Dimension | Shipped (custom-agent + default-spec) | §5 — true non-agent |
-|---|---|---|
-| Scope of change | shipped under KK20-168 | runtime refactor |
-| Backend changes | none beyond original KK20-168 | yes — tool-resolution layer, lift isAgent guard |
-| UX delta | chip on every Knauf model spec chat (custom + default) | chip on plain chat-completions surface |
-| Admin kill switch | `interface.knauf.imageGen: false` | same + per-surface flag |
-| Cost surface | per-chat user opt-in | per-chat user opt-in |
-| Upstream-sync risk | medium (Knauf-namespaced schema + tracked [knauf] markers) | high (rebuilds a chat-completions tool path that upstream is also migrating) |
-| Estimated effort | shipped | ≥ 1 epic |
+| Dimension | Shipped — default-spec chip | Shipped — custom-agent always-on | §5 — true non-agent |
+|---|---|---|---|
+| Admission control | per-chat chip toggle | admin install on agent record | TBD |
+| Where it lives | composer chip + `useImageGenAvailable` | agent's stored `tools` array | non-agent chat-completions controller |
+| Backend gate | `loadEphemeralAgent` push when flag on | `loadAgent` pass-through (no gate) | tool resolution layer + lift isAgent guard |
+| Cost surface | per-send user opt-in | every turn with that agent | TBD |
+| Admin kill switch | `interface.knauf.imageGen: false` | remove `image_gen_oai` from `includedTools` (also kills default-spec) | both + per-surface flag |
+| Upstream-sync risk | medium (Knauf-namespaced schema + tracked [knauf] block) | low (no custom seam — uses upstream tools array as-is) | high (rebuilds a chat-completions tool path) |
+| Estimated effort | shipped | shipped | ≥ 1 epic |
 
 ---
 
 ## 7. Cross-references
 
-- [SEAMS.md](../../../SEAMS.md) — KK20-168 rows for `ChatForm.tsx` (two — original mount + broadened predicate), `KnaufImageGenTools.tsx`, `useImageGenAvailable.ts`, `useImageGenAvailable.spec.ts`, `load.ts`, `types.ts`, `config.ts` (knauf.imageGen), `LocalStorageKeys`.
+- [SEAMS.md](../../../SEAMS.md) — KK20-168 rows for `ChatForm.tsx` (two — original mount + broadened predicate), `KnaufImageGenTools.tsx`, `useImageGenAvailable.ts`, `useImageGenAvailable.spec.ts`, `load.ts` (`loadEphemeralAgent` ephemeral branch — the persistent strip introduced under the same ticket was later removed), `types.ts`, `config.ts` (knauf.imageGen), `LocalStorageKeys`.
 - [librechat.yaml](../../../librechat.yaml) — `includedTools: image_gen_oai` (line 19), `interface.knauf.imageGen` (default `true`).
 - [packages/api/src/tools/toolkits/oai.ts](../../../packages/api/src/tools/toolkits/oai.ts) — definitions of `image_gen_oai` and `image_edit_oai`.
 - [CLAUDE.local.md](../../../CLAUDE.local.md) — FEAT-03 (admin/user view split) and FEAT-04 (agent-config capability flags) for adjacent work.
