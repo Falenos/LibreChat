@@ -30,15 +30,18 @@ The tool key itself is registered in [packages/api/src/tools/toolkits/oai.ts](..
 
 The tools registry itself is admin-gated globally by the [librechat.yaml](../../../librechat.yaml) `includedTools` list — `image_gen_oai` must appear there to be available at all. If an admin removes it from the YAML, every other gate becomes moot.
 
-### 2.2 User opt-in — the composer chip
+### 2.2 User opt-in — the menu item and the chip
 
-[KnaufImageGenTools.tsx](../../../client/src/knauf/components/Chat/KnaufImageGenTools.tsx) renders a Settings2 button next to the paperclip. The button opens a popover with one row, *Create image*, plus a pin button. Pinning promotes a `CheckboxButton` chip directly into the composer; clicking the chip flips the per-conversation toggle.
+The user-facing surface is split across two places that share Recoil state via `useToolToggle('image_gen')`:
+
+- **The "Create image" menu item lives inside the upstream [ToolsDropdown.tsx](../../../client/src/components/Chat/Input/ToolsDropdown.tsx)** via a `[knauf]` block — same Settings2 popover that hosts web_search, file_search, execute_code, artifacts, MCP. One popover, all tools. The item carries a pin button just like its neighbours.
+- **The pinned/toggled chip is rendered by [KnaufImageGenTools.tsx](../../../client/src/knauf/components/Chat/KnaufImageGenTools.tsx)** in the composer row when (a) image gen is available and (b) the toggle is on or pinned. The component is mounted unconditionally from [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx); the visibility predicate (`useImageGenAvailable`) returns false on the surfaces that shouldn't see the chip.
 
 State machinery:
 
 - `useToolToggle({ toolKey: 'image_gen', localStorageKey: LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_, … })` writes into the Recoil atom `ephemeralAgentByConvoId` ([client/src/hooks/Plugins/useToolToggle.ts](../../../client/src/hooks/Plugins/useToolToggle.ts)).
 - Pin state and last-toggle value are mirrored to `localStorage` so reopening the conversation preserves the chip's visibility, but **default per-conversation state is OFF** — the user must explicitly enable image gen each chat (product owner spec).
-- The chip is mounted **unconditionally** from [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx); visibility is decided inside the component via `useImageGenAvailable` (§2.3). This is a change from the original KK20-168 ship, which mounted only on `isAgentsEndpoint(endpoint)` and was therefore invisible on default Karl spec chats.
+- The menu item inside `ToolsDropdown` reaches the active modelSpec name via a `specName` field added to [BadgeRowContext](../../../client/src/Providers/BadgeRowContext.tsx) (also a `[knauf]` block). `ToolsDropdown` itself only renders on default-spec chats (`showEphemeralBadges === true` in `BadgeRow`), so on custom-agent chats the popover is absent and the chip is automatically hidden.
 
 ### 2.3 Visibility policy — `useImageGenAvailable`
 
@@ -147,7 +150,9 @@ flowchart LR
   end
   subgraph Client[Client - React + Recoil]
     C1[ChatForm.tsx<br/>unconditional mount]
-    C2[KnaufImageGenTools.tsx<br/>chip + popover]
+    C2[KnaufImageGenTools.tsx<br/>chip only]
+    TD[ToolsDropdown.tsx<br/>Create image item<br/>knauf block]
+    BR[BadgeRowContext<br/>specName forwarded]
     H1[useImageGenAvailable<br/>visibility policy]
     C3[useToolToggle<br/>toolKey: image_gen]
     C4[ephemeralAgentByConvoId<br/>Recoil atom]
@@ -163,6 +168,9 @@ flowchart LR
   C1 -.mounts.-> C2
   C2 --> H1
   C2 --> C3
+  BR -->|specName| TD
+  TD --> H1
+  TD --> C3
   C3 <--> C4
   C3 <--> C5
   C4 -->|body.ephemeralAgent.image_gen| S2

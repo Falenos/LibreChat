@@ -1,10 +1,9 @@
 /**
- * [knauf] Seam test for the visibility gate of KnaufImageGenTools — the
- * image-generation toggle now backed by `useImageGenAvailable`. The
- * component must render nothing when the hook reports unavailability and
- * the popover/chip when it reports availability. The hook's own policy
- * (custom-agent vs default-spec vs kill switch) is covered by its own
- * spec at `client/src/knauf/hooks/Chat/useImageGenAvailable.spec.ts`.
+ * [knauf] Seam test for the slimmed `KnaufImageGenTools` chip. The
+ * popover/menu-item lives in upstream `ToolsDropdown` now; this component
+ * only renders the pinned/toggled CheckboxButton chip in the composer row.
+ * Visibility is delegated to `useImageGenAvailable` — that hook's own
+ * spec covers the policy branches.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
@@ -29,20 +28,6 @@ jest.mock('@librechat/client', () => ({
       {label}
     </button>
   ),
-  DropdownPopup: ({ trigger }: { trigger: React.ReactNode }) => (
-    <div data-testid="image-gen-popover">{trigger}</div>
-  ),
-  PinIcon: () => <span data-testid="pin-icon" />,
-  TooltipAnchor: ({ render }: { render: React.ReactNode }) => <>{render}</>,
-}));
-
-jest.mock('@ariakit/react', () => ({
-  __esModule: true,
-  MenuButton: ({ children, ...rest }: React.PropsWithChildren<unknown>) => (
-    <button type="button" data-testid="image-gen-trigger" {...rest}>
-      {children}
-    </button>
-  ),
 }));
 
 function setToggle(opts: { enabled?: boolean; isPinned?: boolean } = {}) {
@@ -54,7 +39,7 @@ function setToggle(opts: { enabled?: boolean; isPinned?: boolean } = {}) {
   });
 }
 
-describe('[knauf] KnaufImageGenTools — visibility gate', () => {
+describe('[knauf] KnaufImageGenTools — chip-only visibility', () => {
   beforeEach(() => {
     mockUseImageGenAvailable.mockReset();
     mockUseToolToggle.mockReset();
@@ -62,30 +47,33 @@ describe('[knauf] KnaufImageGenTools — visibility gate', () => {
 
   it('renders nothing when useImageGenAvailable returns false', () => {
     mockUseImageGenAvailable.mockReturnValue(false);
-    setToggle();
-    const { container } = render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+    setToggle({ enabled: true, isPinned: true });
+    const { container } = render(
+      <KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />,
+    );
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders the popover trigger when useImageGenAvailable returns true', () => {
+  it('renders nothing when available but neither toggled nor pinned', () => {
     mockUseImageGenAvailable.mockReturnValue(true);
-    setToggle();
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
-    expect(screen.getByTestId('image-gen-popover')).toBeInTheDocument();
-    expect(screen.getByTestId('image-gen-trigger')).toBeInTheDocument();
+    setToggle({ enabled: false, isPinned: false });
+    const { container } = render(
+      <KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />,
+    );
+    expect(container.innerHTML).toBe('');
   });
 
-  it('renders the pinned chip when the toggle is pinned and chip is available', () => {
+  it('renders the chip when pinned', () => {
     mockUseImageGenAvailable.mockReturnValue(true);
     setToggle({ isPinned: true });
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+    render(<KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />);
     expect(screen.getByTestId('image-gen-chip')).toHaveTextContent('com_knauf_create_image');
   });
 
-  it('renders the chip when the toggle is enabled even without a pin', () => {
+  it('renders the chip when toggled on even without pin', () => {
     mockUseImageGenAvailable.mockReturnValue(true);
     setToggle({ enabled: true });
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+    render(<KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />);
     expect(screen.getByTestId('image-gen-chip')).toBeInTheDocument();
   });
 

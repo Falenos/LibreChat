@@ -17,6 +17,12 @@ interface BadgeRowContextType {
   conversationId?: string | null;
   storageContextKey?: string;
   agentsConfig?: TAgentsEndpoint | null;
+  // [knauf] KK20-168 — expose the active modelSpec name on the context so
+  // ToolsDropdown can gate its Knauf image-gen item via
+  // `useImageGenAvailable({ spec })`. Provider already receives `specName`
+  // as a prop; this just adds it to the consumer surface.
+  specName?: string | null;
+  // End [knauf]
   webSearch: ReturnType<typeof useToolToggle>;
   artifacts: ReturnType<typeof useToolToggle>;
   fileSearch: ReturnType<typeof useToolToggle>;
@@ -251,6 +257,10 @@ export default function BadgeRowProvider({
     codeInterpreter,
     searchApiKeyForm,
     mcpServerManager,
+    // [knauf] KK20-168 — forward specName so ToolsDropdown's Knauf image-gen
+    // item can read it via the context instead of prop-drilling from ChatForm.
+    specName,
+    // End [knauf]
   };
 
   return <BadgeRowContext.Provider value={value}>{children}</BadgeRowContext.Provider>;
