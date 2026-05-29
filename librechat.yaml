@@ -98,6 +98,21 @@ fileConfig:
   endpoints:
     gptPlugins:
       fileLimit: 5
+    # 25 MB per-file cap on chat composer uploads (default Karl spec + any
+    # Azure-backed conversation). Upstream default is 512 MB — tightened
+    # here to control Azure Blob spend and avoid oversized PDFs blowing
+    # the model context. totalSizeLimit matches fileSizeLimit so multiple
+    # files in one send can't sidestep the per-file cap. Values are MB;
+    # the loader (packages/data-provider/src/file-config.ts) converts to
+    # bytes at load time.
+    azureOpenAI:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
+    # Mirror the cap on the agents endpoint so custom-agent chats are
+    # subject to the same policy as the default-spec chat.
+    agents:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
 
 endpoints:
 
@@ -155,6 +170,14 @@ modelSpecs:
       description: 'KARL GPT for the Knauf Group'
       preset:
         endpoint: 'azureOpenAI'
+        # Use the Azure Responses API so the chat composer's paperclip
+        # menu surfaces "Upload files" (image + PDF) instead of the
+        # image-only fallback. Azure is excluded from the
+        # `documentSupportedProviders` allow-list (see
+        # packages/data-provider/src/schemas.ts), so document upload on
+        # an azureOpenAI chat is gated specifically on this flag — same
+        # mechanism the karl-personality-* specs already use.
+        useResponsesApi: true
         agentOptions:
           model: 'gpt-5.4'
           agent: 'functions'
