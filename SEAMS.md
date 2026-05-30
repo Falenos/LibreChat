@@ -78,7 +78,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `Dockerfile`     | `# [knauf] Keep workspace runtime deps...` | 
 | `packages/api/package.json` | `"mongodb": "^6.14.2"` moved from `devDependencies` → `peerDependencies` | Fixes production `MODULE_NOT_FOUND` crash — `mongodb` was externalized by rollup but not declared as a peer, so prod installs omitted it |
 | `api/package.json` | `"mongodb": "^6.14.2"` added to `dependencies` | Peer dep fulfillment — ensures `mongodb` is present in production `node_modules` so `@librechat/api` dist can resolve it |
-| `client/src/locales/en/translation.json` | `com_knauf_*` namespace — Knauf-only i18n keys added inline to the upstream locale JSON (JSON has no comment syntax, so no `[knauf]` marker is possible). Current keys: `com_knauf_builder_simplified_view` (KK20-125 / FEAT-03, admin builder toggle label). Future Knauf-only keys must reuse the `com_knauf_*` prefix so they are greppable and namespaced away from upstream |
+| `client/src/locales/en/translation.json` | `com_knauf_*` namespace — Knauf-only i18n keys added inline to the upstream locale JSON (JSON has no comment syntax, so no `[knauf]` marker is possible). Current keys: `com_knauf_builder_simplified_view` (KK20-125 / FEAT-03, admin builder toggle label). Future Knauf-only keys must reuse the `com_knauf_*` prefix so they are greppable and namespaced away from upstream. Upstream-key value overrides: `com_ui_upload_delay` (KK20-123) — neutralised wording to drop the RAG-specific "indexing for retrieval" claim, since on Knauf the slow-upload toast fires for plain provider/inline uploads too |
 
 ## Net-New Files
 
