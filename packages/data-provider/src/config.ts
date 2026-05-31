@@ -831,6 +831,17 @@ export const turnstileSchema = z.object({
 
 export type TTurnstileConfig = z.infer<typeof turnstileSchema>;
 
+// [knauf] Startup payload for the post-login OneTrust + Adobe Analytics controller. (NO-TICKET)
+export type TKnaufAnalyticsConfig = {
+  enabled: boolean;
+  oneTrustScriptSrc: string;
+  oneTrustDomainScriptId: string;
+  consentCategoryId: string;
+  adobeLaunchScriptUrl: string;
+  adobeAppName: string;
+};
+// End [knauf]
+
 export type TStartupConfig = {
   appTitle: string;
   socialLogins?: string[];
@@ -885,6 +896,11 @@ export type TStartupConfig = {
     scraperProvider?: ScraperProviders;
     rerankerType?: RerankerTypes;
   };
+  // [knauf] Namespaced startup config avoids collisions with future upstream fields. (NO-TICKET)
+  knauf?: {
+    analytics?: TKnaufAnalyticsConfig;
+  };
+  // End [knauf]
   mcpServers?: Record<
     string,
     {
