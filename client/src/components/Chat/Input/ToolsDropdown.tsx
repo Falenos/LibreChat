@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
-import { Globe, ImageIcon, Settings, Settings2, TerminalSquareIcon } from 'lucide-react';
+import { Globe, Settings, Settings2, TerminalSquareIcon } from 'lucide-react';
 import { TooltipAnchor, DropdownPopup, PinIcon, VectorIcon } from '@librechat/client';
 import type { MenuItemProps } from '~/common';
 import {
@@ -8,26 +8,27 @@ import {
   Permissions,
   ArtifactModes,
   PermissionTypes,
-  LocalStorageKeys,
   defaultAgentCapabilities,
 } from 'librechat-data-provider';
-import { useLocalize, useHasAccess, useAgentCapabilities, useToolToggle } from '~/hooks';
+import { useLocalize, useHasAccess, useAgentCapabilities } from '~/hooks';
 import ArtifactsSubMenu from '~/components/Chat/Input/ArtifactsSubMenu';
 import MCPSubMenu from '~/components/Chat/Input/MCPSubMenu';
 import { useGetStartupConfig } from '~/data-provider';
 import { useBadgeRowContext } from '~/Providers';
-// [knauf] KK20-168 — image-gen visibility predicate shared with the chip
-// rendered separately by KnaufImageGenTools. Single source of truth for
-// "should image gen be reachable on this surface".
-import { useImageGenAvailable } from '~/knauf/hooks/Chat/useImageGenAvailable';
-// End [knauf]
 import { cn } from '~/utils';
 
 interface ToolsDropdownProps {
   disabled?: boolean;
+  // [knauf] KK20-168 — extension point for fork-specific menu items
+  // (used by KnaufToolsDropdown to inject "Create image"). Keeping the
+  // injection surface to a single optional prop avoids spreading [knauf]
+  // markers through the body of this file — see SEAMS row + the
+  // KnaufToolsDropdown wrapper.
+  extraItems?: MenuItemProps[];
+  // End [knauf]
 }
 
-const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
+const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
   const localize = useLocalize();
   const context = useBadgeRowContext();
   const { data: startupConfig } = useGetStartupConfig();
@@ -83,28 +84,6 @@ const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
   } = codeInterpreter ?? {};
   const { isPinned: isFileSearchPinned, setIsPinned: setIsFileSearchPinned } = fileSearch ?? {};
   const { isPinned: isArtifactsPinned, setIsPinned: setIsArtifactsPinned } = artifacts ?? {};
-
-  // [knauf] KK20-168 — image-gen menu item. Mirrors the upstream tools'
-  // shape (icon + label + pin button). Visibility delegated to
-  // useImageGenAvailable so the kill switch + default-spec gating live in
-  // one place; toggle state shared with the pinned chip rendered by
-  // KnaufImageGenTools.
-  const imageGenAvailable = useImageGenAvailable({
-    agentId: null,
-    spec: context?.specName,
-  });
-  const imageGen = useToolToggle({
-    conversationId: context?.conversationId,
-    toolKey: 'image_gen',
-    localStorageKey: LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_,
-    isAuthenticated: true,
-  });
-  const { isPinned: isImageGenPinned, setIsPinned: setIsImageGenPinned } = imageGen;
-  const handleImageGenToggle = useCallback(() => {
-    const newValue = !imageGen.toggleState;
-    imageGen.debouncedChange({ value: newValue });
-  }, [imageGen]);
-  // End [knauf]
 
   const showWebSearchSettings = useMemo(() => {
     const authTypes = webSearchAuthData?.authTypes ?? [];
@@ -328,41 +307,10 @@ const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
     });
   }
 
-  // [knauf] KK20-168 — Create image menu item. Sits at the bottom of the
-  // popover, gated by useImageGenAvailable (kill switch + default-spec
-  // branch). Toggle + pin state come from useToolToggle('image_gen') above;
-  // the pinned chip is rendered separately by KnaufImageGenTools in the
-  // composer row.
-  if (imageGenAvailable) {
-    dropdownItems.push({
-      onClick: handleImageGenToggle,
-      hideOnClick: false,
-      render: (props) => (
-        <div {...props}>
-          <div className="flex items-center gap-2">
-            <ImageIcon className="icon-md" aria-hidden="true" />
-            <span>{localize('com_knauf_create_image')}</span>
-          </div>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsImageGenPinned?.(!isImageGenPinned);
-            }}
-            className={cn(
-              'rounded p-1 transition-all duration-200',
-              'hover:bg-surface-secondary hover:shadow-sm',
-              !isImageGenPinned && 'text-text-secondary hover:text-text-primary',
-            )}
-            aria-label={isImageGenPinned ? 'Unpin' : 'Pin'}
-          >
-            <div className="h-4 w-4">
-              <PinIcon unpin={isImageGenPinned} />
-            </div>
-          </button>
-        </div>
-      ),
-    });
+  // [knauf] KK20-168 — append fork-specific items at the tail. See the
+  // `extraItems` prop comment + KnaufToolsDropdown.
+  if (extraItems && extraItems.length > 0) {
+    dropdownItems.push(...extraItems);
   }
   // End [knauf]
 

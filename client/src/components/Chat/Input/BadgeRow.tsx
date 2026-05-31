@@ -13,7 +13,13 @@ import { useRecoilValue, useRecoilCallback } from 'recoil';
 import type { LucideIcon } from 'lucide-react';
 import CodeInterpreter from './CodeInterpreter';
 import { BadgeRowProvider } from '~/Providers';
-import ToolsDropdown from './ToolsDropdown';
+// [knauf] KK20-168 — swap upstream ToolsDropdown for the Knauf wrapper
+// that injects the "Create image" menu item via the upstream component's
+// `extraItems` prop. The wrapper renders upstream ToolsDropdown directly,
+// so the upstream component still owns the popover trigger and item
+// rendering — only the Knauf-specific item lives outside upstream.
+import ToolsDropdown from '~/knauf/components/Chat/KnaufToolsDropdown';
+// End [knauf]
 import type { BadgeItem } from '~/common';
 import { useChatBadges } from '~/hooks';
 import ToolDialogs from './ToolDialogs';
