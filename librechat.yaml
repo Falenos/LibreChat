@@ -65,7 +65,14 @@ interface:
     imageGen: true
   webSearch: false
   runCode: false
-  fileSearch: true
+  # Hide the file_search chip + ToolsDropdown entry on chat surfaces — on
+  # default-spec chats there's no upload path for it (knowledge curation
+  # happens in the agent builder, not in chat), and custom agents that
+  # have `file_search` in their tools array still fire it server-side via
+  # `loadAgent` regardless of this flag. Matches the webSearch/runCode
+  # pattern above (chat-side BYOK badges hidden; underlying tools still
+  # work where they're configured). KK20-168.
+  fileSearch: false
   agents:
     use: true
     create: true
