@@ -56,6 +56,22 @@ const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
   <div className="flex flex-wrap gap-2">{children}</div>
 );
 
+type UploadedFileLike = { filename?: string; bytes?: number; size?: number };
+
+/**
+ * True when an uploaded ExtendedFile entry corresponds to a pending Knauf
+ * file (same filename, same byte length). Some upstream code paths set
+ * `bytes`, others set `size` — we accept either. Extracted to module scope
+ * so the drain effect's predicate doesn't sit five callbacks deep
+ * (SonarCloud typescript:S2004).
+ */
+function uploadedFileMatchesPending(uploaded: UploadedFileLike, pending: File): boolean {
+  return (
+    uploaded.filename === pending.name &&
+    (uploaded.bytes === pending.size || uploaded.size === pending.size)
+  );
+}
+
 function KnaufFileSearch({
   agent_id,
   files: _files,
@@ -181,12 +197,13 @@ function KnaufFileSearch({
           const next = new Map(prev);
           for (const [tempId, entry] of prev) {
             if (entry.status !== 'uploading') continue;
-            const matched = Array.from(filesRef.current.values()).some(
-              (f) =>
-                f.filename === entry.file.name &&
-                ((f as { bytes?: number }).bytes === entry.file.size ||
-                  (f as { size?: number }).size === entry.file.size),
-            );
+            let matched = false;
+            for (const f of filesRef.current.values()) {
+              if (uploadedFileMatchesPending(f as UploadedFileLike, entry.file)) {
+                matched = true;
+                break;
+              }
+            }
             if (matched) {
               next.delete(tempId);
             } else {
@@ -302,7 +319,7 @@ function KnaufFileSearch({
   const retryPending = (tempId: string) => {
     setPendingFiles((prev) => {
       const entry = prev.get(tempId);
-      if (!entry || entry.status !== 'error') return prev;
+      if (entry?.status !== 'error') return prev;
       const next = new Map(prev);
       next.set(tempId, { ...entry, status: 'queued' });
       return next;
