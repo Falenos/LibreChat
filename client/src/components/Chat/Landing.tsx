@@ -61,24 +61,21 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
     assistant_id: conversation?.assistant_id,
   });
 
-  // [knauf] KK20-159 — when no agent/assistant entity is active and the
-  // conversation is on a default modelSpec (e.g. `karl`), surface the
-  // spec's `label` as the landing title and its `description` as the
-  // centred subtitle below it. Mirrors the agent-name / agent-description
-  // pattern below so the default chat doesn't fall through to a single-
-  // line greeting. The lookup is gated on `default: true` so non-Knauf
-  // deployments that don't mark a default keep the upstream behaviour.
-  const defaultSpec = useMemo(() => {
-    if (entity) return null;
+  const name = entity?.name ?? '';
+  const description = (entity?.description || conversation?.greeting) ?? '';
+  // [knauf] KK20-159 — flag whether the conversation is on a default
+  // modelSpec (today: `karl`). Used below to render a small "what you
+  // can do" tips block under the customWelcome heading on the
+  // default-spec landing. The customWelcome title itself flows through
+  // the upstream greetingText branch unchanged.
+  const isDefaultSpecLanding = useMemo(() => {
+    if (entity) return false;
     const specName = conversation?.spec;
-    if (!specName) return null;
+    if (!specName) return false;
     const list = startupConfig?.modelSpecs?.list ?? [];
     const match = list.find((s) => s.name === specName);
-    return match && match.default === true ? match : null;
+    return match?.default === true;
   }, [entity, conversation?.spec, startupConfig?.modelSpecs?.list]);
-  const name = entity?.name ?? defaultSpec?.label ?? '';
-  const description =
-    (entity?.description || defaultSpec?.description || conversation?.greeting) ?? '';
   // End [knauf]
 
   const getGreeting = useCallback(() => {
@@ -220,6 +217,19 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
             {description}
           </div>
         )}
+        {/* [knauf] KK20-159 — concise feature tips below the customWelcome
+            title on the default-spec landing. Centred, sub-title-sized,
+            same animate-fadeIn cadence as the agent description above.
+            Kept short by design — three lines that point at the three
+            most-used affordances on the composer. */}
+        {isDefaultSpecLanding && (
+          <ul className="animate-fadeIn mt-6 max-w-md list-none space-y-1.5 text-center text-sm font-normal text-text-secondary">
+            <li>{localize('com_knauf_landing_tip_attach')}</li>
+            <li>{localize('com_knauf_landing_tip_image')}</li>
+            <li>{localize('com_knauf_landing_tip_agents')}</li>
+          </ul>
+        )}
+        {/* End [knauf] */}
       </div>
     </div>
   );

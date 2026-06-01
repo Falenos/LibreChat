@@ -174,9 +174,17 @@ modelSpecs:
     - name: 'karl'
       label: 'KARL'
       default: true
-      # KK20-159 — surfaced on the landing screen as the subtitle below
-      # the "KARL" title (mirror of agent-card title/description). Keep
-      # short and product-facing.
+      # KK20-159 — landing icon. ConvoIcon reads `conversation.iconURL`
+      # (sourced from this field on the active modelSpec) before falling
+      # back to the endpoint default — without this the default-spec
+      # landing rendered Azure OpenAI's generic "A" glyph. Re-uses the
+      # 180×180 apple-touch-icon binary we ship under client/public/
+      # assets — already Knauf-branded, plenty crisp at the 41px landing
+      # render size.
+      iconURL: 'assets/apple-touch-icon-180x180.png'
+      # Subtitle text rendered under the customWelcome title on the
+      # default-spec landing (when no agent is selected). Kept short and
+      # product-facing.
       description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'

@@ -90,20 +90,41 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     mockUseAuthContext.mockReturnValue({ user: { name: 'Tester' } });
   });
 
-  it('renders KARL as title and "Knauf AI Platform" as subtitle on the default spec when no agent is active', () => {
+  it('renders the customWelcome string as the title and the Knauf tips block below it on the default-spec landing', () => {
     mockUseChatContext.mockReturnValue({
       conversation: { endpoint: 'azureOpenAI', spec: 'karl' },
     });
     mockGetEntity.mockReturnValue({ entity: null, isAgent: false, isAssistant: false });
-    setStartupConfigWithKarlSpec();
+    mockUseGetStartupConfig.mockReturnValue({
+      data: {
+        modelSpecs: {
+          list: [
+            {
+              name: 'karl',
+              label: 'KARL',
+              default: true,
+              description: 'Knauf AI Platform',
+            },
+          ],
+        },
+        interface: { customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.' },
+      },
+    });
 
     render(<Landing centerFormOnLanding={false} />);
 
-    expect(screen.getByTestId('split-title')).toHaveTextContent('KARL');
-    expect(screen.getByText('Knauf AI Platform')).toBeInTheDocument();
+    expect(screen.getByTestId('split-title')).toHaveTextContent(
+      'Welcome to Agentic Karl! Enjoy your experience.',
+    );
+    // The three tip locale keys render — content is i18n-driven so we
+    // only assert the key strings (the mock localize returns keys
+    // verbatim).
+    expect(screen.getByText('com_knauf_landing_tip_attach')).toBeInTheDocument();
+    expect(screen.getByText('com_knauf_landing_tip_image')).toBeInTheDocument();
+    expect(screen.getByText('com_knauf_landing_tip_agents')).toBeInTheDocument();
   });
 
-  it('keeps the agent-entity branch winning when an agent is selected (no regression)', () => {
+  it('keeps the agent-entity branch winning when an agent is selected (no regression) and does NOT render the Knauf tips', () => {
     mockUseChatContext.mockReturnValue({
       conversation: { endpoint: 'agents', spec: 'karl', agent_id: 'agent-x' },
     });
@@ -118,9 +139,11 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
 
     expect(screen.getByTestId('split-title')).toHaveTextContent('Research Bot');
     expect(screen.getByText('Helps with literature reviews')).toBeInTheDocument();
+    // Tips are default-spec-only — agent landings shouldn't see them.
+    expect(screen.queryByText('com_knauf_landing_tip_attach')).not.toBeInTheDocument();
   });
 
-  it('falls back to the greeting branch when the conversation spec is not marked default', () => {
+  it('does not render the Knauf tips on a non-default spec (e.g. a personality preset)', () => {
     mockUseChatContext.mockReturnValue({
       conversation: { endpoint: 'azureOpenAI', spec: 'karl-personality-precise' },
     });
@@ -143,12 +166,9 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
 
     render(<Landing centerFormOnLanding={false} />);
 
-    // The Knauf override only fires on default-marked specs, so neither
-    // the spec's label nor its description should appear as the title /
-    // subtitle here.
-    expect(screen.queryByText('Precise')).not.toBeInTheDocument();
-    expect(screen.queryByText('Sticks to facts')).not.toBeInTheDocument();
-    // The customWelcome greeting wins instead.
+    // The customWelcome still renders as title via the upstream path.
     expect(screen.getByTestId('split-title')).toHaveTextContent('Welcome, traveller.');
+    // The Knauf tips only fire on default-marked specs.
+    expect(screen.queryByText('com_knauf_landing_tip_attach')).not.toBeInTheDocument();
   });
 });
