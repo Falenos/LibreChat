@@ -61,8 +61,25 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
     assistant_id: conversation?.assistant_id,
   });
 
-  const name = entity?.name ?? '';
-  const description = (entity?.description || conversation?.greeting) ?? '';
+  // [knauf] KK20-159 — when no agent/assistant entity is active and the
+  // conversation is on a default modelSpec (e.g. `karl`), surface the
+  // spec's `label` as the landing title and its `description` as the
+  // centred subtitle below it. Mirrors the agent-name / agent-description
+  // pattern below so the default chat doesn't fall through to a single-
+  // line greeting. The lookup is gated on `default: true` so non-Knauf
+  // deployments that don't mark a default keep the upstream behaviour.
+  const defaultSpec = useMemo(() => {
+    if (entity) return null;
+    const specName = conversation?.spec;
+    if (!specName) return null;
+    const list = startupConfig?.modelSpecs?.list ?? [];
+    const match = list.find((s) => s.name === specName);
+    return match && match.default === true ? match : null;
+  }, [entity, conversation?.spec, startupConfig?.modelSpecs?.list]);
+  const name = entity?.name ?? defaultSpec?.label ?? '';
+  const description =
+    (entity?.description || defaultSpec?.description || conversation?.greeting) ?? '';
+  // End [knauf]
 
   const getGreeting = useCallback(() => {
     if (typeof startupConfig?.interface?.customWelcome === 'string') {

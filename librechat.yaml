@@ -174,7 +174,10 @@ modelSpecs:
     - name: 'karl'
       label: 'KARL'
       default: true
-      description: 'KARL GPT for the Knauf Group'
+      # KK20-159 — surfaced on the landing screen as the subtitle below
+      # the "KARL" title (mirror of agent-card title/description). Keep
+      # short and product-facing.
+      description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'

@@ -3,6 +3,10 @@ import { apiBaseUrl, QueryKeys, request, dataService } from 'librechat-data-prov
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import type { Agents, TConversation } from 'librechat-data-provider';
 import { updateConvoInAllQueries } from '~/utils';
+// [knauf] KK20-159 — page-title helper for the SSE-driven auto-title path
+// so the browser tab also carries the "<title> | KARL" subtitle.
+import { buildPageTitle } from '~/knauf/common/pageTitle';
+// End [knauf]
 
 export interface StreamStatusResponse {
   active: boolean;
@@ -119,7 +123,10 @@ export function useTitleGeneration(enabled = true) {
         updateConvoInAllQueries(queryClient, conversationId, (c) => ({ ...c, title }));
         // Only update document title if this conversation is currently active
         if (window.location.pathname.includes(conversationId)) {
-          document.title = title;
+          // [knauf] KK20-159 — suffix the brand short so the auto-title
+          // path also reads "<title> | KARL".
+          document.title = buildPageTitle(title);
+          // End [knauf]
         }
         processedTitles.add(conversationId);
         titleQueue.delete(conversationId);
