@@ -17,7 +17,7 @@ const startupConfig = {
       oneTrustDomainScriptId: 'domain-script',
       consentCategoryId: 'C0002',
       adobeLaunchScriptUrl: 'https://example.test/adobe.js',
-      adobeAppName: 'agentic_karl',
+      adobeAppName: 'knauf_karl',
     },
   },
 };
@@ -49,6 +49,7 @@ describe('KnaufConsentAnalytics', () => {
     delete (window as any).OneTrust;
     delete (window as any).adobeDataLayer;
     delete (window as any)._satellite;
+    window.sessionStorage.clear();
     resetExternalScriptForTest('knauf-onetrust-sdk');
     resetExternalScriptForTest('knauf-adobe-analytics');
   });
@@ -97,13 +98,17 @@ describe('KnaufConsentAnalytics', () => {
       expect.objectContaining({
         event: 'pageview',
         event_info: expect.objectContaining({
-          app_name: 'agentic_karl',
+          app_name: 'knauf_karl',
           event_specification: 'pageview',
-          page_category: 'agentic_karl',
-          page_name: '/c/new?source=test',
-          page_path: '/c/new?source=test',
+          page_category: 'karl_page',
+          page_name: 'New Chat',
+          page_path: '/c/new',
+          page_query_string: '?source=test',
           page_section: 'chat',
+          page_url: 'http://localhost:3080/c/new',
           user_login_status: 'logged_in',
+          user_session_id: expect.any(String),
+          user_timestamp_iso: expect.any(String),
         }),
       }),
     ]);
@@ -126,11 +131,13 @@ describe('KnaufConsentAnalytics', () => {
     await waitFor(() => {
       expect((window as any).adobeDataLayer).toHaveLength(1);
     });
+    expect(window.sessionStorage.getItem('knauf_adobe_session_id')).toEqual(expect.any(String));
 
     act(() => {
       window.dispatchEvent(new CustomEvent('OneTrustGroupsUpdated', { detail: ['C0001'] }));
     });
 
     expect((window as any).adobeDataLayer).toHaveLength(1);
+    expect(window.sessionStorage.getItem('knauf_adobe_session_id')).toBeNull();
   });
 });

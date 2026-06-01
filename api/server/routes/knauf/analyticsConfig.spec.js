@@ -19,7 +19,7 @@ describe('getKnaufAnalyticsConfig', () => {
       consentCategoryId: 'C0002',
       adobeLaunchScriptUrl:
         'https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js',
-      adobeAppName: 'agentic_karl',
+      adobeAppName: 'knauf_karl',
     });
   });
 

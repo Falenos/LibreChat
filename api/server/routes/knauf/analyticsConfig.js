@@ -9,7 +9,7 @@ const ADOBE_ANALYTICS_SCRIPT_URLS = {
   prod: 'https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-6532ab2ce849.min.js',
 };
 const ANALYTICS_CONSENT_CATEGORY_ID = 'C0002';
-const ADOBE_APP_NAME = 'agentic_karl';
+const ADOBE_APP_NAME = 'knauf_karl';
 
 function isFalseLike(value) {
   return /^(false|0|no|off)$/i.test(String(value).trim());

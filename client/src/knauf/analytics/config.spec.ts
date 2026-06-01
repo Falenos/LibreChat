@@ -8,7 +8,7 @@ const completeConfig = {
       oneTrustDomainScriptId: 'domain-script',
       consentCategoryId: 'C0002',
       adobeLaunchScriptUrl: 'https://example.test/adobe.js',
-      adobeAppName: 'agentic_karl',
+      adobeAppName: 'knauf_karl',
     },
   },
 };

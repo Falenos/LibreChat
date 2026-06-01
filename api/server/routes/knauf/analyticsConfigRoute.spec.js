@@ -58,7 +58,7 @@ describe('GET /api/config — Knauf analytics config', () => {
         enabled: true,
         oneTrustDomainScriptId: '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test',
         consentCategoryId: 'C0002',
-        adobeAppName: 'agentic_karl',
+        adobeAppName: 'knauf_karl',
       }),
     );
   });

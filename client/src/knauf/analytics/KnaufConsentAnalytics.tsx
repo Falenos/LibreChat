@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useGetStartupConfig } from '~/data-provider';
-import { emitAdobePageView } from './adobe';
+import { clearAdobeSessionId, emitAdobePageView } from './adobe';
 import { getKnaufAnalyticsConfig } from './config';
 import { getOneTrustGroupsFromEvent, hasAnalyticsConsent } from './consent';
 import { loadExternalScript } from './scriptLoader';
@@ -76,6 +76,7 @@ export default function KnaufConsentAnalytics() {
     if (!analyticsConfig || !analyticsConsented) {
       setAdobeReady(false);
       lastTrackedPathRef.current = '';
+      clearAdobeSessionId();
       return;
     }
 

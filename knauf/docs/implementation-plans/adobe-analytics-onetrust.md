@@ -13,7 +13,7 @@ The default local/non-prod configuration is:
 OneTrust domain script ID: 1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test
 Adobe Launch script: https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js
 Consent category: C0002
-Adobe app name: agentic_karl
+Adobe app name: knauf_karl
 ```
 
 The app currently emits one Adobe Client Data Layer event after Adobe Launch has
@@ -23,16 +23,21 @@ loaded and analytics consent is active:
 {
   "event": "pageview",
   "event_info": {
-    "app_name": "agentic_karl",
+    "app_name": "knauf_karl",
     "event_specification": "pageview",
+    "page_category": "karl_page",
     "page_section": "chat",
-    "user_login_status": "logged_in"
+    "user_login_status": "logged_in",
+    "user_session_id": "generated-per-browser-session",
+    "user_timestamp_iso": "2026-06-01T10:00:00.000Z"
   }
 }
 ```
 
 No user email, prompt text, message text, agent content, or chat content is sent
-by this branch.
+by this branch. The current implementation also does not send `user_country`,
+`user_is_knauf_employee`, or `user_hashed_knauf_id`; those need a verified data
+source and privacy sign-off before they are added.
 
 ## Runtime configuration
 
@@ -48,7 +53,7 @@ Required deployment values:
 KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=nonprod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
-KNAUF_ADOBE_APP_NAME=agentic_karl
+KNAUF_ADOBE_APP_NAME=knauf_karl
 ```
 
 For production, set:
@@ -57,7 +62,7 @@ For production, set:
 KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=prod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
-KNAUF_ADOBE_APP_NAME=agentic_karl
+KNAUF_ADOBE_APP_NAME=knauf_karl
 ```
 
 Optional explicit overrides, useful if infra does not want to rely on code
@@ -97,10 +102,10 @@ repository:
 
 ```text
 1. Add a Launch rule for Adobe Client Data Layer event = pageview.
-2. Scope the rule to event_info.app_name = agentic_karl and the deployed Agentic Karl hostname.
+2. Scope the rule to event_info.app_name = knauf_karl and the deployed Agentic Karl hostname, or use myknauf_karl if the final placement is under myKnauf.
 3. Map the dev/stage Launch property to the correct non-production report suite.
 4. Map the production Launch property to the correct production report suite.
-5. Map data elements from event_info, including app_name, page_url, page_name, page_title, page_domain, page_hostname, page_locale, page_section, and user_login_status.
+5. Map data elements from event_info, including app_name, page_url, page_name, page_title, page_domain, page_hostname, page_locale, page_query_string, page_category, page_section, user_language, user_login_status, user_session_id, and user_timestamp_iso.
 6. Confirm no PII fields are required. This branch intentionally sends no email, prompt, message, agent content, or chat content.
 ```
 
@@ -125,21 +130,21 @@ window.adobeDataLayer?.slice?.(-3)
 
 Expected result: OneTrust is present, Adobe Launch is present, and the latest
 data layer event has `event: "pageview"` and `event_info.app_name:
-"agentic_karl"`.
+"knauf_karl"` or the app name configured through `KNAUF_ADOBE_APP_NAME`.
 
 ## Deployment readiness plan
 
 Adobe Launch needs a matching rule/report-suite mapping for Agentic Karl. The
 current dev Launch property loads successfully, but local testing may not show an
 Adobe collection beacon (`b/ss` or `omtrdc`) until Adobe is configured for
-`agentic_karl` and the deployed hostname.
+the configured Adobe app name and the deployed hostname.
 
 Before production rollout, confirm these open decisions with the analytics owner:
 
 ```text
 1. Which hostname will Agentic Karl use in production?
-2. Which Adobe report suite should receive agentic_karl events?
-3. Should the Launch rule key only on event_info.app_name = agentic_karl, or also on hostname?
+2. Which Adobe report suite should receive knauf_karl/myknauf_karl events?
+3. Should the Launch rule key only on event_info.app_name, or also on hostname?
 4. Is C0002 the final OneTrust category for Adobe Analytics?
 5. Should any additional non-content events be tracked beyond pageview?
 ```
