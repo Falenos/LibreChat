@@ -6,6 +6,8 @@ This branch adds a post-login consent and analytics controller for Agentic Karl.
 The backend exposes a Knauf namespaced analytics config through `/api/config`.
 The authenticated React app reads that config, loads OneTrust, waits for the
 analytics consent category, and then loads Adobe Launch.
+The legacy LibreChat terms modal is disabled in `librechat.yaml` so OneTrust is
+the only consent prompt.
 
 The default local/non-prod configuration is:
 
@@ -16,8 +18,9 @@ Consent category: C0002
 Adobe app name: knauf_karl
 ```
 
-The app currently emits one Adobe Client Data Layer event after Adobe Launch has
-loaded and analytics consent is active:
+The app initialises `window.adobeDataLayer` before Adobe Launch is injected, then
+emits one Adobe Client Data Layer event after Adobe Launch has loaded and
+analytics consent is active:
 
 ```json
 {
@@ -132,12 +135,31 @@ Expected result: OneTrust is present, Adobe Launch is present, and the latest
 data layer event has `event: "pageview"` and `event_info.app_name:
 "knauf_karl"` or the app name configured through `KNAUF_ADOBE_APP_NAME`.
 
+For `http://localhost:3080`, rebuild the static client and restart the backend
+after code changes. The backend reads `client/dist/index.html` once at startup
+for SPA fallback routes.
+
+```bash
+npm run build:client
+npm run backend:dev
+```
+
+Latest local production-value check on `localhost:3080`:
+
+```text
+Before consent: OneTrust loads; knauf-adobe-analytics is not injected.
+After Accept All Cookies: Adobe Launch and AppMeasurement load.
+Observed gap: no Adobe Analytics /b/ss/ collection beacon appears locally yet.
+```
+
 ## Deployment readiness plan
 
 Adobe Launch needs a matching rule/report-suite mapping for Agentic Karl. The
-current dev Launch property loads successfully, but local testing may not show an
-Adobe collection beacon (`b/ss` or `omtrdc`) until Adobe is configured for
-the configured Adobe app name and the deployed hostname.
+production Launch property loads successfully with the production values, but the
+local `localhost:3080` check did not show an Adobe collection beacon (`b/ss` or
+`omtrdc`). Treat that as a Launch/report-suite follow-up: confirm the pageview
+rule listens to the Adobe Client Data Layer `pageview` event and is enabled for
+the configured Adobe app name and hostname.
 
 Before production rollout, confirm these open decisions with the analytics owner:
 

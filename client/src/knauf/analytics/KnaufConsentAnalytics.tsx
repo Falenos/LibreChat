@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useGetStartupConfig } from '~/data-provider';
-import { clearAdobeSessionId, emitAdobePageView } from './adobe';
+import { clearAdobeSessionId, emitAdobePageView, ensureAdobeDataLayer } from './adobe';
 import { getKnaufAnalyticsConfig } from './config';
 import { getOneTrustGroupsFromEvent, hasAnalyticsConsent } from './consent';
 import { loadExternalScript } from './scriptLoader';
@@ -82,6 +82,7 @@ export default function KnaufConsentAnalytics() {
 
     let cancelled = false;
     setAdobeReady(false);
+    ensureAdobeDataLayer();
 
     void loadExternalScript({
       id: ADOBE_ANALYTICS_SCRIPT_ID,

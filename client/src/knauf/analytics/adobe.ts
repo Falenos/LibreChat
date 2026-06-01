@@ -80,6 +80,11 @@ export function clearAdobeSessionId(adobeWindow: AdobeAnalyticsWindow = window):
   }
 }
 
+export function ensureAdobeDataLayer(adobeWindow: AdobeAnalyticsWindow = window): unknown[] {
+  adobeWindow.adobeDataLayer = adobeWindow.adobeDataLayer ?? [];
+  return adobeWindow.adobeDataLayer;
+}
+
 export function emitAdobePageView(
   analyticsConfig: KnaufAnalyticsConfig,
   location: AdobePageLocation,
@@ -116,6 +121,5 @@ export function emitAdobePageView(
     event_info: eventInfo,
   };
 
-  adobeWindow.adobeDataLayer = adobeWindow.adobeDataLayer ?? [];
-  adobeWindow.adobeDataLayer.push(payload);
+  ensureAdobeDataLayer(adobeWindow).push(payload);
 }

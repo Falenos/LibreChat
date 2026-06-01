@@ -87,7 +87,7 @@ describe('KnaufConsentAnalytics', () => {
     await waitFor(() => {
       expect(document.getElementById('knauf-adobe-analytics')).toBeInTheDocument();
     });
-    expect((window as any).adobeDataLayer).toBeUndefined();
+    expect((window as any).adobeDataLayer).toEqual([]);
 
     finishScriptLoad('knauf-adobe-analytics');
 
