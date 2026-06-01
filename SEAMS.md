@@ -80,6 +80,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/package.json` | `"mongodb": "^6.14.2"` added to `dependencies` | Peer dep fulfillment — ensures `mongodb` is present in production `node_modules` so `@librechat/api` dist can resolve it |
 | `client/src/locales/en/translation.json` | `com_knauf_*` namespace — Knauf-only i18n keys added inline to the upstream locale JSON (JSON has no comment syntax, so no `[knauf]` marker is possible). Current keys: `com_knauf_builder_simplified_view` (KK20-125 / FEAT-03, admin builder toggle label). Future Knauf-only keys must reuse the `com_knauf_*` prefix so they are greppable and namespaced away from upstream |
 | `.env.example` | Documents Knauf OneTrust + Adobe Analytics runtime envs, including `C0002` analytics consent default and `agentic_karl` Adobe app name |
+| `.github/workflows/release_pipeline.yaml` | Release pipeline deploys merged PRs to both the legacy CT shared dev AKS path and the AGK nonprod dev ArgoCD path |
 
 ## Net-New Files
 
