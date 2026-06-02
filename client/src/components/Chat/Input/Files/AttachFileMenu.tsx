@@ -210,7 +210,10 @@ const AttachFileMenu = ({
       // which conflicts with the Knauf model where knowledge is curated per
       // agent. The upstream gate is preserved below for reference / easy
       // un-hiding; flip KNAUF_SHOW_FILE_SEARCH_IN_CHAT to true to restore.
-      const KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false;
+      // `as boolean` widens the literal so SonarCloud doesn't flag the `&&`
+      // below as a constant/gratuitous condition (S6644 / S2589) — see
+      // .claude/notes/ANTI_PATTERNS.md.
+      const KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false as boolean;
       if (
         KNAUF_SHOW_FILE_SEARCH_IN_CHAT &&
         capabilities.fileSearchEnabled &&

@@ -10,8 +10,8 @@ Companion to the [SEAMS.md](../../../SEAMS.md) entries under ticket KK20-168. Th
 
 Engineers reading the KK20-168 seam rows see five touchpoints:
 
-- `client/src/components/Chat/Input/ChatForm.tsx` (unconditional UI mount; spec forwarded)
-- `client/src/knauf/components/Chat/KnaufImageGenTools.tsx` (composer chip + popover)
+- `client/src/components/Chat/Input/BadgeRow.tsx` (unconditional chip mount inside the `showEphemeralBadges` cluster; `specName` forwarded — `ChatForm.tsx` now carries only a tombstone marker where the mount used to live)
+- `client/src/knauf/components/Chat/KnaufImageGenTools.tsx` (composer chip only — the popover menu item lives in upstream `ToolsDropdown` via `KnaufToolsDropdown`)
 - `client/src/knauf/hooks/Chat/useImageGenAvailable.ts` (centralised visibility policy)
 - `packages/api/src/agents/load.ts` (backend gate, two branches)
 - `packages/data-provider/src/types.ts` + `config.ts` (request payload field + interface flag)
@@ -35,7 +35,7 @@ The tools registry itself is admin-gated globally by the [librechat.yaml](../../
 The user-facing surface is split across two places that share Recoil state via `useToolToggle('image_gen')`:
 
 - **The "Create image" menu item lives inside the upstream [ToolsDropdown.tsx](../../../client/src/components/Chat/Input/ToolsDropdown.tsx)** via a `[knauf]` block — same Settings2 popover that hosts web_search, file_search, execute_code, artifacts, MCP. One popover, all tools. The item carries a pin button just like its neighbours.
-- **The pinned/toggled chip is rendered by [KnaufImageGenTools.tsx](../../../client/src/knauf/components/Chat/KnaufImageGenTools.tsx)** in the composer row when (a) image gen is available and (b) the toggle is on or pinned. The component is mounted unconditionally from [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx); the visibility predicate (`useImageGenAvailable`) returns false on the surfaces that shouldn't see the chip.
+- **The pinned/toggled chip is rendered by [KnaufImageGenTools.tsx](../../../client/src/knauf/components/Chat/KnaufImageGenTools.tsx)** in the composer row when (a) image gen is available and (b) the toggle is on or pinned. The component is mounted unconditionally from [BadgeRow.tsx](../../../client/src/components/Chat/Input/BadgeRow.tsx) (inside the `showEphemeralBadges` chip cluster, after `FileSearch`); the visibility predicate (`useImageGenAvailable`) returns false on the surfaces that shouldn't see the chip.
 
 State machinery:
 
@@ -45,7 +45,7 @@ State machinery:
 
 ### 2.3 Visibility policy — `useImageGenAvailable`
 
-[useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts) is the single source of truth for "should the chip appear here?" Both the mount in `ChatForm.tsx` and the chip itself consult it. Three branches:
+[useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts) is the single source of truth for "should the chip appear here?" Both the chip mount in `BadgeRow.tsx` and the `KnaufToolsDropdown` popover-item wrapper consult it. Three branches:
 
 1. **Global kill switch.** `interface.knauf.imageGen === false` returns `false` everywhere. Default is `true` (the librechat.yaml seed) — admins flip it to `false` to disable the surface without removing `image_gen_oai` from `includedTools`.
 2. **Custom-agent branch — always hidden.** When `agentId` is set and not the ephemeral marker, the hook returns `false`. Custom-agent chats never show the chip. If the admin installed `image_gen_oai` on the agent, the tool fires unconditionally — no per-chat opt-in, no toggle. See §2.4 for the backend consequence.
@@ -75,7 +75,7 @@ Test coverage lives in [packages/api/src/agents/load.image-gen.knauf.spec.ts](..
 sequenceDiagram
   autonumber
   participant U as User (default-spec chat)
-  participant CF as ChatForm + KnaufImageGenTools
+  participant CF as BadgeRow + KnaufImageGenTools
   participant H as useImageGenAvailable
   participant R as Recoil<br/>ephemeralAgentByConvoId
   participant LS as localStorage<br/>LAST_IMAGE_GEN_TOGGLE_
@@ -149,7 +149,7 @@ flowchart LR
     A1[agents document<br/>tools: image_gen_oai]
   end
   subgraph Client[Client - React + Recoil]
-    C1[ChatForm.tsx<br/>unconditional mount]
+    C1[BadgeRow.tsx<br/>unconditional chip mount]
     C2[KnaufImageGenTools.tsx<br/>chip only]
     TD[ToolsDropdown.tsx<br/>Create image item<br/>knauf block]
     BR[BadgeRowContext<br/>specName forwarded]
@@ -184,7 +184,7 @@ flowchart LR
 
 Image generation has two surfaces, by design:
 
-**Default Karl spec chat (chip).** Any conversation on a Knauf model spec (`karl`, personality presets) with no custom agent selected. The chip in the composer is the admission control — user toggles per send, request body carries `ephemeralAgent.image_gen`, [loadEphemeralAgent](../../../packages/api/src/agents/load.ts) pushes `image_gen_oai` onto the synthetic tool list. Mount in [ChatForm.tsx](../../../client/src/components/Chat/Input/ChatForm.tsx) is unconditional and forwards `conversation?.spec`; visibility is decided by [useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts). The hook returns `true` for this branch when `spec` is set and the global kill switch is not flipped.
+**Default Karl spec chat (chip).** Any conversation on a Knauf model spec (`karl`, personality presets) with no custom agent selected. The chip in the composer is the admission control — user toggles per send, request body carries `ephemeralAgent.image_gen`, [loadEphemeralAgent](../../../packages/api/src/agents/load.ts) pushes `image_gen_oai` onto the synthetic tool list. Mount in [BadgeRow.tsx](../../../client/src/components/Chat/Input/BadgeRow.tsx) is unconditional and forwards the active `specName`; visibility is decided by [useImageGenAvailable](../../../client/src/knauf/hooks/Chat/useImageGenAvailable.ts). The hook returns `true` for this branch when `spec` is set and the global kill switch is not flipped.
 
 **Custom agent chat (no chip, tool fires unconditionally).** An admin equips a custom agent with `image_gen_oai` via the upstream agent builder. There is no chip, no per-chat opt-in. [loadAgent](../../../packages/api/src/agents/load.ts) passes the stored tools through unchanged, so the LLM sees `image_gen_oai` every turn. The product call: installing the tool on a custom agent is the deliberate per-agent commitment; the chat-time toggle is reserved for the default-spec branch where the chip is the only admission control.
 
@@ -195,7 +195,7 @@ Implications worth flagging:
 - **Cost surface — custom agents.** Image gen fires on every chat with a custom agent that has `image_gen_oai` installed. There is no per-conversation gate. Admins should reserve the install for agents where image gen is a deliberate first-class capability.
 - **Cost surface — default-spec.** Per-send opt-in via the chip. Each generation is a paid call. The chip is default-visible on every default-spec chat; risk of normalising usage upward is real.
 - **Permissions.** The chip is not role-gated. If image gen should be admin-only or role-gated, the policy belongs in `useImageGenAvailable` (one place to add it). See `FEAT-03` in [CLAUDE.local.md](../../../CLAUDE.local.md) for the broader admin/user split.
-- **Upstream-sync risk.** `interface.knauf.imageGen` lives under the existing Knauf-namespaced sub-schema. Upstream cannot collide with it. The ChatForm mount predicate and `loadEphemeralAgent` push are wrapped in `[knauf]` blocks and tracked in SEAMS.md.
+- **Upstream-sync risk.** `interface.knauf.imageGen` lives under the existing Knauf-namespaced sub-schema. Upstream cannot collide with it. The BadgeRow chip mount and `loadEphemeralAgent` push are wrapped in `[knauf]` blocks and tracked in SEAMS.md.
 
 ---
 
@@ -242,7 +242,7 @@ Order of operations, smallest to largest:
 
 ## 7. Cross-references
 
-- [SEAMS.md](../../../SEAMS.md) — KK20-168 rows for `ChatForm.tsx` (two — original mount + broadened predicate), `KnaufImageGenTools.tsx`, `useImageGenAvailable.ts`, `useImageGenAvailable.spec.ts`, `load.ts` (`loadEphemeralAgent` ephemeral branch — the persistent strip introduced under the same ticket was later removed), `types.ts`, `config.ts` (knauf.imageGen), `LocalStorageKeys`.
+- [SEAMS.md](../../../SEAMS.md) — KK20-168 rows for `BadgeRow.tsx` (chip mount + `ToolsDropdown`→`KnaufToolsDropdown` import swap), `ChatForm.tsx` (tombstone marker where the mount used to live), `ToolsDropdown.tsx` (`extraItems` prop), `BadgeRowContext.tsx` (`specName` forwarding), `KnaufToolsDropdown.tsx`, `KnaufImageGenTools.tsx`, `useImageGenAvailable.ts`, `useImageGenAvailable.spec.ts`, `load.ts` (`loadEphemeralAgent` ephemeral branch — the persistent strip introduced under the same ticket was later removed), `types.ts`, `config.ts` (knauf.imageGen), `LocalStorageKeys`.
 - [librechat.yaml](../../../librechat.yaml) — `includedTools: image_gen_oai` (line 19), `interface.knauf.imageGen` (default `true`).
 - [packages/api/src/tools/toolkits/oai.ts](../../../packages/api/src/tools/toolkits/oai.ts) — definitions of `image_gen_oai` and `image_edit_oai`.
 - [CLAUDE.local.md](../../../CLAUDE.local.md) — FEAT-03 (admin/user view split) and FEAT-04 (agent-config capability flags) for adjacent work.

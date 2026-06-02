@@ -224,29 +224,37 @@ function KnaufModelSelectorContent() {
   }, []);
 
   /**
-   * Auto-bind the default modelSpec ("Chat") once per picker mount, on a
-   * fresh conversation. Sister behaviour to upstream's
-   * `modelSpecs.list[].default: true` mechanism — the spec gets selected on
-   * app entry so the trigger shows its label (e.g. "KARL") instead of
-   * "Select Agent". The one-shot ref guarantees we never snap back to the
-   * default after the first auto-bind, no matter how `selectedValues` or
-   * `conversationId` re-fire.
+   * Auto-bind the default modelSpec ("Chat") on a fresh conversation that has
+   * no selection yet. Sister behaviour to upstream's
+   * `modelSpecs.list[].default: true` mechanism — the spec gets selected on app
+   * entry so the trigger shows its label (e.g. "KARL") instead of an empty
+   * "Select Agent" placeholder.
+   *
+   * Gated on the *state* ("nothing selected yet"), not a one-shot ref. The
+   * selection guard short-circuits the moment any value is chosen — including a
+   * user picking a custom agent on a still-unsent chat — so it never overrides
+   * a later choice; and because it re-evaluates on every fresh-state
+   * transition, New Chat (which resets `selectedValues`) correctly re-binds the
+   * default. A one-shot ref here would fire once and then never again, leaving
+   * New Chat stuck on "Select Agent" — see `.claude/notes/ANTI_PATTERNS.md`
+   * ("Don't gate a state-driven effect with a one-shot ref"). If upstream's
+   * startup hooks already selected the default spec, `selectedValues.modelSpec`
+   * is set and the guard no-ops.
    */
   const conversationId = useRecoilValue(store.conversationIdByIndex(0));
   const isFreshChat = !conversationId || conversationId === Constants.NEW_CONVO;
-  const hasAutoBoundDefaultRef = useRef(false);
   useEffect(() => {
-    if (hasAutoBoundDefaultRef.current) return;
     if (!defaultModelSpec || !isFreshChat) return;
-    if (isDefaultSpecSelected) {
-      // Already selected (e.g. by upstream startup hooks) — don't fire again
-      // but mark as auto-bound so we don't drift if state flips later.
-      hasAutoBoundDefaultRef.current = true;
-      return;
-    }
+    if (selectedValues.endpoint || selectedValues.model || selectedValues.modelSpec) return;
     handleSelectSpec(defaultModelSpec);
-    hasAutoBoundDefaultRef.current = true;
-  }, [defaultModelSpec, isFreshChat, isDefaultSpecSelected, handleSelectSpec]);
+  }, [
+    defaultModelSpec,
+    isFreshChat,
+    selectedValues.endpoint,
+    selectedValues.model,
+    selectedValues.modelSpec,
+    handleSelectSpec,
+  ]);
 
   const triggerLabel =
     selectedAgent?.name ??
