@@ -13,6 +13,10 @@ import { ConvoOptions } from './ConvoOptions';
 import RenameForm from './RenameForm';
 import { cn, logger } from '~/utils';
 import ConvoLink from './ConvoLink';
+// [knauf] KK20-159 — page-title helper so the browser tab carries
+// "<chatTitle> | KARL" instead of just the bare conversation title.
+import { buildPageTitle } from '~/knauf/common/pageTitle';
+// End [knauf]
 import store from '~/store';
 
 interface ConversationProps {
@@ -157,7 +161,10 @@ export default function Conversation({
     toggleNav();
 
     if (typeof title === 'string' && title.length > 0) {
-      document.title = title;
+      // [knauf] KK20-159 — suffix the brand short so the tab reads
+      // "<title> | KARL" instead of just the bare conversation title.
+      document.title = buildPageTitle(title);
+      // End [knauf]
     }
 
     navigateToConvo(conversation, {

@@ -1,9 +1,9 @@
-import { memo, useCallback, lazy, Suspense } from 'react';
+import { memo, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRecoilValue } from 'recoil';
 import { SquarePen } from 'lucide-react';
 import { QueryKeys } from 'librechat-data-provider';
-import { Skeleton, Sidebar, Button, TooltipAnchor } from '@librechat/client';
+import { Sidebar, Button, TooltipAnchor } from '@librechat/client';
 import type { NavLink } from '~/common';
 import { CLOSE_SIDEBAR_ID } from '~/components/Chat/Menus/OpenSidebar';
 import { useActivePanel, resolveActivePanel, DEFAULT_PANEL } from '~/Providers';
@@ -11,7 +11,13 @@ import { useLocalize, useNewConvo } from '~/hooks';
 import { clearMessagesCache, cn } from '~/utils';
 import store from '~/store';
 
-const AccountSettings = lazy(() => import('~/components/Nav/AccountSettings'));
+// [knauf] KK20-173 — the lazy `AccountSettings` import and its `<Suspense>`
+// wrapper used to render the sidebar user-avatar button at the bottom of
+// this panel. KK20-173 moved that surface to the new full-width top
+// header (KnaufTopBar), so the sidebar mount + its `Skeleton` fallback +
+// the `lazy` / `Suspense` imports are gone here. See the SEAMS row for
+// ExpandedPanel.tsx and the paired mount in `routes/Root.tsx`.
+// End [knauf]
 
 const NewChatButton = memo(function NewChatButton({
   setActive,
@@ -212,11 +218,11 @@ function ExpandedPanel({
         ))}
       </div>
 
-      <div className="mt-auto">
-        <Suspense fallback={<Skeleton className="h-9 w-9 rounded-lg" />}>
-          <AccountSettings collapsed />
-        </Suspense>
-      </div>
+      {/* [knauf] KK20-173 — sidebar user-avatar removed because the new
+          full-width top header (KnaufTopBar) now owns the user-menu
+          surface. The lazy import above is left in place so the
+          one-line revert is cheap if we ever want both exits back. */}
+      {/* End [knauf] */}
     </div>
   );
 }
