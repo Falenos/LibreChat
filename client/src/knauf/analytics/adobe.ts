@@ -4,6 +4,10 @@ const ADOBE_PAGE_VIEW_EVENT = 'pageview';
 const ADOBE_PAGE_CATEGORY = 'karl_page';
 const ADOBE_SESSION_STORAGE_KEY = 'knauf_adobe_session_id';
 type AdobePageLocation = Pick<Location, 'hash' | 'href' | 'pathname' | 'search'>;
+type EmitAdobePageViewOptions = {
+  adobeWindow?: AdobeAnalyticsWindow;
+  consentState?: string;
+};
 
 function getPageDomain(hostname: string): string {
   const parts = hostname.split('.').filter(Boolean);
@@ -88,7 +92,7 @@ export function ensureAdobeDataLayer(adobeWindow: AdobeAnalyticsWindow = window)
 export function emitAdobePageView(
   analyticsConfig: KnaufAnalyticsConfig,
   location: AdobePageLocation,
-  adobeWindow: AdobeAnalyticsWindow = window,
+  { adobeWindow = window, consentState }: EmitAdobePageViewOptions = {},
 ): void {
   const language = document.documentElement.lang || window.navigator.language || 'en-US';
   const hostname = window.location.hostname;
@@ -96,6 +100,8 @@ export function emitAdobePageView(
   const eventInfo: Record<string, string> = {
     action: 'view',
     app_name: analyticsConfig.adobeAppName,
+    consent_state: consentState ?? '',
+    consent_status: consentState ?? '',
     event_specification: ADOBE_PAGE_VIEW_EVENT,
     page_category: ADOBE_PAGE_CATEGORY,
     page_domain: getPageDomain(hostname),

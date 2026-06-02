@@ -27,7 +27,7 @@ export function parseOneTrustGroups(groups: unknown): Set<string> {
 
 export function getOneTrustGroupsFromEvent(
   event: Event | undefined,
-  oneTrustWindow: Pick<OneTrustWindow, 'OnetrustActiveGroups'>,
+  oneTrustWindow: Pick<OneTrustWindow, 'OnetrustActiveGroups' | 'OptanonActiveGroups'>,
 ): Set<string> {
   const detail = event instanceof CustomEvent ? event.detail : undefined;
   const eventGroups = parseOneTrustGroups(detail);
@@ -36,9 +36,20 @@ export function getOneTrustGroupsFromEvent(
     return eventGroups;
   }
 
-  return parseOneTrustGroups(oneTrustWindow.OnetrustActiveGroups);
+  return new Set([
+    ...parseOneTrustGroups(oneTrustWindow.OptanonActiveGroups),
+    ...parseOneTrustGroups(oneTrustWindow.OnetrustActiveGroups),
+  ]);
 }
 
 export function hasAnalyticsConsent(groups: Set<string>, consentCategoryId: string): boolean {
   return groups.has(consentCategoryId);
+}
+
+export function formatOneTrustConsentState(groups: Set<string>): string {
+  if (groups.size === 0) {
+    return '';
+  }
+
+  return `,${Array.from(groups).join(',')},`;
 }

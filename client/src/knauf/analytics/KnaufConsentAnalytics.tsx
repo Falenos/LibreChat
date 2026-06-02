@@ -3,7 +3,11 @@ import { useLocation } from 'react-router-dom';
 import { useGetStartupConfig } from '~/data-provider';
 import { clearAdobeSessionId, emitAdobePageView, ensureAdobeDataLayer } from './adobe';
 import { getKnaufAnalyticsConfig } from './config';
-import { getOneTrustGroupsFromEvent, hasAnalyticsConsent } from './consent';
+import {
+  formatOneTrustConsentState,
+  getOneTrustGroupsFromEvent,
+  hasAnalyticsConsent,
+} from './consent';
 import { loadExternalScript } from './scriptLoader';
 import type { OneTrustWindow } from './types';
 
@@ -16,6 +20,7 @@ export default function KnaufConsentAnalytics() {
   const { data: startupConfig } = useGetStartupConfig();
   const analyticsConfig = useMemo(() => getKnaufAnalyticsConfig(startupConfig), [startupConfig]);
   const [analyticsConsented, setAnalyticsConsented] = useState(false);
+  const [consentState, setConsentState] = useState('');
   const [adobeReady, setAdobeReady] = useState(false);
   const lastTrackedPathRef = useRef('');
 
@@ -23,11 +28,13 @@ export default function KnaufConsentAnalytics() {
     (event?: Event) => {
       if (!analyticsConfig) {
         setAnalyticsConsented(false);
+        setConsentState('');
         return;
       }
 
       const oneTrustWindow = window as OneTrustWindow;
       const activeGroups = getOneTrustGroupsFromEvent(event, oneTrustWindow);
+      setConsentState(formatOneTrustConsentState(activeGroups));
       setAnalyticsConsented(hasAnalyticsConsent(activeGroups, analyticsConfig.consentCategoryId));
     },
     [analyticsConfig],
@@ -116,16 +123,23 @@ export default function KnaufConsentAnalytics() {
     }
 
     lastTrackedPathRef.current = trackedPath;
-    emitAdobePageView(analyticsConfig, {
-      hash: location.hash,
-      href: `${window.location.origin}${trackedPath}`,
-      pathname: location.pathname,
-      search: location.search,
-    });
+    emitAdobePageView(
+      analyticsConfig,
+      {
+        hash: location.hash,
+        href: `${window.location.origin}${trackedPath}`,
+        pathname: location.pathname,
+        search: location.search,
+      },
+      {
+        consentState,
+      },
+    );
   }, [
     adobeReady,
     analyticsConfig,
     analyticsConsented,
+    consentState,
     location.hash,
     location.pathname,
     location.search,

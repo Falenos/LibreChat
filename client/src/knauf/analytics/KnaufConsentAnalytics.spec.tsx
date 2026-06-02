@@ -99,6 +99,8 @@ describe('KnaufConsentAnalytics', () => {
         event: 'pageview',
         event_info: expect.objectContaining({
           app_name: 'knauf_karl',
+          consent_state: ',C0001,C0002,',
+          consent_status: ',C0001,C0002,',
           event_specification: 'pageview',
           page_category: 'karl_page',
           page_name: 'New Chat',
