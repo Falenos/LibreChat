@@ -160,16 +160,32 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
           className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
         >
           <div className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}>
-            <ConvoIcon
-              agentsMap={agentsMap}
-              assistantMap={assistantMap}
-              conversation={conversation}
-              endpointsConfig={endpointsConfig}
-              containerClassName={containerClassName}
-              context="landing"
-              className="h-2/3 w-2/3 text-black dark:text-white"
-              size={41}
-            />
+            {/* [knauf] KK20-159 — Knauf wordmark logo on the default-spec
+                landing. Bypasses ConvoIcon (whose URL renderer only fires
+                on iconURLs that include `http`, so a relative
+                `assets/...` path would fall through to Azure's generic
+                "A" fallback). Rendered as a wide rectangular image
+                instead of a square avatar to suit the wordmark's
+                aspect ratio. */}
+            {isDefaultSpecLanding ? (
+              <img
+                src="/assets/knauf-logo.png"
+                alt="Knauf"
+                className="h-10 w-auto object-contain"
+              />
+            ) : (
+              <ConvoIcon
+                agentsMap={agentsMap}
+                assistantMap={assistantMap}
+                conversation={conversation}
+                endpointsConfig={endpointsConfig}
+                containerClassName={containerClassName}
+                context="landing"
+                className="h-2/3 w-2/3 text-black dark:text-white"
+                size={41}
+              />
+            )}
+            {/* End [knauf] */}
             {startupConfig?.showBirthdayIcon && (
               <TooltipAnchor
                 className="absolute bottom-[27px] right-2"

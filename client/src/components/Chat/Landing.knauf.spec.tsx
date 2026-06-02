@@ -116,6 +116,10 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     expect(screen.getByTestId('split-title')).toHaveTextContent(
       'Welcome to Agentic Karl! Enjoy your experience.',
     );
+    // Knauf wordmark renders in the icon slot (bypasses ConvoIcon).
+    const logo = screen.getByAltText('Knauf');
+    expect(logo).toBeInTheDocument();
+    expect(logo).toHaveAttribute('src', '/assets/knauf-logo.png');
     // The three tip locale keys render — content is i18n-driven so we
     // only assert the key strings (the mock localize returns keys
     // verbatim).
@@ -141,6 +145,8 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     expect(screen.getByText('Helps with literature reviews')).toBeInTheDocument();
     // Tips are default-spec-only — agent landings shouldn't see them.
     expect(screen.queryByText('com_knauf_landing_tip_attach')).not.toBeInTheDocument();
+    // Knauf wordmark is also default-spec-only — agent landings use ConvoIcon.
+    expect(screen.queryByAltText('Knauf')).not.toBeInTheDocument();
   });
 
   it('does not render the Knauf tips on a non-default spec (e.g. a personality preset)', () => {

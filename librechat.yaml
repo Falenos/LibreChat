@@ -174,17 +174,16 @@ modelSpecs:
     - name: 'karl'
       label: 'KARL'
       default: true
-      # KK20-159 — landing icon. ConvoIcon reads `conversation.iconURL`
-      # (sourced from this field on the active modelSpec) before falling
-      # back to the endpoint default — without this the default-spec
-      # landing rendered Azure OpenAI's generic "A" glyph. Re-uses the
-      # 180×180 apple-touch-icon binary we ship under client/public/
-      # assets — already Knauf-branded, plenty crisp at the 41px landing
-      # render size.
-      iconURL: 'assets/apple-touch-icon-180x180.png'
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
-      # product-facing.
+      # product-facing. KK20-159.
+      #
+      # No `iconURL` here: upstream `ConvoIcon` only dispatches to its
+      # URL renderer when the value contains `http`, so a relative
+      # `assets/...` path falls through to the endpoint-icon fallback.
+      # The Knauf landing logo is rendered directly in Landing.tsx via
+      # a `[knauf]` block (default-spec branch only) — see the SEAMS row
+      # for `client/src/components/Chat/Landing.tsx`.
       description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
