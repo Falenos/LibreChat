@@ -19,9 +19,16 @@ import { cn } from '~/utils';
 
 interface ToolsDropdownProps {
   disabled?: boolean;
+  // [knauf] KK20-168 — extension point for fork-specific menu items
+  // (used by KnaufToolsDropdown to inject "Create image"). Keeping the
+  // injection surface to a single optional prop avoids spreading [knauf]
+  // markers through the body of this file — see SEAMS row + the
+  // KnaufToolsDropdown wrapper.
+  extraItems?: MenuItemProps[];
+  // End [knauf]
 }
 
-const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
+const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
   const localize = useLocalize();
   const context = useBadgeRowContext();
   const { data: startupConfig } = useGetStartupConfig();
@@ -299,6 +306,13 @@ const ToolsDropdown = ({ disabled }: ToolsDropdownProps) => {
       render: (props) => <MCPSubMenu {...props} placeholder={mcpPlaceholder} />,
     });
   }
+
+  // [knauf] KK20-168 — append fork-specific items at the tail. See the
+  // `extraItems` prop comment + KnaufToolsDropdown.
+  if (extraItems && extraItems.length > 0) {
+    dropdownItems.push(...extraItems);
+  }
+  // End [knauf]
 
   if (dropdownItems.length === 0) {
     return null;

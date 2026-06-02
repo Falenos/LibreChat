@@ -11,6 +11,10 @@ import { SidePanelGroup } from '~/components/SidePanel';
 import CategoryTabs from './CategoryTabs';
 import SearchBar from './SearchBar';
 import AgentGrid from './AgentGrid';
+// [knauf] KK20-159 — drop the hardcoded "| LibreChat" suffix and route
+// through the shared page-title helper so the tab reads "<page> | KARL".
+import { buildPageTitle } from '~/knauf/common/pageTitle';
+// End [knauf]
 import { cn } from '~/utils';
 
 interface AgentMarketplaceProps {
@@ -47,7 +51,10 @@ const AgentMarketplace: React.FC<AgentMarketplaceProps> = ({ className = '' }) =
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Set page title
-  useDocumentTitle(`${localize('com_agents_marketplace')} | LibreChat`);
+  // [knauf] KK20-159 — was hardcoded "| LibreChat"; now uses the shared
+  // helper so it tracks the KARL brand short.
+  useDocumentTitle(buildPageTitle(localize('com_agents_marketplace')));
+  // End [knauf]
 
   // Ensure endpoints config is loaded first (required for agent queries)
   useGetEndpointsQuery();
