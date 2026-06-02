@@ -156,23 +156,24 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
       className={`flex h-full transform-gpu flex-col items-center justify-center pb-16 transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
     >
       <div ref={contentRef} className="flex flex-col items-center gap-0 p-2">
-        {/* [knauf] KK20-159 — on the default-spec landing, replace the
-            upstream icon+title row (40px round icon next to the
-            customWelcome / time-of-day greeting) with a stacked layout:
-            a large Knauf wordmark on top, then the modelSpec's
-            preset.greeting as the title underneath. The customWelcome
-            line is suppressed for this surface so users see one strong
+        {/* [knauf] KK20-159 — on the default-spec landing, the Knauf
+            wordmark sits inside the same round white avatar container
+            the upstream agent landing uses (visual parity). The
+            modelSpec's preset.greeting is the title below; the
+            customWelcome line is suppressed so users see one
             brand-led message instead of two stacked greetings. Every
             other branch (agents / assistants / non-default spec)
             renders the upstream layout unchanged. */}
         {isDefaultSpecLanding ? (
-          <>
-            <div className="relative mb-4 flex h-20 items-center justify-center">
-              <img
-                src="/assets/knauf-logo.png"
-                alt="Knauf"
-                className="h-full w-auto object-contain"
-              />
+          <div className="flex flex-col items-center gap-3">
+            <div className="relative mb-2 size-12">
+              <div className={containerClassName}>
+                <img
+                  src="/assets/knauf-logo.png"
+                  alt="Knauf"
+                  className="h-7 w-auto object-contain"
+                />
+              </div>
               {startupConfig?.showBirthdayIcon && (
                 <TooltipAnchor
                   className="absolute bottom-[27px] right-2"
@@ -196,7 +197,7 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
               rootMargin="0px"
               onLineCountChange={handleLineCountChange}
             />
-          </>
+          </div>
         ) : (
           <div
             className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
