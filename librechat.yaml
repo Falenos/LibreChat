@@ -174,7 +174,17 @@ modelSpecs:
     - name: 'karl'
       label: 'KARL'
       default: true
-      description: 'KARL GPT for the Knauf Group'
+      # Subtitle text rendered under the customWelcome title on the
+      # default-spec landing (when no agent is selected). Kept short and
+      # product-facing. KK20-159.
+      #
+      # No `iconURL` here: upstream `ConvoIcon` only dispatches to its
+      # URL renderer when the value contains `http`, so a relative
+      # `assets/...` path falls through to the endpoint-icon fallback.
+      # The Knauf landing logo is rendered directly in Landing.tsx via
+      # a `[knauf]` block (default-spec branch only) — see the SEAMS row
+      # for `client/src/components/Chat/Landing.tsx`.
+      description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'

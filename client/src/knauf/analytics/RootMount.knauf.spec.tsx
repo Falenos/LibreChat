@@ -14,6 +14,7 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/store', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories can't reference out-of-scope imports; require() is the standard dodge
   const { atom } = require('recoil');
   return {
     __esModule: true,
@@ -32,6 +33,7 @@ jest.mock('~/hooks', () => ({
 }));
 
 jest.mock('~/Providers', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- same constraint as ~/store mock above
   const React = require('react');
   const PassThrough = ({ children }: { children: React.ReactNode }) => <>{children}</>;
   return {
@@ -64,6 +66,14 @@ jest.mock('~/components/Banners', () => ({
 jest.mock('~/knauf/analytics/KnaufConsentAnalytics', () => ({
   __esModule: true,
   default: () => <div data-testid="knauf-consent-analytics" />,
+}));
+
+// KK20-173 — mock the top header so this spec doesn't transitively require
+// every hook the real KnaufTopBar pulls in (`useLocalize`, auth, settings
+// dialog, etc.). Root.tsx mounts it; we only need its presence here.
+jest.mock('~/knauf/components/Header/KnaufTopBar', () => ({
+  __esModule: true,
+  default: () => <div data-testid="knauf-top-bar" />,
 }));
 
 function renderRoot() {
