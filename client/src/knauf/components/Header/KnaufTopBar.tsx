@@ -21,21 +21,21 @@ import { Avatar, DropdownMenuSeparator, GearIcon, LinkIcon } from '@librechat/cl
 import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import Settings from '~/components/Nav/Settings';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
-import { useAuthContext } from '~/hooks/AuthContext';
-import { useLocalize } from '~/hooks';
+import { useAuthContext, useLocalize } from '~/hooks';
 
 function KnaufTopBar() {
   const localize = useLocalize();
   const { user, isAuthenticated, logout } = useAuthContext();
   const { data: startupConfig } = useGetStartupConfig();
   const balanceQuery = useGetUserBalance({
-    enabled: !!isAuthenticated && startupConfig?.balance?.enabled,
+    enabled: !!isAuthenticated && startupConfig?.balance?.enabled === true,
   });
   const [showSettings, setShowSettings] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const avatarButtonRef = useRef<HTMLButtonElement>(null);
   const menuStore = Ariakit.useMenuStore({ placement: 'bottom-end' });
 
+  // [knauf] Header height is h-14 (56px); keep in sync with KNAUF_HEADER_HEIGHT in routes/Root.tsx.
   return (
     <header className="flex h-14 w-full flex-shrink-0 items-center justify-between border-b border-border-light bg-surface-primary px-4">
       <div className="flex h-full items-center">

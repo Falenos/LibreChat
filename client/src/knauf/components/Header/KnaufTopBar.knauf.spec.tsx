@@ -17,9 +17,6 @@ const mockSettings = jest.fn();
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
-}));
-
-jest.mock('~/hooks/AuthContext', () => ({
   useAuthContext: () => mockUseAuthContext(),
 }));
 

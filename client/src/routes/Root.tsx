@@ -29,7 +29,7 @@ import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
 // Renders above the sidebar+chat split; the layout height calc below
 // subtracts KNAUF_HEADER_HEIGHT so the inner flex doesn't overflow.
 import KnaufTopBar from '~/knauf/components/Header/KnaufTopBar';
-const KNAUF_HEADER_HEIGHT = 56;
+const KNAUF_HEADER_HEIGHT = 56; // px — must match KnaufTopBar's `h-14` (56px)
 // End [knauf]
 
 export default function Root() {
