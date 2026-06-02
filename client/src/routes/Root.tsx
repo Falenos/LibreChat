@@ -25,6 +25,12 @@ import { Banner } from '~/components/Banners';
 // [knauf] Mount post-login OneTrust and Adobe Analytics consent controller. (NO-TICKET)
 import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
 // End [knauf]
+// [knauf] KK20-173 — full-width top header (logo left + user menu right).
+// Renders above the sidebar+chat split; the layout height calc below
+// subtracts KNAUF_HEADER_HEIGHT so the inner flex doesn't overflow.
+import KnaufTopBar from '~/knauf/components/Header/KnaufTopBar';
+const KNAUF_HEADER_HEIGHT = 56;
+// End [knauf]
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
@@ -71,12 +77,23 @@ export default function Root() {
       {/* [knauf] OneTrust prompts after login; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
       <KnaufConsentAnalytics />
       {/* End [knauf] */}
+      {/* [knauf] KK20-173 — full-width top header. Sits above Banner so it
+          spans the entire viewport width; the height calc below subtracts
+          KNAUF_HEADER_HEIGHT so the sidebar+chat split fits the remaining
+          viewport. */}
+      <KnaufTopBar />
+      {/* End [knauf] */}
       <FileMapContext.Provider value={fileMap}>
         <AssistantsMapContext.Provider value={assistantsMap}>
           <AgentsMapContext.Provider value={agentsMap}>
             <PromptGroupsProvider>
               <Banner onHeightChange={setBannerHeight} />
-              <div className="flex" style={{ height: `calc(100dvh - ${bannerHeight}px)` }}>
+              <div
+                className="flex"
+                style={{
+                  height: `calc(100dvh - ${bannerHeight}px - ${KNAUF_HEADER_HEIGHT}px)`,
+                }}
+              >
                 <div className="relative z-0 flex h-full w-full overflow-hidden">
                   <UnifiedSidebar />
                   <div
