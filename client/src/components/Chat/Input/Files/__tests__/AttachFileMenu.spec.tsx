@@ -82,7 +82,12 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false 
 
 function setupMocks(overrides: { provider?: string } = {}) {
   const translations: Record<string, string> = {
+    // [knauf] KK20-123 — Tier 5 swap in AttachFileMenu.tsx replaced
+    // `com_ui_upload_provider` ("Upload to Provider") with the generic
+    // `com_ui_upload_files` ("Upload files"). Keep both mocks here so
+    // any future revert of the label is detected by the spec.
     com_ui_upload_provider: 'Upload to Provider',
+    com_ui_upload_files: 'Upload files',
     com_ui_upload_image_input: 'Upload Image',
     com_ui_upload_ocr_text: 'Upload as Text',
     com_ui_upload_file_search: 'Upload for File Search',
@@ -138,34 +143,39 @@ function openMenu() {
 describe('AttachFileMenu', () => {
   beforeEach(jest.clearAllMocks);
 
-  describe('Upload to Provider vs Upload Image', () => {
-    it('shows "Upload to Provider" when endpointType is custom (resolved from agent provider)', () => {
+  // [knauf] KK20-123 — provider-doc upload item is rendered with the
+  // generic "Upload files" label (com_ui_upload_files) instead of
+  // upstream's "Upload to Provider" (com_ui_upload_provider). The gating
+  // logic (endpointType/provider → show provider-doc vs image-only) is
+  // identical to upstream; only the label changed.
+  describe('Upload files vs Upload Image', () => {
+    it('shows "Upload files" when endpointType is custom (resolved from agent provider)', () => {
       setupMocks({ provider: 'Moonshot' });
       renderMenu({ endpointType: EModelEndpoint.custom });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
       expect(screen.queryByText('Upload Image')).not.toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is openAI', () => {
+    it('shows "Upload files" when endpointType is openAI', () => {
       setupMocks({ provider: EModelEndpoint.openAI });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is anthropic', () => {
+    it('shows "Upload files" when endpointType is anthropic', () => {
       setupMocks({ provider: EModelEndpoint.anthropic });
       renderMenu({ endpointType: EModelEndpoint.anthropic });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" when endpointType is google', () => {
+    it('shows "Upload files" when endpointType is google', () => {
       setupMocks({ provider: Providers.GOOGLE });
       renderMenu({ endpointType: EModelEndpoint.google });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" when endpointType is agents (no provider resolution)', () => {
@@ -173,7 +183,7 @@ describe('AttachFileMenu', () => {
       renderMenu({ endpointType: EModelEndpoint.agents });
       openMenu();
       expect(screen.getByText('Upload Image')).toBeInTheDocument();
-      expect(screen.queryByText('Upload to Provider')).not.toBeInTheDocument();
+      expect(screen.queryByText('Upload files')).not.toBeInTheDocument();
     });
 
     it('shows "Upload Image" when neither endpointType nor provider supports documents', () => {
@@ -183,11 +193,11 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload Image')).toBeInTheDocument();
     });
 
-    it('shows "Upload to Provider" for azureOpenAI with useResponsesApi', () => {
+    it('shows "Upload files" for azureOpenAI with useResponsesApi', () => {
       setupMocks({ provider: EModelEndpoint.azureOpenAI });
       renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" for azureOpenAI without useResponsesApi', () => {
@@ -199,14 +209,14 @@ describe('AttachFileMenu', () => {
   });
 
   describe('agent provider resolution scenario', () => {
-    it('shows "Upload to Provider" when agents endpoint has custom endpointType from provider', () => {
+    it('shows "Upload files" when agents endpoint has custom endpointType from provider', () => {
       setupMocks({ provider: 'Moonshot' });
       renderMenu({
         endpoint: EModelEndpoint.agents,
         endpointType: EModelEndpoint.custom,
       });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
 
     it('shows "Upload Image" when agents endpoint has no resolved provider type', () => {
@@ -253,7 +263,15 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload as Text')).toBeInTheDocument();
     });
 
-    it('shows File Search option when enabled and allowed by agent', () => {
+    // [knauf] KK20-123 — Tier 5 swap hides the chat-paperclip "Upload
+    // for File Search" item unconditionally. Knowledge uploads now go
+    // through the agent builder's Data Knowledge panel (KnaufFileSearch)
+    // only — adding files from chat would create an ad-hoc RAG corpus
+    // tied to the conversation, conflicting with the Knauf per-agent
+    // curation model. The test below pins the seam behavior: even when
+    // upstream's gates (fileSearchEnabled + fileSearchAllowedByAgent)
+    // are both true, the item stays out of the menu.
+    it('does NOT show File Search even when enabled and allowed by agent (Knauf seam)', () => {
       setupMocks();
       mockUseAgentCapabilities.mockReturnValue({
         contextEnabled: false,
@@ -267,7 +285,7 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload for File Search')).toBeInTheDocument();
+      expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
     });
 
     it('does NOT show File Search when enabled but not allowed by agent', () => {
@@ -313,9 +331,11 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload to Provider')).toBeInTheDocument();
+      // [knauf] KK20-123 — "Upload files" replaces "Upload to Provider"
+      // and "Upload for File Search" is hidden unconditionally.
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
       expect(screen.getByText('Upload as Text')).toBeInTheDocument();
-      expect(screen.getByText('Upload for File Search')).toBeInTheDocument();
+      expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
       expect(screen.getByText('Upload Code Files')).toBeInTheDocument();
     });
   });

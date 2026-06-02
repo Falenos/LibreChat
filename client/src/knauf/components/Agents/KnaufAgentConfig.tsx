@@ -19,6 +19,7 @@
  *   popover + ✦ Autogenerate).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { LucideProps } from 'lucide-react';
 import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
@@ -34,7 +35,7 @@ import KnaufMCPTools from './KnaufMCPTools';
 import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import * as HoverCard from '@radix-ui/react-hover-card';
-import { Brain, Check, Copy, Zap } from 'lucide-react';
+import { Brain, Zap } from 'lucide-react';
 import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
 import KnaufFileSearch from './KnaufFileSearch';
@@ -49,6 +50,10 @@ import {
   usePersonalities,
   type KnaufPersonality,
 } from '~/knauf/data-provider/Agents/usePersonalities';
+import {
+  knaufPendingAgentFilesAtom,
+  knaufPendingForAgentIdAtom,
+} from '~/knauf/store/pendingAgentFiles';
 
 const labelClass = 'mb-2 text-token-text-primary block text-sm font-medium';
 const inputClass = cn(
@@ -97,7 +102,13 @@ export default function KnaufAgentConfig() {
   // YAML-gated capabilities — `endpoints.agents.capabilities` from
   // librechat.yaml. Each capability in the registry decides via its
   // `isEnabled` whether to render given this list.
-  const { agentsConfig, regularTools, availableMCPServers, mcpServersMap } = useAgentPanelContext();
+  const {
+    agentsConfig,
+    regularTools,
+    availableMCPServers,
+    mcpServersMap,
+    agent_id: contextAgentId,
+  } = useAgentPanelContext();
   const enabledCapabilities = useMemo(
     () => (agentsConfig?.capabilities ?? []) as ReadonlyArray<string>,
     [agentsConfig?.capabilities],
@@ -117,9 +128,74 @@ export default function KnaufAgentConfig() {
 
   const { control, setValue, getValues } = useFormContext<AgentForm>();
   const agent = useWatch({ control, name: 'agent' });
-  const agent_id = useWatch({ control, name: 'id' });
+  const formAgentId = useWatch({ control, name: 'id' });
+  /**
+   * KK20-123 — prefer the AgentPanelContext's `agent_id` over the form's.
+   * The upstream create-agent mutation in `AgentPanel.tsx` calls
+   * `setCurrentAgentId(newId)` (which lands here as `contextAgentId`)
+   * synchronously in `onSuccess`, but the form's `id` only updates later
+   * via the agent-refetch + `resetAgentForm` chain in `AgentSelect.tsx`.
+   * Using the form id as our agent_id source means the deferred-upload
+   * drain in KnaufFileSearch never sees the ephemeral→real transition in
+   * time and uploads never fire. Falling back to the form id covers the
+   * "selected an existing agent from the dropdown" path where AgentSelect
+   * updates the form before the context.
+   */
+  const agent_id =
+    contextAgentId && !isEphemeralAgent(contextAgentId) ? contextAgentId : (formAgentId ?? '');
   const instructions = useWatch({ control, name: 'instructions' });
   const tools = useWatch({ control, name: 'tools' });
+
+  // KK20-123 — pending-files queue lives in a Knauf-namespaced Recoil
+  // atom (see store/pendingAgentFiles.ts) so it survives the AgentPanel
+  // remount cycle. KnaufAgentConfig only owns the *clearing policy* on
+  // navigation, so we take setter-only handles (`useSetRecoilState`) —
+  // we don't need to re-render this component when the atom changes;
+  // KnaufFileSearch is the one that subscribes for renders.
+  const setPendingFiles = useSetRecoilState(knaufPendingAgentFilesAtom);
+  const [pendingForAgentId, setPendingForAgentId] = useRecoilState(knaufPendingForAgentIdAtom);
+
+  // KK20-123 — Scope the pending-files queue to a single agent so the
+  // red retry cards don't leak between agents.
+  //
+  // Three clearing cases:
+  //   A. We have a tracked owner (a real id) AND the user navigated to
+  //      a *different* real agent. The error entries belong to the
+  //      previous create flow — drop them.
+  //   B. No tracked owner AND the user navigated to a real agent. They
+  //      picked files in the ephemeral Create view but never clicked
+  //      Create; navigating to an existing agent shouldn't drag those
+  //      pending cards along.
+  //   C. Fresh ephemeral mount with no tracked owner. Clears leftovers
+  //      from a previous abandoned new-agent attempt.
+  //
+  // The DURING-SAVE remount is the case we deliberately DON'T clear in:
+  // `useDrainPendingKnaufFiles` stamps `pendingForAgentId = newId`
+  // before flipping `setCurrentAgentId`, so the post-transition mount
+  // sees `pendingForAgentId === agent_id` and falls through.
+  useEffect(() => {
+    // Case A
+    if (
+      pendingForAgentId &&
+      !isEphemeralAgent(pendingForAgentId) &&
+      agent_id &&
+      !isEphemeralAgent(agent_id) &&
+      pendingForAgentId !== agent_id
+    ) {
+      setPendingFiles((prev) => (prev.size === 0 ? prev : new Map()));
+      setPendingForAgentId(null);
+      return;
+    }
+    // Case B
+    if (!pendingForAgentId && agent_id && !isEphemeralAgent(agent_id)) {
+      setPendingFiles((prev) => (prev.size === 0 ? prev : new Map()));
+      return;
+    }
+    // Case C
+    if ((!agent_id || isEphemeralAgent(agent_id)) && !pendingForAgentId) {
+      setPendingFiles((prev) => (prev.size === 0 ? prev : new Map()));
+    }
+  }, [agent_id, pendingForAgentId, setPendingFiles, setPendingForAgentId]);
   const { toolIds, mcpServerNames } = useVisibleTools(tools, regularTools, mcpServersMap);
 
   const { data: agentFiles = [] } = useGetAgentFiles(agent_id);
@@ -156,6 +232,25 @@ export default function KnaufAgentConfig() {
     if (getValues('file_search') === shouldEnable) return;
     setValue('file_search', shouldEnable as never, { shouldDirty: false });
   }, [agent_id, knowledge_files.length, getValues, setValue]);
+
+  // Mirror useResponsesApi=true into model_parameters for any agent that
+  // doesn't already have it. New agents inherit it from the personality
+  // preset in librechat.yaml; this effect covers pre-existing agents so the
+  // "Upload to Provider" item in the chat paperclip menu (gated by
+  // useResponsesApi on Azure OpenAI — see AttachFileMenu.tsx:158) starts
+  // appearing. shouldDirty: false intentionally: we don't fake-dirty the
+  // form, so the flag only persists the next time the user saves the agent
+  // for some other reason. Idempotent — once set, the early return fires.
+  useEffect(() => {
+    if (!agent_id) return;
+    const params = (getValues('model_parameters') ?? {}) as Record<string, unknown>;
+    if (params.useResponsesApi === true) return;
+    setValue(
+      'model_parameters',
+      { ...params, useResponsesApi: true } as unknown as AgentForm['model_parameters'],
+      { shouldDirty: false },
+    );
+  }, [agent_id, getValues, setValue]);
 
   // ── Personality ───────────────────────────────────────────────────────────
   // Single source of truth: the form's `spec` field (hydrated by
@@ -342,7 +437,6 @@ export default function KnaufAgentConfig() {
               </>
             )}
           />
-          {agent_id && !isEphemeralAgent(agent_id) ? <KnaufAgentIdRow agentId={agent_id} /> : null}
         </div>
 
         {/* Description */}
@@ -679,53 +773,5 @@ function PersonalityHeaderToggles() {
         disabled={fastMode}
       />
     </>
-  );
-}
-
-/**
- * Small read-only display of the agent's id beneath the Name field, with a
- * click-to-copy button. Lets admins copy the id into librechat.yaml's
- * `interface.knauf.defaultAgentId`. Only renders for saved (non-ephemeral)
- * agents. (KK20-128)
- */
-function KnaufAgentIdRow({ agentId }: Readonly<{ agentId: string }>) {
-  const localize = useLocalize();
-  const [copied, setCopied] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current != null) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-  const onCopy = useCallback(() => {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-    navigator.clipboard.writeText(agentId).then(
-      () => {
-        if (timeoutRef.current != null) {
-          clearTimeout(timeoutRef.current);
-        }
-        setCopied(true);
-        timeoutRef.current = setTimeout(() => setCopied(false), 1500);
-      },
-      () => undefined,
-    );
-  }, [agentId]);
-  const buttonTitle = copied ? localize('com_ui_copied') : localize('com_knauf_copy_agent_id');
-  return (
-    <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
-      <span className="font-medium">{localize('com_knauf_agent_id')}:</span>
-      <code className="truncate font-mono text-[11px]">{agentId}</code>
-      <button
-        type="button"
-        onClick={onCopy}
-        aria-label={buttonTitle}
-        title={buttonTitle}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary"
-      >
-        {copied ? <Check size={14} /> : <Copy size={14} />}
-      </button>
-    </div>
   );
 }

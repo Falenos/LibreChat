@@ -1,15 +1,15 @@
 /**
- * [knauf] Seam test for the visibility gate of KnaufImageGenTools — the
- * agent-chat-only image-generation toggle. The toggle must render nothing
- * when the active agent does not have `image_gen_oai` in its stored
- * tools, and must render a clickable trigger when it does. If either
- * branch flips, this seam (and the user-facing contract) is broken.
+ * [knauf] Seam test for the slimmed `KnaufImageGenTools` chip. The
+ * popover/menu-item lives in upstream `ToolsDropdown` now; this component
+ * only renders the pinned/toggled CheckboxButton chip in the composer row.
+ * Visibility is delegated to `useImageGenAvailable` — that hook's own
+ * spec covers the policy branches.
  */
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import KnaufImageGenTools from './KnaufImageGenTools';
 
-const mockUseGetAgentByIdQuery = jest.fn();
+const mockUseImageGenAvailable = jest.fn();
 const mockUseToolToggle = jest.fn();
 
 jest.mock('~/hooks', () => ({
@@ -17,8 +17,8 @@ jest.mock('~/hooks', () => ({
   useToolToggle: (opts: unknown) => mockUseToolToggle(opts),
 }));
 
-jest.mock('~/data-provider', () => ({
-  useGetAgentByIdQuery: (id: unknown) => mockUseGetAgentByIdQuery(id),
+jest.mock('~/knauf/hooks/Chat/useImageGenAvailable', () => ({
+  useImageGenAvailable: (args: unknown) => mockUseImageGenAvailable(args),
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -26,20 +26,6 @@ jest.mock('@librechat/client', () => ({
   CheckboxButton: ({ label }: { label: string }) => (
     <button type="button" data-testid="image-gen-chip">
       {label}
-    </button>
-  ),
-  DropdownPopup: ({ trigger }: { trigger: React.ReactNode }) => (
-    <div data-testid="image-gen-popover">{trigger}</div>
-  ),
-  PinIcon: () => <span data-testid="pin-icon" />,
-  TooltipAnchor: ({ render }: { render: React.ReactNode }) => <>{render}</>,
-}));
-
-jest.mock('@ariakit/react', () => ({
-  __esModule: true,
-  MenuButton: ({ children, ...rest }: React.PropsWithChildren<unknown>) => (
-    <button type="button" data-testid="image-gen-trigger" {...rest}>
-      {children}
     </button>
   ),
 }));
@@ -53,53 +39,48 @@ function setToggle(opts: { enabled?: boolean; isPinned?: boolean } = {}) {
   });
 }
 
-describe('[knauf] KnaufImageGenTools — visibility gate', () => {
+describe('[knauf] KnaufImageGenTools — chip-only visibility', () => {
   beforeEach(() => {
-    mockUseGetAgentByIdQuery.mockReset();
+    mockUseImageGenAvailable.mockReset();
     mockUseToolToggle.mockReset();
   });
 
-  it('renders nothing when the agent does not have image_gen_oai in tools', () => {
-    mockUseGetAgentByIdQuery.mockReturnValue({
-      data: { id: 'agent-x', tools: ['file_search', 'web_search'] },
-    });
-    setToggle();
-    const { container } = render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+  it('renders nothing when useImageGenAvailable returns false', () => {
+    mockUseImageGenAvailable.mockReturnValue(false);
+    setToggle({ enabled: true, isPinned: true });
+    const { container } = render(
+      <KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />,
+    );
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders nothing when the agent record is not yet loaded', () => {
-    mockUseGetAgentByIdQuery.mockReturnValue({ data: undefined });
-    setToggle();
-    const { container } = render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+  it('renders nothing when available but neither toggled nor pinned', () => {
+    mockUseImageGenAvailable.mockReturnValue(true);
+    setToggle({ enabled: false, isPinned: false });
+    const { container } = render(
+      <KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />,
+    );
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders the popover trigger when the agent has image_gen_oai in tools', () => {
-    mockUseGetAgentByIdQuery.mockReturnValue({
-      data: { id: 'agent-x', tools: ['file_search', 'image_gen_oai'] },
-    });
-    setToggle();
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
-    expect(screen.getByTestId('image-gen-popover')).toBeInTheDocument();
-    expect(screen.getByTestId('image-gen-trigger')).toBeInTheDocument();
-  });
-
-  it('renders the pinned chip when the toggle is pinned', () => {
-    mockUseGetAgentByIdQuery.mockReturnValue({
-      data: { id: 'agent-x', tools: ['image_gen_oai'] },
-    });
+  it('renders the chip when pinned', () => {
+    mockUseImageGenAvailable.mockReturnValue(true);
     setToggle({ isPinned: true });
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+    render(<KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />);
     expect(screen.getByTestId('image-gen-chip')).toHaveTextContent('com_knauf_create_image');
   });
 
-  it('renders the chip when the toggle is enabled even without a pin', () => {
-    mockUseGetAgentByIdQuery.mockReturnValue({
-      data: { id: 'agent-x', tools: ['image_gen_oai'] },
-    });
+  it('renders the chip when toggled on even without pin', () => {
+    mockUseImageGenAvailable.mockReturnValue(true);
     setToggle({ enabled: true });
-    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" />);
+    render(<KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />);
     expect(screen.getByTestId('image-gen-chip')).toBeInTheDocument();
+  });
+
+  it('forwards agentId + spec to the availability hook', () => {
+    mockUseImageGenAvailable.mockReturnValue(false);
+    setToggle();
+    render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" spec="karl" />);
+    expect(mockUseImageGenAvailable).toHaveBeenCalledWith({ agentId: 'agent-x', spec: 'karl' });
   });
 });
