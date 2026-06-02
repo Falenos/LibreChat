@@ -90,9 +90,13 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     mockUseAuthContext.mockReturnValue({ user: { name: 'Tester' } });
   });
 
-  it('renders the customWelcome string as the title and the Knauf tips block below it on the default-spec landing', () => {
+  it('renders the modelSpec greeting as the title with the Knauf wordmark above it on the default-spec landing', () => {
     mockUseChatContext.mockReturnValue({
-      conversation: { endpoint: 'azureOpenAI', spec: 'karl' },
+      conversation: {
+        endpoint: 'azureOpenAI',
+        spec: 'karl',
+        greeting: 'Hello! I am KARL, your CorporateGPT for the Knauf Group.',
+      },
     });
     mockGetEntity.mockReturnValue({ entity: null, isAgent: false, isAssistant: false });
     mockUseGetStartupConfig.mockReturnValue({
@@ -113,16 +117,17 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
 
     render(<Landing centerFormOnLanding={false} />);
 
+    // The preset greeting (long Knauf intro) is the title — customWelcome
+    // is suppressed on the default-spec landing.
     expect(screen.getByTestId('split-title')).toHaveTextContent(
-      'Welcome to Agentic Karl! Enjoy your experience.',
+      'Hello! I am KARL, your CorporateGPT for the Knauf Group.',
     );
-    // Knauf wordmark renders in the icon slot (bypasses ConvoIcon).
+    expect(screen.queryByText(/Welcome to Agentic Karl/)).not.toBeInTheDocument();
+    // Knauf wordmark renders above the title (bypasses ConvoIcon).
     const logo = screen.getByAltText('Knauf');
     expect(logo).toBeInTheDocument();
     expect(logo).toHaveAttribute('src', '/assets/knauf-logo.png');
-    // The three tip locale keys render — content is i18n-driven so we
-    // only assert the key strings (the mock localize returns keys
-    // verbatim).
+    // The three tip locale keys still render below the title.
     expect(screen.getByText('com_knauf_landing_tip_attach')).toBeInTheDocument();
     expect(screen.getByText('com_knauf_landing_tip_image')).toBeInTheDocument();
     expect(screen.getByText('com_knauf_landing_tip_agents')).toBeInTheDocument();

@@ -156,24 +156,54 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
       className={`flex h-full transform-gpu flex-col items-center justify-center pb-16 transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
     >
       <div ref={contentRef} className="flex flex-col items-center gap-0 p-2">
-        <div
-          className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
-        >
-          <div className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}>
-            {/* [knauf] KK20-159 — Knauf wordmark logo on the default-spec
-                landing. Bypasses ConvoIcon (whose URL renderer only fires
-                on iconURLs that include `http`, so a relative
-                `assets/...` path would fall through to Azure's generic
-                "A" fallback). Rendered as a wide rectangular image
-                instead of a square avatar to suit the wordmark's
-                aspect ratio. */}
-            {isDefaultSpecLanding ? (
+        {/* [knauf] KK20-159 — on the default-spec landing, replace the
+            upstream icon+title row (40px round icon next to the
+            customWelcome / time-of-day greeting) with a stacked layout:
+            a large Knauf wordmark on top, then the modelSpec's
+            preset.greeting as the title underneath. The customWelcome
+            line is suppressed for this surface so users see one strong
+            brand-led message instead of two stacked greetings. Every
+            other branch (agents / assistants / non-default spec)
+            renders the upstream layout unchanged. */}
+        {isDefaultSpecLanding ? (
+          <>
+            <div className="relative mb-4 flex h-20 items-center justify-center">
               <img
                 src="/assets/knauf-logo.png"
                 alt="Knauf"
-                className="h-10 w-auto object-contain"
+                className="h-full w-auto object-contain"
               />
-            ) : (
+              {startupConfig?.showBirthdayIcon && (
+                <TooltipAnchor
+                  className="absolute bottom-[27px] right-2"
+                  description={localize('com_ui_happy_birthday')}
+                  aria-label={localize('com_ui_happy_birthday')}
+                >
+                  <BirthdayIcon />
+                </TooltipAnchor>
+              )}
+            </div>
+            <SplitText
+              key={`split-text-knauf-${conversation?.greeting ?? ''}`}
+              text={conversation?.greeting ?? greetingText}
+              className={`${getTextSizeClass(conversation?.greeting ?? greetingText)} max-w-2xl font-medium text-text-primary`}
+              delay={50}
+              textAlign="center"
+              animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
+              animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
+              easing={easings.easeOutCubic}
+              threshold={0}
+              rootMargin="0px"
+              onLineCountChange={handleLineCountChange}
+            />
+          </>
+        ) : (
+          <div
+            className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
+          >
+            <div
+              className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}
+            >
               <ConvoIcon
                 agentsMap={agentsMap}
                 assistantMap={assistantMap}
@@ -184,24 +214,37 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
                 className="h-2/3 w-2/3 text-black dark:text-white"
                 size={41}
               />
-            )}
-            {/* End [knauf] */}
-            {startupConfig?.showBirthdayIcon && (
-              <TooltipAnchor
-                className="absolute bottom-[27px] right-2"
-                description={localize('com_ui_happy_birthday')}
-                aria-label={localize('com_ui_happy_birthday')}
-              >
-                <BirthdayIcon />
-              </TooltipAnchor>
-            )}
-          </div>
-          {((isAgent || isAssistant) && name) || name ? (
-            <div className="flex flex-col items-center gap-0 p-2">
+              {startupConfig?.showBirthdayIcon && (
+                <TooltipAnchor
+                  className="absolute bottom-[27px] right-2"
+                  description={localize('com_ui_happy_birthday')}
+                  aria-label={localize('com_ui_happy_birthday')}
+                >
+                  <BirthdayIcon />
+                </TooltipAnchor>
+              )}
+            </div>
+            {((isAgent || isAssistant) && name) || name ? (
+              <div className="flex flex-col items-center gap-0 p-2">
+                <SplitText
+                  key={`split-text-${name}`}
+                  text={name}
+                  className={`${getTextSizeClass(name)} font-medium text-text-primary`}
+                  delay={50}
+                  textAlign="center"
+                  animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
+                  animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
+                  easing={easings.easeOutCubic}
+                  threshold={0}
+                  rootMargin="0px"
+                  onLineCountChange={handleLineCountChange}
+                />
+              </div>
+            ) : (
               <SplitText
-                key={`split-text-${name}`}
-                text={name}
-                className={`${getTextSizeClass(name)} font-medium text-text-primary`}
+                key={`split-text-${greetingText}${user?.name ? '-user' : ''}`}
+                text={greetingText}
+                className={`${getTextSizeClass(greetingText)} font-medium text-text-primary`}
                 delay={50}
                 textAlign="center"
                 animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
@@ -211,24 +254,11 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
                 rootMargin="0px"
                 onLineCountChange={handleLineCountChange}
               />
-            </div>
-          ) : (
-            <SplitText
-              key={`split-text-${greetingText}${user?.name ? '-user' : ''}`}
-              text={greetingText}
-              className={`${getTextSizeClass(greetingText)} font-medium text-text-primary`}
-              delay={50}
-              textAlign="center"
-              animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
-              animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
-              easing={easings.easeOutCubic}
-              threshold={0}
-              rootMargin="0px"
-              onLineCountChange={handleLineCountChange}
-            />
-          )}
-        </div>
-        {description && (
+            )}
+          </div>
+        )}
+        {/* End [knauf] */}
+        {description && !isDefaultSpecLanding && (
           <div className="animate-fadeIn mt-4 max-w-md text-center text-sm font-normal text-text-primary">
             {description}
           </div>
