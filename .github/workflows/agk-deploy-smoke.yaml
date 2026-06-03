@@ -107,8 +107,7 @@ jobs:
             az acr repository delete \
               --subscription "$AGK_SUBSCRIPTION_ID" \
               --name "$AGK_ACR_NAME" \
-              --repository "$AGK_SMOKE_IMAGE_REPOSITORY" \
-              --tag "$SMOKE_TAG" \
+              --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
               --yes >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
@@ -132,8 +131,7 @@ jobs:
           az acr repository delete \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
-            --repository "$AGK_SMOKE_IMAGE_REPOSITORY" \
-            --tag "$SMOKE_TAG" \
+            --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --yes
           trap - EXIT
 
