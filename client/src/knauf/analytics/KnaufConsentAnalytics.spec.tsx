@@ -17,7 +17,7 @@ const startupConfig = {
       oneTrustDomainScriptId: 'domain-script',
       consentCategoryId: 'C0002',
       adobeLaunchScriptUrl: 'https://example.test/adobe.js',
-      adobeAppName: 'knauf_karl',
+      adobeAppName: 'knauf_agentic_karl',
     },
   },
 };
@@ -98,11 +98,11 @@ describe('KnaufConsentAnalytics', () => {
       expect.objectContaining({
         event: 'pageview',
         event_info: expect.objectContaining({
-          app_name: 'knauf_karl',
+          app_name: 'knauf_agentic_karl',
           consent_state: ',C0001,C0002,',
           consent_status: ',C0001,C0002,',
           event_specification: 'pageview',
-          page_category: 'karl_page',
+          page_category: 'agentic_karl_page',
           page_name: 'New Chat',
           page_path: '/c/new',
           page_query_string: '?source=test',

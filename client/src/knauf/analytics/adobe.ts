@@ -1,7 +1,7 @@
 import type { AdobeAnalyticsWindow, KnaufAnalyticsConfig } from './types';
 
 const ADOBE_PAGE_VIEW_EVENT = 'pageview';
-const ADOBE_PAGE_CATEGORY = 'karl_page';
+const ADOBE_PAGE_CATEGORY = 'agentic_karl_page';
 const ADOBE_SESSION_STORAGE_KEY = 'knauf_adobe_session_id';
 type AdobePageLocation = Pick<Location, 'hash' | 'href' | 'pathname' | 'search'>;
 type EmitAdobePageViewOptions = {

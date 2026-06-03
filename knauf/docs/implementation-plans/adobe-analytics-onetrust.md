@@ -15,7 +15,7 @@ The default local/non-prod configuration is:
 OneTrust domain script ID: 1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test
 Adobe Launch script: https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js
 Consent category: C0002
-Adobe app name: knauf_karl
+Adobe app name: knauf_agentic_karl
 ```
 
 The app initialises `window.adobeDataLayer` before Adobe Launch is injected, then
@@ -26,9 +26,9 @@ analytics consent is active:
 {
   "event": "pageview",
   "event_info": {
-    "app_name": "knauf_karl",
+    "app_name": "knauf_agentic_karl",
     "event_specification": "pageview",
-    "page_category": "karl_page",
+    "page_category": "agentic_karl_page",
     "page_section": "chat",
     "user_login_status": "logged_in",
     "user_session_id": "generated-per-browser-session",
@@ -56,7 +56,7 @@ Required deployment values:
 KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=nonprod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
-KNAUF_ADOBE_APP_NAME=knauf_karl
+KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
 ```
 
 For production, set:
@@ -65,7 +65,7 @@ For production, set:
 KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=prod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
-KNAUF_ADOBE_APP_NAME=knauf_karl
+KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
 ```
 
 Optional explicit overrides, useful if infra does not want to rely on code
@@ -104,8 +104,8 @@ Adobe Launch and Adobe Analytics must also be configured outside this
 repository:
 
 ```text
-1. Add a Launch rule for Adobe Client Data Layer event = pageview.
-2. Scope the rule to event_info.app_name = knauf_karl and the deployed Agentic Karl hostname, or use myknauf_karl if the final placement is under myKnauf.
+1. Confirm the CST/Adobe consumer is listening for Adobe Client Data Layer event = pageview.
+2. Scope the listener/rule to event_info.app_name = knauf_agentic_karl and the deployed Agentic Karl hostname.
 3. Map the dev/stage Launch property to the correct non-production report suite.
 4. Map the production Launch property to the correct production report suite.
 5. Map data elements from event_info, including app_name, page_url, page_name, page_title, page_domain, page_hostname, page_locale, page_query_string, page_category, page_section, user_language, user_login_status, user_session_id, and user_timestamp_iso.
@@ -133,7 +133,8 @@ window.adobeDataLayer?.slice?.(-3)
 
 Expected result: OneTrust is present, Adobe Launch is present, and the latest
 data layer event has `event: "pageview"` and `event_info.app_name:
-"knauf_karl"` or the app name configured through `KNAUF_ADOBE_APP_NAME`.
+"knauf_agentic_karl"` or the app name configured through
+`KNAUF_ADOBE_APP_NAME`.
 
 For `http://localhost:3080`, rebuild the static client and restart the backend
 after code changes. The backend reads `client/dist/index.html` once at startup
@@ -149,26 +150,26 @@ Latest local production-value check on `localhost:3080`:
 ```text
 Before consent: OneTrust loads; knauf-adobe-analytics is not injected.
 After Accept All Cookies: Adobe Launch and AppMeasurement load.
-Observed gap: no Adobe Analytics /b/ss/ collection beacon appears locally yet.
+Expected hand-off: window.adobeDataLayer receives a pageview event for app_name
+knauf_agentic_karl. New consumer apps are expected to hand off events through
+the data layer; the downstream CST/Adobe listener owns beacon collection.
 ```
 
 ## Deployment readiness plan
 
-Adobe Launch needs a matching rule/report-suite mapping for Agentic Karl. The
-production Launch property loads successfully with the production values, but the
-local `localhost:3080` check did not show an Adobe collection beacon (`b/ss` or
-`omtrdc`). Treat that as a Launch/report-suite follow-up: confirm the pageview
-rule listens to the Adobe Client Data Layer `pageview` event and is enabled for
-the configured Adobe app name and hostname.
+Adobe/CST needs a matching listener/rule/report-suite mapping for Agentic Karl.
+The app-side contract is the Adobe Client Data Layer event; the downstream
+analytics setup consumes that event and owns beacon collection. Confirm the
+pageview listener is enabled for the configured Adobe app name and hostname.
 
 Before production rollout, confirm these open decisions with the analytics owner:
 
 ```text
 1. Which hostname will Agentic Karl use in production?
-2. Which Adobe report suite should receive knauf_karl/myknauf_karl events?
-3. Should the Launch rule key only on event_info.app_name, or also on hostname?
+2. Which Adobe report suite should receive knauf_agentic_karl events?
+3. Should the CST/Launch listener key only on event_info.app_name, or also on hostname?
 4. Is C0002 the final OneTrust category for Adobe Analytics?
-5. Should any additional non-content events be tracked beyond pageview?
+5. Should Click (Live) from the tracking concept be included in this PR or tracked in a follow-up?
 ```
 
 Recommended rollout sequence:
@@ -177,10 +178,10 @@ Recommended rollout sequence:
 1. Configure non-production runtime values and deploy the branch to dev/stage.
 2. Verify /api/config returns knauf.analytics.enabled = true and the non-production OneTrust and Adobe values.
 3. Log in, accept Performance and Analytics Cookies, and confirm OneTrust, Adobe Launch, and window.adobeDataLayer pageview are present.
-4. In browser Network, confirm Adobe Launch loads. If no Adobe collection request appears, finish the Launch rule/report-suite setup before production.
+4. Confirm with the analytics owner that the CST/Adobe consumer receives the data layer event for the deployed hostname.
 5. Test a clean browser session with Reject All and confirm knauf-adobe-analytics is not injected and no Adobe collection request is sent.
 6. Configure production runtime values with KNAUF_ANALYTICS_ENV=prod.
 7. Get OneTrust and Adobe owner approval for the production hostname, consent category, app name, Launch rule, and report suite.
-8. Deploy production and verify the production OneTrust ID, production Adobe Launch URL, consent-positive collection request, and consent-negative suppression.
+8. Deploy production and verify the production OneTrust ID, production Adobe Launch URL, consent-positive data layer event consumption, and consent-negative suppression.
 9. If rollback is needed, set KNAUF_ANALYTICS_ENABLED=false and restart/redeploy the app.
 ```
