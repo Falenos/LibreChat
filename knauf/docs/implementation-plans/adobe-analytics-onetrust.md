@@ -57,6 +57,7 @@ KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=nonprod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
 KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
+KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js
 ```
 
 For production, set:
@@ -66,23 +67,23 @@ KNAUF_ANALYTICS_ENABLED=true
 KNAUF_ANALYTICS_ENV=prod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
 KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
+KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-6532ab2ce849.min.js
 ```
 
-Optional explicit overrides, useful if infra does not want to rely on code
-defaults:
+Optional OneTrust overrides, useful if infra does not want to rely on the
+environment-based OneTrust defaults:
 
 ```text
 KNAUF_ONETRUST_SCRIPT_SRC=https://cdn.cookielaw.org/scripttemplates/otSDKStub.js
 KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test
-KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js
 ```
 
-Production override values, if the deployment stores every value explicitly:
+Production OneTrust override values, if the deployment stores every value
+explicitly:
 
 ```text
 KNAUF_ONETRUST_SCRIPT_SRC=https://cdn.cookielaw.org/scripttemplates/otSDKStub.js
 KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc
-KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-6532ab2ce849.min.js
 ```
 
 No OneTrust API key, Adobe API key, Adobe client secret, or user credential is

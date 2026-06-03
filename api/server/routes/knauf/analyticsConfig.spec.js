@@ -1,6 +1,15 @@
+const mockWarn = jest.fn();
+
+jest.mock('@librechat/data-schemas', () => ({
+  logger: {
+    warn: (...args) => mockWarn(...args),
+  },
+}));
+
 const { getKnaufAnalyticsConfig } = require('./analyticsConfig');
 
 afterEach(() => {
+  jest.clearAllMocks();
   delete process.env.KNAUF_ANALYTICS_ENABLED;
   delete process.env.KNAUF_ANALYTICS_ENV;
   delete process.env.KNAUF_ONETRUST_SCRIPT_SRC;
@@ -11,7 +20,10 @@ afterEach(() => {
 });
 
 describe('getKnaufAnalyticsConfig', () => {
-  it('returns non-prod OneTrust and Adobe defaults for analytics consent', () => {
+  it('returns non-prod OneTrust defaults with the configured Adobe Launch URL', () => {
+    process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL =
+      'https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js';
+
     expect(getKnaufAnalyticsConfig()).toEqual({
       enabled: true,
       oneTrustScriptSrc: 'https://cdn.cookielaw.org/scripttemplates/otSDKStub.js',
@@ -23,8 +35,10 @@ describe('getKnaufAnalyticsConfig', () => {
     });
   });
 
-  it('returns production script IDs when KNAUF_ANALYTICS_ENV is production', () => {
+  it('returns the production OneTrust ID while keeping the configured Adobe Launch URL', () => {
     process.env.KNAUF_ANALYTICS_ENV = 'production';
+    process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL =
+      'https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-6532ab2ce849.min.js';
 
     expect(getKnaufAnalyticsConfig()).toEqual(
       expect.objectContaining({
@@ -56,5 +70,13 @@ describe('getKnaufAnalyticsConfig', () => {
     process.env.KNAUF_ANALYTICS_ENABLED = 'false';
 
     expect(getKnaufAnalyticsConfig()).toBeUndefined();
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
+  it('does not expose analytics config when the Adobe Launch URL is missing', () => {
+    expect(getKnaufAnalyticsConfig()).toBeUndefined();
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining('KNAUF_ADOBE_ANALYTICS_SCRIPT_URL is required'),
+    );
   });
 });
