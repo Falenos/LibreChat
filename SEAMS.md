@@ -105,6 +105,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.github/workflows/release_pipeline.yaml` | Release pipeline deploys merged PRs to both the legacy CT shared dev AKS path and the AGK nonprod dev ArgoCD path |
 | `client/index.html` | KK20-159 — Tier 5 branded `<head>`: the `<title>` and `<meta name="description">` carry the KARL / Knauf brand, replacing the upstream LibreChat literals. Wrapped in `[knauf]` HTML-comment markers, but `.html` is outside `seams.config.js` `sourceExtensions`, so `diff-check` cannot enforce it — registered here instead. Favicon refs/filenames kept identical to upstream; the PNG binaries are swapped (see Static Assets). |
 | `.env.example` | KK20-159 — `APP_TITLE=KARL \| Knauf AI Platform`. Consumed server-side by `api/server/routes/config.js` → `startupConfig.appTitle`; on the client, surfaces in `Startup.tsx`, `useAppStartup.ts`, `useNewConvo.ts`, and the `buildPageTitle` fallback. `.env.example` is the template, not the secret-bearing `.env`. |
+| `.env.example` | OneTrust/Adobe Analytics runtime config template — documents `KNAUF_ANALYTICS_ENABLED`, consent category, app name, required OneTrust domain script ID, and required Adobe Launch URL. Values are read by `/api/config` at runtime and exposed to the browser as non-sensitive deployment config. |
 
 ## Net-New Files
 
