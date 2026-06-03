@@ -165,19 +165,6 @@ export async function loadAgent(
     return null;
   }
 
-  // [knauf] Per-chat gate for image_gen_oai. Agents that include the tool
-  // are expected to opt-in per conversation — admin-installed image gen
-  // does not fire silently. When the user hasn't enabled the toggle for
-  // this conversation (ephemeralAgent.image_gen !== true), strip the tool
-  // (and its companion image_edit_oai, which the OAI toolkit auto-pairs).
-  // Front-end gate hides the toggle for agents that don't have the tool,
-  // so this branch is a no-op for those.
-  const wantsImageGen = req.body?.ephemeralAgent?.image_gen === true;
-  if (agent.tools && agent.tools.includes('image_gen_oai') && !wantsImageGen) {
-    agent.tools = agent.tools.filter((t) => t !== 'image_gen_oai' && t !== 'image_edit_oai');
-  }
-  // End [knauf]
-
   // Set version count from versions array length
   const agentWithVersion = agent as Agent & { versions?: unknown[]; version?: number };
   agentWithVersion.version = agentWithVersion.versions ? agentWithVersion.versions.length : 0;

@@ -746,12 +746,20 @@ export const interfaceSchema = z
       .optional(),
     // [knauf] Knauf-specific interface options, namespaced under their own
     // key so future Knauf additions don't collide with upstream `interface.*`
-    // fields. Currently carries `defaultAgentId` (the locked-default agent in
-    // the Knauf chat header picker) — empty / unset means no admin default
-    // (KK20-128).
+    // fields.
     knauf: z
       .object({
-        defaultAgentId: z.string().optional(),
+        /**
+         * Global kill switch for the per-conversation image-generation chip
+         * mounted by ChatForm.tsx and rendered by KnaufImageGenTools. When
+         * `false`, the chip is hidden on the default-spec branch (custom-
+         * agent chats have no chip to hide — admin install on the agent
+         * record is their admission control). When `true` (default), the
+         * per-branch policy in `useImageGenAvailable` decides visibility.
+         * The backend gate in `loadEphemeralAgent` still enforces per-chat
+         * opt-in via `ephemeralAgent.image_gen`. KK20-168.
+         */
+        imageGen: z.boolean().optional(),
       })
       .optional(),
     // End [knauf]
