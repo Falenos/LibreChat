@@ -7,7 +7,7 @@ description: Use when working on Agentic Karl / AGK infrastructure, Azure CLI ac
 
 This skill is the operational map for Agentic Karl infrastructure. Use it before changing deployment workflows, Azure resources, Key Vault secrets, ArgoCD apps, Helm values, or environment config.
 
-Last verified: 2026-06-02.
+Last verified: 2026-06-03.
 
 ## Operating Rules
 
@@ -18,20 +18,27 @@ Last verified: 2026-06-02.
 - Use `argocd ... --grpc-web` for `argocd.agk.nonprod.knauf.digital`; keep using it for AGK ArgoCD unless verified otherwise.
 - For Key Vault rotations consumed as pod env vars, update Key Vault, refresh ExternalSecret, then restart the Deployment so pods reload env.
 - Do not run `terraform init`, `plan`, or `apply` locally against remote state. Infra repo READMEs say CI/CD owns Terraform state access. Local Terraform is for syntax validation only.
+- Before changing AGK deploy workflow logic, use `.github/workflows/agk-deploy-smoke.yaml` to validate Azure login, Key Vault reads, GitHub writes, ACR import, deployment-config repo writes, and ArgoCD API access without waiting for the full release pipeline.
 
 ## Repos
 
-- App repo: `/Users/ZaharA/knauf/agentic-karl`
-- AGK Terraform repo: `/Users/ZaharA/knauf/agk-infrastructure`
-- AGK GitOps repo: `/Users/ZaharA/knauf/agk-deployment-configs`
-- Old CT shared GitOps repo: `/Users/ZaharA/knauf/ct-shared-deployment-configs`
+Use the same repo names regardless of local checkout path. In examples, set `KNAUF_ROOT` to the directory that contains the Knauf repos:
+
+```bash
+export KNAUF_ROOT="${KNAUF_ROOT:-$HOME/knauf}"
+```
+
+- App repo: `Knauf-Group/agentic-karl` (`$KNAUF_ROOT/agentic-karl`)
+- AGK Terraform repo: `Knauf-Group/agk-infrastructure` (`$KNAUF_ROOT/agk-infrastructure`)
+- AGK GitOps repo: `Knauf-Group/agk-deployment-configs` (`$KNAUF_ROOT/agk-deployment-configs`)
+- Legacy CT shared GitOps repo: `Knauf-Group/ct-shared-deployment-configs` (`$KNAUF_ROOT/ct-shared-deployment-configs`)
 
 Before relying on repo facts, fetch the latest main branches:
 
 ```bash
-git -C /Users/ZaharA/knauf/agk-infrastructure fetch origin main
-git -C /Users/ZaharA/knauf/agk-deployment-configs fetch origin main
-git -C /Users/ZaharA/knauf/agentic-karl fetch origin main
+git -C $KNAUF_ROOT/agk-infrastructure fetch origin main
+git -C $KNAUF_ROOT/agk-deployment-configs fetch origin main
+git -C $KNAUF_ROOT/agentic-karl fetch origin main
 ```
 
 ## Azure CLI Access
@@ -40,7 +47,6 @@ Known tenant:
 
 - Tenant name: `Knauf`
 - Tenant ID: `ad200093-0cba-48cb-9853-16fb53354a4d`
-- User: `ZaharA@knauf.com`
 
 Subscriptions used by AGK:
 
@@ -81,39 +87,40 @@ kubectl get ns
 kubectl -n agentic-karl-dev get deploy,pods,externalsecret,secretstore
 ```
 
-## Access Snapshot
+## Permission Model
 
-Known nonprod access from the current session:
+Access varies by colleague, group membership, and pipeline identity. Do not hardcode a person's current roles into decisions; verify effective access on the target scope before assuming a change can be made.
 
-- Subscription-wide Reader via group `C-CT-Developers`.
-- Owner on `rg-agk-hub-nonprod-westeurope`.
-- Owner on `rg-agk-nonprod-westeurope`.
-- Owner on `rg-agentic-karl-tenant-nonprod-westeurope`.
-- Owner on Cosmos DB account `cosmos-ct-shared-westeurope-ai-mongo-001`.
-- Key Vault Secrets Officer on `kv-agntkarl-nonprod-001`.
+Check the active human identity:
 
-Practical nonprod scope: read-only across the subscription, full control on AGK nonprod resource groups, and secret operations on the AGK tenant Key Vault.
+```bash
+az account show --query "{subscription:name,id:id,user:user.name}" -o json
+USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv)
+az role assignment list \
+  --assignee "$USER_OBJECT_ID" \
+  --include-groups \
+  --include-inherited \
+  --scope "/subscriptions/<subscription-id>/resourceGroups/<resource-group>" \
+  --query "[].{role:roleDefinitionName,scope:scope,principalType:principalType,principalName:principalName}" \
+  -o table
+```
 
-Do not assume identical personal access in prod without checking. Prod resources are visible from Azure CLI in `CT-SHARED-RESOURCES-PROD`, but mutation should go through the prod Terraform/GitOps pipelines unless explicitly approved.
+Control-plane `Owner` or `Contributor` on a resource group lets an operator manage Azure resources there, but data-plane access is separate for several services:
 
-## Subscription Inventory Snapshot
+- Key Vault contents: `Key Vault Secrets Officer` for secrets, or `Key Vault Administrator` for full vault data-plane administration.
+- Storage contents: `Storage Blob Data Reader`, `Storage Blob Data Contributor`, or `Storage Blob Data Owner` depending on whether read, write, or ACL/admin operations are needed.
+- ACR image publishing/import: target registry write permission such as `AcrPush` or equivalent pipeline/service-principal access.
+- AKS debugging: Azure cluster access plus Kubernetes RBAC/ArgoCD permissions; Azure `Reader` alone is not enough for pod logs, restarts, or secret inspection.
+- ArgoCD operations: ArgoCD app read/sync permissions are independent from Azure RBAC.
 
-Nonprod `CT-SHARED-RESOURCES` snapshot from this session:
+For day-to-day Agentic Karl work:
 
-- Resource groups: 63.
-- Total visible Azure resources: 593.
-- Main region: `westeurope`.
-- Key AKS clusters: `aks-ct-shared-001`, `aks-karl-dev-001`, `aks-agk-nonprod-001`.
-- Key ACRs: `acrctshared001`, `acrkarldev001`, `acragkhubnonprod001`, `acrpdashared`, `acrcnshared`, `acrdarcsharedlakehouse`.
-- AGK-owned nonprod hub RG contains firewall, Bastion, VM, ACR, Key Vault, PostgreSQL, and private DNS.
-- AGK-owned nonprod spoke RG contains AKS `aks-agk-nonprod-001`, VNet, ACI, managed identities, and route table resources.
-- Agentic Karl tenant RG contains the app Key Vault, Redis, Cosmos/Mongo, Blob Storage, private endpoints, private DNS links, and External Secrets identity.
+- App secrets and app-owned data usually live in the tenant RG and tenant Key Vault.
+- Image movement and registry cleanup target the hub ACR.
+- Pod/runtime debugging targets the spoke AKS cluster and ArgoCD.
+- Terraform state and platform changes are normally owned by CI/CD service principals, not local `terraform apply`.
 
-Prod `CT-SHARED-RESOURCES-PROD` AGK resource groups are visible and mirror the same hub/spoke/tenant model:
-
-- `rg-agk-hub-prod-westeurope`
-- `rg-agk-prod-westeurope`
-- `rg-agentic-karl-tenant-prod-westeurope`
+Do not assume pipeline access matches human access. GitHub Actions credentials and ArgoCD credentials must be tested separately.
 
 ## Infrastructure Shape
 
@@ -159,8 +166,31 @@ Networking:
 
 Read these infra docs only when relevant:
 
-- `/Users/ZaharA/knauf/agk-infrastructure/docs/SHARED-AZURE-FIREWALL.md` for shared firewall/route-table work.
-- `/Users/ZaharA/knauf/agk-infrastructure/docs/CONFLUENT-CLOUD-PEERING.md` for Kafka/Confluent private peering.
+- `$KNAUF_ROOT/agk-infrastructure/docs/SHARED-AZURE-FIREWALL.md` for shared firewall/route-table work.
+- `$KNAUF_ROOT/agk-infrastructure/docs/CONFLUENT-CLOUD-PEERING.md` for Kafka/Confluent private peering.
+
+## Environment Map
+
+Use these as topology anchors. Verify live state with Azure CLI before mutating resources.
+
+| Env | Subscription | Hub RG | Spoke RG | Tenant RG | AKS | Hub ACR | Tenant Key Vault |
+|---|---|---|---|---|---|---|---|
+| Dev/nonprod | `CT-SHARED-RESOURCES` | `rg-agk-hub-nonprod-westeurope` | `rg-agk-nonprod-westeurope` | `rg-agentic-karl-tenant-nonprod-westeurope` | `aks-agk-nonprod-001` | `acragkhubnonprod001` | `kv-agntkarl-nonprod-001` |
+| Prod | `CT-SHARED-RESOURCES-PROD` | `rg-agk-hub-prod-westeurope` | `rg-agk-prod-westeurope` | `rg-agentic-karl-tenant-prod-westeurope` | `aks-agk-prod-001` | `acragkhubprod001` | `kv-agntkarl-prod-001` |
+
+Tenant Terraform roots:
+
+| Env | Tenant root | App root | Tenant state | App state |
+|---|---|---|---|---|
+| Dev/nonprod | `$KNAUF_ROOT/agk-infrastructure/terraform/subscription/nonprod/tenant/agentic-karl` | `.../tenant/agentic-karl/agentic-karl` | `rg-agk-nonprod-tfstate-westeurope` / `agknonprodwestfstate` / `tfstate` / `agk.tenant.agentic-karl.tfstate` | same backend, key `agk.tenant.agentic-karl.agentic-karl.tfstate` |
+| Prod | `$KNAUF_ROOT/agk-infrastructure/terraform/subscription/prod/tenant/agentic-karl` | `.../tenant/agentic-karl/agentic-karl` | `rg-agk-prod-tfstate-westeurope` / `agkprodwestfstate` / `tfstate` / `agk.tenant.agentic-karl.tfstate` | same backend, key `agk.tenant.agentic-karl.agentic-karl.tfstate` |
+
+Agentic Karl app resources:
+
+| Env | MongoDB vCore | Redis | Blob Storage | External Secrets MI | PostgreSQL |
+|---|---|---|---|---|---|
+| Dev/nonprod | `cosmos-agk-nonprod-westeurope-001` | `redis-agk-nonprod-westeurope-redis-agk-dev-001` | `agkblobdevwesteu`, file share `karlshare`, container `files` | `mi-agentic-karl-dev-westeurope-aks-external-secrets-001` | server `pgsql-agk-hub-nonprod-westeurope-001`, DB `agentic-karl-dev` |
+| Prod | `cosmos-agk-prod-westeurope-001` | `redis-agk-prod-westeurope-redis-agk-prod-001` | `agkblobprodwesteu`, container `files` | `mi-agentic-karl-prod-westeurope-aks-external-secrets-001` | server `pgsql-agk-hub-prod-westeurope-001`, DB `agentic-karl-prod` |
 
 ## Deployment Config Shape
 
@@ -191,66 +221,37 @@ The ApplicationSet lists the GitOps values file first and `$serviceValues/...` s
 
 Current Agentic Karl GitOps state:
 
-- `agk-deployment-configs` currently contains `agentic-karl/dev/...` only.
-- No `agentic-karl/prod/...` service values were present at last verification. Prod Azure tenant resources exist, but prod app deployment through ArgoCD still requires prod GitOps directories and app repo `infrastructure/prod/values.yaml`.
-- Dev services present: `agentic-karl`, `agentic-karl-rag-api`, `agentic-karl-meilisearch`, plus `common-namespace-resources` and `network-policy`.
+- `agk-deployment-configs` contains both `agentic-karl/dev/...` and `agentic-karl/prod/...`.
+- Dev and prod services present: `agentic-karl`, `agentic-karl-rag-api`, `agentic-karl-meilisearch`, plus `common-namespace-resources` and `network-policy`.
+- App repo `origin/main` currently contains `infrastructure/dev/values.yaml` only. `infrastructure/prod/values.yaml` is still absent and is required for the prod multi-source Agentic Karl service app unless the ApplicationSet/value source is changed.
+- Prod service image currently points at `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl:v0.38.0` in GitOps values; prod promotion must intentionally import/publish a newer tag and update the prod values.
 
 ArgoCD bootstrap workflows in `agk-deployment-configs`:
 
-- Nonprod workflow targets `aks-agk-nonprod-001`, `rg-agk-nonprod-westeurope`, `acragkhubnonprod001`, `kv-agk-hub-nonprod-001`, runner `agk-dc-nonprod-runner`, secret `ENV_AZURE_CREDENTIALS_NONPROD`.
-- Prod workflow targets `aks-agk-prod-001`, `rg-agk-prod-westeurope`, `acragkhubprod001`, `kv-agk-hub-prod-001`, runner `agk-dc-prod-runner`, secret `ENV_AZURE_CREDENTIALS_PROD`.
+- Nonprod workflow uses `ENV_AZURE_CREDENTIALS_NONPROD`, runner `agk-dc-nonprod-runner`, hub Key Vault `kv-agk-hub-nonprod-001`.
+- Prod workflow uses `ENV_AZURE_CREDENTIALS_PROD`, runner `agk-dc-prod-runner`, hub Key Vault `kv-agk-hub-prod-001`.
 
-## Agentic Karl Azure Resources
-
-Nonprod tenant root:
-
-- Terraform: `/Users/ZaharA/knauf/agk-infrastructure/terraform/subscription/nonprod/tenant/agentic-karl`
-- Subscription: `CT-SHARED-RESOURCES`.
-- Tenant RG: `rg-agentic-karl-tenant-nonprod-westeurope`.
-- Tenant state: `rg-agk-nonprod-tfstate-westeurope` / `agknonprodwestfstate` / `tfstate` / `agk.tenant.agentic-karl.tfstate`.
-- App state: same backend with key `agk.tenant.agentic-karl.agentic-karl.tfstate`.
-- AKS: `aks-agk-nonprod-001` in `rg-agk-nonprod-westeurope`.
-- Hub RG: `rg-agk-hub-nonprod-westeurope`.
-- Hub ACR: `acragkhubnonprod001`.
-- Hub Key Vault: `kv-agk-hub-nonprod-001`.
-- Tenant Key Vault: `kv-agntkarl-nonprod-001`.
-- MongoDB vCore: `cosmos-agk-nonprod-westeurope-001`.
-- Redis: `redis-agk-nonprod-westeurope-redis-agk-dev-001`.
-- Blob storage: `agkblobdevwesteu`, file share `karlshare`, container `files`.
-- External Secrets MI: `mi-agentic-karl-dev-westeurope-aks-external-secrets-001`.
-- PostgreSQL server: `pgsql-agk-hub-nonprod-westeurope-001`.
-- PostgreSQL DB: `agentic-karl-dev`.
-
-Prod tenant root:
-
-- Terraform: `/Users/ZaharA/knauf/agk-infrastructure/terraform/subscription/prod/tenant/agentic-karl`
-- Subscription: `CT-SHARED-RESOURCES-PROD`.
-- Tenant RG: `rg-agentic-karl-tenant-prod-westeurope`.
-- Tenant state: `rg-agk-prod-tfstate-westeurope` / `agkprodwestfstate` / `tfstate` / `agk.tenant.agentic-karl.tfstate`.
-- App state: same backend with key `agk.tenant.agentic-karl.agentic-karl.tfstate`.
-- AKS: `aks-agk-prod-001` in `rg-agk-prod-westeurope`.
-- Hub RG: `rg-agk-hub-prod-westeurope`.
-- Hub ACR: `acragkhubprod001`.
-- Hub Key Vault: `kv-agk-hub-prod-001`.
-- Tenant Key Vault: `kv-agntkarl-prod-001`.
-- MongoDB vCore: `cosmos-agk-prod-westeurope-001`.
-- Redis: `redis-agk-prod-westeurope-redis-agk-prod-001`.
-- Blob storage: `agkblobprodwesteu`, container `files`.
-- External Secrets MI: `mi-agentic-karl-prod-westeurope-aks-external-secrets-001`.
-- PostgreSQL server: `pgsql-agk-hub-prod-westeurope-001`.
-- PostgreSQL DB: `agentic-karl-prod`.
-
-## Agentic Karl Dev Runtime
+## Agentic Karl Runtime
 
 New AGK dev:
 
 - Domain: `https://agentic-karl.agk.dev.knauf.digital`
 - ACR image: `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl:<version>`
-- Config repo path: `/Users/ZaharA/knauf/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
-- App overlay path: `/Users/ZaharA/knauf/agentic-karl/infrastructure/dev/values.yaml`
+- Config repo path: `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
+- App overlay path: `$KNAUF_ROOT/agentic-karl/infrastructure/dev/values.yaml`
 - ArgoCD domain: `argocd.agk.nonprod.knauf.digital`
 - ArgoCD app: `agentic-karl-dev-agentic-karl`
 - Namespace: `agentic-karl-dev`
+
+AGK prod:
+
+- Domain: `https://agentic-karl.agk.prod.knauf.digital`
+- ACR image: `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl:<version>`
+- Config repo path: `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/prod/services/agentic-karl/values.yaml`
+- App overlay path: `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml` (currently missing from app repo `origin/main`)
+- ArgoCD domain: `argocd.agk.prod.knauf.digital`
+- ArgoCD app: `agentic-karl-prod-agentic-karl`
+- Namespace: `agentic-karl-prod`
 
 Old CT dev:
 
@@ -269,38 +270,36 @@ Current dev Okta/OpenID settings in AGK GitOps values:
 - `OPENID_ISSUER`: `https://dev.identity.knauf.digital/oauth2/default`
 - `OPENID_CALLBACK_URL`: `/oauth/openid/callback`
 
+Current prod Okta/OpenID settings in AGK GitOps values:
+
+- `DOMAIN_CLIENT`: `https://agentic-karl.agk.prod.knauf.digital`
+- `DOMAIN_SERVER`: `https://agentic-karl.agk.prod.knauf.digital`
+- `OPENID_CLIENT_ID`: `0oawcorb2pfMcXkHU417`
+- `OPENID_ISSUER`: `https://identity.knauf.digital/oauth2/default`
+- `OPENID_CALLBACK_URL`: `/oauth/openid/callback`
+
 App code references:
 
-- `/Users/ZaharA/knauf/agentic-karl/api/strategies/openidStrategy.js`
-- `/Users/ZaharA/knauf/agentic-karl/api/server/routes/oauth.js`
+- `$KNAUF_ROOT/agentic-karl/api/strategies/openidStrategy.js`
+- `$KNAUF_ROOT/agentic-karl/api/server/routes/oauth.js`
 
 ## Secrets And External Secrets
 
-Nonprod External Secrets service account and SecretStore live in:
+External Secrets service accounts and SecretStores live in:
 
-- `/Users/ZaharA/knauf/agk-deployment-configs/agentic-karl/dev/common-namespace-resources/values.yaml`
+- `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/dev/common-namespace-resources/values.yaml`
+- `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/prod/common-namespace-resources/values.yaml`
 
-Known nonprod values:
+Known nonprod values: ServiceAccount `sa-external-secrets`, client ID `b573fdae-1009-46d4-8c58-16694e48f65f`, tenant ID `ad200093-0cba-48cb-9853-16fb53354a4d`, SecretStore `kv-agntkarl-nonprod-001`, vault URL `https://kv-agntkarl-nonprod-001.vault.azure.net/`.
 
-- ServiceAccount: `sa-external-secrets`.
-- Workload identity client ID: `b573fdae-1009-46d4-8c58-16694e48f65f`.
-- Tenant ID: `ad200093-0cba-48cb-9853-16fb53354a4d`.
-- SecretStore: `kv-agntkarl-nonprod-001`.
-- Vault URL: `https://kv-agntkarl-nonprod-001.vault.azure.net/`.
-
-Known prod External Secrets identity from Azure/Terraform:
-
-- Expected ServiceAccount: `sa-external-secrets` in namespace `agentic-karl-prod`.
-- Workload identity client ID: `af3876d3-0183-4213-8877-e66daff78ef2`.
-- Federated subject: `system:serviceaccount:agentic-karl-prod:sa-external-secrets`.
-- SecretStore should point at `kv-agntkarl-prod-001`.
-- Vault URL should be `https://kv-agntkarl-prod-001.vault.azure.net/`.
+Known prod values: ServiceAccount `sa-external-secrets`, client ID `af3876d3-0183-4213-8877-e66daff78ef2`, federated subject `system:serviceaccount:agentic-karl-prod:sa-external-secrets`, SecretStore `kv-agntkarl-prod-001`, vault URL `https://kv-agntkarl-prod-001.vault.azure.net/`.
 
 Main app ExternalSecret lives in:
 
-- `/Users/ZaharA/knauf/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
+- `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
+- `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/prod/services/agentic-karl/values.yaml`
 
-Important nonprod mappings:
+Important app mappings in dev and prod:
 
 - `OPENID_CLIENT_SECRET` <- `AGK-OPENID-CLIENT-SECRET`
 - `OPENID_SESSION_SECRET` <- `AGK-OPENID-SESSION-SECRET`
@@ -309,6 +308,13 @@ Important nonprod mappings:
 - `AZURE_STORAGE_CONNECTION_STRING` <- `agentic-karl-BLOB-STORAGE-CONNECTION-STRING`
 - OpenAI/Azure OpenAI env vars <- `AGK-OPENAI-API-KEY`
 - Blob storage volume secret keys reference `AGK-AZURE-STORAGEACCOUNT-NAME` and `AGK-AZURE-STORAGEACCOUNT-KEY`.
+
+Dev also maps analytics secrets:
+
+- `KNAUF_ADOBE_ANALYTICS_SCRIPT_URL` <- `AGK-KNAUF-ADOBE-ANALYTICS-SCRIPT-URL`
+- `KNAUF_ONETRUST_DOMAIN_SCRIPT_ID` <- `AGK-KNAUF-ONETRUST-DOMAIN-SCRIPT-ID`
+
+Prod values currently do not include the Knauf analytics configmap or ExternalSecret entries. Add them deliberately if production analytics/OneTrust is required.
 
 Terraform-managed secrets include MongoDB, Redis, Blob Storage, and PostgreSQL connection values. Do not manually rotate those as a durable fix; change Terraform or rerun the correct pipeline. Manually managed app secrets such as Okta/OpenID client secret can be set in Key Vault, then consumed through the existing ExternalSecret mapping.
 
@@ -337,18 +343,16 @@ To add a new runtime secret:
 
 ## Release And Deployment
 
-As of last verification, `origin/main` in the app repo still has only the CT shared release job in `.github/workflows/release_pipeline.yaml`. Open PR `#51` (`deploy-both-devs`) adds AGK dev deployment after the CT release; verify whether it has merged before assuming dual deployment is live.
-
-Intended dual-dev flow:
+`origin/main` now deploys merged PR releases to both dev environments:
 
 1. Existing CT release job builds and publishes `acrctshared001.azurecr.io/tools-non-prod/agentic-karl:<version>`.
 2. AGK deploy job imports the same tag into `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl:<version>`.
 3. Workflow commits the version to:
-   - `/Users/ZaharA/knauf/agentic-karl/infrastructure/dev/values.yaml`
-   - `/Users/ZaharA/knauf/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
+   - `$KNAUF_ROOT/agentic-karl/infrastructure/dev/values.yaml`
+   - `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/dev/services/agentic-karl/values.yaml`
 4. ArgoCD auto-syncs `agentic-karl-dev-agentic-karl`; workflow can refresh and poll for Synced/Healthy.
 
-Important AGK dev workflow constants from PR `#51`:
+Important AGK dev workflow constants:
 
 - `AGK_SUBSCRIPTION_ID`: `ad3f0a71-cc5b-4d00-8289-23623cf2064c`
 - `AGK_ACR_NAME`: `acragkhubnonprod001`
@@ -361,6 +365,8 @@ Important AGK dev workflow constants from PR `#51`:
 - `AGK_ARGOCD_PASSWORD_SECRET_NAME`: `argocd-admin-agk-nonprod`
 - `CT_ACR_LOGIN_SERVER`: `acrctshared001.azurecr.io`
 - `CT_IMAGE_REPOSITORY`: `tools-non-prod/agentic-karl`
+
+`agk-deploy-smoke.yaml` validates the same dependencies without mutating real release tags: Azure login, Key Vault reads, temporary app/deployment-config branch push/delete, temporary ACR import/delete under `agentic-karl-dev/smoke/agentic-karl`, and ArgoCD API read for `agentic-karl-dev-agentic-karl`.
 
 The reusable CT workflow does not expose `new-version` as a `workflow_call` output. If needed, recompute the released version after the CT release succeeds:
 
@@ -384,6 +390,8 @@ argocd version --grpc-web
 argocd app get agentic-karl-dev-agentic-karl --grpc-web
 argocd app diff agentic-karl-dev-agentic-karl --grpc-web
 argocd app manifests agentic-karl-dev-agentic-karl --grpc-web
+argocd app get agentic-karl-prod-agentic-karl --grpc-web
+argocd app diff agentic-karl-prod-agentic-karl --grpc-web
 ```
 
 ExternalSecret status:
@@ -400,6 +408,7 @@ Dry-run sync:
 
 ```bash
 argocd app sync agentic-karl-dev-agentic-karl --dry-run --grpc-web
+argocd app sync agentic-karl-prod-agentic-karl --dry-run --grpc-web
 ```
 
 Live operations after explicit confirmation:
@@ -423,7 +432,7 @@ argocd app actions run agentic-karl-dev-agentic-karl restart \
   --grpc-web
 ```
 
-The Key Vault rotation issue from this session was resolved by refreshing the ExternalSecret path and restarting pods so they picked up the latest `AGK-OPENID-CLIENT-SECRET`.
+Operational note: Key Vault rotations consumed as environment variables require ExternalSecret refresh and pod restart before the running app sees the new values.
 
 ## How To Make Future Changes
 
@@ -441,30 +450,19 @@ For a new service in AGK:
 3. Add namespace shared resources under `{project}/{env}/common-namespace-resources` and `{project}/{env}/network-policy` if needed.
 4. Commit to `main`; ArgoCD ApplicationSet creates the app and syncs automatically.
 
-For prod Agentic Karl app onboarding:
+For prod Agentic Karl app onboarding or promotion:
 
 1. Confirm prod DNS, Okta app, secrets, and release policy.
-2. Add `/Users/ZaharA/knauf/agentic-karl/infrastructure/prod/values.yaml`.
-3. Add `agentic-karl/prod/common-namespace-resources`, `agentic-karl/prod/network-policy`, and `agentic-karl/prod/services/agentic-karl` in `agk-deployment-configs`.
-4. Use prod ACR `acragkhubprod001`, prod namespace `agentic-karl-prod`, prod Key Vault `kv-agntkarl-prod-001`, and prod app resources from the prod Terraform tenant.
-5. Expected generated ArgoCD app name is `agentic-karl-prod-agentic-karl` once the prod service directory exists.
+2. Add `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml`; app repo `origin/main` does not currently have it.
+3. Validate existing prod GitOps directories and required manual prod app secrets in `kv-agntkarl-prod-001`; Terraform-managed MongoDB/Redis/Blob/PostgreSQL secrets should come from the infra pipeline.
+4. Import/publish the chosen image tag into `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl`, then update prod GitOps image tag and app repo prod overlay values deliberately.
+5. Verify ArgoCD app `agentic-karl-prod-agentic-karl` with read-only/dry-run checks before live sync or restart.
 6. Update release/promotion automation intentionally; do not let dev release jobs push prod without an approved promotion step.
 
 ## GitHub Azure Credentials Caveat
 
 GitHub secret values cannot be read back. Existing release logs prove `AZURE_CREDENTIALS` can read the two CT Key Vaults. To confirm it also covers AGK, verify the secret's `clientId`.
 
-If `AZURE_CREDENTIALS.clientId` is `73332216-62c9-46a5-a3d0-09a353447f9c` (`sp-ct-shared-resources`), it has sufficient nonprod access:
+If `AZURE_CREDENTIALS.clientId` is `73332216-62c9-46a5-a3d0-09a353447f9c` (`sp-ct-shared-resources`), prior release logs showed sufficient nonprod access. If it is a different service principal, test or grant reads on `kv-ct-shared-devops-001`, `kv-ct-shared-tools`, and `kv-agk-hub-nonprod-001`, plus import/write into `acragkhubnonprod001`.
 
-- Owner on subscription `ad3f0a71-cc5b-4d00-8289-23623cf2064c`.
-- Member of `C-CT-devops`.
-- Access to CT and AGK Key Vaults through group/direct policies.
-
-If it is a different service principal, test or grant:
-
-- Read `kv-ct-shared-devops-001`.
-- Read `kv-ct-shared-tools`.
-- Import/write into `acragkhubnonprod001`.
-- Read `kv-agk-hub-nonprod-001`.
-
-Prod release or promotion automation needs separately verified prod credentials for `e0515a24-7205-481b-b657-944901020e32`, `acragkhubprod001`, `kv-agk-hub-prod-001`, and `kv-agntkarl-prod-001`.
+Prod release or promotion automation needs separately verified prod credentials for `e0515a24-7205-481b-b657-944901020e32`, `acragkhubprod001`, `kv-agk-hub-prod-001`, `kv-agntkarl-prod-001`, `argocd.agk.prod.knauf.digital`, and both the app repo and `agk-deployment-configs` writes. Human tenant-RG access does not prove pipeline write access to prod ACR or AKS.
