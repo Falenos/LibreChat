@@ -43,12 +43,12 @@ function getPageSection(pathname: string): string {
     return 'chat';
   }
 
-  const [section] = pathname.split('/').filter(Boolean);
+  const section = pathname.split('/').find(Boolean);
   return section || 'karl';
 }
 
 function getPageUrlWithoutQuery(location: AdobePageLocation): string {
-  const url = new URL(location.href, window.location.origin);
+  const url = new URL(location.href, globalThis.location.origin);
   url.search = '';
   url.hash = '';
   return url.toString();
@@ -76,7 +76,9 @@ function getSessionId(adobeWindow: AdobeAnalyticsWindow): string | undefined {
   }
 }
 
-export function clearAdobeSessionId(adobeWindow: AdobeAnalyticsWindow = window): void {
+export function clearAdobeSessionId(
+  adobeWindow: AdobeAnalyticsWindow = globalThis as AdobeAnalyticsWindow,
+): void {
   try {
     adobeWindow.sessionStorage?.removeItem(ADOBE_SESSION_STORAGE_KEY);
   } catch {
@@ -84,7 +86,9 @@ export function clearAdobeSessionId(adobeWindow: AdobeAnalyticsWindow = window):
   }
 }
 
-export function ensureAdobeDataLayer(adobeWindow: AdobeAnalyticsWindow = window): unknown[] {
+export function ensureAdobeDataLayer(
+  adobeWindow: AdobeAnalyticsWindow = globalThis as AdobeAnalyticsWindow,
+): unknown[] {
   adobeWindow.adobeDataLayer = adobeWindow.adobeDataLayer ?? [];
   return adobeWindow.adobeDataLayer;
 }
@@ -92,10 +96,11 @@ export function ensureAdobeDataLayer(adobeWindow: AdobeAnalyticsWindow = window)
 export function emitAdobePageView(
   analyticsConfig: KnaufAnalyticsConfig,
   location: AdobePageLocation,
-  { adobeWindow = window, consentState }: EmitAdobePageViewOptions = {},
+  { adobeWindow = globalThis as AdobeAnalyticsWindow, consentState }: EmitAdobePageViewOptions = {},
 ): void {
-  const language = document.documentElement.lang || window.navigator.language || 'en-US';
-  const hostname = window.location.hostname;
+  const language =
+    globalThis.document.documentElement.lang || globalThis.navigator.language || 'en-US';
+  const hostname = globalThis.location.hostname;
   const sessionId = getSessionId(adobeWindow);
   const eventInfo: Record<string, string> = {
     action: 'view',
