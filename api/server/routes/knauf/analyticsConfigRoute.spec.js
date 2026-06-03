@@ -39,7 +39,6 @@ afterEach(() => {
   jest.resetAllMocks();
   delete process.env.ANALYTICS_GTM_ID;
   delete process.env.KNAUF_ANALYTICS_ENABLED;
-  delete process.env.KNAUF_ANALYTICS_ENV;
   delete process.env.KNAUF_ONETRUST_SCRIPT_SRC;
   delete process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID;
   delete process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL;
@@ -48,8 +47,10 @@ afterEach(() => {
 });
 
 describe('GET /api/config — Knauf analytics config', () => {
-  it('includes consent-gated analytics config when Adobe Launch is configured', async () => {
+  it('includes consent-gated analytics config when OneTrust and Adobe are configured', async () => {
     mockGetAppConfig.mockResolvedValue(baseAppConfig);
+    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID =
+      '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
     process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL = 'https://example.test/adobe.js';
     const app = createApp();
 
@@ -79,6 +80,8 @@ describe('GET /api/config — Knauf analytics config', () => {
   it('suppresses legacy GTM when Knauf consent-gated analytics is active', async () => {
     mockGetAppConfig.mockResolvedValue(baseAppConfig);
     process.env.ANALYTICS_GTM_ID = 'GTM-123';
+    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID =
+      '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
     process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL = 'https://example.test/adobe.js';
     const app = createApp();
 
@@ -87,9 +90,10 @@ describe('GET /api/config — Knauf analytics config', () => {
     expect(response.body.analyticsGtmId).toBeUndefined();
   });
 
-  it('does not suppress legacy GTM when the Adobe Launch URL is not configured', async () => {
+  it('does not suppress legacy GTM when required Knauf analytics config is missing', async () => {
     mockGetAppConfig.mockResolvedValue(baseAppConfig);
     process.env.ANALYTICS_GTM_ID = 'GTM-123';
+    process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL = 'https://example.test/adobe.js';
     const app = createApp();
 
     const response = await request(app).get('/api/config');

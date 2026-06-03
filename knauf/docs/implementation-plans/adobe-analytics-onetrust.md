@@ -54,9 +54,9 @@ Required deployment values:
 
 ```text
 KNAUF_ANALYTICS_ENABLED=true
-KNAUF_ANALYTICS_ENV=nonprod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
 KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
+KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test
 KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js
 ```
 
@@ -64,26 +64,17 @@ For production, set:
 
 ```text
 KNAUF_ANALYTICS_ENABLED=true
-KNAUF_ANALYTICS_ENV=prod
 KNAUF_ANALYTICS_CONSENT_CATEGORY_ID=C0002
 KNAUF_ADOBE_APP_NAME=knauf_agentic_karl
+KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc
 KNAUF_ADOBE_ANALYTICS_SCRIPT_URL=https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-6532ab2ce849.min.js
 ```
 
-Optional OneTrust overrides, useful if infra does not want to rely on the
-environment-based OneTrust defaults:
+Optional OneTrust script source override, useful only if the standard OneTrust
+CDN stub location changes:
 
 ```text
 KNAUF_ONETRUST_SCRIPT_SRC=https://cdn.cookielaw.org/scripttemplates/otSDKStub.js
-KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test
-```
-
-Production OneTrust override values, if the deployment stores every value
-explicitly:
-
-```text
-KNAUF_ONETRUST_SCRIPT_SRC=https://cdn.cookielaw.org/scripttemplates/otSDKStub.js
-KNAUF_ONETRUST_DOMAIN_SCRIPT_ID=1f2c6fdd-5a57-44ad-b965-2a85d905bbdc
 ```
 
 No OneTrust API key, Adobe API key, Adobe client secret, or user credential is
@@ -181,7 +172,7 @@ Recommended rollout sequence:
 3. Log in, accept Performance and Analytics Cookies, and confirm OneTrust, Adobe Launch, and window.adobeDataLayer pageview are present.
 4. Confirm with the analytics owner that the CST/Adobe consumer receives the data layer event for the deployed hostname.
 5. Test a clean browser session with Reject All and confirm knauf-adobe-analytics is not injected and no Adobe collection request is sent.
-6. Configure production runtime values with KNAUF_ANALYTICS_ENV=prod.
+6. Configure production runtime values with the production OneTrust domain script ID and production Adobe Launch URL.
 7. Get OneTrust and Adobe owner approval for the production hostname, consent category, app name, Launch rule, and report suite.
 8. Deploy production and verify the production OneTrust ID, production Adobe Launch URL, consent-positive data layer event consumption, and consent-negative suppression.
 9. If rollback is needed, set KNAUF_ANALYTICS_ENABLED=false and restart/redeploy the app.
