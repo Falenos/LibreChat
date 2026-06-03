@@ -1,9 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { FileUpload, TooltipAnchor, AttachmentIcon } from '@librechat/client';
 import type { TConversation } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import { useFileHandlingNoChatContext, useLocalize } from '~/hooks';
 import { cn } from '~/utils';
+// [knauf] Emit Adobe data-layer app_interaction events for chat file upload selections.
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 
 const AttachFile = ({
   disabled,
@@ -28,9 +31,31 @@ const AttachFile = ({
     setFilesLoading,
     conversation,
   });
+  // [knauf] Centralised chat-upload interaction event. The payload avoids
+  // filenames, sizes, paths, and file-source metadata.
+  const dispatchChatUploadInteraction = useCallback(() => {
+    dispatchAdobeAppInteraction({
+      action: 'upload_chat_file',
+      component: 'chat_composer',
+      eventSpecification: 'upload_chat_file',
+      pageSection: 'chat',
+    });
+  }, []);
+  // End [knauf]
 
   return (
-    <FileUpload ref={inputRef} handleFileChange={handleFileChange}>
+    <FileUpload
+      ref={inputRef}
+      handleFileChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+        // [knauf] Track local chat upload selections without collecting file
+        // metadata.
+        if ((event.target.files?.length ?? 0) > 0) {
+          dispatchChatUploadInteraction();
+        }
+        // End [knauf]
+        handleFileChange(event);
+      }}
+    >
       <TooltipAnchor
         description={localize('com_sidepanel_attach_files')}
         id="attach-file"

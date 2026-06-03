@@ -9,6 +9,9 @@ import type { Agent } from 'librechat-data-provider';
 
 // Mock toast context - define this after all mocks
 let mockShowToast: jest.Mock;
+// [knauf] Capture Adobe app_interaction dispatches from the AgentPanel lifecycle seams.
+const mockDispatchAdobeAppInteraction = jest.fn();
+// End [knauf]
 
 // Mock notification severity enum before other imports
 jest.mock('~/common/types', () => ({
@@ -129,6 +132,13 @@ jest.mock('~/common', () => ({
     advanced: 'advanced',
   },
 }));
+
+// [knauf] Mock the Adobe data-layer bridge so update/no-change assertions
+// can pin successful agent edit tracking without loading the analytics controller.
+jest.mock('~/knauf/analytics/adobe', () => ({
+  dispatchAdobeAppInteraction: (payload: unknown) => mockDispatchAdobeAppInteraction(payload),
+}));
+// End [knauf]
 
 // Mock child components to simplify testing
 jest.mock('./AgentPanelSkeleton', () => ({
@@ -305,6 +315,9 @@ describe('AgentPanel - Update Agent Toast Messages', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockShowToast = jest.fn();
+    // [knauf] Reset captured analytics events between agent lifecycle tests.
+    mockDispatchAdobeAppInteraction.mockClear();
+    // End [knauf]
     mockFormSubmitHandler = null;
   });
 
@@ -330,6 +343,9 @@ describe('AgentPanel - Update Agent Toast Messages', () => {
           status: 'info',
         });
       });
+      // [knauf] Empty saves should not be counted as agent edits.
+      expect(mockDispatchAdobeAppInteraction).not.toHaveBeenCalled();
+      // End [knauf]
     });
 
     it('should show "update success" toast when version changes', async () => {
@@ -352,6 +368,14 @@ describe('AgentPanel - Update Agent Toast Messages', () => {
           status: undefined,
         });
       });
+      // [knauf] Successful version-changing saves emit one agent-builder interaction.
+      expect(mockDispatchAdobeAppInteraction).toHaveBeenCalledWith({
+        action: 'update_agent',
+        component: 'agent_builder',
+        eventSpecification: 'update_agent',
+        pageSection: 'agent_builder',
+      });
+      // End [knauf]
     });
 
     it('should show "update success" with default name when agent has no name', async () => {

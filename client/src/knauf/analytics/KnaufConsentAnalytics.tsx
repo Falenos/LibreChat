@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useGetStartupConfig } from '~/data-provider';
-import { emitAdobePageView } from './adobe';
+import {
+  KNAUF_ADOBE_APP_INTERACTION_EVENT,
+  clearAdobeSessionId,
+  emitAdobeAppInteraction,
+  emitAdobePageView,
+  ensureAdobeDataLayer,
+  isAdobeAppInteraction,
+} from './adobe';
 import { getKnaufAnalyticsConfig } from './config';
-import { getOneTrustGroupsFromEvent, hasAnalyticsConsent } from './consent';
+import {
+  formatOneTrustConsentState,
+  getOneTrustGroupsFromEvent,
+  hasAnalyticsConsent,
+} from './consent';
 import { loadExternalScript } from './scriptLoader';
 import type { OneTrustWindow } from './types';
 
@@ -16,18 +27,31 @@ export default function KnaufConsentAnalytics() {
   const { data: startupConfig } = useGetStartupConfig();
   const analyticsConfig = useMemo(() => getKnaufAnalyticsConfig(startupConfig), [startupConfig]);
   const [analyticsConsented, setAnalyticsConsented] = useState(false);
+  const [consentState, setConsentState] = useState('');
   const [adobeReady, setAdobeReady] = useState(false);
   const lastTrackedPathRef = useRef('');
+  const trackedPath = `${location.pathname}${location.search}${location.hash}`;
+  const adobeLocation = useMemo(
+    () => ({
+      hash: location.hash,
+      href: `${globalThis.location.origin}${trackedPath}`,
+      pathname: location.pathname,
+      search: location.search,
+    }),
+    [location.hash, location.pathname, location.search, trackedPath],
+  );
 
   const syncConsentState = useCallback(
     (event?: Event) => {
       if (!analyticsConfig) {
         setAnalyticsConsented(false);
+        setConsentState('');
         return;
       }
 
       const oneTrustWindow = window as OneTrustWindow;
       const activeGroups = getOneTrustGroupsFromEvent(event, oneTrustWindow);
+      setConsentState(formatOneTrustConsentState(activeGroups));
       setAnalyticsConsented(hasAnalyticsConsent(activeGroups, analyticsConfig.consentCategoryId));
     },
     [analyticsConfig],
@@ -76,11 +100,13 @@ export default function KnaufConsentAnalytics() {
     if (!analyticsConfig || !analyticsConsented) {
       setAdobeReady(false);
       lastTrackedPathRef.current = '';
+      clearAdobeSessionId();
       return;
     }
 
     let cancelled = false;
     setAdobeReady(false);
+    ensureAdobeDataLayer();
 
     void loadExternalScript({
       id: ADOBE_ANALYTICS_SCRIPT_ID,
@@ -108,26 +134,48 @@ export default function KnaufConsentAnalytics() {
       return;
     }
 
-    const trackedPath = `${location.pathname}${location.search}${location.hash}`;
     if (lastTrackedPathRef.current === trackedPath) {
       return;
     }
 
     lastTrackedPathRef.current = trackedPath;
-    emitAdobePageView(analyticsConfig, {
-      hash: location.hash,
-      href: `${window.location.origin}${trackedPath}`,
-      pathname: location.pathname,
-      search: location.search,
-    });
+    emitAdobePageView(
+      analyticsConfig,
+      adobeLocation,
+      {
+        consentState,
+      },
+    );
   }, [
     adobeReady,
     analyticsConfig,
     analyticsConsented,
-    location.hash,
-    location.pathname,
-    location.search,
+    consentState,
+    adobeLocation,
+    trackedPath,
   ]);
+
+  useEffect(() => {
+    if (!analyticsConfig || !analyticsConsented || !adobeReady) {
+      return;
+    }
+
+    const handleAppInteraction = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!isAdobeAppInteraction(detail)) {
+        return;
+      }
+
+      emitAdobeAppInteraction(analyticsConfig, adobeLocation, detail, {
+        consentState,
+      });
+    };
+
+    globalThis.addEventListener(KNAUF_ADOBE_APP_INTERACTION_EVENT, handleAppInteraction);
+    return () => {
+      globalThis.removeEventListener(KNAUF_ADOBE_APP_INTERACTION_EVENT, handleAppInteraction);
+    };
+  }, [adobeLocation, adobeReady, analyticsConfig, analyticsConsented, consentState]);
 
   return null;
 }

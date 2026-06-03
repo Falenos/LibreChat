@@ -18,6 +18,7 @@ export type KnaufStartupConfig = TStartupConfig & {
 export type OneTrustWindow = Window &
   typeof globalThis & {
     OptanonWrapper?: () => void;
+    OptanonActiveGroups?: string;
     OnetrustActiveGroups?: string;
     OneTrust?: {
       changeLanguage?: (language: string) => void;

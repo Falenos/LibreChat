@@ -1,4 +1,5 @@
 import {
+  formatOneTrustConsentState,
   getOneTrustGroupsFromEvent,
   hasAnalyticsConsent,
   parseOneTrustGroups,
@@ -23,8 +24,19 @@ describe('OneTrust consent helpers', () => {
     ).toEqual(new Set(['C0001', 'C0002']));
   });
 
+  it('falls back to window OptanonActiveGroups when OneTrust uses the legacy global', () => {
+    expect(
+      getOneTrustGroupsFromEvent(undefined, { OptanonActiveGroups: ',C0002,C0003,' }),
+    ).toEqual(new Set(['C0002', 'C0003']));
+  });
+
   it('detects analytics consent for the configured category', () => {
     expect(hasAnalyticsConsent(new Set(['C0001', 'C0002']), 'C0002')).toBe(true);
     expect(hasAnalyticsConsent(new Set(['C0001']), 'C0002')).toBe(false);
+  });
+
+  it('formats OneTrust active groups for Adobe Launch consent checks', () => {
+    expect(formatOneTrustConsentState(new Set(['C0001', 'C0002']))).toBe(',C0001,C0002,');
+    expect(formatOneTrustConsentState(new Set())).toBe('');
   });
 });

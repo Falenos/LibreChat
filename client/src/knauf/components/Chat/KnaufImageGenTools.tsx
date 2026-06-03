@@ -11,11 +11,12 @@
  *
  * KK20-168.
  */
-import { memo } from 'react';
+import { memo, useCallback, type ChangeEvent } from 'react';
 import { ImageIcon } from 'lucide-react';
 import { CheckboxButton } from '@librechat/client';
 import { LocalStorageKeys } from 'librechat-data-provider';
 import { useToolToggle, useLocalize } from '~/hooks';
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import { useImageGenAvailable } from '~/knauf/hooks/Chat/useImageGenAvailable';
 
 interface KnaufImageGenToolsProps {
@@ -37,6 +38,23 @@ function KnaufImageGenTools({ agentId, conversationId, spec }: Readonly<KnaufIma
 
   const { toggleState, debouncedChange, isPinned } = imageGen;
   const enabled = toggleState === true;
+  const handleImageGenChange = useCallback(
+    ({ e, value }: { e?: ChangeEvent<HTMLInputElement>; value: boolean | string }) => {
+      debouncedChange({ e, value });
+      if (typeof value !== 'boolean') {
+        return;
+      }
+
+      const eventSpecification = value ? 'enable_image_generation' : 'disable_image_generation';
+      dispatchAdobeAppInteraction({
+        action: eventSpecification,
+        component: 'chat_tools',
+        eventSpecification,
+        pageSection: 'chat',
+      });
+    },
+    [debouncedChange],
+  );
 
   if (!available) return null;
   if (!enabled && !isPinned) return null;
@@ -45,7 +63,7 @@ function KnaufImageGenTools({ agentId, conversationId, spec }: Readonly<KnaufIma
     <CheckboxButton
       className="max-w-fit"
       checked={enabled}
-      setValue={debouncedChange}
+      setValue={handleImageGenChange}
       label={localize('com_knauf_create_image')}
       isCheckedClassName="border-green-600/40 bg-green-500/10 hover:bg-green-700/10"
       icon={<ImageIcon className="icon-md" />}

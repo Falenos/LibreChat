@@ -19,6 +19,7 @@ import type { MenuItemProps } from '~/common';
 import { useLocalize, useToolToggle } from '~/hooks';
 import { useBadgeRowContext } from '~/Providers';
 import ToolsDropdown from '~/components/Chat/Input/ToolsDropdown';
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import { useImageGenAvailable } from '~/knauf/hooks/Chat/useImageGenAvailable';
 import { cn } from '~/utils';
 
@@ -26,7 +27,7 @@ interface KnaufToolsDropdownProps {
   disabled?: boolean;
 }
 
-const KnaufToolsDropdown = ({ disabled }: KnaufToolsDropdownProps) => {
+const KnaufToolsDropdown = ({ disabled }: Readonly<KnaufToolsDropdownProps>) => {
   const localize = useLocalize();
   const context = useBadgeRowContext();
 
@@ -46,6 +47,13 @@ const KnaufToolsDropdown = ({ disabled }: KnaufToolsDropdownProps) => {
   const handleImageGenToggle = useCallback(() => {
     const newValue = !imageGen.toggleState;
     imageGen.debouncedChange({ value: newValue });
+    const eventSpecification = newValue ? 'enable_image_generation' : 'disable_image_generation';
+    dispatchAdobeAppInteraction({
+      action: eventSpecification,
+      component: 'chat_tools',
+      eventSpecification,
+      pageSection: 'chat',
+    });
   }, [imageGen]);
 
   const extraItems = useMemo<MenuItemProps[]>(() => {

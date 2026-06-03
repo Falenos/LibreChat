@@ -11,6 +11,7 @@ import KnaufImageGenTools from './KnaufImageGenTools';
 
 const mockUseImageGenAvailable = jest.fn();
 const mockUseToolToggle = jest.fn();
+const mockDispatchAdobeAppInteraction = jest.fn();
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
@@ -21,10 +22,22 @@ jest.mock('~/knauf/hooks/Chat/useImageGenAvailable', () => ({
   useImageGenAvailable: (args: unknown) => mockUseImageGenAvailable(args),
 }));
 
+jest.mock('~/knauf/analytics/adobe', () => ({
+  dispatchAdobeAppInteraction: (payload: unknown) => mockDispatchAdobeAppInteraction(payload),
+}));
+
 jest.mock('@librechat/client', () => ({
   __esModule: true,
-  CheckboxButton: ({ label }: { label: string }) => (
-    <button type="button" data-testid="image-gen-chip">
+  CheckboxButton: ({
+    checked,
+    label,
+    setValue,
+  }: {
+    checked?: boolean;
+    label: string;
+    setValue?: (values: { value: boolean }) => void;
+  }) => (
+    <button type="button" data-testid="image-gen-chip" onClick={() => setValue?.({ value: !checked })}>
       {label}
     </button>
   ),
@@ -43,6 +56,7 @@ describe('[knauf] KnaufImageGenTools — chip-only visibility', () => {
   beforeEach(() => {
     mockUseImageGenAvailable.mockReset();
     mockUseToolToggle.mockReset();
+    mockDispatchAdobeAppInteraction.mockClear();
   });
 
   it('renders nothing when useImageGenAvailable returns false', () => {
@@ -82,5 +96,27 @@ describe('[knauf] KnaufImageGenTools — chip-only visibility', () => {
     setToggle();
     render(<KnaufImageGenTools agentId="agent-x" conversationId="convo-1" spec="karl" />);
     expect(mockUseImageGenAvailable).toHaveBeenCalledWith({ agentId: 'agent-x', spec: 'karl' });
+  });
+
+  it('dispatches an app_interaction when the chip toggles image generation', () => {
+    const debouncedChange = jest.fn();
+    mockUseImageGenAvailable.mockReturnValue(true);
+    mockUseToolToggle.mockReturnValue({
+      toggleState: false,
+      debouncedChange,
+      isPinned: true,
+      setIsPinned: jest.fn(),
+    });
+
+    render(<KnaufImageGenTools agentId={null} conversationId="convo-1" spec="karl" />);
+    screen.getByTestId('image-gen-chip').click();
+
+    expect(debouncedChange).toHaveBeenCalledWith({ e: undefined, value: true });
+    expect(mockDispatchAdobeAppInteraction).toHaveBeenCalledWith({
+      action: 'enable_image_generation',
+      component: 'chat_tools',
+      eventSpecification: 'enable_image_generation',
+      pageSection: 'chat',
+    });
   });
 });

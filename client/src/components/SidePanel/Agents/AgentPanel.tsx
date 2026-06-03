@@ -38,6 +38,9 @@ import AgentConfig from '~/knauf/components/Agents/AgentConfigSwitch';
 // wrap below for the upload-then-transition gate.
 import { useDrainPendingKnaufFiles } from '~/knauf/data-provider/Agents/useDrainPendingKnaufFiles';
 // End [knauf]
+// [knauf] Emit Adobe data-layer app_interaction events for agent builder lifecycle actions.
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 import AgentSelect from './AgentSelect';
 import AgentFooter from './AgentFooter';
 import ModelPanel from './ModelPanel';
@@ -335,6 +338,17 @@ export default function AgentPanel() {
   // Create to Edit AFTER uploads have settled (success or failure).
   const drainPendingKnaufFiles = useDrainPendingKnaufFiles();
   // End [knauf]
+  // [knauf] Agent builder lifecycle events are pushed through the central
+  // consent-gated Adobe data-layer bridge, not sent as direct AA beacons.
+  const dispatchAgentBuilderInteraction = useCallback((eventSpecification: string) => {
+    dispatchAdobeAppInteraction({
+      action: eventSpecification,
+      component: 'agent_builder',
+      eventSpecification,
+      pageSection: 'agent_builder',
+    });
+  }, []);
+  // End [knauf]
 
   /* Mutations */
   const update = useUpdateAgentMutation({
@@ -355,6 +369,11 @@ export default function AgentPanel() {
       if (toastMessage) {
         showToast({ message: toastMessage, status: noVersionChange ? 'info' : undefined });
       }
+      // [knauf] Count only successful edits that actually changed the agent.
+      if (!noVersionChange) {
+        dispatchAgentBuilderInteraction('update_agent');
+      }
+      // End [knauf]
 
       const agentOption = getValues('agent');
       if (agentOption && typeof agentOption !== 'string') {
@@ -412,6 +431,9 @@ export default function AgentPanel() {
           data.name ?? localize('com_ui_agent')
         }`,
       });
+      // [knauf] Successful agent creation app_interaction for Adobe data-layer review.
+      dispatchAgentBuilderInteraction('create_agent');
+      // End [knauf]
 
       try {
         await handleAvatarUpload(data.id);
