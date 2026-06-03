@@ -55,10 +55,19 @@ function getPageUrlWithoutQuery(location: AdobePageLocation): string {
 }
 
 function createSessionId(adobeWindow: AdobeAnalyticsWindow): string {
-  return (
-    adobeWindow.crypto?.randomUUID?.() ??
-    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-  );
+  const crypto = adobeWindow.crypto;
+  const randomUUID = crypto?.randomUUID?.();
+  if (randomUUID) {
+    return randomUUID;
+  }
+
+  if (!crypto?.getRandomValues) {
+    throw new Error('Browser Crypto API is unavailable');
+  }
+
+  const randomValues = new Uint32Array(4);
+  crypto.getRandomValues(randomValues);
+  return Array.from(randomValues, (value) => value.toString(16).padStart(8, '0')).join('-');
 }
 
 function getSessionId(adobeWindow: AdobeAnalyticsWindow): string | undefined {
