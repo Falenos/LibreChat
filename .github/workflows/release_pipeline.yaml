@@ -77,6 +77,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure AGK app repository credentials
+        run: git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
+
       - name: Determine released version
         id: version
         run: |

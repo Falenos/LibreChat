@@ -1,0 +1,186 @@
+name: AGK Deploy Smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - .github/workflows/agk-deploy-smoke.yaml
+      - .github/workflows/release_pipeline.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Smoke AGK deploy dependencies
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_ACR_NAME: acragkhubnonprod001
+      AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_SMOKE_IMAGE_REPOSITORY: agentic-karl-dev/smoke/agentic-karl
+      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
+      AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
+      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
+      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
+      CT_ACR_LOGIN_SERVER: acrctshared001.azurecr.io
+      CT_IMAGE_REPOSITORY: tools-non-prod/agentic-karl
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get smoke support secrets
+        run: |
+          set -euo pipefail
+
+          GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
+
+          CT_ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
+          echo "::add-mask::$CT_ACR_PASSWORD"
+          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Check out app repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure app repository credentials
+        run: git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: Smoke app repository read and write
+        run: |
+          set -euo pipefail
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git ls-remote --heads origin main
+          git fetch origin main
+          git pull --ff-only origin main
+
+          SMOKE_BRANCH="agk-deploy-smoke/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            git push origin ":refs/heads/$SMOKE_BRANCH" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          git push origin "HEAD:refs/heads/$SMOKE_BRANCH"
+          git push origin ":refs/heads/$SMOKE_BRANCH"
+          trap - EXIT
+
+      - name: Determine source image version
+        id: version
+        run: |
+          set -euo pipefail
+
+          SOURCE_VERSION="v$(npm pkg get version | tr -d '"')"
+          echo "Source version: $SOURCE_VERSION"
+          echo "source-version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke AGK ACR import permissions
+        run: |
+          set -euo pipefail
+
+          SOURCE_VERSION="${{ steps.version.outputs.source-version }}"
+          SMOKE_TAG="$SOURCE_VERSION-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            az acr repository delete \
+              --subscription "$AGK_SUBSCRIPTION_ID" \
+              --name "$AGK_ACR_NAME" \
+              --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+              --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          az acr import \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --source "$CT_ACR_LOGIN_SERVER/$CT_IMAGE_REPOSITORY:$SOURCE_VERSION" \
+            --username acrctshared001 \
+            --password "$CT_ACR_PASSWORD" \
+            --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --force
+
+          az acr repository show-tags \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --repository "$AGK_SMOKE_IMAGE_REPOSITORY" \
+            --query "[?@=='$SMOKE_TAG']" \
+            -o tsv | grep -Fx "$SMOKE_TAG"
+
+          az acr repository delete \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --yes
+          trap - EXIT
+
+      - name: Smoke AGK deployment config repository write
+        run: |
+          set -euo pipefail
+
+          git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+          cd agk-deployment-configs
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git pull --ff-only origin main
+          test -f "$AGK_CONFIG_DIRECTORY/values.yaml"
+
+          SMOKE_BRANCH="agk-deploy-smoke/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            git push origin ":refs/heads/$SMOKE_BRANCH" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          git push origin "HEAD:refs/heads/$SMOKE_BRANCH"
+          git push origin ":refs/heads/$SMOKE_BRANCH"
+          trap - EXIT
+
+      - name: Smoke AGK ArgoCD API access
+        run: |
+          set -euo pipefail
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value \
+            -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" \
+                -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          curl -fsS \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" \
+            -H "Accept: application/json" \
+            | jq -e --arg app "$AGK_ARGOCD_APP" '
+                .metadata.name == $app
+                and (.status.sync.status | type == "string")
+                and (.status.health.status | type == "string")
+              '
