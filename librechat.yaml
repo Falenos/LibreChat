@@ -36,6 +36,10 @@ interface:
   privacyPolicy:
     externalUrl: '/privacy'
     openNewTab: true
+  termsOfService:
+    externalUrl: '/eula'
+    openNewTab: true
+    modalAcceptance: true
   modelSelect: true
   parameters: false
   presets: false

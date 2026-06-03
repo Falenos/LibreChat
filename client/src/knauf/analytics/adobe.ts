@@ -43,7 +43,54 @@ function getPageName(pathname: string): string {
     return 'Search';
   }
 
+  if (pathname === '/prompts/new') {
+    return 'New Prompt';
+  }
+
+  if (pathname.startsWith('/prompts')) {
+    return 'Prompt';
+  }
+
   return pathname || 'KARL';
+}
+
+function getSafePagePath(pathname: string): string {
+  if (pathname === '/' || pathname === '/c/new') {
+    return pathname;
+  }
+
+  if (/^\/c\/[^/]+/.test(pathname)) {
+    return '/c/:conversationId';
+  }
+
+  if (pathname === '/prompts/new') {
+    return pathname;
+  }
+
+  if (/^\/prompts\/[^/]+/.test(pathname)) {
+    return '/prompts/:promptId';
+  }
+
+  if (pathname === '/agents') {
+    return pathname;
+  }
+
+  if (/^\/agents\/[^/]+/.test(pathname)) {
+    return '/agents/:category';
+  }
+
+  return pathname || '/';
+}
+
+function getSafeQueryString(search: string): string {
+  const params = new URLSearchParams(search);
+  const parameterNames = Array.from(new Set(Array.from(params.keys()).filter(Boolean)));
+
+  if (parameterNames.length === 0) {
+    return '';
+  }
+
+  return `?${parameterNames.map((name) => encodeURIComponent(name)).join('&')}`;
 }
 
 function getPageSection(pathname: string): string {
@@ -56,9 +103,7 @@ function getPageSection(pathname: string): string {
 }
 
 function getPageUrlWithoutQuery(location: AdobePageLocation): string {
-  const url = new URL(location.href, globalThis.location.origin);
-  url.search = '';
-  url.hash = '';
+  const url = new URL(getSafePagePath(location.pathname), globalThis.location.origin);
   return url.toString();
 }
 
@@ -119,19 +164,19 @@ function buildAdobeEventInfo(
     globalThis.document.documentElement.lang || globalThis.navigator.language || 'en-US';
   const hostname = globalThis.location.hostname;
   const sessionId = getSessionId(adobeWindow);
+  const pageName = getPageName(location.pathname);
   const eventInfo: Record<string, string> = {
     app_name: analyticsConfig.adobeAppName,
     consent_state: consentState ?? '',
-    consent_status: consentState ?? '',
     page_category: ADOBE_PAGE_CATEGORY,
     page_domain: getPageDomain(hostname),
     page_hostname: hostname,
     page_locale: language,
-    page_name: getPageName(location.pathname),
-    page_path: location.pathname,
-    page_query_string: location.search,
+    page_name: pageName,
+    page_path: getSafePagePath(location.pathname),
+    page_query_string: getSafeQueryString(location.search),
     page_section: getPageSection(location.pathname),
-    page_title: document.title,
+    page_title: pageName,
     page_url: getPageUrlWithoutQuery(location),
     user_language: language,
     user_login_status: 'logged_in',

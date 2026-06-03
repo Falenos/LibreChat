@@ -78,6 +78,7 @@ describe('KnaufConsentAnalytics', () => {
 
   it('loads Adobe and emits a page view when analytics consent is granted', async () => {
     renderController('/c/new?source=test');
+    document.title = 'Sensitive conversation-derived title';
 
     act(() => {
       window.dispatchEvent(
@@ -101,13 +102,13 @@ describe('KnaufConsentAnalytics', () => {
         event_info: expect.objectContaining({
           app_name: 'knauf_agentic_karl',
           consent_state: ',C0001,C0002,',
-          consent_status: ',C0001,C0002,',
           event_specification: 'pageview',
           page_category: 'agentic_karl_page',
           page_name: 'New Chat',
           page_path: '/c/new',
-          page_query_string: '?source=test',
+          page_query_string: '?source',
           page_section: 'chat',
+          page_title: 'New Chat',
           page_url: 'http://localhost:3080/c/new',
           user_login_status: 'logged_in',
           user_session_id: expect.any(String),
@@ -115,6 +116,7 @@ describe('KnaufConsentAnalytics', () => {
         }),
       }),
     ]);
+    expect((window as any).adobeDataLayer[0].event_info).not.toHaveProperty('consent_status');
   });
 
   it('stops emitting page views after analytics consent is revoked', async () => {
