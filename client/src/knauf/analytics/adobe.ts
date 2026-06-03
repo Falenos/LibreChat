@@ -1,13 +1,21 @@
 import type { AdobeAnalyticsWindow, KnaufAnalyticsConfig } from './types';
 
 const ADOBE_PAGE_VIEW_EVENT = 'pageview';
+const ADOBE_APP_INTERACTION_EVENT = 'app_interaction';
 const ADOBE_PAGE_CATEGORY = 'agentic_karl_page';
 const ADOBE_SESSION_STORAGE_KEY = 'knauf_adobe_session_id';
+export const KNAUF_ADOBE_APP_INTERACTION_EVENT = 'knauf:adobe-app-interaction';
 type AdobePageLocation = Pick<Location, 'hash' | 'href' | 'pathname' | 'search'>;
-type EmitAdobePageViewOptions = {
+type EmitAdobeEventOptions = {
   adobeWindow?: AdobeAnalyticsWindow;
   consentState?: string;
 };
+export type AdobeAppInteraction = Readonly<{
+  action: string;
+  component: string;
+  eventSpecification: string;
+  pageSection?: string;
+}>;
 
 function getPageDomain(hostname: string): string {
   const parts = hostname.split('.').filter(Boolean);
@@ -102,21 +110,19 @@ export function ensureAdobeDataLayer(
   return adobeWindow.adobeDataLayer;
 }
 
-export function emitAdobePageView(
+function buildAdobeEventInfo(
   analyticsConfig: KnaufAnalyticsConfig,
   location: AdobePageLocation,
-  { adobeWindow = globalThis as AdobeAnalyticsWindow, consentState }: EmitAdobePageViewOptions = {},
-): void {
+  { adobeWindow = globalThis as AdobeAnalyticsWindow, consentState }: EmitAdobeEventOptions = {},
+): Record<string, string> {
   const language =
     globalThis.document.documentElement.lang || globalThis.navigator.language || 'en-US';
   const hostname = globalThis.location.hostname;
   const sessionId = getSessionId(adobeWindow);
   const eventInfo: Record<string, string> = {
-    action: 'view',
     app_name: analyticsConfig.adobeAppName,
     consent_state: consentState ?? '',
     consent_status: consentState ?? '',
-    event_specification: ADOBE_PAGE_VIEW_EVENT,
     page_category: ADOBE_PAGE_CATEGORY,
     page_domain: getPageDomain(hostname),
     page_hostname: hostname,
@@ -136,10 +142,74 @@ export function emitAdobePageView(
     eventInfo.user_session_id = sessionId;
   }
 
+  return eventInfo;
+}
+
+export function emitAdobePageView(
+  analyticsConfig: KnaufAnalyticsConfig,
+  location: AdobePageLocation,
+  options: EmitAdobeEventOptions = {},
+): void {
+  const eventInfo = {
+    ...buildAdobeEventInfo(analyticsConfig, location, options),
+    action: 'view',
+    event_specification: ADOBE_PAGE_VIEW_EVENT,
+  };
+
   const payload = {
     event: ADOBE_PAGE_VIEW_EVENT,
     event_info: eventInfo,
   };
 
-  ensureAdobeDataLayer(adobeWindow).push(payload);
+  ensureAdobeDataLayer(options.adobeWindow).push(payload);
+}
+
+export function emitAdobeAppInteraction(
+  analyticsConfig: KnaufAnalyticsConfig,
+  location: AdobePageLocation,
+  interaction: AdobeAppInteraction,
+  options: EmitAdobeEventOptions = {},
+): void {
+  const eventInfo = {
+    ...buildAdobeEventInfo(analyticsConfig, location, options),
+    action: interaction.action,
+    component: interaction.component,
+    event_specification: interaction.eventSpecification,
+    page_section: interaction.pageSection ?? getPageSection(location.pathname),
+  };
+
+  const payload = {
+    event: ADOBE_APP_INTERACTION_EVENT,
+    event_info: eventInfo,
+  };
+
+  ensureAdobeDataLayer(options.adobeWindow).push(payload);
+}
+
+export function isAdobeAppInteraction(value: unknown): value is AdobeAppInteraction {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const interaction = value as Partial<AdobeAppInteraction>;
+  return (
+    typeof interaction.action === 'string' &&
+    interaction.action.length > 0 &&
+    typeof interaction.component === 'string' &&
+    interaction.component.length > 0 &&
+    typeof interaction.eventSpecification === 'string' &&
+    interaction.eventSpecification.length > 0 &&
+    (interaction.pageSection === undefined || typeof interaction.pageSection === 'string')
+  );
+}
+
+export function dispatchAdobeAppInteraction(
+  interaction: AdobeAppInteraction,
+  adobeWindow: AdobeAnalyticsWindow = globalThis as AdobeAnalyticsWindow,
+): void {
+  adobeWindow.dispatchEvent(
+    new CustomEvent(KNAUF_ADOBE_APP_INTERACTION_EVENT, {
+      detail: interaction,
+    }),
+  );
 }

@@ -1,6 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import KnaufConsentAnalytics from './KnaufConsentAnalytics';
+import { dispatchAdobeAppInteraction } from './adobe';
 import { resetExternalScriptForTest } from './scriptLoader';
 
 const mockUseGetStartupConfig = jest.fn();
@@ -141,5 +142,52 @@ describe('KnaufConsentAnalytics', () => {
 
     expect((window as any).adobeDataLayer).toHaveLength(1);
     expect(window.sessionStorage.getItem('knauf_adobe_session_id')).toBeNull();
+  });
+
+  it('emits app interaction events through the consent-gated Adobe data layer', async () => {
+    renderController('/c/new');
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('OneTrustGroupsUpdated', { detail: ['C0001', 'C0002'] }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(document.getElementById('knauf-adobe-analytics')).toBeInTheDocument();
+    });
+    finishScriptLoad('knauf-adobe-analytics');
+
+    await waitFor(() => {
+      expect((window as any).adobeDataLayer).toHaveLength(1);
+    });
+
+    act(() => {
+      dispatchAdobeAppInteraction({
+        action: 'enable_image_generation',
+        component: 'chat_tools',
+        eventSpecification: 'enable_image_generation',
+        pageSection: 'chat',
+      });
+    });
+
+    await waitFor(() => {
+      expect((window as any).adobeDataLayer).toHaveLength(2);
+    });
+    expect((window as any).adobeDataLayer[1]).toEqual(
+      expect.objectContaining({
+        event: 'app_interaction',
+        event_info: expect.objectContaining({
+          action: 'enable_image_generation',
+          app_name: 'knauf_agentic_karl',
+          component: 'chat_tools',
+          consent_state: ',C0001,C0002,',
+          event_specification: 'enable_image_generation',
+          page_category: 'agentic_karl_page',
+          page_section: 'chat',
+          user_login_status: 'logged_in',
+        }),
+      }),
+    );
   });
 });

@@ -29,6 +29,7 @@
  */
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -50,6 +51,7 @@ import { SharePointPickerDialog } from '~/components/SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import FileContainer from '~/components/Chat/Input/Files/FileContainer';
 import { useGetStartupConfig } from '~/data-provider';
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
 
 const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
@@ -222,6 +224,15 @@ function KnaufFileSearch({
       });
   }, [agent_id, pendingFiles, setPendingFiles, handleFiles, showToast, localize]);
 
+  const dispatchAgentKnowledgeUploadInteraction = useCallback(() => {
+    dispatchAdobeAppInteraction({
+      action: 'upload_agent_knowledge_files',
+      component: 'agent_builder',
+      eventSpecification: 'upload_agent_knowledge_files',
+      pageSection: 'agent_builder',
+    });
+  }, []);
+
   const isUploadDisabled = endpointFileConfig?.disabled ?? false;
   if (isUploadDisabled) {
     return null;
@@ -236,13 +247,17 @@ function KnaufFileSearch({
    * agent, fall straight through to upstream's `handleFileChange`.
    */
   const onLocalFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(event.target.files ?? []);
     if (!ephemeral) {
+      if (picked.length > 0) {
+        dispatchAgentKnowledgeUploadInteraction();
+      }
       handleFileChange(event);
       return;
     }
-    const picked = Array.from(event.target.files ?? []);
     event.target.value = '';
     if (picked.length === 0) return;
+    dispatchAgentKnowledgeUploadInteraction();
     setPendingFiles((prev) => {
       const next = new Map(prev);
       for (const file of picked) {
@@ -260,6 +275,9 @@ function KnaufFileSearch({
   const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
     try {
       await handleSharePointFiles(sharePointFiles);
+      if (sharePointFiles.length > 0) {
+        dispatchAgentKnowledgeUploadInteraction();
+      }
       setIsSharePointDialogOpen(false);
     } catch (error) {
       console.error('SharePoint file processing error:', error);

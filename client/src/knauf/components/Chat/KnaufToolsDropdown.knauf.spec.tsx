@@ -12,6 +12,7 @@ import KnaufToolsDropdown from './KnaufToolsDropdown';
 const mockUseImageGenAvailable = jest.fn();
 const mockUseToolToggle = jest.fn();
 const mockUseBadgeRowContext = jest.fn();
+const mockDispatchAdobeAppInteraction = jest.fn();
 type UpstreamProps = { disabled?: boolean; extraItems?: unknown[] };
 const mockUpstreamToolsDropdown = jest.fn<null, [UpstreamProps]>(() => null);
 
@@ -22,6 +23,10 @@ jest.mock('~/hooks', () => ({
 
 jest.mock('~/Providers', () => ({
   useBadgeRowContext: () => mockUseBadgeRowContext(),
+}));
+
+jest.mock('~/knauf/analytics/adobe', () => ({
+  dispatchAdobeAppInteraction: (payload: unknown) => mockDispatchAdobeAppInteraction(payload),
 }));
 
 jest.mock('~/knauf/hooks/Chat/useImageGenAvailable', () => ({
@@ -62,6 +67,7 @@ describe('[knauf] KnaufToolsDropdown — extraItems wiring', () => {
     mockUseImageGenAvailable.mockReset();
     mockUseToolToggle.mockReset();
     mockUseBadgeRowContext.mockReset();
+    mockDispatchAdobeAppInteraction.mockClear();
     mockUpstreamToolsDropdown.mockClear();
     mockUseBadgeRowContext.mockReturnValue({
       specName: 'karl',
@@ -89,6 +95,29 @@ describe('[knauf] KnaufToolsDropdown — extraItems wiring', () => {
     render(<KnaufToolsDropdown />);
     const items = lastUpstreamProps().extraItems ?? [];
     expect(items).toHaveLength(1);
+  });
+
+  it('dispatches an app_interaction when the image generation item is toggled', () => {
+    const debouncedChange = jest.fn();
+    mockUseImageGenAvailable.mockReturnValue(true);
+    mockUseToolToggle.mockReturnValue({
+      toggleState: false,
+      debouncedChange,
+      isPinned: false,
+      setIsPinned: jest.fn(),
+    });
+
+    render(<KnaufToolsDropdown />);
+    const [item] = (lastUpstreamProps().extraItems ?? []) as Array<{ onClick: () => void }>;
+    item.onClick();
+
+    expect(debouncedChange).toHaveBeenCalledWith({ value: true });
+    expect(mockDispatchAdobeAppInteraction).toHaveBeenCalledWith({
+      action: 'enable_image_generation',
+      component: 'chat_tools',
+      eventSpecification: 'enable_image_generation',
+      pageSection: 'chat',
+    });
   });
 
   it('forwards the disabled prop to the upstream ToolsDropdown', () => {

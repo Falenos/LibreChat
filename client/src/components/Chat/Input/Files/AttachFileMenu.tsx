@@ -39,6 +39,9 @@ import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
 import { MenuItemProps } from '~/common';
 import { cn } from '~/utils';
+// [knauf] Emit Adobe data-layer app_interaction events for chat file upload selections.
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 
 type FileUploadType =
   | 'image'
@@ -166,6 +169,7 @@ const AttachFileMenu = ({
           // provider/endpoint terms, and the item already accepts images +
           // PDFs / docs (handled by the FileUploadType chosen below).
           label: localize('com_ui_upload_files'),
+          // End [knauf]
           onClick: () => {
             setToolResource(undefined);
             let fileType: Exclude<FileUploadType, 'image' | 'document'> = 'image_document';
@@ -232,6 +236,7 @@ const AttachFileMenu = ({
           icon: <FileSearch className="icon-md" />,
         });
       }
+      // End [knauf]
 
       if (capabilities.codeEnabled && codeAllowedByAgent) {
         items.push({
@@ -306,9 +311,27 @@ const AttachFileMenu = ({
       disabled={isUploadDisabled}
     />
   );
+  // [knauf] Centralised chat-upload interaction event. The payload avoids
+  // filenames, sizes, paths, and file-source metadata.
+  const dispatchChatUploadInteraction = useCallback(() => {
+    dispatchAdobeAppInteraction({
+      action: 'upload_chat_file',
+      component: 'chat_composer',
+      eventSpecification: 'upload_chat_file',
+      pageSection: 'chat',
+    });
+  }, []);
+  // End [knauf]
+
   const handleSharePointFilesSelected = async (sharePointFiles: any[]) => {
     try {
       await handleSharePointFiles(sharePointFiles);
+      // [knauf] Track the upload action only after the user selected files
+      // and SharePoint processing completed successfully.
+      if (sharePointFiles.length > 0) {
+        dispatchChatUploadInteraction();
+      }
+      // End [knauf]
       setIsSharePointDialogOpen(false);
     } catch (error) {
       console.error('SharePoint file processing error:', error);
@@ -320,6 +343,12 @@ const AttachFileMenu = ({
       <FileUpload
         ref={inputRef}
         handleFileChange={(e) => {
+          // [knauf] Track local chat upload selections without collecting
+          // file metadata.
+          if ((e.target.files?.length ?? 0) > 0) {
+            dispatchChatUploadInteraction();
+          }
+          // End [knauf]
           handleFileChange(e, toolResource);
         }}
       >
