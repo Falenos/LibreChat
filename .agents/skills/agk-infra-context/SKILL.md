@@ -7,7 +7,7 @@ description: Use when working on Agentic Karl / AGK infrastructure, Azure CLI ac
 
 This skill is the operational map for Agentic Karl infrastructure. Use it before changing deployment workflows, Azure resources, Key Vault secrets, ArgoCD apps, Helm values, or environment config.
 
-Last verified: 2026-06-03.
+Last verified: 2026-06-05.
 
 ## Operating Rules
 
@@ -121,6 +121,38 @@ For day-to-day Agentic Karl work:
 - Terraform state and platform changes are normally owned by CI/CD service principals, not local `terraform apply`.
 
 Do not assume pipeline access matches human access. GitHub Actions credentials and ArgoCD credentials must be tested separately.
+
+## Private DB Maintenance
+
+AGK MongoDB is intentionally private-only. Do not enable public Mongo access for local convenience.
+
+For occasional, tightly scoped database maintenance, prefer a short-lived ArgoCD/Kubernetes Job over direct laptop access:
+
+1. Create a temporary GitOps branch in `$KNAUF_ROOT/agk-deployment-configs`.
+2. Add a one-off `batch/v1` Job under a temporary maintenance path, usually `maintenance/<env>/<purpose>/job.yaml`.
+3. Run the Job in the target namespace with the deployed app image and existing `envFrom` refs for the app ConfigMap and Secret, so it uses the same private network path and `MONGO_URI` as the backend.
+4. Print only non-secret before/after metadata. Never print connection strings, tokens, or secret values.
+5. Create a temporary ArgoCD Application pointing at that branch/path, sync it, inspect Job logs, then delete the ArgoCD Application.
+6. Delete the temporary remote branch and restore the local GitOps repo to its previous branch.
+
+Use this pattern for small, deterministic changes such as setting one user's `role` or granting a specific ACL entry. Do not use it for exploratory querying, bulk migrations, long-running scripts, or changes that should live as product/admin functionality. Those belong in application code, a migration, or a reviewed operational runbook.
+
+Local DB access is possible only if both routing and DNS are configured:
+
+- The active VPN/client route table must route the AGK environment CIDR through VPN. Dev/nonprod Mongo currently lives behind the AGK nonprod spoke CIDR `10.160.0.0/16`; the dev Mongo private endpoint resolves to `10.160.0.7:10260`.
+- VPN/corporate DNS must resolve the AGK tenant private DNS zone records for `privatelink.mongocluster.cosmos.azure.com`, including the `A` and `_mongodb._tcp` `SRV` records. A shared DNS zone for another Mongo cluster is not enough.
+- Network policy, NSG, and firewall rules must allow the VPN client CIDR to the private endpoint and port.
+
+Useful validation commands:
+
+```bash
+route -n get 10.160.0.7
+dig @<vpn-dns-server> cosmos-agk-nonprod-westeurope-001.privatelink.mongocluster.cosmos.azure.com A
+dig @<vpn-dns-server> _mongodb._tcp.cosmos-agk-nonprod-westeurope-001.privatelink.mongocluster.cosmos.azure.com SRV
+nc -vz 10.160.0.7 10260
+```
+
+If these checks fail, do not work around it by changing Mongo public access. Either fix VPN/Private DNS through Terraform/network ownership, or use the short-lived ArgoCD Job pattern above.
 
 ## Infrastructure Shape
 
