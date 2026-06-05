@@ -272,6 +272,7 @@ jobs:
           test -f "$AGK_MEILI_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_ACR_NAME.azurecr.io/$AGK_IMAGE_REPOSITORY" "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -F "DOMAIN_SERVER: \"https://agentic-karl.agk.prod.knauf.digital\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_MEILI_CONFIG_DIRECTORY/values.yaml"
 
       - name: Import image into AGK prod ACR
