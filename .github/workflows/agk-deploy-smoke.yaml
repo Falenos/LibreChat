@@ -34,6 +34,10 @@ jobs:
       AGK_SMOKE_IMAGE_REPOSITORY: agentic-karl-dev/smoke/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_PROD_ACR_NAME: acragkhubprod001
+      AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
+      AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
+      AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
@@ -145,6 +149,12 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git pull --ff-only origin main
           test -f "$AGK_CONFIG_DIRECTORY/values.yaml"
+          test -f "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          test -f "$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
+          grep -F "repository: $AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_IMAGE_REPOSITORY" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "DOMAIN_SERVER: \"https://agentic-karl.agk.prod.knauf.digital\"" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
 
           SMOKE_BRANCH="agk-deploy-smoke/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           cleanup() {
