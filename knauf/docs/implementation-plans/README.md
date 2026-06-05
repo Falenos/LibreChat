@@ -33,5 +33,7 @@ If you can't decide between promote and archive: archive.
 | Plan | Owner(s) | Started | Target completion |
 |---|---|---|---|
 | [`azure-blob-and-private-files.md`](./azure-blob-and-private-files.md) | jorgecostak | 2026-05-22 | KK20-167 — KARL prod rollout of private Azure Blob with SAS signing |
+| [`agent-publishing-governance.md`](./agent-publishing-governance.md) | Zahar / KARL admins | 2026-06-02 | Working direction for AI Champions controlled agent publishing pilot |
+| [`admin-panel-dev-deployment-plan.md`](./admin-panel-dev-deployment-plan.md) | Zahar / KARL admins | 2026-06-05 | Deploy LibreChat Admin Panel as a pinned AGK dev service |
 
 When that table empties, this folder can be reconsidered — maybe it stays as a known home for the next workstream, maybe it gets dropped. For now it has a clear purpose.
