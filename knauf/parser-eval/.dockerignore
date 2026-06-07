@@ -1,0 +1,7 @@
+# Keep the eval image lean — these are mounted at runtime, not baked in.
+corpus/
+runs/
+.judge_cache/
+__pycache__/
+*.pyc
+.venv/
