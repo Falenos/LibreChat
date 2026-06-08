@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import itertools
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -85,22 +86,27 @@ def main() -> int:
     if not docs:
         print(f"[run] no documents under {args.corpus}/<category>/ — add some and re-run.")
         return 1
+    # Stable, unique doc key = corpus-relative posix path (e.g. "office/file.xlsx"). Keying by
+    # basename collides when two categories share a filename, silently dropping result rows.
+    corpus_docs = [
+        (category, path, os.path.relpath(path, args.corpus).replace(os.sep, "/"))
+        for category, path in docs
+    ]
 
     # ---- 1) parse: strategy × doc -> raw output + ParseResult ----------------
     results: dict[tuple, object] = {}
     md_by_doc_strat: dict[tuple, str] = {}
-    for category, path in docs:
-        doc = Path(path).name
+    for category, path, doc in corpus_docs:
         mime = guess_mime(path)
         for strat, adapter in adapters.items():
-            res = adapter.parse(path, mime, category=category)
+            res = adapter.parse(path, mime, category=category, doc=doc)
             results[(doc, strat)] = res
             md_by_doc_strat[(doc, strat)] = res.markdown
-            out_md = run_dir / strat / f"{category}__{slugify(doc)}.md"
+            out_md = run_dir / strat / f"{slugify(doc)}.md"
             out_md.parent.mkdir(parents=True, exist_ok=True)
             out_md.write_text(res.markdown or "")
             flag = "OK " if res.ok else ("ERR" if res.error else "EMPTY")
-            print(f"  [{flag}] {strat:10s} {category}/{doc}  "
+            print(f"  [{flag}] {strat:10s} {doc}  "
                   f"{res.seconds}s  pages={res.n_pages}  chars={len(res.markdown)}"
                   + (f"  ({res.error})" if res.error else ""))
 
@@ -134,8 +140,7 @@ def main() -> int:
     if not judge.available:
         print(f"[judge] disabled: {judge.reason_unavailable}")
     else:
-        for category, path in docs:
-            doc = Path(path).name
+        for category, path, doc in corpus_docs:
             images = render_pages(path, judge.max_pages)
             for strat in strategies:
                 res = results[(doc, strat)]
@@ -166,7 +171,7 @@ def main() -> int:
 
     # ---- 5) Phase 2: RAG quality ---------------------------------------------
     if args.phase2:
-        _run_phase2(args, cfg, docs, md_by_doc_strat, strategies, judge, run_dir)
+        _run_phase2(args, cfg, corpus_docs, md_by_doc_strat, strategies, judge, run_dir)
 
     # ---- 6) report ------------------------------------------------------------
     report_path = report.generate(str(run_dir))
@@ -175,14 +180,14 @@ def main() -> int:
     return 0
 
 
-def _run_phase2(args, cfg, docs, md_by_doc_strat, strategies, judge, run_dir):
+def _run_phase2(args, cfg, corpus_docs, md_by_doc_strat, strategies, judge, run_dir):
     import yaml
 
     from metrics import rag
 
     qa_items = []
-    for _, path in docs:
-        qp = qa_path(args.corpus, Path(path).name)
+    for _, _, doc in corpus_docs:
+        qp = qa_path(args.corpus, doc)
         if qp:
             data = yaml.safe_load(Path(qp).read_text()) or []
             qa_items.extend(data.get("qa", data) if isinstance(data, dict) else data)
@@ -191,7 +196,7 @@ def _run_phase2(args, cfg, docs, md_by_doc_strat, strategies, judge, run_dir):
         return
     # Concatenate each strategy's text across all docs into one corpus per strategy.
     strategy_texts = {
-        s: "\n\n".join(md_by_doc_strat[(Path(p).name, s)] for _, p in docs)
+        s: "\n\n".join(md_by_doc_strat[(doc, s)] for _, _, doc in corpus_docs)
         for s in strategies
     }
     print(f"[phase2] scoring RAG over {len(qa_items)} Q&A items...")

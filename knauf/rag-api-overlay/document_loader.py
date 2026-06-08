@@ -127,7 +127,7 @@ class _AzureDIWithFallback:
 
     def load(self):
         try:
-            return self._load_via_di()
+            docs = self._load_via_di()
         except Exception as e:  # noqa: BLE001 — degrade, don't fail the upload
             logger.warning(
                 f"[knauf] Azure DI failed for '{self.filename}' ({type(e).__name__}: {e}); "
@@ -137,6 +137,19 @@ class _AzureDIWithFallback:
                 self.filename, self.file_content_type, self.filepath, self.raw_text, _no_di=True
             )
             return loader.load()
+        # [knauf] The Azure DI loader does NOT set metadata["source"]: in markdown/single mode it
+        # stores the raw analyze result (result.as_dict()), in page mode only "page" — never the
+        # file path. Every upstream loader sets source=filepath, and both rag_api's
+        # process_documents() and LibreChat's file_search tool (docInfo.metadata.source.split("/"))
+        # rely on it — a missing source throws "Cannot read properties of undefined (reading
+        # 'split')" at query time. Normalize to the loader contract (and drop the multi-MB DI
+        # result dict we'd otherwise embed as per-chunk metadata).
+        for doc in docs:
+            page = doc.metadata.get("page") if isinstance(doc.metadata, dict) else None
+            doc.metadata = {"source": self.filepath}
+            if page is not None:
+                doc.metadata["page"] = page
+        return docs
 
     def lazy_load(self):
         yield from self.load()

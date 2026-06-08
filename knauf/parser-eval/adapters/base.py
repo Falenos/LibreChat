@@ -41,8 +41,13 @@ class BaseAdapter:
 
     name = "base"
 
-    def parse(self, filepath: str, mimetype: str, category: str = "") -> ParseResult:
-        doc = os.path.basename(filepath)
+    def parse(
+        self, filepath: str, mimetype: str, category: str = "", doc: Optional[str] = None
+    ) -> ParseResult:
+        # `doc` is the caller-supplied stable key (corpus-relative path, e.g. "office/file.xlsx").
+        # It MUST be unique across the corpus — basenames collide when two categories share a
+        # filename, silently overwriting result rows. Fall back to basename only for ad-hoc calls.
+        doc = doc or os.path.basename(filepath)
         t0 = time.perf_counter()
         try:
             markdown, n_pages = self._extract(filepath, mimetype)

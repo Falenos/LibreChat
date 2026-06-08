@@ -74,13 +74,24 @@ def iter_corpus(corpus_dir: str):
             yield cat_dir.name, str(f)
 
 
-def ground_truth_path(corpus_dir: str, doc_name: str) -> str | None:
-    """Reference markdown for a doc, if present at corpus/ground_truth/<stem>.md."""
-    gt = Path(corpus_dir) / "ground_truth" / (Path(doc_name).stem + ".md")
-    return str(gt) if gt.exists() else None
+def _sidecar_path(corpus_dir: str, subdir: str, doc_key: str, ext: str) -> str | None:
+    """Locate a ground-truth / QA sidecar for a doc. ``doc_key`` is the corpus-relative
+    key (e.g. "office/file.xlsx"). Prefer a category-mirrored location
+    (corpus/<subdir>/office/file<ext>) so duplicate basenames across categories stay
+    unambiguous; fall back to the legacy flat layout (corpus/<subdir>/file<ext>)."""
+    root = Path(corpus_dir) / subdir
+    mirrored = root / Path(doc_key).with_suffix(ext)
+    if mirrored.exists():
+        return str(mirrored)
+    flat = root / (Path(doc_key).stem + ext)
+    return str(flat) if flat.exists() else None
 
 
-def qa_path(corpus_dir: str, doc_name: str) -> str | None:
-    """Q&A file for a doc, if present at corpus/qa/<stem>.yaml."""
-    qa = Path(corpus_dir) / "qa" / (Path(doc_name).stem + ".yaml")
-    return str(qa) if qa.exists() else None
+def ground_truth_path(corpus_dir: str, doc_key: str) -> str | None:
+    """Reference markdown for a doc, if present (category-mirrored or legacy flat)."""
+    return _sidecar_path(corpus_dir, "ground_truth", doc_key, ".md")
+
+
+def qa_path(corpus_dir: str, doc_key: str) -> str | None:
+    """Q&A file for a doc, if present (category-mirrored or legacy flat)."""
+    return _sidecar_path(corpus_dir, "qa", doc_key, ".yaml")
