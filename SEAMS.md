@@ -91,6 +91,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/SidePanel/Agents/__tests__/DeleteButton.knauf.spec.tsx` | `DeleteButton analytics` | 1–6 | Seam test for the successful agent deletion `delete_agent` app_interaction event | Self | NO-TICKET |
 | `client/src/hooks/Chat/useChatFunctions.ts` | `dispatchAdobeAppInteraction` import + `ask` submission path | 36–38, 349–358 | Emit a consent-gated `send_chat_message` app_interaction from the shared chat submission path after validation, while skipping regenerate/continue and sending no message content | `useChatFunctions.knauf.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Chat/__tests__/useChatFunctions.knauf.spec.tsx` | `useChatFunctions analytics seam test` | 1–7 | Seam test for the shared chat submission `send_chat_message` app_interaction and the regenerate/continue exclusions | Self | NO-TICKET |
+| `client/src/components/Auth/AuthLayout.tsx` | `AuthLayout` | 64–73 | Login-screen logo `<img>` points at the Knauf wordmark (`assets/knauf-logo.png`) instead of upstream `logo.svg`, matching the in-app landing branding (Landing.tsx, KK20-159) | Manual | KK20-175 |
 <!-- seams:auto:end -->
 
 ## Configuration

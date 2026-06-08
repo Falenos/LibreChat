@@ -153,6 +153,8 @@ endpoints:
         plugins: true
         instanceName: 'cst-karl-dev'
         version: '2025-01-01-preview'
+        addParams:
+          web_search: true
         dropParams:
           - temperature
           - top_p

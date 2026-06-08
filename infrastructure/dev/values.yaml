@@ -1,9 +1,9 @@
 agentic-karl:
   image:
-    tag: 'v0.53.0'
+    tag: 'v0.54.0'
 
   configmap:
-    SERVICE_VERSION: v0.53.0
+    SERVICE_VERSION: v0.54.0
 
   externalSecret:
     secrets: {}
