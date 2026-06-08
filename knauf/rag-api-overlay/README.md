@@ -73,9 +73,16 @@ Set the `RAG_AZURE_DI_*` vars (at minimum endpoint + key) in `.env` to enable OC
 
 The dev cluster does **not** deploy from this repo's compose/Helm files. It deploys from
 `Knauf-Group/ct-shared-deployment-configs` → `dev/services/agentic-karl-rag-api/.../values.yaml`,
-whose `image` is the overlay published to ACR (`acrctshared001.azurecr.io/tools-non-prod/agentic-karl-rag-api:<tag>`,
-built via `az acr build`). That build + the `RAG_AZURE_DI_*` / `RAG_XLSX_*` env + secret wiring are
-the **deferred infra step**, tracked end-to-end in
+whose `image` is the overlay published to ACR (`acrctshared001.azurecr.io/tools-non-prod/agentic-karl-rag-api:<tag>`).
+
+The image is built + pushed by the GitHub Action
+[`.github/workflows/build-rag-api-overlay.yaml`](../../.github/workflows/build-rag-api-overlay.yaml)
+— it authenticates as the shared service principal + the ACR password from Key Vault (**no personal
+Azure login**). Trigger it from the GitHub UI (*Actions → Build RAG API overlay image → Run workflow*,
+tag defaults to [`VERSION`](VERSION)), or it auto-runs on a push to `main` touching this directory.
+Bump [`VERSION`](VERSION) when you change the overlay, then point the deployment-configs `values.yaml`
+tag at it. (Manual fallback: `az acr build`, if you have Azure access.) The full image → `values.yaml`
+→ ArgoCD rollout is tracked in
 [knauf/docs/implementation-plans/rag-azure-di-rollout.md](../docs/implementation-plans/rag-azure-di-rollout.md).
 
 ## Re-vendoring on a base-image bump

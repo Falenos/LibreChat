@@ -72,9 +72,17 @@ ArgoCD has no opinion about whether the image exists — it just applies the man
 
 ### Step 1 — Build & push the overlay image to ACR
 
-Run from the **agentic-karl repo root**. `az acr build` runs the Docker build server-side in
-ACR (it pulls the public base image itself — no local Docker or registry login needed beyond
-`az login` + ACR access):
+**Primary (no Azure login needed): the GitHub Action.** The workflow
+[`.github/workflows/build-rag-api-overlay.yaml`](../../../.github/workflows/build-rag-api-overlay.yaml)
+builds the overlay and pushes it to ACR, authenticating as the shared service principal
+(`secrets.AZURE_CREDENTIALS`) + the ACR password from Key Vault — the same credentials the release
+pipeline uses. **No personal `az login`.** Trigger it from the GitHub UI (Actions → *Build RAG API
+overlay image* → *Run workflow*) and accept/enter the tag (default = `knauf/rag-api-overlay/VERSION`,
+i.e. `0.1.0`). It also auto-runs on a push to `main` that touches `knauf/rag-api-overlay/**`. Bump
+`VERSION` when you change the overlay, then point the deployment-configs `values.yaml` tag at it.
+
+**Fallback (manual, needs Azure access):** from the agentic-karl repo root, `az acr build` runs the
+build server-side in ACR:
 
 ```bash
 cd ~/repos/knauf/agentic-karl-v2
@@ -235,7 +243,8 @@ Confirm dev egress reaches `*.services.ai.azure.com`.
 - **Jira anchor.** The app branch (`feat/rag-azure-doc-intelligence`) carries no KK20 number. If
   a ticket exists for this workstream, rename the infra branch/commit/PR to `…/KK20-XXX-…` and
   list it in both PR bodies. Otherwise file one (config rollout = not a process-only carve-out).
-- **Image rebuild automation.** For now the overlay is built by hand. Follow-up: a GitHub Action
-  that rebuilds on `knauf/rag-api-overlay/**` changes using the `ACRCTSHARED001-REGISTRY-PASSWORD`
-  creds the release pipeline already uses.
+- **Image rebuild automation.** ✅ Done — [`.github/workflows/build-rag-api-overlay.yaml`](../../../.github/workflows/build-rag-api-overlay.yaml)
+  builds + pushes on overlay changes / manual dispatch using the shared SP + `ACRCTSHARED001-REGISTRY-PASSWORD`
+  (no personal Azure login). Open: confirm the SP has AcrPush on `acrctshared001` (the release
+  pipeline's `az acr import` uses the same registry password, so it should).
 - **prod.** This rollout is dev-only. Promotion repeats Steps 1–4 against the prod values path.
