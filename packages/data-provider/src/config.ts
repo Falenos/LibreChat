@@ -746,12 +746,20 @@ export const interfaceSchema = z
       .optional(),
     // [knauf] Knauf-specific interface options, namespaced under their own
     // key so future Knauf additions don't collide with upstream `interface.*`
-    // fields. Currently carries `defaultAgentId` (the locked-default agent in
-    // the Knauf chat header picker) — empty / unset means no admin default
-    // (KK20-128).
+    // fields.
     knauf: z
       .object({
-        defaultAgentId: z.string().optional(),
+        /**
+         * Global kill switch for the per-conversation image-generation chip
+         * mounted by ChatForm.tsx and rendered by KnaufImageGenTools. When
+         * `false`, the chip is hidden on the default-spec branch (custom-
+         * agent chats have no chip to hide — admin install on the agent
+         * record is their admission control). When `true` (default), the
+         * per-branch policy in `useImageGenAvailable` decides visibility.
+         * The backend gate in `loadEphemeralAgent` still enforces per-chat
+         * opt-in via `ephemeralAgent.image_gen`. KK20-168.
+         */
+        imageGen: z.boolean().optional(),
       })
       .optional(),
     // End [knauf]
@@ -823,6 +831,17 @@ export const turnstileSchema = z.object({
 
 export type TTurnstileConfig = z.infer<typeof turnstileSchema>;
 
+// [knauf] Startup payload for the post-login OneTrust + Adobe Analytics controller. (NO-TICKET)
+export type TKnaufAnalyticsConfig = {
+  enabled: boolean;
+  oneTrustScriptSrc: string;
+  oneTrustDomainScriptId: string;
+  consentCategoryId: string;
+  adobeLaunchScriptUrl: string;
+  adobeAppName: string;
+};
+// End [knauf]
+
 export type TStartupConfig = {
   appTitle: string;
   socialLogins?: string[];
@@ -877,6 +896,11 @@ export type TStartupConfig = {
     scraperProvider?: ScraperProviders;
     rerankerType?: RerankerTypes;
   };
+  // [knauf] Namespaced startup config avoids collisions with future upstream fields. (NO-TICKET)
+  knauf?: {
+    analytics?: TKnaufAnalyticsConfig;
+  };
+  // End [knauf]
   mcpServers?: Record<
     string,
     {
@@ -1572,6 +1596,12 @@ export enum CacheKeys {
    * Key for s3 check intervals per user
    */
   S3_EXPIRY_INTERVAL = 'S3_EXPIRY_INTERVAL',
+  // [knauf] KK20-167 — paired with api/cache/getLogStores.js for Azure URL refresh.
+  /**
+   * Key for Azure Blob check intervals per user
+   */
+  AZURE_EXPIRY_INTERVAL = 'AZURE_EXPIRY_INTERVAL',
+  // End [knauf]
   /**
    * key for open id exchanged tokens
    */
@@ -1957,6 +1987,10 @@ export enum LocalStorageKeys {
   LAST_WEB_SEARCH_TOGGLE_ = 'LAST_WEB_SEARCH_TOGGLE_',
   /** Last checked toggle for File Search per conversation ID */
   LAST_FILE_SEARCH_TOGGLE_ = 'LAST_FILE_SEARCH_TOGGLE_',
+  // [knauf] Per-conversation toggle for the image_gen_oai tool, surfaced as
+  // a pinnable agent-chat chip. See `image_gen` on TEphemeralAgent.
+  LAST_IMAGE_GEN_TOGGLE_ = 'LAST_IMAGE_GEN_TOGGLE_',
+  // End [knauf]
   /** Last checked toggle for Artifacts per conversation ID */
   LAST_ARTIFACTS_TOGGLE_ = 'LAST_ARTIFACTS_TOGGLE_',
   /** Key for the last selected agent provider */

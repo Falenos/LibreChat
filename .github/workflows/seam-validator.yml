@@ -63,6 +63,6 @@ jobs:
             cat seams-diff.log >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat seams-diff.log
-            echo "::error::Modified upstream files lack [knauf] markers. See CUSTOMIZATION_STRATEGY.md tier 5."
+            echo "::error::Modified upstream files lack [knauf] markers. See knauf/docs/reference/code-change-protocol.md (Tier 5)."
             exit "$rc"
           fi

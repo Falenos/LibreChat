@@ -6,6 +6,14 @@ version: 1.3.8
 
 cache: true
 
+# Route all file uploads (avatars, images, attachments, file_search) to
+# Azure Blob Storage with SAS-signed URLs. Behavior of `azure_blob` here
+# depends on the Knauf overlay (KK20-167) that adds short-lived signed
+# URLs + refresh-on-expiry on top of upstream's Azure file strategy.
+# Required env: AZURE_STORAGE_CONNECTION_STRING (or AZURE_STORAGE_ACCOUNT_NAME
+# for Managed Identity), AZURE_CONTAINER_NAME, AZURE_STORAGE_PUBLIC_ACCESS=false.
+fileStrategy: "azure_blob"
+
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
 includedTools:
@@ -44,16 +52,27 @@ interface:
   memories: true
   multiConvo: false
   # Knauf-specific interface options, namespaced to avoid colliding with
-  # future upstream `interface.*` fields. `defaultAgentId` is the agent ID
-  # surfaced as the locked-default in the Knauf chat header picker (KK20-128).
-  # If absent or invalid the picker still renders, just without a locked
-  # default. Admins find the ID via the agent builder (see the "Agent ID"
-  # line below the agent name).
+  # future upstream `interface.*` fields.
   knauf:
-    defaultAgentId: ''
+    # Per-conversation image-generation chip (Settings2 popover next to the
+    # paperclip + pinnable composer chip) on default Knauf model spec chats.
+    # `true` (default) shows the chip on default-spec chats; users toggle
+    # per send. `false` hides it. Custom-agent chats have no chip — admin
+    # install of `image_gen_oai` on the agent record is the admission
+    # control there, and the tool fires every turn regardless of this flag.
+    # Flipping to `false` does not remove the tool from `includedTools` or
+    # affect custom agents that already have it installed. KK20-168.
+    imageGen: true
   webSearch: false
   runCode: false
-  fileSearch: true
+  # Hide the file_search chip + ToolsDropdown entry on chat surfaces — on
+  # default-spec chats there's no upload path for it (knowledge curation
+  # happens in the agent builder, not in chat), and custom agents that
+  # have `file_search` in their tools array still fire it server-side via
+  # `loadAgent` regardless of this flag. Matches the webSearch/runCode
+  # pattern above (chat-side BYOK badges hidden; underlying tools still
+  # work where they're configured). KK20-168.
+  fileSearch: false
   agents:
     use: true
     create: true
@@ -86,6 +105,21 @@ fileConfig:
   endpoints:
     gptPlugins:
       fileLimit: 5
+    # 25 MB per-file cap on chat composer uploads (default Karl spec + any
+    # Azure-backed conversation). Upstream default is 512 MB — tightened
+    # here to control Azure Blob spend and avoid oversized PDFs blowing
+    # the model context. totalSizeLimit matches fileSizeLimit so multiple
+    # files in one send can't sidestep the per-file cap. Values are MB;
+    # the loader (packages/data-provider/src/file-config.ts) converts to
+    # bytes at load time.
+    azureOpenAI:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
+    # Mirror the cap on the agents endpoint so custom-agent chats are
+    # subject to the same policy as the default-spec chat.
+    agents:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
 
 endpoints:
 
@@ -140,12 +174,28 @@ modelSpecs:
     - name: 'karl'
       label: 'KARL'
       default: true
-      description: 'KARL GPT for the Knauf Group'
+      # Subtitle text rendered under the customWelcome title on the
+      # default-spec landing (when no agent is selected). Kept short and
+      # product-facing. KK20-159.
+      #
+      # No `iconURL` here: upstream `ConvoIcon` only dispatches to its
+      # URL renderer when the value contains `http`, so a relative
+      # `assets/...` path falls through to the endpoint-icon fallback.
+      # The Knauf landing logo is rendered directly in Landing.tsx via
+      # a `[knauf]` block (default-spec branch only) — see the SEAMS row
+      # for `client/src/components/Chat/Landing.tsx`.
+      description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
-        agentOptions:
-          model: 'gpt-5.4'
-          agent: 'functions'
+        model: 'gpt-5.4'
+        # Use the Azure Responses API so the chat composer's paperclip
+        # menu surfaces "Upload files" (image + PDF) instead of the
+        # image-only fallback. Azure is excluded from the
+        # `documentSupportedProviders` allow-list (see
+        # packages/data-provider/src/schemas.ts), so document upload on
+        # an azureOpenAI chat is gated specifically on this flag — same
+        # mechanism the karl-personality-* specs already use.
+        useResponsesApi: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
@@ -173,6 +223,15 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
+    # Each personality preset enables `useResponsesApi` so new agents get the
+    # "Upload to Provider" item in the chat paperclip menu by default (so
+    # users can attach PDFs / text files directly to the model). Azure
+    # OpenAI is excluded from the document-supported providers allow-list
+    # except when Responses API is on — see
+    # packages/data-provider/src/schemas.ts (documentSupportedProviders)
+    # and the menu gate at AttachFileMenu.tsx:158. Once set on an agent the
+    # flag is preserved across toggling `web_search` on/off
+    # (capabilities.ts → browseInternet).
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -181,6 +240,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: high
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-balanced'
       label: 'Balanced'
@@ -190,6 +250,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: medium
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'
@@ -199,6 +260,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'gpt-5.4'
         reasoning_effort: low
+        useResponsesApi: true
         additional_instructions: |
           When the answer would benefit from breadth, surface multiple options
           or angles before settling on one.

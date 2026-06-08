@@ -4,6 +4,10 @@ import type { TStartupConfig } from 'librechat-data-provider';
 import { TranslationKeys, useLocalize } from '~/hooks';
 import { useGetStartupConfig } from '~/data-provider';
 import AuthLayout from '~/components/Auth/AuthLayout';
+// [knauf] KK20-159 — replace the hardcoded "LibreChat" fallback so the
+// pre-login / pre-config page title reads the KARL brand instead.
+import { buildPageTitle } from '~/knauf/common/pageTitle';
+// End [knauf]
 import { REDIRECT_PARAM, SESSION_KEY } from '~/utils';
 
 const headerMap: Record<string, TranslationKeys> = {
@@ -44,7 +48,11 @@ export default function StartupLayout({ isAuthenticated }: { isAuthenticated?: b
   }, [isAuthenticated, navigate, data]);
 
   useEffect(() => {
-    document.title = startupConfig?.appTitle || 'LibreChat';
+    // [knauf] KK20-159 — fall back to "KARL | Knauf AI Platform" instead
+    // of the upstream "LibreChat" literal when startup config hasn't
+    // resolved yet.
+    document.title = buildPageTitle(undefined, startupConfig?.appTitle);
+    // End [knauf]
   }, [startupConfig?.appTitle]);
 
   useEffect(() => {
