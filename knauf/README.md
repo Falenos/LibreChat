@@ -86,4 +86,10 @@ Follow this order. Each step assumes the previous one is complete.
 | [docs/reference/rag-file-search-architecture.md](docs/reference/rag-file-search-architecture.md) | RAG file-search: ingestion + retrieval, Azure DI + spreadsheet handling, future text-to-SQL (with diagrams) |
 | [docs/migration.md](docs/migration.md) | Historical record: how this repo was created, why we re-forked |
 
+### Implementation plans
+
+| Doc | When to read it |
+|---|---|
+| [docs/implementation-plans/rag-azure-di-rollout.md](docs/implementation-plans/rag-azure-di-rollout.md) | Deploying the RAG Azure DI overlay to dev: build → ACR → values.yaml → ArgoCD, with the infra-repo PR commands |
+
 ---

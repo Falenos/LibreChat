@@ -26,10 +26,12 @@ existing Tier-2 `Dockerfile.knauf` pattern — no rag_api repo fork, no separate
 Opt-in. When `RAG_AZURE_DI_ENDPOINT` and `RAG_AZURE_DI_KEY` are unset, behaviour is identical
 to upstream.
 
+This is the **authoritative** env reference for the overlay; other docs link here.
+
 | Var | Default | Notes |
 |-----|---------|-------|
-| `RAG_AZURE_DI_ENDPOINT` | `""` | Cognitive Services endpoint, e.g. `https://cst-karl-dev.cognitiveservices.azure.com/`. **Not** the Foundry `*.services.ai.azure.com/api/projects/...` endpoint. |
-| `RAG_AZURE_DI_KEY` | `""` | API key from the resource's *Azure AI Services* keys blade. |
+| `RAG_AZURE_DI_ENDPOINT` | `""` | The resource's **data-plane** endpoint — the AI Services host `https://cst-karl-dev.services.ai.azure.com/` (what we validated; in `.env` + the dev `values.yaml`), or a classic `https://<name>.cognitiveservices.azure.com/`. **Not** the Foundry *project* URL `…/api/projects/<name>` — that's the wrong one. |
+| `RAG_AZURE_DI_KEY` | `""` | API key from the resource's *Azure AI Services* keys blade (same `cst-karl-dev` account key as `AZURE_OPENAI_API_KEY`). |
 | `RAG_AZURE_DI_API_MODEL` | `prebuilt-layout` | `prebuilt-layout` (markdown + tables) or `prebuilt-read` (plain OCR text). |
 | `RAG_AZURE_DI_MODE` | `markdown` | `markdown` \| `page` \| `single`. Fall back to `page`/`single` if the region/API version lacks markdown. |
 | `RAG_AZURE_DI_FILE_EXTS` | `pdf` | Comma-list of extensions routed through DI. **Recommended: `pdf,docx,pptx,html`.** `.xlsx` is intentionally **not** routed to DI (DI can't analyze xlsx tables and has an 8 M-char cap) — spreadsheets go to the native `_LeanExcelLoader` (one self-describing record **per row**, free, no limit). |
@@ -42,15 +44,39 @@ error never hard-fails the file-search upload.
 
 ## Local build & run
 
-The local stack wires this in via `docker-compose.override.yml` (builds `knauf/rag-api:local`).
+The committed [`docker-compose.override.yml`](../../docker-compose.override.yml) already wires the
+overlay into the **primary** local stack — its `rag_api` service has an explicit `build:` block:
+
+```yaml
+rag_api:
+  build:
+    context: ./knauf/rag-api-overlay
+    dockerfile: Dockerfile.knauf-rag
+  image: knauf/rag-api:local
+```
+
+So the standard local workflow builds and runs the overlay (no extra wiring needed):
 
 ```bash
 # from repo root
-docker compose build rag_api      # builds the overlay
+docker compose build rag_api      # (re)builds the overlay from Dockerfile.knauf-rag
 docker compose up -d              # runs the stack with the overlay rag_api
 ```
 
 Set the `RAG_AZURE_DI_*` vars (at minimum endpoint + key) in `.env` to enable OCR routing.
+
+> The other local composes — `deploy-compose.yml` (`npm run start:deployed`) and `rag.yml` — and
+> the in-repo `helm/librechat-rag-api/` chart still reference the **upstream** base image; they are
+> not part of the primary local stack and are left on upstream by design.
+
+## Deployed wiring (dev cluster)
+
+The dev cluster does **not** deploy from this repo's compose/Helm files. It deploys from
+`Knauf-Group/ct-shared-deployment-configs` → `dev/services/agentic-karl-rag-api/.../values.yaml`,
+whose `image` is the overlay published to ACR (`acrctshared001.azurecr.io/tools-non-prod/agentic-karl-rag-api:<tag>`,
+built via `az acr build`). That build + the `RAG_AZURE_DI_*` / `RAG_XLSX_*` env + secret wiring are
+the **deferred infra step**, tracked end-to-end in
+[knauf/docs/implementation-plans/rag-azure-di-rollout.md](../docs/implementation-plans/rag-azure-di-rollout.md).
 
 ## Re-vendoring on a base-image bump
 

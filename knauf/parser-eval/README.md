@@ -5,6 +5,10 @@ Intelligence** (current), the **current upstream loaders** (PyPDF / Docx2txt / U
 and **liteparse**. It runs each strategy over a categorized corpus, **stores every raw
 output**, and scores them with industry-standard metrics.
 
+> **Why this exists:** it's the evidence basis for the parser-routing decisions in
+> [knauf/docs/reference/rag-file-search-architecture.md](../docs/reference/rag-file-search-architecture.md)
+> — Azure DI for documents, the native lean loader for spreadsheets.
+
 Modeled on [OmniDocBench](https://github.com/opendatalab/OmniDocBench) (categorized corpus),
 with **CER/WER + TEDS** classic metrics and an **LLM-as-judge** (the highest human-correlation
 method per [SCORE-Bench](https://unstructured.io/blog/introducing-score-bench-an-open-benchmark-for-document-parsing)),
@@ -40,16 +44,18 @@ adapters/   azure_di.py  upstream.py  liteparse_adapter.py  (+ base.py)
 metrics/    text.py  tables.py  llm_judge.py  rag.py
 run.py      report.py  common.py  config.yaml  requirements.txt  Dockerfile.eval
 corpus/     digital_pdf/ scanned_pdf/ tables/ multicol/ office/   ground_truth/  qa/
-runs/       <timestamp>/<strategy>/<doc>.md  +  results.csv  +  report.md   (gitignored)
+runs/       <timestamp>/<strategy>/<category_doc>.md  +  results.csv  +  report.md   (gitignored)
 ```
 
 ## Corpus
 
 Drop representative documents into the category folders (OmniDocBench-style):
 `digital_pdf/`, `scanned_pdf/`, `tables/`, `multicol/`, `office/` (docx/xlsx/pptx).
-Optional, per document `<name>.pdf`:
-- `corpus/ground_truth/<name>.md` — reference markdown → unlocks CER/WER/TEDS.
-- `corpus/qa/<name>.yaml` — `qa: [{question: ..., answer: ...}]` → unlocks Phase 2.
+Each document is identified by its **corpus-relative path** (e.g. `office/report.xlsx`), so two
+categories may share a filename without colliding. Optional sidecars, per document — prefer the
+category-mirrored layout, with the flat layout kept as a fallback:
+- `corpus/ground_truth/<category>/<name>.md` (or flat `corpus/ground_truth/<name>.md`) — reference markdown → unlocks CER/WER/TEDS.
+- `corpus/qa/<category>/<name>.yaml` (or flat `corpus/qa/<name>.yaml`) — `qa: [{question: ..., answer: ...}]` → unlocks Phase 2.
 
 Corpus files are gitignored (may be proprietary/large); only the folder structure is tracked.
 

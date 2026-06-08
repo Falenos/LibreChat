@@ -130,17 +130,14 @@ Structured files would be loaded into relational tables (DuckDB/Postgres); the L
 
 ## Config reference
 
-| Var | Default | Purpose |
-|---|---|---|
-| `RAG_AZURE_DI_ENDPOINT` | — | Azure DI (AI Services data-plane) endpoint, e.g. `https://cst-karl-dev.services.ai.azure.com/` |
-| `RAG_AZURE_DI_KEY` | — | DI key (**secret**; same `cst-karl-dev` account key as `AZURE_OPENAI_API_KEY`) |
-| `RAG_AZURE_DI_API_MODEL` | `prebuilt-layout` | DI model |
-| `RAG_AZURE_DI_MODE` | `markdown` | DI output mode |
-| `RAG_AZURE_DI_FILE_EXTS` | `pdf` (KARL: `pdf,docx,pptx,html`) | extensions routed to DI; xlsx excluded on purpose |
-| `RAG_XLSX_MAX_CHARS` | `1500000` | xlsx summary trigger (`0` = unlimited) |
-| `RAG_XLSX_SUMMARY_ROWS` | `50` | rows/sheet shown in the summary |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1500` / `100` | rag_api splitter (characters) |
-| `EMBEDDINGS_PROVIDER` / `EMBEDDINGS_MODEL` | `openAI` / `text-embedding-3-large` | embeddings |
+The **authoritative** env reference (defaults, the endpoint gotcha, fallback behaviour) lives in
+[knauf/rag-api-overlay/README.md](../../rag-api-overlay/README.md) — kept in one place so the two
+docs can't drift. In brief:
+
+- `RAG_AZURE_DI_ENDPOINT` / `RAG_AZURE_DI_KEY` — DI data-plane endpoint (`…services.ai.azure.com/`, **not** the Foundry `…/api/projects/…` URL) + key (same `cst-karl-dev` account key).
+- `RAG_AZURE_DI_API_MODEL=prebuilt-layout`, `RAG_AZURE_DI_MODE=markdown`, `RAG_AZURE_DI_FILE_EXTS` (KARL: `pdf,docx,pptx,html`; xlsx excluded on purpose).
+- `RAG_XLSX_MAX_CHARS=1500000` (summary trigger; `0`=unlimited), `RAG_XLSX_SUMMARY_ROWS=50`.
+- rag_api stock: `CHUNK_SIZE=1500` / `CHUNK_OVERLAP=100` (char splitter); `EMBEDDINGS_PROVIDER=openAI` / `EMBEDDINGS_MODEL=text-embedding-3-large`.
 
 ## Code map
 
