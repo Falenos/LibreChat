@@ -61,11 +61,16 @@ function AuthLayout({
       <Banner />
       <BlinkAnimation active={isFetching}>
         <div className="mt-6 h-10 w-full bg-cover">
+          {/* [knauf] KK20-175 — login screen carries the Knauf wordmark, not
+              the upstream LibreChat logo. Reuses the same asset the default-spec
+              landing renders (Landing.tsx, KK20-159) so login + in-app branding
+              stay in sync. */}
           <img
-            src="assets/logo.svg"
+            src="assets/knauf-logo.png"
             className="h-full w-full object-contain"
             alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'LibreChat' })}
           />
+          {/* End [knauf] */}
         </div>
       </BlinkAnimation>
       <DisplayError />
