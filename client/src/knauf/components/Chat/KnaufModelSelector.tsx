@@ -8,9 +8,11 @@
  *     Personality lives inside the agent builder now (KK20-128 phase 1).
  *   - "Pinned" section at the top, mirroring the sidebar Favorites store
  *     (same `useFavorites()` hook, so pinning here also shows in the sidebar).
- *   - The admin-configured `interface.defaultAgentId` always appears first
- *     in Pinned, with no unpin affordance.
  *   - Pin/unpin icon on hover-right of every agent row.
+ *
+ * The default conversation on a fresh chat is whichever modelSpec is marked
+ * `default: true` in librechat.yaml (today: `karl`) — that's upstream's
+ * mechanism; this picker doesn't override it.
  *
  * Reuses upstream `ModelSelectorChatProvider` + `ModelSelectorProvider` for
  * the agent map, selection handler, search debounce, and Ariakit
@@ -19,12 +21,13 @@
 import { memo, useMemo, useCallback, useEffect, useRef, type MouseEvent } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { useRecoilValue } from 'recoil';
-import type { Agent } from 'librechat-data-provider';
-import { EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
+import type { Agent, TModelSpec } from 'librechat-data-provider';
+import { Constants, EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
 import { TooltipAnchor } from '@librechat/client';
-import { Pin, PinOff } from 'lucide-react';
+import { MessageSquare, Pin, PinOff } from 'lucide-react';
 import type { ModelSelectorProps } from '~/common';
 import { useFavorites, useLocalize } from '~/hooks';
+import { useGetStartupConfig } from '~/data-provider';
 import store from '~/store';
 import { cn, renderAgentAvatar } from '~/utils';
 import {
@@ -40,20 +43,6 @@ import {
 import DialogManager from '~/components/Chat/Menus/Endpoints/DialogManager';
 
 const defaultInterface = getConfigDefaults().interface;
-
-/**
- * Local mirror of the Knauf-namespaced interface extension declared in
- * packages/data-provider/src/config.ts. Used here as a typed accessor so
- * we don't rely on `interfaceConfig` carrying the field at the TypeScript
- * level — `data-provider/dist` may be one build behind the source. Drop
- * this helper after `npm run build:packages` lands.
- */
-type KnaufInterfaceExtension = { knauf?: { defaultAgentId?: string } };
-function getKnaufDefaultAgentId(interfaceConfig: unknown): string {
-  return (
-    (interfaceConfig as KnaufInterfaceExtension | null | undefined)?.knauf?.defaultAgentId ?? ''
-  );
-}
 
 /** Pinned alphabetical sort locale — pinned so cross-user/cross-tenant ordering is stable. */
 const SORT_LOCALE = 'en';
@@ -72,13 +61,13 @@ export default function KnaufModelSelector({ startupConfig }: Readonly<ModelSele
   return (
     <ModelSelectorChatProvider>
       <ModelSelectorProvider startupConfig={startupConfig}>
-        <KnaufModelSelectorContent defaultAgentId={getKnaufDefaultAgentId(interfaceConfig)} />
+        <KnaufModelSelectorContent />
       </ModelSelectorProvider>
     </ModelSelectorChatProvider>
   );
 }
 
-function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId: string }>) {
+function KnaufModelSelectorContent() {
   const localize = useLocalize();
   const {
     agentsMap,
@@ -88,10 +77,12 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
     selectedValues,
     setSearchValue,
     handleSelectModel,
+    handleSelectSpec,
     keyDialogOpen,
     onOpenChange,
     keyDialogEndpoint,
   } = useModelSelectorContext();
+  const { data: startupConfig } = useGetStartupConfig();
   /**
    * Own the Ariakit menu store at this layer (instead of letting CustomMenu
    * own it) so we can call `.hide()` on sidebar toggles. Ariakit's
@@ -154,33 +145,19 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
     [favorites],
   );
 
-  /** The locked-default agent (if configured AND accessible). */
-  const defaultAgent = useMemo(() => {
-    if (!defaultAgentId) return null;
-    return agentsMap?.[defaultAgentId] ?? null;
-  }, [defaultAgentId, agentsMap]);
-
   /**
-   * Pinned agents = default (if any) + favorites that are NOT the default
-   * and that exist in the agentsMap. De-dupes accidental double-pin of
-   * the default; orphan favorites (deleted agents) are filtered out.
+   * Pinned agents = favorites that exist in the agentsMap. Orphan favorites
+   * (deleted agents) are filtered out.
    */
   const pinnedAgents = useMemo<Agent[]>(() => {
-    const seen = new Set<string>();
     const list: Agent[] = [];
-    if (defaultAgent) {
-      list.push(defaultAgent);
-      seen.add(defaultAgent.id);
-    }
     for (const id of favoritedAgentIds) {
-      if (seen.has(id)) continue;
       const agent = agentsMap?.[id];
       if (!agent) continue;
       list.push(agent);
-      seen.add(id);
     }
     return list;
-  }, [defaultAgent, favoritedAgentIds, agentsMap]);
+  }, [favoritedAgentIds, agentsMap]);
 
   /** Set of pinned agent IDs — recomputed only when the favorites array changes. */
   const pinnedAgentIdSet = useMemo(() => new Set(favoritedAgentIds), [favoritedAgentIds]);
@@ -198,13 +175,33 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
       .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', SORT_LOCALE));
   }, [allAgents, pinnedAgents, searchValue]);
 
-  /** Currently-selected agent (for trigger label) — fall back to default. */
+  /** Currently-selected agent (for trigger label). */
   const selectedAgent = useMemo<Agent | null>(() => {
     if (selectedValues.model && agentsMap?.[selectedValues.model]) {
       return agentsMap[selectedValues.model] ?? null;
     }
-    return defaultAgent;
-  }, [selectedValues.model, agentsMap, defaultAgent]);
+    return null;
+  }, [selectedValues.model, agentsMap]);
+
+  /**
+   * The "Chat" entry — driven by whichever modelSpec carries `default: true`
+   * in librechat.yaml (today: `karl`). Surfaced as a first-class row at the
+   * top of the picker so users can switch back to the default-spec chat
+   * after selecting an agent. Also auto-bound on a fresh app open so the
+   * picker shows the modelSpec's label as the selection (instead of an
+   * empty "Select Agent" placeholder).
+   */
+  const defaultModelSpec = useMemo<TModelSpec | null>(() => {
+    const list = startupConfig?.modelSpecs?.list ?? [];
+    return list.find((s) => s.default === true) ?? null;
+  }, [startupConfig?.modelSpecs?.list]);
+
+  const isDefaultSpecSelected =
+    !!defaultModelSpec && selectedValues.modelSpec === defaultModelSpec.name;
+
+  const onSelectDefaultSpec = useCallback(() => {
+    if (defaultModelSpec) handleSelectSpec(defaultModelSpec);
+  }, [defaultModelSpec, handleSelectSpec]);
 
   /**
    * Stable handlers passed to each row. They read latest favorite-mutator
@@ -227,25 +224,42 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
   }, []);
 
   /**
-   * Auto-bind the locked-default agent on a truly fresh chat (no endpoint and
-   * no model yet). Re-fires whenever the conversation resets back to an
-   * empty state — e.g. when the user opens a new chat — but the guard below
-   * short-circuits as soon as a selection exists, so it never overrides a
-   * user's later choice.
+   * Auto-bind the default modelSpec ("Chat") on a fresh conversation that has
+   * no selection yet. Sister behaviour to upstream's
+   * `modelSpecs.list[].default: true` mechanism — the spec gets selected on app
+   * entry so the trigger shows its label (e.g. "KARL") instead of an empty
+   * "Select Agent" placeholder.
+   *
+   * Gated on the *state* ("nothing selected yet"), not a one-shot ref. The
+   * selection guard short-circuits the moment any value is chosen — including a
+   * user picking a custom agent on a still-unsent chat — so it never overrides
+   * a later choice; and because it re-evaluates on every fresh-state
+   * transition, New Chat (which resets `selectedValues`) correctly re-binds the
+   * default. A one-shot ref here would fire once and then never again, leaving
+   * New Chat stuck on "Select Agent" — see `.claude/notes/ANTI_PATTERNS.md`
+   * ("Don't gate a state-driven effect with a one-shot ref"). If upstream's
+   * startup hooks already selected the default spec, `selectedValues.modelSpec`
+   * is set and the guard no-ops.
    */
+  const conversationId = useRecoilValue(store.conversationIdByIndex(0));
+  const isFreshChat = !conversationId || conversationId === Constants.NEW_CONVO;
   useEffect(() => {
-    if (!defaultAgent || !agentsEndpoint) return;
-    if (selectedValues.endpoint || selectedValues.model) return;
-    handleSelectModel(agentsEndpoint, defaultAgent.id);
+    if (!defaultModelSpec || !isFreshChat) return;
+    if (selectedValues.endpoint || selectedValues.model || selectedValues.modelSpec) return;
+    handleSelectSpec(defaultModelSpec);
   }, [
-    defaultAgent,
-    agentsEndpoint,
+    defaultModelSpec,
+    isFreshChat,
     selectedValues.endpoint,
     selectedValues.model,
-    handleSelectModel,
+    selectedValues.modelSpec,
+    handleSelectSpec,
   ]);
 
-  const triggerLabel = selectedAgent?.name ?? localize('com_ui_select_agent');
+  const triggerLabel =
+    selectedAgent?.name ??
+    (isDefaultSpecSelected ? defaultModelSpec?.label : undefined) ??
+    localize('com_ui_select_agent');
   const triggerIcon = selectedAgent ? renderAgentAvatar(selectedAgent, { size: 'icon' }) : null;
 
   const trigger = (
@@ -278,6 +292,17 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
         comboboxLabel={localize('com_knauf_search_agents')}
         trigger={trigger}
       >
+        {defaultModelSpec ? (
+          <>
+            <KnaufDefaultSpecRow
+              label={defaultModelSpec.label ?? defaultModelSpec.name}
+              isSelected={isDefaultSpecSelected}
+              onSelect={onSelectDefaultSpec}
+            />
+            <CustomMenuSeparator />
+          </>
+        ) : null}
+
         {pinnedAgents.length > 0 ? (
           <>
             <SectionLabel>{localize('com_knauf_pinned')}</SectionLabel>
@@ -286,7 +311,6 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
                 key={agent.id}
                 agent={agent}
                 isSelected={selectedValues.model === agent.id}
-                isDefault={agent.id === defaultAgent?.id}
                 pinned={pinnedAgentIdSet.has(agent.id)}
                 onSelect={onAgentSelect}
                 onTogglePin={onTogglePin}
@@ -312,7 +336,6 @@ function KnaufModelSelectorContent({ defaultAgentId }: Readonly<{ defaultAgentId
                 key={agent.id}
                 agent={agent}
                 isSelected={selectedValues.model === agent.id}
-                isDefault={false}
                 pinned={pinnedAgentIdSet.has(agent.id)}
                 onSelect={onAgentSelect}
                 onTogglePin={onTogglePin}
@@ -340,24 +363,22 @@ function SectionLabel({ children }: Readonly<{ children: string }>) {
 }
 
 /**
- * Single agent row inside the dropdown. Renders avatar + name, an optional
- * "Default" badge, the selected-state background, and a pin/unpin button
- * (always visible when pinned; revealed on row hover/focus when unpinned).
- * The default-locked agent has no pin button. All favorite state and
- * mutators live on the parent — this component only receives the booleans
- * it needs, so `memo()` actually skips re-renders for unchanged rows.
+ * Single agent row inside the dropdown. Renders avatar + name, the
+ * selected-state background, and a pin/unpin button (always visible when
+ * pinned; revealed on row hover/focus when unpinned). All favorite state
+ * and mutators live on the parent — this component only receives the
+ * booleans it needs, so `memo()` actually skips re-renders for unchanged
+ * rows.
  */
 const KnaufAgentRow = memo(function KnaufAgentRow({
   agent,
   isSelected,
-  isDefault,
   pinned,
   onSelect,
   onTogglePin,
 }: Readonly<{
   agent: Agent;
   isSelected: boolean;
-  isDefault: boolean;
   pinned: boolean;
   onSelect: (agentId: string) => void;
   onTogglePin: (agentId: string, currentlyPinned: boolean) => void;
@@ -389,26 +410,48 @@ const KnaufAgentRow = memo(function KnaufAgentRow({
         {renderAgentAvatar(agent, { size: 'icon' })}
       </div>
       <span className="min-w-0 flex-1 truncate">{agent.name ?? agent.id}</span>
-      {isDefault ? (
-        <span className="ml-1 rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary">
-          {localize('com_knauf_default_badge')}
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={handlePinClick}
-          aria-label={pinTitle}
-          title={pinTitle}
-          className={cn(
-            'ml-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary',
-            pinned
-              ? 'opacity-100'
-              : 'opacity-0 focus:opacity-100 group-hover:opacity-100 group-data-[active-item]:opacity-100',
-          )}
-        >
-          {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handlePinClick}
+        aria-label={pinTitle}
+        title={pinTitle}
+        className={cn(
+          'ml-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-tertiary hover:text-text-primary',
+          pinned
+            ? 'opacity-100'
+            : 'opacity-0 focus:opacity-100 group-hover:opacity-100 group-data-[active-item]:opacity-100',
+        )}
+      >
+        {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+      </button>
+    </CustomMenuItem>
+  );
+});
+
+/**
+ * "Chat" row that selects the default modelSpec. Sits at the very top of
+ * the picker (above Pinned). No pin/unpin affordance — it's not a user
+ * favourite, it's the system default. KK20-168.
+ */
+const KnaufDefaultSpecRow = memo(function KnaufDefaultSpecRow({
+  label,
+  isSelected,
+  onSelect,
+}: Readonly<{
+  label: string;
+  isSelected: boolean;
+  onSelect: () => void;
+}>) {
+  return (
+    <CustomMenuItem
+      onClick={onSelect}
+      aria-label={label}
+      className={cn(isSelected ? 'bg-surface-tertiary' : undefined)}
+    >
+      <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+        <MessageSquare size={16} aria-hidden="true" />
+      </div>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
     </CustomMenuItem>
   );
 });

@@ -15,7 +15,6 @@ const {
   stripFileIdsFromToolResources,
 } = require('@librechat/api');
 const {
-  Time,
   Tools,
   CacheKeys,
   Constants,
@@ -37,11 +36,27 @@ const {
 } = require('~/server/services/PermissionService');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
-const { getFileStrategy } = require('~/server/utils/getFileStrategy');
+const { getFileStrategy, getFileURLRefreshCacheTime } = require('~/server/utils/getFileStrategy');
 const { filterFile } = require('~/server/services/Files/process');
 const { getCachedTools } = require('~/server/services/Config');
 const { resolveConfigServers } = require('~/server/services/MCP');
 const { getMCPServersRegistry } = require('~/config');
+// [knauf] KK20-167 — Azure-backed agent-avatar URL refresh, dispatched by
+// source via urlRefreshersBySource (used in getAgentHandler). The
+// avatarRefreshCacheKeyByStrategy map picks the right cache namespace so
+// the agent-list avatar-refresh cache doesn't outlive Azure's much shorter
+// URL TTL (S3 default 1h, Azure default 5m — sharing one namespace served
+// stale Azure URLs for ~25 min of the cache window).
+const { refreshAzureUrl } = require('~/server/services/Files/Azure/crud');
+const urlRefreshersBySource = {
+  [FileSources.s3]: refreshS3Url,
+  [FileSources.azure_blob]: refreshAzureUrl,
+};
+const avatarRefreshCacheKeyByStrategy = {
+  [FileSources.s3]: CacheKeys.S3_EXPIRY_INTERVAL,
+  [FileSources.azure_blob]: CacheKeys.AZURE_EXPIRY_INTERVAL,
+};
+// End [knauf]
 const { getLogStores } = require('~/cache');
 const db = require('~/models');
 
@@ -283,14 +298,13 @@ const getAgentHandler = async (req, res, expandProperties = false) => {
 
     agent.version = agent.versions ? agent.versions.length : 0;
 
-    if (agent.avatar && agent.avatar?.source === FileSources.s3) {
+    const refreshFn = agent.avatar && urlRefreshersBySource[agent.avatar.source];
+    if (refreshFn) {
       try {
-        agent.avatar = {
-          ...agent.avatar,
-          filepath: await refreshS3Url(agent.avatar),
-        };
+        const newPath = await refreshFn(agent.avatar);
+        agent.avatar = { ...agent.avatar, filepath: newPath };
       } catch (e) {
-        logger.warn('[/Agents/:id] Failed to refresh S3 URL', e);
+        logger.warn('[/Agents/:id] Failed to refresh signed URL', e);
       }
     }
 
@@ -724,11 +738,21 @@ const getListAgentsHandler = async (req, res) => {
     });
 
     /**
-     * Refresh all S3 avatars for this user's accessible agent set (not only the current page)
-     * This addresses page-size limits preventing refresh of agents beyond the first page
+     * Refresh all signed-URL avatars (S3 + Azure) for this user's accessible
+     * agent set (not only the current page). Addresses page-size limits
+     * preventing refresh of agents beyond the first page.
      */
-    const cache = getLogStores(CacheKeys.S3_EXPIRY_INTERVAL);
+    // [knauf] KK20-167 — Strategy-aware cache namespace + TTL. Using
+    // S3_EXPIRY_INTERVAL with a hardcoded 30-minute TTL outlived Azure's
+    // 5-minute default URL TTL by ~25 minutes, so cached entries served
+    // expired SAS URLs. Pick the cache namespace by strategy and use
+    // getFileURLRefreshCacheTime (half the URL TTL, floored at 1 minute).
+    const strategy = req.config?.fileStrategy;
+    const refreshCacheKey =
+      avatarRefreshCacheKeyByStrategy[strategy] ?? CacheKeys.S3_EXPIRY_INTERVAL;
+    const cache = getLogStores(refreshCacheKey);
     const refreshKey = `${userId}:agents_avatar_refresh`;
+    // End [knauf]
     let cachedRefresh = await cache.get(refreshKey);
     const isValidCachedRefresh =
       cachedRefresh != null && typeof cachedRefresh === 'object' && cachedRefresh.urlCache != null;
@@ -744,15 +768,18 @@ const getListAgentsHandler = async (req, res) => {
           agents: fullList?.data ?? [],
           userId,
           refreshS3Url,
+          refreshAzureUrl,
           updateAgent: db.updateAgent,
         });
         cachedRefresh = { urlCache };
-        await cache.set(refreshKey, cachedRefresh, Time.THIRTY_MINUTES);
+        // [knauf] KK20-167 — strategy-aware cache TTL (see refreshCacheKey above).
+        await cache.set(refreshKey, cachedRefresh, getFileURLRefreshCacheTime(strategy));
+        // End [knauf]
       } catch (err) {
         logger.error('[/Agents] Error refreshing avatars for full list: %o', err);
       }
     } else {
-      logger.debug('[/Agents] S3 avatar refresh already checked, skipping');
+      logger.debug('[/Agents] Avatar refresh already checked, skipping');
     }
 
     // Use the new ACL-aware function
@@ -776,14 +803,21 @@ const getListAgentsHandler = async (req, res) => {
         if (agent?._id && publicSet.has(agent._id.toString())) {
           agent.isPublic = true;
         }
+        // [knauf] KK20-167 — Only replay cached URLs onto avatars whose source
+        // is still a signed-URL provider. If the agent's avatar source changed
+        // (e.g. to `local`) after the cache entry was written, the stale signed
+        // URL would otherwise overwrite the new filepath until cache expiry.
         if (
           urlCache &&
           agent?.id &&
-          agent?.avatar?.source === FileSources.s3 &&
+          agent?.avatar &&
+          (agent.avatar.source === FileSources.s3 ||
+            agent.avatar.source === FileSources.azure_blob) &&
           urlCache[agent.id]
         ) {
           agent.avatar = { ...agent.avatar, filepath: urlCache[agent.id] };
         }
+        // End [knauf]
       } catch (e) {
         // Silently ignore mapping errors
         void e;
@@ -871,8 +905,16 @@ const uploadAgentAvatarHandler = async (req, res) => {
     });
 
     try {
-      const avatarCache = getLogStores(CacheKeys.S3_EXPIRY_INTERVAL);
+      // [knauf] KK20-167 — Invalidate the cache namespace that the active
+      // file strategy populated. Pre-fix, the invalidate-on-upload only
+      // touched the S3 namespace, so a fresh avatar upload on the Azure path
+      // left the stale entry alive in the Azure namespace until its TTL
+      // expired — the agent list kept serving the old avatar.
+      const avatarRefreshCacheKey =
+        avatarRefreshCacheKeyByStrategy[fileStrategy] ?? CacheKeys.S3_EXPIRY_INTERVAL;
+      const avatarCache = getLogStores(avatarRefreshCacheKey);
       await avatarCache.delete(`${req.user.id}:agents_avatar_refresh`);
+      // End [knauf]
     } catch (cacheErr) {
       logger.error('[/:agent_id/avatar] Error invalidating avatar refresh cache', cacheErr);
     }

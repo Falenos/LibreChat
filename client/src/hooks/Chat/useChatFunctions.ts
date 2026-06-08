@@ -33,6 +33,9 @@ import store, { useGetEphemeralAgent } from '~/store';
 import { startupConfigKey } from '~/data-provider';
 import useUserKey from '~/hooks/Input/useUserKey';
 import { useAuthContext } from '~/hooks';
+// [knauf] emit privacy-safe Adobe app interaction events from the shared chat submission path
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 
 const logChatRequest = (request: Record<string, unknown>) => {
   logger.log('=====================================\nAsk function called with:');
@@ -342,6 +345,17 @@ export default function useChatFunctions({
     if (index === 0 && setLatestMessage) {
       setLatestMessage(initialResponse);
     }
+
+    // [knauf] count successful user message submissions without sending message content
+    if (!isRegenerate && !isContinued) {
+      dispatchAdobeAppInteraction({
+        action: 'send_chat_message',
+        component: 'chat_composer',
+        eventSpecification: 'send_chat_message',
+        pageSection: 'chat',
+      });
+    }
+    // End [knauf]
 
     setSubmission(submission);
     logger.dir('message_stream', submission, { depth: null });

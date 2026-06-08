@@ -63,6 +63,20 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
 
   const name = entity?.name ?? '';
   const description = (entity?.description || conversation?.greeting) ?? '';
+  // [knauf] KK20-159 — flag whether the conversation is on a default
+  // modelSpec (today: `karl`). Used below to render a small "what you
+  // can do" tips block under the customWelcome heading on the
+  // default-spec landing. The customWelcome title itself flows through
+  // the upstream greetingText branch unchanged.
+  const isDefaultSpecLanding = useMemo(() => {
+    if (entity) return false;
+    const specName = conversation?.spec;
+    if (!specName) return false;
+    const list = startupConfig?.modelSpecs?.list ?? [];
+    const match = list.find((s) => s.name === specName);
+    return match?.default === true;
+  }, [entity, conversation?.spec, startupConfig?.modelSpecs?.list]);
+  // End [knauf]
 
   const getGreeting = useCallback(() => {
     if (typeof startupConfig?.interface?.customWelcome === 'string') {
@@ -142,51 +156,38 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
       className={`flex h-full transform-gpu flex-col items-center justify-center pb-16 transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
     >
       <div ref={contentRef} className="flex flex-col items-center gap-0 p-2">
-        <div
-          className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
-        >
-          <div className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}>
-            <ConvoIcon
-              agentsMap={agentsMap}
-              assistantMap={assistantMap}
-              conversation={conversation}
-              endpointsConfig={endpointsConfig}
-              containerClassName={containerClassName}
-              context="landing"
-              className="h-2/3 w-2/3 text-black dark:text-white"
-              size={41}
-            />
-            {startupConfig?.showBirthdayIcon && (
-              <TooltipAnchor
-                className="absolute bottom-[27px] right-2"
-                description={localize('com_ui_happy_birthday')}
-                aria-label={localize('com_ui_happy_birthday')}
-              >
-                <BirthdayIcon />
-              </TooltipAnchor>
-            )}
-          </div>
-          {((isAgent || isAssistant) && name) || name ? (
-            <div className="flex flex-col items-center gap-0 p-2">
-              <SplitText
-                key={`split-text-${name}`}
-                text={name}
-                className={`${getTextSizeClass(name)} font-medium text-text-primary`}
-                delay={50}
-                textAlign="center"
-                animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
-                animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
-                easing={easings.easeOutCubic}
-                threshold={0}
-                rootMargin="0px"
-                onLineCountChange={handleLineCountChange}
-              />
+        {/* [knauf] KK20-159 — on the default-spec landing, the Knauf
+            wordmark sits inside the same round white avatar container
+            the upstream agent landing uses (visual parity). The
+            modelSpec's preset.greeting is the title below; the
+            customWelcome line is suppressed so users see one
+            brand-led message instead of two stacked greetings. Every
+            other branch (agents / assistants / non-default spec)
+            renders the upstream layout unchanged. */}
+        {isDefaultSpecLanding ? (
+          <div className="flex flex-col items-center gap-3">
+            <div className="relative mb-2 size-12">
+              <div className={containerClassName}>
+                <img
+                  src="/assets/knauf-logo.png"
+                  alt="Knauf"
+                  className="h-7 w-auto object-contain"
+                />
+              </div>
+              {startupConfig?.showBirthdayIcon && (
+                <TooltipAnchor
+                  className="absolute bottom-[27px] right-2"
+                  description={localize('com_ui_happy_birthday')}
+                  aria-label={localize('com_ui_happy_birthday')}
+                >
+                  <BirthdayIcon />
+                </TooltipAnchor>
+              )}
             </div>
-          ) : (
             <SplitText
-              key={`split-text-${greetingText}${user?.name ? '-user' : ''}`}
-              text={greetingText}
-              className={`${getTextSizeClass(greetingText)} font-medium text-text-primary`}
+              key={`split-text-knauf-${conversation?.greeting ?? ''}`}
+              text={conversation?.greeting ?? greetingText}
+              className={`${getTextSizeClass(conversation?.greeting ?? greetingText)} max-w-2xl font-medium text-text-primary`}
               delay={50}
               textAlign="center"
               animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
@@ -196,13 +197,86 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
               rootMargin="0px"
               onLineCountChange={handleLineCountChange}
             />
-          )}
-        </div>
-        {description && (
+          </div>
+        ) : (
+          <div
+            className={`flex ${textHasMultipleLines ? 'flex-col' : 'flex-col md:flex-row'} items-center justify-center gap-2`}
+          >
+            <div
+              className={`relative size-10 justify-center ${textHasMultipleLines ? 'mb-2' : ''}`}
+            >
+              <ConvoIcon
+                agentsMap={agentsMap}
+                assistantMap={assistantMap}
+                conversation={conversation}
+                endpointsConfig={endpointsConfig}
+                containerClassName={containerClassName}
+                context="landing"
+                className="h-2/3 w-2/3 text-black dark:text-white"
+                size={41}
+              />
+              {startupConfig?.showBirthdayIcon && (
+                <TooltipAnchor
+                  className="absolute bottom-[27px] right-2"
+                  description={localize('com_ui_happy_birthday')}
+                  aria-label={localize('com_ui_happy_birthday')}
+                >
+                  <BirthdayIcon />
+                </TooltipAnchor>
+              )}
+            </div>
+            {((isAgent || isAssistant) && name) || name ? (
+              <div className="flex flex-col items-center gap-0 p-2">
+                <SplitText
+                  key={`split-text-${name}`}
+                  text={name}
+                  className={`${getTextSizeClass(name)} font-medium text-text-primary`}
+                  delay={50}
+                  textAlign="center"
+                  animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
+                  animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
+                  easing={easings.easeOutCubic}
+                  threshold={0}
+                  rootMargin="0px"
+                  onLineCountChange={handleLineCountChange}
+                />
+              </div>
+            ) : (
+              <SplitText
+                key={`split-text-${greetingText}${user?.name ? '-user' : ''}`}
+                text={greetingText}
+                className={`${getTextSizeClass(greetingText)} font-medium text-text-primary`}
+                delay={50}
+                textAlign="center"
+                animationFrom={{ opacity: 0, transform: 'translate3d(0,50px,0)' }}
+                animationTo={{ opacity: 1, transform: 'translate3d(0,0,0)' }}
+                easing={easings.easeOutCubic}
+                threshold={0}
+                rootMargin="0px"
+                onLineCountChange={handleLineCountChange}
+              />
+            )}
+          </div>
+        )}
+        {/* End [knauf] */}
+        {description && !isDefaultSpecLanding && (
           <div className="animate-fadeIn mt-4 max-w-md text-center text-sm font-normal text-text-primary">
             {description}
           </div>
         )}
+        {/* [knauf] KK20-159 — concise feature tips below the customWelcome
+            title on the default-spec landing. Centred, sub-title-sized,
+            same animate-fadeIn cadence as the agent description above.
+            Kept short by design — three lines that point at the three
+            most-used affordances on the composer. */}
+        {isDefaultSpecLanding && (
+          <ul className="animate-fadeIn mt-6 max-w-md list-none space-y-1.5 text-center text-sm font-normal text-text-secondary">
+            <li>{localize('com_knauf_landing_tip_attach')}</li>
+            <li>{localize('com_knauf_landing_tip_image')}</li>
+            <li>{localize('com_knauf_landing_tip_agents')}</li>
+          </ul>
+        )}
+        {/* End [knauf] */}
       </div>
     </div>
   );

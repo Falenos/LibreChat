@@ -1,0 +1,11 @@
+agentic-karl:
+  image:
+    tag: 'v0.53.0'
+
+  configmap:
+    SERVICE_VERSION: v0.53.0
+
+  externalSecret:
+    secrets: {}
+    # Add env-specific Key Vault secrets here, e.g.:
+    #   OKTA_CLIENT_SECRET: my-app-dev-OKTA-SECRET

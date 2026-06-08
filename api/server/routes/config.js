@@ -5,6 +5,9 @@ const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-sch
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { getLdapConfig } = require('~/server/services/Config/ldap');
 const { getAppConfig } = require('~/server/services/Config/app');
+// [knauf] Load consent-gated OneTrust and Adobe Analytics config from a Knauf-only helper. (NO-TICKET)
+const { getKnaufAnalyticsConfig } = require('~/server/routes/knauf/analyticsConfig');
+// End [knauf]
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -39,6 +42,9 @@ function buildSharedPayload() {
     !!process.env.SAML_SESSION_SECRET;
 
   const ldap = getLdapConfig();
+  // [knauf] Resolve Knauf analytics once per config response so legacy GTM can be suppressed. (NO-TICKET)
+  const knaufAnalyticsConfig = getKnaufAnalyticsConfig();
+  // End [knauf]
 
   /** @type {Partial<TStartupConfig>} */
   const payload = {
@@ -76,7 +82,7 @@ function buildSharedPayload() {
     helpAndFaqURL: process.env.HELP_AND_FAQ_URL || 'https://librechat.ai',
     sharedLinksEnabled,
     publicSharedLinksEnabled,
-    analyticsGtmId: process.env.ANALYTICS_GTM_ID,
+    analyticsGtmId: knaufAnalyticsConfig ? undefined : process.env.ANALYTICS_GTM_ID,
     openidReuseTokens,
     /** Read inline (not module-level) for per-request evaluation and test isolation */
     allowAccountDeletion:
@@ -96,6 +102,12 @@ function buildSharedPayload() {
   if (typeof process.env.CUSTOM_FOOTER === 'string') {
     payload.customFooter = process.env.CUSTOM_FOOTER;
   }
+
+  // [knauf] Expose post-login OneTrust/Adobe Analytics config under a namespaced key. (NO-TICKET)
+  if (knaufAnalyticsConfig) {
+    payload.knauf = { analytics: knaufAnalyticsConfig };
+  }
+  // End [knauf]
 
   return payload;
 }

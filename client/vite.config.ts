@@ -17,15 +17,12 @@ const require = createRequire(import.meta.url);
  * the shim specifiers to absolute paths via CJS require.resolve anchored to the client directory.
  */
 const NODE_POLYFILL_SHIMS: Record<string, string> = {
-  'vite-plugin-node-polyfills/shims/process': require.resolve(
-    'vite-plugin-node-polyfills/shims/process',
-  ),
-  'vite-plugin-node-polyfills/shims/buffer': require.resolve(
-    'vite-plugin-node-polyfills/shims/buffer',
-  ),
-  'vite-plugin-node-polyfills/shims/global': require.resolve(
-    'vite-plugin-node-polyfills/shims/global',
-  ),
+  'vite-plugin-node-polyfills/shims/process':
+    require.resolve('vite-plugin-node-polyfills/shims/process'),
+  'vite-plugin-node-polyfills/shims/buffer':
+    require.resolve('vite-plugin-node-polyfills/shims/buffer'),
+  'vite-plugin-node-polyfills/shims/global':
+    require.resolve('vite-plugin-node-polyfills/shims/global'),
 };
 
 // https://vitejs.dev/config/
@@ -88,8 +85,12 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: 'LibreChat',
-        short_name: 'LibreChat',
+        // [knauf] KK20-159 — PWA manifest brand. Full name shows under
+        // installed-app icons on desktop; short name shows on iOS home
+        // screen. Both replace the upstream "LibreChat" literal.
+        name: 'KARL | Knauf AI Platform',
+        short_name: 'KARL',
+        // End [knauf]
         display: 'standalone',
         background_color: '#000000',
         theme_color: '#009688',

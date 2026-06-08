@@ -71,6 +71,16 @@ export async function loadEphemeralAgent(
   if (ephemeralAgent?.web_search === true || modelSpec?.webSearch === true) {
     tools.push(Tools.web_search);
   }
+  // [knauf] Image generation tool — surfaced in the agent-chat composer as
+  // a pinnable chip backed by `image_gen` on TEphemeralAgent. The backend
+  // tool toolkit auto-pairs `image_edit_oai` at request time (see
+  // packages/api/src/tools/toolkits/oai.ts), so we only push the gen tool.
+  // Literal string used because image_gen_oai is registered in the tools
+  // registry, not the AgentCapabilities/Tools enum.
+  if (ephemeralAgent?.image_gen === true) {
+    tools.push('image_gen_oai');
+  }
+  // End [knauf]
 
   const addedServers = new Set<string>();
   if (mcpServers.size > 0) {

@@ -83,13 +83,18 @@ Follow this order. Each step assumes the previous one is complete.
 | [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md) | Tier ladder, marker / SEAMS.md format, anti-patterns, refusals |
 | [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, CI automation |
 | [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md) | Seam tests, emergency rollback |
+| [docs/reference/azure-blob-storage.md](docs/reference/azure-blob-storage.md) | How file storage works on Azure — SAS-token anatomy, refresh chain, TTL math, signing modes, before/after diagrams |
+| [docs/reference/image-gen-toggle.md](docs/reference/image-gen-toggle.md) | How the image-generation toggle works on agent chats and default Knauf model spec chats (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
 | [docs/reference/rag-file-search-architecture.md](docs/reference/rag-file-search-architecture.md) | RAG file-search: ingestion + retrieval, Azure DI + spreadsheet handling, future text-to-SQL (with diagrams) |
 | [docs/migration.md](docs/migration.md) | Historical record: how this repo was created, why we re-forked |
 
 ### Implementation plans
 
-| Doc | When to read it |
+Time-bound, multi-PR workstreams being executed. Plans get deleted, promoted to `reference/`, or archived once the rollout finishes — see [docs/implementation-plans/README.md](docs/implementation-plans/README.md) for the lifecycle convention.
+
+| Doc | What it covers |
 |---|---|
+| [docs/implementation-plans/azure-blob-and-private-files.md](docs/implementation-plans/azure-blob-and-private-files.md) | Azure Blob private-container rollout — upstream PR status, deployment-configs changes, prod hardening checklist, end-to-end verification recipes |
 | [docs/implementation-plans/rag-azure-di-rollout.md](docs/implementation-plans/rag-azure-di-rollout.md) | Deploying the RAG Azure DI overlay to dev: build → ACR → values.yaml → ArgoCD, with the infra-repo PR commands |
 
 ---

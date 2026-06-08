@@ -344,6 +344,17 @@ const ChatForm = memo(function ChatForm({
                   setFilesLoading={setFilesLoading}
                 />
               </div>
+              {/* [knauf] KK20-168 — image-gen chip used to mount here as a
+                  sibling of the paperclip on agent-endpoint chats (added
+                  under b6ee12555). It's since been retired from this file:
+                  on default-spec chats the chip lives inside BadgeRow next
+                  to FileSearch (see SEAMS row for BadgeRow.tsx), and on
+                  custom-agent chats it's gone entirely (admin-installed
+                  image_gen_oai is always-on, no per-send toggle). This
+                  tombstone is kept so the deletion is greppable via
+                  `[knauf]` and the SEAMS row for this file documents the
+                  removal explicitly. */}
+              {/* End [knauf] */}
               <BadgeRow
                 showEphemeralBadges={
                   !!endpoint && !isAgentsEndpoint(endpoint) && !isAssistantsEndpoint(endpoint)

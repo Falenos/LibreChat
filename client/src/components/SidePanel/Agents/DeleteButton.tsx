@@ -17,6 +17,9 @@ import { useDeleteAgentMutation } from '~/data-provider';
 import { isEphemeralAgent } from '~/common';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
+// [knauf] Emit Adobe data-layer app_interaction events for agent deletion.
+import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 
 function DeleteButton({
   agent_id,
@@ -44,6 +47,14 @@ function DeleteButton({
         message: localize('com_ui_agent_deleted'),
         status: 'success',
       });
+      // [knauf] Successful agent deletion app_interaction for Adobe data-layer review.
+      dispatchAdobeAppInteraction({
+        action: 'delete_agent',
+        component: 'agent_builder',
+        eventSpecification: 'delete_agent',
+        pageSection: 'agent_builder',
+      });
+      // End [knauf]
 
       if (createMutation.data?.id ?? '') {
         logger.log('agents', 'resetting createMutation');
