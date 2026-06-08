@@ -7,6 +7,7 @@ would not load standalone. The mapping below is kept in sync with the overlay's 
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .base import BaseAdapter
@@ -18,14 +19,21 @@ def _md_cell(value) -> str:
 
 
 def _lean_xlsx_markdown(filepath: str) -> str:
-    """Compact .xlsx -> per-sheet markdown (non-empty rows/cols only). Mirrors the overlay's
-    `_LeanExcelLoader` so the benchmark reflects production — keep the two in sync."""
+    """`.xlsx` -> compact, RAG-friendly text: one self-describing record per row
+    ("(<sheet>) Header: value; ...") so the char splitter keeps rows + headers together. Skips
+    hidden sheets; above RAG_XLSX_MAX_CHARS emits a per-sheet summary. Mirrors the overlay's
+    `_LeanExcelLoader` — keep the two in sync."""
     import openpyxl
 
+    max_chars = int(os.getenv("RAG_XLSX_MAX_CHARS") or "1500000")  # 0 = unlimited
+    summary_rows = int(os.getenv("RAG_XLSX_SUMMARY_ROWS") or "50")
+
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    sheets = []  # (title, [record, ...], n_cols)
     try:
-        blocks = []
         for ws in wb.worksheets:
+            if getattr(ws, "sheet_state", "visible") != "visible":
+                continue
             rows = [
                 cells
                 for row in ws.iter_rows(values_only=True)
@@ -36,18 +44,35 @@ def _lean_xlsx_markdown(filepath: str) -> str:
             width = max((i + 1 for r in rows for i, c in enumerate(r) if c), default=0)
             if not width:
                 continue
-            rows = [r[:width] + [""] * (width - len(r)) for r in rows]
-            header, body = rows[0], rows[1:]
-            lines = [
-                f"## {ws.title}", "",
-                "| " + " | ".join(header) + " |",
-                "| " + " | ".join("---" for _ in header) + " |",
-            ]
-            lines += ["| " + " | ".join(r) + " |" for r in body]
-            blocks.append("\n".join(lines))
+            # header = the most-populated row among the first few (skips title rows above it)
+            hdr_idx = max(range(len(rows[:8])), key=lambda i: sum(1 for c in rows[i] if c))
+            header = (list(rows[hdr_idx]) + [""] * width)[:width]
+            records = []
+            for r in rows[hdr_idx + 1:]:
+                r = (list(r) + [""] * width)[:width]
+                pairs = [f"{header[i] or f'col{i + 1}'}: {v}" for i, v in enumerate(r) if v]
+                if pairs:
+                    records.append(f"({ws.title}) " + "; ".join(pairs))
+            if records:
+                sheets.append((ws.title, records, width))
     finally:
         wb.close()
-    return "\n\n".join(blocks)
+
+    full = "\n\n".join(f"# {t}\n" + "\n".join(recs) for t, recs, _ in sheets)
+    if not max_chars or len(full) <= max_chars:
+        return full
+    total = sum(len(recs) for _, recs, _ in sheets)
+    parts = [
+        f"[knauf] Large workbook summary — {total:,} rows across {len(sheets)} sheet(s); "
+        f"full content omitted to keep ingestion fast. Showing up to {summary_rows} rows per sheet."
+    ]
+    for t, recs, ncol in sheets:
+        shown = recs[:summary_rows]
+        block = [f"# {t} ({len(recs):,} rows x {ncol} cols)"] + shown
+        if len(recs) > len(shown):
+            block.append(f"... (+{len(recs) - len(shown):,} more rows omitted)")
+        parts.append("\n".join(block))
+    return "\n\n".join(parts)
 
 
 class UpstreamAdapter(BaseAdapter):

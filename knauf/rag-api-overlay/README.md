@@ -32,7 +32,9 @@ to upstream.
 | `RAG_AZURE_DI_KEY` | `""` | API key from the resource's *Azure AI Services* keys blade. |
 | `RAG_AZURE_DI_API_MODEL` | `prebuilt-layout` | `prebuilt-layout` (markdown + tables) or `prebuilt-read` (plain OCR text). |
 | `RAG_AZURE_DI_MODE` | `markdown` | `markdown` \| `page` \| `single`. Fall back to `page`/`single` if the region/API version lacks markdown. |
-| `RAG_AZURE_DI_FILE_EXTS` | `pdf` | Comma-list of extensions routed through DI. **Recommended: `pdf,docx,pptx,html`.** `.xlsx` is intentionally **not** routed to DI (DI can't analyze xlsx tables and has an 8 M-char cap) — spreadsheets go to the native `_LeanExcelLoader` (per-sheet markdown, free, no limit). |
+| `RAG_AZURE_DI_FILE_EXTS` | `pdf` | Comma-list of extensions routed through DI. **Recommended: `pdf,docx,pptx,html`.** `.xlsx` is intentionally **not** routed to DI (DI can't analyze xlsx tables and has an 8 M-char cap) — spreadsheets go to the native `_LeanExcelLoader` (one self-describing record **per row**, free, no limit). |
+| `RAG_XLSX_MAX_CHARS` | `1500000` | Native xlsx guard: above this many chars of extracted text, emit a per-sheet **summary** (first `RAG_XLSX_SUMMARY_ROWS` rows/sheet) instead of the full dump — keeps a giant workbook from becoming thousands of chunks. `0` = unlimited. |
+| `RAG_XLSX_SUMMARY_ROWS` | `50` | Rows per sheet shown in the summary fallback. |
 
 **Graceful fallback:** if a DI call fails for a file (unsupported/too large, transient error, or
 outage), `_AzureDIWithFallback` logs a warning and re-parses it with the upstream loader — so a DI

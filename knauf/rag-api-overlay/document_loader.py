@@ -39,6 +39,12 @@ _AZURE_DI_FILE_EXTS = {
     if ext.strip()
 }
 
+# [knauf] Native xlsx guard: above _XLSX_MAX_CHARS of extracted text, emit a per-sheet SUMMARY
+# (first _XLSX_SUMMARY_ROWS rows/sheet) instead of the full dump, so a giant workbook doesn't
+# become ~thousands of embedding chunks. 0 = unlimited (always full).
+_XLSX_MAX_CHARS = int(os.getenv("RAG_XLSX_MAX_CHARS") or "1500000")
+_XLSX_SUMMARY_ROWS = int(os.getenv("RAG_XLSX_SUMMARY_ROWS") or "50")
+
 
 # Extensions that identify binary file formats handled by dedicated loaders.
 # Used to prevent a conflicting multipart Content-Type (e.g. ``text/markdown``)
@@ -142,10 +148,11 @@ def _md_cell(value) -> str:
 
 
 class _LeanExcelLoader:
-    """[knauf] Compact .xlsx -> per-sheet markdown (non-empty rows/cols only). Replaces
-    UnstructuredExcelLoader's whole-grid dump, which bloats large workbooks (a 1 MB sheet with a
-    big used-range explodes to tens of MB of mostly-empty cells). Reads cached cell VALUES via
-    openpyxl (no formula eval) and emits one markdown table per non-empty sheet — clean RAG input.
+    """[knauf] .xlsx -> compact, RAG-friendly text. Emits one self-describing record per row
+    ("(<sheet>) Header: value; Header: value; ...") so rag_api's char-based splitter packs whole
+    rows per chunk and never drops the headers — structure-aware chunking via input shaping, with
+    no rag_api change. Skips hidden sheets + empty rows/cols; reads cached cell VALUES via openpyxl.
+    Above _XLSX_MAX_CHARS it emits a per-sheet summary instead of the full dump (see guard above).
     NOTE: keep in sync with knauf/parser-eval/adapters/upstream.py."""
 
     def __init__(self, filepath: str):
@@ -156,9 +163,11 @@ class _LeanExcelLoader:
         import openpyxl
 
         wb = openpyxl.load_workbook(self.filepath, read_only=True, data_only=True)
+        sheets = []  # (title, [record, ...], n_cols)
         try:
-            blocks = []
             for ws in wb.worksheets:
+                if getattr(ws, "sheet_state", "visible") != "visible":
+                    continue  # skip hidden / veryHidden tabs
                 rows = [
                     cells
                     for row in ws.iter_rows(values_only=True)
@@ -169,18 +178,43 @@ class _LeanExcelLoader:
                 width = max((i + 1 for r in rows for i, c in enumerate(r) if c), default=0)
                 if not width:
                     continue
-                rows = [r[:width] + [""] * (width - len(r)) for r in rows]
-                header, body = rows[0], rows[1:]
-                lines = [
-                    f"## {ws.title}", "",
-                    "| " + " | ".join(header) + " |",
-                    "| " + " | ".join("---" for _ in header) + " |",
-                ]
-                lines += ["| " + " | ".join(r) + " |" for r in body]
-                blocks.append("\n".join(lines))
+                # header = the most-populated row among the first few (skips title rows above it)
+                hdr_idx = max(range(len(rows[:8])), key=lambda i: sum(1 for c in rows[i] if c))
+                header = (list(rows[hdr_idx]) + [""] * width)[:width]
+                records = []
+                for r in rows[hdr_idx + 1:]:
+                    r = (list(r) + [""] * width)[:width]
+                    pairs = [f"{header[i] or f'col{i + 1}'}: {v}" for i, v in enumerate(r) if v]
+                    if pairs:
+                        records.append(f"({ws.title}) " + "; ".join(pairs))
+                if records:
+                    sheets.append((ws.title, records, width))
         finally:
             wb.close()
-        return [Document(page_content="\n\n".join(blocks), metadata={"source": self.filepath})]
+
+        full = "\n\n".join(f"# {t}\n" + "\n".join(recs) for t, recs, _ in sheets)
+        if not _XLSX_MAX_CHARS or len(full) <= _XLSX_MAX_CHARS:
+            text = full
+        else:
+            total = sum(len(recs) for _, recs, _ in sheets)
+            logger.warning(
+                f"[knauf] xlsx '{os.path.basename(self.filepath)}' is large "
+                f"({len(full):,} chars / {total:,} rows) > RAG_XLSX_MAX_CHARS={_XLSX_MAX_CHARS:,}; "
+                f"emitting a summary (first {_XLSX_SUMMARY_ROWS} rows/sheet)."
+            )
+            parts = [
+                f"[knauf] Large workbook summary — {total:,} rows across {len(sheets)} sheet(s); "
+                f"full content omitted from search to keep ingestion fast. Showing up to "
+                f"{_XLSX_SUMMARY_ROWS} rows per sheet — ask a specific lookup or open the source file."
+            ]
+            for t, recs, ncol in sheets:
+                shown = recs[:_XLSX_SUMMARY_ROWS]
+                block = [f"# {t} ({len(recs):,} rows x {ncol} cols)"] + shown
+                if len(recs) > len(shown):
+                    block.append(f"... (+{len(recs) - len(shown):,} more rows omitted)")
+                parts.append("\n".join(block))
+            text = "\n\n".join(parts)
+        return [Document(page_content=text, metadata={"source": self.filepath})]
 
     def load(self):
         return self._render()
