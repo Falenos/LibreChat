@@ -7,6 +7,11 @@ import { BlinkAnimation } from './BlinkAnimation';
 import { Banner } from '../Banners';
 import Footer from './Footer';
 
+// [knauf] Use the Agentic Karl app title fallback for pre-config auth chrome instead
+// of upstream's default brand. (NO-TICKET)
+const KNAUF_APP_TITLE_FALLBACK = 'Agentic Karl | Knauf AI Platform';
+// End [knauf]
+
 function AuthLayout({
   children,
   header,
@@ -62,13 +67,15 @@ function AuthLayout({
       <BlinkAnimation active={isFetching}>
         <div className="mt-6 h-10 w-full bg-cover">
           {/* [knauf] KK20-175 — login screen carries the Knauf wordmark, not
-              the upstream LibreChat logo. Reuses the same asset the default-spec
+              the upstream logo. Reuses the same asset the default-spec
               landing renders (Landing.tsx, KK20-159) so login + in-app branding
               stay in sync. */}
           <img
             src="assets/knauf-logo.png"
             className="h-full w-full object-contain"
-            alt={localize('com_ui_logo', { 0: startupConfig?.appTitle ?? 'LibreChat' })}
+            alt={localize('com_ui_logo', {
+              0: startupConfig?.appTitle ?? KNAUF_APP_TITLE_FALLBACK,
+            })}
           />
           {/* End [knauf] */}
         </div>

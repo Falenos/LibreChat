@@ -12,6 +12,9 @@ import { MarketplaceProvider } from '~/components/Agents/MarketplaceContext';
 import AgentMarketplace from '~/components/Agents/Marketplace';
 import { OAuthSuccess, OAuthError } from '~/components/OAuth';
 import { AuthContextProvider } from '~/hooks/AuthContext';
+// [knauf] Mount Knauf-owned public agreement pages for configured footer links. (NO-TICKET)
+import UserAgreement from '~/knauf/components/Public/UserAgreement';
+// End [knauf]
 import RouteErrorBoundary from './RouteErrorBoundary';
 import StartupLayout from './Layouts/Startup';
 import LoginLayout from './Layouts/Login';
@@ -81,6 +84,19 @@ export const router = createBrowserRouter(
       element: <VerifyEmail />,
       errorElement: <RouteErrorBoundary />,
     },
+    // [knauf] Resolve privacy/eula footer links to the exact Knauf agreement text
+    // served through startup config instead of falling through to upstream/default pages. (NO-TICKET)
+    {
+      path: 'privacy',
+      element: <UserAgreement />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    {
+      path: 'eula',
+      element: <UserAgreement />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    // End [knauf]
     {
       element: <AuthLayout />,
       errorElement: <RouteErrorBoundary />,

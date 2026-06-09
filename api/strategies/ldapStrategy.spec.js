@@ -9,7 +9,9 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
-  isEnabled: jest.fn(() => false),
+  // [knauf] First-user role-governance specs need env-sensitive booleans.
+  isEnabled: jest.fn((value) => value === 'true' || value === true),
+  // End [knauf]
   isEmailDomainAllowed: jest.fn(() => true),
   getBalanceConfig: jest.fn(() => ({ enabled: false })),
   resolveAppConfigForUser: jest.fn(async (_getAppConfig, _user) => ({})),
@@ -65,6 +67,9 @@ describe('ldapStrategy', () => {
     delete process.env.LDAP_EMAIL;
     delete process.env.LDAP_TLS_REJECT_UNAUTHORIZED;
     delete process.env.LDAP_STARTTLS;
+    // [knauf] Keep first-user role-governance specs isolated.
+    delete process.env.KNAUF_DISABLE_FIRST_USER_ADMIN;
+    // End [knauf]
 
     // Default model/domain mocks
     findUser.mockReset().mockResolvedValue(null);
@@ -120,6 +125,46 @@ describe('ldapStrategy', () => {
     expect(createUser).not.toHaveBeenCalled();
     expect(resolveAppConfigForUser).not.toHaveBeenCalled();
   });
+
+  // [knauf] Prod disables upstream first-user-admin LDAP bootstrap while
+  // preserving the bootstrap behavior everywhere else.
+  it('keeps the upstream first LDAP user admin bootstrap when the Knauf flag is unset', async () => {
+    const userinfo = {
+      uid: 'uid-admin',
+      mail: 'admin@example.com',
+      givenName: 'Admin',
+      cn: 'Admin User',
+    };
+
+    await callVerify(userinfo);
+
+    expect(createUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'ADMIN',
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('creates the first LDAP user as USER when Knauf disables first-user admin', async () => {
+    process.env.KNAUF_DISABLE_FIRST_USER_ADMIN = 'true';
+    const userinfo = {
+      uid: 'uid-user',
+      mail: 'user@example.com',
+      givenName: 'Regular',
+      cn: 'Regular User',
+    };
+
+    await callVerify(userinfo);
+
+    expect(createUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: 'USER',
+      }),
+      expect.any(Object),
+    );
+  });
+  // End [knauf]
 
   it('updates an existing ldap user with current LDAP info', async () => {
     const existing = {

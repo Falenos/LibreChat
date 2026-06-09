@@ -214,6 +214,11 @@ const registerUser = async (user, additionalData = {}) => {
 
     //determine if this is the first registered user (not counting anonymous_user)
     const isFirstRegisteredUser = (await countUsers()) === 0;
+    // [knauf] Prod disables upstream's first-user-admin bootstrap; admins are
+    // assigned via configured SSO/admin flows instead.
+    const shouldGrantFirstUserAdmin =
+      isFirstRegisteredUser && !isEnabled(process.env.KNAUF_DISABLE_FIRST_USER_ADMIN);
+    // End [knauf]
 
     const salt = bcrypt.genSaltSync(10);
     const newUserData = {
@@ -222,7 +227,7 @@ const registerUser = async (user, additionalData = {}) => {
       username,
       name,
       avatar: null,
-      role: isFirstRegisteredUser ? SystemRoles.ADMIN : SystemRoles.USER,
+      role: shouldGrantFirstUserAdmin ? SystemRoles.ADMIN : SystemRoles.USER,
       password: bcrypt.hashSync(password, salt),
       ...additionalData,
     };

@@ -8,6 +8,7 @@ import {
 } from 'librechat-data-provider';
 import type { IRole, AppConfig } from '@librechat/data-schemas';
 import { isMemoryEnabled } from '~/memory/config';
+import { isEnabled } from '~/utils';
 
 /**
  * Checks if a permission type has explicit configuration
@@ -49,6 +50,59 @@ function hasExplicitConfig(
       return false;
   }
 }
+
+// [knauf] Prod-only USER role lockdown while preserving dev's permissive
+// builder defaults from librechat.yaml.
+const KNAUF_RESTRICT_PROD_USER_PERMISSIONS = 'KNAUF_RESTRICT_PROD_USER_PERMISSIONS';
+const KNAUF_RESTRICTED_USER_PERMISSION_TYPES = new Set<PermissionTypes>([
+  PermissionTypes.AGENTS,
+  PermissionTypes.MEMORIES,
+  PermissionTypes.PEOPLE_PICKER,
+]);
+
+function shouldApplyKnaufUserRestriction(roleName: SystemRoles, permType?: PermissionTypes) {
+  if (roleName !== SystemRoles.USER) {
+    return false;
+  }
+  if (!isEnabled(process.env[KNAUF_RESTRICT_PROD_USER_PERMISSIONS])) {
+    return false;
+  }
+  return permType === undefined || KNAUF_RESTRICTED_USER_PERMISSION_TYPES.has(permType);
+}
+
+function applyKnaufProdUserRestrictions(
+  roleName: SystemRoles,
+  permissions: Partial<Record<PermissionTypes, Record<string, boolean | undefined>>>,
+) {
+  if (!shouldApplyKnaufUserRestriction(roleName)) {
+    return permissions;
+  }
+
+  return {
+    ...permissions,
+    [PermissionTypes.AGENTS]: {
+      ...permissions[PermissionTypes.AGENTS],
+      [Permissions.CREATE]: false,
+      [Permissions.SHARE]: false,
+      [Permissions.SHARE_PUBLIC]: false,
+    },
+    [PermissionTypes.MEMORIES]: {
+      ...permissions[PermissionTypes.MEMORIES],
+      [Permissions.USE]: false,
+      [Permissions.CREATE]: false,
+      [Permissions.READ]: false,
+      [Permissions.UPDATE]: false,
+      [Permissions.OPT_OUT]: false,
+    },
+    [PermissionTypes.PEOPLE_PICKER]: {
+      ...permissions[PermissionTypes.PEOPLE_PICKER],
+      [Permissions.VIEW_USERS]: false,
+      [Permissions.VIEW_GROUPS]: false,
+      [Permissions.VIEW_ROLES]: false,
+    },
+  };
+}
+// End [knauf]
 
 export async function updateInterfacePermissions({
   appConfig,
@@ -138,9 +192,18 @@ export async function updateInterfacePermissions({
         permType === PermissionTypes.MEMORIES &&
         shouldEnableMemory &&
         existingPermissions?.[PermissionTypes.MEMORIES]?.[Permissions.USE] === false;
+      // [knauf] Force prod USER lockdown to re-apply on every startup.
+      const isKnaufUserRestricted = shouldApplyKnaufUserRestriction(roleName, permType);
+      // End [knauf]
 
       // Only update if: doesn't exist OR explicitly configured OR memory state change
-      if (!permTypeExists || isExplicitlyConfigured || isMemoryDisabled || isMemoryReenabling) {
+      if (
+        !permTypeExists ||
+        isExplicitlyConfigured ||
+        isMemoryDisabled ||
+        isMemoryReenabling ||
+        isKnaufUserRestricted
+      ) {
         permissionsToUpdate[permType] = permissions;
         if (!permTypeExists) {
           logger.debug(`Role '${roleName}': Setting up default permissions for '${permType}'`);
@@ -433,8 +496,13 @@ export async function updateInterfacePermissions({
       },
     };
 
+    // [knauf] Apply prod-only normal-user restrictions after YAML values and
+    // role defaults are resolved so admins and dev remain unchanged.
+    const resolvedPermissions = applyKnaufProdUserRestrictions(roleName, allPermissions);
+    // End [knauf]
+
     // Check and add each permission type if needed
-    for (const [permType, permissions] of Object.entries(allPermissions)) {
+    for (const [permType, permissions] of Object.entries(resolvedPermissions)) {
       addPermissionIfNeeded(permType as PermissionTypes, permissions);
     }
 

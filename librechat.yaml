@@ -40,6 +40,123 @@ interface:
     externalUrl: '/eula'
     openNewTab: true
     modalAcceptance: true
+    modalTitle: 'End User License Agreement (EULA)'
+    modalContent: |
+      End User License Agreement (EULA)
+      1. Introduction
+      This End User License Agreement ("Agreement") is a legal agreement between you ("User" or "you") and Knauf Digital GmbH ("Company," "we," or "us") for the use of “Karl” ("Software"). By accessing or using the Software, you agree to be bound by the terms of this Agreement.
+
+      “Karl” is a GPT, which stands for Generative Pre-trained Transformer, is an advanced AI model designed to understand and generate human-like text based on the input it receives. As an artificial intelligence system, GPT leverages deep learning techniques to provide high-quality responses, assist with content creation, answer queries, support brainstorming sessions, and perform a variety of other tasks to enhance productivity and streamline workflows.
+
+
+      2. License Grant
+      Company grants you a non-exclusive, non-transferable, limited license to use the Software for your internal business purposes, subject to the terms and conditions of this Agreement.
+
+
+      3. Restrictions
+      You may not use our Services for any illegal, harmful, or abusive activity. For example, you are prohibited from:
+
+      - Using our Services in a way that infringes, misappropriates or violates anyone’s rights.
+
+      - Modifying, copying, leasing, selling or distributing any of our Services.
+
+      - Attempting to or assisting anyone to reverse engineer, decompile or discover the source code or underlying components of our Services, including our models, algorithms, or systems (except to the extent this restriction is prohibited by applicable law).
+
+      - Automatically or programmatically extracting data or Output (defined below).
+
+      - Representing that Output was human-generated when it was not.
+
+      - Interfering with or disrupting our Services, including circumventing any rate limits or restrictions or bypassing any protective measures or safety mitigations we put on our Services.
+
+      - Rent, lease, loan, sell, or distribute the Software to any third party.
+
+      - Using sensitive data as input or uploading documents and/or pictures containing sensitive data.
+
+      - Sensitive data definition: https://commission.europa.eu/law/law-topic/data-protection/rules-business-and-organisations/legal-grounds-processing-data/sensitive-data/what-personal-data-considered-sensitive_en
+
+      - Use the Software in any unlawful manner, for any unlawful purpose, or in any manner inconsistent with this Agreement.
+
+
+      **4. Ownership**
+      All rights, title, and interest in and to the Software, including all intellectual property rights, are and shall remain the sole property of Company.
+
+
+      5. Privacy note
+      In accordance with Article 13 of the
+
+      General Data Protection Regulation (GDPR), we inform you that we process the following personal data (pseudonymized) based on legitimate interest (Authentication and content filtering):
+
+      - Full name
+
+      - Work email
+
+      - "INPUT"/ “Message” (as specified during your use of the Software)
+
+
+      Controller: Knauf Digital GmbH
+      Address: Landshuter Allee 10, 80637 Munich
+      Processor: Microsoft Azure
+      Service Provided: Storage, Cloud computing
+      Data Center Location: Netherlands
+      The data will be stored in the Netherlands. For any inquiries regarding data protection, please contact us at cai@knauf.com
+      You have the right:
+      · in accordance with Art.
+      15 GDPR to request information about your personal data processed by us. In particular, you can request information about the processing purposes, the category of personal data, the categories of recipients to whom your data has been or will be disclosed, the planned storage period, the existence of a right to rectification, erasure, restriction of processing or objection, the existence of a right of appeal; in connection with the operation of the Survey website, we do not collect any personal data about the user from third parties and do not carry out any data processing in the sense of automated decision-making or profiling;
+
+
+      · in accordance with Art.
+      16 GDPR to immediately demand the correction of incorrect or completion of yourpersonal data stored by us;
+
+
+      · pursuant to Art. 17
+      GDPR to request the erasure of your personal data stored by us, unless theprocessing is necessary for the exercise of the right to freedom of expression and information, for compliance with a legal obligation, for reasons of public interest or for the establishment, exercise or defense of legal claims;
+
+
+      · to request the
+      restriction of the processing of your personal data in accordance with Art. 18 GDPR, insofar as the accuracy of the data is disputed by you, the processing is unlawful, but you object to its erasure and we no longer require the data, but you need it for the assertion, exercise or defense of legal claims or you have objected to the processing in accordance with Art. 21 GDPR;
+
+
+      · pursuant to Art. 20
+      GDPR to receive your personal data that you have provided to us in a structured, common and machine-readable format or to request the transfer to another controller;
+
+
+      · to revoke your consent
+      at any time in accordance with Art. 7 (3) GDPR. This has the consequence that we are no longer allowed to continue the data processing based on this consent for the future.
+
+
+      6. Data Storage and Security
+      We implement appropriate technical and organizational measures to ensure a level of security appropriate to the risk of the personal data we process. Your data is stored securely in the Netherlands.
+
+
+      7. Termination
+      This Agreement is effective until terminated. Company may terminate this Agreement at any time without notice if you breach any term hereof. Upon termination, you shall cease all use of the Software.
+
+
+      8. Disclaimer of Warranties
+      The Software is provided "as is," without warranty of any kind. Company disclaims all warranties, express or implied, including, but not limited to, implied warranties of merchantability, fitness for a particular purpose, and non-infringement.
+
+
+      9. Limitation of Liability
+      In no event shall Company be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, whether incurred directly or indirectly, or any loss of data, use, goodwill, or other intangible losses, resulting from (i) your use or inability to use the Software; (ii) any unauthorized access to or use of our servers and/or any personal information stored therein.
+
+
+      10. Governing Law
+      This Agreement shall be governed by and construed in accordance with the laws of Germany, without regard to its conflict of laws principles.
+
+
+      11. Amendments
+      Company reserves the right to modify this Agreement at any time. We will notify you of any changes by posting the new Agreement on our website. Your continued use of the Software following the posting of changes constitutes your acceptance of such changes.
+
+
+      12. Contact Information
+      If you have any questions about this Agreement, please contact us at:
+
+      - Email: cai@knauf.com
+
+      - Address: Landshuter Allee 8-10, 80637 Munich
+
+
+      Knauf Digital GmbH
   modelSelect: true
   parameters: false
   presets: false
