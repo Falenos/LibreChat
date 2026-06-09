@@ -184,12 +184,21 @@
     "svgo": "^2.8.2"
   },
   "nodemonConfig": {
+    "watch": [
+      "api/"
+    ],
+    "ext": "js,json",
     "ignore": [
       "api/data/",
+      "api/logs/",
+      "api/**/uploads/**",
       "data/",
       "client/",
       "admin/",
-      "packages/"
+      "packages/",
+      "logs/",
+      "**/*.test.js",
+      "**/*.spec.js"
     ]
   }
 }
