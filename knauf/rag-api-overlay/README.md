@@ -44,22 +44,42 @@ error never hard-fails the file-search upload.
 
 ## Local build & run
 
-The committed [`docker-compose.override.yml`](../../docker-compose.override.yml) already wires the
-overlay into the **primary** local stack — its `rag_api` service has an explicit `build:` block:
+`docker-compose.override.yml` is **gitignored** (see [`.gitignore`](../../.gitignore)), so a fresh
+clone does **not** have it — and without it `docker compose up` runs the stock upstream rag_api
+image (**no DI overlay**). Create it at the repo root with the `rag_api` build block (plus the
+standard local-dev overrides this repo expects):
 
 ```yaml
-rag_api:
-  build:
-    context: ./knauf/rag-api-overlay
-    dockerfile: Dockerfile.knauf-rag
-  image: knauf/rag-api:local
+# docker-compose.override.yml — repo root, gitignored, create locally
+services:
+  api:
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml # base compose omits this; api ENOENTs without it
+
+  mongodb:
+    ports:
+      - "27018:27017"
+
+  meilisearch:
+    ports:
+      - "7701:7700"
+
+  rag_api:
+    # [knauf] Build the Azure AI Document Intelligence overlay locally (this directory).
+    build:
+      context: ./knauf/rag-api-overlay
+      dockerfile: Dockerfile.knauf-rag
+    image: knauf/rag-api:local
+    ports:
+      - "8010:8000"
 ```
 
-So the standard local workflow builds and runs the overlay (no extra wiring needed):
+In local dev the backend runs on the **host**, so point `RAG_API_URL` at the published port:
+`RAG_API_URL=http://localhost:8010` in `.env`. Then build + run:
 
 ```bash
 # from repo root
-docker compose build rag_api      # (re)builds the overlay from Dockerfile.knauf-rag
+docker compose build rag_api      # builds the overlay from Dockerfile.knauf-rag
 docker compose up -d              # runs the stack with the overlay rag_api
 ```
 

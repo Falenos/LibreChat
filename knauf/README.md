@@ -33,8 +33,8 @@ npm run frontend           # full client build
 npm run build              # turbo build across all workspaces
 
 # Supporting services (mongo, meilisearch, vectordb, rag_api — not the api service)
-# Note: rag_api here builds the Knauf Azure-DI overlay via docker-compose.override.yml
-# (image knauf/rag-api:local) — see knauf/rag-api-overlay/README.md.
+# Note: to run rag_api as the Knauf Azure-DI overlay, add the gitignored
+# docker-compose.override.yml — see knauf/rag-api-overlay/README.md (else it's the upstream image).
 docker compose up -d mongodb meilisearch vectordb rag_api
 
 # Dev (two terminals — backend on host, frontend on host)
