@@ -5,10 +5,19 @@ import { dispatchAdobeAppInteraction } from './adobe';
 import { resetExternalScriptForTest } from './scriptLoader';
 
 const mockUseGetStartupConfig = jest.fn();
+const mockReportAnalyticsDiagnostic = jest.fn();
 
 jest.mock('~/data-provider', () => ({
   useGetStartupConfig: () => mockUseGetStartupConfig(),
 }));
+
+jest.mock('./diagnostics', () => {
+  const actual = jest.requireActual('./diagnostics');
+  return {
+    ...actual,
+    reportAnalyticsDiagnostic: (...args: unknown[]) => mockReportAnalyticsDiagnostic(...args),
+  };
+});
 
 const startupConfig = {
   knauf: {
@@ -42,8 +51,20 @@ function finishScriptLoad(id: string) {
   });
 }
 
+function failScriptLoad(id: string) {
+  const script = document.getElementById(id);
+  if (!script) {
+    throw new Error(`Expected script ${id} to be present`);
+  }
+
+  act(() => {
+    script.dispatchEvent(new Event('error'));
+  });
+}
+
 describe('KnaufConsentAnalytics', () => {
   beforeEach(() => {
+    mockReportAnalyticsDiagnostic.mockClear();
     mockUseGetStartupConfig.mockReturnValue({ data: startupConfig });
     delete (window as any).OnetrustActiveGroups;
     delete (window as any).OptanonWrapper;
@@ -62,6 +83,7 @@ describe('KnaufConsentAnalytics', () => {
 
     expect(document.getElementById('knauf-onetrust-sdk')).not.toBeInTheDocument();
     expect(document.getElementById('knauf-adobe-analytics')).not.toBeInTheDocument();
+    expect(mockReportAnalyticsDiagnostic).not.toHaveBeenCalled();
   });
 
   it('loads OneTrust but not Adobe before analytics consent', async () => {
@@ -74,6 +96,7 @@ describe('KnaufConsentAnalytics', () => {
     });
     expect(document.getElementById('knauf-adobe-analytics')).not.toBeInTheDocument();
     expect((window as any).adobeDataLayer).toBeUndefined();
+    expect(mockReportAnalyticsDiagnostic).not.toHaveBeenCalled();
   });
 
   it('loads Adobe and emits a page view when analytics consent is granted', async () => {
@@ -82,7 +105,9 @@ describe('KnaufConsentAnalytics', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('OneTrustGroupsUpdated', { detail: ['C0001', 'C0002'] }),
+        new CustomEvent('OneTrustGroupsUpdated', {
+          detail: ['C0001', 'C0002'],
+        }),
       );
     });
 
@@ -117,6 +142,7 @@ describe('KnaufConsentAnalytics', () => {
       }),
     ]);
     expect((window as any).adobeDataLayer[0].event_info).not.toHaveProperty('consent_status');
+    expect(mockReportAnalyticsDiagnostic).not.toHaveBeenCalled();
   });
 
   it('stops emitting page views after analytics consent is revoked', async () => {
@@ -124,7 +150,9 @@ describe('KnaufConsentAnalytics', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('OneTrustGroupsUpdated', { detail: ['C0001', 'C0002'] }),
+        new CustomEvent('OneTrustGroupsUpdated', {
+          detail: ['C0001', 'C0002'],
+        }),
       );
     });
 
@@ -151,7 +179,9 @@ describe('KnaufConsentAnalytics', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('OneTrustGroupsUpdated', { detail: ['C0001', 'C0002'] }),
+        new CustomEvent('OneTrustGroupsUpdated', {
+          detail: ['C0001', 'C0002'],
+        }),
       );
     });
 
@@ -191,5 +221,112 @@ describe('KnaufConsentAnalytics', () => {
         }),
       }),
     );
+    expect(mockReportAnalyticsDiagnostic).not.toHaveBeenCalled();
+  });
+
+  it('reports invalid startup analytics config', async () => {
+    mockUseGetStartupConfig.mockReturnValue({
+      data: {
+        knauf: {
+          analytics: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    renderController('/c/new');
+
+    await waitFor(() => {
+      expect(mockReportAnalyticsDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'config_invalid',
+          reason: 'startup_config_invalid',
+        }),
+      );
+    });
+    expect(document.getElementById('knauf-onetrust-sdk')).not.toBeInTheDocument();
+  });
+
+  it('reports OneTrust script load failures', async () => {
+    renderController('/c/new');
+
+    await waitFor(() => {
+      expect(document.getElementById('knauf-onetrust-sdk')).toBeInTheDocument();
+    });
+    failScriptLoad('knauf-onetrust-sdk');
+
+    await waitFor(() => {
+      expect(mockReportAnalyticsDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'onetrust_script_load_failed',
+          reason: 'script_load_error',
+          scriptHost: 'example.test',
+          scriptId: 'knauf-onetrust-sdk',
+          scriptPath: '/onetrust.js',
+        }),
+      );
+    });
+  });
+
+  it('reports Adobe Launch script load failures', async () => {
+    renderController('/c/new');
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('OneTrustGroupsUpdated', {
+          detail: ['C0001', 'C0002'],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(document.getElementById('knauf-adobe-analytics')).toBeInTheDocument();
+    });
+    failScriptLoad('knauf-adobe-analytics');
+
+    await waitFor(() => {
+      expect(mockReportAnalyticsDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'adobe_launch_script_load_failed',
+          reason: 'script_load_error',
+          scriptHost: 'example.test',
+          scriptId: 'knauf-adobe-analytics',
+          scriptPath: '/adobe.js',
+        }),
+      );
+    });
+  });
+
+  it('reports data layer push failures without retrying successful diagnostics', async () => {
+    (window as any).adobeDataLayer = {
+      push: jest.fn(() => {
+        throw new Error('push failed');
+      }),
+    };
+    renderController('/c/new');
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('OneTrustGroupsUpdated', {
+          detail: ['C0001', 'C0002'],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(document.getElementById('knauf-adobe-analytics')).toBeInTheDocument();
+    });
+    finishScriptLoad('knauf-adobe-analytics');
+
+    await waitFor(() => {
+      expect(mockReportAnalyticsDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'adobe_data_layer_push_failed',
+          pagePath: '/c/new',
+          reason: 'pageview_push_failed',
+        }),
+      );
+    });
   });
 });
