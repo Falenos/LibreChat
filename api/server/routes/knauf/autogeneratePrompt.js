@@ -39,6 +39,7 @@ const { logger, getTenantId } = require('@librechat/data-schemas');
 const { getProviderConfig } = require('@librechat/api');
 const { initializeModel } = require('@librechat/agents');
 const { specialVariables } = require('librechat-data-provider');
+const { resolveProvider, tokenLimitParam } = require('./lib/resolveProvider');
 const { getAppConfig } = require('~/server/services/Config');
 const { requireJwtAuth } = require('~/server/middleware');
 const db = require('~/models');
@@ -194,23 +195,22 @@ router.post('/', express.json({ limit: '32kb' }), async (req, res) => {
 
     const llmConfig = options?.llmConfig ?? {};
 
-    // 3. Build the chat model via `@librechat/agents`'s `initializeModel` —
-    //    the single entry point the agent graph and summarization node use.
-    //    It dispatches on `provider` to the right LangChain class
-    //    (ChatOpenAI / AzureChatOpenAI / ChatAnthropic / ChatVertexAI /
-    //    ChatBedrockConverse / …) and applies provider-specific field
-    //    assignments, so this route works for any endpoint configured in
-    //    `librechat.yaml` modelSpecs without provider-specific deps here.
+    // 3. Build the chat model via initializeModel (provider-agnostic).
+    const { provider: resolvedProvider, useResponsesApi } = resolveProvider({
+      provider,
+      llmConfig,
+    });
+
     const maxCompletionTokens = spec.preset.max_completion_tokens;
     const modelKwargs = { ...(llmConfig.modelKwargs ?? {}) };
     if (typeof maxCompletionTokens === 'number') {
-      modelKwargs.max_completion_tokens = maxCompletionTokens;
+      modelKwargs[tokenLimitParam(useResponsesApi)] = maxCompletionTokens;
     }
 
     let client;
     try {
       client = initializeModel({
-        provider,
+        provider: resolvedProvider,
         clientOptions: {
           ...llmConfig,
           streaming: false,
