@@ -6,7 +6,7 @@ import { InMemoryEventTransport } from './implementations/InMemoryEventTransport
 import { RedisJobStore } from './implementations/RedisJobStore';
 import { RedisEventTransport } from './implementations/RedisEventTransport';
 import { cacheConfig } from '~/cache/cacheConfig';
-import { ioredisClient } from '~/cache/redisClients';
+import { attachIoredisPingInterval, ioredisClient } from '~/cache/redisClients';
 
 /**
  * Configuration for stream services (optional overrides)
@@ -89,6 +89,10 @@ export function createStreamServices(config: StreamServicesConfig = {}): StreamS
         logger.warn('[StreamServices] No subscriber client available, falling back to in-memory');
         return createInMemoryServices(inMemoryOptions);
       }
+
+      // [knauf] Pub/sub subscribers are dedicated ioredis connections; keep them alive too.
+      attachIoredisPingInterval(subscriber, 'ioredis subscriber');
+      // End [knauf]
 
       const jobStore = new RedisJobStore(redisClient);
       const eventTransport = new RedisEventTransport(redisClient, subscriber);
