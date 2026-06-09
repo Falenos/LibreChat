@@ -7,11 +7,11 @@ on:
         type: choice
         description: 'Source and destination environments for promotion'
         required: true
-        default: 'dev → prod'
+        default: 'AGK dev -> AGK prod'
         options:
-          - 'dev → prod'
+          - 'AGK dev -> AGK prod'
       version:
-        description: 'The version to promote. Only used when the version to promote is not the current one in the source environment'
+        description: 'Version to promote, for example v0.54.0. Defaults to the current AGK dev GitOps tag.'
         type: string
         required: false
 
@@ -24,24 +24,240 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote-dev-to-prod:
-    if: ${{ inputs.source-and-destination-environment == 'dev → prod' }}
-    uses: 'Knauf-Group/ct-shared-workflows/.github/workflows/promote-app-kubernetes.yaml@v2.9.0'
-    with:
-      app-name: agentic-karl
-      version: ${{ inputs.version }}
-      source-environment-key-vault-name: kv-ct-shared-tools
-      source-environment-argocd-password-key-vault-secret-name: shared-dev-ARGOCD
-      source-environment-argocd-domain: argocd-shared-dev.knauf.digital
-      source-environment-acr-registry-name: acrctshared001
-      namespace: tools-non-prod
-      destination-environment-acr-registry-name: acrctshared001
-      destination-environment-config-repository: Knauf-Group/ct-shared-deployment-configs
-      destination-environment-config-repository-app-directory: ./dev/services/agentic-karl/agentic-karl
-      destination-environment-key-vault-name: kv-ct-sharedprod-tools
-      destination-environment-argocd-password-key-vault-secret-name: shared-prod-ARGOCD
-      destination-environment-argocd-domain: argocd-shared-prod.knauf.digital
-      destination-environment: prod
-      version-badge-directory: './docs/versions'
-    secrets:
-      azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
+  promote-agk-dev-to-prod:
+    name: Promote AGK dev to prod
+    if: ${{ inputs.source-and-destination-environment == 'AGK dev -> AGK prod' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://agentic-karl.knauf.com
+    env:
+      CT_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_DEV_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_PROD_SUBSCRIPTION_ID: e0515a24-7205-481b-b657-944901020e32
+      AGK_DEV_ACR_NAME: acragkhubnonprod001
+      AGK_PROD_ACR_NAME: acragkhubprod001
+      AGK_DEV_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
+      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
+      AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
+      AGK_PROD_DOMAIN: https://agentic-karl.knauf.com
+      AGK_ARGOCD_DOMAIN: argocd.agk.prod.knauf.digital
+      AGK_ARGOCD_APP: agentic-karl-prod-agentic-karl
+      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-prod-001
+      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get promotion support secrets
+        run: |
+          set -euo pipefail
+
+          GITHUB_PAT=$(az keyvault secret show \
+            --subscription "$CT_SUBSCRIPTION_ID" \
+            --vault-name kv-ct-shared-devops-001 \
+            --name GITHUB-PAT \
+            --query value \
+            -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
+
+      - name: Check out app repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure app repository credentials
+        run: git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: Check out AGK deployment config repository
+        run: git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+
+      - name: Determine version to promote
+        id: version
+        run: |
+          set -euo pipefail
+
+          git pull --ff-only origin main
+          cd agk-deployment-configs
+          git pull --ff-only origin main
+          cd ..
+
+          INPUT_VERSION="${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
+              "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
+          fi
+
+          if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$VERSION"; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          echo "Version to promote: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate promotion inputs and prod config shape
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+
+          test -f infrastructure/prod/values.yaml
+          grep -Eq "tag: ['\"]v[0-9]+\.[0-9]+\.[0-9]+['\"]" infrastructure/prod/values.yaml
+          grep -Eq "SERVICE_VERSION: v[0-9]+\.[0-9]+\.[0-9]+" infrastructure/prod/values.yaml
+
+          test -f "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
+          test -f "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          test -f "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
+          grep -F "repository: $AGK_DEV_ACR_NAME.azurecr.io/$AGK_DEV_IMAGE_REPOSITORY" \
+            "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
+          grep -F "repository: $AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_IMAGE_REPOSITORY" \
+            "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "DOMAIN_SERVER: \"$AGK_PROD_DOMAIN\"" \
+            "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" \
+            "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" \
+            "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
+
+          az acr repository show-tags \
+            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
+            --name "$AGK_DEV_ACR_NAME" \
+            --repository "$AGK_DEV_IMAGE_REPOSITORY" \
+            --query "[?@=='$VERSION']" \
+            -o tsv | grep -Fx "$VERSION"
+
+      - name: Import image into AGK prod ACR
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          SOURCE_REGISTRY_ID=$(az acr show \
+            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
+            --name "$AGK_DEV_ACR_NAME" \
+            --query id \
+            -o tsv)
+
+          az acr import \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --name "$AGK_PROD_ACR_NAME" \
+            --registry "$SOURCE_REGISTRY_ID" \
+            --source "$AGK_DEV_IMAGE_REPOSITORY:$VERSION" \
+            --image "$AGK_PROD_IMAGE_REPOSITORY:$VERSION" \
+            --force
+
+      - name: Verify AGK prod image tag
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          az acr repository show-tags \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --name "$AGK_PROD_ACR_NAME" \
+            --repository "$AGK_PROD_IMAGE_REPOSITORY" \
+            --query "[?@=='$VERSION']" \
+            -o tsv | grep -Fx "$VERSION"
+
+      - name: Update AGK prod deployment config values
+        working-directory: agk-deployment-configs
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          git pull --ff-only origin main
+          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update agentic-karl prod to $VERSION"
+            git push origin main
+          else
+            echo "AGK prod deployment config already points at $VERSION"
+          fi
+
+      - name: Update AGK prod app overlay values
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: '$VERSION'/" infrastructure/prod/values.yaml
+          sed -i -E "s/SERVICE_VERSION: .*/SERVICE_VERSION: $VERSION/" infrastructure/prod/values.yaml
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
+          git add infrastructure/prod/values.yaml
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update AGK prod version to $VERSION"
+            git push origin main
+          else
+            echo "AGK prod app overlay already points at $VERSION"
+          fi
+
+      - name: Refresh AGK prod ArgoCD application
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value \
+            -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" \
+                -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          curl -fsS \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" \
+            -H "Accept: application/json" \
+            > /dev/null
+
+          for attempt in {1..60}; do
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json")
+
+            SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
+            HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | grep -F "$AGK_PROD_IMAGE_REPOSITORY:$VERSION" || true)
+
+            echo "Attempt $attempt: sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              exit 0
+            fi
+
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" \
+              > /dev/null
+            sleep 10
+          done
+
+          echo "AGK prod ArgoCD did not report $VERSION as Synced/Healthy in time"
+          exit 1

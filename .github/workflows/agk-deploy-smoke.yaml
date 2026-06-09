@@ -11,6 +11,7 @@ on:
     paths:
       - .github/workflows/agk-deploy-smoke.yaml
       - .github/workflows/release_pipeline.yaml
+      - .github/workflows/promote_pipeline.yaml
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,7 @@ jobs:
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
+      AGK_PROD_DOMAIN: https://agentic-karl.knauf.com
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
@@ -97,7 +99,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          SOURCE_VERSION="v$(npm pkg get version | tr -d '"')"
+          PACKAGE_VERSION="v$(npm pkg get version | tr -d '"')"
+          if az acr repository show-tags \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name acrctshared001 \
+            --repository "$CT_IMAGE_REPOSITORY" \
+            --query "[?@=='$PACKAGE_VERSION']" \
+            -o tsv | grep -Fx "$PACKAGE_VERSION" >/dev/null; then
+            SOURCE_VERSION="$PACKAGE_VERSION"
+          else
+            SOURCE_VERSION=$(az acr repository show-tags \
+              --subscription "$AGK_SUBSCRIPTION_ID" \
+              --name acrctshared001 \
+              --repository "$CT_IMAGE_REPOSITORY" \
+              --orderby time_desc \
+              --top 20 \
+              -o tsv | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+          fi
+
+          if [ -z "$SOURCE_VERSION" ]; then
+            echo "No existing CT source image tag found for smoke import"
+            exit 1
+          fi
+
           echo "Source version: $SOURCE_VERSION"
           echo "source-version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -152,7 +176,7 @@ jobs:
           test -f "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           test -f "$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_IMAGE_REPOSITORY" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
-          grep -F "DOMAIN_SERVER: \"https://agentic-karl.agk.prod.knauf.digital\"" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "DOMAIN_SERVER: \"$AGK_PROD_DOMAIN\"" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" "$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
 
