@@ -94,5 +94,6 @@ Time-bound, multi-PR workstreams being executed. Plans get deleted, promoted to 
 | Doc | What it covers |
 |---|---|
 | [docs/implementation-plans/azure-blob-and-private-files.md](docs/implementation-plans/azure-blob-and-private-files.md) | Azure Blob private-container rollout — upstream PR status, deployment-configs changes, prod hardening checklist, end-to-end verification recipes |
+| [docs/implementation-plans/langfuse-rollout.md](docs/implementation-plans/langfuse-rollout.md) | Deploying Langfuse (LLM observability) on AGK: single-source Helm service in agk-deployment-configs via the ApplicationSet, bundled in-cluster stores, Traefik + Okta, zero-Terraform dev |
 
 ---
