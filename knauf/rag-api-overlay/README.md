@@ -113,5 +113,3 @@ docker run --rm registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:lat
   cat /app/app/utils/document_loader.py > knauf/rag-api-overlay/document_loader.py
 # then re-apply the two [knauf] blocks (import + env constants, and the get_loader() branch)
 ```
-
-Drift surface = this one file.
