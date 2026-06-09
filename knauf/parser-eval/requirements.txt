@@ -1,0 +1,36 @@
+# Document-parser evaluation harness — Phase 1 deps.
+# Pinned loosely; pin exactly in CI. liteparse + system deps live in Dockerfile.eval.
+
+# Parsing (same loaders production uses). No upper pin on langchain-community so it
+# doesn't downgrade the version already in the rag_api base image (Dockerfile.eval).
+langchain-community>=0.3
+azure-ai-documentintelligence>=1.0.0
+pypdf>=4.0
+pymupdf>=1.24            # page render for vision judge + page counts
+unstructured[docx,pptx,xlsx,md]>=0.15   # upstream office/markdown loaders
+
+# Metrics
+jiwer>=3.0              # CER / WER
+rapidfuzz>=3.6          # normalized edit similarity
+apted>=1.0.3            # TEDS tree-edit distance
+lxml>=5.0               # table HTML parsing
+beautifulsoup4>=4.12
+markdown>=3.5           # markdown tables -> HTML
+
+# LLM-as-judge + (phase 2) RAG scoring
+openai>=1.40            # Azure OpenAI judge + embeddings
+Pillow>=10.0
+
+# Orchestration / reporting
+pandas>=2.0
+tabulate>=0.9
+pyyaml>=6.0
+python-dotenv>=1.0
+tqdm>=4.66
+
+# --- Phase 2 (RAG eval) ---
+numpy>=1.26
+# Optional RAGAS backend (config rag.backend: ragas|auto). Heavy + version-churny, so it's
+# opt-in: uncomment both, rebuild, and the harness auto-uses ragas (else falls back to lite).
+# ragas==0.2.*
+# langchain-openai>=0.2

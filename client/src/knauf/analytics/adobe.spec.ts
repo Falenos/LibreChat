@@ -54,8 +54,9 @@ describe('Adobe analytics payload privacy', () => {
         }),
       }),
     ]);
-    expect((adobeWindow.adobeDataLayer?.[0] as { event_info: Record<string, string> }).event_info)
-      .not.toHaveProperty('consent_status');
+    expect(
+      (adobeWindow.adobeDataLayer?.[0] as { event_info: Record<string, string> }).event_info,
+    ).not.toHaveProperty('consent_status');
   });
 
   it('redacts prompt ids and query values on prompt routes', () => {

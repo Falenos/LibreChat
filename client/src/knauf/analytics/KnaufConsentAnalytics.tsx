@@ -139,21 +139,10 @@ export default function KnaufConsentAnalytics() {
     }
 
     lastTrackedPathRef.current = trackedPath;
-    emitAdobePageView(
-      analyticsConfig,
-      adobeLocation,
-      {
-        consentState,
-      },
-    );
-  }, [
-    adobeReady,
-    analyticsConfig,
-    analyticsConsented,
-    consentState,
-    adobeLocation,
-    trackedPath,
-  ]);
+    emitAdobePageView(analyticsConfig, adobeLocation, {
+      consentState,
+    });
+  }, [adobeReady, analyticsConfig, analyticsConsented, consentState, adobeLocation, trackedPath]);
 
   useEffect(() => {
     if (!analyticsConfig || !analyticsConsented || !adobeReady) {

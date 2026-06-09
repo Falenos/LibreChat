@@ -49,8 +49,7 @@ afterEach(() => {
 describe('GET /api/config — Knauf analytics config', () => {
   it('includes consent-gated analytics config when OneTrust and Adobe are configured', async () => {
     mockGetAppConfig.mockResolvedValue(baseAppConfig);
-    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID =
-      '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
+    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID = '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
     process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL = 'https://example.test/adobe.js';
     const app = createApp();
 
@@ -80,8 +79,7 @@ describe('GET /api/config — Knauf analytics config', () => {
   it('suppresses legacy GTM when Knauf consent-gated analytics is active', async () => {
     mockGetAppConfig.mockResolvedValue(baseAppConfig);
     process.env.ANALYTICS_GTM_ID = 'GTM-123';
-    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID =
-      '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
+    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID = '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
     process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL = 'https://example.test/adobe.js';
     const app = createApp();
 

@@ -115,7 +115,7 @@ sequenceDiagram
   LLM-->>API: assistant message with image part
   API-->>U: streamed response
 
-  Note over U,T: Custom-agent chats: chip hidden; if `image_gen_oai`<br/>is in the stored tools, the tool fires every turn —<br/>loadAgent passes the tools array through unchanged.
+  Note over U,T: Custom-agent chats: chip hidden; if image_gen_oai<br/>is in the stored tools, the tool fires every turn —<br/>loadAgent passes the tools array through unchanged.
 ```
 
 ### 3.2 Decision flow — does `image_gen_oai` reach the model?

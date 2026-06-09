@@ -25,9 +25,9 @@ describe('OneTrust consent helpers', () => {
   });
 
   it('falls back to window OptanonActiveGroups when OneTrust uses the legacy global', () => {
-    expect(
-      getOneTrustGroupsFromEvent(undefined, { OptanonActiveGroups: ',C0002,C0003,' }),
-    ).toEqual(new Set(['C0002', 'C0003']));
+    expect(getOneTrustGroupsFromEvent(undefined, { OptanonActiveGroups: ',C0002,C0003,' })).toEqual(
+      new Set(['C0002', 'C0003']),
+    );
   });
 
   it('detects analytics consent for the configured category', () => {

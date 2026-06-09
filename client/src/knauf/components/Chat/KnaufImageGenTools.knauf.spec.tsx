@@ -37,7 +37,11 @@ jest.mock('@librechat/client', () => ({
     label: string;
     setValue?: (values: { value: boolean }) => void;
   }) => (
-    <button type="button" data-testid="image-gen-chip" onClick={() => setValue?.({ value: !checked })}>
+    <button
+      type="button"
+      data-testid="image-gen-chip"
+      onClick={() => setValue?.({ value: !checked })}
+    >
       {label}
     </button>
   ),

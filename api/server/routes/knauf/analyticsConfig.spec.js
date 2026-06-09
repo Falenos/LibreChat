@@ -20,8 +20,7 @@ afterEach(() => {
 
 describe('getKnaufAnalyticsConfig', () => {
   it('returns configured non-prod OneTrust and Adobe values', () => {
-    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID =
-      '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
+    process.env.KNAUF_ONETRUST_DOMAIN_SCRIPT_ID = '1f2c6fdd-5a57-44ad-b965-2a85d905bbdc-test';
     process.env.KNAUF_ADOBE_ANALYTICS_SCRIPT_URL =
       'https://assets.adobedtm.com/ab43015a9bd1/1c0f435acc82/launch-5440eaedcac0-development.min.js';
 
