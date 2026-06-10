@@ -106,6 +106,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/AuthService.spec.js` | `registerUser Knauf first-user role governance` | 38–40, 52–58, 290–332 | Seam test — validates local registration keeps upstream admin bootstrap by default and flips the first account to `USER` under the prod flag | Self | NO-TICKET |
 | `api/strategies/ldapStrategy.spec.js` | `ldapStrategy` first-user role governance | 12–14, 70–72, 129–167 | Seam test — validates LDAP registration keeps upstream admin bootstrap by default and flips the first account to `USER` under the prod flag | Self | NO-TICKET |
 | `packages/api/src/app/permissions.spec.ts` | `Knauf prod user governance` | 2142–2199 | Seam test — validates prod `USER` lockdown overwrites existing permissive role permissions without touching `ADMIN` | Self | NO-TICKET |
+| `packages/api/src/app/permissions.ts` | `applyKnaufUserRestrictions` | 54–156, 246–248, 550–553 | Startup role seed gate — lets YAML seed full built-in `ADMIN` permissions while deployed env flags force built-in `USER` back to a safe baseline for prompt creation/sharing, agent creation, memories, run/web/file search, people picker, MCP creation, and remote agents | `permissions.spec.ts` | NO-TICKET |
+| `packages/api/src/app/permissions.spec.ts` | `Knauf user governance` | 2142–2229 | Seam test — validates the generalized user-governance env flag rewrites the built-in `USER` permission matrix without changing `ADMIN` | Self | NO-TICKET |
+| `client/src/components/Chat/Landing.tsx` | `default-spec capability tiles` | 5–7, 270–311 | Landing polish — replaces the plain three-line tips list with compact icon-led capability tiles for files, image generation, and direct web browsing on the default-spec landing | `Landing.knauf.spec.tsx` | NO-TICKET |
+| `packages/api/src/app/permissions.ts` | `userRestrictions import + call sites` | 11–16, 147–149, 451–454 | Import boundary — keeps Knauf USER lockdown policy in `packages/api/src/knauf/permissions/userRestrictions.ts` while the upstream permissions loop only asks whether to force an update and applies the resolved permission matrix | `permissions.spec.ts` | NO-TICKET |
+| `packages/api/src/app/permissions.spec.ts` | `Knauf user governance env alias + ADMIN YAML` | 2142–2348 | Seam test — validates both the generalized and legacy prod-named env flags trigger built-in `USER` lockdown, and that explicit YAML still seeds built-in `ADMIN` with the fully enabled permission surface | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -128,6 +133,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.env.example` | OneTrust/Adobe Analytics runtime config template — documents `KNAUF_ANALYTICS_ENABLED`, consent category, app name, required OneTrust domain script ID, and required Adobe Launch URL. Values are read by `/api/config` at runtime and exposed to the browser as non-sensitive deployment config. |
 | `client/index.html` | Social sharing card metadata — Open Graph/Twitter title/description/image point at Agentic Karl and the existing Knauf logo asset (`https://agentic-karl.knauf.com/assets/knauf-logo.png`) so link previews do not show generic or upstream branding |
 | `.env.example` | User-facing template defaults — mail sender uses Knauf/KARL values and `HELP_AND_FAQ_URL=/` hides the Help & FAQ menu item unless a deployment provides a Knauf-owned URL |
+| `infrastructure/dev/values.yaml` | AGK dev Helm overlay enables built-in `USER` lockdown so dev matches prod role governance while retaining the legacy prod-named env alias during rollout |
+| `infrastructure/prod/values.yaml` | AGK prod Helm overlay enables the generalized `KNAUF_RESTRICT_USER_PERMISSIONS` flag alongside the legacy prod-named alias for built-in `USER` lockdown |
+| `client/src/locales/{en,de}/translation.json` | Landing capability copy — replaces the old default landing tip strings with localized titles/descriptions for file Q&A, image generation, and direct web browsing |
 
 ## Net-New Files
 
@@ -175,6 +183,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/configFooter.knauf.spec.js` | `../config`, `express`, `supertest`; upstream config services mocked | Medium — route-level test for `/api/config` startup payload defaults without editing upstream spec files | Self | NO-TICKET |
 | `client/src/knauf/branding/BrandFallbacks.knauf.spec.tsx` | `~/components/{Auth,Chat}/*`; upstream hooks/data-provider/components mocked | Low — test-only; pins Agentic Karl fallbacks in auth chrome and chat footer | Self | NO-TICKET |
 | `client/src/knauf/branding/SocialPreviewMeta.knauf.spec.ts` | Node `fs`/`path` reading `client/index.html` | Low — test-only; pins Open Graph/Twitter metadata to the Knauf logo asset | Self | NO-TICKET |
+| `packages/api/src/knauf/permissions/userRestrictions.ts` | `librechat-data-provider` (`Permissions`, `PermissionTypes`, `SystemRoles`), `~/utils` (`isEnabled`) | Low — pure startup role-governance helper; upstream coupling is limited to permission enum names and the shared env parsing helper | `permissions.spec.ts` | NO-TICKET |
 | `api/server/routes/knauf/lib/resolveProvider.js` | `librechat-data-provider` (`EModelEndpoint`) | Low — pure helper; switches Azure→OpenAI provider when Responses API is active, maps token param names | Self | KK20-175 |
 | `api/server/routes/knauf/lib/resolveProvider.spec.js` | `librechat-data-provider` mocked | Low — test-only; 7 unit tests for resolveProvider + tokenLimitParam | Self | KK20-175 |
 <!-- seams:new:end -->

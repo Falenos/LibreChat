@@ -4,6 +4,8 @@ agentic-karl:
 
   configmap:
     SERVICE_VERSION: v0.60.0
+    KNAUF_RESTRICT_USER_PERMISSIONS: 'true'
+    KNAUF_RESTRICT_PROD_USER_PERMISSIONS: 'true'
 
   externalSecret:
     secrets: {}

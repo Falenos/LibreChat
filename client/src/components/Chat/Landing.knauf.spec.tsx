@@ -53,6 +53,12 @@ jest.mock('@librechat/client', () => ({
   SplitText: ({ text }: { text: string }) => <h1 data-testid="split-title">{text}</h1>,
 }));
 
+jest.mock('lucide-react', () => ({
+  EarthIcon: () => <svg data-testid="earth-icon" />,
+  FileText: () => <svg data-testid="file-icon" />,
+  ImageIcon: () => <svg data-testid="image-icon" />,
+}));
+
 jest.mock('@react-spring/web', () => ({
   easings: { easeOutCubic: 'easeOutCubic' },
 }));
@@ -127,10 +133,13 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     const logo = screen.getByAltText('Knauf');
     expect(logo).toBeInTheDocument();
     expect(logo).toHaveAttribute('src', '/assets/knauf-logo.png');
-    // The three tip locale keys still render below the title.
-    expect(screen.getByText('com_knauf_landing_tip_attach')).toBeInTheDocument();
-    expect(screen.getByText('com_knauf_landing_tip_image')).toBeInTheDocument();
-    expect(screen.getByText('com_knauf_landing_tip_agents')).toBeInTheDocument();
+    // The capability tiles render below the title, including direct web browsing.
+    expect(screen.getByText('com_knauf_landing_capability_files_title')).toBeInTheDocument();
+    expect(screen.getByText('com_knauf_landing_capability_images_title')).toBeInTheDocument();
+    expect(screen.getByText('com_knauf_landing_capability_web_title')).toBeInTheDocument();
+    expect(
+      screen.getByText('com_knauf_landing_capability_web_description'),
+    ).toBeInTheDocument();
   });
 
   it('keeps the agent-entity branch winning when an agent is selected (no regression) and does NOT render the Knauf tips', () => {
@@ -149,7 +158,7 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     expect(screen.getByTestId('split-title')).toHaveTextContent('Research Bot');
     expect(screen.getByText('Helps with literature reviews')).toBeInTheDocument();
     // Tips are default-spec-only — agent landings shouldn't see them.
-    expect(screen.queryByText('com_knauf_landing_tip_attach')).not.toBeInTheDocument();
+    expect(screen.queryByText('com_knauf_landing_capability_files_title')).not.toBeInTheDocument();
     // Knauf wordmark is also default-spec-only — agent landings use ConvoIcon.
     expect(screen.queryByAltText('Knauf')).not.toBeInTheDocument();
   });
@@ -180,6 +189,6 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     // The customWelcome still renders as title via the upstream path.
     expect(screen.getByTestId('split-title')).toHaveTextContent('Welcome, traveller.');
     // The Knauf tips only fire on default-marked specs.
-    expect(screen.queryByText('com_knauf_landing_tip_attach')).not.toBeInTheDocument();
+    expect(screen.queryByText('com_knauf_landing_capability_files_title')).not.toBeInTheDocument();
   });
 });

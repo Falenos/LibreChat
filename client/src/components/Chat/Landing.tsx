@@ -2,6 +2,9 @@ import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { easings } from '@react-spring/web';
 import { EModelEndpoint } from 'librechat-data-provider';
 import { BirthdayIcon, TooltipAnchor, SplitText } from '@librechat/client';
+// [knauf] Icons for the default-spec landing capability tiles.
+import { EarthIcon, FileText, ImageIcon } from 'lucide-react';
+// End [knauf]
 import { useChatContext, useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import ConvoIcon from '~/components/Endpoints/ConvoIcon';
@@ -264,16 +267,45 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
             {description}
           </div>
         )}
-        {/* [knauf] KK20-159 — concise feature tips below the customWelcome
-            title on the default-spec landing. Centred, sub-title-sized,
-            same animate-fadeIn cadence as the agent description above.
-            Kept short by design — three lines that point at the three
-            most-used affordances on the composer. */}
+        {/* [knauf] KK20-159 — concise feature capability tiles below the
+            customWelcome title on the default-spec landing. Keeps the
+            default landing scan-friendly while making direct web browsing
+            visible as a first-class capability. */}
         {isDefaultSpecLanding && (
-          <ul className="animate-fadeIn mt-6 max-w-md list-none space-y-1.5 text-center text-sm font-normal text-text-secondary">
-            <li>{localize('com_knauf_landing_tip_attach')}</li>
-            <li>{localize('com_knauf_landing_tip_image')}</li>
-            <li>{localize('com_knauf_landing_tip_agents')}</li>
+          <ul className="animate-fadeIn mt-7 grid w-full max-w-3xl list-none grid-cols-1 gap-2.5 px-2 text-left sm:grid-cols-3">
+            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
+              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                <FileText className="size-4" aria-hidden="true" />
+              </div>
+              <p className="text-sm font-medium text-text-primary">
+                {localize('com_knauf_landing_capability_files_title')}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {localize('com_knauf_landing_capability_files_description')}
+              </p>
+            </li>
+            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
+              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                <ImageIcon className="size-4" aria-hidden="true" />
+              </div>
+              <p className="text-sm font-medium text-text-primary">
+                {localize('com_knauf_landing_capability_images_title')}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {localize('com_knauf_landing_capability_images_description')}
+              </p>
+            </li>
+            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
+              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                <EarthIcon className="size-4" aria-hidden="true" />
+              </div>
+              <p className="text-sm font-medium text-text-primary">
+                {localize('com_knauf_landing_capability_web_title')}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {localize('com_knauf_landing_capability_web_description')}
+              </p>
+            </li>
           </ul>
         )}
         {/* End [knauf] */}

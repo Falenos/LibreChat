@@ -163,11 +163,11 @@ interface:
   prompts:
     use: true
     create: true
-    share: false
-    public: false
+    share: true
+    public: true
   bookmarks: true
   memories: true
-  multiConvo: false
+  multiConvo: true
   # Knauf-specific interface options, namespaced to avoid colliding with
   # future upstream `interface.*` fields.
   knauf:
@@ -180,16 +180,13 @@ interface:
     # Flipping to `false` does not remove the tool from `includedTools` or
     # affect custom agents that already have it installed. KK20-168.
     imageGen: true
-  webSearch: false
-  runCode: false
-  # Hide the file_search chip + ToolsDropdown entry on chat surfaces — on
-  # default-spec chats there's no upload path for it (knowledge curation
-  # happens in the agent builder, not in chat), and custom agents that
-  # have `file_search` in their tools array still fire it server-side via
-  # `loadAgent` regardless of this flag. Matches the webSearch/runCode
-  # pattern above (chat-side BYOK badges hidden; underlying tools still
-  # work where they're configured). KK20-168.
-  fileSearch: false
+  # Built-in ADMIN is seeded with the full platform surface from this YAML.
+  # Built-in USER is forced back to the restricted baseline by
+  # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
+  # Custom roles remain Admin UI controlled.
+  webSearch: true
+  runCode: true
+  fileSearch: true
   agents:
     use: true
     create: true
@@ -203,13 +200,15 @@ interface:
     use: true
   fileCitations: true
   mcpServers:
-    use: true       # activates the MCP_SERVERS permission type for all roles
-    # create / share / public intentionally omitted — they are role-driven
-    # via packages/data-provider/src/roles.ts: ADMIN gets create+share+public,
-    # USER gets none. Setting them here would override BOTH roles (the YAML
-    # loop in packages/api/src/app/permissions.ts iterates USER + ADMIN and
-    # the explicit config value beats the role default), which would also
-    # lock admins out of creating MCP server definitions.
+    use: true
+    create: true
+    share: true
+    public: true
+  remoteAgents:
+    use: true
+    create: true
+    share: true
+    public: true
 
 registration:
   socialLogins: ['openid']
