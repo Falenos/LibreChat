@@ -1,24 +1,9 @@
 /**
  * Knauf V6 agent-builder body. Replaces upstream's `AgentConfig` via a
- * single `[knauf]` import-line swap in
- * client/src/components/SidePanel/Agents/AgentPanel.tsx.
- *
- * Renders inside upstream's `<FormProvider>` and `<form>` shell — so:
- *   • AgentSelect (top of upstream's AgentPanel) loads/switches agents
- *   • AgentFooter (bottom) handles Save / Delete / Cancel
- *   • VersionPanel mounts via AgentPanelSwitch
- *   • AgentAvatar (upstream) handles real avatar upload
- *   • KnaufFileSearch (fork of upstream FileSearch) handles
- *     knowledge file upload + listing inside the Data Knowledge section
- *
- * Knauf overlay renders the V6-shaped middle of the form, in order:
- *   avatar, name, description, Category (upstream selector), Personality
- *   pills, "What it can do" capability rows (registry), Data Knowledge
- *   (KnaufFileSearch — file presence drives `file_search` automatically),
- *   MCP servers (when configured), Tools, Instructions (with Variables
- *   popover + ✦ Autogenerate).
+ * `[knauf]` import swap in AgentPanel.tsx. Renders inside upstream's
+ * FormProvider/form shell alongside AgentSelect, AgentFooter, and VersionPanel.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { LucideProps } from 'lucide-react';
 import { Switch, useToastContext } from '@librechat/client';
@@ -36,13 +21,16 @@ import { useGetAgentFiles } from '~/data-provider';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import * as HoverCard from '@radix-ui/react-hover-card';
 import { Brain, Zap } from 'lucide-react';
-import AutoGenerateButton from './AutoGenerateButton';
 import CapabilitySwitch from './CapabilitySwitch';
+import InstructionsEditorOverlay from './InstructionsEditorOverlay';
+import InstructionsField from './InstructionsField';
 import KnaufFileSearch from './KnaufFileSearch';
 import KnaufInfoBadge from './KnaufInfoBadge';
 import KnaufSection from './KnaufSection';
 import PersonalityPills from './PersonalityPills';
-import VariablesPopover from './VariablesPopover';
+import TemplatePicker from './TemplatePicker';
+import { usePromptTemplates } from '~/knauf/data-provider/Agents/usePromptTemplates';
+import type { PromptTemplate } from '~/knauf/data-provider/data-service';
 import { KNAUF_CAPABILITIES } from './capabilities';
 import { KARL_DEFAULT_PERSONALITY_NAME } from '~/knauf/common/constants';
 import { useAutogeneratePrompt } from '~/knauf/data-provider/Agents/useAutogeneratePrompt';
@@ -99,6 +87,7 @@ export default function KnaufAgentConfig() {
   const personalities = usePersonalities();
   const { categories } = useAgentCategories();
   const autogenerate = useAutogeneratePrompt();
+  const previewMutation = useAutogeneratePrompt('preview');
   // YAML-gated capabilities — `endpoints.agents.capabilities` from
   // librechat.yaml. Each capability in the registry decides via its
   // `isEnabled` whether to render given this list.
@@ -120,13 +109,26 @@ export default function KnaufAgentConfig() {
     () => KNAUF_CAPABILITIES.filter((cap) => cap.isEnabled(enabledCapabilities)),
     [enabledCapabilities],
   );
-  // Mutable ref so we can both forward to react-hook-form AND read in the
-  // variable-popover insert handler. Plain `useRef<HTMLTextAreaElement>(null)`
-  // would be a readonly RefObject — pinning the union explicitly gives us a
-  // writable MutableRefObject.
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // ── Instructions overlay + template context + undo ──────────────────────
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const undoTextRef = useRef<string | null>(null);
+  // Captures the user's draft BEFORE any template was applied.
+  // Used as currentDraft for preview generation so switching templates
+  // doesn't carry over sections from a previously applied template.
+  const originalDraftRef = useRef<string | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
+  // Derive template content from activeTemplateId so re-renders propagate
+  const { data: templatesData } = usePromptTemplates();
+  const templateReferenceContent = useMemo(
+    () => templatesData?.templates?.find((t) => t.id === activeTemplateId)?.content,
+    [templatesData, activeTemplateId],
+  );
 
-  const { control, setValue, getValues } = useFormContext<AgentForm>();
+  // Clear template context and undo when switching agents
+  const prevAgentRef = useRef<string | undefined>(undefined);
+
+  const { control, setValue, getValues, formState } = useFormContext<AgentForm>();
   const agent = useWatch({ control, name: 'agent' });
   const formAgentId = useWatch({ control, name: 'id' });
   /**
@@ -145,6 +147,30 @@ export default function KnaufAgentConfig() {
     contextAgentId && !isEphemeralAgent(contextAgentId) ? contextAgentId : (formAgentId ?? '');
   const instructions = useWatch({ control, name: 'instructions' });
   const tools = useWatch({ control, name: 'tools' });
+
+  // Reset template context and undo when switching to a different agent
+  useEffect(() => {
+    if (prevAgentRef.current !== undefined && prevAgentRef.current !== agent_id) {
+      originalDraftRef.current = null;
+      undoTextRef.current = null;
+      setCanUndo(false);
+      setActiveTemplateId(null);
+    }
+    prevAgentRef.current = agent_id;
+  }, [agent_id]);
+
+  // Clear undo after a successful save — the saved text becomes the
+  // new baseline, undoing to a pre-save state would be confusing.
+  const prevSubmitCount = useRef(formState.submitCount);
+  useEffect(() => {
+    if (formState.submitCount > prevSubmitCount.current && formState.isSubmitSuccessful) {
+      undoTextRef.current = null;
+      originalDraftRef.current = null;
+      setCanUndo(false);
+      setActiveTemplateId(null);
+    }
+    prevSubmitCount.current = formState.submitCount;
+  }, [formState.submitCount, formState.isSubmitSuccessful]);
 
   // KK20-123 — pending-files queue lives in a Knauf-namespaced Recoil
   // atom (see store/pendingAgentFiles.ts) so it survives the AgentPanel
@@ -323,49 +349,41 @@ export default function KnaufAgentConfig() {
     applyPersonality(name, { shouldDirty: true });
   };
 
-  // ── Instructions: Variables popover + ✦ Autogenerate ──────────────────────
-  const insertVariable = (token: string) => {
-    const ta = textareaRef.current;
-    const current = getValues('instructions') ?? '';
-    if (!ta) {
-      setValue('instructions', current + token, { shouldDirty: true });
-      return;
-    }
-    const start = ta.selectionStart ?? current.length;
-    const end = ta.selectionEnd ?? current.length;
-    const next = current.slice(0, start) + token + current.slice(end);
-    setValue('instructions', next, { shouldDirty: true });
-    requestAnimationFrame(() => {
-      ta.focus();
-      const pos = start + token.length;
-      ta.setSelectionRange(pos, pos);
-    });
-  };
+  // ── Instructions: undo + ✦ Autogenerate ─────────────────────────────────
+  const handleUndo = useCallback(() => {
+    if (undoTextRef.current === null) return;
+    setValue('instructions', undoTextRef.current, { shouldDirty: true });
+    undoTextRef.current = null;
+    setCanUndo(false);
+  }, [setValue]);
 
-  const onAutogenerate = () => {
-    const picked = personalities.find((p) => p.name === personality);
-    // Build capability labels from the visible registry entries that are
-    // currently on. Knowledge isn't part of the registry (it lives in
-    // upstream FileSearch), so it's appended below.
-    const capabilityLabels: string[] = visibleCapabilities
-      .filter((cap) => cap.readFromForm({ getValues, setValue }))
-      .map((cap) => cap.label);
-    if (knowledge_files.length > 0) {
-      capabilityLabels.push(
-        `Knowledge base (${knowledge_files.length} attached document${knowledge_files.length === 1 ? '' : 's'})`,
-      );
-    }
-    // Tool display names — `regularTools[].name` is human-readable; fall
-    // back to `pluginKey` if name is missing. (`id` is always non-empty,
-    // so the result is always populated when `toolIds` is.)
-    const toolNames = toolIds.map((id) => {
-      const t = regularTools?.find((rt) => rt.pluginKey === id);
-      return t?.name ?? id;
-    });
-    const categoryValue = getValues('category') ?? '';
-    const categoryLabel = categories.find((c) => c.value === categoryValue)?.label ?? categoryValue;
-    autogenerate.mutate(
-      {
+  const dismissUndo = useCallback(() => {
+    undoTextRef.current = null;
+    setCanUndo(false);
+  }, []);
+
+  /** Builds the autogenerate payload from current form state.
+   *  Polish calls with no args (no template context).
+   *  Preview calls with the template content to merge. */
+  const buildAutogeneratePayload = useCallback(
+    (sourceTemplate?: string) => {
+      const picked = personalities.find((p) => p.name === personality);
+      const capabilityLabels: string[] = visibleCapabilities
+        .filter((cap) => cap.readFromForm({ getValues, setValue }))
+        .map((cap) => cap.label);
+      if (knowledge_files.length > 0) {
+        capabilityLabels.push(
+          `Knowledge base (${knowledge_files.length} attached document${knowledge_files.length === 1 ? '' : 's'})`,
+        );
+      }
+      const toolNames = toolIds.map((id) => {
+        const t = regularTools?.find((rt) => rt.pluginKey === id);
+        return t?.name ?? id;
+      });
+      const categoryValue = getValues('category') ?? '';
+      const categoryLabel =
+        categories.find((c) => c.value === categoryValue)?.label ?? categoryValue;
+      return {
         agent: {
           name: getValues('name') ?? '',
           description: getValues('description') ?? '',
@@ -380,17 +398,98 @@ export default function KnaufAgentConfig() {
           mcpServers: mcpServerNames ?? [],
         },
         currentDraft: getValues('instructions') ?? '',
+        sourceTemplate,
+      };
+    },
+    [
+      personalities,
+      personality,
+      visibleCapabilities,
+      knowledge_files,
+      toolIds,
+      regularTools,
+      categories,
+      mcpServerNames,
+      getValues,
+      setValue,
+    ],
+  );
+
+  const onAutogenerate = () => {
+    undoTextRef.current = getValues('instructions') ?? '';
+    setCanUndo(false);
+    autogenerate.mutate(buildAutogeneratePayload(), {
+      onSuccess: ({ text }) => {
+        setValue('instructions', text, { shouldDirty: true });
+        setCanUndo(true);
       },
-      {
-        onSuccess: ({ text }) => setValue('instructions', text, { shouldDirty: true }),
-        onError: (err) =>
-          showToast({
-            status: 'error',
-            message: err?.message ?? 'Couldn’t draft instructions.',
-          }),
-      },
-    );
+      onError: (err) =>
+        showToast({
+          status: 'error',
+          message: err?.message ?? "Couldn't draft instructions.",
+        }),
+    });
   };
+
+  /** Generate a preview of the user's draft merged into a template.
+   *  Uses a separate mutation (distinct mutationKey) so it doesn't
+   *  conflict with Polish. Returns a promise for the overlay's state. */
+  const generatePreview = useCallback(
+    async (templateContent: string): Promise<string> => {
+      // Use the original draft (before any template was applied) so that
+      // switching templates doesn't carry over sections from a prior apply.
+      const payload = buildAutogeneratePayload(templateContent);
+      if (originalDraftRef.current !== null) {
+        payload.currentDraft = originalDraftRef.current;
+      }
+      const { text } = await previewMutation.mutateAsync(payload);
+      return text;
+    },
+    [previewMutation, buildAutogeneratePayload],
+  );
+
+  /** Called when a template is selected from the TemplatePicker.
+   *  Does NOT touch the editor content — the user's draft stays as-is.
+   *  Sets the template as a read-only reference panel below the editor
+   *  and records it as sourceTemplate for Polish context. */
+  const handleTemplateSelect = useCallback(
+    (template: PromptTemplate) => {
+      // Capture the original draft on first template selection so that
+      // preview generation always starts from the user's own text,
+      // not from a previously-applied template.
+      if (originalDraftRef.current === null) {
+        originalDraftRef.current = getValues('instructions') ?? '';
+      }
+      setActiveTemplateId(template.id);
+    },
+    [getValues],
+  );
+
+  /** Called when the template panel is closed. Clears the reference
+   *  panel since the user is done browsing templates. */
+  const handleTemplatePanelClose = useCallback(() => {
+    setActiveTemplateId(null);
+    originalDraftRef.current = null;
+  }, []);
+
+  /** Called when the user clicks "Apply" on a template preview.
+   *  Commits the AI-generated merged text to the editor with undo support. */
+  const handleApplyPreview = useCallback(
+    (text: string) => {
+      undoTextRef.current = getValues('instructions') ?? '';
+      setValue('instructions', text, { shouldDirty: true });
+      setCanUndo(true);
+    },
+    [getValues, setValue],
+  );
+
+  const templatePickerNode: ReactNode = (
+    <TemplatePicker onSelect={handleTemplateSelect} activeTemplateId={activeTemplateId} />
+  );
+
+  const templatePickerCompactNode: ReactNode = (
+    <TemplatePicker onSelect={handleTemplateSelect} compact activeTemplateId={activeTemplateId} />
+  );
 
   // Default category to 'general' on first mount when unset. The
   // `<AgentCategorySelector />` then lets the user change it. We previously
@@ -580,48 +679,32 @@ export default function KnaufAgentConfig() {
           </KnaufSection>
         ) : null}
 
-        {/* Instructions */}
-        <div className="mb-6">
-          <div className="mb-2 flex items-center gap-2">
-            <label
-              htmlFor="knauf-agent-instructions"
-              className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
-            >
-              <span className="truncate">{localize('com_ui_instructions')}</span>
-              <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. You can write this yourself, or click Generate to have AI draft it. Once you have something written the button changes to Polish, so AI can tighten it up." />
-            </label>
-            <AutoGenerateButton
-              hasDraft={(instructions ?? '').trim().length > 0}
-              drafting={autogenerate.isLoading}
-              onClick={onAutogenerate}
-            />
-            <VariablesPopover onPick={insertVariable} />
-          </div>
-          <Controller
-            name="instructions"
-            control={control}
-            render={({ field }) => (
-              <textarea
-                {...field}
-                value={field.value ?? ''}
-                ref={(el) => {
-                  field.ref(el);
-                  textareaRef.current = el;
-                }}
-                rows={6}
-                placeholder="What should this agent do? Describe its role, voice, and any guardrails."
-                className={cn(inputClass, 'min-h-[140px] resize-y leading-relaxed')}
-                aria-label="Agent instructions"
-              />
-            )}
-          />
-          <div className="mt-1 flex items-center justify-end text-xs text-text-tertiary">
-            <span>
-              {(instructions ?? '').length}
-              {' characters'}
-            </span>
-          </div>
-        </div>
+        {/* Instructions — smart dual-mode field (KK20-179) */}
+        <InstructionsField
+          drafting={autogenerate.isLoading}
+          onAutogenerate={onAutogenerate}
+          onExpandClick={() => setOverlayOpen(true)}
+          canUndo={canUndo}
+          onUndo={handleUndo}
+          onUserEdit={dismissUndo}
+          templatePicker={templatePickerNode}
+        />
+
+        {/* Fullscreen editor overlay */}
+        <InstructionsEditorOverlay
+          open={overlayOpen}
+          onOpenChange={setOverlayOpen}
+          drafting={autogenerate.isLoading}
+          onAutogenerate={onAutogenerate}
+          canUndo={canUndo}
+          onUndo={handleUndo}
+          onUserEdit={dismissUndo}
+          templatePicker={templatePickerCompactNode}
+          onTemplatePanelClose={handleTemplatePanelClose}
+          templateReferenceContent={templateReferenceContent}
+          onGeneratePreview={generatePreview}
+          onApplyPreview={handleApplyPreview}
+        />
 
         {/* Model parameters are managed by personality + capability toggles.
           We never render the model picker; values flow into the form via

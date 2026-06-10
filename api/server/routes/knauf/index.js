@@ -11,9 +11,11 @@
 const express = require('express');
 const analyticsDiagnostics = require('./analyticsDiagnostics');
 const autogeneratePrompt = require('./autogeneratePrompt');
+const promptTemplates = require('./promptTemplates');
 
 const router = express.Router();
 router.use('/analytics', analyticsDiagnostics);
 router.use('/autogenerate-prompt', autogeneratePrompt);
+router.use('/prompt-templates', promptTemplates);
 
 module.exports = router;

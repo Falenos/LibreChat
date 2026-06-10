@@ -1,36 +1,18 @@
 /**
  * POST /api/knauf/autogenerate-prompt
  *
- * One-shot completion that drafts (or polishes) an agent's system
- * instructions from the V6 agent builder's current state. Used by the ✦
- * "Autogenerate / Polish & expand" button in the Knauf overlay.
+ * One-shot completion that drafts (or polishes) an agent's system instructions
+ * from the V6 agent builder's current state. Also used for template-based
+ * preview generation when `sourceTemplate` is provided.
  *
- * Configuration source-of-truth: the `karl-autogenerate-prompt` entry in
- * `librechat.yaml` `modelSpecs.list`. That entry's `preset` carries the
- * provider (`endpoint`), the model/deployment, max_completion_tokens, and
- * promptPrefix (= the system message).
+ * Config source-of-truth: the `karl-autogenerate-prompt` modelSpec entry in
+ * `librechat.yaml` — its `preset` carries provider, model/deployment,
+ * max_completion_tokens, and promptPrefix (= the system message).
  *
- * Provider routing: we walk the same `getProviderConfig({ provider,
- * appConfig })` path that `packages/api/src/agents/initialize.ts` uses for
- * every chat turn to resolve credentials, then hand the resulting
- * `llmConfig` to `@librechat/agents`'s `initializeModel` — the same single
- * entry point the agent graph and summarization node use to build a chat
- * model. Net effect: any provider configured in the YAML (azureOpenAI,
- * openAI, anthropic, google, bedrock, custom, ...) works without pulling
- * provider-specific deps into this file.
- *
- * Request body: validated by `autogeneratePromptSchema` below. Nested:
- * `{ agent: { name, description, category, personality: { label, description },
- *   capabilities, knowledgeFileCount, tools, mcpServers }, currentDraft }`.
- * Defence in depth — every string field is bounded so the prompt is a
- * fixed-shape input. The `tools` and `mcpServers` arrays carry display
- * names of the agent's selected tools / connected MCP servers so the
- * drafter can write "use the X tool when …" guidance. The user message
- * also lists the canonical `specialVariables` tokens
- * ({{current_date}}, …) so the drafter can emit them for time- or
- * audience-aware framing.
- *
- * Auth: requireJwtAuth, same as every Knauf-relevant route.
+ * Provider routing: getProviderConfig → initializeModel (same path used by
+ * chat turns). Any YAML-configured provider works without provider-specific
+ * deps in this file. Request body: bounded by `autogeneratePromptSchema`.
+ * Auth: requireJwtAuth.
  */
 const express = require('express');
 const { z } = require('zod');
@@ -63,11 +45,12 @@ const autogeneratePromptSchema = z.object({
     mcpServers: z.array(z.string().max(80)).max(10).default([]),
   }),
   currentDraft: z.string().max(4000).default(''),
+  sourceTemplate: z.string().max(4000).optional(),
 });
 
 /** Build the user-message body from the validated request shape. */
 function buildUserMessage(input) {
-  const { agent, currentDraft } = input;
+  const { agent, currentDraft, sourceTemplate } = input;
   const name = agent.name.trim() || 'this agent';
   const description = agent.description.trim();
   const category = agent.category.trim();
@@ -124,6 +107,14 @@ function buildUserMessage(input) {
     lines.push("User's draft:");
     lines.push('"""');
     lines.push(currentDraft.trim());
+    lines.push('"""');
+  }
+
+  if (sourceTemplate && sourceTemplate.trim()) {
+    lines.push('');
+    lines.push('Reference template (follow its structural pattern):');
+    lines.push('"""');
+    lines.push(sourceTemplate.trim());
     lines.push('"""');
   }
 
