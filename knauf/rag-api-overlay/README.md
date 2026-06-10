@@ -19,7 +19,11 @@ existing Tier-2 `Dockerfile.knauf` pattern — no rag_api repo fork, no separate
   plus a `[knauf]` env block, an Azure DI branch in `get_loader()`, and a `_AzureDIWithFallback`
   wrapper that falls back to the upstream loader if the DI call fails.
 - `Dockerfile.knauf-rag` — `FROM` the upstream image, `pip install azure-ai-documentintelligence`,
-  `COPY` the patched loader.
+  `COPY` the patched loader and logging shim.
+- `sitecustomize.py` — installed into Python's site-packages and imported automatically before
+  `main.py`; routes normal INFO/DEBUG logs to stdout while keeping WARNING/ERROR/CRITICAL on stderr,
+  so Datadog does not classify normal RAG startup logs as errors when account-level log pipelines
+  are unavailable.
 
 ## Configuration (env)
 
