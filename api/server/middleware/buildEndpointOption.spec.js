@@ -13,10 +13,16 @@ jest.mock('librechat-data-provider', () => {
 
 const { EModelEndpoint, parseCompactConvo } = require('librechat-data-provider');
 
-const mockBuildOptions = jest.fn((_endpoint, parsedBody) => ({
-  ...parsedBody,
-  endpoint: _endpoint,
-}));
+// [knauf] support both assistant and agent buildOptions call shapes in dynamic spec rehydration tests
+const mockBuildOptions = jest.fn((...args) => {
+  const endpoint = typeof args[0] === 'string' ? args[0] : args[1];
+  const parsedBody = typeof args[0] === 'string' ? args[1] : args[2];
+  return {
+    ...parsedBody,
+    endpoint,
+  };
+});
+// End [knauf]
 
 jest.mock('~/server/services/Endpoints/azureAssistants', () => ({
   buildOptions: mockBuildOptions,
@@ -206,6 +212,62 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
     expect(enforcedResult.temperature).toBe(0.7);
     expect(enforcedResult.maxContextTokens).toBe(50000);
   });
+
+  // [knauf] existing spec conversations are rehydrated from current modelSpecs before agent validation
+  it('should rehydrate stale non-enforced model spec conversations from the current preset', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({
+      [EModelEndpoint.azureOpenAI]: {},
+    });
+
+    const req = createReq(
+      {
+        endpoint: EModelEndpoint.azureOpenAI,
+        spec: 'karl',
+        model: 'gpt-5',
+        promptPrefix: 'Old Karl prompt',
+        useResponsesApi: false,
+      },
+      {
+        modelSpecs: {
+          list: [
+            {
+              name: 'karl',
+              iconURL: 'current-karl-icon',
+              preset: {
+                endpoint: EModelEndpoint.azureOpenAI,
+                model: 'current-karl-model',
+                promptPrefix: 'Current Karl prompt',
+                useResponsesApi: true,
+              },
+            },
+          ],
+        },
+      },
+    );
+    req.baseUrl = '/api/agents/chat';
+
+    const next = jest.fn();
+    await buildEndpointOption(req, createRes(), next);
+
+    expect(next).toHaveBeenCalled();
+    expect(mockBuildOptions).toHaveBeenCalledWith(
+      req,
+      EModelEndpoint.azureOpenAI,
+      expect.objectContaining({
+        spec: 'karl',
+        model: 'current-karl-model',
+        promptPrefix: 'Current Karl prompt',
+        useResponsesApi: true,
+        iconURL: 'current-karl-icon',
+      }),
+      undefined,
+    );
+    expect(req.body.endpointOption).toMatchObject({
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'current-karl-model',
+    });
+  });
+  // End [knauf]
 
   it('should fall back to OpenAI schema when getEndpointsConfig fails', async () => {
     mockGetEndpointsConfig.mockRejectedValue(new Error('Config unavailable'));

@@ -8,9 +8,15 @@ const { bulkSaveMessages, bulkSaveConvos: _bulkSaveConvos } = require('~/models'
 const mockGetEndpointsConfig = jest.fn().mockResolvedValue({
   [EModelEndpoint.openAI]: { userProvide: false },
 });
+// [knauf] import-time model spec normalization needs current app config in LibreChat importer tests
+const mockGetAppConfig = jest.fn().mockResolvedValue({});
+// End [knauf]
 
 jest.mock('~/server/services/Config', () => ({
   getEndpointsConfig: (...args) => mockGetEndpointsConfig(...args),
+  // [knauf] expose app config mock for dynamic spec import normalization
+  getAppConfig: (...args) => mockGetAppConfig(...args),
+  // End [knauf]
 }));
 
 // Mock the database methods
@@ -818,6 +824,88 @@ describe('importLibreChatConvo', () => {
     expect(importBatchBuilder.saveBatch).toHaveBeenCalled();
   });
 
+  // [knauf] legacy Karl imports must persist the current model spec so the conversation can continue after import
+  it('should normalize legacy model spec options from current app config', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({
+      [EModelEndpoint.azureOpenAI]: {},
+    });
+    mockGetAppConfig.mockResolvedValue({
+      modelSpecs: {
+        list: [
+          {
+            name: 'karl',
+            iconURL: 'current-karl-icon',
+            preset: {
+              endpoint: EModelEndpoint.azureOpenAI,
+              model: 'current-karl-model',
+              promptPrefix: 'Current Karl prompt',
+              useResponsesApi: true,
+            },
+          },
+        ],
+      },
+    });
+
+    const jsonData = {
+      conversationId: 'legacy-convo',
+      endpoint: 'gptPlugins',
+      title: 'Legacy Karl',
+      options: {
+        title: 'Legacy Karl',
+        endpoint: 'gptPlugins',
+        model: 'gpt-5',
+        spec: 'karl',
+        promptPrefix: 'Old Karl prompt',
+        useResponsesApi: false,
+        agentOptions: { model: 'gpt-5' },
+        iconURL: 'gptPlugins',
+      },
+      messages: [
+        {
+          messageId: 'legacy-user',
+          parentMessageId: Constants.NO_PARENT,
+          text: 'What was this conversation about?',
+          sender: 'User',
+          isCreatedByUser: true,
+          endpoint: 'gptPlugins',
+          model: null,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    };
+    const requestUserId = 'user-123';
+    const importBatchBuilder = new ImportBatchBuilder(requestUserId);
+    jest.spyOn(importBatchBuilder, 'startConversation');
+    jest.spyOn(importBatchBuilder, 'finishConversation');
+
+    const importer = getImporter(jsonData);
+    await importer(jsonData, requestUserId, () => importBatchBuilder);
+
+    expect(importBatchBuilder.startConversation).toHaveBeenCalledWith(EModelEndpoint.azureOpenAI);
+    const [_title, _createdAt, originalConvo] = importBatchBuilder.finishConversation.mock.calls[0];
+    expect(originalConvo).toMatchObject({
+      title: 'Legacy Karl',
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'current-karl-model',
+      spec: 'karl',
+      promptPrefix: 'Current Karl prompt',
+      useResponsesApi: true,
+      iconURL: 'current-karl-icon',
+    });
+    expect(originalConvo.agentOptions).toBeUndefined();
+    expect(importBatchBuilder.conversations[0]).toMatchObject({
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'current-karl-model',
+      spec: 'karl',
+    });
+    expect(importBatchBuilder.messages[0]).toMatchObject({
+      text: 'What was this conversation about?',
+      endpoint: 'gptPlugins',
+      model: undefined,
+    });
+  });
+  // End [knauf]
+
   it('should maintain correct message hierarchy (tree parent/children relationship)', async () => {
     const jsonData = JSON.parse(
       fs.readFileSync(path.join(__dirname, '__data__', 'librechat-tree.json'), 'utf8'),
@@ -933,11 +1021,16 @@ describe('importLibreChatConvo', () => {
     jest.spyOn(importBatchBuilder, 'finishConversation');
 
     const importer = getImporter(jsonDataNonRecursiveBranches);
+    // [knauf] imported LibreChat conversations should appear at the top of the recent chat list
+    const beforeImport = new Date();
     await importer(jsonDataNonRecursiveBranches, requestUserId, () => importBatchBuilder);
+    const afterImport = new Date();
+    // End [knauf]
 
     expect(importBatchBuilder.finishConversation).toHaveBeenCalledTimes(1);
 
-    const [_title, createdAt, originalConvo] = importBatchBuilder.finishConversation.mock.calls[0];
+    const [_title, createdAt, originalConvo, updatedAt] =
+      importBatchBuilder.finishConversation.mock.calls[0];
     const convo = importBatchBuilder.conversations[0];
 
     expect(convo).toEqual({
@@ -946,7 +1039,7 @@ describe('importLibreChatConvo', () => {
       conversationId: importBatchBuilder.conversationId,
       title: originalConvo.title || 'Imported Chat',
       createdAt: createdAt,
-      updatedAt: createdAt,
+      updatedAt,
       overrideTimestamp: true,
       endpoint: importBatchBuilder.endpoint,
       model: originalConvo.model || openAISettings.model.default,
@@ -954,6 +1047,12 @@ describe('importLibreChatConvo', () => {
 
     expect(convo.title).toBe('Original');
     expect(convo.createdAt).toBeInstanceOf(Date);
+    // [knauf] updatedAt uses import time so uploaded chats appear in Recent.
+    expect(convo.updatedAt).toBeInstanceOf(Date);
+    expect(convo.updatedAt.getTime()).toBeGreaterThanOrEqual(beforeImport.getTime());
+    expect(convo.updatedAt.getTime()).toBeLessThanOrEqual(afterImport.getTime());
+    expect(convo.updatedAt.getTime()).toBeGreaterThan(convo.createdAt.getTime());
+    // End [knauf]
     expect(convo.endpoint).toBe(EModelEndpoint.azureOpenAI);
     expect(convo.model).toBe('gpt-4o');
   });
