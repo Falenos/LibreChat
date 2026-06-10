@@ -8,6 +8,9 @@ import { EarthIcon, FileText, ImageIcon } from 'lucide-react';
 import { useChatContext, useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import ConvoIcon from '~/components/Endpoints/ConvoIcon';
+// [knauf] Shared contained Knauf avatar for circular logo placements.
+import KnaufLogoAvatar from '~/knauf/components/Brand/KnaufLogoAvatar';
+// End [knauf]
 import { useLocalize, useAuthContext } from '~/hooks';
 import { getIconEndpoint, getEntity } from '~/utils';
 
@@ -153,10 +156,13 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
     typeof startupConfig?.interface?.customWelcome === 'string'
       ? getGreeting()
       : getGreeting() + (user?.name ? ', ' + user.name : '');
+  // [knauf] Keep the default-spec capability cards clear of the composer.
+  const landingBottomPadding = isDefaultSpecLanding ? 'pb-28 sm:pb-32' : 'pb-16';
+  // End [knauf]
 
   return (
     <div
-      className={`flex h-full transform-gpu flex-col items-center justify-center pb-16 transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
+      className={`flex h-full transform-gpu flex-col items-center justify-center ${landingBottomPadding} transition-all duration-200 ${centerFormOnLanding ? 'max-h-full sm:max-h-0' : 'max-h-full'} ${getDynamicMargin}`}
     >
       <div ref={contentRef} className="flex flex-col items-center gap-0 p-2">
         {/* [knauf] KK20-159 — on the default-spec landing, the Knauf
@@ -170,13 +176,7 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
         {isDefaultSpecLanding ? (
           <div className="flex flex-col items-center gap-3">
             <div className="relative mb-2 size-12">
-              <div className={containerClassName}>
-                <img
-                  src="/assets/knauf-logo.png"
-                  alt="Knauf"
-                  className="h-7 w-auto object-contain"
-                />
-              </div>
+              <KnaufLogoAvatar className={containerClassName} />
               {startupConfig?.showBirthdayIcon && (
                 <TooltipAnchor
                   className="absolute bottom-[27px] right-2"
@@ -273,37 +273,43 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
             visible as a first-class capability. */}
         {isDefaultSpecLanding && (
           <ul className="animate-fadeIn mt-7 grid w-full max-w-3xl list-none grid-cols-1 gap-2.5 px-2 text-left sm:grid-cols-3">
-            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
-              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
-                <FileText className="size-4" aria-hidden="true" />
+            <li className="bg-surface-primary/80 dark:bg-surface-secondary/60 rounded-lg border border-border-light px-3.5 py-3 shadow-sm">
+              <div className="mb-2 flex min-w-0 items-center gap-2">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                  <EarthIcon className="size-4" aria-hidden="true" />
+                </div>
+                <p className="min-w-0 text-sm font-medium text-text-primary">
+                  {localize('com_knauf_landing_capability_web_title')}
+                </p>
               </div>
-              <p className="text-sm font-medium text-text-primary">
-                {localize('com_knauf_landing_capability_files_title')}
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {localize('com_knauf_landing_capability_web_description')}
               </p>
+            </li>
+            <li className="bg-surface-primary/80 dark:bg-surface-secondary/60 rounded-lg border border-border-light px-3.5 py-3 shadow-sm">
+              <div className="mb-2 flex min-w-0 items-center gap-2">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                  <FileText className="size-4" aria-hidden="true" />
+                </div>
+                <p className="min-w-0 text-sm font-medium text-text-primary">
+                  {localize('com_knauf_landing_capability_files_title')}
+                </p>
+              </div>
               <p className="mt-1 text-xs leading-5 text-text-secondary">
                 {localize('com_knauf_landing_capability_files_description')}
               </p>
             </li>
-            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
-              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
-                <ImageIcon className="size-4" aria-hidden="true" />
+            <li className="bg-surface-primary/80 dark:bg-surface-secondary/60 rounded-lg border border-border-light px-3.5 py-3 shadow-sm">
+              <div className="mb-2 flex min-w-0 items-center gap-2">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
+                  <ImageIcon className="size-4" aria-hidden="true" />
+                </div>
+                <p className="min-w-0 text-sm font-medium text-text-primary">
+                  {localize('com_knauf_landing_capability_images_title')}
+                </p>
               </div>
-              <p className="text-sm font-medium text-text-primary">
-                {localize('com_knauf_landing_capability_images_title')}
-              </p>
               <p className="mt-1 text-xs leading-5 text-text-secondary">
                 {localize('com_knauf_landing_capability_images_description')}
-              </p>
-            </li>
-            <li className="rounded-lg border border-border-light bg-surface-primary/80 px-3.5 py-3 shadow-sm dark:bg-surface-secondary/60">
-              <div className="mb-2 flex size-8 items-center justify-center rounded-lg bg-surface-tertiary text-blue-600 dark:text-blue-400">
-                <EarthIcon className="size-4" aria-hidden="true" />
-              </div>
-              <p className="text-sm font-medium text-text-primary">
-                {localize('com_knauf_landing_capability_web_title')}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-text-secondary">
-                {localize('com_knauf_landing_capability_web_description')}
               </p>
             </li>
           </ul>

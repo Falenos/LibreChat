@@ -382,16 +382,17 @@ function BadgeRow({
         {showEphemeralBadges === true && (
           <>
             <WebSearch />
-            <CodeInterpreter />
             <FileSearch />
-            {/* [knauf] Image-gen chip mounted next to FileSearch so the
-                rendered order is paperclip → Settings2 → upstream chips →
-                Create image. The component returns null unless the chip is
+            {/* [knauf] Image-gen chip mounted after WebSearch and
+                FileSearch so the composer chip order mirrors the landing
+                cards: web search → file search → image generation. The
+                component returns null unless the chip is
                 pinned/toggled and the policy in `useImageGenAvailable`
                 allows it; agentId/spec come from BadgeRowContext via the
                 component, not via props. */}
             <KnaufImageGenTools agentId={null} conversationId={conversationId} spec={specName} />
             {/* End [knauf] */}
+            <CodeInterpreter />
             <Artifacts />
             <MCPSelect />
           </>

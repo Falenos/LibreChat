@@ -37,6 +37,7 @@ jest.mock('~/hooks', () => ({
 }));
 
 jest.mock('~/utils', () => ({
+  cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
   getIconEndpoint: () => 'azureOpenAI',
   getEntity: (args: unknown) => mockGetEntity(args),
 }));
@@ -137,9 +138,11 @@ describe('[knauf] Landing — KK20-159 default-spec title/subtitle', () => {
     expect(screen.getByText('com_knauf_landing_capability_files_title')).toBeInTheDocument();
     expect(screen.getByText('com_knauf_landing_capability_images_title')).toBeInTheDocument();
     expect(screen.getByText('com_knauf_landing_capability_web_title')).toBeInTheDocument();
-    expect(
-      screen.getByText('com_knauf_landing_capability_web_description'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('com_knauf_landing_capability_web_description')).toBeInTheDocument();
+    const capabilityCards = screen.getAllByRole('listitem');
+    expect(capabilityCards[0]).toHaveTextContent('com_knauf_landing_capability_web_title');
+    expect(capabilityCards[1]).toHaveTextContent('com_knauf_landing_capability_files_title');
+    expect(capabilityCards[2]).toHaveTextContent('com_knauf_landing_capability_images_title');
   });
 
   it('keeps the agent-entity branch winning when an agent is selected (no regression) and does NOT render the Knauf tips', () => {

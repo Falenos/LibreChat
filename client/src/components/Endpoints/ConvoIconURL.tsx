@@ -1,6 +1,9 @@
 import { memo, useMemo } from 'react';
 import type { IconMapProps } from '~/common';
 import { URLIcon } from '~/components/Endpoints/URLIcon';
+// [knauf] Render the wide Knauf wordmark as contained logo art, not a cropped photo avatar.
+import KnaufLogoAvatar from '~/knauf/components/Brand/KnaufLogoAvatar';
+// End [knauf]
 import { icons } from '~/hooks/Endpoint/Icons';
 
 interface ConvoIconURLProps {
@@ -40,11 +43,30 @@ const ConvoIconURL: React.FC<ConvoIconURLProps> = ({
   context,
 }) => {
   const Icon = useMemo(() => icons[iconURL] ?? icons.unknown, [iconURL]);
+  // [knauf] Allow app-local branded avatar assets to flow through URL rendering.
   const isURL = useMemo(
-    () => !!(iconURL && (iconURL.includes('http') || iconURL.startsWith('/images/'))),
+    () =>
+      !!(
+        iconURL &&
+        (iconURL.includes('http') ||
+          iconURL.startsWith('/images/') ||
+          iconURL.startsWith('/assets/'))
+      ),
     [iconURL],
   );
+  // End [knauf]
   if (isURL) {
+    // [knauf] The Knauf wordmark is much wider than a square avatar; object-cover crops it.
+    if (iconURL.includes('/assets/knauf-logo')) {
+      return (
+        <KnaufLogoAvatar
+          className={classMap[context ?? 'default'] ?? classMap.default}
+          style={styleMap[context ?? 'default'] ?? styleMap.default}
+        />
+      );
+    }
+    // End [knauf]
+
     return (
       <URLIcon
         iconURL={iconURL}

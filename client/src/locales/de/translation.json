@@ -414,6 +414,7 @@
   "com_knauf_search_agents": "Agenten suchen…",
   "com_knauf_show_reasoning_description": "Zeigt, wie der Agent zu seiner Antwort gelangt ist. Hilfreich, wenn Sie die Überlegungen des Modells sehen möchten, nicht nur das Ergebnis.",
   "com_knauf_show_reasoning_label": "Denkschritte anzeigen",
+  "com_knauf_terms_and_privacy": "Nutzungsbedingungen und Datenschutz",
   "com_nav_2fa": "Zwei-Faktor-Authentifizierung (2FA)",
   "com_nav_account_settings": "Kontoeinstellungen",
   "com_nav_always_make_prod": "Neue Versionen direkt produktiv nehmen",

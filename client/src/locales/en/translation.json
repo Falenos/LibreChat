@@ -421,6 +421,7 @@
   "com_knauf_search_agents": "Search agents…",
   "com_knauf_show_reasoning_description": "Show how the agent worked out its answer. Useful when you want to see the model's thinking, not just the conclusion.",
   "com_knauf_show_reasoning_label": "Show reasoning steps",
+  "com_knauf_terms_and_privacy": "Terms and privacy",
   "com_nav_2fa": "Two-Factor Authentication (2FA)",
   "com_nav_account_settings": "Account Settings",
   "com_nav_advanced_prompts": "Advanced prompts editor",
