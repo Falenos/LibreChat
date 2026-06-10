@@ -61,6 +61,12 @@ const AuthContextProvider = ({
   const { data: adminRole = null } = useGetRole(SystemRoles.ADMIN, {
     enabled: !!(isAuthenticated && user?.role === SystemRoles.ADMIN),
   });
+  // [knauf] AGENT_BUILDER is a system role but needs its own fetch — AuthContext only
+  // pre-fetches USER and ADMIN, so without this the roles map has no entry for AGENT_BUILDER
+  // and useHasAccess always returns false for AGENT_BUILDER users.
+  const { data: agentBuilderRole = null } = useGetRole(SystemRoles.AGENT_BUILDER, {
+    enabled: !!(isAuthenticated && user?.role === SystemRoles.AGENT_BUILDER),
+  });
   const { data: customRole = null } = useGetRole(isCustomRole ? userRoleName : '_', {
     enabled: isCustomRole,
   });
@@ -278,6 +284,8 @@ const AuthContextProvider = ({
       roles: {
         [SystemRoles.USER]: userRole,
         [SystemRoles.ADMIN]: adminRole,
+        // [knauf] Expose AGENT_BUILDER role permissions so useHasAccess works for AGENT_BUILDER users.
+        [SystemRoles.AGENT_BUILDER]: agentBuilderRole,
         ...(isCustomRole && customRole ? { [userRoleName]: customRole } : {}),
       },
       isAuthenticated,
@@ -290,6 +298,7 @@ const AuthContextProvider = ({
       token,
       userRole,
       adminRole,
+      agentBuilderRole,
       isCustomRole,
       userRoleName,
       customRole,

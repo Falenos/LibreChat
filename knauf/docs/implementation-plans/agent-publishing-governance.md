@@ -2,6 +2,8 @@
 
 Working draft started on 2026-06-02. This document captures the current proposal for a controlled AI Champions pilot. It is intentionally not the final legal/process document yet; it is the place to collect decisions until we converge on the final operating model.
 
+> **Status update (2026-06-10):** The `AGENT_BUILDER` role proposed below has been implemented. See [`knauf/docs/reference/roles-and-access.md`](../reference/roles-and-access.md) for the technical reference. The final role model is `USER` / `AGENT_BUILDER` / `ADMIN`.
+
 ## Goal
 
 Allow a narrow set of AI Champions to create agents while keeping publication and audience access under admin control.
