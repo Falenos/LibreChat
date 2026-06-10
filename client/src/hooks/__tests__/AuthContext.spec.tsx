@@ -578,4 +578,70 @@ describe('AuthContextProvider — custom role detection and fetching', () => {
     mockUseGetRole.mockReturnValue({ data: null });
     jest.useRealTimers();
   });
+
+  // [knauf] AGENT_BUILDER is a system role so isCustomRole=false, but AuthContext must
+  // still fetch and expose its permissions — verified by the explicit useGetRole call below.
+  it('[knauf] calls useGetRole with AGENT_BUILDER and enabled: true for AGENT_BUILDER users', () => {
+    jest.useFakeTimers();
+
+    renderProviderLive();
+
+    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
+      unknown,
+      { onSuccess: (data: unknown) => void },
+    ];
+
+    act(() => {
+      refreshOptions.onSuccess({ user: { id: '1', role: 'AGENT_BUILDER' }, token: 'tok' });
+    });
+    act(() => {
+      jest.advanceTimersByTime(100);
+    });
+
+    const agentBuilderCalls = mockUseGetRole.mock.calls.filter(
+      ([name]: [string]) => name === 'AGENT_BUILDER',
+    );
+    expect(agentBuilderCalls.length).toBeGreaterThan(0);
+    const lastCall = agentBuilderCalls[agentBuilderCalls.length - 1];
+    expect(lastCall[1]).toEqual(expect.objectContaining({ enabled: true }));
+
+    jest.useRealTimers();
+  });
+
+  it('[knauf] includes AGENT_BUILDER role data in the roles context map when loaded', () => {
+    jest.useFakeTimers();
+    const agentBuilderPermissions = {
+      name: 'AGENT_BUILDER',
+      permissions: { AGENTS: { USE: true, CREATE: true, SHARE: true } },
+    };
+    mockUseGetRole.mockImplementation((name: string, opts?: { enabled?: boolean }) => {
+      if (name === 'AGENT_BUILDER' && opts?.enabled) {
+        return { data: agentBuilderPermissions };
+      }
+      return { data: null };
+    });
+
+    const { getByTestId } = renderProviderLive();
+
+    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
+      unknown,
+      { onSuccess: (data: unknown) => void },
+    ];
+
+    act(() => {
+      refreshOptions.onSuccess({ user: { id: '1', role: 'AGENT_BUILDER' }, token: 'tok' });
+    });
+    act(() => {
+      jest.advanceTimersByTime(100);
+    });
+
+    const rolesAttr = getByTestId('consumer').getAttribute('data-roles') ?? '{}';
+    const roles = JSON.parse(rolesAttr);
+    expect(roles).toHaveProperty('AGENT_BUILDER');
+    expect(roles.AGENT_BUILDER).toEqual(agentBuilderPermissions);
+
+    mockUseGetRole.mockReturnValue({ data: null });
+    jest.useRealTimers();
+  });
+  // End [knauf]
 });

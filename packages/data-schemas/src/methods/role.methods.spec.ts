@@ -900,3 +900,40 @@ describe('createRoleByName - duplicate key race', () => {
     insertSpy.mockRestore();
   });
 });
+
+// [knauf] AGENT_BUILDER role seeding tests.
+describe('initializeRoles — AGENT_BUILDER', () => {
+  beforeEach(async () => {
+    await Role.deleteMany({});
+  });
+
+  it('[knauf] creates AGENT_BUILDER role with agents.CREATE=true on first run', async () => {
+    await initializeRoles();
+
+    const role = await getRoleByName(SystemRoles.AGENT_BUILDER);
+    expect(role).toBeTruthy();
+    expect(role.permissions[PermissionTypes.AGENTS]?.[Permissions.CREATE]).toBe(true);
+    expect(role.permissions[PermissionTypes.AGENTS]?.[Permissions.USE]).toBe(true);
+    expect(role.permissions[PermissionTypes.AGENTS]?.[Permissions.SHARE]).toBe(true);
+  });
+
+  it('[knauf] AGENT_BUILDER permissions match ADMIN defaults', async () => {
+    await initializeRoles();
+
+    const agentBuilderRole = await getRoleByName(SystemRoles.AGENT_BUILDER);
+    const adminDefaults = roleDefaults[SystemRoles.ADMIN].permissions;
+
+    Object.values(PermissionTypes).forEach((permType) => {
+      expect(agentBuilderRole.permissions[permType]).toEqual(adminDefaults[permType]);
+    });
+  });
+
+  it('[knauf] initializeRoles is idempotent for AGENT_BUILDER', async () => {
+    await initializeRoles();
+    await initializeRoles();
+
+    const roles = await Role.find({ name: SystemRoles.AGENT_BUILDER });
+    expect(roles).toHaveLength(1);
+  });
+});
+// End [knauf]

@@ -213,6 +213,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Brand/KnaufLogoAvatar.tsx` | `~/utils` (`cn`) | Low — small branded view component; upstream coupling is limited to the shared className helper | `KnaufLogoAvatar.knauf.spec.tsx` | NO-TICKET |
 | `client/src/knauf/components/Brand/KnaufLogoAvatar.knauf.spec.tsx` | Subject under test | Low — test-only | Self | NO-TICKET |
 | `client/src/knauf/branding/KnaufConversationAvatars.knauf.spec.tsx` | `~/components/Endpoints/{ConvoIconURL,EndpointIcon}` with upstream providers mocked | Low — test-only; pins shared endpoint avatar behavior without depending on live endpoint config | Self | NO-TICKET |
+| `packages/data-provider/src/roles.ts` | `librechat-data-provider` enum + schema types | Low — purely additive; adds `AGENT_BUILDER` entry to `SystemRoles`, `defaultRolesSchema`, and `roleDefaults`; no upstream function signatures changed | `packages/data-schemas/src/methods/systemGrant.spec.ts`, `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
+| `packages/data-schemas/src/methods/systemGrant.ts` | `librechat-data-provider` (`SystemRoles`), MongoDB models | Medium — startup seeding logic; seeds AGENT_BUILDER with all capabilities except `access:admin`; wrong capability set breaks admin panel security boundary | `packages/data-schemas/src/methods/systemGrant.spec.ts` | NO-TICKET |
+| `packages/data-schemas/src/methods/role.ts` | `librechat-data-provider` (`SystemRoles`, `roleDefaults`), MongoDB models | Low — startup seeding; adds AGENT_BUILDER to the `initializeRoles()` loop alongside ADMIN and USER | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
+| `client/src/hooks/AuthContext.tsx` | `librechat-data-provider` (`SystemRoles`), `~/data-provider` (`useGetRole`) | High — without this seam AGENT_BUILDER users get no permissions in the client; explicit `useGetRole(AGENT_BUILDER)` bypasses the `isCustomRole` guard that otherwise skips system roles | `client/src/hooks/__tests__/AuthContext.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
