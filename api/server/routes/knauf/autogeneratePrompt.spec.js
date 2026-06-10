@@ -34,6 +34,7 @@ jest.mock('~/models', () => ({
 
 jest.mock('librechat-data-provider', () => ({
   specialVariables: { current_date: '', current_user: '' },
+  EModelEndpoint: { azureOpenAI: 'azureOpenAI', openAI: 'openAI' },
 }));
 
 const express = require('express');
@@ -212,5 +213,64 @@ describe('POST /', () => {
         }),
       }),
     );
+  });
+
+  it('switches provider from azureOpenAI to openAI when useResponsesApi is active', async () => {
+   const azureSpec = {
+     name: 'karl-autogenerate-prompt',
+     preset: {
+       endpoint: 'azureOpenAI',
+       model: 'gpt-4o',
+       promptPrefix: 'Draft agent instructions.',
+       max_completion_tokens: 500,
+     },
+   };
+   getAppConfig.mockResolvedValue(makeConfig(azureSpec));
+   // Simulate the config pipeline output when web_search triggers useResponsesApi:
+   // Azure fields are stripped, apiKey + baseURL are set instead.
+   getProviderConfig.mockReturnValue({
+     getOptions: makeGetOptions({ apiKey: 'test-key', useResponsesApi: true }),
+   });
+   const mockInvoke = jest.fn().mockResolvedValue({ content: 'Generated instructions.' });
+   initializeModel.mockReturnValue({ invoke: mockInvoke });
+
+   const res = await request(app).post('/').send(VALID_BODY);
+
+   expect(res.status).toBe(200);
+   expect(res.body.text).toBe('Generated instructions.');
+   // Must use 'openAI' (ChatOpenAI), not 'azureOpenAI' (AzureChatOpenAI),
+   // because the Azure fields were stripped by constructAzureResponsesApi.
+   const call = initializeModel.mock.calls[0][0];
+   expect(call.provider).toBe('openAI');
+   // Responses API uses max_output_tokens, not max_completion_tokens.
+   expect(call.clientOptions.modelKwargs).toHaveProperty('max_output_tokens', 500);
+   expect(call.clientOptions.modelKwargs).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('keeps azureOpenAI provider when useResponsesApi is not active', async () => {
+   const azureSpec = {
+    name: 'karl-autogenerate-prompt',
+    preset: {
+      endpoint: 'azureOpenAI',
+      model: 'gpt-4o',
+      promptPrefix: 'Draft agent instructions.',
+      max_completion_tokens: 500,
+    },
+   };
+   getAppConfig.mockResolvedValue(makeConfig(azureSpec));
+   getProviderConfig.mockReturnValue({
+    getOptions: makeGetOptions({ apiKey: 'test-key' }),
+   });
+   const mockInvoke = jest.fn().mockResolvedValue({ content: 'Generated instructions.' });
+   initializeModel.mockReturnValue({ invoke: mockInvoke });
+
+   const res = await request(app).post('/').send(VALID_BODY);
+
+   expect(res.status).toBe(200);
+   const call = initializeModel.mock.calls[0][0];
+   expect(call.provider).toBe('azureOpenAI');
+   // Completions API uses max_completion_tokens.
+   expect(call.clientOptions.modelKwargs).toHaveProperty('max_completion_tokens', 500);
+   expect(call.clientOptions.modelKwargs).not.toHaveProperty('max_output_tokens');
   });
 });

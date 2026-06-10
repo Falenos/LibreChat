@@ -175,6 +175,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/configFooter.knauf.spec.js` | `../config`, `express`, `supertest`; upstream config services mocked | Medium — route-level test for `/api/config` startup payload defaults without editing upstream spec files | Self | NO-TICKET |
 | `client/src/knauf/branding/BrandFallbacks.knauf.spec.tsx` | `~/components/{Auth,Chat}/*`; upstream hooks/data-provider/components mocked | Low — test-only; pins Agentic Karl fallbacks in auth chrome and chat footer | Self | NO-TICKET |
 | `client/src/knauf/branding/SocialPreviewMeta.knauf.spec.ts` | Node `fs`/`path` reading `client/index.html` | Low — test-only; pins Open Graph/Twitter metadata to the Knauf logo asset | Self | NO-TICKET |
+| `api/server/routes/knauf/lib/resolveProvider.js` | `librechat-data-provider` (`EModelEndpoint`) | Low — pure helper; switches Azure→OpenAI provider when Responses API is active, maps token param names | Self | KK20-175 |
+| `api/server/routes/knauf/lib/resolveProvider.spec.js` | `librechat-data-provider` mocked | Low — test-only; 7 unit tests for resolveProvider + tokenLimitParam | Self | KK20-175 |
 <!-- seams:new:end -->
 
 ## Static Assets
