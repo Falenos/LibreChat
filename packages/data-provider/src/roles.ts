@@ -33,6 +33,7 @@ export enum SystemRoles {
   // [knauf] AGENT_BUILDER: Knauf-only role for AI Champions. Same chat/agent permissions as ADMIN
   // but no admin panel access. See knauf/docs/reference/roles-and-access.md.
   AGENT_BUILDER = 'AGENT_BUILDER',
+  // End [knauf]
 }
 
 export const roleSchema = z.object({
@@ -110,6 +111,7 @@ const defaultRolesSchema = z.object({
       }),
     }),
   }),
+  // End [knauf]
   [SystemRoles.ADMIN]: roleSchema.extend({
     name: z.literal(SystemRoles.ADMIN),
     permissions: permissionsSchema.extend({
@@ -258,6 +260,7 @@ export const roleDefaults = defaultRolesSchema.parse({
       },
     },
   },
+  // End [knauf]
   [SystemRoles.ADMIN]: {
     name: SystemRoles.ADMIN,
     permissions: {

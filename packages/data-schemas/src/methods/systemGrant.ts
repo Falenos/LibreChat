@@ -411,6 +411,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')) {
             upsert: true,
           },
         }));
+        // End [knauf]
 
         await tenantSafeBulkWrite(SystemGrant, [...adminOps, ...agentBuilderOps], { ordered: false });
         return;

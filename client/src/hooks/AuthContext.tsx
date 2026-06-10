@@ -67,6 +67,7 @@ const AuthContextProvider = ({
   const { data: agentBuilderRole = null } = useGetRole(SystemRoles.AGENT_BUILDER, {
     enabled: !!(isAuthenticated && user?.role === SystemRoles.AGENT_BUILDER),
   });
+  // End [knauf]
   const { data: customRole = null } = useGetRole(isCustomRole ? userRoleName : '_', {
     enabled: isCustomRole,
   });
@@ -286,6 +287,7 @@ const AuthContextProvider = ({
         [SystemRoles.ADMIN]: adminRole,
         // [knauf] Expose AGENT_BUILDER role permissions so useHasAccess works for AGENT_BUILDER users.
         [SystemRoles.AGENT_BUILDER]: agentBuilderRole,
+        // End [knauf]
         ...(isCustomRole && customRole ? { [userRoleName]: customRole } : {}),
       },
       isAuthenticated,

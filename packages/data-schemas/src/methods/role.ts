@@ -42,6 +42,7 @@ export function createRoleMethods(mongoose: typeof import('mongoose'), deps: Rol
 
     // [knauf] AGENT_BUILDER added to ensure the role is seeded at startup.
     for (const roleName of [SystemRoles.ADMIN, SystemRoles.USER, SystemRoles.AGENT_BUILDER]) {
+    // End [knauf]
       let role = await Role.findOne({ name: roleName });
       const defaultPerms = roleDefaults[roleName].permissions;
 

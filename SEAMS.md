@@ -129,6 +129,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` Knauf spec fallback | 42–48, 62–73 | Conversation-history branding — default modelSpec chats use a compact Knauf wordmark instead of generic provider glyphs while non-spec conversations keep upstream endpoint icons | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Landing.tsx` | `KnaufLogoAvatar` import | 11–13 | Landing polish — reuses the shared contained Knauf logo avatar for the default-spec landing badge so its sizing matches history and URL-avatar surfaces | `Landing.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` agent history fallback | 61–72 | Conversation-history branding — agent chats without a custom icon URL now share the compact Knauf wordmark instead of falling back to the generic agent glyph | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
+| `client/src/hooks/__tests__/AuthContext.spec.tsx` | — | 582–646 | AGENT_BUILDER is a system role so isCustomRole=false, but AuthContext must | Self | — |
+| `packages/data-schemas/src/methods/role.methods.spec.ts` | — | 904–939 | AGENT_BUILDER role seeding tests. | Self | — |
+| `packages/data-schemas/src/methods/systemGrant.spec.ts` | — | 54–93 | AGENT_BUILDER seeding tests — verify the Knauf role split is enforced. | Self | — |
+| `client/src/hooks/AuthContext.tsx` | — | 64–70, 288–290 | AGENT_BUILDER is a system role but needs its own fetch — AuthContext only | — | — |
+| `packages/data-provider/src/roles.ts` | — | 33–36, 47–114, 197–263 | AGENT_BUILDER: Knauf-only role for AI Champions. Same chat/agent permissions as ADMIN | — | — |
+| `packages/data-schemas/src/methods/role.ts` | — | 43–45 | AGENT_BUILDER added to ensure the role is seeded at startup. | — | — |
+| `packages/data-schemas/src/methods/systemGrant.ts` | — | 391–414 | AGENT_BUILDER gets all capabilities EXCEPT ACCESS_ADMIN. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration
