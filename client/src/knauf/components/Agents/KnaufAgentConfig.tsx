@@ -4,7 +4,7 @@
  * FormProvider/form shell alongside AgentSelect, AgentFooter, and VersionPanel.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { useRecoilState, useSetRecoilState } from 'recoil';
+import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
 import type { LucideProps } from 'lucide-react';
 import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
@@ -179,6 +179,7 @@ export default function KnaufAgentConfig() {
   // we don't need to re-render this component when the atom changes;
   // KnaufFileSearch is the one that subscribes for renders.
   const setPendingFiles = useSetRecoilState(knaufPendingAgentFilesAtom);
+  const pendingFiles = useRecoilValue(knaufPendingAgentFilesAtom);
   const [pendingForAgentId, setPendingForAgentId] = useRecoilState(knaufPendingForAgentIdAtom);
 
   // KK20-123 — Scope the pending-files queue to a single agent so the
@@ -371,9 +372,18 @@ export default function KnaufAgentConfig() {
       const capabilityLabels: string[] = visibleCapabilities
         .filter((cap) => cap.readFromForm({ getValues, setValue }))
         .map((cap) => cap.label);
-      if (knowledge_files.length > 0) {
+      // Build knowledge file metadata from edit-flow (saved files) and
+      // create-flow (pending uploads not yet persisted).
+      const knowledgeFiles: Array<{ name: string; type: string }> = [];
+      for (const [, ext] of knowledge_files) {
+        if (ext.filename) knowledgeFiles.push({ name: ext.filename, type: ext.type ?? '' });
+      }
+      for (const [, entry] of pendingFiles) {
+        if (entry.file?.name) knowledgeFiles.push({ name: entry.file.name, type: entry.file.type ?? '' });
+      }
+      if (knowledgeFiles.length > 0) {
         capabilityLabels.push(
-          `Knowledge base (${knowledge_files.length} attached document${knowledge_files.length === 1 ? '' : 's'})`,
+          `Knowledge base (${knowledgeFiles.length} attached document${knowledgeFiles.length === 1 ? '' : 's'})`,
         );
       }
       const toolNames = toolIds.map((id) => {
@@ -393,7 +403,7 @@ export default function KnaufAgentConfig() {
             description: picked?.description ?? '',
           },
           capabilities: capabilityLabels,
-          knowledgeFileCount: knowledge_files.length,
+          knowledgeFiles,
           tools: toolNames,
           mcpServers: mcpServerNames ?? [],
         },
@@ -406,6 +416,7 @@ export default function KnaufAgentConfig() {
       personality,
       visibleCapabilities,
       knowledge_files,
+      pendingFiles,
       toolIds,
       regularTools,
       categories,

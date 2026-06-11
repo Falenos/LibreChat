@@ -13,7 +13,7 @@ export interface AutogeneratePromptRequest {
     category: string;
     personality: { label: string; description: string };
     capabilities: string[];
-    knowledgeFileCount: number;
+    knowledgeFiles: Array<{ name: string; type: string }>;
     tools: string[];
     mcpServers: string[];
   };

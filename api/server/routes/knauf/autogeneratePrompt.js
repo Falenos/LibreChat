@@ -40,7 +40,10 @@ const autogeneratePromptSchema = z.object({
       })
       .default({ label: '', description: '' }),
     capabilities: z.array(z.string().max(80)).max(8).default([]),
-    knowledgeFileCount: z.number().int().min(0).max(99).default(0),
+    knowledgeFiles: z
+      .array(z.object({ name: z.string().max(256), type: z.string().max(100).default('') }))
+      .max(50)
+      .default([]),
     tools: z.array(z.string().max(120)).max(20).default([]),
     mcpServers: z.array(z.string().max(80)).max(10).default([]),
   }),
@@ -57,7 +60,7 @@ function buildUserMessage(input) {
   const personalityLabel = agent.personality.label.trim();
   const personalityDescription = agent.personality.description.trim();
   const capabilities = agent.capabilities;
-  const knowledgeFileCount = agent.knowledgeFileCount;
+  const knowledgeFiles = agent.knowledgeFiles;
   const tools = agent.tools;
   const mcpServers = agent.mcpServers;
 
@@ -71,10 +74,11 @@ function buildUserMessage(input) {
     capabilities.length > 0
       ? `What it can do: ${capabilities.join(', ')}`
       : 'What it can do: reply from its own knowledge only';
-  const knowledgeLine =
-    knowledgeFileCount > 0
-      ? `Knowledge: ${knowledgeFileCount} attached document${knowledgeFileCount === 1 ? '' : 's'}.`
-      : '';
+  let knowledgeLine = '';
+  if (knowledgeFiles.length > 0) {
+    const fileList = knowledgeFiles.map((f) => f.name).join(', ');
+    knowledgeLine = `Knowledge files (${knowledgeFiles.length}): ${fileList}`;
+  }
   // Tools and MCP get their own lines so the drafter knows they're
   // *callable* (not just a vague capability). Helps the model write
   // instructions like "use the X tool when ...".
