@@ -350,12 +350,9 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')) {
   }
 
   /**
-   * Seed system capability grants on server startup.
-   *
-   * [knauf] ADMIN / AGENT_BUILDER capability split:
-   *  - ADMIN receives ALL capabilities including ACCESS_ADMIN (full access + admin panel).
-   *  - AGENT_BUILDER receives all capabilities EXCEPT ACCESS_ADMIN (chat/agent power user, no admin panel).
-   *
+   * Seed the ADMIN role with all system capabilities.
+   * Context-agnostic: caller provides tenant context (e.g., `runAsSystem()` for
+   * startup, `tenantStorage.run()` for future per-tenant provisioning).
    * Idempotent and concurrency-safe: uses bulkWrite with ordered:false so parallel
    * server instances (K8s rolling deploy, PM2 cluster) do not race on E11000.
    * Retries up to 3 times with exponential backoff on transient failures.
@@ -366,9 +363,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')) {
       try {
         const SystemGrant = mongoose.models.SystemGrant as Model<ISystemGrant>;
         const now = new Date();
-
-        // ADMIN gets ALL capabilities (including ACCESS_ADMIN) — unchanged from upstream.
-        const adminOps = Object.values(SystemCapabilities).map((capability) => ({
+        const ops = Object.values(SystemCapabilities).map((capability) => ({
           updateOne: {
             filter: {
               principalType: PrincipalType.ROLE,
@@ -387,33 +382,7 @@ export function createSystemGrantMethods(mongoose: typeof import('mongoose')) {
             upsert: true,
           },
         }));
-
-        // [knauf] AGENT_BUILDER gets all capabilities EXCEPT ACCESS_ADMIN.
-        const agentBuilderCaps = Object.values(SystemCapabilities).filter(
-          (cap) => cap !== SystemCapabilities.ACCESS_ADMIN,
-        );
-        const agentBuilderOps = agentBuilderCaps.map((capability) => ({
-          updateOne: {
-            filter: {
-              principalType: PrincipalType.ROLE,
-              principalId: SystemRoles.AGENT_BUILDER,
-              capability,
-              tenantId: { $exists: false },
-            },
-            update: {
-              $setOnInsert: {
-                principalType: PrincipalType.ROLE,
-                principalId: SystemRoles.AGENT_BUILDER,
-                capability,
-                grantedAt: now,
-              },
-            },
-            upsert: true,
-          },
-        }));
-        // End [knauf]
-
-        await tenantSafeBulkWrite(SystemGrant, [...adminOps, ...agentBuilderOps], { ordered: false });
+        await tenantSafeBulkWrite(SystemGrant, ops, { ordered: false });
         return;
       } catch (err) {
         if (attempt < maxRetries) {

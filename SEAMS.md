@@ -129,13 +129,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` Knauf spec fallback | 42–48, 62–73 | Conversation-history branding — default modelSpec chats use a compact Knauf wordmark instead of generic provider glyphs while non-spec conversations keep upstream endpoint icons | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Landing.tsx` | `KnaufLogoAvatar` import | 11–13 | Landing polish — reuses the shared contained Knauf logo avatar for the default-spec landing badge so its sizing matches history and URL-avatar surfaces | `Landing.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` agent history fallback | 61–72 | Conversation-history branding — agent chats without a custom icon URL now share the compact Knauf wordmark instead of falling back to the generic agent glyph | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
-| `client/src/hooks/__tests__/AuthContext.spec.tsx` | — | 582–646 | AGENT_BUILDER is a system role so isCustomRole=false, but AuthContext must | Self | — |
-| `packages/data-schemas/src/methods/role.methods.spec.ts` | — | 904–939 | AGENT_BUILDER role seeding tests. | Self | — |
-| `packages/data-schemas/src/methods/systemGrant.spec.ts` | — | 54–93 | AGENT_BUILDER seeding tests — verify the Knauf role split is enforced. | Self | — |
-| `client/src/hooks/AuthContext.tsx` | — | 64–70, 288–290 | AGENT_BUILDER is a system role but needs its own fetch — AuthContext only | — | — |
-| `packages/data-provider/src/roles.ts` | — | 33–36, 47–114, 197–263 | AGENT_BUILDER: Knauf-only role for AI Champions. Same chat/agent permissions as ADMIN | — | — |
-| `packages/data-schemas/src/methods/role.ts` | — | 43–45 | AGENT_BUILDER added to ensure the role is seeded at startup. | — | — |
-| `packages/data-schemas/src/methods/systemGrant.ts` | — | 391–414 | AGENT_BUILDER gets all capabilities EXCEPT ACCESS_ADMIN. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -220,10 +213,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Brand/KnaufLogoAvatar.tsx` | `~/utils` (`cn`) | Low — small branded view component; upstream coupling is limited to the shared className helper | `KnaufLogoAvatar.knauf.spec.tsx` | NO-TICKET |
 | `client/src/knauf/components/Brand/KnaufLogoAvatar.knauf.spec.tsx` | Subject under test | Low — test-only | Self | NO-TICKET |
 | `client/src/knauf/branding/KnaufConversationAvatars.knauf.spec.tsx` | `~/components/Endpoints/{ConvoIconURL,EndpointIcon}` with upstream providers mocked | Low — test-only; pins shared endpoint avatar behavior without depending on live endpoint config | Self | NO-TICKET |
-| `packages/data-provider/src/roles.ts` | `librechat-data-provider` enum + schema types | Low — purely additive; adds `AGENT_BUILDER` entry to `SystemRoles`, `defaultRolesSchema`, and `roleDefaults`; no upstream function signatures changed | `packages/data-schemas/src/methods/systemGrant.spec.ts`, `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
-| `packages/data-schemas/src/methods/systemGrant.ts` | `librechat-data-provider` (`SystemRoles`), MongoDB models | Medium — startup seeding logic; seeds AGENT_BUILDER with all capabilities except `access:admin`; wrong capability set breaks admin panel security boundary | `packages/data-schemas/src/methods/systemGrant.spec.ts` | NO-TICKET |
-| `packages/data-schemas/src/methods/role.ts` | `librechat-data-provider` (`SystemRoles`, `roleDefaults`), MongoDB models | Low — startup seeding; adds AGENT_BUILDER to the `initializeRoles()` loop alongside ADMIN and USER | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
-| `client/src/hooks/AuthContext.tsx` | `librechat-data-provider` (`SystemRoles`), `~/data-provider` (`useGetRole`) | High — without this seam AGENT_BUILDER users get no permissions in the client; explicit `useGetRole(AGENT_BUILDER)` bypasses the `isCustomRole` guard that otherwise skips system roles | `client/src/hooks/__tests__/AuthContext.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

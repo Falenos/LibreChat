@@ -51,47 +51,6 @@ describe('systemGrant methods', () => {
       expect(actual).toEqual(expected);
     });
 
-    // [knauf] AGENT_BUILDER seeding tests — verify the Knauf role split is enforced.
-    it('[knauf] seeds all capabilities except ACCESS_ADMIN for AGENT_BUILDER role', async () => {
-      await methods.seedSystemGrants();
-
-      const grants = await SystemGrant.find({
-        principalType: PrincipalType.ROLE,
-        principalId: SystemRoles.AGENT_BUILDER,
-      }).lean();
-
-      const actual = grants.map((g) => g.capability).sort();
-      const expected = Object.values(SystemCapabilities)
-        .filter((cap) => cap !== SystemCapabilities.ACCESS_ADMIN)
-        .sort();
-      expect(actual).toEqual(expected);
-    });
-
-    it('[knauf] does not grant ACCESS_ADMIN to AGENT_BUILDER', async () => {
-      await methods.seedSystemGrants();
-
-      const grant = await SystemGrant.findOne({
-        principalType: PrincipalType.ROLE,
-        principalId: SystemRoles.AGENT_BUILDER,
-        capability: SystemCapabilities.ACCESS_ADMIN,
-      }).lean();
-
-      expect(grant).toBeNull();
-    });
-
-    it('[knauf] AGENT_BUILDER seeding is idempotent', async () => {
-      await methods.seedSystemGrants();
-      await methods.seedSystemGrants();
-
-      const count = await SystemGrant.countDocuments({
-        principalType: PrincipalType.ROLE,
-        principalId: SystemRoles.AGENT_BUILDER,
-      });
-      const expected = Object.values(SystemCapabilities).length - 1; // all except ACCESS_ADMIN
-      expect(count).toBe(expected);
-    });
-    // End [knauf]
-
     it('is idempotent — duplicate calls produce no extra documents', async () => {
       await methods.seedSystemGrants();
       await methods.seedSystemGrants();
