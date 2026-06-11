@@ -35,8 +35,11 @@ const variableOptions: VariableOption[] = Object.keys(specialVariables).map(
 
 export default function VariablesPopover({
   onPick,
+  labelClassName,
 }: Readonly<{
   onPick: (token: string) => void;
+  /** Extra classes on the text label — e.g. `"hidden sm:inline"` to hide on mobile. */
+  labelClassName?: string;
 }>) {
   const localize = useLocalize();
 
@@ -52,7 +55,7 @@ export default function VariablesPopover({
           )}
         >
           <PlusCircle className="h-3 w-3 text-text-secondary" aria-hidden />
-          {localize('com_ui_variables')}
+          <span className={labelClassName}>{localize('com_ui_variables')}</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>

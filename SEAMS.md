@@ -221,6 +221,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/markdownDetect.ts` | None | Low — pure function, zero deps | `looksLikeMarkdown.spec.ts` | KK20-179 |
 | `client/src/knauf/components/Agents/MarkdownPreview.tsx` | `react-markdown`, `remark-gfm`, `~/utils` | Low — memoized markdown renderer, no upstream file mods | Manual | KK20-179 |
 | `client/src/knauf/components/Agents/TemplatePicker.tsx` | `~/utils`, `~/knauf/data-provider/*` | Low — UI-only card grid | Manual | KK20-179 |
+| `client/src/knauf/components/Agents/TemplateSelect.tsx` | `~/utils`, `~/knauf/data-provider/*` | Low — UI-only compact dropdown | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/usePromptTemplates.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query hook with 5-min staleTime | Manual | KK20-179 |
 <!-- seams:new:end -->
 

@@ -13,11 +13,14 @@ export default function AutoGenerateButton({
   drafting,
   disabled,
   onClick,
+  labelClassName,
 }: Readonly<{
   hasDraft: boolean;
   drafting: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  /** Extra classes on the text label — e.g. `"hidden sm:inline"` to hide on mobile. */
+  labelClassName?: string;
 }>) {
   // Short labels that fit comfortably even when the side panel is at its
   // narrow setting. The Sparkles icon plus the title attribute carry the
@@ -58,7 +61,7 @@ export default function AutoGenerateButton({
       ) : (
         <Sparkles className="h-3 w-3 text-text-secondary" aria-hidden />
       )}
-      <span>{label}</span>
+      <span className={labelClassName}>{label}</span>
     </button>
   );
 }
