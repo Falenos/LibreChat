@@ -22,14 +22,22 @@ Two separate systems control access:
 
 ## AGENT_BUILDER — no code changes needed
 
-`AGENT_BUILDER` is a **custom role** created via the admin panel — no code changes required.
+`AGENT_BUILDER` is a **custom role** created via script or admin panel — no code changes required.
 
-**One-time setup (per environment):**
+**Option A — mongosh script (recommended, idempotent):**
+```bash
+# Local dev
+mongosh "mongodb://localhost:27018/LibreChat" knauf/scripts/seed-agent-builder-role.js
+
+# Remote (e.g. via SSH tunnel to nonprod)
+mongosh "<connection-string>" knauf/scripts/seed-agent-builder-role.js
+```
+Safe to re-run: creates the role if missing, patches any missing permissions if it exists.
+
+**Option B — admin panel (one-time manual):**
 1. Log in as ADMIN → Admin Panel → Roles → **Create role**
 2. Name it `AGENT_BUILDER`, enable all agent/prompt permissions
 3. Assign users: Admin Panel → Users → select user → **Change Role → AGENT_BUILDER**
-
-The admin panel's custom role system handles everything automatically. Custom roles can be assigned to any user and their permissions are fetched dynamically by the client.
 
 ## Assigning roles
 
