@@ -117,28 +117,6 @@ export default function InstructionsField({
 
   // ── Render ──────────────────────────────────────────────────────────────
 
-  // Show template picker when instructions are empty
-  if (!hasContent && templatePicker && mode === 'edit') {
-    return (
-      <div className="mb-6">
-        <div className="mb-2 flex items-center gap-2">
-          <label
-            className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
-          >
-            <span className="truncate">{localize('com_ui_instructions')}</span>
-            <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. Pick a template to get started, or click Generate to have AI draft instructions for you." />
-          </label>
-          <AutoGenerateButton
-            hasDraft={false}
-            drafting={drafting}
-            onClick={onAutogenerate}
-          />
-        </div>
-        {templatePicker}
-      </div>
-    );
-  }
-
   return (
     <div className="mb-6">
       {/* Header row */}
@@ -148,7 +126,7 @@ export default function InstructionsField({
           className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
         >
           <span className="truncate">{localize('com_ui_instructions')}</span>
-          <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. You can write this yourself, or click Generate to have AI draft it. Once you have something written the button changes to Polish, so AI can tighten it up." />
+          <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. Pick a template from the dropdown, or click Generate to have AI draft instructions for you." />
         </label>
 
         {/* Undo after polish */}
@@ -180,6 +158,13 @@ export default function InstructionsField({
           <Maximize2 className="h-3 w-3 text-text-secondary" aria-hidden />
         </button>
       </div>
+
+      {/* Template select — compact dropdown, always visible in edit mode */}
+      {templatePicker && mode === 'edit' && (
+        <div className="mb-2">
+          {templatePicker}
+        </div>
+      )}
 
       {/* Content area */}
       {mode === 'formatted' ? (

@@ -29,6 +29,7 @@ import KnaufInfoBadge from './KnaufInfoBadge';
 import KnaufSection from './KnaufSection';
 import PersonalityPills from './PersonalityPills';
 import TemplatePicker from './TemplatePicker';
+import TemplateSelect from './TemplateSelect';
 import { usePromptTemplates } from '~/knauf/data-provider/Agents/usePromptTemplates';
 import type { PromptTemplate } from '~/knauf/data-provider/data-service';
 import { KNAUF_CAPABILITIES } from './capabilities';
@@ -459,21 +460,30 @@ export default function KnaufAgentConfig() {
     [previewMutation, buildAutogeneratePayload],
   );
 
-  /** Called when a template is selected from the TemplatePicker.
+  /** Called when a template is selected in the expanded overlay.
    *  Does NOT touch the editor content — the user's draft stays as-is.
-   *  Sets the template as a read-only reference panel below the editor
-   *  and records it as sourceTemplate for Polish context. */
-  const handleTemplateSelect = useCallback(
+   *  Sets the template as a read-only reference panel and records it
+   *  as sourceTemplate for Preview context. */
+  const handleTemplateSelectOverlay = useCallback(
     (template: PromptTemplate) => {
-      // Capture the original draft on first template selection so that
-      // preview generation always starts from the user's own text,
-      // not from a previously-applied template.
       if (originalDraftRef.current === null) {
         originalDraftRef.current = getValues('instructions') ?? '';
       }
       setActiveTemplateId(template.id);
     },
     [getValues],
+  );
+
+  /** Called when a template is selected in the sidebar (non-overlay).
+   *  Populates the textarea with the template content so the user sees
+   *  immediate feedback. Supports undo. */
+  const handleTemplateSelectSidebar = useCallback(
+    (template: PromptTemplate) => {
+      undoTextRef.current = getValues('instructions') ?? '';
+      setValue('instructions', template.content, { shouldDirty: true });
+      setCanUndo(true);
+    },
+    [getValues, setValue],
   );
 
   /** Called when the template panel is closed. Clears the reference
@@ -495,11 +505,11 @@ export default function KnaufAgentConfig() {
   );
 
   const templatePickerNode: ReactNode = (
-    <TemplatePicker onSelect={handleTemplateSelect} activeTemplateId={activeTemplateId} />
+    <TemplateSelect onSelect={handleTemplateSelectSidebar} />
   );
 
   const templatePickerCompactNode: ReactNode = (
-    <TemplatePicker onSelect={handleTemplateSelect} compact activeTemplateId={activeTemplateId} />
+    <TemplatePicker onSelect={handleTemplateSelectOverlay} compact activeTemplateId={activeTemplateId} />
   );
 
   // Default category to 'general' on first mount when unset. The
