@@ -17,8 +17,19 @@
 
 Two separate systems control access:
 
-1. **Permissions** (`roles` collection) — what you can do in chat. Defined in `packages/data-provider/src/roles.ts`. `AGENT_BUILDER` has identical defaults to `ADMIN`.
-2. **Capabilities** (`systemgrants` collection) — admin panel access. `seedSystemGrants()` in `packages/data-schemas/src/methods/systemGrant.ts` seeds `ADMIN` with all capabilities (including `access:admin`) and `AGENT_BUILDER` with all capabilities **except** `access:admin`.
+1. **Permissions** (`roles` collection) — what you can do in chat (create agents, share prompts, etc.).
+2. **Capabilities** (`systemgrants` collection) — admin panel access. Only `ADMIN` has the `access:admin` capability.
+
+## AGENT_BUILDER — no code changes needed
+
+`AGENT_BUILDER` is a **custom role** created via the admin panel — no code changes required.
+
+**One-time setup (per environment):**
+1. Log in as ADMIN → Admin Panel → Roles → **Create role**
+2. Name it `AGENT_BUILDER`, enable all agent/prompt permissions
+3. Assign users: Admin Panel → Users → select user → **Change Role → AGENT_BUILDER**
+
+The admin panel's custom role system handles everything automatically. Custom roles can be assigned to any user and their permissions are fetched dynamically by the client.
 
 ## Assigning roles
 
@@ -31,14 +42,7 @@ mongosh "mongodb://localhost:27018/LibreChat" --eval '
 '
 ```
 
-Restart the backend after any role change so `seedSystemGrants()` runs.
-
-## Files changed (all marked `// [knauf]`)
-
-- `packages/data-provider/src/roles.ts` — `AGENT_BUILDER` added to `SystemRoles` + `roleDefaults`
-- `packages/data-schemas/src/methods/systemGrant.ts` — `seedSystemGrants()` updated
-
 ## Related
 
 - [agent-publishing-governance.md](../implementation-plans/agent-publishing-governance.md) — business rationale
-- [code-change-protocol.md](code-change-protocol.md) — tier ladder (this is Tier 4c)
+- [code-change-protocol.md](code-change-protocol.md) — tier ladder
