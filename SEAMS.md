@@ -137,6 +137,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/schema/migrationAllowlist.ts` | — | 1–24 | Migration access allowlist — one document per allowed user (keyed by normalised email). | — | — |
 | `packages/data-schemas/src/types/index.ts` | — | 39–41 | Migration allowlist type. | — | — |
 | `packages/data-schemas/src/types/migrationAllowlist.ts` | — | 1–10 | Type for the migration allowlist document. | — | — |
+| `api/test/server/middleware/requireMigrationAccess.test.js` | — | 1–94 | Tests for the requireMigrationAccess middleware. | Self | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -231,6 +232,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/VariablesPopover.tsx` | `@radix-ui/react-popover`, `librechat-data-provider` (`specialVariables`), `~/hooks` | Low — variable insertion popover, portal-aware for OGDialog | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/useAutogeneratePrompt.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query mutation hook for autogenerate/preview | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/usePromptTemplates.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query hook with 5-min staleTime | Manual | KK20-179 |
+| `api/server/knauf/migrationAllowlist.js` | — | — | — | — |
+| `api/server/knauf/migrationAllowlist.test.js` | — | — | — | — |
+| `api/server/routes/knauf/migrationAccess.js` | — | — | — | — |
+| `api/server/routes/knauf/migrationAccess.test.js` | — | — | — | — |
+| `client/src/knauf/components/AccessDenied/KnaufAccessDenied.tsx` | — | — | — | — |
+| `client/src/knauf/hooks/Auth/useMigrationAccess.ts` | — | — | — | — |
 <!-- seams:new:end -->
 
 ## Static Assets
