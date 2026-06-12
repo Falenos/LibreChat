@@ -36,6 +36,10 @@ const { getAppConfig } = require('./services/Config');
 const staticCache = require('./utils/staticCache');
 const optionalJwtAuth = require('./middleware/optionalJwtAuth');
 const noIndex = require('./middleware/noIndex');
+// [knauf] Migration access enforcement on protected API routes.
+const requireJwtAuth = require('./middleware/requireJwtAuth');
+const requireMigrationAccess = require('./middleware/requireMigrationAccess');
+// End [knauf]
 const routes = require('./routes');
 
 const { PORT, HOST, ALLOW_SOCIAL_LOGIN, DISABLE_COMPRESSION, TRUST_PROXY } = process.env ?? {};
@@ -151,6 +155,25 @@ const startServer = async () => {
   /* Pre-auth tenant context for unauthenticated routes that need tenant scoping.
    * The reverse proxy / auth gateway sets `X-Tenant-Id` header for multi-tenant deployments. */
   app.use('/oauth', preAuthTenantMiddleware, routes.oauth);
+  // [knauf] Migration access gate — applied before chat/agent/file routes.
+  // Composed with requireJwtAuth so req.user is populated before the allowlist check.
+  // Unauthenticated requests pass through here; each route's own requireJwtAuth handles 401.
+  for (const path of [
+    '/api/convos',
+    '/api/messages',
+    '/api/agents',
+    '/api/files',
+    '/api/memories',
+    '/api/presets',
+    '/api/prompts',
+    '/api/assistants',
+    '/api/actions',
+    '/api/search',
+  ]) {
+    app.use(path, requireJwtAuth, requireMigrationAccess);
+  }
+  // End [knauf]
+
   /* API Endpoints */
   app.use('/api/auth', preAuthTenantMiddleware, routes.auth);
   app.use('/api/admin', routes.adminAuth);

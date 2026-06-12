@@ -129,6 +129,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` Knauf spec fallback | 42–48, 62–73 | Conversation-history branding — default modelSpec chats use a compact Knauf wordmark instead of generic provider glyphs while non-spec conversations keep upstream endpoint icons | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Landing.tsx` | `KnaufLogoAvatar` import | 11–13 | Landing polish — reuses the shared contained Knauf logo avatar for the default-spec landing badge so its sizing matches history and URL-avatar surfaces | `Landing.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` agent history fallback | 61–72 | Conversation-history branding — agent chats without a custom icon URL now share the compact Knauf wordmark instead of falling back to the generic agent glyph | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
+| `api/server/middleware/requireMigrationAccess.js` | — | 1–37 | Express middleware: rejects authenticated users who are not on | — | — |
+| `packages/data-schemas/src/models/index.ts` | — | 31–33, 70–72 | Migration allowlist model — who is allowed into the new platform. | — | — |
+| `packages/data-schemas/src/models/migrationAllowlist.ts` | — | 1–11 | Model factory for the migration allowlist collection. | — | — |
+| `packages/data-schemas/src/schema/index.ts` | — | 29–31 | Migration allowlist schema — one doc per allowed user (keyed by email). | — | — |
+| `packages/data-schemas/src/schema/migrationAllowlist.ts` | — | 1–24 | Migration access allowlist — one document per allowed user (keyed by normalised email). | — | — |
+| `packages/data-schemas/src/types/index.ts` | — | 39–41 | Migration allowlist type. | — | — |
+| `packages/data-schemas/src/types/migrationAllowlist.ts` | — | 1–10 | Type for the migration allowlist document. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration

@@ -36,3 +36,6 @@ export * from './admin';
 export * from './web';
 /* MCP Servers */
 export * from './mcp';
+// [knauf] Migration allowlist type.
+export * from './migrationAllowlist';
+// End [knauf]

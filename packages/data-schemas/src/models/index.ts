@@ -28,6 +28,9 @@ import { createAclEntryModel } from './aclEntry';
 import { createSystemGrantModel } from './systemGrant';
 import { createGroupModel } from './group';
 import { createConfigModel } from './config';
+// [knauf] Migration allowlist model — who is allowed into the new platform.
+import { createMigrationAllowlistModel } from './migrationAllowlist';
+// End [knauf]
 
 /**
  * Creates all database models for all collections
@@ -64,5 +67,8 @@ export function createModels(mongoose: typeof import('mongoose')) {
     SystemGrant: createSystemGrantModel(mongoose),
     Group: createGroupModel(mongoose),
     Config: createConfigModel(mongoose),
+    // [knauf] Migration allowlist — who can access the new platform.
+    MigrationAllowlist: createMigrationAllowlistModel(mongoose),
+    // End [knauf]
   };
 }

@@ -31,6 +31,10 @@ import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
 import KnaufTopBar from '~/knauf/components/Header/KnaufTopBar';
 const KNAUF_HEADER_HEIGHT = 56; // px — must match KnaufTopBar's `h-14` (56px)
 // End [knauf]
+// [knauf] Migration access gate — blocks users not on the allowlist after Okta login.
+import KnaufAccessDenied from '~/knauf/components/AccessDenied/KnaufAccessDenied';
+import { useMigrationAccess } from '~/knauf/hooks/Auth/useMigrationAccess';
+// End [knauf]
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
@@ -39,6 +43,10 @@ export default function Root() {
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
 
   const { isAuthenticated, logout } = useAuthContext();
+
+  // [knauf] Block non-allowlisted users immediately after login.
+  const { allowed: migrationAllowed, isLoading: migrationLoading } = useMigrationAccess();
+  // End [knauf]
 
   useHealthCheck(isAuthenticated);
 
@@ -71,6 +79,16 @@ export default function Root() {
   if (!isAuthenticated) {
     return null;
   }
+
+  // [knauf] Show access denied screen if the user is not on the migration allowlist.
+  // While the check is loading we render null (avoids flash of main UI).
+  if (migrationLoading) {
+    return null;
+  }
+  if (!migrationAllowed) {
+    return <KnaufAccessDenied />;
+  }
+  // End [knauf]
 
   return (
     <SetConvoProvider>
