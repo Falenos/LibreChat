@@ -503,6 +503,57 @@ describe('interfaceSchema', () => {
     expect(result).not.toHaveProperty('sidePanel');
     expect(result.modelSelect).toBe(false);
   });
+
+  // [knauf] KK20-179 — seam test for interface.knauf.promptTemplates schema
+  describe('knauf.promptTemplates', () => {
+    it('accepts a well-formed promptTemplates array', () => {
+      const result = interfaceSchema.safeParse({
+        knauf: {
+          promptTemplates: [
+            { id: 'tpl-1', label: 'General', description: 'Desc', content: '## Role\nYou are helpful.' },
+            { id: 'tpl-2', label: 'Writer', description: 'Desc2', content: 'Content here' },
+          ],
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(result.data?.knauf?.promptTemplates).toHaveLength(2);
+    });
+
+    it('accepts omitting promptTemplates entirely (optional)', () => {
+      const result = interfaceSchema.safeParse({ knauf: {} });
+      expect(result.success).toBe(true);
+      expect(result.data?.knauf?.promptTemplates).toBeUndefined();
+    });
+
+    it('rejects a template entry missing required id', () => {
+      const result = interfaceSchema.safeParse({
+        knauf: {
+          promptTemplates: [{ label: 'No ID', description: 'Desc', content: 'Text' }],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects a template entry with non-string content', () => {
+      const result = interfaceSchema.safeParse({
+        knauf: {
+          promptTemplates: [{ id: 'x', label: 'X', description: 'D', content: 123 }],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects content exceeding max length (4000 chars)', () => {
+      const result = interfaceSchema.safeParse({
+        knauf: {
+          promptTemplates: [
+            { id: 'x', label: 'X', description: 'D', content: 'a'.repeat(4001) },
+          ],
+        },
+      });
+      expect(result.success).toBe(false);
+    });
+  });
 });
 
 describe('summarizationTriggerSchema', () => {
