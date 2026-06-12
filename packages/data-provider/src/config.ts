@@ -760,6 +760,21 @@ export const interfaceSchema = z
          * opt-in via `ephemeralAgent.image_gen`. KK20-168.
          */
         imageGen: z.boolean().optional(),
+        /**
+         * Starter prompt templates for the agent builder. Each entry is
+         * rendered as a selectable card in the template picker when the
+         * instructions field is empty. KK20-179.
+         */
+        promptTemplates: z
+          .array(
+            z.object({
+              id: z.string().max(50),
+              label: z.string().max(100),
+              description: z.string().max(300),
+              content: z.string().max(4000),
+            }),
+          )
+          .optional(),
       })
       .optional(),
     // End [knauf]

@@ -13,11 +13,12 @@ export interface AutogeneratePromptRequest {
     category: string;
     personality: { label: string; description: string };
     capabilities: string[];
-    knowledgeFileCount: number;
+    knowledgeFiles: Array<{ name: string; type: string }>;
     tools: string[];
     mcpServers: string[];
   };
   currentDraft: string;
+  sourceTemplate?: string;
 }
 
 export interface AutogeneratePromptResponse {
@@ -28,4 +29,19 @@ export function postAutogeneratePrompt(
   body: AutogeneratePromptRequest,
 ): Promise<AutogeneratePromptResponse> {
   return request.post(endpoints.autogeneratePrompt(), body);
+}
+
+export interface PromptTemplate {
+  id: string;
+  label: string;
+  description: string;
+  content: string;
+}
+
+export interface PromptTemplatesResponse {
+  templates: PromptTemplate[];
+}
+
+export function getPromptTemplates(): Promise<PromptTemplatesResponse> {
+  return request.get(endpoints.promptTemplates());
 }
