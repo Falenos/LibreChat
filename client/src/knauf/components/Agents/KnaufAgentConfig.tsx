@@ -442,23 +442,20 @@ export default function KnaufAgentConfig() {
       onError: (err) =>
         showToast({
           status: 'error',
-          message: err?.message ?? "Couldn't draft instructions.",
+          message: err?.message ?? localize('com_knauf_prompt_draft_failed'),
         }),
     });
   };
 
   /** Generate a preview of the user's draft merged into a template.
    *  Uses a separate mutation (distinct mutationKey) so it doesn't
-   *  conflict with Polish. Returns a promise for the overlay's state. */
+   *  conflict with Polish. Returns a promise for the overlay's state.
+   *  Always uses the current editor text so manual edits are never lost. */
   const generatePreview = useCallback(
     async (templateContent: string): Promise<string> => {
-      // Use the original draft (before any template was applied) so that
-      // switching templates doesn't carry over sections from a prior apply.
-      const payload = buildAutogeneratePayload(templateContent);
-      if (originalDraftRef.current !== null) {
-        payload.currentDraft = originalDraftRef.current;
-      }
-      const { text } = await previewMutation.mutateAsync(payload);
+      const { text } = await previewMutation.mutateAsync(
+        buildAutogeneratePayload(templateContent),
+      );
       return text;
     },
     [previewMutation, buildAutogeneratePayload],
@@ -466,13 +463,11 @@ export default function KnaufAgentConfig() {
 
   /** Called when a template is selected in the expanded overlay.
    *  Does NOT touch the editor content — the user's draft stays as-is.
-   *  Sets the template as a read-only reference panel and records it
-   *  as sourceTemplate for Preview context. */
+   *  Sets the template as a read-only reference panel and saves the
+   *  current draft so Apply can provide undo back to it. */
   const handleTemplateSelectOverlay = useCallback(
     (template: PromptTemplate) => {
-      if (originalDraftRef.current === null) {
-        originalDraftRef.current = getValues('instructions') ?? '';
-      }
+      originalDraftRef.current = getValues('instructions') ?? '';
       setActiveTemplateId(template.id);
     },
     [getValues],

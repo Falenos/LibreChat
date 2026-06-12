@@ -162,8 +162,9 @@ export default function InstructionsField({
         </button>
       </div>
 
-      {/* Template select — compact dropdown, always visible in edit mode */}
-      {templatePicker && mode === 'edit' && (
+      {/* Template select — always visible so users can pick a template
+           regardless of whether they're in formatted or edit view */}
+      {templatePicker && (
         <div className="mb-2">
           {templatePicker}
         </div>
@@ -234,4 +235,3 @@ export default function InstructionsField({
   );
 }
 
-export { looksLikeMarkdown } from './markdownDetect';

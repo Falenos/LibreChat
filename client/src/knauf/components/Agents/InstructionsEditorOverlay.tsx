@@ -70,9 +70,13 @@ function TemplatePreviewPanel({
         )}
       </div>
 
-      {/* Preview area */}
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-4">
+      {/* Preview area — shrink-to-fit when only the CTA is showing,
+           flex-1 once a preview or loading state needs scroll space */}
+      <div className={cn(
+        'flex min-h-0 flex-col overflow-hidden',
+        hasPreview ? 'flex-1' : 'shrink-0',
+      )}>
+        <div className={cn(hasPreview ? 'flex-1 overflow-y-auto' : '', 'p-4')}>
           {previewLoading && (
             <div className="flex items-center gap-2 py-4 text-sm text-text-secondary">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -179,6 +183,7 @@ export default function InstructionsEditorOverlay({
   const { control, setValue, getValues } = useFormContext<AgentForm>();
   const instructions = useWatch({ control, name: 'instructions' });
   const monacoRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [mobileTab, setMobileTab] = useState<MobileTab>('edit');
   const [showTemplates, setShowTemplates] = useState(false);
 
@@ -263,22 +268,27 @@ export default function InstructionsEditorOverlay({
     wasDrafting.current = drafting;
   }, [drafting]);
 
-  // Sync external form changes into Monaco (e.g., after Polish or Apply)
+  // Sync external form changes into Monaco (e.g., after Polish or Apply).
+  // `suppressOnChange` prevents ed.setValue from re-triggering handleEditorChange
+  // which would cause a redundant form write cycle.
   const lastExternalValue = useRef(instructions ?? '');
+  const suppressOnChange = useRef(false);
   useEffect(() => {
     const ed = monacoRef.current;
     if (!ed) return;
     const current = instructions ?? '';
     const editorValue = ed.getValue();
-    // Only update if the form value changed externally (not from our own onChange)
     if (current !== editorValue && current !== lastExternalValue.current) {
+      suppressOnChange.current = true;
       ed.setValue(current);
+      suppressOnChange.current = false;
     }
     lastExternalValue.current = current;
   }, [instructions]);
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
+      if (suppressOnChange.current) return;
       const text = value ?? '';
       lastExternalValue.current = text;
       setValue('instructions', text, { shouldDirty: true });
@@ -351,11 +361,11 @@ export default function InstructionsEditorOverlay({
       setTemplateCollapsed(true);
     } catch (err: unknown) {
       if (previewGenRef.current !== thisGen) return;
-      setPreviewError(err instanceof Error ? err.message : 'Preview generation failed.');
+      setPreviewError(err instanceof Error ? err.message : localize('com_knauf_prompt_preview_failed'));
     } finally {
       if (previewGenRef.current === thisGen) setPreviewLoading(false);
     }
-  }, [templateReferenceContent, onGeneratePreview]);
+  }, [templateReferenceContent, onGeneratePreview, localize]);
 
   const handleApply = useCallback(() => {
     if (!previewText || !onApplyPreview) return;
@@ -367,6 +377,7 @@ export default function InstructionsEditorOverlay({
   return (
     <OGDialog open={open} onOpenChange={onOpenChange}>
       <OGDialogContent
+        ref={dialogRef}
         showCloseButton={false}
         className={cn(
           // Override OGDialogContent's default centered/constrained layout
@@ -394,7 +405,7 @@ export default function InstructionsEditorOverlay({
             <button
               type="button"
               onClick={onUndo}
-              title={localize('com_knauf_prompt_undo_polish')}
+              title={localize('com_knauf_prompt_undo_revert')}
               className="flex h-8 items-center gap-1 rounded-md border border-border-medium bg-surface-secondary px-2 text-sm text-text-primary transition-colors hover:bg-surface-tertiary"
             >
               <Undo2 className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
@@ -408,7 +419,7 @@ export default function InstructionsEditorOverlay({
             onClick={onAutogenerate}
             labelClassName="hidden sm:inline"
           />
-          <VariablesPopover onPick={insertVariable} labelClassName="hidden sm:inline" />
+          <VariablesPopover onPick={insertVariable} labelClassName="hidden sm:inline" portalContainer={dialogRef.current} />
 
           {templatePicker && (
             <button

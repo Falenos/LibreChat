@@ -60,7 +60,7 @@ function buildUserMessage(input) {
   const personalityLabel = agent.personality.label.trim();
   const personalityDescription = agent.personality.description.trim();
   const capabilities = agent.capabilities;
-  const knowledgeFiles = agent.knowledgeFiles;
+  const knowledgeFiles = agent.knowledgeFiles ?? [];
   const tools = agent.tools;
   const mcpServers = agent.mcpServers;
 

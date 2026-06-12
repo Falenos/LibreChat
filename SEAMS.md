@@ -217,11 +217,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/promptTemplates.js` | `requireJwtAuth`, `getAppConfig` | Low — reads `interface.knauf.promptTemplates` from cached app config | Manual | KK20-179 |
 | `client/src/knauf/components/Agents/InstructionsEditorOverlay.tsx` | `@librechat/client` (`OGDialog`), `@monaco-editor/react`, `~/common`, `~/utils` | Low — UI-only overlay; Monaco already in bundle (Artifacts) | Manual | KK20-179 |
 | `client/src/knauf/components/Agents/InstructionsField.tsx` | `~/common`, `~/utils`, `~/hooks` | Low — UI-only dual-mode textarea/markdown field | Manual | KK20-179 |
-| `client/src/knauf/components/Agents/looksLikeMarkdown.spec.ts` | `./markdownDetect` | Low — test-only; 8 unit tests for markdown heuristic | Self | KK20-179 |
-| `client/src/knauf/components/Agents/markdownDetect.ts` | None | Low — pure function, zero deps | `looksLikeMarkdown.spec.ts` | KK20-179 |
+| `client/src/knauf/components/Agents/AutoGenerateButton.tsx` | `~/utils`, `~/hooks` | Low — UI-only Generate/Polish button | Manual | KK20-179 |
 | `client/src/knauf/components/Agents/MarkdownPreview.tsx` | `react-markdown`, `remark-gfm`, `~/utils` | Low — memoized markdown renderer, no upstream file mods | Manual | KK20-179 |
 | `client/src/knauf/components/Agents/TemplatePicker.tsx` | `~/utils`, `~/knauf/data-provider/*` | Low — UI-only card grid | Manual | KK20-179 |
-| `client/src/knauf/components/Agents/TemplateSelect.tsx` | `~/utils`, `~/knauf/data-provider/*` | Low — UI-only compact dropdown | Manual | KK20-179 |
+| `client/src/knauf/components/Agents/TemplateSelect.tsx` | `@librechat/client` (`ControlCombobox`), `~/knauf/data-provider/*` | Low — UI-only combobox dropdown matching AgentCategorySelector | Manual | KK20-179 |
+| `client/src/knauf/components/Agents/VariablesPopover.tsx` | `@radix-ui/react-popover`, `librechat-data-provider` (`specialVariables`), `~/hooks` | Low — variable insertion popover, portal-aware for OGDialog | Manual | KK20-179 |
+| `client/src/knauf/data-provider/Agents/useAutogeneratePrompt.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query mutation hook for autogenerate/preview | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/usePromptTemplates.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query hook with 5-min staleTime | Manual | KK20-179 |
 <!-- seams:new:end -->
 

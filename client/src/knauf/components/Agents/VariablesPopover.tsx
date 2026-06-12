@@ -36,10 +36,14 @@ const variableOptions: VariableOption[] = Object.keys(specialVariables).map(
 export default function VariablesPopover({
   onPick,
   labelClassName,
+  portalContainer,
 }: Readonly<{
   onPick: (token: string) => void;
   /** Extra classes on the text label — e.g. `"hidden sm:inline"` to hide on mobile. */
   labelClassName?: string;
+  /** Portal target — set to the dialog element when used inside an OGDialog
+   *  so clicks aren't swallowed by the dialog's focus trap. */
+  portalContainer?: HTMLElement | null;
 }>) {
   const localize = useLocalize();
 
@@ -58,12 +62,12 @@ export default function VariablesPopover({
           <span className={labelClassName}>{localize('com_ui_variables')}</span>
         </button>
       </Popover.Trigger>
-      <Popover.Portal>
+      <Popover.Portal container={portalContainer ?? undefined}>
         <Popover.Content
           align="end"
           side="top"
           sideOffset={6}
-          className="z-30 w-56 overflow-hidden rounded-md border border-border-light bg-surface-primary p-1 shadow-lg"
+          className="z-[1100] w-56 overflow-hidden rounded-md border border-border-light bg-surface-primary p-1 shadow-lg"
         >
           {variableOptions.map((option) => (
             <Popover.Close key={option.value} asChild>

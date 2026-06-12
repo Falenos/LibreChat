@@ -81,7 +81,7 @@ describe('buildUserMessage', () => {
       category: '',
       personality: { label: '', description: '' },
       capabilities: [],
-      knowledgeFileCount: 0,
+      knowledgeFiles: [],
       tools: [],
       mcpServers: [],
     },
@@ -108,6 +108,7 @@ describe('buildUserMessage', () => {
     expect(msg).not.toContain("What it's for:");
     expect(msg).not.toContain('Category:');
     expect(msg).not.toContain('Personality:');
+    expect(msg).not.toContain('Knowledge files');
     // capabilities default line should appear
     expect(msg).toContain('What it can do: reply from its own knowledge only');
   });
@@ -129,7 +130,11 @@ describe('buildUserMessage', () => {
         category: 'Sales',
         personality: { label: 'Precise', description: 'Sticks to the facts.' },
         capabilities: ['Browse the internet'],
-        knowledgeFileCount: 3,
+        knowledgeFiles: [
+          { name: 'pricing.pdf', type: 'application/pdf' },
+          { name: 'faq.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+          { name: 'catalog.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+        ],
         tools: ['Web Search'],
         mcpServers: ['sharepoint'],
       },
@@ -140,7 +145,7 @@ describe('buildUserMessage', () => {
     expect(msg).toContain('Category: Sales');
     expect(msg).toContain('Personality: Precise');
     expect(msg).toContain('What it can do: Browse the internet');
-    expect(msg).toContain('Knowledge: 3 attached documents');
+    expect(msg).toContain('Knowledge files (3): pricing.pdf, faq.docx, catalog.xlsx');
     expect(msg).toContain('Tools available: Web Search');
     expect(msg).toContain('MCP servers connected: sharepoint');
   });
@@ -155,10 +160,10 @@ describe('POST /', () => {
     jest.clearAllMocks();
   });
 
-  it('returns 400 for invalid body (knowledgeFileCount is not a number)', async () => {
+  it('returns 400 for invalid body (knowledgeFiles has wrong shape)', async () => {
     const res = await request(app)
       .post('/')
-      .send({ agent: { knowledgeFileCount: 'bad' } });
+      .send({ agent: { knowledgeFiles: 'bad' } });
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('Invalid request body.');
     expect(res.body.issues).toBeDefined();
