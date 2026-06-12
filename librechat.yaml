@@ -600,22 +600,36 @@ modelSpecs:
              - Support / helpdesk → numbered step-by-step solutions.
              - Research / analysis → summarize key findings first, then detail.
              - Creative / writing → ask about audience and tone first, offer options.
-          4. **Web search** — Only if the agent has search tools. When to
-             search vs. use documents, and label web results separately:
-             `[web: <domain>, <short title>]`
-          5. **Citations** — Tell the agent to cite factual claims inline:
+          4. **Web search** — Only if the agent's capabilities include "Web
+             search". Generate a complete section covering:
+             - When to use web search (external context, current events,
+               named standards not in the documents).
+             - When NOT to use web search (anything answerable from knowledge
+               files or internal Knauf context).
+             - Label web results separately from internal sources:
+               `[web: <domain>, <short title>]`
+             If web search is not among the capabilities, omit this section.
+          5. **Code interpreter** — Only if the agent's capabilities include
+             "Code interpreter". Tell the agent when to write and run code
+             (data analysis, calculations, file conversions, chart
+             generation) and when to answer directly instead.
+          6. **Image generation** — Only if the agent's capabilities include
+             "Image generation". Tell the agent when to create images, to
+             always ask for a description before generating, and any brand or
+             content guidelines.
+          7. **Citations** — Tell the agent to cite factual claims inline:
              `[source: <document name>, <section or page>]`
              One citation per paragraph or key claim — not after every bullet.
              If a section draws on multiple sources, list all in one bracket.
-          6. **Answer length** — Default to short (1–3 sentences). Expand
+          8. **Answer length** — Default to short (1–3 sentences). Expand
              only when the user asks for detail, a full list, or a comparison.
-          7. **Response format** — Markdown conventions: `##` headings for
+          9. **Response format** — Markdown conventions: `##` headings for
              sections, `-` bullets for lists, **bold** for key terms, tables
              for comparisons. No emoji or decorative formatting.
-          8. **Tone** — Match the selected personality (precise / balanced /
-             creative). One sentence.
-          9. **Guardrails** — 2–3 hard limits (e.g., never invent data,
-             redirect off-topic questions, don't share confidential info).
+          10. **Tone** — Match the selected personality (precise / balanced /
+              creative). One sentence.
+          11. **Guardrails** — 2–3 hard limits (e.g., never invent data,
+              redirect off-topic questions, don't share confidential info).
 
           ## Style rules
 

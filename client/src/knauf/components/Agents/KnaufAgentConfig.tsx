@@ -112,7 +112,8 @@ export default function KnaufAgentConfig() {
   );
   // ── Instructions overlay + template context + undo ──────────────────────
   const [overlayOpen, setOverlayOpen] = useState(false);
-  const undoTextRef = useRef<string | null>(null);
+  const UNDO_STACK_MAX = 10;
+  const undoStackRef = useRef<string[]>([]);
   // Captures the user's draft BEFORE any template was applied.
   // Used as currentDraft for preview generation so switching templates
   // doesn't carry over sections from a previously applied template.
@@ -153,7 +154,7 @@ export default function KnaufAgentConfig() {
   useEffect(() => {
     if (prevAgentRef.current !== undefined && prevAgentRef.current !== agent_id) {
       originalDraftRef.current = null;
-      undoTextRef.current = null;
+      undoStackRef.current = [];
       setCanUndo(false);
       setActiveTemplateId(null);
     }
@@ -165,7 +166,7 @@ export default function KnaufAgentConfig() {
   const prevSubmitCount = useRef(formState.submitCount);
   useEffect(() => {
     if (formState.submitCount > prevSubmitCount.current && formState.isSubmitSuccessful) {
-      undoTextRef.current = null;
+      undoStackRef.current = [];
       originalDraftRef.current = null;
       setCanUndo(false);
       setActiveTemplateId(null);
@@ -173,12 +174,20 @@ export default function KnaufAgentConfig() {
     prevSubmitCount.current = formState.submitCount;
   }, [formState.submitCount, formState.isSubmitSuccessful]);
 
+  /** Push a snapshot onto the undo stack (capped at UNDO_STACK_MAX). */
+  const pushUndo = useCallback((text: string) => {
+    const stack = undoStackRef.current;
+    // Avoid duplicate consecutive entries
+    if (stack.length > 0 && stack[stack.length - 1] === text) return;
+    stack.push(text);
+    if (stack.length > UNDO_STACK_MAX) stack.shift();
+    setCanUndo(true);
+  }, []);
+
   // KK20-123 — pending-files queue lives in a Knauf-namespaced Recoil
   // atom (see store/pendingAgentFiles.ts) so it survives the AgentPanel
-  // remount cycle. KnaufAgentConfig only owns the *clearing policy* on
-  // navigation, so we take setter-only handles (`useSetRecoilState`) —
-  // we don't need to re-render this component when the atom changes;
-  // KnaufFileSearch is the one that subscribes for renders.
+  // remount cycle. KnaufAgentConfig owns the *clearing policy* on
+  // navigation and reads pendingFiles for autogenerate payload metadata.
   const setPendingFiles = useSetRecoilState(knaufPendingAgentFilesAtom);
   const pendingFiles = useRecoilValue(knaufPendingAgentFilesAtom);
   const [pendingForAgentId, setPendingForAgentId] = useRecoilState(knaufPendingForAgentIdAtom);
@@ -353,16 +362,12 @@ export default function KnaufAgentConfig() {
 
   // ── Instructions: undo + ✦ Autogenerate ─────────────────────────────────
   const handleUndo = useCallback(() => {
-    if (undoTextRef.current === null) return;
-    setValue('instructions', undoTextRef.current, { shouldDirty: true });
-    undoTextRef.current = null;
-    setCanUndo(false);
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    const prev = stack.pop()!;
+    setValue('instructions', prev, { shouldDirty: true });
+    setCanUndo(stack.length > 0);
   }, [setValue]);
-
-  const dismissUndo = useCallback(() => {
-    undoTextRef.current = null;
-    setCanUndo(false);
-  }, []);
 
   /** Builds the autogenerate payload from current form state.
    *  Polish calls with no args (no template context).
@@ -428,12 +433,11 @@ export default function KnaufAgentConfig() {
   );
 
   const onAutogenerate = () => {
-    undoTextRef.current = getValues('instructions') ?? '';
-    setCanUndo(false);
+    const current = getValues('instructions') ?? '';
     autogenerate.mutate(buildAutogeneratePayload(), {
       onSuccess: ({ text }) => {
+        pushUndo(current);
         setValue('instructions', text, { shouldDirty: true });
-        setCanUndo(true);
       },
       onError: (err) =>
         showToast({
@@ -475,15 +479,39 @@ export default function KnaufAgentConfig() {
   );
 
   /** Called when a template is selected in the sidebar (non-overlay).
-   *  Populates the textarea with the template content so the user sees
-   *  immediate feedback. Supports undo. */
+   *  If the user already has a draft, auto-merges it with the template
+   *  via the preview mutation (same as "Preview with template" in the
+   *  overlay). Falls back to raw template insertion on error or when
+   *  there's no existing draft. */
+  const [sidebarTemplateMerging, setSidebarTemplateMerging] = useState(false);
   const handleTemplateSelectSidebar = useCallback(
     (template: PromptTemplate) => {
-      undoTextRef.current = getValues('instructions') ?? '';
-      setValue('instructions', template.content, { shouldDirty: true });
-      setCanUndo(true);
+      const currentDraft = getValues('instructions') ?? '';
+      // No existing draft — just insert the template content directly
+      if (!currentDraft.trim()) {
+        pushUndo(currentDraft);
+        setValue('instructions', template.content, { shouldDirty: true });
+        return;
+      }
+      // Existing draft — merge via the preview mutation
+      setSidebarTemplateMerging(true);
+      previewMutation.mutateAsync(buildAutogeneratePayload(template.content))
+        .then(({ text }) => {
+          pushUndo(currentDraft);
+          setValue('instructions', text, { shouldDirty: true });
+        })
+        .catch(() => {
+          // Fallback: insert raw template content
+          pushUndo(currentDraft);
+          setValue('instructions', template.content, { shouldDirty: true });
+          showToast({
+            status: 'warning',
+            message: localize('com_knauf_prompt_merge_failed'),
+          });
+        })
+        .finally(() => setSidebarTemplateMerging(false));
     },
-    [getValues, setValue],
+    [getValues, setValue, pushUndo, buildAutogeneratePayload, previewMutation, showToast, localize],
   );
 
   /** Called when the template panel is closed. Clears the reference
@@ -497,15 +525,14 @@ export default function KnaufAgentConfig() {
    *  Commits the AI-generated merged text to the editor with undo support. */
   const handleApplyPreview = useCallback(
     (text: string) => {
-      undoTextRef.current = getValues('instructions') ?? '';
+      pushUndo(getValues('instructions') ?? '');
       setValue('instructions', text, { shouldDirty: true });
-      setCanUndo(true);
     },
-    [getValues, setValue],
+    [getValues, setValue, pushUndo],
   );
 
   const templatePickerNode: ReactNode = (
-    <TemplateSelect onSelect={handleTemplateSelectSidebar} />
+    <TemplateSelect onSelect={handleTemplateSelectSidebar} loading={sidebarTemplateMerging} />
   );
 
   const templatePickerCompactNode: ReactNode = (
@@ -707,7 +734,6 @@ export default function KnaufAgentConfig() {
           onExpandClick={() => setOverlayOpen(true)}
           canUndo={canUndo}
           onUndo={handleUndo}
-          onUserEdit={dismissUndo}
           templatePicker={templatePickerNode}
         />
 
@@ -719,7 +745,6 @@ export default function KnaufAgentConfig() {
           onAutogenerate={onAutogenerate}
           canUndo={canUndo}
           onUndo={handleUndo}
-          onUserEdit={dismissUndo}
           templatePicker={templatePickerCompactNode}
           onTemplatePanelClose={handleTemplatePanelClose}
           templateReferenceContent={templateReferenceContent}

@@ -1,7 +1,8 @@
 /**
- * Dual-mode instructions field: formatted markdown view (click to edit)
- * and raw textarea (blur to return to formatted when content has markdown).
- * Undo state managed by parent (KnaufAgentConfig).
+ * Dual-mode instructions field: formatted markdown/text view (click to edit)
+ * and raw textarea (blur always returns to formatted). Always shows
+ * formatted view — even for plain text — so the reading experience is
+ * consistent. Undo state managed by parent (KnaufAgentConfig).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
@@ -13,7 +14,6 @@ import AutoGenerateButton from './AutoGenerateButton';
 import KnaufInfoBadge from './KnaufInfoBadge';
 import MarkdownPreview from './MarkdownPreview';
 import VariablesPopover from './VariablesPopover';
-import { looksLikeMarkdown } from './markdownDetect';
 
 const inputClass = cn(
   defaultTextProps,
@@ -31,7 +31,6 @@ export default function InstructionsField({
   onExpandClick,
   canUndo,
   onUndo,
-  onUserEdit,
   templatePicker,
 }: Readonly<{
   /** Whether the autogenerate mutation is in-flight. */
@@ -44,8 +43,6 @@ export default function InstructionsField({
   canUndo: boolean;
   /** Handler for the Undo button click (managed by parent). */
   onUndo: () => void;
-  /** Called when the user manually edits the textarea (to dismiss undo). */
-  onUserEdit?: () => void;
   /** Template picker element to render when instructions are empty. */
   templatePicker?: React.ReactNode;
 }>) {
@@ -54,27 +51,27 @@ export default function InstructionsField({
   const instructions = useWatch({ control, name: 'instructions' });
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Clear blur timer on unmount to prevent state-update-on-unmounted
   useEffect(() => () => clearTimeout(blurTimerRef.current), []);
 
   // ── View mode ──────────────────────────────────────────────────────────
   const hasContent = (instructions ?? '').trim().length > 0;
-  const isMd = looksLikeMarkdown(instructions ?? '');
 
-  // Default to formatted view if content looks like markdown
+  // Always default to formatted view — even for plain text
   const [mode, setMode] = useState<ViewMode>(() =>
-    hasContent && isMd ? 'formatted' : 'edit',
+    hasContent ? 'formatted' : 'edit',
   );
 
-  // When switching to a different agent that has markdown content, reset mode
+  // When switching to a different agent, reset to formatted if it has content
   const agentId = useWatch({ control, name: 'id' });
   const prevAgentId = useRef(agentId);
   useEffect(() => {
     if (agentId !== prevAgentId.current) {
       prevAgentId.current = agentId;
       const text = getValues('instructions') ?? '';
-      setMode(looksLikeMarkdown(text) ? 'formatted' : 'edit');
+      setMode(text.trim().length > 0 ? 'formatted' : 'edit');
     }
   }, [agentId, getValues]);
 
@@ -93,6 +90,7 @@ export default function InstructionsField({
   // ── Variable insertion ──────────────────────────────────────────────────
   const insertVariable = useCallback(
     (token: string) => {
+      clearTimeout(blurTimerRef.current);
       // If in formatted view, switch to edit mode first
       if (mode === 'formatted') setMode('edit');
 
@@ -118,7 +116,7 @@ export default function InstructionsField({
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="mb-6">
+    <div className="mb-6" ref={containerRef}>
       {/* Header row */}
       <div className="mb-2 flex items-center gap-2">
         <label
@@ -126,15 +124,16 @@ export default function InstructionsField({
           className={cn(labelClass, 'mb-0 inline-flex min-w-0 flex-grow items-center gap-1.5')}
         >
           <span className="truncate">{localize('com_ui_instructions')}</span>
-          <KnaufInfoBadge tip="Tell the agent what to do, who it is, and how to behave. Pick a template from the dropdown, or click Generate to have AI draft instructions for you." />
+          <KnaufInfoBadge tip={localize('com_knauf_prompt_info_tip')} />
         </label>
 
-        {/* Undo after polish */}
+        {/* Undo */}
         {canUndo && (
           <button
             type="button"
             onClick={onUndo}
-            title="Undo polish — revert to previous version"
+            onMouseDown={() => clearTimeout(blurTimerRef.current)}
+            title={localize('com_knauf_prompt_undo_revert')}
             className="flex h-7 flex-shrink-0 items-center gap-1 rounded-md border border-border-medium bg-surface-secondary px-2 text-sm text-text-primary transition-colors hover:bg-surface-tertiary"
           >
             <Undo2 className="h-3 w-3 text-text-secondary" aria-hidden />
@@ -144,7 +143,10 @@ export default function InstructionsField({
         <AutoGenerateButton
           hasDraft={hasContent}
           drafting={drafting}
-          onClick={onAutogenerate}
+          onClick={() => {
+            clearTimeout(blurTimerRef.current);
+            onAutogenerate();
+          }}
         />
         <VariablesPopover onPick={insertVariable} />
 
@@ -152,7 +154,8 @@ export default function InstructionsField({
         <button
           type="button"
           onClick={onExpandClick}
-          title="Open in full editor"
+          onMouseDown={() => clearTimeout(blurTimerRef.current)}
+          title={localize('com_knauf_prompt_open_full_editor')}
           className="flex h-7 flex-shrink-0 items-center justify-center rounded-md border border-border-medium bg-surface-secondary px-1.5 text-text-primary transition-colors hover:bg-surface-tertiary"
         >
           <Maximize2 className="h-3 w-3 text-text-secondary" aria-hidden />
@@ -179,7 +182,7 @@ export default function InstructionsField({
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') setMode('edit');
           }}
-          aria-label="Click to edit instructions"
+          aria-label={localize('com_knauf_prompt_click_to_edit')}
         >
           <MarkdownPreview content={instructions ?? ''} />
         </div>
@@ -197,17 +200,24 @@ export default function InstructionsField({
               }}
               onChange={(e) => {
                 field.onChange(e);
-                onUserEdit?.();
               }}
-              onBlur={() => {
+              onBlur={(e) => {
+                // If focus moves to another element within the instructions
+                // container (e.g. a header button), skip the auto-switch so
+                // the click target doesn't disappear mid-interaction.
+                if (
+                  e.relatedTarget instanceof Node &&
+                  containerRef.current?.contains(e.relatedTarget)
+                ) {
+                  return;
+                }
                 const text = getValues('instructions') ?? '';
-                if (looksLikeMarkdown(text)) {
-                  // Small delay to avoid flicker when clicking other buttons
-                  blurTimerRef.current = setTimeout(() => setMode('formatted'), 200);
+                if (text.trim().length > 0) {
+                  blurTimerRef.current = setTimeout(() => setMode('formatted'), 300);
                 }
               }}
               rows={6}
-              placeholder="What should this agent do? Describe its role, voice, and any guardrails."
+              placeholder={localize('com_knauf_prompt_placeholder')}
               className={cn(inputClass, 'min-h-[140px] resize-y leading-relaxed')}
               id="knauf-agent-instructions"
               aria-label="Agent instructions"
@@ -218,10 +228,7 @@ export default function InstructionsField({
 
       {/* Footer: character count */}
       <div className="mt-1 flex items-center justify-end text-xs text-text-tertiary">
-        <span>
-          {(instructions ?? '').length}
-          {' characters'}
-        </span>
+        <span>{localize('com_knauf_prompt_characters', { 0: `${(instructions ?? '').length}` })}</span>
       </div>
     </div>
   );

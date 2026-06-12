@@ -1,18 +1,17 @@
 /**
  * Fullscreen editor overlay for agent instructions (OGDialog).
- * Monaco Editor in markdown mode, adaptive right panel (formatted / stacked
- * template+preview), context-aware mobile tabs. Right panel hidden for plain
- * text without a template.
+ * Monaco Editor in markdown mode, always-visible right panel (formatted
+ * preview or stacked template+preview), context-aware mobile tabs.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFormContext, useWatch } from 'react-hook-form';
 import MonacoEditor from '@monaco-editor/react';
-import type { editor } from 'monaco-editor';
+import type { editor, IPosition } from 'monaco-editor';
 import { X, Undo2, BookOpen, Pencil, FileText, Sparkles, Loader2, Check, ChevronDown, ChevronRight, LayoutTemplate } from 'lucide-react';
 import { OGDialog, OGDialogContent } from '@librechat/client';
 import type { AgentForm } from '~/common';
 import { cn } from '~/utils';
-import { looksLikeMarkdown } from './markdownDetect';
+import { useLocalize } from '~/hooks';
 import AutoGenerateButton from './AutoGenerateButton';
 import MarkdownPreview from './MarkdownPreview';
 import VariablesPopover from './VariablesPopover';
@@ -21,7 +20,10 @@ type MobileTab = 'edit' | 'formatted';
 
 // ── Right-panel sub-components (extracted to reduce cognitive complexity) ──
 
-/** Template reference + AI preview panel (shown when a template is active). */
+/** Template reference + AI preview panel (shown when a template is active).
+ *  Layout: template reference takes more space when no preview exists,
+ *  preview CTA is compact. After preview is generated, both areas split
+ *  the space. */
 function TemplatePreviewPanel({
   templateContent,
   templateCollapsed,
@@ -41,46 +43,51 @@ function TemplatePreviewPanel({
   onGeneratePreview: () => void;
   onApply: () => void;
 }>) {
+  const localize = useLocalize();
+  const hasPreview = previewText != null || previewLoading;
   return (
     <>
-      {/* Collapsible template reference */}
-      <div className="border-b border-border-light">
+      {/* Collapsible template reference — takes flex-1 when no preview */}
+      <div className={cn(
+        'flex flex-col overflow-hidden border-b border-border-light',
+        hasPreview ? 'max-h-[40%] shrink-0' : 'flex-1 min-h-0',
+      )}>
         <button
           type="button"
           onClick={onToggleCollapse}
-          className="flex w-full items-center gap-1.5 px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:text-text-primary"
+          className="flex w-full items-center gap-1.5 px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:text-text-primary shrink-0"
         >
           {templateCollapsed
             ? <ChevronRight className="h-3.5 w-3.5" aria-hidden />
             : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
           <FileText className="h-3.5 w-3.5" aria-hidden />
-          Template reference
+          {localize('com_knauf_prompt_template_reference')}
         </button>
         {!templateCollapsed && (
-          <div className="max-h-64 overflow-y-auto border-t border-border-light px-4 py-3">
+          <div className="flex-1 min-h-0 overflow-y-auto border-t border-border-light px-4 py-3">
             <MarkdownPreview content={templateContent} />
           </div>
         )}
       </div>
 
       {/* Preview area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden">
         <div className="flex-1 overflow-y-auto p-4">
           {previewLoading && (
-            <div className="flex items-center gap-2 py-8 text-sm text-text-secondary">
+            <div className="flex items-center gap-2 py-4 text-sm text-text-secondary">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              Generating preview…
+              {localize('com_knauf_prompt_generating_preview')}
             </div>
           )}
           {previewError && (
-            <div className="py-4">
+            <div className="py-3">
               <p className="text-sm text-red-500">{previewError}</p>
               <button
                 type="button"
                 onClick={onGeneratePreview}
                 className="mt-2 text-sm text-text-secondary underline hover:text-text-primary"
               >
-                Retry
+                {localize('com_knauf_prompt_retry')}
               </button>
             </div>
           )}
@@ -88,32 +95,32 @@ function TemplatePreviewPanel({
             <MarkdownPreview content={previewText} />
           )}
           {!previewText && !previewLoading && !previewError && (
-            <div className="flex flex-col items-center gap-3 py-10">
-              <p className="text-sm text-text-tertiary">
-                See how your draft looks merged with this template.
-              </p>
+            <div className="flex items-center gap-3 py-4">
               <button
                 type="button"
                 onClick={onGeneratePreview}
-                className="flex items-center gap-1.5 rounded-lg border border-border-medium bg-surface-secondary px-4 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary"
+                className="flex items-center gap-1.5 rounded-lg border border-border-medium bg-surface-secondary px-3 py-1.5 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary"
               >
                 <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                Preview with template
+                {localize('com_knauf_prompt_preview_with_template')}
               </button>
+              <span className="text-xs text-text-tertiary">
+                {localize('com_knauf_prompt_preview_hint')}
+              </span>
             </div>
           )}
         </div>
 
         {/* Apply button — pinned at bottom */}
         {previewText && !previewLoading && (
-          <div className="border-t border-border-light px-4 py-3">
+          <div className="border-t border-border-light px-4 py-2.5 shrink-0">
             <button
               type="button"
               onClick={onApply}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700"
             >
               <Check className="h-4 w-4" aria-hidden />
-              Apply to editor
+              {localize('com_knauf_prompt_apply_to_editor')}
             </button>
           </div>
         )}
@@ -124,11 +131,12 @@ function TemplatePreviewPanel({
 
 /** Formatted markdown preview of editor content (shown when no template is active). */
 function FormattedPreviewPanel({ content }: Readonly<{ content: string }>) {
+  const localize = useLocalize();
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border-light px-4 py-2">
         <BookOpen className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
-        <span className="text-xs font-medium text-text-secondary">Formatted view</span>
+        <span className="text-xs font-medium text-text-secondary">{localize('com_knauf_prompt_formatted_view')}</span>
       </div>
       <div className="flex-1 overflow-y-auto p-4">
         <MarkdownPreview content={content} />
@@ -146,7 +154,6 @@ export default function InstructionsEditorOverlay({
   onAutogenerate,
   canUndo,
   onUndo,
-  onUserEdit,
   templatePicker,
   onTemplatePanelClose,
   templateReferenceContent,
@@ -159,7 +166,6 @@ export default function InstructionsEditorOverlay({
   onAutogenerate: () => void;
   canUndo: boolean;
   onUndo: () => void;
-  onUserEdit?: () => void;
   templatePicker?: React.ReactNode;
   onTemplatePanelClose?: () => void;
   /** Raw template content for the read-only reference panel. Display only — never persisted. */
@@ -169,17 +175,15 @@ export default function InstructionsEditorOverlay({
   /** Commits the previewed text to the editor with undo support. */
   onApplyPreview?: (text: string) => void;
 }>) {
+  const localize = useLocalize();
   const { control, setValue, getValues } = useFormContext<AgentForm>();
   const instructions = useWatch({ control, name: 'instructions' });
   const monacoRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const [mobileTab, setMobileTab] = useState<MobileTab>('edit');
   const [showTemplates, setShowTemplates] = useState(false);
 
-  // Right panel: stacked template reference + preview when a template is selected
+  // Right panel: always visible — formatted preview or stacked template+preview
   const hasTemplate = Boolean(templateReferenceContent);
-  const isMd = looksLikeMarkdown(instructions ?? '');
-  // Show right panel when there's markdown to preview or a template is active
-  const showRightPanel = hasTemplate || isMd;
   const [templateCollapsed, setTemplateCollapsed] = useState(false);
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -234,24 +238,30 @@ export default function InstructionsEditorOverlay({
     }
   }, [templateReferenceContent]);
 
+  // Stable ref for onTemplatePanelClose to avoid re-triggering the effect
+  const onTemplatePanelCloseRef = useRef(onTemplatePanelClose);
+  onTemplatePanelCloseRef.current = onTemplatePanelClose;
+
   // Focus editor when overlay opens; end template browsing when it closes
   useEffect(() => {
     if (open) {
       requestAnimationFrame(() => monacoRef.current?.focus());
-    } else if (showTemplates) {
-      setShowTemplates(false);
-      onTemplatePanelClose?.();
+    } else {
+      setShowTemplates((prev) => {
+        if (prev) onTemplatePanelCloseRef.current?.();
+        return false;
+      });
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Auto-switch to formatted tab on mobile after polish completes
   const wasDrafting = useRef(false);
   useEffect(() => {
     if (wasDrafting.current && !drafting) {
-      if (showRightPanel) setMobileTab('formatted');
+      setMobileTab('formatted');
     }
     wasDrafting.current = drafting;
-  }, [drafting, showRightPanel]);
+  }, [drafting]);
 
   // Sync external form changes into Monaco (e.g., after Polish or Apply)
   const lastExternalValue = useRef(instructions ?? '');
@@ -272,14 +282,20 @@ export default function InstructionsEditorOverlay({
       const text = value ?? '';
       lastExternalValue.current = text;
       setValue('instructions', text, { shouldDirty: true });
-      onUserEdit?.();
     },
-    [setValue, onUserEdit],
+    [setValue],
   );
+
+  // Track the last known cursor position so variable insertion works
+  // even after the popover button steals focus from Monaco.
+  const lastCursorPosition = useRef<IPosition | null>(null);
 
   const handleEditorMount = useCallback(
     (ed: editor.IStandaloneCodeEditor) => {
       monacoRef.current = ed;
+      ed.onDidChangeCursorPosition((e) => {
+        lastCursorPosition.current = e.position;
+      });
     },
     [],
   );
@@ -290,14 +306,29 @@ export default function InstructionsEditorOverlay({
       const ed = monacoRef.current;
       if (ed) {
         const selection = ed.getSelection();
-        if (selection) {
-          ed.executeEdits('insertVariable', [{
-            range: selection,
-            text: token,
-            forceMoveMarkers: true,
-          }]);
-          ed.focus();
+        // If the selection is the default (1,1)→(1,1) and we have a stored
+        // cursor position, use that instead — the popover stole focus.
+        const useStoredPos =
+          selection &&
+          selection.startLineNumber === 1 &&
+          selection.startColumn === 1 &&
+          selection.endLineNumber === 1 &&
+          selection.endColumn === 1 &&
+          lastCursorPosition.current;
+
+        if (useStoredPos) {
+          const pos = lastCursorPosition.current!;
+          const range = {
+            startLineNumber: pos.lineNumber,
+            startColumn: pos.column,
+            endLineNumber: pos.lineNumber,
+            endColumn: pos.column,
+          };
+          ed.executeEdits('insertVariable', [{ range, text: token, forceMoveMarkers: true }]);
+        } else if (selection) {
+          ed.executeEdits('insertVariable', [{ range: selection, text: token, forceMoveMarkers: true }]);
         }
+        ed.focus();
       } else {
         const current = getValues('instructions') ?? '';
         setValue('instructions', current + token, { shouldDirty: true });
@@ -352,22 +383,22 @@ export default function InstructionsEditorOverlay({
         {/* ── Header ──────────────────────────────────────────────── */}
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-light px-4 py-2 md:py-3">
           <h2 className="mr-auto text-base font-semibold text-text-primary">
-            Instructions
+            {localize('com_knauf_prompt_instructions')}
           </h2>
 
           <span className="text-xs text-text-tertiary">
-            {(instructions ?? '').length} chars
+            {localize('com_knauf_prompt_chars', { 0: `${(instructions ?? '').length}` })}
           </span>
 
           {canUndo && (
             <button
               type="button"
               onClick={onUndo}
-              title="Undo polish"
+              title={localize('com_knauf_prompt_undo_polish')}
               className="flex h-8 items-center gap-1 rounded-md border border-border-medium bg-surface-secondary px-2 text-sm text-text-primary transition-colors hover:bg-surface-tertiary"
             >
               <Undo2 className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
-              <span className="hidden sm:inline">Undo</span>
+              <span className="hidden sm:inline">{localize('com_knauf_prompt_undo')}</span>
             </button>
           )}
 
@@ -382,7 +413,7 @@ export default function InstructionsEditorOverlay({
           {templatePicker && (
             <button
               type="button"
-              title="Templates"
+              title={localize('com_knauf_prompt_templates')}
               onClick={() => setShowTemplates((v) => {
                 const next = !v;
                 if (!next) onTemplatePanelClose?.();
@@ -396,14 +427,14 @@ export default function InstructionsEditorOverlay({
               )}
             >
               <LayoutTemplate className="h-3.5 w-3.5 text-text-secondary" aria-hidden />
-              <span className="hidden sm:inline">Templates</span>
+              <span className="hidden sm:inline">{localize('com_knauf_prompt_templates')}</span>
             </button>
           )}
 
           <button
             type="button"
             onClick={() => onOpenChange(false)}
-            title="Close editor"
+            title={localize('com_knauf_prompt_close_editor')}
             className="flex h-8 w-8 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-surface-tertiary hover:text-text-primary"
           >
             <X className="h-4 w-4" />
@@ -418,8 +449,7 @@ export default function InstructionsEditorOverlay({
         )}
 
         {/* ── Mobile tab bar (visible < md) — context-aware ──── */}
-        {showRightPanel && (
-          <div className="flex border-b border-border-light md:hidden">
+        <div className="flex border-b border-border-light md:hidden">
             <button
               type="button"
               onClick={() => setMobileTab('edit')}
@@ -431,7 +461,7 @@ export default function InstructionsEditorOverlay({
               )}
             >
               <Pencil className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />
-              Edit
+              {localize('com_knauf_prompt_edit_tab')}
             </button>
             <button
               type="button"
@@ -446,17 +476,16 @@ export default function InstructionsEditorOverlay({
               {hasTemplate ? (
                 <>
                   <Sparkles className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />
-                  Preview
+                  {localize('com_knauf_prompt_preview_tab')}
                 </>
               ) : (
                 <>
                   <BookOpen className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />
-                  Formatted
+                  {localize('com_knauf_prompt_formatted_tab')}
                 </>
               )}
             </button>
           </div>
-        )}
 
         {/* ── Body ────────────────────────────────────────────── */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -466,13 +495,8 @@ export default function InstructionsEditorOverlay({
           <div
             className={cn(
               'flex min-h-0 flex-col overflow-hidden',
-              showRightPanel
-                ? 'md:flex md:w-1/2 md:border-r md:border-border-light'
-                : 'md:flex md:w-full',
-              // Narrow: tab-gated when right panel exists, otherwise full width
-              showRightPanel
-                ? (mobileTab === 'edit' ? 'flex w-full' : 'hidden')
-                : 'flex w-full',
+              'md:flex md:w-1/2 md:border-r md:border-border-light',
+              mobileTab === 'edit' ? 'flex w-full' : 'hidden',
             )}
           >
             <div className="min-h-0 flex-1 overflow-hidden">
@@ -488,10 +512,9 @@ export default function InstructionsEditorOverlay({
             </div>
           </div>
 
-          {/* Right pane — hidden when plain text + no template.
-              "Formatted" when markdown only, stacked template+preview when template selected */}
-          {showRightPanel && (
-            <div
+          {/* Right pane — always visible. Formatted preview when no template,
+              stacked template reference + AI preview when template selected */}
+          <div
               className={cn(
                 'flex min-h-0 flex-col overflow-hidden',
                 'md:flex md:w-1/2',
@@ -513,7 +536,6 @@ export default function InstructionsEditorOverlay({
                 <FormattedPreviewPanel content={instructions ?? ''} />
               )}
             </div>
-          )}
         </div>
       </OGDialogContent>
     </OGDialog>
