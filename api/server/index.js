@@ -155,23 +155,23 @@ const startServer = async () => {
   /* Pre-auth tenant context for unauthenticated routes that need tenant scoping.
    * The reverse proxy / auth gateway sets `X-Tenant-Id` header for multi-tenant deployments. */
   app.use('/oauth', preAuthTenantMiddleware, routes.oauth);
-  // [knauf] Migration access gate — applied before chat/agent/file routes.
-  // Composed with requireJwtAuth so req.user is populated before the allowlist check.
-  // Unauthenticated requests pass through here; each route's own requireJwtAuth handles 401.
-  for (const path of [
-    '/api/convos',
-    '/api/messages',
-    '/api/agents',
-    '/api/files',
-    '/api/memories',
-    '/api/presets',
-    '/api/prompts',
-    '/api/assistants',
-    '/api/actions',
-    '/api/search',
-  ]) {
-    app.use(path, requireJwtAuth, requireMigrationAccess);
-  }
+  // [knauf] Migration access gate — default-deny for all /api routes.
+  // Routes in MIGRATION_GATE_EXEMPT bypass the check (auth, config, banner,
+  // admin panel, and the access-check endpoint itself must remain reachable
+  // before a user is on the allowlist).
+  const MIGRATION_GATE_EXEMPT = [
+    '/auth',
+    '/config',
+    '/banner',
+    '/admin',
+    '/knauf/migration/access',
+  ];
+  app.use('/api', (req, res, next) => {
+    if (MIGRATION_GATE_EXEMPT.some((prefix) => req.path.startsWith(prefix))) {
+      return next();
+    }
+    return requireJwtAuth(req, res, () => requireMigrationAccess(req, res, next));
+  });
   // End [knauf]
 
   /* API Endpoints */
