@@ -19,20 +19,22 @@ const createRes = () => ({
 });
 
 describe('requireMigrationAccess middleware', () => {
-  describe('pass-through cases (no user / no email)', () => {
+  describe('pass-through — no req.user (unauthenticated)', () => {
     it('calls next() without checking DB when req.user is undefined', async () => {
       const next = jest.fn();
       await requireMigrationAccess(createReq(undefined), createRes(), next);
       expect(next).toHaveBeenCalledWith();
       expect(mockIsEmailAllowed).not.toHaveBeenCalled();
     });
+  });
 
-    it('calls next() without checking DB when req.user.email is empty string', async () => {
+  describe('authenticated but no email claim', () => {
+    it('returns 401 when req.user exists but has no email', async () => {
       const next = jest.fn();
-      await requireMigrationAccess(createReq(''), createRes(), next);
-      // isEmailAllowed is called but empty string will be falsy-gated inside it
-      // The middleware itself gates on !email so it should call next() directly
-      expect(next).toHaveBeenCalledWith();
+      const res = createRes();
+      await requireMigrationAccess(createReq(''), res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
       expect(mockIsEmailAllowed).not.toHaveBeenCalled();
     });
   });
@@ -85,7 +87,6 @@ describe('requireMigrationAccess middleware', () => {
 
       await requireMigrationAccess(createReq('ali@knauf.com'), res, next);
 
-      // Must fail closed — a DB error must not grant access to the new platform
       expect(next).not.toHaveBeenCalled();
       expect(res.status).toHaveBeenCalledWith(503);
       expect(res.json).toHaveBeenCalledWith(

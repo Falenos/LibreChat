@@ -2,21 +2,27 @@
 // the migration allowlist with HTTP 403.
 //
 // Must be placed AFTER requireJwtAuth (which populates req.user).
-// Non-authenticated requests are passed through unchanged — the route's
+// Unauthenticated requests (no req.user) are passed through — the route's
 // own requireJwtAuth will reject them with 401.
+// Authenticated tokens with no email claim are rejected with 401.
 'use strict';
 
 const { isEmailAllowed } = require('~/server/knauf/migrationAllowlist');
 
 /**
  * Blocks requests from users whose email is not in migration_allowlists.
- * Pass-through for unauthenticated requests (requireJwtAuth handles those).
+ * Pass-through only for genuinely unauthenticated requests (no req.user).
  */
 async function requireMigrationAccess(req, res, next) {
-  const email = req.user?.email;
+  // No user at all — unauthenticated request, requireJwtAuth on the route handles 401
+  if (!req.user) return next();
 
-  // No user on the request — let requireJwtAuth handle the 401
-  if (!email) return next();
+  const email = req.user.email;
+
+  // Authenticated but token carries no email claim — reject
+  if (!email) {
+    return res.status(401).json({ message: 'Unauthorized: no email claim in token' });
+  }
 
   try {
     const allowed = await isEmailAllowed(email);
