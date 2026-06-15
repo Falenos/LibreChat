@@ -47,9 +47,15 @@ export default function Root() {
   const fileMap = useFileMap({ isAuthenticated });
 
   const { data: config } = useGetStartupConfig();
+  // [knauf] Delay OneTrust until the required EULA flow is resolved so the cookie banner
+  // cannot overlap the blocking terms modal for first-time users. (NO-TICKET)
+  const termsAcceptanceRequired = config?.interface?.termsOfService?.modalAcceptance === true;
   const { data: termsData } = useUserTermsQuery({
-    enabled: isAuthenticated && config?.interface?.termsOfService?.modalAcceptance === true,
+    enabled: isAuthenticated && termsAcceptanceRequired,
   });
+  const shouldMountKnaufConsentAnalytics =
+    config != null && (!termsAcceptanceRequired || termsData?.termsAccepted === true);
+  // End [knauf]
 
   useSearchEnabled(isAuthenticated);
 
@@ -74,8 +80,8 @@ export default function Root() {
 
   return (
     <SetConvoProvider>
-      {/* [knauf] OneTrust prompts after login; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
-      <KnaufConsentAnalytics />
+      {/* [knauf] OneTrust prompts after login and any required EULA acceptance; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
+      {shouldMountKnaufConsentAnalytics && <KnaufConsentAnalytics />}
       {/* End [knauf] */}
       {/* [knauf] KK20-173 — full-width top header. Sits above Banner so it
           spans the entire viewport width; the height calc below subtracts

@@ -130,6 +130,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` Knauf spec fallback | 42–48, 62–73 | Conversation-history branding — default modelSpec chats use a compact Knauf wordmark instead of generic provider glyphs while non-spec conversations keep upstream endpoint icons | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Landing.tsx` | `KnaufLogoAvatar` import | 11–13 | Landing polish — reuses the shared contained Knauf logo avatar for the default-spec landing badge so its sizing matches history and URL-avatar surfaces | `Landing.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` agent history fallback | 61–72 | Conversation-history branding — agent chats without a custom icon URL now share the compact Knauf wordmark instead of falling back to the generic agent glyph | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
+| `client/src/routes/Root.tsx` | `termsAcceptanceRequired`, `shouldMountKnaufConsentAnalytics` | 50–58, 83–85 | EULA gate — delays the OneTrust controller until startup config resolves and required terms are accepted, preventing first-time users from seeing the cookie banner over the blocking agreement modal | `client/src/knauf/analytics/RootMount.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
