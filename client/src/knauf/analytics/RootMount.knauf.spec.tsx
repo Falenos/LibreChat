@@ -78,6 +78,10 @@ jest.mock('~/knauf/components/Header/KnaufTopBar', () => ({
   default: () => <div data-testid="knauf-top-bar" />,
 }));
 
+jest.mock('~/knauf/hooks/Auth/useMigrationAccess', () => ({
+  useMigrationAccess: () => ({ allowed: true, isLoading: false, isError: false, hasData: true }),
+}));
+
 function renderRoot() {
   return render(
     <RecoilRoot>

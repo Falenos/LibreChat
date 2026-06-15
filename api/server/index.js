@@ -36,6 +36,10 @@ const { getAppConfig } = require('./services/Config');
 const staticCache = require('./utils/staticCache');
 const optionalJwtAuth = require('./middleware/optionalJwtAuth');
 const noIndex = require('./middleware/noIndex');
+// [knauf] Migration access enforcement on protected API routes.
+const requireJwtAuth = require('./middleware/requireJwtAuth');
+const requireMigrationAccess = require('./middleware/requireMigrationAccess');
+// End [knauf]
 const routes = require('./routes');
 
 const { PORT, HOST, ALLOW_SOCIAL_LOGIN, DISABLE_COMPRESSION, TRUST_PROXY } = process.env ?? {};
@@ -151,6 +155,44 @@ const startServer = async () => {
   /* Pre-auth tenant context for unauthenticated routes that need tenant scoping.
    * The reverse proxy / auth gateway sets `X-Tenant-Id` header for multi-tenant deployments. */
   app.use('/oauth', preAuthTenantMiddleware, routes.oauth);
+  // [knauf] Migration access gate — default-deny for all /api routes.
+  // Every authenticated route requires the user to be on the migration allowlist.
+  //
+  // Exempt routes (must be reachable before a user is on the allowlist):
+  //   /auth                    — Okta login/logout bootstrap
+  //   /config                  — pre-login app config (endpoints, UI flags)
+  //   /banner                  — public announcement banners
+  //   /admin                   — admin panel manages the allowlist itself
+  //   /user                    — AuthContext bootstrap: fetches user identity on load.
+  //                              Without this, a 403 on /api/user causes LibreChat to
+  //                              redirect to /login showing "account temporarily banned".
+  //                              The visual gate is handled by useMigrationAccess in Root.tsx.
+  //   /knauf/migration/access  — the access-check endpoint the frontend calls
+  //
+  // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
+  // (our current setting) share links already required login before this gate existed.
+  // This is a temporary rollout gate and will be removed post-migration.
+  const MIGRATION_GATE_EXEMPT = [
+    '/auth',
+    '/config',
+    '/banner',
+    '/admin',
+    '/user',
+    '/knauf/migration/access',
+    '/knauf/migration/access/check',
+  ];
+  app.use('/api', (req, res, next) => {
+    if (
+      MIGRATION_GATE_EXEMPT.some(
+        (prefix) => req.path === prefix || req.path.startsWith(prefix + '/'),
+      )
+    ) {
+      return next();
+    }
+    return requireJwtAuth(req, res, () => requireMigrationAccess(req, res, next));
+  });
+  // End [knauf]
+
   /* API Endpoints */
   app.use('/api/auth', preAuthTenantMiddleware, routes.auth);
   app.use('/api/admin', routes.adminAuth);

@@ -130,7 +130,18 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` Knauf spec fallback | 42–48, 62–73 | Conversation-history branding — default modelSpec chats use a compact Knauf wordmark instead of generic provider glyphs while non-spec conversations keep upstream endpoint icons | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Landing.tsx` | `KnaufLogoAvatar` import | 11–13 | Landing polish — reuses the shared contained Knauf logo avatar for the default-spec landing badge so its sizing matches history and URL-avatar surfaces | `Landing.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Endpoints/EndpointIcon.tsx` | `EndpointIcon` agent history fallback | 61–72 | Conversation-history branding — agent chats without a custom icon URL now share the compact Knauf wordmark instead of falling back to the generic agent glyph | `KnaufConversationAvatars.knauf.spec.tsx` | NO-TICKET |
+| `api/server/middleware/requireMigrationAccess.js` | — | 1–37 | Express middleware: rejects authenticated users who are not on | — | — |
+| `packages/data-schemas/src/models/index.ts` | — | 31–33, 70–72 | Migration allowlist model — who is allowed into the new platform. | — | — |
+| `packages/data-schemas/src/models/migrationAllowlist.ts` | — | 1–11 | Model factory for the migration allowlist collection. | — | — |
+| `packages/data-schemas/src/schema/index.ts` | — | 29–31 | Migration allowlist schema — one doc per allowed user (keyed by email). | — | — |
+| `packages/data-schemas/src/schema/migrationAllowlist.ts` | — | 1–24 | Migration access allowlist — one document per allowed user (keyed by normalised email). | — | — |
+| `packages/data-schemas/src/types/index.ts` | — | 39–41 | Migration allowlist type. | — | — |
+| `packages/data-schemas/src/types/migrationAllowlist.ts` | — | 1–10 | Type for the migration allowlist document. | — | — |
+| `api/test/server/middleware/requireMigrationAccess.test.js` | — | 1–94 | Tests for the requireMigrationAccess middleware. | Self | — |
 | `client/src/routes/Root.tsx` | `termsAcceptanceRequired`, `shouldMountKnaufConsentAnalytics` | 50–58, 83–85 | EULA gate — delays the OneTrust controller until startup config resolves and required terms are accepted, preventing first-time users from seeing the cookie banner over the blocking agreement modal | `client/src/knauf/analytics/RootMount.knauf.spec.tsx` | NO-TICKET |
+| `api/server/middleware/requireKnaufApiKey.js` | — | 1–25 | Middleware: validates X-Knauf-Api-Key header against KNAUF_MIGRATION_API_SECRET. | — | — |
+| `api/server/index.spec.js` | — | 103–128 | The migration access gate (requireJwtAuth) now intercepts all /api/* requests. | Self | — |
+| `api/test/server/middleware/requireKnaufApiKey.test.js` | — | 1–58 | Tests for requireKnaufApiKey middleware. | Self | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -225,6 +236,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/VariablesPopover.tsx` | `@radix-ui/react-popover`, `librechat-data-provider` (`specialVariables`), `~/hooks` | Low — variable insertion popover, portal-aware for OGDialog | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/useAutogeneratePrompt.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query mutation hook for autogenerate/preview | Manual | KK20-179 |
 | `client/src/knauf/data-provider/Agents/usePromptTemplates.ts` | `@tanstack/react-query`, `~/knauf/data-provider/*` | Low — React Query hook with 5-min staleTime | Manual | KK20-179 |
+| `api/server/knauf/migrationAllowlist.js` | — | — | — | — |
+| `api/server/knauf/migrationAllowlist.test.js` | — | — | — | — |
+| `api/server/routes/knauf/migrationAccess.js` | — | — | — | — |
+| `api/server/routes/knauf/migrationAccess.test.js` | — | — | — | — |
+| `client/src/knauf/components/AccessDenied/KnaufAccessDenied.tsx` | — | — | — | — |
+| `client/src/knauf/hooks/Auth/useMigrationAccess.ts` | — | — | — | — |
 <!-- seams:new:end -->
 
 ## Static Assets

@@ -26,3 +26,6 @@ export { default as memorySchema } from './memory';
 export { default as groupSchema } from './group';
 export { default as systemGrantSchema } from './systemGrant';
 export { default as configSchema } from './config';
+// [knauf] Migration allowlist schema — one doc per allowed user (keyed by email).
+export { default as migrationAllowlistSchema } from './migrationAllowlist';
+// End [knauf]

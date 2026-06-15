@@ -100,33 +100,32 @@ describe('Server Configuration', () => {
     expect(response.headers['expires']).toBe('0');
   });
 
-  it('should return 404 JSON for undefined API routes', async () => {
+  // [knauf] The migration access gate (requireJwtAuth) now intercepts all /api/* requests.
+  // Unauthenticated requests to undefined routes return 401 (not 404) because the gate
+  // rejects them before they reach the apiNotFound handler. This is the correct behaviour.
+  it('should return 401 for unauthenticated requests to undefined API routes', async () => {
     const response = await request(app).get('/api/nonexistent');
-    expect(response.status).toBe(404);
-    expect(response.body).toEqual({ message: 'Endpoint not found' });
+    expect(response.status).toBe(401);
   });
 
-  it('should return 404 JSON for nested undefined API routes', async () => {
+  it('should return 401 for unauthenticated requests to nested undefined API routes', async () => {
     const response = await request(app).get('/api/nonexistent/nested/path');
-    expect(response.status).toBe(404);
-    expect(response.body).toEqual({ message: 'Endpoint not found' });
+    expect(response.status).toBe(401);
   });
 
-  it('should return 404 JSON for non-GET methods on undefined API routes', async () => {
+  it('should return 401 for unauthenticated non-GET methods on undefined API routes', async () => {
     const post = await request(app).post('/api/nonexistent');
-    expect(post.status).toBe(404);
-    expect(post.body).toEqual({ message: 'Endpoint not found' });
+    expect(post.status).toBe(401);
 
     const del = await request(app).delete('/api/nonexistent');
-    expect(del.status).toBe(404);
-    expect(del.body).toEqual({ message: 'Endpoint not found' });
+    expect(del.status).toBe(401);
   });
 
-  it('should return 404 JSON for the /api root path', async () => {
+  it('should return 401 for unauthenticated request to /api root', async () => {
     const response = await request(app).get('/api');
-    expect(response.status).toBe(404);
-    expect(response.body).toEqual({ message: 'Endpoint not found' });
+    expect(response.status).toBe(401);
   });
+  // End [knauf]
 
   it('should serve SPA HTML for non-API unmatched routes', async () => {
     const response = await request(app).get('/this/does/not/exist');
