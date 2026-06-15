@@ -21,6 +21,10 @@ const mockDoc = (email) => ({
 });
 
 describe('migrationAllowlist service', () => {
+  beforeEach(() => {
+    mockFindOne.mockClear();
+  });
+
   describe('isEmailAllowed — input validation', () => {
     it('returns false for empty string', async () => {
       expect(await isEmailAllowed('')).toBe(false);
@@ -63,8 +67,17 @@ describe('migrationAllowlist service', () => {
 
     it('normalises mixed-case input so it matches the lowercased DB value', async () => {
       mockFindOne.mockReturnValue(mockDoc('ali.karimizandi@knauf.com'));
-      // key is lowercased in code; schema enforces lowercase on write — direct index hit
       expect(await isEmailAllowed('ALI.KARIMIZANDI@KNAUF.COM')).toBe(true);
+    });
+  });
+
+  describe('isEmailAllowed — TTL=0 (default, no cache)', () => {
+    it('hits DB on every call when TTL is 0', async () => {
+      mockFindOne.mockReturnValue(mockDoc('ali@knauf.com'));
+      await isEmailAllowed('ali@knauf.com');
+      await isEmailAllowed('ali@knauf.com');
+      // Both calls must hit the DB — no caching when TTL=0
+      expect(mockFindOne).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -74,7 +87,6 @@ describe('migrationAllowlist service', () => {
 
       jest.isolateModules(() => {
         process.env.MIGRATION_ALLOWLIST_CACHE_TTL_MINUTES = '10';
-        // Re-mock mongoose inside the isolated scope
         jest.mock('mongoose', () => {
           const actual = jest.requireActual('mongoose');
           return {
@@ -88,9 +100,7 @@ describe('migrationAllowlist service', () => {
 
       mockFindOne.mockReturnValue(mockDoc('cached@knauf.com'));
 
-      // First call: hits DB
       await isEmailAllowedCached('cached@knauf.com');
-      // Second call: should read from cache, not DB
       await isEmailAllowedCached('cached@knauf.com');
 
       expect(mockFindOne).toHaveBeenCalledTimes(1);
@@ -118,13 +128,8 @@ describe('migrationAllowlist service', () => {
 
       mockFindOne.mockReturnValue(mockDoc('expiry@knauf.com'));
 
-      // First call
       await isEmailAllowedCached('expiry@knauf.com');
-
-      // Advance past the 1-minute TTL
       jest.advanceTimersByTime(61 * 1000);
-
-      // Second call after expiry
       await isEmailAllowedCached('expiry@knauf.com');
 
       expect(mockFindOne).toHaveBeenCalledTimes(2);

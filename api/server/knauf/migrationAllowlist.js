@@ -37,7 +37,8 @@ function getModel() {
 
 /**
  * Checks whether an email address is on the migration allowlist.
- * Results are cached per email for CACHE_TTL_MS.
+ * Results are cached per email for CACHE_TTL_MS when TTL > 0.
+ * When TTL = 0 (default) the cache is bypassed entirely — no reads or writes.
  *
  * @param {string} email - Raw email (will be normalised to lowercase).
  * @returns {Promise<boolean>}
@@ -46,9 +47,11 @@ async function isEmailAllowed(email) {
   const key = (email || '').toLowerCase().trim();
   if (!key) return false;
 
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.allowed;
+  if (CACHE_TTL_MS > 0) {
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.allowed;
+    }
   }
 
   const Model = getModel();
@@ -57,7 +60,10 @@ async function isEmailAllowed(email) {
   const doc = await Model.findOne({ emailNormalized: key }).lean();
   const allowed = doc != null;
 
-  cache.set(key, { allowed, expiresAt: Date.now() + CACHE_TTL_MS });
+  if (CACHE_TTL_MS > 0) {
+    cache.set(key, { allowed, expiresAt: Date.now() + CACHE_TTL_MS });
+  }
+
   return allowed;
 }
 
