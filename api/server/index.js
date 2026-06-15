@@ -167,7 +167,11 @@ const startServer = async () => {
     '/knauf/migration/access',
   ];
   app.use('/api', (req, res, next) => {
-    if (MIGRATION_GATE_EXEMPT.some((prefix) => req.path.startsWith(prefix))) {
+    if (
+      MIGRATION_GATE_EXEMPT.some(
+        (prefix) => req.path === prefix || req.path.startsWith(prefix + '/'),
+      )
+    ) {
       return next();
     }
     return requireJwtAuth(req, res, () => requireMigrationAccess(req, res, next));
