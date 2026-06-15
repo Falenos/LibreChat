@@ -100,30 +100,29 @@ describe('Server Configuration', () => {
     expect(response.headers['expires']).toBe('0');
   });
 
-  // [knauf] The migration access gate (requireJwtAuth) now intercepts all /api/* requests.
-  // Unauthenticated requests to undefined routes return 401 (not 404) because the gate
-  // rejects them before they reach the apiNotFound handler. This is the correct behaviour.
-  it('should return 401 for unauthenticated requests to undefined API routes', async () => {
+  // [knauf] With MIGRATION_ALLOWLIST_ENABLED=false (default), the gate is bypassed.
+  // Unauthenticated requests to undefined routes fall through to apiNotFound → 404.
+  it('should return 404 for unauthenticated requests to undefined API routes', async () => {
     const response = await request(app).get('/api/nonexistent');
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
   });
 
-  it('should return 401 for unauthenticated requests to nested undefined API routes', async () => {
+  it('should return 404 for unauthenticated requests to nested undefined API routes', async () => {
     const response = await request(app).get('/api/nonexistent/nested/path');
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
   });
 
-  it('should return 401 for unauthenticated non-GET methods on undefined API routes', async () => {
+  it('should return 404 for unauthenticated non-GET methods on undefined API routes', async () => {
     const post = await request(app).post('/api/nonexistent');
-    expect(post.status).toBe(401);
+    expect(post.status).toBe(404);
 
     const del = await request(app).delete('/api/nonexistent');
-    expect(del.status).toBe(401);
+    expect(del.status).toBe(404);
   });
 
-  it('should return 401 for unauthenticated request to /api root', async () => {
+  it('should return 404 for unauthenticated request to /api root', async () => {
     const response = await request(app).get('/api');
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
   });
   // End [knauf]
 
