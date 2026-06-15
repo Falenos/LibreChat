@@ -156,9 +156,18 @@ const startServer = async () => {
    * The reverse proxy / auth gateway sets `X-Tenant-Id` header for multi-tenant deployments. */
   app.use('/oauth', preAuthTenantMiddleware, routes.oauth);
   // [knauf] Migration access gate — default-deny for all /api routes.
-  // Routes in MIGRATION_GATE_EXEMPT bypass the check (auth, config, banner,
-  // admin panel, and the access-check endpoint itself must remain reachable
-  // before a user is on the allowlist).
+  // Every authenticated route requires the user to be on the migration allowlist.
+  //
+  // Exempt routes (must be reachable before a user is on the allowlist):
+  //   /auth                    — Okta login/logout bootstrap
+  //   /config                  — pre-login app config (endpoints, UI flags)
+  //   /banner                  — public announcement banners
+  //   /admin                   — admin panel manages the allowlist itself
+  //   /knauf/migration/access  — the access-check endpoint the frontend calls
+  //
+  // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
+  // (our current setting) share links already required login before this gate existed.
+  // This is a temporary rollout gate and will be removed post-migration.
   const MIGRATION_GATE_EXEMPT = [
     '/auth',
     '/config',
