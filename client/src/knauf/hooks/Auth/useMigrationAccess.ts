@@ -25,18 +25,16 @@ export function useMigrationAccess() {
   // Include email in the key so each user gets an isolated cache entry.
   // Prevents a logged-out user's result being briefly shown to the next user
   // who logs in on the same tab.
-  const query = useQuery<MigrationAccessResponse>(
-    ['knauf', 'migration-access', user?.email ?? ''],
-    async () => {
+  const query = useQuery<MigrationAccessResponse>({
+    queryKey: ['knauf', 'migration-access', user?.email ?? ''],
+    queryFn: async () => {
       const { data } = await axios.get<MigrationAccessResponse>('/api/knauf/migration/access');
       return data;
     },
-    {
-      enabled: isAuthenticated,
-      staleTime: 0,   // always re-check on focus; backend cache (MIGRATION_ALLOWLIST_CACHE_TTL_MINUTES) is the gate
-      retry: 1,
-    },
-  );
+    enabled: isAuthenticated,
+    staleTime: 0,   // always re-check on focus; backend cache (MIGRATION_ALLOWLIST_CACHE_TTL_MINUTES) is the gate
+    retry: 1,
+  });
 
   return {
     allowed: query.data?.allowed ?? false,

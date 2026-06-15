@@ -13,7 +13,7 @@ import React from 'react';
 const OLD_KARL_URL = 'https://karl.knauf.com';
 
 interface Props {
-  errorMode?: boolean;
+  readonly errorMode?: boolean;
 }
 
 export default function KnaufAccessDenied({ errorMode = false }: Props) {
