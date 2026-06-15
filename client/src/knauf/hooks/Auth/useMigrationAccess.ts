@@ -7,8 +7,9 @@
  *
  * Returns:
  *   - allowed: true if the user is in the allowlist
- *   - isLoading: true while the check is in-flight
- *   - isError: true if the request failed (treated as NOT allowed)
+ *   - isLoading: true while the initial fetch is in-flight
+ *   - isError: true if the request failed
+ *   - hasData: true if at least one successful response has been received
  */
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
@@ -39,8 +40,12 @@ export function useMigrationAccess() {
 
   return {
     allowed: query.data?.allowed ?? false,
-    isLoading: query.isLoading,
+    isLoading: query.isInitialLoading,
     isError: query.isError,
+    // true once at least one successful fetch has completed.
+    // Root.tsx uses this to avoid showing the error screen when a background
+    // refetch fails but we already have a confirmed allowed=true result.
+    hasData: query.dataUpdatedAt > 0,
   };
 }
 
