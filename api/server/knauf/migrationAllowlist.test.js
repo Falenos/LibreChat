@@ -3,16 +3,11 @@
 
 const mockFindOne = jest.fn();
 
-jest.mock('mongoose', () => {
-  const actual = jest.requireActual('mongoose');
-  return {
-    ...actual,
-    models: {
-      MigrationAllowlist: { findOne: mockFindOne },
-    },
-    model: jest.fn(() => ({ findOne: mockFindOne })),
-  };
-});
+jest.mock('mongoose', () => ({
+  models: {
+    MigrationAllowlist: { findOne: mockFindOne },
+  },
+}));
 
 const { isEmailAllowed } = require('~/server/knauf/migrationAllowlist');
 
@@ -71,12 +66,12 @@ describe('migrationAllowlist service', () => {
     });
   });
 
+
   describe('isEmailAllowed — TTL=0 (default, no cache)', () => {
     it('hits DB on every call when TTL is 0', async () => {
       mockFindOne.mockReturnValue(mockDoc('ali@knauf.com'));
       await isEmailAllowed('ali@knauf.com');
       await isEmailAllowed('ali@knauf.com');
-      // Both calls must hit the DB — no caching when TTL=0
       expect(mockFindOne).toHaveBeenCalledTimes(2);
     });
   });
@@ -87,14 +82,9 @@ describe('migrationAllowlist service', () => {
 
       jest.isolateModules(() => {
         process.env.MIGRATION_ALLOWLIST_CACHE_TTL_MINUTES = '10';
-        jest.mock('mongoose', () => {
-          const actual = jest.requireActual('mongoose');
-          return {
-            ...actual,
-            models: { MigrationAllowlist: { findOne: mockFindOne } },
-            model: jest.fn(() => ({ findOne: mockFindOne })),
-          };
-        });
+        jest.mock('mongoose', () => ({
+          models: { MigrationAllowlist: { findOne: mockFindOne } },
+        }));
         isEmailAllowedCached = require('~/server/knauf/migrationAllowlist').isEmailAllowed;
       });
 
@@ -115,14 +105,9 @@ describe('migrationAllowlist service', () => {
 
       jest.isolateModules(() => {
         process.env.MIGRATION_ALLOWLIST_CACHE_TTL_MINUTES = '1';
-        jest.mock('mongoose', () => {
-          const actual = jest.requireActual('mongoose');
-          return {
-            ...actual,
-            models: { MigrationAllowlist: { findOne: mockFindOne } },
-            model: jest.fn(() => ({ findOne: mockFindOne })),
-          };
-        });
+        jest.mock('mongoose', () => ({
+          models: { MigrationAllowlist: { findOne: mockFindOne } },
+        }));
         isEmailAllowedCached = require('~/server/knauf/migrationAllowlist').isEmailAllowed;
       });
 

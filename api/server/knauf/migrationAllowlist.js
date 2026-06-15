@@ -17,25 +17,6 @@ const CACHE_TTL_MS = (isNaN(_ttlMinutes) || _ttlMinutes < 0 ? 0 : _ttlMinutes) *
 const cache = new Map();
 
 /**
- * Returns the Mongoose model, creating it if not yet registered.
- * Uses a plain schema definition here to avoid TS→JS compilation issues
- * when called from JS route/middleware files.
- */
-function getModel() {
-  if (mongoose.models.MigrationAllowlist) {
-    return mongoose.models.MigrationAllowlist;
-  }
-  const schema = new mongoose.Schema(
-    {
-      emailNormalized: { type: String, required: true, lowercase: true, trim: true },
-    },
-    { timestamps: true },
-  );
-  schema.index({ emailNormalized: 1 }, { unique: true });
-  return mongoose.model('MigrationAllowlist', schema);
-}
-
-/**
  * Checks whether an email address is on the migration allowlist.
  * Results are cached per email for CACHE_TTL_MS when TTL > 0.
  * When TTL = 0 (default) the cache is bypassed entirely — no reads or writes.
@@ -54,7 +35,14 @@ async function isEmailAllowed(email) {
     }
   }
 
-  const Model = getModel();
+  // Use the model registered by createModels() at startup — no inline schema needed.
+  const Model = mongoose.models.MigrationAllowlist;
+  if (!Model) {
+    throw new Error(
+      'MigrationAllowlist model not registered. Ensure createModels() has been called.',
+    );
+  }
+
   // key is already lowercased above; schema enforces lowercase: true on write,
   // so this equality match hits the unique index directly.
   const doc = await Model.findOne({ emailNormalized: key }).lean();
