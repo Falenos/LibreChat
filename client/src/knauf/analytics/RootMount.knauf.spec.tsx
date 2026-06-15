@@ -4,6 +4,8 @@ import { render, screen } from '@testing-library/react';
 import Root from '~/routes/Root';
 
 const mockUseAuthContext = jest.fn();
+const mockUseGetStartupConfig = jest.fn();
+const mockUseUserTermsQuery = jest.fn();
 
 jest.mock('react-router-dom', () => ({
   Outlet: () => <div data-testid="outlet" />,
@@ -47,8 +49,8 @@ jest.mock('~/Providers', () => {
 
 jest.mock('~/data-provider', () => ({
   useHealthCheck: jest.fn(),
-  useGetStartupConfig: () => ({ data: { interface: {} } }),
-  useUserTermsQuery: () => ({ data: undefined }),
+  useGetStartupConfig: () => mockUseGetStartupConfig(),
+  useUserTermsQuery: (options: unknown) => mockUseUserTermsQuery(options),
 }));
 
 jest.mock('~/components/UnifiedSidebar', () => ({
@@ -87,14 +89,17 @@ function renderRoot() {
 describe('Root — Knauf analytics mount', () => {
   beforeEach(() => {
     mockUseAuthContext.mockReset();
+    mockUseGetStartupConfig.mockReturnValue({ data: { interface: {} } });
+    mockUseUserTermsQuery.mockReturnValue({ data: undefined });
   });
 
-  it('mounts the consent analytics controller only after authentication', () => {
+  it('mounts the consent analytics controller only after authentication when EULA is not required', () => {
     mockUseAuthContext.mockReturnValue({ isAuthenticated: true, logout: jest.fn() });
 
     renderRoot();
 
     expect(screen.getByTestId('knauf-consent-analytics')).toBeInTheDocument();
+    expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: false });
   });
 
   it('does not mount the consent analytics controller while unauthenticated', () => {
@@ -103,5 +108,41 @@ describe('Root — Knauf analytics mount', () => {
     renderRoot();
 
     expect(screen.queryByTestId('knauf-consent-analytics')).not.toBeInTheDocument();
+  });
+
+  it('does not mount the consent analytics controller before startup config resolves', () => {
+    mockUseAuthContext.mockReturnValue({ isAuthenticated: true, logout: jest.fn() });
+    mockUseGetStartupConfig.mockReturnValue({ data: undefined });
+
+    renderRoot();
+
+    expect(screen.queryByTestId('knauf-consent-analytics')).not.toBeInTheDocument();
+    expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: false });
+  });
+
+  it('does not mount the consent analytics controller while required EULA is unaccepted', () => {
+    mockUseAuthContext.mockReturnValue({ isAuthenticated: true, logout: jest.fn() });
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { interface: { termsOfService: { modalAcceptance: true } } },
+    });
+    mockUseUserTermsQuery.mockReturnValue({ data: { termsAccepted: false } });
+
+    renderRoot();
+
+    expect(screen.queryByTestId('knauf-consent-analytics')).not.toBeInTheDocument();
+    expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('mounts the consent analytics controller after required EULA acceptance', () => {
+    mockUseAuthContext.mockReturnValue({ isAuthenticated: true, logout: jest.fn() });
+    mockUseGetStartupConfig.mockReturnValue({
+      data: { interface: { termsOfService: { modalAcceptance: true } } },
+    });
+    mockUseUserTermsQuery.mockReturnValue({ data: { termsAccepted: true } });
+
+    renderRoot();
+
+    expect(screen.getByTestId('knauf-consent-analytics')).toBeInTheDocument();
+    expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: true });
   });
 });
