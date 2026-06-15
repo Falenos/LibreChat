@@ -163,6 +163,10 @@ const startServer = async () => {
   //   /config                  — pre-login app config (endpoints, UI flags)
   //   /banner                  — public announcement banners
   //   /admin                   — admin panel manages the allowlist itself
+  //   /user                    — AuthContext bootstrap: fetches user identity on load.
+  //                              Without this, a 403 on /api/user causes LibreChat to
+  //                              redirect to /login showing "account temporarily banned".
+  //                              The visual gate is handled by useMigrationAccess in Root.tsx.
   //   /knauf/migration/access  — the access-check endpoint the frontend calls
   //
   // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
@@ -173,7 +177,9 @@ const startServer = async () => {
     '/config',
     '/banner',
     '/admin',
+    '/user',
     '/knauf/migration/access',
+    '/knauf/migration/access/check',
   ];
   app.use('/api', (req, res, next) => {
     if (

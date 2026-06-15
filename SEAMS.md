@@ -139,6 +139,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/types/migrationAllowlist.ts` | — | 1–10 | Type for the migration allowlist document. | — | — |
 | `api/test/server/middleware/requireMigrationAccess.test.js` | — | 1–94 | Tests for the requireMigrationAccess middleware. | Self | — |
 | `client/src/routes/Root.tsx` | `termsAcceptanceRequired`, `shouldMountKnaufConsentAnalytics` | 50–58, 83–85 | EULA gate — delays the OneTrust controller until startup config resolves and required terms are accepted, preventing first-time users from seeing the cookie banner over the blocking agreement modal | `client/src/knauf/analytics/RootMount.knauf.spec.tsx` | NO-TICKET |
+| `api/server/middleware/requireKnaufApiKey.js` | — | 1–25 | Middleware: validates X-Knauf-Api-Key header against KNAUF_MIGRATION_API_SECRET. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration
