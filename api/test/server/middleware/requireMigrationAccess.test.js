@@ -77,17 +77,20 @@ describe('requireMigrationAccess middleware', () => {
     });
   });
 
-  describe('error handling (fail open)', () => {
-    it('calls next() without error when isEmailAllowed throws', async () => {
+  describe('error handling (fail closed)', () => {
+    it('returns 503 with MIGRATION_ACCESS_UNAVAILABLE when isEmailAllowed throws', async () => {
       mockIsEmailAllowed.mockRejectedValue(new Error('DB connection lost'));
       const next = jest.fn();
       const res = createRes();
 
       await requireMigrationAccess(createReq('ali@knauf.com'), res, next);
 
-      // Must fail open — do not lock out users on infrastructure errors
-      expect(next).toHaveBeenCalledWith();
-      expect(res.status).not.toHaveBeenCalled();
+      // Must fail closed — a DB error must not grant access to the new platform
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ code: 'MIGRATION_ACCESS_UNAVAILABLE' }),
+      );
     });
   });
 });

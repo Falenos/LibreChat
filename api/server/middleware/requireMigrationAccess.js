@@ -28,8 +28,11 @@ async function requireMigrationAccess(req, res, next) {
     }
     return next();
   } catch (err) {
-    // Fail open: a DB error should not lock out users entirely
-    return next();
+    // Fail closed: a DB error must not grant access to the new platform
+    return res.status(503).json({
+      message: 'Access check temporarily unavailable. Please try again shortly.',
+      code: 'MIGRATION_ACCESS_UNAVAILABLE',
+    });
   }
 }
 
