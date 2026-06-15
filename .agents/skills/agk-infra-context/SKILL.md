@@ -1,13 +1,13 @@
 ---
 name: agk-infra-context
-description: Use when working on Agentic Karl / AGK infrastructure, Azure CLI access, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform resources, Helm values, deployment-config repos, release pipelines, or debugging dev/prod deployment behavior for this fork.
+description: Use when working on Agentic Karl / AGK infrastructure, Azure CLI access, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform resources, Helm values, deployment-config repos, release pipelines, adding services, choosing infra ownership/state/workflows, or debugging dev/prod deployment behavior for this fork.
 ---
 
 # AGK Infra Context
 
 This skill is the operational map for Agentic Karl infrastructure. Use it before changing deployment workflows, Azure resources, Key Vault secrets, ArgoCD apps, Helm values, or environment config.
 
-Last verified: 2026-06-05.
+Last verified: 2026-06-15.
 
 ## Operating Rules
 
@@ -19,6 +19,8 @@ Last verified: 2026-06-05.
 - For Key Vault rotations consumed as pod env vars, update Key Vault, refresh ExternalSecret, then restart the Deployment so pods reload env.
 - Do not run `terraform init`, `plan`, or `apply` locally against remote state. Infra repo READMEs say CI/CD owns Terraform state access. Local Terraform is for syntax validation only.
 - Before changing AGK deploy workflow logic, use `.github/workflows/agk-deploy-smoke.yaml` to validate Azure login, Key Vault reads, GitHub writes, ACR import, deployment-config repo writes, and ArgoCD API access without waiting for the full release pipeline.
+- Before adding a Terraform root, backend key, GitHub workflow, or pipeline state, prove that no existing root/workflow owns the resource. Default to the smallest existing layer that owns the lifecycle.
+- For external providers such as Datadog, do not create a separate root/workflow just because the provider is not Azure. State ownership follows the app/platform lifecycle, not the vendor.
 
 ## Repos
 
@@ -255,8 +257,8 @@ Current Agentic Karl GitOps state:
 
 - `agk-deployment-configs` contains both `agentic-karl/dev/...` and `agentic-karl/prod/...`.
 - Dev and prod services present: `agentic-karl`, `agentic-karl-rag-api`, `agentic-karl-meilisearch`, plus `common-namespace-resources` and `network-policy`.
-- App repo `origin/main` currently contains `infrastructure/dev/values.yaml` only. `infrastructure/prod/values.yaml` is still absent and is required for the prod multi-source Agentic Karl service app unless the ApplicationSet/value source is changed.
-- Prod service image currently points at `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl:v0.38.0` in GitOps values; prod promotion must intentionally import/publish a newer tag and update the prod values.
+- App repo contains both `infrastructure/dev/values.yaml` and `infrastructure/prod/values.yaml`.
+- Prod service image currently points at `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl:v0.57.0` in GitOps values and the prod app overlay.
 
 ArgoCD bootstrap workflows in `agk-deployment-configs`:
 
@@ -277,10 +279,10 @@ New AGK dev:
 
 AGK prod:
 
-- Domain: `https://agentic-karl.agk.prod.knauf.digital`
+- Domain: `https://agentic-karl.knauf.com` for the public app; older AGK internal prod hostname was `https://agentic-karl.agk.prod.knauf.digital`.
 - ACR image: `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl:<version>`
 - Config repo path: `$KNAUF_ROOT/agk-deployment-configs/agentic-karl/prod/services/agentic-karl/values.yaml`
-- App overlay path: `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml` (currently missing from app repo `origin/main`)
+- App overlay path: `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml`
 - ArgoCD domain: `argocd.agk.prod.knauf.digital`
 - ArgoCD app: `agentic-karl-prod-agentic-karl`
 - Namespace: `agentic-karl-prod`
@@ -304,16 +306,97 @@ Current dev Okta/OpenID settings in AGK GitOps values:
 
 Current prod Okta/OpenID settings in AGK GitOps values:
 
-- `DOMAIN_CLIENT`: `https://agentic-karl.agk.prod.knauf.digital`
-- `DOMAIN_SERVER`: `https://agentic-karl.agk.prod.knauf.digital`
-- `OPENID_CLIENT_ID`: `0oawcorb2pfMcXkHU417`
-- `OPENID_ISSUER`: `https://identity.knauf.digital/oauth2/default`
+- `DOMAIN_CLIENT`: `https://agentic-karl.knauf.com`
+- `DOMAIN_SERVER`: `https://agentic-karl.knauf.com`
+- `ADMIN_PANEL_URL`: `https://agentic-karl-admin.knauf.com`
+- `OPENID_CLIENT_ID`: `0oae5vnxw30lWRJmh417`
+- `OPENID_ISSUER`: `https://login.knauf.com`
 - `OPENID_CALLBACK_URL`: `/oauth/openid/callback`
 
 App code references:
 
 - `$KNAUF_ROOT/agentic-karl/api/strategies/openidStrategy.js`
 - `$KNAUF_ROOT/agentic-karl/api/server/routes/oauth.js`
+
+## Azure AI And Model Map
+
+The main Agentic Karl and CST KARL model backend is the shared Azure AI Services account `cst-karl-dev` in the prod shared subscription:
+
+- Subscription: `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`)
+- Resource group: `rg-ct-sharedprod-westeurope`
+- Resource type/kind: `Microsoft.CognitiveServices/accounts`, kind `AIServices`
+- Region: `swedencentral`
+- OpenAI endpoint: `https://cst-karl-dev.openai.azure.com/`
+- AI Services / Foundry data-plane endpoint: `https://cst-karl-dev.services.ai.azure.com/`
+- Foundry project child resource: `cst-karl-dev-project`; this is a project layer under the account, not a separate model billing or quota account.
+
+Do not confuse this with `ct-sharedprod-openai-swedencentral-001` or `knauf-openai`:
+
+- `ct-sharedprod-openai-swedencentral-001` is a separate Terraform-managed Azure OpenAI account in the same prod shared subscription. It has deployments such as `gpt-5`, `gpt-4o`, and `text-embedding-3-large`, but not `gpt-54` or `gpt-image-1` as of the last verification.
+- `knauf-openai` is the custom subdomain/private endpoint name used by that shared account, not a live resource name. The only CST KARL runtime reference found was a suspended evaluation cronjob, so do not assume normal app traffic uses it.
+- `knauf-supafil-aihub` / `knauf-supafil-project` are Machine Learning workspace Foundry hub/project resources and were not referenced by Agentic Karl or CST KARL runtime config during the last check.
+
+Live `cst-karl-dev` deployments last verified with:
+
+```bash
+az account set --subscription e0515a24-7205-481b-b657-944901020e32
+az cognitiveservices account deployment list \
+  --name cst-karl-dev \
+  --resource-group rg-ct-sharedprod-westeurope \
+  --query "[].{deployment:name,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity,rateLimits:properties.rateLimits}" \
+  -o json
+```
+
+Current deployment map:
+
+| Deployment | Model | Version | SKU | Capacity | Rate limit |
+|---|---|---|---|---:|---|
+| `gpt-54` | `gpt-5.4` | `2026-03-05` | `GlobalStandard` | 1838 | 18,380 RPM / 1,838,000 TPM |
+| `gpt-5` | `gpt-5` | `2025-08-07` | `GlobalStandard` | 8492 | 84,920 RPM / 8,492,000 TPM |
+| `gpt-4o` | `gpt-4o` | `2024-11-20` | `Standard` | 150 | 150 requests / 10s, 150,000 TPM |
+| `text-embedding-3-large` | `text-embedding-3-large` | `1` | `GlobalStandard` | 250 | 250 requests / 10s, 250,000 TPM |
+| `gpt-image-1` | `gpt-image-1` | `2025-04-15` | `GlobalStandard` | 20 | 60 RPM |
+
+Rate-limit interpretation:
+
+- Azure evaluates both RPM and TPM. Whichever is reached first throttles the deployment.
+- TPM is based on Azure's estimated processed tokens when the request arrives. That estimate includes prompt size and configured max output tokens, and can differ from final billed token counts.
+- RPM is enforced over short windows inside the minute, so bursty tests can receive `429` before a full one-minute average appears to exceed the limit.
+- For `gpt-54`, practical max request rate is `min(18380, 1838000 / estimated_tokens_per_request)` requests per minute. Convert to concurrent load with `concurrency ~= (max_rpm / 60) * p95_latency_seconds`.
+- This shared deployment is used by both CST KARL and Agentic Karl. Load tests against production can throttle real users unless quota is isolated with a separate deployment/resource or the test is carefully ramped and capped.
+
+Agentic Karl model wiring:
+
+- App repo `$KNAUF_ROOT/agentic-karl/librechat.yaml` defines the Azure group `cst-karl-dev` with `instanceName: cst-karl-dev`.
+- UI model `gpt-5.4` maps to Azure deployment `gpt-54`.
+- UI model `gpt-4o` maps to Azure deployment `gpt-4o`.
+- Default model spec `karl` uses endpoint `azureOpenAI`, model `gpt-5.4`, and `useResponsesApi: true`.
+- Personality presets `karl-personality-precise`, `karl-personality-balanced`, and `karl-personality-creative` all use `gpt-5.4`.
+- Internal prompt autogeneration uses `gpt-4o` for cheaper/faster instruction drafting.
+- AGK GitOps dev/prod main app values set `AZURE_RESOURCE_NAME: cst-karl-dev`, `ENDPOINTS: azureOpenAI,agents`, and image generation endpoint `https://cst-karl-dev.openai.azure.com/openai/deployments/gpt-image-1`.
+- AGK RAG API dev/prod values set `RAG_OPENAI_BASEURL: https://cst-karl-dev.openai.azure.com/openai/v1`, `EMBEDDINGS_PROVIDER: openAI`, and `EMBEDDINGS_MODEL: text-embedding-3-large`.
+- AGK dev RAG also sets `RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/`; prod RAG did not include this value in GitOps at the last check.
+
+CST KARL model wiring, for shared-resource awareness:
+
+- CST KARL dev/prod GitOps points the web UI at `AZURE_RESOURCE_NAME: cst-karl-dev`, `AZURE_DEPLOYMENT_NAME: gpt-54`, `AZURE_BASE_URL: https://cst-karl-dev.openai.azure.com/`, and `GPT_IMAGE_BASEURL: https://cst-karl-dev.openai.azure.com/openai/deployments/gpt-image-1`.
+- CST KARL RAG uses `text-embedding-3-large` on `https://cst-karl-dev.openai.azure.com/`.
+- CST KARL RAG also has a Supafil path using `gpt-4o`.
+- The CST KARL suspended evaluation cronjob in prod references `knauf-openai`; because it is suspended and that account does not have `gpt-54`/`gpt-image-1`, do not treat it as normal traffic without revalidating.
+
+Useful usage checks:
+
+```bash
+az monitor metrics list \
+  --resource /subscriptions/e0515a24-7205-481b-b657-944901020e32/resourceGroups/rg-ct-sharedprod-westeurope/providers/Microsoft.CognitiveServices/accounts/cst-karl-dev \
+  --metric ModelRequests,ProcessedPromptTokens,GeneratedTokens \
+  --interval PT1M \
+  --aggregation Total \
+  --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+  --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --filter "ModelDeploymentName eq 'gpt-54'" \
+  -o json
+```
 
 ## Secrets And External Secrets
 
@@ -468,24 +551,72 @@ Operational note: Key Vault rotations consumed as environment variables require 
 
 ## How To Make Future Changes
 
-Use this split:
+Start every infra change by deciding the owner, then fit the change into the existing owner root/workflow. Do not start from the provider name or from what is easiest to authenticate.
 
-- New Azure resource, private endpoint, managed identity, Key Vault, Redis, MongoDB, Blob Storage, PostgreSQL DB/role, network dependency: change `agk-infrastructure`.
-- New service deployment, env config, image tag, ingress, resource limits, node placement, ExternalSecret mapping, SecretStore, network policy: change `agk-deployment-configs`.
-- App default Helm values, service-owned overrides, `SERVICE_VERSION`, release automation, code behavior: change `agentic-karl`.
-- Old dev-only CT deployment: change `ct-shared-deployment-configs` only when maintaining the old CT dev deployment.
+### Placement Decision Table
 
-For a new service in AGK:
+| Change | Default owner |
+|---|---|
+| Hub-wide shared services, tfstate bootstrap, hub VNet, firewall, Bastion, hub ACR, hub Key Vault, PostgreSQL server | `agk-infrastructure/terraform/subscription/<env>/base/hub/<layer>` |
+| Spoke AKS, node/ingress/ACI/pod subnets, runners, workload identities, route tables | `agk-infrastructure/terraform/subscription/<env>/base/<env>/<layer>` |
+| Tenant RG, tenant Key Vault, tenant storage, Redis, MongoDB, tenant External Secrets identity | `agk-infrastructure/terraform/subscription/<env>/tenant/<tenant>` |
+| App-specific DBs, DB roles, app-owned Key Vault secrets, app-specific provider resources, app bindings | `agk-infrastructure/terraform/subscription/<env>/tenant/<tenant>/<app>` |
+| Kubernetes service deployment, image tag, ingress, probes, resource limits, env config, ExternalSecret mapping, SecretStore, network policy | `agk-deployment-configs/<project>/<env>/...` |
+| Service-owned Helm defaults, app overlays, release automation, code behavior | `agentic-karl` or the owning service repo |
+| Old CT dev deployment only | `ct-shared-deployment-configs` |
 
-1. Add `{project}/{env}/services/{service}/values.yaml` in `agk-deployment-configs`.
-2. Add `Knauf-Group/{service}/infrastructure/{env}/values.yaml` unless the service is intentionally handled by a single-source ApplicationSet.
-3. Add namespace shared resources under `{project}/{env}/common-namespace-resources` and `{project}/{env}/network-policy` if needed.
-4. Commit to `main`; ArgoCD ApplicationSet creates the app and syncs automatically.
+If more than one row seems plausible, choose the narrowest lifecycle owner. For example, a Datadog RUM application for Agentic Karl belongs in the Agentic Karl tenant app root, not in a standalone Datadog root, because it is app-owned and should be planned by the tenant app pipeline.
+
+### Terraform Root And Workflow Rules
+
+- Prefer existing roots and workflows. A new root/backend/workflow needs an explicit lifecycle reason, such as a separate owner, separate apply cadence, or a shared platform resource that multiple tenants consume.
+- Do not create a side pipeline to solve credential convenience. Add the needed provider credentials to the existing owner pipeline, or retrieve them inside that pipeline.
+- If changing a workflow file should validate that workflow on PRs, include the workflow path in its `on.push.paths` and `on.pull_request.paths`.
+- If a self-hosted runner lacks a required CLI, add a scoped install/check step in the existing job. Do not switch runners without checking private network requirements.
+- Use standard provider environment variables when a provider supports them. For Datadog, prefer `DD_HOST`, `DD_API_KEY`, and `DD_APP_KEY`; source the values from existing repo secrets or Key Vault retrieval without printing secret values.
+- Reuse established shared modules when sibling repos use them. If no module exists for the resource, a direct Terraform resource in the correct root is acceptable.
+- Use local Terraform only for syntax validation:
+  ```bash
+  terraform init -backend=false -input=false
+  terraform validate -no-color
+  ```
+  Remove local `.terraform` and `.terraform.lock.hcl` artifacts afterwards if the repo ignores them.
+
+### New Service Checklist
+
+1. Identify the service owner repo, environments, target namespace, image repository, ingress hostnames, external dependencies, and required secrets.
+2. Search existing AGK and sibling repo patterns before designing from scratch:
+   ```bash
+   rg -n "<service-or-provider>|ExternalSecret|SecretStore|ingress|datadog" $KNAUF_ROOT/agk-deployment-configs $KNAUF_ROOT/agk-infrastructure $KNAUF_ROOT/cms-cf-infrastructure
+   ```
+3. Add or update the service repo overlay `Knauf-Group/<service>/infrastructure/<env>/values.yaml` when the ApplicationSet expects service-owned values.
+4. Add GitOps values at `agk-deployment-configs/<project>/<env>/services/<service>/values.yaml`.
+5. Add or update namespace shared resources only if the namespace needs them: `common-namespace-resources`, `SecretStore`, service account, and `network-policy`.
+6. Add ExternalSecret mappings for runtime env vars, but create the source Key Vault secrets through the right path: Terraform for generated infra outputs, manual/approved Key Vault update for manually managed app config.
+7. Add Terraform only for cloud resources the service actually needs. Put shared tenant resources in the tenant root and app-owned resources in the tenant app root.
+8. Verify image repository and tag ownership. Dev usually imports to `acragkhubnonprod001.azurecr.io/agentic-karl-dev/...`; prod uses `acragkhubprod001.azurecr.io/agentic-karl-prod/...`.
+9. Validate with ArgoCD read-only checks and dry-run before live actions:
+   ```bash
+   argocd app get <app> --grpc-web
+   argocd app diff <app> --grpc-web
+   argocd app sync <app> --dry-run --grpc-web
+   ```
+
+### Pre-PR Infra Review Checklist
+
+- Confirm current branch and subscription; fetch latest `main` for touched repos.
+- State the owner in the PR description: root/path, backend state key if Terraform, workflow that plans/applies it, and why a new root/state is not needed.
+- Search sibling repos for the same pattern before opening the PR. For Datadog, check `cms-cf-infrastructure` and existing AGK deployment-config Datadog usage.
+- Inspect GitHub secret names with `gh secret list` only as metadata. Do not assume secrets exist because another repo has them.
+- Run local YAML/action checks when workflows change. Existing custom runner labels may need actionlint ignores, but new diagnostics should be fixed.
+- Run safe Terraform validation with `-backend=false`; never run local plan/apply against remote state.
+- After opening the PR, inspect the CI plan for unexpected destroys, new backend keys, or resources outside the intended owner.
+- If the plan requires a new pipeline, new state, or new credentials, pause and ask whether the resource actually belongs in an existing layer.
 
 For prod Agentic Karl app onboarding or promotion:
 
 1. Confirm prod DNS, Okta app, secrets, and release policy.
-2. Add `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml`; app repo `origin/main` does not currently have it.
+2. Confirm `$KNAUF_ROOT/agentic-karl/infrastructure/prod/values.yaml` exists and has the intended version/security overrides.
 3. Validate existing prod GitOps directories and required manual prod app secrets in `kv-agntkarl-prod-001`; Terraform-managed MongoDB/Redis/Blob/PostgreSQL secrets should come from the infra pipeline.
 4. Import/publish the chosen image tag into `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl`, then update prod GitOps image tag and app repo prod overlay values deliberately.
 5. Verify ArgoCD app `agentic-karl-prod-agentic-karl` with read-only/dry-run checks before live sync or restart.
