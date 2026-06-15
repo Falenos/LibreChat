@@ -14,17 +14,18 @@ import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
 import { useAuthContext } from '~/hooks';
 
-const MIGRATION_ACCESS_QUERY_KEY = ['knauf', 'migration-access'];
-
 interface MigrationAccessResponse {
   allowed: boolean;
 }
 
 export function useMigrationAccess() {
-  const { isAuthenticated } = useAuthContext();
+  const { isAuthenticated, user } = useAuthContext();
 
+  // Include email in the key so each user gets an isolated cache entry.
+  // Prevents a logged-out user's result being briefly shown to the next user
+  // who logs in on the same tab.
   const query = useQuery<MigrationAccessResponse>(
-    MIGRATION_ACCESS_QUERY_KEY,
+    ['knauf', 'migration-access', user?.email ?? ''],
     async () => {
       const { data } = await axios.get<MigrationAccessResponse>('/api/knauf/migration/access');
       return data;
