@@ -52,23 +52,18 @@ describe('migrationAllowlist service', () => {
     it('lowercases the email before querying', async () => {
       mockFindOne.mockReturnValue(mockDoc(null));
       await isEmailAllowed('ALI@Knauf.COM');
-      expect(mockFindOne).toHaveBeenCalledWith({
-        $expr: { $eq: [{ $toLower: '$emailNormalized' }, 'ali@knauf.com'] },
-      });
+      expect(mockFindOne).toHaveBeenCalledWith({ emailNormalized: 'ali@knauf.com' });
     });
 
     it('trims whitespace from the email before querying', async () => {
       mockFindOne.mockReturnValue(mockDoc(null));
       await isEmailAllowed('  ali@knauf.com  ');
-      expect(mockFindOne).toHaveBeenCalledWith({
-        $expr: { $eq: [{ $toLower: '$emailNormalized' }, 'ali@knauf.com'] },
-      });
+      expect(mockFindOne).toHaveBeenCalledWith({ emailNormalized: 'ali@knauf.com' });
     });
 
-    it('normalises mixed-case input so it matches a mixed-case DB value', async () => {
-      mockFindOne.mockReturnValue(mockDoc('Ali.Karimizandi@Knauf.com'));
-      // The query uses $toLower on both sides, so 'ALI...' maps to key 'ali...'
-      // and the DB $toLower makes 'Ali.Karimizandi@Knauf.com' also lowercase
+    it('normalises mixed-case input so it matches the lowercased DB value', async () => {
+      mockFindOne.mockReturnValue(mockDoc('ali.karimizandi@knauf.com'));
+      // key is lowercased in code; schema enforces lowercase on write — direct index hit
       expect(await isEmailAllowed('ALI.KARIMIZANDI@KNAUF.COM')).toBe(true);
     });
   });

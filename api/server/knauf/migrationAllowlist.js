@@ -52,11 +52,9 @@ async function isEmailAllowed(email) {
   }
 
   const Model = getModel();
-  // Always compare lowercase-to-lowercase: normalise the DB value at query time
-  // so manually-inserted mixed-case emails are matched correctly.
-  const doc = await Model.findOne({
-    $expr: { $eq: [{ $toLower: '$emailNormalized' }, key] },
-  }).lean();
+  // key is already lowercased above; schema enforces lowercase: true on write,
+  // so this equality match hits the unique index directly.
+  const doc = await Model.findOne({ emailNormalized: key }).lean();
   const allowed = doc != null;
 
   cache.set(key, { allowed, expiresAt: Date.now() + CACHE_TTL_MS });
