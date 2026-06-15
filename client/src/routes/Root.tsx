@@ -45,7 +45,7 @@ export default function Root() {
   const { isAuthenticated, logout } = useAuthContext();
 
   // [knauf] Block non-allowlisted users immediately after login.
-  const { allowed: migrationAllowed, isLoading: migrationLoading } = useMigrationAccess();
+  const { allowed: migrationAllowed, isLoading: migrationLoading, isError: migrationError } = useMigrationAccess();
   // End [knauf]
 
   useHealthCheck(isAuthenticated);
@@ -90,6 +90,9 @@ export default function Root() {
   // While the check is loading we render null (avoids flash of main UI).
   if (migrationLoading) {
     return null;
+  }
+  if (migrationError) {
+    return <KnaufAccessDenied errorMode />
   }
   if (!migrationAllowed) {
     return <KnaufAccessDenied />;
