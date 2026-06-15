@@ -23,7 +23,7 @@ router.get('/', requireJwtAuth, async (req, res) => {
     const allowed = await isEmailAllowed(email);
     return res.json({ allowed });
   } catch (err) {
-    return res.status(500).json({ message: 'Failed to check migration access' });
+    return res.status(503).json({ message: 'Access check temporarily unavailable. Please try again shortly.' });
   }
 });
 

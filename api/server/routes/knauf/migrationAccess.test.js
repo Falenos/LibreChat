@@ -72,10 +72,10 @@ describe('GET /api/knauf/migration/access', () => {
   });
 
   describe('error handling', () => {
-    it('returns 500 when isEmailAllowed throws', async () => {
+    it('returns 503 when isEmailAllowed throws', async () => {
       mockIsEmailAllowed.mockRejectedValue(new Error('DB timeout'));
       const res = await request(buildApp('ali@knauf.com')).get('/');
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
       expect(res.body).toHaveProperty('message');
     });
   });
