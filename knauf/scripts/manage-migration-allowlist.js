@@ -4,7 +4,7 @@
 // Edit the two config lines below, then execute the whole script.
 //
 // ─── CONFIGURE HERE ──────────────────────────────────────────────────────────
-const ACTION = 'list';   // 'list' | 'add' | 'remove'
+const ACTION = 'list'; // 'list' | 'add' | 'remove'
 const EMAILS = [
   // 'alice@knauf.com',
   // 'bob@knauf.com',
@@ -46,13 +46,13 @@ function parseEmails(raw) {
 // ---------- actions ----------
 
 if (action === 'list') {
-  const docs = allowlist.find({}, { emailNormalized: 1, addedBy: 1, createdAt: 1 }).toArray();
+  const docs = allowlist.find({}, { emailNormalized: 1, createdAt: 1 }).toArray();
   if (docs.length === 0) {
     print('ℹ️  Allowlist is empty — no users can access the new platform yet.');
   } else {
     print(`✅  ${docs.length} allowed email(s):\n`);
     docs.forEach((d) =>
-      print(`  • ${d.emailNormalized}  (added by: ${d.addedBy || '—'}, at: ${d.createdAt?.toISOString?.() ?? '—'})`),
+      print(`  • ${d.emailNormalized}  (at: ${d.createdAt?.toISOString?.() ?? '—'})`),
     );
   }
 } else if (action === 'add') {
@@ -65,7 +65,7 @@ if (action === 'list') {
     emails.forEach((email) => {
       const result = allowlist.updateOne(
         { emailNormalized: email },
-        { $setOnInsert: { emailNormalized: email, addedBy: 'script', createdAt: new Date(), updatedAt: new Date() } },
+        { $setOnInsert: { emailNormalized: email, createdAt: new Date(), updatedAt: new Date() } },
         { upsert: true },
       );
       if (result.upsertedCount > 0) {
