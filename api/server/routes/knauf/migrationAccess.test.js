@@ -16,6 +16,16 @@ jest.mock('~/server/middleware', () => ({
 
 const VALID_SECRET = 'test-secret-123';
 
+// Snapshot env once before all tests; restore fully after each test so no
+// state leaks between suites when running with jest -t or --testPathPatterns.
+const originalEnv = { ...process.env };
+afterEach(() => {
+  Object.keys(process.env).forEach((key) => {
+    if (!(key in originalEnv)) delete process.env[key];
+  });
+  Object.assign(process.env, originalEnv);
+});
+
 const buildApp = () => {
   process.env.KNAUF_MIGRATION_API_SECRET = VALID_SECRET;
   jest.resetModules();
@@ -35,7 +45,6 @@ describe('GET / — frontend endpoint (JWT)', () => {
     process.env.MIGRATION_ALLOWLIST_ENABLED = 'true';
     mockIsEmailAllowed.mockClear();
   });
-  afterEach(() => delete process.env.MIGRATION_ALLOWLIST_ENABLED);
 
   it('returns { allowed: true } for an allowed user', async () => {
     mockIsEmailAllowed.mockResolvedValue(true);
@@ -66,11 +75,6 @@ describe('GET /check — third-party endpoint (API key)', () => {
     process.env.MIGRATION_ALLOWLIST_ENABLED = 'true';
     process.env.KNAUF_MIGRATION_API_SECRET = VALID_SECRET;
     mockIsEmailAllowed.mockClear();
-  });
-
-  afterEach(() => {
-    delete process.env.MIGRATION_ALLOWLIST_ENABLED;
-    delete process.env.KNAUF_MIGRATION_API_SECRET;
   });
 
   it('returns { allowed: true } with valid key and allowed email', async () => {
@@ -128,11 +132,6 @@ describe('MIGRATION_ALLOWLIST_ENABLED=false — gate disabled', () => {
     process.env.MIGRATION_ALLOWLIST_ENABLED = 'false';
     process.env.KNAUF_MIGRATION_API_SECRET = VALID_SECRET;
     mockIsEmailAllowed.mockClear();
-  });
-
-  afterEach(() => {
-    delete process.env.MIGRATION_ALLOWLIST_ENABLED;
-    delete process.env.KNAUF_MIGRATION_API_SECRET;
   });
 
   it('frontend endpoint returns { allowed: true } without DB call', async () => {
