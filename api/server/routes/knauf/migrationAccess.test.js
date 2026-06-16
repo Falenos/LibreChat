@@ -142,14 +142,26 @@ describe('MIGRATION_ALLOWLIST_ENABLED=false — gate disabled', () => {
     expect(mockIsEmailAllowed).not.toHaveBeenCalled();
   });
 
-  it('third-party endpoint returns { allowed: true } without DB call', async () => {
+  it('third-party endpoint always checks allowlist even when gate is disabled — allowed email', async () => {
+    mockIsEmailAllowed.mockResolvedValue(true);
     const app = buildApp();
     const res = await request(app)
       .get('/check?email=ali@knauf.com')
       .set('X-Knauf-Api-Key', VALID_SECRET);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ allowed: true });
-    expect(mockIsEmailAllowed).not.toHaveBeenCalled();
+    expect(mockIsEmailAllowed).toHaveBeenCalledWith('ali@knauf.com');
+  });
+
+  it('third-party endpoint always checks allowlist even when gate is disabled — denied email', async () => {
+    mockIsEmailAllowed.mockResolvedValue(false);
+    const app = buildApp();
+    const res = await request(app)
+      .get('/check?email=stranger@example.com')
+      .set('X-Knauf-Api-Key', VALID_SECRET);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ allowed: false });
+    expect(mockIsEmailAllowed).toHaveBeenCalledWith('stranger@example.com');
   });
 });
 // End [knauf]
