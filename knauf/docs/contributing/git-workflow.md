@@ -4,7 +4,7 @@
 
 ## Merge Protocol
 
-See [upstream-sync.md](../guides/upstream-sync.md) for the full ritual (branching strategy, per-step checklist, tagging).
+See [upstream-sync.md](upstream-sync.md) for the full ritual (branching strategy, per-step checklist, tagging).
 
 Summary: branch from `main`, run `git merge --no-ff upstream/<tag>` (never rebase), resolve conflicts at `[knauf]` markers using SEAMS.md as the index, validate with `seams.js check`, build + test + staging deploy, then PR to `main` with `--no-ff`.
 
@@ -92,5 +92,5 @@ Five test suites: `test:client:coverage`, `test:api`, `test:packages:api`, `test
 
 ## Related
 
-- [upstream-sync.md](../guides/upstream-sync.md) — full merge ritual
+- [upstream-sync.md](upstream-sync.md) — full merge ritual
 - [../../README.md](../../README.md) — local development commands

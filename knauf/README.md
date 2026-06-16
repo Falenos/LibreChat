@@ -51,9 +51,9 @@ npm run e2e:ci             # Playwright (no test cases yet)
 
 Follow this order. Each step assumes the previous one is complete.
 
-1. **Read the protocol.** Open [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md). The tier ladder decides where your change goes; the Anti-Patterns and Refusals sections list what reviewers will reject.
+1. **Read the protocol.** Open [docs/contributing/code-change-protocol.md](docs/contributing/code-change-protocol.md). The tier ladder decides where your change goes; the Anti-Patterns and Refusals sections list what reviewers will reject.
 2. **Pick the lowest tier that works.** Walk the Decision Framework: Tier 0 config → Tier 1 MCP/Action → Tier 2 asset overlay → Tier 3 net-new Knauf code → Tier 4a/b/c/d upstream modification. Stop at the first "yes".
-3. **If Tier 4c (inline `[knauf]` marker):** wrap the change in `[knauf] <reason> ... End [knauf]` and add a row to [SEAMS.md](../SEAMS.md). Easiest path: invoke the `seam-manifest` skill at [.agents/skills/seam-manifest](../.agents/skills/seam-manifest) — it handles the marker, the SEAMS.md row, and re-runs the validator. Manual reference: [code-change-protocol.md § Tracking Changes](docs/reference/code-change-protocol.md#tracking-changes-tier-4c).
+3. **If Tier 4c (inline `[knauf]` marker):** wrap the change in `[knauf] <reason> ... End [knauf]` and add a row to [SEAMS.md](../SEAMS.md). Easiest path: invoke the `seam-manifest` skill at [.agents/skills/seam-manifest](../.agents/skills/seam-manifest) — it handles the marker, the SEAMS.md row, and re-runs the validator. Manual reference: [code-change-protocol.md § Tracking Changes](docs/contributing/code-change-protocol.md#tracking-changes-tier-4c).
 4. **Run the seam tooling before opening the PR:**
    ```bash
    node knauf/scripts/seams.js check --all                 # validate SEAMS.md ↔ markers
@@ -61,39 +61,22 @@ Follow this order. Each step assumes the previous one is complete.
    node knauf/scripts/seams.js diff-check --base=<sha>     # check the PR diff for untagged upstream mods
    ```
    `check` and `diff-check` are the CI merge gate; both must exit 0.
-5. **Write a seam test.** Every `[knauf]` marker needs a corresponding test — see [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md). Untested seams fail silently when upstream refactors.
+5. **Write a seam test.** Every `[knauf]` marker needs a corresponding test — see [docs/contributing/testing-and-rollback.md](docs/contributing/testing-and-rollback.md). Untested seams fail silently when upstream refactors.
 6. **If you're working with AI:** the two skills at [.agents/skills/](../.agents/skills/) wrap steps 2–4. Invoke [`fork-management`](../.agents/skills/fork-management) *before* the change (tier selection + anti-pattern checks) and [`seam-manifest`](../.agents/skills/seam-manifest) *after* adding or editing a `[knauf]` marker or net-new `knauf/`-directory file (runs the seam tooling and authors the SEAMS.md row). Don't relitigate the tier choice once a skill has done it.
 
-**Picking up an upstream-sync issue instead?** Skip the steps above and follow [docs/guides/upstream-sync.md](docs/guides/upstream-sync.md).
+**Picking up an upstream-sync issue instead?** Skip the steps above and follow [docs/contributing/upstream-sync.md](docs/contributing/upstream-sync.md).
 
 ---
 
 ## Documentation
 
-### Guides
+Full index with per-doc summaries: **[docs/README.md](docs/README.md)**. Docs are organized by purpose:
 
-| Doc | When to read it |
+| Folder | Purpose |
 |---|---|
-| [docs/guides/upstream-sync.md](docs/guides/upstream-sync.md) | Step-by-step ritual for picking up an upstream sync issue |
-
-### Reference
-
-| Doc | When to read it |
-|---|---|
-| [docs/reference/code-change-protocol.md](docs/reference/code-change-protocol.md) | Tier ladder, marker / SEAMS.md format, anti-patterns, refusals |
-| [docs/reference/git-workflow.md](docs/reference/git-workflow.md) | Merge protocol, CI automation |
-| [docs/reference/testing-and-rollback.md](docs/reference/testing-and-rollback.md) | Seam tests, emergency rollback |
-| [docs/reference/azure-blob-storage.md](docs/reference/azure-blob-storage.md) | How file storage works on Azure — SAS-token anatomy, refresh chain, TTL math, signing modes, before/after diagrams |
-| [docs/reference/image-gen-toggle.md](docs/reference/image-gen-toggle.md) | How the image-generation toggle works on agent chats and default Knauf model spec chats (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
-| [docs/migration.md](docs/migration.md) | Historical record: how this repo was created, why we re-forked |
-
-### Implementation plans
-
-Time-bound, multi-PR workstreams being executed. Plans get deleted, promoted to `reference/`, or archived once the rollout finishes — see [docs/implementation-plans/README.md](docs/implementation-plans/README.md) for the lifecycle convention.
-
-| Doc | What it covers |
-|---|---|
-| [docs/implementation-plans/azure-blob-and-private-files.md](docs/implementation-plans/azure-blob-and-private-files.md) | Azure Blob private-container rollout — upstream PR status, deployment-configs changes, prod hardening checklist, end-to-end verification recipes |
-| [docs/implementation-plans/langfuse-rollout.md](docs/implementation-plans/langfuse-rollout.md) | Deploying Langfuse (LLM observability) on AGK: single-source Helm service in agk-deployment-configs via the ApplicationSet, bundled in-cluster stores, Traefik + Okta, zero-Terraform dev |
+| [docs/architecture/](docs/architecture/) | How the product works — feature & subsystem reference |
+| [docs/contributing/](docs/contributing/) | How we work on this fork — change protocol, git/merge workflow, seam testing, upstream sync, fork history |
+| [docs/implementation-plans/](docs/implementation-plans/) | Time-bound, multi-PR workstreams in flight |
+| [docs/proposals/](docs/proposals/) | Designs still being decided |
 
 ---
