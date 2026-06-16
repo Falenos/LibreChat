@@ -155,11 +155,12 @@ const startServer = async () => {
   /* Pre-auth tenant context for unauthenticated routes that need tenant scoping.
    * The reverse proxy / auth gateway sets `X-Tenant-Id` header for multi-tenant deployments. */
   app.use('/oauth', preAuthTenantMiddleware, routes.oauth);
-  // [knauf] Migration access gate — default-deny for all /api routes.
-  // Every authenticated route requires the user to be on the migration allowlist.
+  // [knauf] Migration access gate — when MIGRATION_ALLOWLIST_ENABLED=true, enforces
+  // default-deny on all /api routes: every authenticated request must come from a user
+  // on the migration allowlist.
   //
-  // Controlled by MIGRATION_ALLOWLIST_ENABLED env var (default: false).
-  // Set to 'true' in production to enforce the gate.
+  // Disabled by default (MIGRATION_ALLOWLIST_ENABLED=false). Set to 'true' in production
+  // to enforce the gate. When disabled, all requests pass through without allowlist checks.
   //
   // Exempt routes (must be reachable before a user is on the allowlist):
   //   /auth                    — Okta login/logout bootstrap
