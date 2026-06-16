@@ -11,6 +11,39 @@ const username = urls?.[0]?.username || cacheConfig.REDIS_USERNAME;
 const password = urls?.[0]?.password || cacheConfig.REDIS_PASSWORD;
 const ca = cacheConfig.REDIS_CA;
 
+// [knauf] Keep every ioredis connection active against Azure Redis idle timeouts.
+const ioredisPingIntervals = new WeakMap<Redis | Cluster, NodeJS.Timeout>();
+
+const clearIoredisPingInterval = (client: Redis | Cluster): void => {
+  const interval = ioredisPingIntervals.get(client);
+  if (!interval) {
+    return;
+  }
+
+  clearInterval(interval);
+  ioredisPingIntervals.delete(client);
+};
+
+const attachIoredisPingInterval = (client: Redis | Cluster, clientName = 'ioredis'): void => {
+  if (cacheConfig.REDIS_PING_INTERVAL <= 0 || ioredisPingIntervals.has(client)) {
+    return;
+  }
+
+  const interval = setInterval(() => {
+    if (client.status === 'ready') {
+      client.ping().catch((err) => {
+        logger.error(`${clientName} ping failed:`, err);
+      });
+    }
+  }, cacheConfig.REDIS_PING_INTERVAL * 1000);
+  interval.unref?.();
+
+  ioredisPingIntervals.set(client, interval);
+  // Keep the timer across transient close/retry cycles; only end is terminal.
+  client.once('end', () => clearIoredisPingInterval(client));
+};
+// End [knauf]
+
 let ioredisClient: Redis | Cluster | null = null;
 if (cacheConfig.USE_REDIS) {
   const redisOptions: Record<string, unknown> = {
@@ -103,26 +136,9 @@ if (cacheConfig.USE_REDIS) {
     logger.warn('ioredis client connection closed');
   });
 
-  /** Ping Interval to keep the Redis server connection alive (if enabled) */
-  let pingInterval: NodeJS.Timeout | null = null;
-  const clearPingInterval = () => {
-    if (pingInterval) {
-      clearInterval(pingInterval);
-      pingInterval = null;
-    }
-  };
-
-  if (cacheConfig.REDIS_PING_INTERVAL > 0) {
-    pingInterval = setInterval(() => {
-      if (ioredisClient && ioredisClient.status === 'ready') {
-        ioredisClient.ping().catch((err) => {
-          logger.error('ioredis ping failed:', err);
-        });
-      }
-    }, cacheConfig.REDIS_PING_INTERVAL * 1000);
-    ioredisClient.on('close', clearPingInterval);
-    ioredisClient.on('end', clearPingInterval);
-  }
+  // [knauf] Attach reusable keepalive so reconnects and duplicated clients keep pinging.
+  attachIoredisPingInterval(ioredisClient);
+  // End [knauf]
 }
 
 let keyvRedisClient: RedisClientType | RedisClusterType | null = null;
@@ -221,4 +237,4 @@ if (cacheConfig.USE_REDIS) {
   });
 }
 
-export { ioredisClient, keyvRedisClient, keyvRedisClientReady };
+export { attachIoredisPingInterval, ioredisClient, keyvRedisClient, keyvRedisClientReady };

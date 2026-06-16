@@ -151,7 +151,12 @@ const ldapLogin = new LdapStrategy(ldapOptions, async (userinfo, done) => {
 
     if (!user) {
       const isFirstRegisteredUser = (await countUsers()) === 0;
-      const role = isFirstRegisteredUser ? SystemRoles.ADMIN : SystemRoles.USER;
+      // [knauf] Prod disables upstream's first-user-admin bootstrap; admins are
+      // assigned via configured SSO/admin flows instead.
+      const shouldGrantFirstUserAdmin =
+        isFirstRegisteredUser && !isEnabled(process.env.KNAUF_DISABLE_FIRST_USER_ADMIN);
+      // End [knauf]
+      const role = shouldGrantFirstUserAdmin ? SystemRoles.ADMIN : SystemRoles.USER;
 
       user = {
         provider: 'ldap',

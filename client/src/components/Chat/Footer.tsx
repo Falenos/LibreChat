@@ -1,9 +1,13 @@
 import React, { useEffect, memo } from 'react';
 import TagManager from 'react-gtm-module';
 import ReactMarkdown from 'react-markdown';
-import { Constants } from 'librechat-data-provider';
 import { useGetStartupConfig } from '~/data-provider';
 import { useLocalize } from '~/hooks';
+
+// [knauf] Default footer fallback to the Agentic Karl brand when startup config does
+// not provide `customFooter`; avoids exposing the upstream link. (NO-TICKET)
+const KNAUF_FOOTER_FALLBACK = 'Agentic Karl | Knauf AI Platform';
+// End [knauf]
 
 function Footer({ className }: { className?: string }) {
   const { data: config } = useGetStartupConfig();
@@ -25,12 +29,7 @@ function Footer({ className }: { className?: string }) {
   );
 
   const mainContentParts = (
-    typeof config?.customFooter === 'string'
-      ? config.customFooter
-      : '[LibreChat ' +
-        Constants.VERSION +
-        '](https://librechat.ai) - ' +
-        localize('com_ui_latest_footer')
+    typeof config?.customFooter === 'string' ? config.customFooter : KNAUF_FOOTER_FALLBACK
   ).split('|');
 
   useEffect(() => {

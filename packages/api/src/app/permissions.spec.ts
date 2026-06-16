@@ -2139,6 +2139,65 @@ describe('updateInterfacePermissions - permissions', () => {
     });
   });
 
+  // [knauf] Prod-only normal USER lockdown must override permissive dev/YAML
+  // defaults without changing ADMIN permissions.
+  it('should restrict normal USER permissions when Knauf prod user governance is enabled', async () => {
+    const previousValue = process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS;
+    process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS = 'true';
+    mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
+      permissions: roleDefaults[roleName].permissions,
+    }));
+
+    try {
+      const config = { interface: {} };
+      const configDefaults = { interface: {} } as TConfigDefaults;
+      const interfaceConfig = await loadDefaultInterface({ config, configDefaults });
+      const appConfig = { config, interfaceConfig } as unknown as AppConfig;
+
+      await updateInterfacePermissions({
+        appConfig,
+        getRoleByName: mockGetRoleByName,
+        updateAccessPermissions: mockUpdateAccessPermissions,
+      });
+
+      const userCall = mockUpdateAccessPermissions.mock.calls.find(
+        (call) => call[0] === SystemRoles.USER,
+      );
+      const adminCall = mockUpdateAccessPermissions.mock.calls.find(
+        (call) => call[0] === SystemRoles.ADMIN,
+      );
+
+      expect(userCall?.[1]).toEqual({
+        [PermissionTypes.AGENTS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: false,
+          [Permissions.SHARE]: false,
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+        [PermissionTypes.MEMORIES]: {
+          [Permissions.USE]: false,
+          [Permissions.CREATE]: false,
+          [Permissions.READ]: false,
+          [Permissions.UPDATE]: false,
+          [Permissions.OPT_OUT]: false,
+        },
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: false,
+          [Permissions.VIEW_GROUPS]: false,
+          [Permissions.VIEW_ROLES]: false,
+        },
+      });
+      expect(adminCall).toBeUndefined();
+    } finally {
+      if (previousValue === undefined) {
+        delete process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS;
+      } else {
+        process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS = previousValue;
+      }
+    }
+  });
+  // End [knauf]
+
   it('should enable all remoteAgents permissions when fully enabled in config', async () => {
     const config = {
       interface: {

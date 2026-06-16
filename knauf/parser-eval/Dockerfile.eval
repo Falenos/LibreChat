@@ -1,0 +1,28 @@
+# Eval harness image. Built FROM the same rag_api base as the production overlay so the
+# `upstream` + `azure_di` strategies use the SAME langchain-community loader versions as
+# production. Adds liteparse + its system deps + the metrics/judge libs. Eval-only — never
+# shipped to prod. Heavy on purpose (LibreOffice/Tesseract).
+FROM registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice imagemagick tesseract-ocr poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /eval
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+# liteparse CLI (`lit`). If the pip package name/CLI differs in your environment, adjust
+# here and in config.yaml (liteparse.command). `|| true` so the image still builds for
+# DI/upstream-only runs.
+RUN pip install --no-cache-dir liteparse || true
+
+# liteparse's bundled tesseract-rs needs English tessdata at /root/.tesseract-rs/tessdata.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /root/.tesseract-rs/tessdata \
+    && cp "$(find /usr/share -name eng.traineddata | head -1)" /root/.tesseract-rs/tessdata/
+ENV TESSDATA_PREFIX=/root/.tesseract-rs/tessdata
+
+COPY . /eval
+ENTRYPOINT ["python", "run.py"]

@@ -1,0 +1,11 @@
+# Eval outputs and caches — never commit
+runs/
+.judge_cache/
+__pycache__/
+*.pyc
+.venv/
+# Corpus docs are user-provided and may be proprietary/large; keep the structure, not the files.
+corpus/**
+!corpus/**/
+!corpus/**/.gitkeep
+!corpus/README.md

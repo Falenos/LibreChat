@@ -9,9 +9,11 @@
  * upstream marker work.
  */
 const express = require('express');
+const analyticsDiagnostics = require('./analyticsDiagnostics');
 const autogeneratePrompt = require('./autogeneratePrompt');
 
 const router = express.Router();
+router.use('/analytics', analyticsDiagnostics);
 router.use('/autogenerate-prompt', autogeneratePrompt);
 
 module.exports = router;

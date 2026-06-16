@@ -32,18 +32,30 @@ jest.mock('~/models', () => ({
   deleteUserById: jest.fn(),
   generateRefreshToken: jest.fn(),
 }));
-jest.mock('~/strategies/validators', () => ({ registerSchema: { parse: jest.fn() } }));
+jest.mock('~/strategies/validators', () => ({
+  registerSchema: {
+    parse: jest.fn(),
+    // [knauf] registerUser role-governance specs exercise the route validator.
+    safeParse: jest.fn(() => ({ success: true })),
+    // End [knauf]
+  },
+}));
 jest.mock('~/server/services/Config', () => ({ getAppConfig: jest.fn() }));
 jest.mock('~/server/utils', () => ({ sendEmail: jest.fn() }));
 
 const {
+  checkEmailConfig,
   shouldUseSecureCookie,
   isEmailDomainAllowed,
   resolveAppConfigForUser,
 } = require('@librechat/api');
-const { findUser } = require('~/models');
+// [knauf] registerUser role-governance specs need the user creation mocks.
+const { findUser, createUser, updateUser, countUsers } = require('~/models');
+// End [knauf]
 const { getAppConfig } = require('~/server/services/Config');
-const { setOpenIDAuthTokens, requestPasswordReset } = require('./AuthService');
+// [knauf] registerUser role-governance specs cover prod first-user behavior.
+const { setOpenIDAuthTokens, requestPasswordReset, registerUser } = require('./AuthService');
+// End [knauf]
 
 /** Helper to build a mock Express response */
 function mockResponse() {
@@ -274,6 +286,50 @@ describe('setOpenIDAuthTokens', () => {
     });
   });
 });
+
+// [knauf] Prod disables upstream first-user-admin local registration while
+// preserving the bootstrap behavior everywhere else.
+describe('registerUser Knauf first-user role governance', () => {
+  const env = process.env;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...env };
+    getAppConfig.mockResolvedValue({ registration: { allowedDomains: ['example.com'] } });
+    isEmailDomainAllowed.mockReturnValue(true);
+    checkEmailConfig.mockReturnValue(false);
+    findUser.mockResolvedValue(null);
+    countUsers.mockResolvedValue(0);
+    createUser.mockResolvedValue({ _id: 'newUserId', emailVerified: false });
+    updateUser.mockResolvedValue({});
+  });
+
+  afterAll(() => {
+    process.env = env;
+  });
+
+  const user = {
+    email: 'first@example.com',
+    password: 'correct horse battery staple',
+    name: 'First User',
+    username: 'first',
+  };
+
+  it('keeps the upstream first local user admin bootstrap when the Knauf flag is unset', async () => {
+    await registerUser(user);
+
+    expect(createUser.mock.calls[0][0]).toEqual(expect.objectContaining({ role: 'ADMIN' }));
+  });
+
+  it('creates the first local user as USER when Knauf disables first-user admin', async () => {
+    process.env.KNAUF_DISABLE_FIRST_USER_ADMIN = 'true';
+
+    await registerUser(user);
+
+    expect(createUser.mock.calls[0][0]).toEqual(expect.objectContaining({ role: 'USER' }));
+  });
+});
+// End [knauf]
 
 describe('requestPasswordReset', () => {
   beforeEach(() => {
