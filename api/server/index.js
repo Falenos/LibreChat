@@ -303,5 +303,21 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+// [knauf] No `unhandledRejection` handler existed (only `uncaughtException`
+// above). Under Node >=15 a stray promise rejection in a request — e.g. an
+// un-awaited Azure SDK / fetch call on the file path — can terminate the
+// worker, printing only to stderr and never through winston. That produced
+// the "socket hang up" on in-flight /api/files requests with an empty error
+// log. Log the rejection through winston (so it lands in api/logs/error-*.log)
+// and keep the process alive instead of crashing. KK20-XXX.
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logger.error(
+    '[unhandledRejection] A promise rejection was not handled; the app will continue running.',
+    { name: err?.name, message: err?.message, stack: err?.stack },
+  );
+});
+// End [knauf]
+
 /** Export app for easier testing purposes */
 module.exports = app;

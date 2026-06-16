@@ -320,9 +320,17 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           size: originalFile.size,
         };
 
-        if (_toolResource != null && _toolResource !== '') {
-          initialExtendedFile.tool_resource = _toolResource;
+        // [knauf] Chat "Upload files" routes documents to File Search (RAG),
+        // but images must stay on the vision path — the server rejects images
+        // for the file_search tool_resource. Drop tool_resource for image
+        // files so they upload as normal vision attachments. KK20-XXX.
+        const isImageFile = originalFile.type.split('/')[0] === 'image';
+        const effectiveToolResource =
+          _toolResource === EToolResources.file_search && isImageFile ? undefined : _toolResource;
+        if (effectiveToolResource != null && effectiveToolResource !== '') {
+          initialExtendedFile.tool_resource = effectiveToolResource;
         }
+        // End [knauf]
 
         // Add file immediately to show in UI
         addFile(initialExtendedFile);

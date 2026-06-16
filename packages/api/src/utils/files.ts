@@ -7,6 +7,9 @@ const USER_FACING_UPLOAD_ERRORS = [
   'Invalid file format',
   'exceeds token limit',
   'Unable to extract text from',
+  // [knauf] Surface the encrypted/password-protected rejection message
+  // (detectEncryptedFile in files/validation.ts) to the client. KK20-XXX.
+  'password-protected',
 ] as const;
 
 /**

@@ -48,7 +48,9 @@ type FileUploadType =
   | 'document'
   | 'image_document'
   | 'image_document_extended'
-  | 'image_document_video_audio';
+  | 'image_document_video_audio'
+  // [knauf] Chat "Upload files" allow-list (mirrors librechat.yaml fileConfig). KK20-XXX.
+  | 'knauf_allowed';
 
 interface AttachFileMenuProps {
   agentId?: string | null;
@@ -135,6 +137,13 @@ const AttachFileMenu = ({
         inputRef.current.accept = `image/*,.heif,.heic,${bedrockDocumentExtensions}`;
       } else if (fileType === 'image_document_video_audio') {
         inputRef.current.accept = 'image/*,.heif,.heic,.pdf,application/pdf,video/*,audio/*';
+      } else if (fileType === 'knauf_allowed') {
+        // [knauf] Restrict the chat file picker to the Knauf allow-list
+        // (mirrors fileConfig.supportedMimeTypes in librechat.yaml). Documents
+        // route to File Search (RAG); images route to the vision path
+        // (per-file split in useFileHandling). KK20-XXX.
+        inputRef.current.accept =
+          '.pdf,.doc,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg';
       } else {
         inputRef.current.accept = '';
       }
@@ -164,13 +173,40 @@ const AttachFileMenu = ({
         isAzureWithResponsesApi
       ) {
         items.push({
-          // [knauf] Use the generic "Upload files" label instead of upstream's
-          // "Upload to Provider" — Knauf users don't think in
-          // provider/endpoint terms, and the item already accepts images +
-          // PDFs / docs (handled by the FileUploadType chosen below).
+          // [knauf] Generic "Upload files" label instead of upstream's "Upload
+          // to Provider" — Knauf users don't think in provider/endpoint terms.
+          // On the Knauf Azure chat this item routes documents to File Search
+          // (see onClick); the label deliberately hides that mechanism.
           label: localize('com_ui_upload_files'),
           // End [knauf]
           onClick: () => {
+            // [knauf] On the Knauf Azure chat, "Upload files" feeds documents
+            // into the chat-scoped File Search (RAG) corpus via an ephemeral
+            // agent, instead of the provider whole-document upload. Images
+            // still go to the vision path (split per-file in useFileHandling,
+            // since the server rejects images for the file_search resource).
+            // Keep the "Upload files" label — no file-search jargon for users.
+            // Other document-capable providers keep upstream provider-upload.
+            // KK20-XXX.
+            //
+            // NB: do NOT gate on `fileSearchAllowedByAgent` here — for an
+            // ephemeral (default) chat that flag is `ephemeralAgent.file_search
+            // ?? false`, i.e. false until file_search is enabled. This click is
+            // what enables it (setEphemeralAgent below), so gating on it would
+            // be a chicken-and-egg that falls back to the provider path and the
+            // picker would only offer images + PDF. `capabilities.fileSearchEnabled`
+            // (from endpoints.agents.capabilities) is the correct platform gate.
+            const useKnaufFileSearch = isAzureWithResponsesApi && capabilities.fileSearchEnabled;
+            if (useKnaufFileSearch) {
+              setToolResource(EToolResources.file_search);
+              setEphemeralAgent((prev) => ({
+                ...prev,
+                [EToolResources.file_search]: true,
+              }));
+              onAction('knauf_allowed');
+              return;
+            }
+            // End [knauf]
             setToolResource(undefined);
             let fileType: Exclude<FileUploadType, 'image' | 'document'> = 'image_document';
             if (currentProvider === Providers.GOOGLE || currentProvider === Providers.OPENROUTER) {

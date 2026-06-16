@@ -396,3 +396,61 @@ export async function validateImage(
 
   return { isValid: true };
 }
+
+// [knauf] Encrypted / password-protected file detection (KK20-XXX).
+// Upstream only checks PDF encryption inside the Anthropic path
+// (`validateAnthropicPdf`); KARL's active Azure path never reaches it. This
+// is a provider-agnostic guard covering the two encryptable formats in the
+// Knauf allow-list: PDF and OOXML (.docx/.xlsx/.pptx). Other allowed types
+// (txt/md/csv/json/png/jpg) have no password-protection concept, and `.zip`
+// isn't in the allow-list. Legacy `.doc`/`.xls` are natively CFBF so the
+// OOXML magic test can't distinguish encrypted from plain — left undetected
+// (low priority: legacy `.doc` won't embed in RAG anyway).
+export interface EncryptionCheckResult {
+  encrypted: boolean;
+  /** User-facing message; contains the "password-protected" fragment that
+   * resolveUploadErrorMessage forwards to the client (see utils/files.ts). */
+  error?: string;
+}
+
+const OOXML_MIME_TYPES = new Set<string>([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+/** OLE2 / Compound File Binary Format magic. A *normal* OOXML file is a ZIP
+ * (`PK\x03\x04`); an encrypted one is wrapped in a CFBF "EncryptedPackage". */
+const CFBF_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+
+const PASSWORD_PROTECTED_PDF =
+  'This PDF is password-protected or encrypted. Please upload an unprotected copy.';
+const PASSWORD_PROTECTED_OFFICE =
+  'This Office file is password-protected or encrypted. Please upload an unprotected copy.';
+
+/**
+ * Detects encrypted / password-protected PDF and OOXML files from their bytes.
+ * Pure function — the caller reads the upload buffer and surfaces `error`.
+ */
+export function detectEncryptedFile(buffer: Buffer, mimetype: string): EncryptionCheckResult {
+  if (!buffer || buffer.length < 8) {
+    return { encrypted: false };
+  }
+
+  const isPdf = mimetype === 'application/pdf' || buffer.subarray(0, 5).toString() === '%PDF-';
+  if (isPdf) {
+    // Encrypted PDFs carry an /Encrypt entry in the trailer dictionary.
+    const content = buffer.toString('binary');
+    if (content.includes('/Encrypt')) {
+      return { encrypted: true, error: PASSWORD_PROTECTED_PDF };
+    }
+    return { encrypted: false };
+  }
+
+  if (OOXML_MIME_TYPES.has(mimetype) && buffer.subarray(0, 8).equals(CFBF_MAGIC)) {
+    return { encrypted: true, error: PASSWORD_PROTECTED_OFFICE };
+  }
+
+  return { encrypted: false };
+}
+// End [knauf]

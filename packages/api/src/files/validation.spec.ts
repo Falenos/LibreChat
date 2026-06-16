@@ -1,6 +1,12 @@
 import { Providers } from '@librechat/agents';
 import { mbToBytes } from 'librechat-data-provider';
-import { validatePdf, validateBedrockDocument, validateVideo, validateAudio } from './validation';
+import {
+  validatePdf,
+  validateBedrockDocument,
+  validateVideo,
+  validateAudio,
+  detectEncryptedFile,
+} from './validation';
 
 describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
   /** Helper to create a PDF buffer with valid header */
@@ -816,3 +822,47 @@ describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
     });
   });
 });
+
+// [knauf] detectEncryptedFile — PDF + OOXML encryption detection (KK20-XXX).
+describe('detectEncryptedFile', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const CFBF_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  const ZIP_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+
+  it('rejects an encrypted PDF (has /Encrypt)', () => {
+    const buf = Buffer.from('%PDF-1.6\n... /Encrypt 12 0 R ... trailer', 'binary');
+    const result = detectEncryptedFile(buf, 'application/pdf');
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toContain('password-protected');
+  });
+
+  it('accepts a plain PDF (no /Encrypt)', () => {
+    const buf = Buffer.from('%PDF-1.4\nhello world plain content', 'binary');
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
+  });
+
+  it('rejects an encrypted OOXML file (CFBF magic, declared docx)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    const result = detectEncryptedFile(buf, DOCX);
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toContain('password-protected');
+  });
+
+  it('accepts a normal OOXML file (ZIP magic, declared xlsx)', () => {
+    const buf = Buffer.concat([ZIP_HEADER, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, XLSX).encrypted).toBe(false);
+  });
+
+  it('ignores types outside the PDF/OOXML scope (e.g. png)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    // Even with CFBF bytes, a non-OOXML mime is out of scope → not flagged.
+    expect(detectEncryptedFile(buf, 'image/png').encrypted).toBe(false);
+  });
+
+  it('handles tiny/empty buffers safely', () => {
+    expect(detectEncryptedFile(Buffer.alloc(0), 'application/pdf').encrypted).toBe(false);
+    expect(detectEncryptedFile(Buffer.from([0x25]), 'application/pdf').encrypted).toBe(false);
+  });
+});
+// End [knauf]
