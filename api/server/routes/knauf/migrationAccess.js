@@ -9,6 +9,8 @@
 //    For third-party apps — requires X-Knauf-Api-Key header + ?email= query param.
 //
 // Response: { allowed: boolean }
+//
+// Both endpoints return { allowed: true } immediately when MIGRATION_ALLOWLIST_ENABLED !== 'true'.
 'use strict';
 
 const express = require('express');
@@ -18,8 +20,13 @@ const { isEmailAllowed } = require('~/server/knauf/migrationAllowlist');
 
 const router = express.Router();
 
+const isGateEnabled = () => process.env.MIGRATION_ALLOWLIST_ENABLED === 'true';
+
 // --- Frontend endpoint (JWT) ---
 router.get('/', requireJwtAuth, async (req, res) => {
+  if (!isGateEnabled()) {
+    return res.json({ allowed: true });
+  }
   const email = req.user?.email;
   if (!email) {
     return res.status(401).json({ message: 'Unauthorized' });
@@ -36,6 +43,9 @@ router.get('/', requireJwtAuth, async (req, res) => {
 
 // --- Third-party endpoint (API key) ---
 router.get('/check', requireKnaufApiKey, async (req, res) => {
+  if (!isGateEnabled()) {
+    return res.json({ allowed: true });
+  }
   const email = req.query.email;
   if (!email || typeof email !== 'string' || !email.trim()) {
     return res.status(400).json({ message: 'Bad Request: email query parameter is required' });
