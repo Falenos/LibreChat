@@ -9,6 +9,12 @@ const {
   getSharedLinks,
   getSharedLink,
 } = require('~/models');
+// [knauf] KK20-182 — Same SAS refresh on the shared conversations
+// read path. See `knauf/docs/reference/azure-blob-storage.md` §7.1.
+const {
+  refreshMessageAttachmentUrls,
+} = require('~/server/services/Files/Azure/refreshMessageAttachments');
+// End [knauf]
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const router = express.Router();
 
@@ -28,6 +34,9 @@ if (allowSharedLinks) {
         const share = await getSharedMessages(req.params.shareId);
 
         if (share) {
+          // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
+          await refreshMessageAttachmentUrls(share.messages);
+          // End [knauf]
           res.status(200).json(share);
         } else {
           res.status(404).end();
