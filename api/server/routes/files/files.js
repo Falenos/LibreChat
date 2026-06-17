@@ -4,7 +4,7 @@ const { EnvVar } = require('@librechat/agents');
 const { logger, SystemCapabilities } = require('@librechat/data-schemas');
 const {
   refreshS3FileUrls,
-  detectEncryptedFile,
+  detectEncryptedFileAtPath,
   resolveUploadErrorMessage,
   verifyAgentUploadPermission,
 } = require('@librechat/api');
@@ -402,15 +402,16 @@ router.post('/', async (req, res) => {
   try {
     filterFile({ req });
 
-    // [knauf] Reject encrypted / password-protected PDFs and Office files
+    // [knauf] Reject encrypted / password-protected PDFs and OOXML files
     // (KK20-190). filterFile already validated size + mime; now inspect the
-    // bytes. The thrown message contains "password-protected", which
-    // resolveUploadErrorMessage forwards to the client. KARL's active Azure
-    // path never hits upstream's Anthropic-only PDF encryption check.
+    // bytes. detectEncryptedFileAtPath reads only the file head (+ the PDF
+    // trailer region) — not the whole upload — and on a match throws the i18n
+    // key `com_knauf_error_file_encrypted`, which resolveUploadErrorMessage
+    // forwards to the client (USER_FACING_UPLOAD_ERRORS) for localization.
+    // KARL's active Azure path never hits upstream's Anthropic-only PDF check.
     if (req.file?.path) {
-      const fileBuffer = await fs.readFile(req.file.path);
-      const { encrypted, error: encryptionError } = detectEncryptedFile(
-        fileBuffer,
+      const { encrypted, error: encryptionError } = await detectEncryptedFileAtPath(
+        req.file.path,
         req.file.mimetype,
       );
       if (encrypted) {

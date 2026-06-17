@@ -1361,7 +1361,9 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
 
   it('spreadsheet (data) is checked before document classification', () => {
     // xlsx matches both excel and application regexes; must resolve to data (50), not document (25)
-    expect(knaufCategorySizeLimit('text/csv')).toBe(50 * megabyte);
+    expect(
+      knaufCategorySizeLimit('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ).toBe(50 * megabyte);
   });
 
   it('returns undefined for an out-of-scope / empty mime (falls back to endpoint fileSizeLimit)', () => {

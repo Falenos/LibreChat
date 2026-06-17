@@ -771,7 +771,10 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 // images 20 MB. Centralized here so the client (validateFiles) and server
 // (filterFile) classify + enforce identically, reusing the MIME regexes above.
 // Endpoint `fileSizeLimit` is set to the largest cap (50 MB) as a backstop; this
-// applies the tighter per-category limit on top. KK20-190.
+// applies the tighter per-category limit on top.
+// NOTE: this block exceeds the Tier-4c 30-line guideline; extract to
+// packages/knauf/ once ADR-017 lands. Until then it stays here as an additive
+// export with near-zero merge surface (appended at end of file). KK20-190.
 export const knaufCategorySizeLimits = {
   document: mbToBytes(25),
   data: mbToBytes(50),

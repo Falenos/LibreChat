@@ -74,7 +74,7 @@ const { EToolResources, FileSources, AgentCapabilities } = require('librechat-da
 const { mergeFileConfig } = require('librechat-data-provider');
 const { checkCapability } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { processAgentFileUpload } = require('./process');
+const { processAgentFileUpload, filterFile } = require('./process');
 
 const PDF_MIME = 'application/pdf';
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -342,3 +342,65 @@ describe('processAgentFileUpload', () => {
     });
   });
 });
+
+// [knauf] filterFile per-category size caps (KK20-190). Documents 25 / data 50 /
+// images 20 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
+// endpoints that carry the Knauf allow-list (azureOpenAI + agents) and skipped
+// for avatars. Endpoint fileSizeLimit is set high here so the per-category cap is
+// what fires.
+describe('filterFile per-category size caps', () => {
+  const VALID_UUID = '123e4567-e89b-12d3-a456-426614174000';
+  const MB = 1024 * 1024;
+
+  const makeCappedConfig = () => ({
+    checkType: () => true,
+    endpoints: {
+      default: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/.*/] },
+      azureOpenAI: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/.*/] },
+      agents: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/.*/] },
+    },
+  });
+
+  const makeFilterReq = ({ endpoint = 'azureOpenAI', mimetype = PDF_MIME, size }) => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/upload.bin', originalname: 'u.bin', filename: 'u.bin', mimetype, size },
+    body: { endpoint, file_id: VALID_UUID },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mergeFileConfig.mockReturnValue(makeCappedConfig());
+  });
+
+  test('throws the document key for a PDF over 25 MB on azureOpenAI', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 30 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_document');
+  });
+
+  test('throws the data key for an XLSX over 50 MB on agents', () => {
+    const req = makeFilterReq({ endpoint: 'agents', mimetype: XLSX_MIME, size: 60 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_data');
+  });
+
+  test('throws the image key for a PNG over 20 MB on azureOpenAI', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/png', size: 26 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_image');
+  });
+
+  test('allows a PDF exactly at the 25 MB cap (strict > boundary)', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 25 * MB });
+    expect(() => filterFile({ req })).not.toThrow();
+  });
+
+  test('does NOT apply the per-category cap on a non-Knauf endpoint (B3 scope)', () => {
+    const req = makeFilterReq({ endpoint: 'bedrock', mimetype: PDF_MIME, size: 30 * MB });
+    expect(() => filterFile({ req })).not.toThrow();
+  });
+
+  test('skips the per-category cap for avatars', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 30 * MB });
+    expect(() => filterFile({ req, isAvatar: true })).not.toThrow();
+  });
+});
+// End [knauf]

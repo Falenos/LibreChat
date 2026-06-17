@@ -298,7 +298,7 @@ export const validateFiles = ({
     // documents 25 MB / data (xlsx,csv) 50 MB / images 20 MB. The error is a
     // localized i18n key (rendered via localize(key) in useFileHandling). KK20-190.
     const knaufCategoryCap = knaufCategorySizeLimit(originalFile.type);
-    if (knaufCategoryCap && originalFile.size >= knaufCategoryCap) {
+    if (knaufCategoryCap && originalFile.size > knaufCategoryCap) {
       setError(knaufCategorySizeErrorKey(originalFile.type));
       return false;
     }

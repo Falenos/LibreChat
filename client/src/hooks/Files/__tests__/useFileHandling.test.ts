@@ -1,5 +1,10 @@
 import { renderHook, act } from '@testing-library/react';
-import { Constants, EModelEndpoint, getEndpointFileConfig } from 'librechat-data-provider';
+import {
+  Constants,
+  EModelEndpoint,
+  EToolResources,
+  getEndpointFileConfig,
+} from 'librechat-data-provider';
 
 beforeAll(() => {
   global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
@@ -9,6 +14,7 @@ beforeAll(() => {
 const mockShowToast = jest.fn();
 const mockSetFilesLoading = jest.fn();
 const mockMutate = jest.fn();
+const mockAddFile = jest.fn();
 
 let mockConversation: Record<string, string | null | undefined> = {};
 
@@ -79,7 +85,7 @@ jest.mock('../useClientResize', () => ({
 jest.mock('../useUpdateFiles', () => ({
   __esModule: true,
   default: jest.fn(() => ({
-    addFile: jest.fn(),
+    addFile: mockAddFile,
     replaceFile: jest.fn(),
     updateFileById: jest.fn(),
     deleteFileById: jest.fn(),
@@ -286,4 +292,44 @@ describe('useFileHandling', () => {
       expect(formData.get('endpoint')).toBe('default');
     });
   });
+
+  // [knauf] Chat "Upload files" routes documents into File Search (file_search),
+  // but images must drop tool_resource and take the vision path (the server rejects
+  // images for the file_search resource). KK20-190.
+  describe('image→vision tool_resource split', () => {
+    beforeEach(() => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+    });
+
+    it('drops tool_resource for an image when file_search is requested', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const imageFile = new File([new ArrayBuffer(1024)], 'pic.png', { type: 'image/png' });
+
+      await act(async () => {
+        await result.current.handleFiles([imageFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile).toHaveBeenCalledTimes(1);
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
+    });
+
+    it('keeps file_search tool_resource for a document', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const pdfFile = new File([new ArrayBuffer(1024)], 'doc.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([pdfFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile).toHaveBeenCalledTimes(1);
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+  });
+  // End [knauf]
 });

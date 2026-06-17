@@ -31,7 +31,17 @@ jest.mock('@librechat/client', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const R = require('react');
   return {
-    FileUpload: (props) => R.createElement('div', { 'data-testid': 'file-upload' }, props.children),
+    // [knauf] forwardRef + render a real <input> so inputRef.current resolves and
+    // the file-picker accept string can be observed via a click spy. KK20-190.
+    FileUpload: R.forwardRef((props, ref) =>
+      R.createElement(
+        'div',
+        { 'data-testid': 'file-upload' },
+        props.children,
+        R.createElement('input', { ref, type: 'file', 'data-testid': 'file-input' }),
+      ),
+    ),
+    // End [knauf]
     TooltipAnchor: (props) => props.render,
     DropdownPopup: (props) =>
       R.createElement(
@@ -339,6 +349,57 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload Code Files')).toBeInTheDocument();
     });
   });
+
+  // [knauf] KK20-190 — on the Azure Responses-API chat, "Upload files" routes
+  // documents into chat-scoped File Search (RAG) via an ephemeral agent and
+  // restricts the picker to the Knauf allow-list. This pins both the routing
+  // decision (gated on capabilities.fileSearchEnabled) and the picker `accept`
+  // string, which mirrors fileConfig.supportedMimeTypes in librechat.yaml — if
+  // the YAML allow-list changes, this assertion fails so the two stay in sync.
+  describe('Knauf File Search routing', () => {
+    // Mirrors the &knauf_allowed_mime allow-list in librechat.yaml.
+    const KNAUF_ALLOWED_ACCEPT =
+      '.pdf,.doc,application/msword,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+
+    function clickUploadFilesCapturingAccept(): string | undefined {
+      let capturedAccept: string | undefined;
+      const clickSpy = jest.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (
+        this: HTMLInputElement,
+      ) {
+        capturedAccept = this.accept;
+      });
+      try {
+        openMenu();
+        fireEvent.click(screen.getByText('Upload files'));
+      } finally {
+        clickSpy.mockRestore();
+      }
+      return capturedAccept;
+    }
+
+    it('routes "Upload files" to the Knauf allow-list when File Search is enabled', () => {
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: true,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      expect(clickUploadFilesCapturingAccept()).toBe(KNAUF_ALLOWED_ACCEPT);
+    });
+
+    it('keeps the upstream provider-upload path when File Search is disabled', () => {
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: false,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      expect(clickUploadFilesCapturingAccept()).not.toBe(KNAUF_ALLOWED_ACCEPT);
+    });
+  });
+  // End [knauf]
 
   describe('SharePoint Integration', () => {
     it('shows SharePoint option when enabled', () => {

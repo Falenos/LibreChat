@@ -1,3 +1,6 @@
+import { promises as fs } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Providers } from '@librechat/agents';
 import { mbToBytes } from 'librechat-data-provider';
 import {
@@ -6,6 +9,7 @@ import {
   validateVideo,
   validateAudio,
   detectEncryptedFile,
+  detectEncryptedFileAtPath,
 } from './validation';
 
 describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
@@ -842,6 +846,17 @@ describe('detectEncryptedFile', () => {
     expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
   });
 
+  it('accepts a non-encrypted PDF with /Encrypt only in an early content stream (F6 regression)', () => {
+    // The /Encrypt entry is authoritative only in the trailer dictionary near EOF.
+    // A non-encrypted PDF can carry the literal bytes "/Encrypt" inside an
+    // (uncompressed) content stream; the tail-only scan must NOT false-positive.
+    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
+    const padding = Buffer.alloc(5000, 0x20); // > the 4096-byte trailer scan window
+    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
+    const buf = Buffer.concat([head, padding, trailer]);
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
+  });
+
   it('rejects an encrypted OOXML file (CFBF magic, declared docx)', () => {
     const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
     const result = detectEncryptedFile(buf, DOCX);
@@ -863,6 +878,71 @@ describe('detectEncryptedFile', () => {
   it('handles tiny/empty buffers safely', () => {
     expect(detectEncryptedFile(Buffer.alloc(0), 'application/pdf').encrypted).toBe(false);
     expect(detectEncryptedFile(Buffer.from([0x25]), 'application/pdf').encrypted).toBe(false);
+  });
+});
+
+// detectEncryptedFileAtPath — partial-read variant used on the upload route. It
+// must reach the same verdict as detectEncryptedFile while reading only the file
+// head (+ PDF trailer region), never the whole file.
+describe('detectEncryptedFileAtPath', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const CFBF_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  const ZIP_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+  const tmpFiles: string[] = [];
+
+  async function writeTmp(buf: Buffer): Promise<string> {
+    const file = path.join(
+      os.tmpdir(),
+      `knauf-enc-${Date.now()}-${Math.random().toString(36).slice(2)}.bin`,
+    );
+    await fs.writeFile(file, buf);
+    tmpFiles.push(file);
+    return file;
+  }
+
+  afterAll(async () => {
+    await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
+  });
+
+  it('rejects an encrypted PDF (/Encrypt in trailer)', async () => {
+    const file = await writeTmp(Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer', 'binary'));
+    const result = await detectEncryptedFileAtPath(file, 'application/pdf');
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
+  });
+
+  it('accepts a plain PDF', async () => {
+    const file = await writeTmp(Buffer.from('%PDF-1.4\nhello world plain content', 'binary'));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
+  });
+
+  it('does not false-positive on /Encrypt outside the trailer window (F6 regression)', async () => {
+    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
+    const padding = Buffer.alloc(5000, 0x20);
+    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
+    const file = await writeTmp(Buffer.concat([head, padding, trailer]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
+  });
+
+  it('rejects an encrypted OOXML file (CFBF magic, head-only read)', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, DOCX)).encrypted).toBe(true);
+  });
+
+  it('accepts a normal OOXML file (ZIP magic)', async () => {
+    const file = await writeTmp(Buffer.concat([ZIP_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, XLSX)).encrypted).toBe(false);
+  });
+
+  it('does not flag a non-PDF/OOXML type even with CFBF bytes', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'image/png')).encrypted).toBe(false);
+  });
+
+  it('handles tiny files safely', async () => {
+    const file = await writeTmp(Buffer.from([0x25]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
   });
 });
 // End [knauf]

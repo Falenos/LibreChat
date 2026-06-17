@@ -115,6 +115,34 @@ describe('validateFiles', () => {
     expect(result).toBe(true);
   });
 
+  // [knauf] Per-category size caps (KK20-190): documents 25 / data 50 / images 20 MB,
+  // enforced on top of the endpoint fileSizeLimit via knaufCategorySizeLimit. The
+  // endpoint fileSizeLimit is set to 50 MB here so the per-category cap is what fires.
+  it('rejects a document over the 25 MB per-category cap with the localized key', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.pdf', 'application/pdf', 30 * megabyte)];
+    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_document');
+  });
+
+  it('rejects an image over the 20 MB per-category cap with the localized key', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.png', 'image/png', 26 * megabyte)];
+    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_image');
+  });
+
+  it('allows a document exactly at the 25 MB per-category cap (strict > boundary)', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('exact.pdf', 'application/pdf', 25 * megabyte)];
+    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+  // End [knauf]
+
   it('rejects when totalSizeLimit would be exceeded', () => {
     const limit = 10 * megabyte;
     endpointFileConfig = makeEndpointConfig({ totalSizeLimit: limit });

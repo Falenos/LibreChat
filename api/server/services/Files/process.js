@@ -1045,9 +1045,15 @@ function filterFile({ req, image, isAvatar }) {
 
   // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) on top of
   // the endpoint fileSizeLimit. Throws the i18n key, surfaced to the client via
-  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Skipped for
-  // avatars (own size limit). KK20-190.
-  if (isAvatar !== true) {
+  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Scoped to the
+  // endpoints that carry the Knauf upload allow-list in librechat.yaml
+  // (&knauf_allowed_mime → azureOpenAI + agents) so a future non-Knauf endpoint or the
+  // broad upstream default doesn't silently inherit the caps; mergeWithDefault always
+  // backfills endpointFileConfig.supportedMimeTypes, so its presence can't serve as the
+  // opt-in signal. Skipped for avatars (own size limit). KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+  if (isAvatar !== true && isKnaufCappedEndpoint) {
     const knaufCategoryCap = knaufCategorySizeLimit(file.mimetype);
     if (knaufCategoryCap && file.size > knaufCategoryCap) {
       throw new Error(knaufCategorySizeErrorKey(file.mimetype));
