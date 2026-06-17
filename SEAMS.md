@@ -151,6 +151,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/__tests__/share.knauf.spec.js` | KK20-182 integration test | 1–4 | Knauf-only supertest that pins SAS rewrite on `GET /api/share/:shareId` for both `attachments[]` and `files[]`, plus 404 path. | Self | KK20-182 |
 | `api/server/controllers/__tests__/tools.knauf.spec.js` | KK20-182 integration test | 1–5 | Knauf-only supertest that pins SAS rewrite on `GET /api/agents/tools/calls` (`getToolCalls`), plus the no-attachments passthrough. | Self | KK20-182 |
 | `api/test/server/services/Files/Azure/refreshMessageAttachments.test.js` | KK20-182 helper unit tests | 1–5 | Knauf-only unit tests for the refresh shim, exercising both message-row and toolcall-row shapes via the duck-typed walker: null/empty inputs, missing fields, fresh / stale URL handling, error fallback, per-call memoization across `attachments` and `files`, single vs array inputs, `bufferSeconds` propagation, non-Azure URL passthrough, local-path short-circuit, `source === azure_blob` opt-in for CNAME endpoints. Lives at the same upstream-class test path as `crud.test.js`. | Self | KK20-182 |
+| `client/src/routes/Root.tsx` | `import { KnaufDatadogRum }` | 28–30 | Import Datadog RUM + Logs component from `knauf/analytics/datadog` | `client/src/knauf/analytics/datadog/KnaufDatadogRum.spec.tsx` | KK20-186 |
+| `client/src/routes/Root.tsx` | `<KnaufDatadogRum />` | 110–112 | Mount Datadog RUM + Logs component (PROD-only, consent-gated via OneTrust C0002) | `client/src/knauf/analytics/datadog/KnaufDatadogRum.spec.tsx` | KK20-186 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -251,6 +253,15 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/migrationAccess.test.js` | — | — | — | — |
 | `client/src/knauf/components/AccessDenied/KnaufAccessDenied.tsx` | — | — | — | — |
 | `client/src/knauf/hooks/Auth/useMigrationAccess.ts` | — | — | — | — |
+| `client/src/knauf/analytics/datadog/index.ts` | `@datadog/browser-rum`, `@datadog/browser-logs` | Low — barrel export | — | KK20-186 |
+| `client/src/knauf/analytics/datadog/isEnabled.ts` | `globalThis.location` | Low — pure hostname gate | `isEnabled.spec.ts` | KK20-186 |
+| `client/src/knauf/analytics/datadog/config.ts` | `@datadog/browser-rum`, `@datadog/browser-logs`, `./beforeSend` | Low — config factory | `config.spec.ts` | KK20-186 |
+| `client/src/knauf/analytics/datadog/beforeSend.ts` | `@datadog/browser-rum`, `@datadog/browser-logs` | Low — event filters | `beforeSend.spec.ts` | KK20-186 |
+| `client/src/knauf/analytics/datadog/KnaufDatadogRum.tsx` | `@datadog/browser-rum`, `@datadog/browser-logs`, `../consent`, `../types` | Low — render-null React component, OneTrust consent wiring | `KnaufDatadogRum.spec.tsx` | KK20-186 |
+| `client/src/knauf/analytics/datadog/beforeSend.spec.ts` | Subject under test | Low — test-only | Self | KK20-186 |
+| `client/src/knauf/analytics/datadog/config.spec.ts` | Subject under test | Low — test-only | Self | KK20-186 |
+| `client/src/knauf/analytics/datadog/isEnabled.spec.ts` | Subject under test | Low — test-only | Self | KK20-186 |
+| `client/src/knauf/analytics/datadog/KnaufDatadogRum.spec.tsx` | Subject under test | Low — test-only | Self | KK20-186 |
 <!-- seams:new:end -->
 
 ## Static Assets
