@@ -76,7 +76,7 @@ The four components, in one line each (deep-dives linked):
 | **`rag_api` + pgvector** | Embedding + retrieval pipeline (external upstream image). | [`rag-search.md`](./rag-search.md) |
 | **Provider Files API** | Azure OpenAI's own file store, via `openai.files.create`. | §2b below |
 
-### 2b. "Upload files" (chat) — *documents → File Search, images → vision* (KK20-XXX)
+### 2b. "Upload files" (chat) — *documents → File Search, images → vision* (KK20-190)
 
 - **UI label**: "Upload files" (paperclip menu) — the single chat upload affordance.
 - **What it does now:** on the Knauf Azure chat, this item routes **documents to File Search** (RAG, chat-scoped via an ephemeral agent — mechanics in §2e) and **images to the vision path** (§2c). The split is per-file: [AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx) sets `tool_resource: file_search` on the item; [useFileHandling.ts](../../../../client/src/hooks/Files/useFileHandling.ts) drops it back to `undefined` for image files (the server rejects images on `file_search`). The label deliberately hides the "file search" mechanism from users.

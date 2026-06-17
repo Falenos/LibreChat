@@ -18,7 +18,7 @@ Several processors exist in the codebase but are **dormant in this deployment** 
 | **Local document parser** (pdfjs/mammoth/xlsx/yauzl) | ⚠ Dormant | Only the `context` ("Upload as Text") path calls it, and `context` is **not** in `endpoints.agents.capabilities` ([librechat.yaml](../../../../librechat.yaml) = `file_search` + `tools`) |
 | **OCR** (Mistral / Azure / Vertex) | ⚠ Dormant | No `ocr:` block in [librechat.yaml](../../../../librechat.yaml) → no OCR strategy configured |
 | **Speech-to-text** (OpenAI / Azure) | ⚠ Dormant | No `stt:` / speech block in [librechat.yaml](../../../../librechat.yaml) |
-| **Provider-side parsing** (Azure "Upload to Provider") | ⚠ Retired from chat | KK20-XXX repurposed the chat "Upload files" item to File Search; the provider whole-document path is no longer the chat default (`useResponsesApi` stays on for reasoning/web-search) |
+| **Provider-side parsing** (Azure "Upload to Provider") | ⚠ Retired from chat | KK20-190 repurposed the chat "Upload files" item to File Search; the provider whole-document path is no longer the chat default (`useResponsesApi` stays on for reasoning/web-search) |
 | **Code files** (sandbox) | ⚠ Dormant | `execute_code` not in agent capabilities |
 
 **The practical consequence:** KARL does **not** parse PDFs locally today. Document understanding happens via **rag_api** — for both agent knowledge *and* chat uploads (the chat "Upload files" item now embeds documents into a chat-scoped File Search corpus; see [`overview.md`](./overview.md) §2b). The local parser, OCR, and STT below are documented because the code is present and a config change would activate them — not because they run now.
