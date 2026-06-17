@@ -144,7 +144,7 @@ const AttachFileMenu = ({
         // route to File Search (RAG); images route to the vision path
         // (per-file split in useFileHandling). KK20-190.
         inputRef.current.accept =
-          '.pdf,.doc,application/msword,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+          '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
       } else {
         inputRef.current.accept = '';
       }

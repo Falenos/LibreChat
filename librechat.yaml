@@ -231,9 +231,9 @@ fileConfig:
     # (packages/data-provider/src/file-config.ts). The same allow-list is shared
     # by chat (azureOpenAI) and agent file_search (agents) via the YAML anchor;
     # only the size/count limits differ. Caveats: `.jpg`/`.jpeg` are both
-    # image/jpeg; `.csv` arrives as text/csv OR application/csv (both listed);
-    # legacy `.doc` passes validation but is NOT embeddable by rag_api (no
-    # loader), so it works for chat attachment but not for File Search.
+    # image/jpeg; `.csv` arrives as text/csv OR application/csv (both listed).
+    # Legacy binary `.doc` is intentionally NOT accepted — rag_api can't embed it
+    # (no loader) and Azure DI only ingests OOXML; users save as `.docx`. KK20-190.
     #
     # Limits are MB (loader converts to bytes). `fileSizeLimit` here is the
     # per-endpoint backstop set to the LARGEST per-category cap (50 MB); the
@@ -245,7 +245,6 @@ fileConfig:
     azureOpenAI:                        # chat composer (default Karl spec)
       supportedMimeTypes: &knauf_allowed_mime
         - "^application/pdf$"                                                                  # .pdf
-        - "^application/msword$"                                                               # .doc (not RAG-embeddable)
         - "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$"    # .docx
         - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$"  # .pptx
         - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"          # .xlsx

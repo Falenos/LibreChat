@@ -359,7 +359,7 @@ describe('AttachFileMenu', () => {
   describe('Knauf File Search routing', () => {
     // Mirrors the &knauf_allowed_mime allow-list in librechat.yaml.
     const KNAUF_ALLOWED_ACCEPT =
-      '.pdf,.doc,application/msword,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+      '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
 
     function clickUploadFilesCapturingAccept(): string | undefined {
       let capturedAccept: string | undefined;

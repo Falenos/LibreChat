@@ -129,7 +129,7 @@ For Agent Knowledge / file_search, the raw binary is POSTed to rag_api `/embed`;
 **What rag_api actually accepts** (from the external image `librechat-rag-api-dev-lite`; source: `app/utils/document_loader.py` + `known_source_ext` in `app/config.py` of [danny-avila/rag_api](https://github.com/danny-avila/rag_api) — verify against the pinned image tag, not this repo):
 - **Dedicated loaders**: PDF (PyPDFLoader), DOCX (Docx2txtLoader), XLSX (UnstructuredExcelLoader), PPTX/PPT (UnstructuredPowerPointLoader), CSV (CSVLoader), Markdown, EPUB, XML, RST, JSON.
 - **Text/code via `known_source_ext`**: `txt`-like + ~50 code/config extensions (py, js, ts, tsx, jsx, java, go, c, cpp, cs, rb, php, rs, swift, scala, sql, sh, bash, yaml/yml, ini, conf, env, eml, vue, svelte, …).
-- **Not handled**: legacy `.doc` (only `.docx`), and any binary type without a loader → `known_type: false` → the "filetype not supported" error above. So **`.doc` uploaded to agent knowledge fails embedding** even though `supportedMimeTypes` (§2) lets it through client validation.
+- **Not handled**: legacy `.doc` (only `.docx`), and any binary type without a loader → `known_type: false` → the "filetype not supported" error above. KARL therefore **excludes `.doc` from the upload allow-list** (§6) so it's rejected at upload with a clear "unsupported file type" rather than failing later at embed time (users save as `.docx`).
 
 ### 4f. Code files — **dormant**
 
@@ -156,7 +156,7 @@ Two different limits are easy to confuse:
 
 | Category | Per-file cap |
 |---|---|
-| Documents (`.pdf .doc .docx .pptx .txt .md .json`) | **25 MB** |
+| Documents (`.pdf .docx .pptx .txt .md .json`) | **25 MB** |
 | Data / spreadsheets (`.xlsx .csv`) | **50 MB** |
 | Images (`.png .jpg/.jpeg .webp`) | **20 MB** |
 
@@ -190,9 +190,9 @@ Values are MB; the loader ([file-config.ts](../../../../packages/data-provider/s
 ## 6. Allow-list & encrypted-file rejection (configured)
 
 > Policy: accept **only** these and reject everything else with a clear error:
-> **Documents** `.pdf .docx .doc .txt .md .json .pptx` · **Data** `.csv .xlsx` · **Images** `.png .jpg .jpeg .webp`. **Encrypted / password-protected files are rejected on upload.**
+> **Documents** `.pdf .docx .txt .md .json .pptx` · **Data** `.csv .xlsx` · **Images** `.png .jpg .jpeg .webp`. **Encrypted / password-protected files are rejected on upload.**
 
-**Allow-list — implemented (Tier 0).** `supportedMimeTypes` is overridden on both `azureOpenAI` (chat) and `agents` (shared via a YAML anchor) in [librechat.yaml](../../../../librechat.yaml). Everything outside the list — video, audio, SVG, **GIF/HEIC/HEIF** (note: WebP **is** allowed), archives, legacy Excel `.xls`, the ~50 code/config types — is now rejected:
+**Allow-list — implemented (Tier 0).** `supportedMimeTypes` is overridden on both `azureOpenAI` (chat) and `agents` (shared via a YAML anchor) in [librechat.yaml](../../../../librechat.yaml). Everything outside the list — video, audio, SVG, **GIF/HEIC/HEIF** (note: WebP **is** allowed), archives, legacy Office binaries `.doc`/`.xls`, the ~50 code/config types — is now rejected:
 
 ```yaml
 fileConfig:
@@ -200,7 +200,6 @@ fileConfig:
     azureOpenAI:
       supportedMimeTypes: &knauf_allowed_mime
         - "^application/pdf$"                                                                 # .pdf
-        - "^application/msword$"                                                              # .doc
         - "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$"   # .docx
         - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$" # .pptx
         - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"         # .xlsx
@@ -211,13 +210,13 @@ fileConfig:
       supportedMimeTypes: *knauf_allowed_mime
 ```
 
-Enforced client-side ([files.ts#L284](../../../../client/src/utils/files.ts#L284)) and server-side ([process.js#L1039](../../../../api/server/services/Files/process.js#L1039)). Caveats: `.jpg`/`.jpeg` are both `image/jpeg`; `.csv` is `text/csv` *or* `application/csv` (both listed); **`.doc` passes validation but fails RAG embedding** (§4e) — only `.docx` embeds.
+Enforced client-side ([files.ts#L284](../../../../client/src/utils/files.ts#L284)) and server-side ([process.js#L1039](../../../../api/server/services/Files/process.js#L1039)). Caveats: `.jpg`/`.jpeg` are both `image/jpeg`; `.csv` is `text/csv` *or* `application/csv` (both listed). Legacy binary `.doc` is **not** accepted (only `.docx`) — rag_api can't embed it (§4e), so it's excluded from the allow-list rather than failing at embed time.
 
 **Encrypted / password-protected rejection — implemented (Tier 5), PDF + OOXML.** A provider-agnostic guard `detectEncryptedFile(buffer, mimetype)` ([packages/api/src/files/validation.ts](../../../../packages/api/src/files/validation.ts), `[knauf]` block) runs in the upload route ([files.js](../../../../api/server/routes/files/files.js), right after `filterFile`) on KARL's active Azure path:
 - **PDF** → reject if the bytes contain `/Encrypt`.
 - **OOXML** (`.docx/.xlsx/.pptx`) → a normal file is a ZIP (`PK\x03\x04`); an encrypted one is an OLE/CFBF compound file (magic `D0CF11E0`). Declared-OOXML + CFBF magic ⇒ reject.
 
-The user sees *"This file is password-protected or encrypted. Please upload an unprotected copy."* (the `password-protected` fragment is whitelisted in `resolveUploadErrorMessage` so it reaches the client). **Scope notes:** ZIP isn't covered because `.zip` isn't in the allow-list; legacy `.doc`/`.xls` are *natively* CFBF so the magic test can't distinguish encrypted from plain (left undetected — low priority, since `.doc` won't embed anyway). Replaces the old Anthropic-only `validateAnthropicPdf` gap.
+The user sees *"This file is password-protected or encrypted. Please upload an unprotected copy."* (the `password-protected` fragment is whitelisted in `resolveUploadErrorMessage` so it reaches the client). **Scope notes:** ZIP isn't covered because `.zip` isn't in the allow-list; legacy binary `.doc`/`.xls` aren't in the allow-list either (rag_api can't embed them), so they're out of scope. Replaces the old Anthropic-only `validateAnthropicPdf` gap.
 
 ---
 

@@ -404,9 +404,8 @@ export async function validateImage(
 // is a provider-agnostic guard covering the two encryptable formats in the
 // Knauf allow-list: PDF and OOXML (.docx/.xlsx/.pptx). Other allowed types
 // (txt/md/csv/json/png/jpg) have no password-protection concept, and `.zip`
-// isn't in the allow-list. Legacy `.doc`/`.xls` are natively CFBF so the
-// OOXML magic test can't distinguish encrypted from plain — left undetected
-// (low priority: legacy `.doc` won't embed in RAG anyway).
+// isn't in the allow-list. Legacy binary `.doc`/`.xls` aren't in the allow-list
+// either (rag_api can't embed them — users save as OOXML), so they're out of scope.
 // NOTE: this block exceeds the Tier-4c 30-line guideline; extract to
 // packages/knauf/ once ADR-017 lands. Until then it stays here as an additive
 // export with near-zero merge surface (appended at end of file).
