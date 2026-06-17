@@ -397,7 +397,7 @@ export async function validateImage(
   return { isValid: true };
 }
 
-// [knauf] Encrypted / password-protected file detection (KK20-XXX).
+// [knauf] Encrypted / password-protected file detection (KK20-190).
 // Upstream only checks PDF encryption inside the Anthropic path
 // (`validateAnthropicPdf`); KARL's active Azure path never reaches it. This
 // is a provider-agnostic guard covering the two encryptable formats in the
@@ -408,8 +408,9 @@ export async function validateImage(
 // (low priority: legacy `.doc` won't embed in RAG anyway).
 export interface EncryptionCheckResult {
   encrypted: boolean;
-  /** User-facing message; contains the "password-protected" fragment that
-   * resolveUploadErrorMessage forwards to the client (see utils/files.ts). */
+  /** i18n key (NOT English) forwarded verbatim by resolveUploadErrorMessage and
+   * localized client-side via `localize(msg) || msg` — see utils/files.ts
+   * (USER_FACING_UPLOAD_ERRORS) and client locales `com_knauf_error_file_encrypted`. */
   error?: string;
 }
 
@@ -423,10 +424,11 @@ const OOXML_MIME_TYPES = new Set<string>([
  * (`PK\x03\x04`); an encrypted one is wrapped in a CFBF "EncryptedPackage". */
 const CFBF_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 
-const PASSWORD_PROTECTED_PDF =
-  'This PDF is password-protected or encrypted. Please upload an unprotected copy.';
-const PASSWORD_PROTECTED_OFFICE =
-  'This Office file is password-protected or encrypted. Please upload an unprotected copy.';
+/** Localized client-side (en/de). Same key for PDF + OOXML — the message is identical. */
+const FILE_ENCRYPTED_ERROR_KEY = 'com_knauf_error_file_encrypted';
+
+/** PDF "/Encrypt" trailer marker, searched as bytes (no full-buffer toString). */
+const PDF_ENCRYPT_MARKER = Buffer.from('/Encrypt');
 
 /**
  * Detects encrypted / password-protected PDF and OOXML files from their bytes.
@@ -439,16 +441,17 @@ export function detectEncryptedFile(buffer: Buffer, mimetype: string): Encryptio
 
   const isPdf = mimetype === 'application/pdf' || buffer.subarray(0, 5).toString() === '%PDF-';
   if (isPdf) {
-    // Encrypted PDFs carry an /Encrypt entry in the trailer dictionary.
-    const content = buffer.toString('binary');
-    if (content.includes('/Encrypt')) {
-      return { encrypted: true, error: PASSWORD_PROTECTED_PDF };
+    // Encrypted PDFs carry an /Encrypt entry in the trailer dictionary. Scan
+    // the raw bytes (indexOf) rather than materializing the whole file as a
+    // binary string — files can be up to the configured size limit.
+    if (buffer.includes(PDF_ENCRYPT_MARKER)) {
+      return { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY };
     }
     return { encrypted: false };
   }
 
   if (OOXML_MIME_TYPES.has(mimetype) && buffer.subarray(0, 8).equals(CFBF_MAGIC)) {
-    return { encrypted: true, error: PASSWORD_PROTECTED_OFFICE };
+    return { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY };
   }
 
   return { encrypted: false };

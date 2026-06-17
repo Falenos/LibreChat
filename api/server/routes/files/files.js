@@ -403,7 +403,7 @@ router.post('/', async (req, res) => {
     filterFile({ req });
 
     // [knauf] Reject encrypted / password-protected PDFs and Office files
-    // (KK20-XXX). filterFile already validated size + mime; now inspect the
+    // (KK20-190). filterFile already validated size + mime; now inspect the
     // bytes. The thrown message contains "password-protected", which
     // resolveUploadErrorMessage forwards to the client. KARL's active Azure
     // path never hits upstream's Anthropic-only PDF encryption check.

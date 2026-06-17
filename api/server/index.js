@@ -309,7 +309,7 @@ process.on('uncaughtException', (err) => {
 // worker, printing only to stderr and never through winston. That produced
 // the "socket hang up" on in-flight /api/files requests with an empty error
 // log. Log the rejection through winston (so it lands in api/logs/error-*.log)
-// and keep the process alive instead of crashing. KK20-XXX.
+// and keep the process alive instead of crashing. KK20-190.
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logger.error(

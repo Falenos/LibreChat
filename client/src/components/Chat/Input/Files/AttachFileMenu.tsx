@@ -49,8 +49,9 @@ type FileUploadType =
   | 'image_document'
   | 'image_document_extended'
   | 'image_document_video_audio'
-  // [knauf] Chat "Upload files" allow-list (mirrors librechat.yaml fileConfig). KK20-XXX.
+  // [knauf] Chat "Upload files" allow-list (mirrors librechat.yaml fileConfig). KK20-190.
   | 'knauf_allowed';
+// End [knauf]
 
 interface AttachFileMenuProps {
   agentId?: string | null;
@@ -141,9 +142,9 @@ const AttachFileMenu = ({
         // [knauf] Restrict the chat file picker to the Knauf allow-list
         // (mirrors fileConfig.supportedMimeTypes in librechat.yaml). Documents
         // route to File Search (RAG); images route to the vision path
-        // (per-file split in useFileHandling). KK20-XXX.
+        // (per-file split in useFileHandling). KK20-190.
         inputRef.current.accept =
-          '.pdf,.doc,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg';
+          '.pdf,.doc,application/msword,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
       } else {
         inputRef.current.accept = '';
       }
@@ -187,7 +188,7 @@ const AttachFileMenu = ({
             // since the server rejects images for the file_search resource).
             // Keep the "Upload files" label — no file-search jargon for users.
             // Other document-capable providers keep upstream provider-upload.
-            // KK20-XXX.
+            // KK20-190.
             //
             // NB: do NOT gate on `fileSearchAllowedByAgent` here — for an
             // ephemeral (default) chat that flag is `ephemeralAgent.file_search

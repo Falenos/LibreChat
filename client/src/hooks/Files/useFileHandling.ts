@@ -323,8 +323,8 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // [knauf] Chat "Upload files" routes documents to File Search (RAG),
         // but images must stay on the vision path — the server rejects images
         // for the file_search tool_resource. Drop tool_resource for image
-        // files so they upload as normal vision attachments. KK20-XXX.
-        const isImageFile = originalFile.type.split('/')[0] === 'image';
+        // files so they upload as normal vision attachments. KK20-190.
+        const isImageFile = originalFile.type?.startsWith('image/') ?? false;
         const effectiveToolResource =
           _toolResource === EToolResources.file_search && isImageFile ? undefined : _toolResource;
         if (effectiveToolResource != null && effectiveToolResource !== '') {

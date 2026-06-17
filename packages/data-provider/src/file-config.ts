@@ -764,3 +764,52 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 
   return mergedConfig;
 }
+
+// [knauf] Per-format-category upload size caps (KK20-190). The fileConfig schema
+// exposes only a single `fileSizeLimit` per endpoint, but the product spec needs
+// different per-file caps by category: documents 25 MB, data/spreadsheets 50 MB,
+// images 20 MB. Centralized here so the client (validateFiles) and server
+// (filterFile) classify + enforce identically, reusing the MIME regexes above.
+// Endpoint `fileSizeLimit` is set to the largest cap (50 MB) as a backstop; this
+// applies the tighter per-category limit on top. KK20-190.
+export const knaufCategorySizeLimits = {
+  document: mbToBytes(25),
+  data: mbToBytes(50),
+  image: mbToBytes(20),
+} as const;
+
+/** CSV arrives as text/csv or application/csv; classified as "data", not document. */
+const knaufCsvMimeTypes = /^(text\/csv|application\/csv)$/;
+
+/**
+ * Per-category upload size cap (bytes) for a MIME type, or `undefined` when the
+ * type isn't in a capped category (caller then falls back to endpoint fileSizeLimit).
+ * Order matters: image → data (xlsx/csv) → document (other text/application).
+ */
+export function knaufCategorySizeLimit(mimetype?: string | null): number | undefined {
+  if (!mimetype) {
+    return undefined;
+  }
+  if (imageMimeTypes.test(mimetype)) {
+    return knaufCategorySizeLimits.image;
+  }
+  if (excelMimeTypes.test(mimetype) || knaufCsvMimeTypes.test(mimetype)) {
+    return knaufCategorySizeLimits.data;
+  }
+  if (textMimeTypes.test(mimetype) || applicationMimeTypes.test(mimetype)) {
+    return knaufCategorySizeLimits.document;
+  }
+  return undefined;
+}
+
+/** i18n key for the per-category "file too large" rejection (localized client-side). */
+export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
+  if (mimetype && imageMimeTypes.test(mimetype)) {
+    return 'com_knauf_error_file_too_large_image';
+  }
+  if (mimetype && (excelMimeTypes.test(mimetype) || knaufCsvMimeTypes.test(mimetype))) {
+    return 'com_knauf_error_file_too_large_data';
+  }
+  return 'com_knauf_error_file_too_large_document';
+}
+// End [knauf]

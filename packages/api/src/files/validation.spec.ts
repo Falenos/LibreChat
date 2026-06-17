@@ -823,7 +823,7 @@ describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
   });
 });
 
-// [knauf] detectEncryptedFile — PDF + OOXML encryption detection (KK20-XXX).
+// [knauf] detectEncryptedFile — PDF + OOXML encryption detection (KK20-190).
 describe('detectEncryptedFile', () => {
   const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -834,7 +834,7 @@ describe('detectEncryptedFile', () => {
     const buf = Buffer.from('%PDF-1.6\n... /Encrypt 12 0 R ... trailer', 'binary');
     const result = detectEncryptedFile(buf, 'application/pdf');
     expect(result.encrypted).toBe(true);
-    expect(result.error).toContain('password-protected');
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
   });
 
   it('accepts a plain PDF (no /Encrypt)', () => {
@@ -846,7 +846,7 @@ describe('detectEncryptedFile', () => {
     const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
     const result = detectEncryptedFile(buf, DOCX);
     expect(result.encrypted).toBe(true);
-    expect(result.error).toContain('password-protected');
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
   });
 
   it('accepts a normal OOXML file (ZIP magic, declared xlsx)', () => {

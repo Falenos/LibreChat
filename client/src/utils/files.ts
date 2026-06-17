@@ -13,6 +13,9 @@ import {
   excelMimeTypes,
   EToolResources,
   fileConfig as defaultFileConfig,
+  // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
 } from 'librechat-data-provider';
 import type { TFile, EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { QueryClient } from '@tanstack/react-query';
@@ -290,6 +293,16 @@ export const validateFiles = ({
       setError(`File size limit exceeded: ${fileSizeLimit / megabyte} MB`);
       return false;
     }
+
+    // [knauf] Per-category size cap on top of the endpoint fileSizeLimit:
+    // documents 25 MB / data (xlsx,csv) 50 MB / images 20 MB. The error is a
+    // localized i18n key (rendered via localize(key) in useFileHandling). KK20-190.
+    const knaufCategoryCap = knaufCategorySizeLimit(originalFile.type);
+    if (knaufCategoryCap && originalFile.size >= knaufCategoryCap) {
+      setError(knaufCategorySizeErrorKey(originalFile.type));
+      return false;
+    }
+    // End [knauf]
   }
 
   if (totalSizeLimit && currentTotalSize + incomingTotalSize > totalSizeLimit) {

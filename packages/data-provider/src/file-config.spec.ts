@@ -11,6 +11,9 @@ import {
   mergeFileConfig,
   inferMimeType,
   textMimeTypes,
+  megabyte,
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
 } from './file-config';
 import { EModelEndpoint } from './schemas';
 
@@ -1320,3 +1323,51 @@ describe('isPermissiveMimeConfig', () => {
     expect(isPermissiveMimeConfig(converted)).toBe(true);
   });
 });
+
+// [knauf] Per-category upload size caps (KK20-190).
+describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
+  const cases: Array<[string, number, string]> = [
+    ['application/pdf', 25, 'com_knauf_error_file_too_large_document'],
+    ['application/msword', 25, 'com_knauf_error_file_too_large_document'],
+    [
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      25,
+      'com_knauf_error_file_too_large_document',
+    ],
+    [
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      25,
+      'com_knauf_error_file_too_large_document',
+    ],
+    ['text/plain', 25, 'com_knauf_error_file_too_large_document'],
+    ['text/markdown', 25, 'com_knauf_error_file_too_large_document'],
+    ['application/json', 25, 'com_knauf_error_file_too_large_document'],
+    [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      50,
+      'com_knauf_error_file_too_large_data',
+    ],
+    ['text/csv', 50, 'com_knauf_error_file_too_large_data'],
+    ['application/csv', 50, 'com_knauf_error_file_too_large_data'],
+    ['image/png', 20, 'com_knauf_error_file_too_large_image'],
+    ['image/jpeg', 20, 'com_knauf_error_file_too_large_image'],
+    ['image/webp', 20, 'com_knauf_error_file_too_large_image'],
+  ];
+
+  it.each(cases)('classifies %s → %i MB cap + %s', (mime, mb, key) => {
+    expect(knaufCategorySizeLimit(mime)).toBe(mb * megabyte);
+    expect(knaufCategorySizeErrorKey(mime)).toBe(key);
+  });
+
+  it('spreadsheet (data) is checked before document classification', () => {
+    // xlsx matches both excel and application regexes; must resolve to data (50), not document (25)
+    expect(knaufCategorySizeLimit('text/csv')).toBe(50 * megabyte);
+  });
+
+  it('returns undefined for an out-of-scope / empty mime (falls back to endpoint fileSizeLimit)', () => {
+    expect(knaufCategorySizeLimit('video/mp4')).toBeUndefined();
+    expect(knaufCategorySizeLimit('')).toBeUndefined();
+    expect(knaufCategorySizeLimit()).toBeUndefined();
+  });
+});
+// End [knauf]

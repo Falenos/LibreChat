@@ -7,9 +7,12 @@ const USER_FACING_UPLOAD_ERRORS = [
   'Invalid file format',
   'exceeds token limit',
   'Unable to extract text from',
-  // [knauf] Surface the encrypted/password-protected rejection message
-  // (detectEncryptedFile in files/validation.ts) to the client. KK20-XXX.
-  'password-protected',
+  // [knauf] Forward the encrypted-file + per-category-too-large rejection i18n keys
+  // (returned by detectEncryptedFile / filterFile) verbatim; the client localizes
+  // them via `localize(msg) || msg`. The `_too_large` entry is a prefix that
+  // matches com_knauf_error_file_too_large_{document,data,image}. KK20-190. End [knauf]
+  'com_knauf_error_file_encrypted',
+  'com_knauf_error_file_too_large',
 ] as const;
 
 /**

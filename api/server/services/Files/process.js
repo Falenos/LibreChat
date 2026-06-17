@@ -17,6 +17,9 @@ const {
   isAssistantsEndpoint,
   getEndpointFileConfig,
   documentParserMimeTypes,
+  // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
 } = require('librechat-data-provider');
 const { EnvVar } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
@@ -1039,6 +1042,18 @@ function filterFile({ req, image, isAvatar }) {
   if (!isSupportedMimeType) {
     throw new Error('Unsupported file type');
   }
+
+  // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) on top of
+  // the endpoint fileSizeLimit. Throws the i18n key, surfaced to the client via
+  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Skipped for
+  // avatars (own size limit). KK20-190.
+  if (isAvatar !== true) {
+    const knaufCategoryCap = knaufCategorySizeLimit(file.mimetype);
+    if (knaufCategoryCap && file.size > knaufCategoryCap) {
+      throw new Error(knaufCategorySizeErrorKey(file.mimetype));
+    }
+  }
+  // End [knauf]
 
   if (!image || isAvatar === true) {
     return;
