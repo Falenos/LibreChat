@@ -80,7 +80,7 @@ The four components, in one line each (deep-dives linked):
 
 - **UI label**: "Upload files" (paperclip menu) — the single chat upload affordance.
 - **What it does now:** on the Knauf Azure chat, this item routes **documents to File Search** (RAG, chat-scoped via an ephemeral agent — mechanics in §2e) and **images to the vision path** (§2c). The split is per-file: [AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx) sets `tool_resource: file_search` on the item; [useFileHandling.ts](../../../../client/src/hooks/Files/useFileHandling.ts) drops it back to `undefined` for image files (the server rejects images on `file_search`). The label deliberately hides the "file search" mechanism from users.
-- **Gated by:** `isAzureWithResponsesApi && capabilities.fileSearchEnabled && fileSearchAllowedByAgent`. Requires `interface.fileSearch: true` (§6). `useResponsesApi` stays on (it also drives reasoning / web-search) — it's no longer what document upload depends on.
+- **Gated by:** `isAzureWithResponsesApi && capabilities.fileSearchEnabled` ([AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)). It deliberately does **not** require `fileSearchAllowedByAgent` — on a fresh ephemeral chat that flag is false, which would leave the picker offering only images + PDF (the chicken-and-egg fix). `interface.fileSearch` is **`false`** and only hides the BYOK chip (§6); it does not gate routing. `useResponsesApi` stays on (it also drives reasoning / web-search) — it's no longer what document upload depends on.
 - **Provider whole-document upload (retired from chat):** previously this item sent documents whole to Azure via `uploadOpenAIFile()` ([OpenAI/crud.js#L18](../../../../api/server/services/Files/OpenAI/crud.js#L18)) so the provider parsed them each turn. That path still exists for genuinely document-capable providers (anthropic/openai/google/bedrock) but is **no longer the Knauf chat default**.
 - **Binding**: message-level (§3a) for both the file_search docs and the vision images.
 
@@ -90,7 +90,7 @@ The four components, in one line each (deep-dives linked):
 - **Server entry**: `processImageFile()` ([process.js#L293](../../../../api/server/services/Files/process.js#L293)).
 - **Reader at chat time**: `addImageURLs()` ([agents/client.js#L169](../../../../api/server/controllers/agents/client.js#L169)) → `encodeAndFormat()` reads bytes from blob and base64-encodes them. **Re-fetched + re-encoded every turn — no caching**; on `azure_blob` that's a fresh download per turn per image.
 - **What the model receives**: an `{ type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }` content part. **Binding**: message-level (§3a).
-- **Why images don't use File Search or the provider:** `file_search` rejects images ([process.js#L488](../../../../api/server/services/Files/process.js#L488)), and images never go to the provider Files API — vision is always inline base64, independent of `useResponsesApi`. So "Upload to Provider" is **not needed** for image support. Limited to **PNG/JPG/JPEG** by the allow-list.
+- **Why images don't use File Search or the provider:** `file_search` rejects images ([process.js#L488](../../../../api/server/services/Files/process.js#L488)), and images never go to the provider Files API — vision is always inline base64, independent of `useResponsesApi`. So "Upload to Provider" is **not needed** for image support. Limited to **PNG/JPG/JPEG/WebP** by the allow-list.
 
 ### 2d. Upload as Text (OCR / extraction)
 
@@ -102,7 +102,7 @@ The four components, in one line each (deep-dives linked):
 
 ### 2e. File Search — chat-time RAG via ephemeral agent
 
-- **`tool_resource`**: `file_search`. **Surfaced in chat under the "Upload files" label** (§2b) — documents uploaded in chat take this path. Enabled by `interface.fileSearch: true` ([librechat.yaml](../../../../librechat.yaml)); the standalone "Upload for File Search" menu item stays hidden (`KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false`) since "Upload files" now serves it.
+- **`tool_resource`**: `file_search`. **Surfaced in chat under the "Upload files" label** (§2b) — documents uploaded in chat take this path. Enabled by the `agents` endpoint carrying the `file_search` capability (`capabilities.fileSearchEnabled`), **not** by `interface.fileSearch` (which is `false` and only hides the BYOK chip). The standalone "Upload for File Search" menu item stays hidden (`KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false`) since "Upload files" now serves it.
 - **Mechanics**: see [`rag-search.md`](./rag-search.md) — `processAgentFileUpload()` embeds to pgvector under an **ephemeral** `entity_id`; the agent's `file_search` tool queries it and feeds top-k chunks back.
 - **What the model receives**: nothing directly — chunks arrive as a tool result. **Binding**: message-level (§3a — the ephemeral agent dies with the conversation).
 - **⚠ Lifecycle / cleanup gap:** the file is "tied to the chat" for *visibility*, but **deleting the chat does NOT delete the file** — the bytes, Mongo `files` doc, and pgvector embeddings all orphan (§5). Cascade cleanup is a deferred follow-up (see `.claude/notes/Architecture/files-problems-and-fixes.md`).
@@ -245,9 +245,9 @@ Cross-cutting config index. Storage-specific and RAG-specific detail lives in th
 - **`fileStrategy`** / **`fileStrategies`** — pick the blob backend (global or per-context). → [`storage.md`](./storage.md)
 - **`fileConfig.serverFileSizeLimit`** — global single-upload ceiling (default 512 MB).
 - **`fileConfig.fileTokenLimit`** — how much extracted document text can ride inline in a prompt (the "talk-to-doc" budget; §2d).
-- **`fileConfig.endpoints.<name>`** — per-endpoint `disabled` / `fileLimit` / `fileSizeLimit` / `totalSizeLimit` / `supportedMimeTypes`. Knauf sets a **restricted allow-list** + distinct limits: chat (`azureOpenAI`) 5 files/10 MB, agent (`agents`) 20 files/50 MB. Exact list → [`processing.md`](./processing.md) §5–6.
+- **`fileConfig.endpoints.<name>`** — per-endpoint `disabled` / `fileLimit` / `fileSizeLimit` / `totalSizeLimit` / `supportedMimeTypes`. Knauf sets a **restricted allow-list** + distinct limits: chat (`azureOpenAI`) 5 files / 50 MB combined, agent (`agents`) 20 files / 100 MB combined; per-file caps are **per-category** (25 MB docs / 50 MB data / 20 MB images), enforced in code on top of the 50 MB backstop. Exact list → [`processing.md`](./processing.md) §5–6.
 - **`fileConfig.ocr|text|stt.supportedMimeTypes`** — MIME routing into OCR / text-parse / speech-to-text. → [`processing.md`](./processing.md).
-- **`interface.fileSearch`** — `true` — activates the file_search capability so the chat "Upload files" item routes documents to File Search (§2b/§2e). → [`rag-search.md`](./rag-search.md)
+- **`interface.fileSearch`** — `false` — hides the BYOK file-search **chip** in the composer. It does **not** gate routing: the chat "Upload files" item routes documents to File Search whenever `endpoints.agents.capabilities` includes `file_search` (`capabilities.fileSearchEnabled`) on an Azure-Responses endpoint (§2b/§2e). → [`rag-search.md`](./rag-search.md)
 - **`endpoints.agents.capabilities`** — must include `file_search` for the RAG path (`tools` + `file_search` today). → [`rag-search.md`](./rag-search.md)
 - **`modelSpecs.list[].preset.useResponsesApi`** — enables the Azure Responses API (reasoning / web-search). No longer gates document upload — chat docs go to File Search regardless (§2b).
 

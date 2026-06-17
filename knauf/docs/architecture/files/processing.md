@@ -99,7 +99,7 @@ A guard at [process.js#L488](../../../../api/server/services/Files/process.js#L4
 
 **Accepted by the processor:** jpeg, gif, png, webp, heic, heif. HEIC/HEIF are decoded natively by sharp and converted to the output type. At chat time the stored image is re-fetched and base64-encoded **every turn** (see [`overview.md`](./overview.md) §2c). Stored via the active `fileStrategy` (→ [`storage.md`](./storage.md)).
 
-> **Images vs. File Search.** `file_search` **rejects images** ([process.js#L488](../../../../api/server/services/Files/process.js#L488)). That's fine — chat images never use file_search or the provider Files API. They take the **inline vision path**: stored as a `message_attachment` (no `openai.files.create`) and sent to the model as a `data:image/...;base64,...` `image_url` part (`encodeAndFormat`, [images/encode.js#L208-L221](../../../../api/server/services/Files/images/encode.js#L208)) — independent of `useResponsesApi`. The chat "Upload files" item routes documents to file_search and images to this vision path per-file ([`overview.md`](./overview.md) §2b). The **allow-list narrows accepted images to PNG/JPG/JPEG** (§6), so gif/webp/heic are rejected at validation even though the processor could handle them.
+> **Images vs. File Search.** `file_search` **rejects images** ([process.js#L488](../../../../api/server/services/Files/process.js#L488)). That's fine — chat images never use file_search or the provider Files API. They take the **inline vision path**: stored as a `message_attachment` (no `openai.files.create`) and sent to the model as a `data:image/...;base64,...` `image_url` part (`encodeAndFormat`, [images/encode.js#L208-L221](../../../../api/server/services/Files/images/encode.js#L208)) — independent of `useResponsesApi`. The chat "Upload files" item routes documents to file_search and images to this vision path per-file ([`overview.md`](./overview.md) §2b). The **allow-list narrows accepted images to PNG/JPG/JPEG/WebP** (§6), so gif/heic/heif are rejected at validation even though the processor could handle them.
 
 ### 4b. Documents — local parser — **dormant**
 
@@ -148,11 +148,19 @@ Two different limits are easy to confuse:
 | Limit | Default | Configured today (`librechat.yaml`) | Meaning |
 |---|---|---|---|
 | `fileLimit` | **10** ([file-config.ts#L402](../../../../packages/data-provider/src/file-config.ts#L402)) | chat (`azureOpenAI`) **5**, agent (`agents`) **20**, `gptPlugins` 5 | Max **number of files** in one upload |
-| `fileSizeLimit` | 512 MB | chat **10 MB**, agent **50 MB** | Max size **per file** (MB) |
-| `totalSizeLimit` | 512 MB | chat **20 MB**, agent **200 MB** | Max **combined** size in one send (MB) |
+| `fileSizeLimit` | 512 MB | **50 MB** on both endpoints | Per-file backstop (see per-category below) |
+| `totalSizeLimit` | 512 MB | chat **50 MB**, agent **100 MB** | Max **combined** size in one send (MB) |
 | `serverFileSizeLimit` | 512 MB | unset | Hard server-side ceiling for any single upload |
 
-So the "10" is the **file-count** default, not a size. All of these are **per-endpoint** under `fileConfig.endpoints.<name>`.
+**Per-category per-file caps (KK20-190)** — the schema has only one `fileSizeLimit` per endpoint, so a tighter cap is applied *on top* by `knaufCategorySizeLimit` ([file-config.ts](../../../../packages/data-provider/src/file-config.ts), client `validateFiles` + server `filterFile`), the same for both surfaces:
+
+| Category | Per-file cap |
+|---|---|
+| Documents (`.pdf .doc .docx .pptx .txt .md .json`) | **25 MB** |
+| Data / spreadsheets (`.xlsx .csv`) | **50 MB** |
+| Images (`.png .jpg/.jpeg .webp`) | **20 MB** |
+
+`fileLimit`/`totalSizeLimit` are **client-side** (each file is a separate `POST /api/files`; the client validates the batch); per-file + per-category + MIME + encryption are enforced **server-side** too. All under `fileConfig.endpoints.<name>`.
 
 ### Different limits for chat vs. agent file search — *configured*
 
@@ -167,24 +175,24 @@ fileConfig:
   endpoints:
     azureOpenAI:        # chat composer
       fileLimit: 5
-      fileSizeLimit: 10
-      totalSizeLimit: 20
+      fileSizeLimit: 50   # backstop; per-category caps (25/50/20) apply on top
+      totalSizeLimit: 50
     agents:             # agent file_search / knowledge
       fileLimit: 20
       fileSizeLimit: 50
-      totalSizeLimit: 200
+      totalSizeLimit: 100
 ```
 
-Values are MB; the loader ([file-config.ts](../../../../packages/data-provider/src/file-config.ts)) converts to bytes. This is **Tier 0** (config only) — change the numbers and reload `librechat.yaml`.
+Values are MB; the loader ([file-config.ts](../../../../packages/data-provider/src/file-config.ts)) converts to bytes. The endpoint `fileLimit`/`fileSizeLimit`/`totalSizeLimit` are **Tier 0** (config only); the per-category caps live in code (`knaufCategorySizeLimit`, Tier 5).
 
 ---
 
 ## 6. Allow-list & encrypted-file rejection (configured)
 
 > Policy: accept **only** these and reject everything else with a clear error:
-> **Documents** `.pdf .docx .doc .txt .md .json .pptx` · **Data** `.csv .xlsx` · **Images** `.png .jpg .jpeg`. **Encrypted / password-protected files are rejected on upload.**
+> **Documents** `.pdf .docx .doc .txt .md .json .pptx` · **Data** `.csv .xlsx` · **Images** `.png .jpg .jpeg .webp`. **Encrypted / password-protected files are rejected on upload.**
 
-**Allow-list — implemented (Tier 0).** `supportedMimeTypes` is overridden on both `azureOpenAI` (chat) and `agents` (shared via a YAML anchor) in [librechat.yaml](../../../../librechat.yaml). Everything outside the list — video, audio, SVG, GIF/WebP/HEIC, archives, the ~50 code/config types — is now rejected:
+**Allow-list — implemented (Tier 0).** `supportedMimeTypes` is overridden on both `azureOpenAI` (chat) and `agents` (shared via a YAML anchor) in [librechat.yaml](../../../../librechat.yaml). Everything outside the list — video, audio, SVG, **GIF/HEIC/HEIF** (note: WebP **is** allowed), archives, legacy Excel `.xls`, the ~50 code/config types — is now rejected:
 
 ```yaml
 fileConfig:
@@ -198,7 +206,7 @@ fileConfig:
         - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"         # .xlsx
         - "^application/(csv|json)$"                                                          # .json + .csv (application/*)
         - "^text/(plain|markdown|csv)$"                                                       # .txt .md .csv (text/*)
-        - "^image/(png|jpeg)$"                                                                # .png .jpg .jpeg
+        - "^image/(png|jpeg|webp)$"                                                           # .png .jpg .jpeg .webp
     agents:
       supportedMimeTypes: *knauf_allowed_mime
 ```

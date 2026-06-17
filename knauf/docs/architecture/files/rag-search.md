@@ -176,7 +176,7 @@ Flow: filter sources by `relevance >= minRelevanceScore` → `applyCitationLimit
 
 ## 8. Config & scoping summary
 
-- **`interface.fileSearch`** — `true` (KK20-190). Activates file_search so the chat **"Upload files"** item routes documents to File Search ([overview.md](./overview.md) §2b). The standalone "Upload for File Search" menu item stays hidden (`KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false` in [AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)) because "Upload files" now serves it.
+- **`interface.fileSearch`** — `false` (KK20-190): hides the BYOK file-search **chip** only. Routing of the chat **"Upload files"** item to File Search is gated on **`endpoints.agents.capabilities`** carrying `file_search` (`capabilities.fileSearchEnabled`), not on this flag ([overview.md](./overview.md) §2b). The standalone "Upload for File Search" menu item stays hidden (`KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false` in [AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)) because "Upload files" now serves it.
 - **`endpoints.agents.capabilities`** — must include `file_search` for the agent RAG path to exist ([librechat.yaml#L141-L143](../../../../librechat.yaml#L141): `tools` + `file_search`).
 - **`endpoints.agents.{minRelevanceScore,maxCitations,maxCitationsPerFile}`** — citation tuning (§6).
 - **`RAG_API_URL`** — env var; if unset, `uploadVectors` throws and `file_search` returns an auth/error string. Embedding model + chunking are configured inside the `rag_api` image, not here.
