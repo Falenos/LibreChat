@@ -69,6 +69,10 @@ const extractMessageContent = (message: TMessage): string => {
   return message.text || '';
 };
 
+// [knauf] Hide edit/fork authoring actions from the chat footer controls.
+const KNAUF_SHOW_AUTHORING_ACTIONS = false;
+// End [knauf]
+
 const HoverButton = memo(
   ({
     id,
@@ -220,7 +224,8 @@ const HoverButtons = ({
       />
 
       {/* Edit Button */}
-      {isEditableEndpoint && (
+      {/* [knauf] Keep upstream edit action in place but hidden for the simplified Karl chat UI. */}
+      {KNAUF_SHOW_AUTHORING_ACTIONS && isEditableEndpoint && (
         <HoverButton
           id={`edit-${message.messageId}`}
           onClick={onEdit}
@@ -233,15 +238,20 @@ const HoverButtons = ({
           className={isCreatedByUser ? '' : 'active'}
         />
       )}
+      {/* End [knauf] */}
 
       {/* Fork Button */}
-      <Fork
-        messageId={message.messageId}
-        conversationId={conversation.conversationId}
-        forkingSupported={forkingSupported}
-        latestMessageId={latestMessageId}
-        isLast={isLast}
-      />
+      {/* [knauf] Keep upstream fork action in place but hidden for the simplified Karl chat UI. */}
+      {KNAUF_SHOW_AUTHORING_ACTIONS && (
+        <Fork
+          messageId={message.messageId}
+          conversationId={conversation.conversationId}
+          forkingSupported={forkingSupported}
+          latestMessageId={latestMessageId}
+          isLast={isLast}
+        />
+      )}
+      {/* End [knauf] */}
 
       {/* Feedback Buttons */}
       {!isCreatedByUser && handleFeedback != null && (

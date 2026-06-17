@@ -1,5 +1,8 @@
 import { useContext, useMemo } from 'react';
-import { PermissionTypes, Permissions } from 'librechat-data-provider';
+// [knauf] USER marketplace visibility also depends on whether any agent is accessible.
+import { PermissionBits, PermissionTypes, Permissions, SystemRoles } from 'librechat-data-provider';
+import { useListAgentsQuery } from '~/data-provider';
+// End [knauf]
 import { useHasAccess, AuthContext } from '~/hooks';
 
 /**
@@ -32,6 +35,29 @@ export default function useShowMarketplace(): boolean {
     [authContext?.isAuthenticated, authContext?.user],
   );
 
-  // Show agent marketplace when marketplace permission is enabled, auth is ready, and user has access to agents
-  return authReady && hasAccessToAgents && hasAccessToMarketplace;
+  // [knauf] Hide marketplace for built-in USER until at least one agent has
+  // been shared/otherwise made accessible beyond the default Karl chat spec.
+  // Admins and custom roles keep the upstream permission-based behavior.
+  const hasBaseMarketplaceAccess = authReady && hasAccessToAgents && hasAccessToMarketplace;
+  const isBuiltInUser = authContext?.user?.role === SystemRoles.USER;
+  const { data: accessibleAgents } = useListAgentsQuery(
+    {
+      limit: 1,
+      requiredPermission: PermissionBits.VIEW,
+    },
+    {
+      enabled: hasBaseMarketplaceAccess && isBuiltInUser,
+    },
+  );
+
+  if (!hasBaseMarketplaceAccess) {
+    return false;
+  }
+
+  if (!isBuiltInUser) {
+    return true;
+  }
+
+  return (accessibleAgents?.data?.length ?? 0) > 0;
+  // End [knauf]
 }

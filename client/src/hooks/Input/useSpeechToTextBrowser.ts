@@ -25,6 +25,10 @@ const useSpeechToTextBrowser = (
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
+  // [knauf] Keep microphone capture active until the user presses the mic button again.
+  const KNAUF_KEEP_RECORDING_UNTIL_STOP = true;
+  // End [knauf]
+
   const {
     listening,
     finalTranscript,
@@ -95,9 +99,12 @@ const useSpeechToTextBrowser = (
     if (isListening === true) {
       SpeechRecognition.stopListening();
     } else {
+      // [knauf] Silence should not flip the mic off; user owns the stop action.
+      const shouldListenContinuously = KNAUF_KEEP_RECORDING_UNTIL_STOP ? true : autoTranscribeAudio;
+      // End [knauf]
       SpeechRecognition.startListening({
         language: languageSTT,
-        continuous: autoTranscribeAudio,
+        continuous: shouldListenContinuously,
       });
     }
   };

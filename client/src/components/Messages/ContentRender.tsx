@@ -11,6 +11,12 @@ import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
 import HoverButtons from '~/components/Chat/Messages/HoverButtons';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import SubRow from '~/components/Chat/Messages/SubRow';
+// [knauf] Use branded Karl heading and generated-time chrome in the active message render path.
+import {
+  KnaufMessageHeading,
+  KnaufMessageTimestamp,
+} from '~/knauf/components/Chat/KnaufMessageChrome';
+// End [knauf]
 import { fontSizeAtom } from '~/store/fontSize';
 import store from '~/store';
 
@@ -77,6 +83,9 @@ function areContentRenderPropsEqual(prev: ContentRenderProps, next: ContentRende
     prevMsg.model === nextMsg.model &&
     prevMsg.endpoint === nextMsg.endpoint &&
     prevMsg.iconURL === nextMsg.iconURL &&
+    prevMsg.clientTimestamp === nextMsg.clientTimestamp &&
+    prevMsg.createdAt === nextMsg.createdAt &&
+    prevMsg.updatedAt === nextMsg.updatedAt &&
     prevMsg.feedback?.rating === nextMsg.feedback?.rating &&
     (prevMsg.attachments?.length ?? 0) === (nextMsg.attachments?.length ?? 0)
   );
@@ -200,10 +209,16 @@ const ContentRender = memo(function ContentRender({
         )}
       >
         {!hasParallelContent && (
-          <h2 className={cn('select-none font-semibold', fontSize)}>
-            <span className="sr-only">{getHeaderPrefixForScreenReader(msg, localize)}</span>
-            {messageLabel}
-          </h2>
+          <>
+            {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+            <KnaufMessageHeading
+              isCreatedByUser={msg.isCreatedByUser}
+              label={messageLabel}
+              fontSize={fontSize}
+              screenReaderPrefix={getHeaderPrefixForScreenReader(msg, localize)}
+            />
+            {/* End [knauf] */}
+          </>
         )}
 
         <div className="flex flex-col gap-1">
@@ -227,26 +242,35 @@ const ContentRender = memo(function ContentRender({
           {hasNoChildren && isSubmitting ? (
             <PlaceholderRow />
           ) : (
-            <SubRow classes="text-xs">
-              <SiblingSwitch
-                siblingIdx={siblingIdx}
-                siblingCount={siblingCount}
-                setSiblingIdx={setSiblingIdx}
+            <SubRow classes="w-full items-center justify-between text-xs">
+              {/* [knauf] Keep actions left and put the generated timestamp on the opposite side. */}
+              <div className="flex min-w-0 items-center gap-3">
+                <SiblingSwitch
+                  siblingIdx={siblingIdx}
+                  siblingCount={siblingCount}
+                  setSiblingIdx={setSiblingIdx}
+                />
+                <HoverButtons
+                  index={index}
+                  message={msg}
+                  isEditing={edit}
+                  enterEdit={enterEdit}
+                  isSubmitting={chatContext.isSubmitting}
+                  conversation={conversation ?? null}
+                  regenerate={handleRegenerateMessage}
+                  copyToClipboard={copyToClipboard}
+                  handleContinue={handleContinue}
+                  latestMessageId={latestMessageId}
+                  handleFeedback={handleFeedback}
+                  isLast={isLast}
+                />
+              </div>
+              <KnaufMessageTimestamp
+                clientTimestamp={msg.clientTimestamp}
+                createdAt={msg.createdAt}
+                updatedAt={msg.updatedAt}
               />
-              <HoverButtons
-                index={index}
-                message={msg}
-                isEditing={edit}
-                enterEdit={enterEdit}
-                isSubmitting={chatContext.isSubmitting}
-                conversation={conversation ?? null}
-                regenerate={handleRegenerateMessage}
-                copyToClipboard={copyToClipboard}
-                handleContinue={handleContinue}
-                latestMessageId={latestMessageId}
-                handleFeedback={handleFeedback}
-                isLast={isLast}
-              />
+              {/* End [knauf] */}
             </SubRow>
           )}
         </div>

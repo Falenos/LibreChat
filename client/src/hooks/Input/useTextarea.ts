@@ -22,6 +22,41 @@ import store from '~/store';
 
 type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
 
+// [knauf] Brand default Karl model-spec chats in the composer placeholder without changing custom agent names.
+const KNAUF_CHAT_ASSISTANT_NAME = 'Karl';
+const KNAUF_DEFAULT_SPEC_NAME = 'karl';
+const KNAUF_PERSONALITY_SPEC_PREFIX = 'karl-personality-';
+const KNAUF_DEFAULT_MODEL = 'gpt-5.4';
+
+const getKnaufComposerSender = ({
+  isAgent,
+  isAssistant,
+  model,
+  spec,
+  sender,
+}: {
+  isAgent: boolean;
+  isAssistant: boolean;
+  model?: string | null;
+  spec?: string | null;
+  sender: string;
+}) => {
+  if (isAgent || isAssistant) {
+    return sender;
+  }
+
+  if (spec === KNAUF_DEFAULT_SPEC_NAME || spec?.startsWith(KNAUF_PERSONALITY_SPEC_PREFIX)) {
+    return KNAUF_CHAT_ASSISTANT_NAME;
+  }
+
+  if (model === KNAUF_DEFAULT_MODEL) {
+    return KNAUF_CHAT_ASSISTANT_NAME;
+  }
+
+  return sender;
+};
+// End [knauf]
+
 export default function useTextarea({
   textAreaRef,
   submitButtonRef,
@@ -98,9 +133,18 @@ export default function useTextarea({
         isAssistant || isAgent
           ? getEntityName({ name: entityName, isAgent, localize })
           : getSender(conversation as TEndpointOption);
+      // [knauf] Use Karl as the visible target for default Karl model-spec chats; keep raw sender for agents/assistants/other endpoints.
+      const composerSender = getKnaufComposerSender({
+        isAgent,
+        isAssistant,
+        model: conversation?.model,
+        spec: conversation?.spec,
+        sender,
+      });
+      // End [knauf]
 
       return `${localize('com_endpoint_message_new', {
-        0: sender ? sender : localize('com_endpoint_ai'),
+        0: composerSender ? composerSender : localize('com_endpoint_ai'),
       })}`;
     };
 

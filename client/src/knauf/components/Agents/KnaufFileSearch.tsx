@@ -431,7 +431,6 @@ function KnaufFileSearch({
         onFilesSelected={handleSharePointFilesSelected}
         isDownloading={isProcessing}
         downloadProgress={downloadProgress}
-        maxSelectionCount={endpointFileConfig?.fileLimit}
       />
     </div>
   );

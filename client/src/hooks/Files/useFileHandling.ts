@@ -283,13 +283,22 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         fileConfig,
         endpointType,
       });
+      // [knauf] Agent FileSearch knowledge uploads should not inherit the
+      // upstream default 10-file count cap. Keep disabled, size, total-size,
+      // and MIME validation intact; only remove the count limit for the
+      // agent-scoped file_search path used by the builder.
+      const validationFileConfig =
+        agent_id && params?.additionalMetadata?.tool_resource === EToolResources.file_search
+          ? { ...endpointFileConfig, fileLimit: undefined }
+          : endpointFileConfig;
+      // End [knauf]
 
       filesAreValid = validateFiles({
         files,
         fileList,
         setError,
         fileConfig,
-        endpointFileConfig,
+        endpointFileConfig: validationFileConfig,
         toolResource: _toolResource,
       });
     } catch (error) {

@@ -29,6 +29,10 @@ const useSpeechToTextExternal = (
   const [speechToText] = useRecoilState<boolean>(store.speechToText);
   const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
+  // [knauf] Keep external STT recording active until the user stops the mic.
+  const KNAUF_STOP_RECORDING_ON_SILENCE = false;
+  // End [knauf]
+
   const { mutate: processAudio, isLoading: isProcessing } = useSpeechToTextMutation({
     onSuccess: (data) => {
       const extractedText = data.text;
@@ -186,9 +190,16 @@ const useSpeechToTextExternal = (
         });
         mediaRecorderRef.current.addEventListener('stop', handleStop);
         mediaRecorderRef.current.start(100);
-        if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
+        // [knauf] Silence should not flip the mic off; user owns the stop action.
+        if (
+          !audioContextRef.current &&
+          KNAUF_STOP_RECORDING_ON_SILENCE &&
+          autoTranscribeAudio &&
+          speechToText
+        ) {
           monitorSilence(audioStream.current, stopRecording);
         }
+        // End [knauf]
         setIsListening(true);
       } catch (error) {
         showToast({ message: `Error starting recording: ${error}`, status: 'error' });

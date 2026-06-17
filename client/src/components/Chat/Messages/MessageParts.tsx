@@ -7,6 +7,12 @@ import { useMessageHelpers, useLocalize, useAttachments, useContentMetadata } fr
 import { cn, getHeaderPrefixForScreenReader, getMessageAriaLabel } from '~/utils';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import ContentParts from './Content/ContentParts';
+// [knauf] Use branded Karl heading and generated-time chrome in message rows.
+import {
+  KnaufMessageHeading,
+  KnaufMessageTimestamp,
+} from '~/knauf/components/Chat/KnaufMessageChrome';
+// End [knauf]
 import { fontSizeAtom } from '~/store/fontSize';
 import SiblingSwitch from './SiblingSwitch';
 import MultiMessage from './MultiMessage';
@@ -124,12 +130,16 @@ export default function Message(props: TMessageProps) {
               )}
             >
               {!hasParallelContent && (
-                <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>
-                  <span className="sr-only">
-                    {getHeaderPrefixForScreenReader(message, localize)}
-                  </span>
-                  {name}
-                </h2>
+                <>
+                  {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+                  <KnaufMessageHeading
+                    isCreatedByUser={message.isCreatedByUser}
+                    label={name || message.sender || message.model || conversation?.model}
+                    fontSize={fontSize}
+                    screenReaderPrefix={getHeaderPrefixForScreenReader(message, localize)}
+                  />
+                  {/* End [knauf] */}
+                </>
               )}
               <div className="flex flex-col gap-1">
                 <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
@@ -152,25 +162,34 @@ export default function Message(props: TMessageProps) {
                 {isLast && isSubmitting ? (
                   <div className="mt-1 h-[31px] bg-transparent" />
                 ) : (
-                  <SubRow classes="text-xs">
-                    <SiblingSwitch
-                      siblingIdx={siblingIdx}
-                      siblingCount={siblingCount}
-                      setSiblingIdx={setSiblingIdx}
+                  <SubRow classes="w-full items-center justify-between text-xs">
+                    {/* [knauf] Keep actions left and put the generated timestamp on the opposite side. */}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <SiblingSwitch
+                        siblingIdx={siblingIdx}
+                        siblingCount={siblingCount}
+                        setSiblingIdx={setSiblingIdx}
+                      />
+                      <HoverButtons
+                        index={index}
+                        isEditing={edit}
+                        message={message}
+                        enterEdit={enterEdit}
+                        isSubmitting={isSubmitting}
+                        conversation={conversation ?? null}
+                        regenerate={() => regenerateMessage()}
+                        copyToClipboard={copyToClipboard}
+                        handleContinue={handleContinue}
+                        latestMessageId={latestMessageId}
+                        isLast={isLast}
+                      />
+                    </div>
+                    <KnaufMessageTimestamp
+                      clientTimestamp={message.clientTimestamp}
+                      createdAt={message.createdAt}
+                      updatedAt={message.updatedAt}
                     />
-                    <HoverButtons
-                      index={index}
-                      isEditing={edit}
-                      message={message}
-                      enterEdit={enterEdit}
-                      isSubmitting={isSubmitting}
-                      conversation={conversation ?? null}
-                      regenerate={() => regenerateMessage()}
-                      copyToClipboard={copyToClipboard}
-                      handleContinue={handleContinue}
-                      latestMessageId={latestMessageId}
-                      isLast={isLast}
-                    />
+                    {/* End [knauf] */}
                   </SubRow>
                 )}
               </div>

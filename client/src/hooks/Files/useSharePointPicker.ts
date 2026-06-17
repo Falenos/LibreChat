@@ -28,7 +28,10 @@ export default function useSharePointPicker({
   onFilesSelected,
   onClose,
   disabled = false,
-  maxSelectionCount = 10,
+  // [knauf] Let FileSearch callers omit a SharePoint maximumCount instead of
+  // silently falling back to the upstream 10-file picker cap.
+  maxSelectionCount,
+  // End [knauf]
 }: UseSharePointPickerProps): UseSharePointPickerReturn {
   const [langcode] = useRecoilState(store.lang);
   const { user } = useAuthContext();
@@ -285,7 +288,10 @@ export default function useSharePointPicker({
         },
         selection: {
           mode: 'multiple',
-          maximumCount: maxSelectionCount,
+          // [knauf] Microsoft Picker v8 marks maximumCount optional; omit it
+          // when no count cap should apply.
+          ...(typeof maxSelectionCount === 'number' ? { maximumCount: maxSelectionCount } : {}),
+          // End [knauf]
         },
         title: localize('com_files_sharepoint_picker_title'),
         commands: {

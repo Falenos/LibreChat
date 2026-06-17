@@ -11,6 +11,13 @@ jest.mock('librechat-data-provider', () => ({
 jest.mock('~/data-provider', () => ({
   useGetEndpointsQuery: jest.fn(() => ({ data: {} })),
 }));
+jest.mock('~/hooks/useLocalize', () => ({
+  __esModule: true,
+  default:
+    () =>
+    (key: string, values?: Record<number, string>): string =>
+      key === 'com_knauf_powered_by_model' ? `Powered by ${values?.[0]}` : key,
+}));
 jest.mock('~/utils', () => ({
   getIconEndpoint: jest.fn(() => 'agents'),
 }));
@@ -61,6 +68,74 @@ describe('MessageIcon render cycles', () => {
     render(<MessageIcon iconData={baseIconData} agent={makeAgent()} />);
     expect(iconRenderCount.current).toBe(1);
   });
+
+  // [knauf] Pin default Karl message icons to the local Knauf logo asset.
+  it('renders the Knauf logo for default Karl assistant messages without a custom avatar', () => {
+    const iconData: TMessageIcon = {
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'gpt-5.4',
+      iconURL: undefined,
+      modelLabel: 'Karl',
+      isCreatedByUser: false,
+    };
+
+    const { getByTestId, queryByTestId } = render(<MessageIcon iconData={iconData} />);
+
+    expect(getByTestId('convo-icon-url')).toHaveAttribute(
+      'data-icon-url',
+      '/assets/knauf-logo.png',
+    );
+    expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
+      'title',
+      'Powered by GPT-5.4',
+    );
+    expect(queryByTestId('icon')).not.toBeInTheDocument();
+  });
+
+  it('uses the Knauf logo when the stored sender label identifies the default Karl model', () => {
+    const iconData: TMessageIcon = {
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'azure-deployment-name',
+      iconURL: 'https://example.test/chatgpt-icon.svg',
+      modelLabel: 'GPT-5.4',
+      isCreatedByUser: false,
+    };
+
+    const { getByTestId, queryByTestId } = render(<MessageIcon iconData={iconData} />);
+
+    expect(getByTestId('convo-icon-url')).toHaveAttribute(
+      'data-icon-url',
+      '/assets/knauf-logo.png',
+    );
+    expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
+      'title',
+      'Powered by GPT-5.4',
+    );
+    expect(queryByTestId('icon')).not.toBeInTheDocument();
+  });
+
+  it('routes local asset icon URLs through ConvoIconURL', () => {
+    const iconData: TMessageIcon = {
+      endpoint: EModelEndpoint.azureOpenAI,
+      model: 'gpt-5.4',
+      iconURL: '/assets/knauf-logo.png',
+      modelLabel: 'Karl',
+      isCreatedByUser: false,
+    };
+
+    const { getByTestId, queryByTestId } = render(<MessageIcon iconData={iconData} />);
+
+    expect(getByTestId('convo-icon-url')).toHaveAttribute(
+      'data-icon-url',
+      '/assets/knauf-logo.png',
+    );
+    expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
+      'title',
+      'Powered by GPT-5.4',
+    );
+    expect(queryByTestId('icon')).not.toBeInTheDocument();
+  });
+  // End [knauf]
 
   it('does not re-render when parent re-renders with same field values but new object references', () => {
     const agent = makeAgent();
