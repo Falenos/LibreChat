@@ -2,6 +2,7 @@ import { render, act } from '@testing-library/react';
 import { datadogRum } from '@datadog/browser-rum';
 import { datadogLogs } from '@datadog/browser-logs';
 import KnaufDatadogRum from './KnaufDatadogRum';
+import type { DatadogConfig } from '../types';
 
 jest.mock('@datadog/browser-rum', () => ({
   datadogRum: {
@@ -22,29 +23,33 @@ jest.mock('./config', () => ({
   getLogsConfig: jest.fn(() => ({ clientToken: 'pub-test' })),
 }));
 
-const mockIsRumEnabled = jest.fn(() => true);
-const mockIsLogsEnabled = jest.fn(() => true);
-const mockIsDatadogEnabled = jest.fn(() => true);
+const enabledConfig: DatadogConfig = {
+  clientToken: 'pub-test',
+  site: 'datadoghq.eu',
+  service: 'agentic-karl',
+  env: 'prod',
+  rumEnabled: true,
+  browserLogsEnabled: true,
+  rumApplicationId: 'test-app-id',
+};
 
-jest.mock('./isEnabled', () => ({
-  isRumEnabled: (...args: unknown[]) => mockIsRumEnabled(...args),
-  isLogsEnabled: (...args: unknown[]) => mockIsLogsEnabled(...args),
-  isDatadogEnabled: (...args: unknown[]) => mockIsDatadogEnabled(...args),
+const disabledConfig: DatadogConfig = {
+  ...enabledConfig,
+  rumEnabled: false,
+  browserLogsEnabled: false,
+};
+
+let mockStartupConfig: Record<string, unknown> = {};
+
+jest.mock('~/data-provider', () => ({
+  useGetStartupConfig: () => ({ data: mockStartupConfig }),
 }));
 
 describe('KnaufDatadogRum', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockIsRumEnabled.mockReturnValue(true);
-    mockIsLogsEnabled.mockReturnValue(true);
-    mockIsDatadogEnabled.mockReturnValue(true);
+    mockStartupConfig = { knauf: { datadog: enabledConfig } };
   });
-
-  // Note: The component uses an initializedRef to prevent double-init.
-  // Because we can't reset a ref without resetModules (which breaks React hooks),
-  // the first test that renders will "consume" the init. Subsequent tests in
-  // this suite will see the ref as already initialized. We test init behavior
-  // first, then consent behavior (which doesn't depend on init).
 
   it('initializes RUM and Logs when enabled', () => {
     render(<KnaufDatadogRum />);
@@ -91,12 +96,24 @@ describe('KnaufDatadogRum', () => {
 describe('KnaufDatadogRum (disabled)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockIsRumEnabled.mockReturnValue(false);
-    mockIsLogsEnabled.mockReturnValue(false);
-    mockIsDatadogEnabled.mockReturnValue(false);
+    mockStartupConfig = { knauf: { datadog: disabledConfig } };
   });
 
   it('does not initialize when disabled', () => {
+    render(<KnaufDatadogRum />);
+
+    expect(datadogRum.init).not.toHaveBeenCalled();
+    expect(datadogLogs.init).not.toHaveBeenCalled();
+  });
+});
+
+describe('KnaufDatadogRum (no config)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockStartupConfig = {};
+  });
+
+  it('does not initialize when datadog config is absent', () => {
     render(<KnaufDatadogRum />);
 
     expect(datadogRum.init).not.toHaveBeenCalled();

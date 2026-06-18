@@ -1,54 +1,64 @@
 /**
- * Feature gates are hostname-based — functions accept an optional hostname
- * parameter for testability (defaults to globalThis.location.hostname).
+ * Feature gates are config-driven — functions check rumEnabled / browserLogsEnabled flags
+ * from the startup config API.
  */
-import { isRumEnabled, isLogsEnabled, isDatadogEnabled, isKnownHost } from './isEnabled';
+import { isRumEnabled, isLogsEnabled, isDatadogEnabled } from './isEnabled';
 
 describe('isEnabled', () => {
-  describe('isKnownHost', () => {
-    it.each([
-      'agentic-karl.knauf.com',
-      'agentic-karl.agk.prod.knauf.digital',
-      'agentic-karl.agk.dev.knauf.digital',
-      'agentic-karl.dev.knauf.digital',
-    ])('returns true for %s', (hostname) => {
-      expect(isKnownHost(hostname)).toBe(true);
+  describe('isRumEnabled', () => {
+    it('returns true when rumEnabled is true', () => {
+      expect(isRumEnabled({ rumEnabled: true })).toBe(true);
     });
 
-    it.each(['localhost', '', 'example.com'])('returns false for "%s"', (hostname) => {
-      expect(isKnownHost(hostname)).toBe(false);
+    it('returns false when rumEnabled is false', () => {
+      expect(isRumEnabled({ rumEnabled: false })).toBe(false);
+    });
+
+    it('returns false for null/undefined config', () => {
+      expect(isRumEnabled(null)).toBe(false);
+      expect(isRumEnabled(undefined)).toBe(false);
+    });
+
+    it('returns false for empty config', () => {
+      expect(isRumEnabled({})).toBe(false);
     });
   });
 
-  describe('isRumEnabled / isLogsEnabled', () => {
-    it('returns true on prod hostname', () => {
-      expect(isRumEnabled('agentic-karl.knauf.com')).toBe(true);
-      expect(isLogsEnabled('agentic-karl.knauf.com')).toBe(true);
+  describe('isLogsEnabled', () => {
+    it('returns true when browserLogsEnabled is true', () => {
+      expect(isLogsEnabled({ browserLogsEnabled: true })).toBe(true);
     });
 
-    it('returns true on AGK dev hostname', () => {
-      expect(isRumEnabled('agentic-karl.agk.dev.knauf.digital')).toBe(true);
-      expect(isLogsEnabled('agentic-karl.agk.dev.knauf.digital')).toBe(true);
+    it('returns false when browserLogsEnabled is false', () => {
+      expect(isLogsEnabled({ browserLogsEnabled: false })).toBe(false);
     });
 
-    it('returns false on localhost', () => {
-      expect(isRumEnabled('localhost')).toBe(false);
-      expect(isLogsEnabled('localhost')).toBe(false);
-    });
-
-    it('returns false on unknown hostname', () => {
-      expect(isRumEnabled('example.com')).toBe(false);
-      expect(isLogsEnabled('example.com')).toBe(false);
+    it('returns false for null/undefined config', () => {
+      expect(isLogsEnabled(null)).toBe(false);
+      expect(isLogsEnabled(undefined)).toBe(false);
     });
   });
 
   describe('isDatadogEnabled', () => {
-    it('returns true on known Knauf hostname', () => {
-      expect(isDatadogEnabled('agentic-karl.agk.prod.knauf.digital')).toBe(true);
+    it('returns true when RUM is enabled', () => {
+      expect(isDatadogEnabled({ rumEnabled: true, browserLogsEnabled: false })).toBe(true);
     });
 
-    it('returns false on localhost', () => {
-      expect(isDatadogEnabled('localhost')).toBe(false);
+    it('returns true when browser logs are enabled', () => {
+      expect(isDatadogEnabled({ rumEnabled: false, browserLogsEnabled: true })).toBe(true);
+    });
+
+    it('returns true when both are enabled', () => {
+      expect(isDatadogEnabled({ rumEnabled: true, browserLogsEnabled: true })).toBe(true);
+    });
+
+    it('returns false when both are disabled', () => {
+      expect(isDatadogEnabled({ rumEnabled: false, browserLogsEnabled: false })).toBe(false);
+    });
+
+    it('returns false for null/undefined config', () => {
+      expect(isDatadogEnabled(null)).toBe(false);
+      expect(isDatadogEnabled(undefined)).toBe(false);
     });
   });
 });

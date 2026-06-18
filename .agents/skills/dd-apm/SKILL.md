@@ -172,7 +172,16 @@ pup slos create --file slo.json
 | Traces not linked | Check trace headers propagated |
 | High cardinality | Don't tag with user_id/request_id |
 
+## Browser RUM ↔ APM Trace Correlation
+
+Agentic Karl's Browser RUM SDK (`@datadog/browser-rum`) connects frontend user sessions to backend APM traces via `allowedTracingUrls`. When a user clicks a button, the RUM session links to the backend span that handled the API call.
+
+Config: `DATADOG_*` env vars → startup config API → frontend `KnaufDatadogRum` component. See `client/src/knauf/analytics/datadog/config.ts` for `allowedTracingUrls` setup and `api/server/routes/knauf/datadogConfig.js` for the backend helper.
+
+RUM is disabled in nonprod (`DATADOG_RUM_ENABLED: "false"` in dev ConfigMap). Browser Logs run independently via `DATADOG_BROWSER_LOGS_ENABLED`.
+
 ## References/Docs
 
 - [APM Setup](https://docs.datadoghq.com/tracing/)
 - [Trace Search](https://docs.datadoghq.com/tracing/trace_explorer/)
+- [RUM & Traces](https://docs.datadoghq.com/real_user_monitoring/platform/connect_rum_and_traces/)

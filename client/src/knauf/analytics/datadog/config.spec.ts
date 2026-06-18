@@ -3,36 +3,33 @@ jest.mock('./beforeSend', () => ({
   logsBeforeSend: jest.fn(),
 }));
 
-import { getRumConfig, getLogsConfig, resolveEnv } from './config';
+import type { DatadogConfig } from '../types';
+import { getRumConfig, getLogsConfig } from './config';
+
+const baseConfig: DatadogConfig = {
+  clientToken: 'pub-test-token',
+  site: 'datadoghq.eu',
+  service: 'agentic-karl',
+  env: 'prod',
+  rumEnabled: true,
+  browserLogsEnabled: true,
+  rumApplicationId: 'test-app-id',
+};
 
 describe('config', () => {
-  describe('resolveEnv', () => {
-    it('returns "prod" for production hostnames', () => {
-      expect(resolveEnv('agentic-karl.knauf.com')).toBe('prod');
-      expect(resolveEnv('agentic-karl.agk.prod.knauf.digital')).toBe('prod');
-    });
-
-    it('returns "dev" for dev/nonprod hostnames', () => {
-      expect(resolveEnv('agentic-karl.agk.dev.knauf.digital')).toBe('dev');
-      expect(resolveEnv('agentic-karl.dev.knauf.digital')).toBe('dev');
-      expect(resolveEnv('something.nonprod.knauf.digital')).toBe('dev');
-    });
-
-    it('returns "local" for localhost or unknown hosts', () => {
-      expect(resolveEnv('localhost')).toBe('local');
-      expect(resolveEnv('')).toBe('local');
-      expect(resolveEnv('example.com')).toBe('local');
-    });
-  });
-
   describe('getRumConfig', () => {
-    it('returns Knauf defaults with hardcoded credentials', () => {
-      const config = getRumConfig();
+    it('maps config values to RUM init configuration', () => {
+      const config = getRumConfig(baseConfig);
 
-      expect(config.applicationId).toBe('1268732f-53c3-48d0-ac2b-fd564cfefe36');
-      expect(config.clientToken).toBe('pubbc77d2e967e9fa2f4a24de29ab0e61c6');
+      expect(config.applicationId).toBe('test-app-id');
+      expect(config.clientToken).toBe('pub-test-token');
       expect(config.site).toBe('datadoghq.eu');
       expect(config.service).toBe('agentic-karl');
+      expect(config.env).toBe('prod');
+    });
+
+    it('applies Knauf defaults', () => {
+      const config = getRumConfig(baseConfig);
 
       expect(config.sessionSampleRate).toBe(100);
       expect(config.sessionReplaySampleRate).toBe(0);
@@ -44,15 +41,26 @@ describe('config', () => {
       expect(config.silentMultipleInit).toBe(true);
       expect(config.beforeSend).toBeDefined();
     });
+
+    it('uses empty string when rumApplicationId is undefined', () => {
+      const config = getRumConfig({ ...baseConfig, rumApplicationId: undefined });
+      expect(config.applicationId).toBe('');
+    });
   });
 
   describe('getLogsConfig', () => {
-    it('returns Knauf defaults for logs', () => {
-      const config = getLogsConfig();
+    it('maps config values to Logs init configuration', () => {
+      const config = getLogsConfig(baseConfig);
 
-      expect(config.clientToken).toBe('pubbc77d2e967e9fa2f4a24de29ab0e61c6');
+      expect(config.clientToken).toBe('pub-test-token');
       expect(config.site).toBe('datadoghq.eu');
       expect(config.service).toBe('agentic-karl');
+      expect(config.env).toBe('prod');
+    });
+
+    it('applies Knauf log defaults', () => {
+      const config = getLogsConfig(baseConfig);
+
       expect(config.forwardConsoleLogs).toEqual(['error']);
       expect(config.forwardErrorsToLogs).toBe(true);
       expect(config.trackingConsent).toBe('not-granted');

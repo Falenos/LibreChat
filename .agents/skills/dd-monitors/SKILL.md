@@ -192,8 +192,21 @@ pup downtime create --file downtime.json
 | No data alerts | Check agent connectivity, metric exists |
 | Auth error | `pup auth refresh` |
 
+## RUM Monitors
+
+Browser RUM enables frontend-specific monitors for Agentic Karl:
+
+| Monitor Type | Query Example | Use Case |
+|---|---|---|
+| RUM Error Rate | `rum("agentic-karl").error.count / rum("agentic-karl").view.count > 0.05` | Frontend JS error spike |
+| Core Web Vitals | `rum("agentic-karl").vitals.lcp.p75 > 2500` | LCP regression |
+| Browser Log Errors | `logs("source:browser service:agentic-karl status:error").count > 10` | Console error burst |
+
+RUM is only enabled in prod (`DATADOG_RUM_ENABLED: "true"`). Browser logs are enabled in both envs.
+
 ## References
 
 - [Monitor Types](https://docs.datadoghq.com/monitors/types/)
 - [Alerting Best Practices](https://docs.datadoghq.com/monitors/guide/)
 - [SLO Monitors](https://docs.datadoghq.com/service_management/service_level_objectives/)
+- [RUM Monitors](https://docs.datadoghq.com/monitors/types/real_user_monitoring/)
