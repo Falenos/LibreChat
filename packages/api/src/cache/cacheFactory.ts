@@ -29,6 +29,11 @@ import { violationFile } from './keyvFiles';
  */
 const inMemoryCacheMap = new Map<string, Keyv>();
 
+// [knauf] Reuse Redis-backed Keyv wrappers so repeated namespace lookups do not
+// attach unbounded listeners to the shared @redis/client instance.
+const redisCacheMap = new Map<string, Keyv>();
+// End [knauf]
+
 /**
  * Creates a cache instance using Redis or a fallback store. Suitable for general caching needs.
  *
@@ -44,6 +49,13 @@ const inMemoryCacheMap = new Map<string, Keyv>();
 export const standardCache = (namespace: string, ttl?: number, fallbackStore?: object): Keyv => {
   if (keyvRedisClient && !cacheConfig.FORCED_IN_MEMORY_CACHE_NAMESPACES?.includes(namespace)) {
     try {
+      // [knauf] First caller owns the namespace TTL, matching the in-memory memoization path.
+      const existing = redisCacheMap.get(namespace);
+      if (existing) {
+        return existing;
+      }
+      // End [knauf]
+
       const keyvRedis = new KeyvRedis(keyvRedisClient);
       const cache = new Keyv(keyvRedis, { namespace, ttl });
       keyvRedis.namespace = cacheConfig.REDIS_KEY_PREFIX;
@@ -78,6 +90,11 @@ export const standardCache = (namespace: string, ttl?: number, fallbackStore?: o
         await batchDeleteKeys(keyvRedisClient, keysToDelete);
         logger.debug(`Cleared ${keysToDelete.length} keys from namespace ${namespace}`);
       };
+
+      // [knauf] Cache the wrapper after clear() is patched so all callers get
+      // the namespace-aware behavior with no duplicate Redis listeners.
+      redisCacheMap.set(namespace, cache);
+      // End [knauf]
 
       return cache;
     } catch (err) {

@@ -1,18 +1,16 @@
 name: Build RAG API overlay image
 
 # Builds the Knauf rag_api overlay (knauf/rag-api-overlay/, Azure Document Intelligence
-# parser + native xlsx loader) and pushes it to ACR as
-# acrctshared001.azurecr.io/tools-non-prod/agentic-karl-rag-api:<tag>.
+# parser + native xlsx loader) straight into the AGK hub ACR:
+#   acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-rag-api:<tag>
 #
-# Why this exists: the dev rag_api Helm service (in Knauf-Group/ct-shared-deployment-configs)
-# points at this overlay image, but the main release pipeline only builds the *app* image — not
-# this one. This workflow removes the manual `az acr build` step (which needed a personal Azure
-# login). It authenticates as the shared service principal (secrets.AZURE_CREDENTIALS) and pushes
-# with the ACR registry password from Key Vault — the same credentials release_pipeline.yaml uses.
+# `az acr build` runs the build server-side in ACR (no docker, no registry password, no
+# cross-registry import), authenticating as the shared service principal (secrets.AZURE_CREDENTIALS).
+# The dev rag_api Helm service (Knauf-Group/agk-deployment-configs) points at this image.
 #
-# Tag: workflow_dispatch lets you type a tag (default = contents of VERSION); a push to main that
-# touches the overlay rebuilds the tag in VERSION. Bump knauf/rag-api-overlay/VERSION when you
-# change the overlay, then update the image tag in the deployment-configs values.yaml to match.
+# Tag: workflow_dispatch input (default = VERSION); a push to main touching the overlay rebuilds
+# the tag in VERSION. Bump knauf/rag-api-overlay/VERSION when you change the overlay, then point
+# the deployment-configs values.yaml tag at it.
 
 on:
   workflow_dispatch:
@@ -36,13 +34,13 @@ concurrency:
 
 jobs:
   build:
-    name: Build & push overlay to ACR
+    name: Build overlay into AGK ACR
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      ACR_NAME: acrctshared001
-      ACR_LOGIN_SERVER: acrctshared001.azurecr.io
-      IMAGE_REPOSITORY: tools-non-prod/agentic-karl-rag-api
+      SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      ACR_NAME: acragkhubnonprod001
+      IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-rag-api
       OVERLAY_DIR: knauf/rag-api-overlay
     steps:
       - name: Check out
@@ -59,40 +57,30 @@ jobs:
           fi
           [ -n "$TAG" ] || { echo "::error::empty tag"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Building $IMAGE_REPOSITORY:$TAG"
+          echo "Building $ACR_NAME / $IMAGE_REPOSITORY:$TAG"
 
       - name: Azure login (shared service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get ACR registry password from Key Vault
+      - name: Build overlay into AGK ACR (server-side)
         run: |
           set -euo pipefail
-          CT_ACR_PASSWORD=$(az keyvault secret show \
-            --vault-name kv-ct-shared-tools \
-            --name ACRCTSHARED001-REGISTRY-PASSWORD \
-            --query value -o tsv)
-          echo "::add-mask::$CT_ACR_PASSWORD"
-          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
-
-      - name: Build & push overlay image
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.tag.outputs.tag }}"
-          echo "$CT_ACR_PASSWORD" | docker login "$ACR_LOGIN_SERVER" -u "$ACR_NAME" --password-stdin
-          docker build \
-            -f "$OVERLAY_DIR/Dockerfile.knauf-rag" \
-            -t "$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$TAG" \
+          az acr build \
+            --subscription "$SUBSCRIPTION_ID" \
+            --registry "$ACR_NAME" \
+            --image "$IMAGE_REPOSITORY:${{ steps.tag.outputs.tag }}" \
+            --file "$OVERLAY_DIR/Dockerfile.knauf-rag" \
             "$OVERLAY_DIR"
-          docker push "$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$TAG"
 
-      - name: Verify tag is in ACR
+      - name: Verify tag is in AGK ACR
         run: |
           set -euo pipefail
           TAG="${{ steps.tag.outputs.tag }}"
           az acr repository show-tags \
+            --subscription "$SUBSCRIPTION_ID" \
             --name "$ACR_NAME" \
             --repository "$IMAGE_REPOSITORY" \
             --query "[?@=='$TAG']" -o tsv | grep -Fx "$TAG"
-          echo "✅ $ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$TAG is in ACR"
+          echo "✅ $ACR_NAME.azurecr.io/$IMAGE_REPOSITORY:$TAG is in AGK ACR"

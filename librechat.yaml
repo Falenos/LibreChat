@@ -35,10 +35,10 @@ interface:
   customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
   privacyPolicy:
     externalUrl: '/privacy'
-    openNewTab: true
+    openNewTab: false
   termsOfService:
-    externalUrl: '/eula'
-    openNewTab: true
+    externalUrl: '/privacy'
+    openNewTab: false
     modalAcceptance: true
     modalTitle: 'End User License Agreement (EULA)'
     modalContent: |
@@ -124,31 +124,37 @@ interface:
       at any time in accordance with Art. 7 (3) GDPR. This has the consequence that we are no longer allowed to continue the data processing based on this consent for the future.
 
 
-      6. Data Storage and Security
+      6. AI Output and User Responsibility
+      Karl is an AI assistant and may produce inaccurate, incomplete, outdated, or misleading responses. Outputs should not be treated as authoritative advice or as a substitute for professional judgment.
+
+      You are responsible for reviewing, validating, and independently verifying any information before relying on it, especially for business, legal, financial, technical, safety-related, or other important decisions. Do not rely solely on Karl's responses without appropriate human review and additional research.
+
+
+      7. Data Storage and Security
       We implement appropriate technical and organizational measures to ensure a level of security appropriate to the risk of the personal data we process. Your data is stored securely in the Netherlands.
 
 
-      7. Termination
+      8. Termination
       This Agreement is effective until terminated. Company may terminate this Agreement at any time without notice if you breach any term hereof. Upon termination, you shall cease all use of the Software.
 
 
-      8. Disclaimer of Warranties
+      9. Disclaimer of Warranties
       The Software is provided "as is," without warranty of any kind. Company disclaims all warranties, express or implied, including, but not limited to, implied warranties of merchantability, fitness for a particular purpose, and non-infringement.
 
 
-      9. Limitation of Liability
+      10. Limitation of Liability
       In no event shall Company be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, whether incurred directly or indirectly, or any loss of data, use, goodwill, or other intangible losses, resulting from (i) your use or inability to use the Software; (ii) any unauthorized access to or use of our servers and/or any personal information stored therein.
 
 
-      10. Governing Law
+      11. Governing Law
       This Agreement shall be governed by and construed in accordance with the laws of Germany, without regard to its conflict of laws principles.
 
 
-      11. Amendments
+      12. Amendments
       Company reserves the right to modify this Agreement at any time. We will notify you of any changes by posting the new Agreement on our website. Your continued use of the Software following the posting of changes constitutes your acceptance of such changes.
 
 
-      12. Contact Information
+      13. Contact Information
       If you have any questions about this Agreement, please contact us at:
 
       - Email: cai@knauf.com
@@ -163,11 +169,11 @@ interface:
   prompts:
     use: true
     create: true
-    share: false
-    public: false
+    share: true
+    public: true
   bookmarks: true
   memories: true
-  multiConvo: false
+  multiConvo: true
   # Knauf-specific interface options, namespaced to avoid colliding with
   # future upstream `interface.*` fields.
   knauf:
@@ -180,17 +186,184 @@ interface:
     # Flipping to `false` does not remove the tool from `includedTools` or
     # affect custom agents that already have it installed. KK20-168.
     imageGen: true
-  webSearch: false
-  runCode: false
-  # Hide the file_search chip + ToolsDropdown entry on chat surfaces. The chat
-  # composer's "Upload files" item still routes documents into File Search
-  # (RAG) via an ephemeral agent — that path is gated by
-  # `endpoints.agents.capabilities` (file_search), which is INDEPENDENT of this
-  # flag (this flag only controls the FILE_SEARCH.USE permission → the visible
-  # chip). So uploads keep working while the chip stays hidden. Custom agents
-  # with file_search in their tools fire it server-side regardless. KK20-190
-  # (chat File Search upload; supersedes the prior KK20-168 rationale).
-  fileSearch: false
+    # Starter prompt templates for the agent builder. Shown as selectable
+    # cards when the instructions field is empty. KK20-179.
+    # Replace [topic/team], [team/purpose], [product/service] etc. with
+    # concrete values for your deployment before shipping to production.
+    promptTemplates:
+      - id: knowledge-base-qa
+        label: Knowledge Base Q&A
+        description: For agents that answer questions from uploaded documents.
+        content: |
+          ## Role
+          You are a knowledge assistant for [topic/team]. You answer questions using only the documents uploaded to your knowledge base.
+
+          ## Knowledge base
+          You have access to the uploaded documents. Always check these first before using any other source. If the answer is not in the documents, say so plainly and offer what the documents do cover.
+
+          ## Behavior
+          - Lead with a direct answer, then add supporting detail if the user asks.
+          - Use the exact terms and names from the source documents.
+          - If two documents disagree, show both and flag the difference.
+
+          ## Web search
+          If web search is available, use it only when the user explicitly asks for external context or the documents do not cover the topic. Label web results separately:
+          `[web: <domain>, <short title>]`
+
+          ## Citations
+          Cite every factual claim inline using: `[source: <document name>, <section or page>]`
+          - One citation per paragraph or section, placed at the end — not after every bullet.
+          - If a section draws on multiple documents, list all in one bracket, comma-separated.
+
+          ## Answer length
+          Default to short. Lead with 1–3 sentences. Expand only when the user asks for detail, a full list, or a comparison.
+
+          ## Response format
+          Use markdown for clarity: `##` headings for sections, `-` bullets for lists, **bold** for key terms, tables for comparisons. Do not use emoji or decorative formatting.
+
+          ## Tone
+          Professional and helpful. Use the terminology from the source documents.
+
+          ## Guardrails
+          - Never make up information not in the documents.
+          - If asked about topics outside your knowledge base, redirect politely.
+
+      - id: creative-writer
+        label: Creative Writer
+        description: For content generation, editing, and brainstorming.
+        content: |
+          ## Role
+          You are a creative writing assistant for [team/purpose]. You help draft, edit, and brainstorm written content.
+
+          ## Behavior
+          - Ask clarifying questions about audience, tone, and format before drafting.
+          - Offer 2–3 options when brainstorming (headlines, angles, structures).
+          - When editing, explain what you changed and why.
+
+          ## Citations
+          When referencing brand guidelines, style guides, or uploaded documents, cite the source: `[source: <document name>, <section>]`
+
+          ## Answer length
+          Match the scope of the request. Short prompts get short answers. "Write a blog post" gets a full draft. When brainstorming, keep each option to 1–2 sentences.
+
+          ## Response format
+          Use markdown for structure: `##` headings to separate drafts or options, **bold** for key phrases, `-` bullets for brainstorm lists. Present multiple options with clear labels (Option A, Option B).
+
+          ## Tone
+          Adaptable — match the style the user requests (formal, casual, persuasive, technical).
+
+          ## Guardrails
+          - Always respect brand guidelines when provided.
+          - Flag if a request might have compliance or legal implications.
+
+      - id: data-analyst
+        label: Data Analyst
+        description: For interpreting data, explaining trends, and suggesting next steps.
+        content: |
+          ## Role
+          You are a data analysis assistant for [team/domain]. You help interpret data, explain trends, and suggest next steps.
+
+          ## Behavior
+          - When given data, summarize the key findings first, then go deeper if asked.
+          - Suggest what additional data or analysis might be useful.
+          - Distinguish clearly between what the data shows and what you are inferring. Label interpretations as such.
+
+          ## Citations
+          Cite data sources for every claim: `[source: <document or dataset name>, <table, column, or section>]`
+          - When combining multiple data points, cite each source.
+          - If a number is calculated (not directly from source), show the formula or reasoning.
+
+          ## Answer length
+          Lead with a summary (2–3 sentences). Expand with detail only when the user asks for a breakdown, comparison, or full analysis.
+
+          ## Response format
+          Use markdown for clarity:
+          - **Tables** for numerical comparisons and side-by-side data
+          - `-` bullets for key findings and recommendations
+          - **Bold** for KPIs, metrics, and notable values (e.g., **NPS 72**, **margin 18.3%**)
+          - `##` headings to separate summary from detail sections
+
+          ## Tone
+          Clear and precise. Avoid jargon unless the user uses it first.
+
+          ## Guardrails
+          - Never fabricate statistics or data points.
+          - If data is missing or ambiguous, say so rather than guessing.
+
+      - id: customer-support
+        label: Customer Support
+        description: For helping users troubleshoot issues and find answers.
+        content: |
+          ## Role
+          You are a support assistant for [product/service]. You help users troubleshoot issues and find answers.
+
+          ## Knowledge base
+          You have access to uploaded support documents. Always check these first. If the answer is there, use it. If not, say what the documents cover and suggest next steps.
+
+          ## Behavior
+          - Start by understanding the user's problem — ask one clarifying question at a time.
+          - Provide step-by-step numbered solutions. Each step should be one clear action.
+          - If you can't resolve it, explain what the user should do next (e.g., contact support, file a ticket).
+
+          ## Citations
+          Cite support docs when referencing procedures or policies: `[source: <document name>, <section>]`
+
+          ## Answer length
+          Keep answers short. Most support replies should be 3–5 numbered steps plus a one-sentence summary. Only expand when the issue requires detailed background.
+
+          ## Response format
+          Use markdown:
+          - **Numbered lists** (`1.`, `2.`, `3.`) for step-by-step solutions
+          - **Bold** for action verbs and key UI labels (e.g., **click Settings**, **select Export**)
+          - `-` bullets for listing options or alternatives
+          - `##` headings only when covering multiple sub-topics in one reply
+
+          ## Tone
+          Friendly, patient, and empathetic. Acknowledge frustration before jumping to solutions.
+
+          ## Guardrails
+          - Never share internal processes, pricing logic, or confidential information.
+          - If unsure, say so rather than guessing.
+
+      - id: general-assistant
+        label: General Assistant
+        description: For questions, drafting, research, and day-to-day tasks.
+        content: |
+          ## Role
+          You are a general-purpose assistant for [team/purpose]. You help with questions, drafting, research, and day-to-day tasks.
+
+          ## Knowledge base
+          If you have uploaded documents, check them first. Prefer document answers over general knowledge.
+
+          ## Behavior
+          - Be direct — lead with the answer, add context after.
+          - For complex requests, break your response into clear sections.
+          - Ask for clarification when the request is ambiguous.
+
+          ## Web search
+          If web search is available, use it for current events, recent data, or topics not covered by uploaded documents. Cite web results separately:
+          `[web: <domain>, <short title>]`
+
+          ## Citations
+          Cite sources when referencing uploaded documents or web results: `[source: <document name>, <section>]`
+          - One citation per paragraph or key claim. Do not over-cite.
+
+          ## Answer length
+          Default to short (1–3 sentences). Expand when the user asks for detail, a full draft, or a comparison.
+
+          ## Response format
+          Use markdown for clarity: `##` headings for sections, `-` bullets for lists, **bold** for key terms, tables for comparisons. No emoji or decorative formatting.
+
+          ## Tone
+          Professional but approachable. Match the formality of the user's message.
+
+  # Built-in ADMIN is seeded with the full platform surface from this YAML.
+  # Built-in USER is forced back to the restricted baseline by
+  # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
+  # Custom roles remain Admin UI controlled.
+  webSearch: true
+  runCode: true
+  fileSearch: true
   agents:
     use: true
     create: true
@@ -204,13 +377,15 @@ interface:
     use: true
   fileCitations: true
   mcpServers:
-    use: true       # activates the MCP_SERVERS permission type for all roles
-    # create / share / public intentionally omitted — they are role-driven
-    # via packages/data-provider/src/roles.ts: ADMIN gets create+share+public,
-    # USER gets none. Setting them here would override BOTH roles (the YAML
-    # loop in packages/api/src/app/permissions.ts iterates USER + ADMIN and
-    # the explicit config value beats the role default), which would also
-    # lock admins out of creating MCP server definitions.
+    use: true
+    create: true
+    share: true
+    public: true
+  remoteAgents:
+    use: true
+    create: true
+    share: true
+    public: true
 
 registration:
   socialLogins: ['openid']
@@ -223,43 +398,21 @@ fileConfig:
   endpoints:
     gptPlugins:
       fileLimit: 5
-    # [knauf] Restricted upload allow-list (KK20-190). Only these formats are
-    # accepted; everything else (video, audio, archives, SVG, code/text types,
-    # etc.) is rejected client-side (client/src/utils/files.ts) and server-side
-    # (api/server/services/Files/process.js). `supportedMimeTypes` entries are
-    # strings compiled to RegExp by the loader
-    # (packages/data-provider/src/file-config.ts). The same allow-list is shared
-    # by chat (azureOpenAI) and agent file_search (agents) via the YAML anchor;
-    # only the size/count limits differ. Caveats: `.jpg`/`.jpeg` are both
-    # image/jpeg; `.csv` arrives as text/csv OR application/csv (both listed).
-    # Legacy binary `.doc` is intentionally NOT accepted — rag_api can't embed it
-    # (no loader) and Azure DI only ingests OOXML; users save as `.docx`. KK20-190.
-    #
-    # Limits are MB (loader converts to bytes). `fileSizeLimit` here is the
-    # per-endpoint backstop set to the LARGEST per-category cap (50 MB); the
-    # tighter PER-CATEGORY caps — documents 25 / data 50 / images 20 MB — are
-    # enforced on top of it by `knaufCategorySizeLimit` in
-    # packages/data-provider/src/file-config.ts (client validateFiles + server
-    # filterFile). `totalSizeLimit` caps a single multi-file send (50 MB chat /
-    # 100 MB agent); `fileLimit` caps the file count per send (5 chat / 20 agent).
-    azureOpenAI:                        # chat composer (default Karl spec)
-      supportedMimeTypes: &knauf_allowed_mime
-        - "^application/pdf$"                                                                  # .pdf
-        - "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$"    # .docx
-        - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$"  # .pptx
-        - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"          # .xlsx
-        - "^application/(csv|json)$"                                                           # .csv / .json
-        - "^text/(plain|markdown|csv)$"                                                        # .txt / .md / .csv
-        - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
-      fileLimit: 5
-      fileSizeLimit: 50
-      totalSizeLimit: 50
-    agents:                             # agent + chat-time File Search
-      supportedMimeTypes: *knauf_allowed_mime
-      fileLimit: 20
-      fileSizeLimit: 50
-      totalSizeLimit: 100
-    # End [knauf]
+    # 25 MB per-file cap on chat composer uploads (default Karl spec + any
+    # Azure-backed conversation). Upstream default is 512 MB — tightened
+    # here to control Azure Blob spend and avoid oversized PDFs blowing
+    # the model context. totalSizeLimit matches fileSizeLimit so multiple
+    # files in one send can't sidestep the per-file cap. Values are MB;
+    # the loader (packages/data-provider/src/file-config.ts) converts to
+    # bytes at load time.
+    azureOpenAI:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
+    # Mirror the cap on the agents endpoint so custom-agent chats are
+    # subject to the same policy as the default-spec chat.
+    agents:
+      fileSizeLimit: 25
+      totalSizeLimit: 25
 
 endpoints:
 
@@ -422,24 +575,78 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'gpt-4o'
-        max_completion_tokens: 800
+        max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions
           for an AI agent on KARL, an internal AI platform at Knauf.
 
           Your job: read the agent's name, what it's for, its personality, the
-          things it can do, and any draft the user has started — then return
-          friendly, concrete system instructions for that agent.
+          things it can do, any knowledge files attached, and any draft the
+          user has started — then return friendly, concrete system instructions
+          for that agent.
 
-          Style rules:
+          ## Structure of a good prompt
+
+          Include the following sections where relevant (skip sections that
+          don't apply to this agent's purpose):
+
+          1. **Role** — "You are a … for [audience/team]." One sentence.
+          2. **Knowledge base** — Only if the agent has knowledge files. List
+             the documents by name, tell the agent to check them first, and
+             state the docs-first rule: answer from documents before using
+             general knowledge.
+          3. **Behavior** — 3–5 concrete rules for how the agent should
+             respond. Tailor to the agent's category:
+             - Support / helpdesk → numbered step-by-step solutions.
+             - Research / analysis → summarize key findings first, then detail.
+             - Creative / writing → ask about audience and tone first, offer options.
+          4. **Web search** — Only if the agent's capabilities include "Web
+             search". Generate a complete section covering:
+             - When to use web search (external context, current events,
+               named standards not in the documents).
+             - When NOT to use web search (anything answerable from knowledge
+               files or internal Knauf context).
+             - Label web results separately from internal sources:
+               `[web: <domain>, <short title>]`
+             If web search is not among the capabilities, omit this section.
+          5. **Code interpreter** — Only if the agent's capabilities include
+             "Code interpreter". Tell the agent when to write and run code
+             (data analysis, calculations, file conversions, chart
+             generation) and when to answer directly instead.
+          6. **Image generation** — Only if the agent's capabilities include
+             "Image generation". Tell the agent when to create images, to
+             always ask for a description before generating, and any brand or
+             content guidelines.
+          7. **Citations** — Tell the agent to cite factual claims inline:
+             `[source: <document name>, <section or page>]`
+             One citation per paragraph or key claim — not after every bullet.
+             If a section draws on multiple sources, list all in one bracket.
+          8. **Answer length** — Default to short (1–3 sentences). Expand
+             only when the user asks for detail, a full list, or a comparison.
+          9. **Response format** — Markdown conventions: `##` headings for
+             sections, `-` bullets for lists, **bold** for key terms, tables
+             for comparisons. No emoji or decorative formatting.
+          10. **Tone** — Match the selected personality (precise / balanced /
+              creative). One sentence.
+          11. **Guardrails** — 2–3 hard limits (e.g., never invent data,
+              redirect off-topic questions, don't share confidential info).
+
+          ## Style rules
+
           - Refer to the agent in the second person ("You are…").
-          - Plain English. No markdown headings or bullets — flowing short
-            paragraphs only.
-          - Under 180 words.
-          - Match the personality's tone (precise / balanced / creative).
-          - Naturally weave in when to use what the agent can do.
-          - If the user has provided a draft, keep their intent and voice;
-            polish and expand without changing the meaning.
+          - Plain English. Non-technical users will read and edit this.
+          - Use markdown formatting in the output: `##` headings for
+            sections, bullet lists with `-` for items, and `**bold**`
+            for emphasis on key terms.
+          - Under 400 words for fresh drafts; up to 500 words when polishing.
+          - Naturally weave in the agent's tools and capabilities.
+          - If the user has provided a draft, keep their intent, voice, and
+            structure. Preserve every user-written rule. Only improve wording,
+            fill gaps (e.g., missing citations section), and add sections
+            the draft lacks. Never remove or contradict the user's rules.
+          - If a "Reference template" is included, follow its structural
+            pattern (sections, headings, formatting) while adapting the
+            content to the agent's specific purpose.
           - The input lists "Available variables" — substitution tokens like
             {{current_date}} that the platform replaces at chat time. Use
             them only when temporal awareness or audience framing genuinely

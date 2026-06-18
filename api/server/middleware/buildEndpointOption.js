@@ -10,6 +10,7 @@ const {
 const azureAssistants = require('~/server/services/Endpoints/azureAssistants');
 const assistants = require('~/server/services/Endpoints/assistants');
 const { getEndpointsConfig } = require('~/server/services/Config');
+const { hydrateParsedBodyFromCurrentSpec } = require('~/server/knauf/modelSpec');
 const agents = require('~/server/services/Endpoints/agents');
 const { updateFilesUsage } = require('~/models');
 
@@ -20,7 +21,7 @@ const buildFunction = {
 };
 
 async function buildEndpointOption(req, res, next) {
-  const { endpoint, endpointType } = req.body;
+  let { endpoint, endpointType } = req.body;
 
   let endpointsConfig;
   try {
@@ -82,11 +83,27 @@ async function buildEndpointOption(req, res, next) {
       return handleError(res, { text: 'Error parsing model spec' });
     }
   } else if (parsedBody.spec && appConfig.modelSpecs?.list) {
-    // Non-enforced mode: if spec is selected, derive iconURL from model spec
-    const modelSpec = appConfig.modelSpecs.list.find((s) => s.name === parsedBody.spec);
-    if (modelSpec?.iconURL) {
-      parsedBody.iconURL = modelSpec.iconURL;
+    // [knauf] Non-enforced model specs are still dynamic: stale saved conversations must run with the current spec preset.
+    const hydratedSpec = hydrateParsedBodyFromCurrentSpec({
+      parsedBody,
+      appConfig,
+      endpointsConfig,
+      parseCompactConvo,
+      getDefaultParamsEndpoint,
+    });
+    if (hydratedSpec) {
+      endpoint = hydratedSpec.endpoint;
+      endpointType = hydratedSpec.endpointType;
+      req.body.endpoint = endpoint;
+      req.body.endpointType = endpointType;
+      parsedBody = hydratedSpec.parsedBody;
+    } else {
+      const modelSpec = appConfig.modelSpecs.list.find((s) => s.name === parsedBody.spec);
+      if (modelSpec?.iconURL) {
+        parsedBody.iconURL = modelSpec.iconURL;
+      }
     }
+    // End [knauf]
   }
 
   try {

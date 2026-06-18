@@ -34,6 +34,7 @@ jest.mock('~/models', () => ({
 
 jest.mock('librechat-data-provider', () => ({
   specialVariables: { current_date: '', current_user: '' },
+  EModelEndpoint: { azureOpenAI: 'azureOpenAI', openAI: 'openAI' },
 }));
 
 const express = require('express');
@@ -80,7 +81,7 @@ describe('buildUserMessage', () => {
       category: '',
       personality: { label: '', description: '' },
       capabilities: [],
-      knowledgeFileCount: 0,
+      knowledgeFiles: [],
       tools: [],
       mcpServers: [],
     },
@@ -107,6 +108,7 @@ describe('buildUserMessage', () => {
     expect(msg).not.toContain("What it's for:");
     expect(msg).not.toContain('Category:');
     expect(msg).not.toContain('Personality:');
+    expect(msg).not.toContain('Knowledge files');
     // capabilities default line should appear
     expect(msg).toContain('What it can do: reply from its own knowledge only');
   });
@@ -128,7 +130,11 @@ describe('buildUserMessage', () => {
         category: 'Sales',
         personality: { label: 'Precise', description: 'Sticks to the facts.' },
         capabilities: ['Browse the internet'],
-        knowledgeFileCount: 3,
+        knowledgeFiles: [
+          { name: 'pricing.pdf', type: 'application/pdf' },
+          { name: 'faq.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+          { name: 'catalog.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+        ],
         tools: ['Web Search'],
         mcpServers: ['sharepoint'],
       },
@@ -139,7 +145,7 @@ describe('buildUserMessage', () => {
     expect(msg).toContain('Category: Sales');
     expect(msg).toContain('Personality: Precise');
     expect(msg).toContain('What it can do: Browse the internet');
-    expect(msg).toContain('Knowledge: 3 attached documents');
+    expect(msg).toContain('Knowledge files (3): pricing.pdf, faq.docx, catalog.xlsx');
     expect(msg).toContain('Tools available: Web Search');
     expect(msg).toContain('MCP servers connected: sharepoint');
   });
@@ -154,10 +160,10 @@ describe('POST /', () => {
     jest.clearAllMocks();
   });
 
-  it('returns 400 for invalid body (knowledgeFileCount is not a number)', async () => {
+  it('returns 400 for invalid body (knowledgeFiles has wrong shape)', async () => {
     const res = await request(app)
       .post('/')
-      .send({ agent: { knowledgeFileCount: 'bad' } });
+      .send({ agent: { knowledgeFiles: 'bad' } });
     expect(res.status).toBe(400);
     expect(res.body.message).toBe('Invalid request body.');
     expect(res.body.issues).toBeDefined();
@@ -212,5 +218,64 @@ describe('POST /', () => {
         }),
       }),
     );
+  });
+
+  it('switches provider from azureOpenAI to openAI when useResponsesApi is active', async () => {
+   const azureSpec = {
+     name: 'karl-autogenerate-prompt',
+     preset: {
+       endpoint: 'azureOpenAI',
+       model: 'gpt-4o',
+       promptPrefix: 'Draft agent instructions.',
+       max_completion_tokens: 500,
+     },
+   };
+   getAppConfig.mockResolvedValue(makeConfig(azureSpec));
+   // Simulate the config pipeline output when web_search triggers useResponsesApi:
+   // Azure fields are stripped, apiKey + baseURL are set instead.
+   getProviderConfig.mockReturnValue({
+     getOptions: makeGetOptions({ apiKey: 'test-key', useResponsesApi: true }),
+   });
+   const mockInvoke = jest.fn().mockResolvedValue({ content: 'Generated instructions.' });
+   initializeModel.mockReturnValue({ invoke: mockInvoke });
+
+   const res = await request(app).post('/').send(VALID_BODY);
+
+   expect(res.status).toBe(200);
+   expect(res.body.text).toBe('Generated instructions.');
+   // Must use 'openAI' (ChatOpenAI), not 'azureOpenAI' (AzureChatOpenAI),
+   // because the Azure fields were stripped by constructAzureResponsesApi.
+   const call = initializeModel.mock.calls[0][0];
+   expect(call.provider).toBe('openAI');
+   // Responses API uses max_output_tokens, not max_completion_tokens.
+   expect(call.clientOptions.modelKwargs).toHaveProperty('max_output_tokens', 500);
+   expect(call.clientOptions.modelKwargs).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('keeps azureOpenAI provider when useResponsesApi is not active', async () => {
+   const azureSpec = {
+    name: 'karl-autogenerate-prompt',
+    preset: {
+      endpoint: 'azureOpenAI',
+      model: 'gpt-4o',
+      promptPrefix: 'Draft agent instructions.',
+      max_completion_tokens: 500,
+    },
+   };
+   getAppConfig.mockResolvedValue(makeConfig(azureSpec));
+   getProviderConfig.mockReturnValue({
+    getOptions: makeGetOptions({ apiKey: 'test-key' }),
+   });
+   const mockInvoke = jest.fn().mockResolvedValue({ content: 'Generated instructions.' });
+   initializeModel.mockReturnValue({ invoke: mockInvoke });
+
+   const res = await request(app).post('/').send(VALID_BODY);
+
+   expect(res.status).toBe(200);
+   const call = initializeModel.mock.calls[0][0];
+   expect(call.provider).toBe('azureOpenAI');
+   // Completions API uses max_completion_tokens.
+   expect(call.clientOptions.modelKwargs).toHaveProperty('max_completion_tokens', 500);
+   expect(call.clientOptions.modelKwargs).not.toHaveProperty('max_output_tokens');
   });
 });

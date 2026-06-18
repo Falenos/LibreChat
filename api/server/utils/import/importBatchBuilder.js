@@ -70,16 +70,18 @@ class ImportBatchBuilder {
    * @param {string} [title='Imported Chat'] - The title of the conversation. Defaults to 'Imported Chat'.
    * @param {Date} [createdAt] - The creation date of the conversation.
    * @param {TConversation} [originalConvo] - The original conversation.
+   * @param {Date} [updatedAt] - The update date of the conversation.
    * @returns {{ conversation: TConversation, messages: TMessage[] }} The resulting conversation and messages.
    */
-  finishConversation(title, createdAt, originalConvo = {}) {
+  // [knauf] Allow importers to mark uploaded conversations as recent without rewriting historical createdAt.
+  finishConversation(title, createdAt, originalConvo = {}, updatedAt = createdAt) {
     const convo = {
       ...originalConvo,
       user: this.requestUserId,
       conversationId: this.conversationId,
       title: title || 'Imported Chat',
       createdAt: createdAt,
-      updatedAt: createdAt,
+      updatedAt,
       overrideTimestamp: true,
       endpoint: this.endpoint,
       model: originalConvo.model ?? openAISettings.model.default,
@@ -89,6 +91,7 @@ class ImportBatchBuilder {
 
     return { conversation: convo, messages: this.messages };
   }
+  // End [knauf]
 
   /**
    * Saves the batch of conversations and messages to the DB.

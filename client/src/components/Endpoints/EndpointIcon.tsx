@@ -7,7 +7,7 @@ import type {
 } from 'librechat-data-provider';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import MinimalIcon from '~/components/Endpoints/MinimalIcon';
-import { getIconEndpoint } from '~/utils';
+import { cn, getIconEndpoint } from '~/utils';
 
 export default function EndpointIcon({
   conversation,
@@ -39,7 +39,15 @@ export default function EndpointIcon({
 
   const iconURL = assistantAvatar || convoIconURL;
 
-  if (iconURL && (iconURL.includes('http') || iconURL.startsWith('/images/'))) {
+  // [knauf] Support app-local branded avatar assets.
+  const hasRenderableIconURL =
+    iconURL &&
+    (iconURL.includes('http') ||
+      iconURL.startsWith('/images/') ||
+      iconURL.startsWith('/assets/'));
+  // End [knauf]
+
+  if (hasRenderableIconURL) {
     return (
       <ConvoIconURL
         iconURL={iconURL}
@@ -50,6 +58,18 @@ export default function EndpointIcon({
         assistantName={assistantName ?? ''}
       />
     );
+  } else if (conversation?.spec || conversation?.agent_id || endpoint === 'agents') {
+    // [knauf] Default Karl/modelSpec and agent conversations use a compact wordmark in history rows.
+    return (
+      <img
+        src="/assets/knauf-logo.png"
+        alt="Knauf"
+        className={cn('h-3 w-7 shrink-0 object-contain', className)}
+        loading="lazy"
+        decoding="async"
+      />
+    );
+    // End [knauf]
   } else {
     return (
       <MinimalIcon

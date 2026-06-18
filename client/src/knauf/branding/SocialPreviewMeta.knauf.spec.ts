@@ -6,7 +6,7 @@ function readIndexHtml(): string {
 }
 
 describe('[knauf] social preview metadata', () => {
-  it('uses the Knauf logo for Open Graph and Twitter preview images', () => {
+  it('uses the padded Knauf social preview for Open Graph and Twitter images', () => {
     const html = readIndexHtml();
 
     expect(html).toContain(
@@ -14,10 +14,10 @@ describe('[knauf] social preview metadata', () => {
     );
     expect(html).toContain('<meta name="twitter:card" content="summary" />');
     expect(html).toContain(
-      '<meta property="og:image" content="https://agentic-karl.knauf.com/assets/knauf-logo.png" />',
+      '<meta property="og:image" content="https://agentic-karl.knauf.com/assets/knauf-social-preview.png" />',
     );
     expect(html).toContain(
-      '<meta name="twitter:image" content="https://agentic-karl.knauf.com/assets/knauf-logo.png" />',
+      '<meta name="twitter:image" content="https://agentic-karl.knauf.com/assets/knauf-social-preview.png" />',
     );
     expect(html).not.toContain('content="https://librechat.ai');
   });

@@ -1,36 +1,18 @@
 /**
  * POST /api/knauf/autogenerate-prompt
  *
- * One-shot completion that drafts (or polishes) an agent's system
- * instructions from the V6 agent builder's current state. Used by the ✦
- * "Autogenerate / Polish & expand" button in the Knauf overlay.
+ * One-shot completion that drafts (or polishes) an agent's system instructions
+ * from the V6 agent builder's current state. Also used for template-based
+ * preview generation when `sourceTemplate` is provided.
  *
- * Configuration source-of-truth: the `karl-autogenerate-prompt` entry in
- * `librechat.yaml` `modelSpecs.list`. That entry's `preset` carries the
- * provider (`endpoint`), the model/deployment, max_completion_tokens, and
- * promptPrefix (= the system message).
+ * Config source-of-truth: the `karl-autogenerate-prompt` modelSpec entry in
+ * `librechat.yaml` — its `preset` carries provider, model/deployment,
+ * max_completion_tokens, and promptPrefix (= the system message).
  *
- * Provider routing: we walk the same `getProviderConfig({ provider,
- * appConfig })` path that `packages/api/src/agents/initialize.ts` uses for
- * every chat turn to resolve credentials, then hand the resulting
- * `llmConfig` to `@librechat/agents`'s `initializeModel` — the same single
- * entry point the agent graph and summarization node use to build a chat
- * model. Net effect: any provider configured in the YAML (azureOpenAI,
- * openAI, anthropic, google, bedrock, custom, ...) works without pulling
- * provider-specific deps into this file.
- *
- * Request body: validated by `autogeneratePromptSchema` below. Nested:
- * `{ agent: { name, description, category, personality: { label, description },
- *   capabilities, knowledgeFileCount, tools, mcpServers }, currentDraft }`.
- * Defence in depth — every string field is bounded so the prompt is a
- * fixed-shape input. The `tools` and `mcpServers` arrays carry display
- * names of the agent's selected tools / connected MCP servers so the
- * drafter can write "use the X tool when …" guidance. The user message
- * also lists the canonical `specialVariables` tokens
- * ({{current_date}}, …) so the drafter can emit them for time- or
- * audience-aware framing.
- *
- * Auth: requireJwtAuth, same as every Knauf-relevant route.
+ * Provider routing: getProviderConfig → initializeModel (same path used by
+ * chat turns). Any YAML-configured provider works without provider-specific
+ * deps in this file. Request body: bounded by `autogeneratePromptSchema`.
+ * Auth: requireJwtAuth.
  */
 const express = require('express');
 const { z } = require('zod');
@@ -39,6 +21,7 @@ const { logger, getTenantId } = require('@librechat/data-schemas');
 const { getProviderConfig } = require('@librechat/api');
 const { initializeModel } = require('@librechat/agents');
 const { specialVariables } = require('librechat-data-provider');
+const { resolveProvider, tokenLimitParam } = require('./lib/resolveProvider');
 const { getAppConfig } = require('~/server/services/Config');
 const { requireJwtAuth } = require('~/server/middleware');
 const db = require('~/models');
@@ -57,23 +40,27 @@ const autogeneratePromptSchema = z.object({
       })
       .default({ label: '', description: '' }),
     capabilities: z.array(z.string().max(80)).max(8).default([]),
-    knowledgeFileCount: z.number().int().min(0).max(99).default(0),
+    knowledgeFiles: z
+      .array(z.object({ name: z.string().max(256), type: z.string().max(100).default('') }))
+      .max(50)
+      .default([]),
     tools: z.array(z.string().max(120)).max(20).default([]),
     mcpServers: z.array(z.string().max(80)).max(10).default([]),
   }),
   currentDraft: z.string().max(4000).default(''),
+  sourceTemplate: z.string().max(4000).optional(),
 });
 
 /** Build the user-message body from the validated request shape. */
 function buildUserMessage(input) {
-  const { agent, currentDraft } = input;
+  const { agent, currentDraft, sourceTemplate } = input;
   const name = agent.name.trim() || 'this agent';
   const description = agent.description.trim();
   const category = agent.category.trim();
   const personalityLabel = agent.personality.label.trim();
   const personalityDescription = agent.personality.description.trim();
   const capabilities = agent.capabilities;
-  const knowledgeFileCount = agent.knowledgeFileCount;
+  const knowledgeFiles = agent.knowledgeFiles ?? [];
   const tools = agent.tools;
   const mcpServers = agent.mcpServers;
 
@@ -87,10 +74,11 @@ function buildUserMessage(input) {
     capabilities.length > 0
       ? `What it can do: ${capabilities.join(', ')}`
       : 'What it can do: reply from its own knowledge only';
-  const knowledgeLine =
-    knowledgeFileCount > 0
-      ? `Knowledge: ${knowledgeFileCount} attached document${knowledgeFileCount === 1 ? '' : 's'}.`
-      : '';
+  let knowledgeLine = '';
+  if (knowledgeFiles.length > 0) {
+    const fileList = knowledgeFiles.map((f) => f.name).join(', ');
+    knowledgeLine = `Knowledge files (${knowledgeFiles.length}): ${fileList}`;
+  }
   // Tools and MCP get their own lines so the drafter knows they're
   // *callable* (not just a vague capability). Helps the model write
   // instructions like "use the X tool when ...".
@@ -123,6 +111,14 @@ function buildUserMessage(input) {
     lines.push("User's draft:");
     lines.push('"""');
     lines.push(currentDraft.trim());
+    lines.push('"""');
+  }
+
+  if (sourceTemplate && sourceTemplate.trim()) {
+    lines.push('');
+    lines.push('Reference template (follow its structural pattern):');
+    lines.push('"""');
+    lines.push(sourceTemplate.trim());
     lines.push('"""');
   }
 
@@ -194,23 +190,22 @@ router.post('/', express.json({ limit: '32kb' }), async (req, res) => {
 
     const llmConfig = options?.llmConfig ?? {};
 
-    // 3. Build the chat model via `@librechat/agents`'s `initializeModel` —
-    //    the single entry point the agent graph and summarization node use.
-    //    It dispatches on `provider` to the right LangChain class
-    //    (ChatOpenAI / AzureChatOpenAI / ChatAnthropic / ChatVertexAI /
-    //    ChatBedrockConverse / …) and applies provider-specific field
-    //    assignments, so this route works for any endpoint configured in
-    //    `librechat.yaml` modelSpecs without provider-specific deps here.
+    // 3. Build the chat model via initializeModel (provider-agnostic).
+    const { provider: resolvedProvider, useResponsesApi } = resolveProvider({
+      provider,
+      llmConfig,
+    });
+
     const maxCompletionTokens = spec.preset.max_completion_tokens;
     const modelKwargs = { ...(llmConfig.modelKwargs ?? {}) };
     if (typeof maxCompletionTokens === 'number') {
-      modelKwargs.max_completion_tokens = maxCompletionTokens;
+      modelKwargs[tokenLimitParam(useResponsesApi)] = maxCompletionTokens;
     }
 
     let client;
     try {
       client = initializeModel({
-        provider,
+        provider: resolvedProvider,
         clientOptions: {
           ...llmConfig,
           streaming: false,

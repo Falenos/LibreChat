@@ -2139,17 +2139,142 @@ describe('updateInterfacePermissions - permissions', () => {
     });
   });
 
-  // [knauf] Prod-only normal USER lockdown must override permissive dev/YAML
-  // defaults without changing ADMIN permissions.
-  it('should restrict normal USER permissions when Knauf prod user governance is enabled', async () => {
-    const previousValue = process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS;
-    process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS = 'true';
-    mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
-      permissions: roleDefaults[roleName].permissions,
-    }));
+  // [knauf] Built-in USER lockdown must override permissive YAML defaults
+  // without changing ADMIN permissions.
+  const knaufUserRestrictionEnvVars = [
+    'KNAUF_RESTRICT_USER_PERMISSIONS',
+    'KNAUF_RESTRICT_PROD_USER_PERMISSIONS',
+  ] as const;
+
+  const expectedKnaufRestrictedUserPermissions = {
+    [PermissionTypes.PROMPTS]: {
+      [Permissions.USE]: true,
+      [Permissions.CREATE]: false,
+      [Permissions.SHARE]: false,
+      [Permissions.SHARE_PUBLIC]: false,
+    },
+    [PermissionTypes.AGENTS]: {
+      [Permissions.USE]: true,
+      [Permissions.CREATE]: false,
+      [Permissions.SHARE]: false,
+      [Permissions.SHARE_PUBLIC]: false,
+    },
+    [PermissionTypes.MEMORIES]: {
+      [Permissions.USE]: false,
+      [Permissions.CREATE]: false,
+      [Permissions.READ]: false,
+      [Permissions.UPDATE]: false,
+      [Permissions.OPT_OUT]: false,
+    },
+    [PermissionTypes.MULTI_CONVO]: {
+      [Permissions.USE]: false,
+    },
+    [PermissionTypes.RUN_CODE]: {
+      [Permissions.USE]: false,
+    },
+    [PermissionTypes.WEB_SEARCH]: {
+      [Permissions.USE]: false,
+    },
+    [PermissionTypes.PEOPLE_PICKER]: {
+      [Permissions.VIEW_USERS]: false,
+      [Permissions.VIEW_GROUPS]: false,
+      [Permissions.VIEW_ROLES]: false,
+    },
+    [PermissionTypes.FILE_SEARCH]: {
+      [Permissions.USE]: false,
+    },
+    [PermissionTypes.MCP_SERVERS]: {
+      [Permissions.USE]: true,
+      [Permissions.CREATE]: false,
+      [Permissions.SHARE]: false,
+      [Permissions.SHARE_PUBLIC]: false,
+    },
+    [PermissionTypes.REMOTE_AGENTS]: {
+      [Permissions.USE]: false,
+      [Permissions.CREATE]: false,
+      [Permissions.SHARE]: false,
+      [Permissions.SHARE_PUBLIC]: false,
+    },
+  };
+
+  const withKnaufUserRestrictionEnv = async (
+    enabledEnvVar: (typeof knaufUserRestrictionEnvVars)[number],
+    callback: () => Promise<void>,
+  ) => {
+    const previousValues = knaufUserRestrictionEnvVars.map((envVar) => [
+      envVar,
+      process.env[envVar],
+    ] as const);
 
     try {
-      const config = { interface: {} };
+      for (const envVar of knaufUserRestrictionEnvVars) {
+        delete process.env[envVar];
+      }
+      process.env[enabledEnvVar] = 'true';
+      await callback();
+    } finally {
+      for (const [envVar, previousValue] of previousValues) {
+        if (previousValue === undefined) {
+          delete process.env[envVar];
+        } else {
+          process.env[envVar] = previousValue;
+        }
+      }
+    }
+  };
+
+  it.each(knaufUserRestrictionEnvVars)(
+    'should restrict normal USER permissions when %s is enabled',
+    async (enabledEnvVar) => {
+      await withKnaufUserRestrictionEnv(enabledEnvVar, async () => {
+        mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
+          permissions: roleDefaults[roleName].permissions,
+        }));
+
+        const config = { interface: {} };
+        const configDefaults = { interface: {} } as TConfigDefaults;
+        const interfaceConfig = await loadDefaultInterface({ config, configDefaults });
+        const appConfig = { config, interfaceConfig } as unknown as AppConfig;
+
+        await updateInterfacePermissions({
+          appConfig,
+          getRoleByName: mockGetRoleByName,
+          updateAccessPermissions: mockUpdateAccessPermissions,
+        });
+
+        const userCall = mockUpdateAccessPermissions.mock.calls.find(
+          (call) => call[0] === SystemRoles.USER,
+        );
+        const adminCall = mockUpdateAccessPermissions.mock.calls.find(
+          (call) => call[0] === SystemRoles.ADMIN,
+        );
+
+        expect(userCall?.[1]).toEqual(expectedKnaufRestrictedUserPermissions);
+        expect(adminCall).toBeUndefined();
+      });
+    },
+  );
+
+  it('should keep ADMIN permissions fully enabled from explicit YAML while restricting USER', async () => {
+    await withKnaufUserRestrictionEnv('KNAUF_RESTRICT_USER_PERMISSIONS', async () => {
+      mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
+        permissions: roleDefaults[roleName].permissions,
+      }));
+
+      const config = {
+        interface: {
+          prompts: { use: true, create: true, share: true, public: true },
+          memories: true,
+          multiConvo: true,
+          agents: { use: true, create: true, share: true, public: true },
+          runCode: true,
+          webSearch: true,
+          peoplePicker: { users: true, groups: true, roles: true },
+          fileSearch: true,
+          mcpServers: { use: true, create: true, share: true, public: true },
+          remoteAgents: { use: true, create: true, share: true, public: true },
+        },
+      };
       const configDefaults = { interface: {} } as TConfigDefaults;
       const interfaceConfig = await loadDefaultInterface({ config, configDefaults });
       const appConfig = { config, interfaceConfig } as unknown as AppConfig;
@@ -2167,34 +2292,58 @@ describe('updateInterfacePermissions - permissions', () => {
         (call) => call[0] === SystemRoles.ADMIN,
       );
 
-      expect(userCall?.[1]).toEqual({
-        [PermissionTypes.AGENTS]: {
+      expect(userCall?.[1]).toEqual(expectedKnaufRestrictedUserPermissions);
+      expect(adminCall?.[1]).toEqual({
+        [PermissionTypes.PROMPTS]: {
           [Permissions.USE]: true,
-          [Permissions.CREATE]: false,
-          [Permissions.SHARE]: false,
-          [Permissions.SHARE_PUBLIC]: false,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
         },
         [PermissionTypes.MEMORIES]: {
-          [Permissions.USE]: false,
-          [Permissions.CREATE]: false,
-          [Permissions.READ]: false,
-          [Permissions.UPDATE]: false,
-          [Permissions.OPT_OUT]: false,
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.READ]: true,
+          [Permissions.UPDATE]: true,
+          [Permissions.OPT_OUT]: undefined,
+        },
+        [PermissionTypes.MULTI_CONVO]: {
+          [Permissions.USE]: true,
+        },
+        [PermissionTypes.AGENTS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
+        },
+        [PermissionTypes.RUN_CODE]: {
+          [Permissions.USE]: true,
+        },
+        [PermissionTypes.WEB_SEARCH]: {
+          [Permissions.USE]: true,
         },
         [PermissionTypes.PEOPLE_PICKER]: {
-          [Permissions.VIEW_USERS]: false,
-          [Permissions.VIEW_GROUPS]: false,
-          [Permissions.VIEW_ROLES]: false,
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: true,
+          [Permissions.VIEW_ROLES]: true,
+        },
+        [PermissionTypes.FILE_SEARCH]: {
+          [Permissions.USE]: true,
+        },
+        [PermissionTypes.MCP_SERVERS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
+        },
+        [PermissionTypes.REMOTE_AGENTS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
         },
       });
-      expect(adminCall).toBeUndefined();
-    } finally {
-      if (previousValue === undefined) {
-        delete process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS;
-      } else {
-        process.env.KNAUF_RESTRICT_PROD_USER_PERMISSIONS = previousValue;
-      }
-    }
+    });
   });
   // End [knauf]
 

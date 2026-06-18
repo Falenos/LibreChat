@@ -1,7 +1,8 @@
 const { v4: uuidv4 } = require('uuid');
 const { logger, getTenantId } = require('@librechat/data-schemas');
 const { EModelEndpoint, Constants, openAISettings } = require('librechat-data-provider');
-const { getEndpointsConfig } = require('~/server/services/Config');
+const { getAppConfig, getEndpointsConfig } = require('~/server/services/Config');
+const { normalizeImportedSpecOptions } = require('~/server/knauf/modelSpec');
 const { createImportBatchBuilder } = require('./importBatchBuilder');
 const { cloneMessagesWithTimestamps } = require('./fork');
 
@@ -199,10 +200,28 @@ async function importLibreChatConvo(
   try {
     /** @type {ImportBatchBuilder} */
     const importBatchBuilder = builderFactory(requestUserId);
-    const options = jsonData.options || {};
+    let options = jsonData.options || {};
+    let didNormalizeSpecOptions = false;
+    // [knauf] Rehydrate imported model-spec conversations from the current app config so legacy exports continue on the active Karl deployment.
+    try {
+      const tenantId = getTenantId();
+      const appConfig = await getAppConfig({
+        role: userRole,
+        userId: requestUserId,
+        tenantId,
+      });
+      const normalizedOptions = normalizeImportedSpecOptions(options, appConfig);
+      didNormalizeSpecOptions = normalizedOptions !== options;
+      options = normalizedOptions;
+    } catch (error) {
+      logger.error(`user: ${requestUserId} | Error normalizing LibreChat import options`, error);
+    }
+    // End [knauf]
 
     /* Endpoint configuration */
-    let endpoint = jsonData.endpoint ?? options.endpoint ?? EModelEndpoint.openAI;
+    let endpoint = didNormalizeSpecOptions
+      ? (options.endpoint ?? jsonData.endpoint ?? EModelEndpoint.openAI)
+      : (jsonData.endpoint ?? options.endpoint ?? EModelEndpoint.openAI);
     const endpointsConfig = await getEndpointsConfig({
       user: { id: requestUserId, role: userRole, tenantId: getTenantId() },
     });
@@ -271,7 +290,14 @@ async function importLibreChatConvo(
       firstMessageDate = null;
     }
 
-    importBatchBuilder.finishConversation(jsonData.title, firstMessageDate ?? new Date(), options);
+    // [knauf] Surface uploaded LibreChat/Karl conversations as recent while preserving historical message and creation timestamps.
+    importBatchBuilder.finishConversation(
+      jsonData.title,
+      firstMessageDate ?? new Date(),
+      options,
+      new Date(),
+    );
+    // End [knauf]
     await importBatchBuilder.saveBatch();
     logger.debug(`user: ${requestUserId} | Conversation "${jsonData.title}" imported`);
   } catch (error) {

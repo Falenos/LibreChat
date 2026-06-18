@@ -260,6 +260,34 @@ Three knobs hold this together:
 - **`needsRefresh*` returns `true` for plain Azure URLs in private mode.** This is the "legacy transition" case — pre-fix URLs without `sig` need signing on first list.
 - **The per-user cache short-circuits all of this.** If we refreshed this user's files in the last 2.5 minutes, don't iterate them again.
 
+### 7.1 Message and tool-call snapshots — refresh on read (KK20-182)
+
+The refresh chain above runs against the `files` collection. But three other collections **also snapshot the file record** — including the SAS-signed `filepath` — into `[Mixed]` arrays that are never updated after write:
+
+- `messages.attachments[]` — tool outputs (image generation, code execution, etc.).
+- `messages.files[]` — user-uploaded files referenced in the message.
+- `toolcalls.attachments[]` — code-interpreter / `execute_code` artifacts (`packages/data-schemas/src/schema/toolCall.ts:10,40`), rehydrated by the client through `useToolCallsMap` on conversation open.
+
+Without an extra hop, any image referenced by one of these snapshots 403s the moment its 5-minute SAS expires, even though the canonical `files` document is kept alive by the user-files refresh chain.
+
+The shim:
+
+- Lives at [`api/server/services/Files/Azure/refreshMessageAttachments.js`](../../../api/server/services/Files/Azure/refreshMessageAttachments.js).
+- Walks each input's `attachments[]` and `files[]` fields (duck-typed — works the same on a message row or a toolcall row), calls `needsRefreshAzure` + `getNewAzureURL` per `filepath`, rewrites in place.
+- Pre-checks `attachment.source === 'azure_blob'` OR `isAzureBlobUrl(new URL(filepath))` so local paths (`/uploads/...`), S3 URLs, and third-party avatars in the same `[Mixed]` array short-circuit without log noise.
+- **In-memory only.** No Mongo writes — the resign cost is local crypto, and persisting back would amplify writes for every list view. The blob is durable; only the URL signature expires.
+- Per-call memoization on `filepath` so a response carrying many copies of the same blob only resigns once.
+- Wired into the three read paths that serve these snapshots:
+  - [`api/server/routes/messages.js`](../../../api/server/routes/messages.js) — root list, `GET /:conversationId`, `GET /:conversationId/:messageId`.
+  - [`api/server/routes/share.js`](../../../api/server/routes/share.js) — `getSharedMessages`.
+  - [`api/server/controllers/tools.js`](../../../api/server/controllers/tools.js) — `getToolCalls`.
+
+Why a separate shim instead of folding it into the existing chain:
+
+- The existing chain operates on `MongoFile[]` rows (`source: 'azure_blob'`) and writes back to the `files` collection. The three snapshot sites above are denormalized copies inside other collections and don't carry the same shape consistently.
+- Write-time copy paths — branched messages (`POST /api/messages/branch`), shared conversations (`anonymizeMessages` in `packages/data-schemas/src/methods/share.ts`), `POST /api/convos/fork`, `POST /api/convos/duplicate` — all snapshot the SAS URL at copy time. Refreshing on read keeps every read path correct without having to touch every write site (their immediate response payload still serves a stale URL for one paint cycle, but self-heals on the next read).
+- Long-term, replacing the `[Mixed]` snapshots with `file_id`-only references + joins is the right shape — but that lives entirely in upstream code and is out of scope for the fork.
+
 ---
 
 ## 9. TTL math — why URL TTL ≠ cache TTL
@@ -370,6 +398,7 @@ flowchart TB
 | Upload routing (text-extraction vs blob) | [`api/server/services/Files/process.js`](../../../../api/server/services/Files/process.js) |
 | Azure signing, refresh, extractor, delete | [`api/server/services/Files/Azure/crud.js`](../../../../api/server/services/Files/Azure/crud.js) |
 | Avatar processing (signed URL out) | [`api/server/services/Files/Azure/images.js`](../../../../api/server/services/Files/Azure/images.js) |
+| **Message-attachment refresh shim (KK20-182)** | [`api/server/services/Files/Azure/refreshMessageAttachments.js`](../../../../api/server/services/Files/Azure/refreshMessageAttachments.js) |
 | Container client + startup | [`packages/api/src/cdn/azure.ts`](../../../../packages/api/src/cdn/azure.ts) |
 | `/api/files` list + refresh dispatch | [`api/server/routes/files/files.js`](../../../../api/server/routes/files/files.js) |
 | User-avatar refresh dispatch | [`api/server/controllers/UserController.js`](../../../../api/server/controllers/UserController.js) |

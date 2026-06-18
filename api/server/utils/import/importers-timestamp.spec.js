@@ -10,14 +10,23 @@ jest.mock('~/models', () => ({
 }));
 
 const mockGetEndpointsConfig = jest.fn().mockResolvedValue(null);
+// [knauf] import-time model spec normalization also reads app config
+const mockGetAppConfig = jest.fn().mockResolvedValue({});
+// End [knauf]
 jest.mock('~/server/services/Config', () => ({
   getEndpointsConfig: (...args) => mockGetEndpointsConfig(...args),
+  // [knauf] provide app config for dynamic spec normalization
+  getAppConfig: (...args) => mockGetAppConfig(...args),
+  // End [knauf]
 }));
 
 describe('Import Timestamp Ordering', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetEndpointsConfig.mockResolvedValue(null);
+    // [knauf] reset default app config for import normalization tests
+    mockGetAppConfig.mockResolvedValue({});
+    // End [knauf]
   });
 
   describe('LibreChat Import - Timestamp Issues', () => {

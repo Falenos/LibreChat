@@ -16,17 +16,14 @@ function Footer({ className }: { className?: string }) {
   const privacyPolicy = config?.interface?.privacyPolicy;
   const termsOfService = config?.interface?.termsOfService;
 
-  const privacyPolicyRender = privacyPolicy?.externalUrl != null && (
-    <a className="text-text-secondary underline" href={privacyPolicy.externalUrl} rel="noreferrer">
-      {localize('com_ui_privacy_policy')}
+  // [knauf] Collapse separate Privacy and Terms links into one legal page link.
+  const legalUrl = privacyPolicy?.externalUrl ?? termsOfService?.externalUrl;
+  const legalLinkRender = legalUrl != null && (
+    <a className="text-text-secondary underline" href={legalUrl} rel="noreferrer">
+      {localize('com_knauf_terms_and_privacy')}
     </a>
   );
-
-  const termsOfServiceRender = termsOfService?.externalUrl != null && (
-    <a className="text-text-secondary underline" href={termsOfService.externalUrl} rel="noreferrer">
-      {localize('com_ui_terms_of_service')}
-    </a>
-  );
+  // End [knauf]
 
   const mainContentParts = (
     typeof config?.customFooter === 'string' ? config.customFooter : KNAUF_FOOTER_FALLBACK
@@ -66,9 +63,7 @@ function Footer({ className }: { className?: string }) {
     </React.Fragment>
   ));
 
-  const footerElements = [...mainContentRender, privacyPolicyRender, termsOfServiceRender].filter(
-    Boolean,
-  );
+  const footerElements = [...mainContentRender, legalLinkRender].filter(Boolean);
 
   return (
     <div className="relative w-full">

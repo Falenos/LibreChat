@@ -31,6 +31,10 @@ import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
 import KnaufTopBar from '~/knauf/components/Header/KnaufTopBar';
 const KNAUF_HEADER_HEIGHT = 56; // px — must match KnaufTopBar's `h-14` (56px)
 // End [knauf]
+// [knauf] Migration access gate — blocks users not on the allowlist after Okta login.
+import KnaufAccessDenied from '~/knauf/components/AccessDenied/KnaufAccessDenied';
+import { useMigrationAccess } from '~/knauf/hooks/Auth/useMigrationAccess';
+// End [knauf]
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
@@ -40,6 +44,10 @@ export default function Root() {
 
   const { isAuthenticated, logout } = useAuthContext();
 
+  // [knauf] Block non-allowlisted users immediately after login.
+  const { allowed: migrationAllowed, isLoading: migrationLoading, isError: migrationError, hasData: migrationHasData } = useMigrationAccess();
+  // End [knauf]
+
   useHealthCheck(isAuthenticated);
 
   const assistantsMap = useAssistantsMap({ isAuthenticated });
@@ -47,9 +55,15 @@ export default function Root() {
   const fileMap = useFileMap({ isAuthenticated });
 
   const { data: config } = useGetStartupConfig();
+  // [knauf] Delay OneTrust until the required EULA flow is resolved so the cookie banner
+  // cannot overlap the blocking terms modal for first-time users. (NO-TICKET)
+  const termsAcceptanceRequired = config?.interface?.termsOfService?.modalAcceptance === true;
   const { data: termsData } = useUserTermsQuery({
-    enabled: isAuthenticated && config?.interface?.termsOfService?.modalAcceptance === true,
+    enabled: isAuthenticated && termsAcceptanceRequired,
   });
+  const shouldMountKnaufConsentAnalytics =
+    config != null && (!termsAcceptanceRequired || termsData?.termsAccepted === true);
+  // End [knauf]
 
   useSearchEnabled(isAuthenticated);
 
@@ -72,10 +86,23 @@ export default function Root() {
     return null;
   }
 
+  // [knauf] Show access denied screen if the user is not on the migration allowlist.
+  // While the check is loading we render null (avoids flash of main UI).
+  if (migrationLoading) {
+    return null;
+  }
+  if (migrationError && !migrationHasData) {
+    return <KnaufAccessDenied errorMode />;
+  }
+  if (!migrationAllowed) {
+    return <KnaufAccessDenied />;
+  }
+  // End [knauf]
+
   return (
     <SetConvoProvider>
-      {/* [knauf] OneTrust prompts after login; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
-      <KnaufConsentAnalytics />
+      {/* [knauf] OneTrust prompts after login and any required EULA acceptance; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
+      {shouldMountKnaufConsentAnalytics && <KnaufConsentAnalytics />}
       {/* End [knauf] */}
       {/* [knauf] KK20-173 — full-width top header. Sits above Banner so it
           spans the entire viewport width; the height calc below subtracts

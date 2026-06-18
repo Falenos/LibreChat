@@ -16,3 +16,11 @@ RUN pip install --no-cache-dir "azure-ai-documentintelligence>=1.0.0"
 
 # Overlay the patched loader (vendored upstream file + one additive Azure DI branch).
 COPY document_loader.py /app/app/utils/document_loader.py
+
+# Route Python log records by severity before Datadog sees container stdout/stderr.
+# The upstream RAG API creates logging.StreamHandler() without a stream, which defaults
+# to stderr and causes INFO startup logs to be indexed as Datadog errors when account
+# log pipelines are unavailable. sitecustomize must live in site-packages because Python
+# imports it before adding the script working directory to sys.path.
+COPY sitecustomize.py /tmp/knauf-sitecustomize.py
+RUN cp /tmp/knauf-sitecustomize.py "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/sitecustomize.py"

@@ -5,6 +5,14 @@ const { ContentTypes } = require('librechat-data-provider');
 const { unescapeLaTeX, countTokens } = require('@librechat/api');
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const { requireJwtAuth, validateMessageReq } = require('~/server/middleware');
+// [knauf] KK20-182 — Re-sign Azure SAS URLs embedded in
+// `messages[].attachments[]` / `messages[].files[]` on read. The
+// `/api/files` refresh chain (KK20-167) does not cover message snapshots.
+// See `knauf/docs/reference/azure-blob-storage.md` §7.1.
+const {
+  refreshMessageAttachmentUrls,
+} = require('~/server/services/Files/Azure/refreshMessageAttachments');
+// End [knauf]
 const db = require('~/models');
 
 const router = express.Router();
@@ -85,6 +93,10 @@ router.get('/', async (req, res) => {
     } else {
       response = { messages: [], nextCursor: null };
     }
+
+    // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
+    await refreshMessageAttachmentUrls(response.messages);
+    // End [knauf]
 
     res.status(200).json(response);
   } catch (error) {
@@ -270,6 +282,9 @@ router.get('/:conversationId', validateMessageReq, async (req, res) => {
   try {
     const { conversationId } = req.params;
     const messages = await db.getMessages({ conversationId }, '-_id -__v -user');
+    // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
+    await refreshMessageAttachmentUrls(messages);
+    // End [knauf]
     res.status(200).json(messages);
   } catch (error) {
     logger.error('Error fetching messages:', error);
@@ -308,6 +323,9 @@ router.get('/:conversationId/:messageId', validateMessageReq, async (req, res) =
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
+    // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
+    await refreshMessageAttachmentUrls(message);
+    // End [knauf]
     res.status(200).json(message);
   } catch (error) {
     logger.error('Error fetching message:', error);
