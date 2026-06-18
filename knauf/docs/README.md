@@ -8,6 +8,7 @@ Documentation for the Knauf "Agentic Karl" fork of LibreChat. Docs are organized
 | [contributing/](contributing/) | **How we work on this fork** — change protocol, git/merge workflow, seam testing, upstream sync, fork history |
 | [implementation-plans/](implementation-plans/) | **Work in flight** — time-bound, multi-PR workstreams (see the folder's own [README](implementation-plans/README.md) for the lifecycle) |
 | [proposals/](proposals/) | **Designs being decided** — not yet approved or implemented |
+| [future-work/](future-work/) | **Backlog & roadmaps** — work we've decided we want but haven't scheduled (ready-to-file ticket drafts) |
 
 When a doc graduates: an implementation plan that finishes is deleted, archived, or **promoted to `architecture/`** (keep the architecture model, drop the rollout steps). A proposal that's accepted becomes a plan, then graduates the same way.
 
@@ -54,3 +55,11 @@ Designs under discussion — not approved, not implemented.
 | Doc | What it proposes |
 |---|---|
 | [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md) | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored) |
+
+## Future work
+
+Backlog and roadmaps — decided we want it, not yet scheduled. Ready-to-file ticket drafts.
+
+| Doc | What it covers |
+|---|---|
+| [future-work/file-management-roadmap.md](future-work/file-management-roadmap.md) | File lifecycle & governance follow-ups to KK20-190 — dedup, cascade cleanup on chat delete, 90-day retention sweep, and the security gap matrix (malware scan, MIME-spoof, quota, audit, encryption-at-rest, DLP) |
