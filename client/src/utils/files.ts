@@ -16,6 +16,8 @@ import {
   // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
+  // [knauf] Legacy Office binary detection for actionable rejection messages. KK20-190.
+  knaufLegacyOfficeErrorKey,
 } from 'librechat-data-provider';
 import type { TFile, EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { QueryClient } from '@tanstack/react-query';
@@ -285,7 +287,14 @@ export const validateFiles = ({
     }
 
     if (!checkType(originalFile.type, mimeTypesToCheck)) {
-      setError(`Unsupported file type: ${originalFile.type}`);
+      // [knauf] Turn the bare "unsupported type" into actionable guidance:
+      // legacy Office binaries (.doc/.xls/.ppt) get specific Save-As-to-OOXML
+      // help; anything else gets a friendly message listing supported formats.
+      // Both are i18n keys localized in useFileHandling (localize(key)||key).
+      // KK20-190 (upload-guidance follow-up).
+      const legacyKey = knaufLegacyOfficeErrorKey(originalFile.type, originalFile.name);
+      setError(legacyKey ?? 'com_knauf_error_unsupported_type');
+      // End [knauf]
       return false;
     }
 

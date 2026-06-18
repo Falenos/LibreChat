@@ -816,3 +816,42 @@ export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
   return 'com_knauf_error_file_too_large_document';
 }
 // End [knauf]
+
+// [knauf] Legacy Office binary detection (KK20-190 upload-guidance follow-up).
+// The allow-list rejects pre-OOXML formats (.doc/.xls/.ppt) because rag_api can't
+// embed them. Rather than a bare "unsupported type", return a specific i18n key
+// that tells the user to Save As the modern format. Detected by MIME, with the
+// filename extension as a backstop (some browsers report a generic type for
+// legacy binaries). Shared by client (validateFiles) and server (filterFile).
+const knaufLegacyOfficeByMime: Record<string, string> = {
+  'application/msword': 'com_knauf_error_legacy_doc',
+  'application/vnd.ms-excel': 'com_knauf_error_legacy_xls',
+  'application/vnd.ms-powerpoint': 'com_knauf_error_legacy_ppt',
+};
+const knaufLegacyOfficeByExt: Record<string, string> = {
+  doc: 'com_knauf_error_legacy_doc',
+  xls: 'com_knauf_error_legacy_xls',
+  ppt: 'com_knauf_error_legacy_ppt',
+};
+
+/**
+ * i18n key for a legacy-Office rejection ("Save As .docx/.xlsx/.pptx"), or
+ * `undefined` when the file isn't a recognized legacy binary. Caller uses this to
+ * upgrade a generic "unsupported type" rejection into actionable migration help.
+ * `.docx`/`.xlsx`/`.pptx` end in their own extensions, so the ext backstop never
+ * matches them.
+ */
+export function knaufLegacyOfficeErrorKey(
+  mimetype?: string | null,
+  filename?: string | null,
+): string | undefined {
+  if (mimetype && knaufLegacyOfficeByMime[mimetype]) {
+    return knaufLegacyOfficeByMime[mimetype];
+  }
+  const ext = filename?.split('.').pop()?.toLowerCase();
+  if (ext && knaufLegacyOfficeByExt[ext]) {
+    return knaufLegacyOfficeByExt[ext];
+  }
+  return undefined;
+}
+// End [knauf]

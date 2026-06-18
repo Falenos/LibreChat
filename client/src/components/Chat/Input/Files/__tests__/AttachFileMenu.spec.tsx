@@ -27,6 +27,14 @@ jest.mock('~/components/SharePoint', () => ({
   SharePointPickerDialog: () => null,
 }));
 
+// [knauf] The "Supported file types" dialog has its own seam test; stub it here so
+// this menu test doesn't pull in OGDialog (absent from the @librechat/client mock
+// above). KK20-190 (upload-guidance follow-up).
+jest.mock('~/knauf/components/Chat/KnaufUploadFormatsDialog', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+
 jest.mock('@librechat/client', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const R = require('react');

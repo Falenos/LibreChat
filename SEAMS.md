@@ -167,6 +167,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/__tests__/share.knauf.spec.js` | KK20-182 integration test | 1–4 | Knauf-only supertest that pins SAS rewrite on `GET /api/share/:shareId` for both `attachments[]` and `files[]`, plus 404 path. | Self | KK20-182 |
 | `api/server/controllers/__tests__/tools.knauf.spec.js` | KK20-182 integration test | 1–5 | Knauf-only supertest that pins SAS rewrite on `GET /api/agents/tools/calls` (`getToolCalls`), plus the no-attachments passthrough. | Self | KK20-182 |
 | `api/test/server/services/Files/Azure/refreshMessageAttachments.test.js` | KK20-182 helper unit tests | 1–5 | Knauf-only unit tests for the refresh shim, exercising both message-row and toolcall-row shapes via the duck-typed walker: null/empty inputs, missing fields, fresh / stale URL handling, error fallback, per-call memoization across `attachments` and `files`, single vs array inputs, `bufferSeconds` propagation, non-Azure URL passthrough, local-path short-circuit, `source === azure_blob` opt-in for CNAME endpoints. Lives at the same upstream-class test path as `crud.test.js`. | Self | KK20-182 |
+| `client/src/hooks/Files/useDragHelpers.ts` | `handleDrop` Knauf File Search routing | 114–137, 172–174 | Drag-drop parity with the "Upload files" menu — on the Azure Responses-API chat, route dropped files into File Search (docs embed; images divert to vision via useFileHandling) instead of the capability-picker modal; gated on `capabilities.fileSearchEnabled` (not `fileSearchAllowedByAgent`, same chicken-and-egg as the menu) | Manual | KK20-190 |
+| `client/src/components/Chat/Input/Files/DragDropOverlay.tsx` | supported-formats hint (endpoint-gated) | 2–8, 17–22, 107–116 | Show the Knauf supported-formats hint on the drop target, gated to the allow-list endpoints (azureOpenAI + agents) via the conversation endpoint so non-allow-list endpoints don't show an inaccurate hint | Manual | KK20-190 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -267,6 +269,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/migrationAccess.test.js` | — | — | — | — |
 | `client/src/knauf/components/AccessDenied/KnaufAccessDenied.tsx` | — | — | — | — |
 | `client/src/knauf/hooks/Auth/useMigrationAccess.ts` | — | — | — | — |
+| `knauf/docs/future-work/file-management-roadmap.md` | None (markdown doc; advisory relative links to `librechat.yaml` + `api/`/`packages/` source for reference) | Low — Knauf-only planning/roadmap document; no runtime coupling. Links break loudly on file moves, surfacing in PR review rather than at runtime | Docs only | NO-TICKET |
+| `client/src/knauf/components/Chat/KnaufUploadFormatsDialog.tsx` | `@librechat/client` (`OGDialog*`), `~/hooks` (`useLocalize`) | Low — presentational dialog opened from the AttachFileMenu hint row. Curated content (grouped accepted formats + limits + legacy .doc/.xls/.ppt → OOXML steps) is COUPLED to the Tier-0 allow-list + per-category caps — keep copy in sync. No upstream-contract surface beyond OGDialog/useLocalize | `KnaufUploadFormatsDialog.knauf.spec.tsx` | KK20-190 |
+| `client/src/knauf/components/Chat/KnaufUploadFormatsDialog.knauf.spec.tsx` | Subject under test + mocks for `~/hooks`, `@librechat/client` | Low — test-only; pins the dialog's three format groups, limits line, and three legacy conversion steps | Self | KK20-190 |
 <!-- seams:new:end -->
 
 ## Static Assets

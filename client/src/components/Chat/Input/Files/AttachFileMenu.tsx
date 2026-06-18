@@ -2,6 +2,7 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
+  Info,
   FileSearch,
   ImageUpIcon,
   FileType2Icon,
@@ -41,6 +42,8 @@ import { MenuItemProps } from '~/common';
 import { cn } from '~/utils';
 // [knauf] Emit Adobe data-layer app_interaction events for chat file upload selections.
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// [knauf] "Supported file types" dialog opened from the upload-menu hint row.
+import KnaufUploadFormatsDialog from '~/knauf/components/Chat/KnaufUploadFormatsDialog';
 // End [knauf]
 
 type FileUploadType =
@@ -88,6 +91,8 @@ const AttachFileMenu = ({
     ephemeralAgentByConvoId(conversationId),
   );
   const [toolResource, setToolResource] = useState<EToolResources | undefined>();
+  // [knauf] Controls the "Supported file types" dialog (opened from the menu hint row). KK20-190.
+  const [formatsDialogOpen, setFormatsDialogOpen] = useState(false);
   const { handleFileChange } = useFileHandlingNoChatContext(undefined, {
     files,
     setFiles,
@@ -222,6 +227,37 @@ const AttachFileMenu = ({
           },
           icon: <FileImageIcon className="icon-md" />,
         });
+        // [knauf] On the Knauf File Search chat, add a trailing ⓘ button to the
+        // "Upload files" row that opens KnaufUploadFormatsDialog (accepted formats
+        // + limits + the legacy .doc/.xls/.ppt → OOXML conversion steps). The row's
+        // primary click still uploads; the ⓘ stops propagation, closes the menu, and
+        // opens the dialog. `label`/`icon` stay set so the seam tests (which mock
+        // DropdownPopup and ignore `render`) still resolve the item. Same gate as the
+        // routing above. KK20-190 (upload-guidance follow-up).
+        if (isAzureWithResponsesApi && capabilities.fileSearchEnabled) {
+          const uploadItem = items[items.length - 1];
+          uploadItem.render = (props) => (
+            <div {...props}>
+              <span className="flex items-center gap-2">
+                <FileImageIcon className="icon-md" />
+                {localize('com_ui_upload_files')}
+              </span>
+              <button
+                type="button"
+                aria-label={localize('com_knauf_upload_formats_title')}
+                className="ml-auto rounded p-1 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsPopoverActive(false);
+                  setFormatsDialogOpen(true);
+                }}
+              >
+                <Info className="icon-sm" aria-hidden="true" />
+              </button>
+            </div>
+          );
+        }
+        // End [knauf]
       } else {
         items.push({
           label: localize('com_ui_upload_image_input'),
@@ -324,6 +360,10 @@ const AttachFileMenu = ({
     codeAllowedByAgent,
     fileSearchAllowedByAgent,
     setIsSharePointDialogOpen,
+    // [knauf] trailing ⓘ on the Upload files row opens the formats dialog + closes the menu
+    setFormatsDialogOpen,
+    setIsPopoverActive,
+    // End [knauf]
   ]);
 
   const menuTrigger = (
@@ -409,6 +449,9 @@ const AttachFileMenu = ({
         downloadProgress={downloadProgress}
         maxSelectionCount={endpointFileConfig?.fileLimit}
       />
+      {/* [knauf] Supported-formats + legacy-migration guidance (opened from the menu hint row). */}
+      <KnaufUploadFormatsDialog open={formatsDialogOpen} onOpenChange={setFormatsDialogOpen} />
+      {/* End [knauf] */}
     </>
   );
 };

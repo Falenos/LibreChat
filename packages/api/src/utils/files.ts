@@ -13,6 +13,11 @@ const USER_FACING_UPLOAD_ERRORS = [
   // matches com_knauf_error_file_too_large_{document,data,image}. KK20-190.
   'com_knauf_error_file_encrypted',
   'com_knauf_error_file_too_large',
+  // Legacy-Office (.doc/.xls/.ppt) + friendly unsupported-type rejection keys
+  // thrown by filterFile (upload-guidance follow-up). `_legacy_` is a prefix
+  // matching com_knauf_error_legacy_{doc,xls,ppt}. KK20-190.
+  'com_knauf_error_legacy_',
+  'com_knauf_error_unsupported_type',
   // End [knauf]
 ] as const;
 

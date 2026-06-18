@@ -20,6 +20,7 @@ const {
   // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
+  knaufLegacyOfficeErrorKey,
 } = require('librechat-data-provider');
 const { EnvVar } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
@@ -1039,20 +1040,36 @@ function filterFile({ req, image, isAvatar }) {
     endpointFileConfig.supportedMimeTypes,
   );
 
+  // [knauf] The Knauf upload endpoints (azureOpenAI chat + agents) carry the
+  // restricted allow-list in librechat.yaml (&knauf_allowed_mime). Gate all
+  // Knauf-specific rejection messaging + per-category caps to them, so a future
+  // non-Knauf endpoint or the broad upstream default keeps upstream behavior.
+  // (mergeWithDefault always backfills endpointFileConfig.supportedMimeTypes, so
+  // its presence can't be the opt-in signal — the endpoint id is.) KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+  // End [knauf]
+
   if (!isSupportedMimeType) {
+    // [knauf] Actionable rejection on the Knauf endpoints: legacy Office binaries
+    // (.doc/.xls/.ppt) get specific Save-As-to-OOXML help; anything else gets a
+    // friendly supported-formats message. Forwarded via resolveUploadErrorMessage
+    // + localized client-side. Other endpoints keep the upstream generic error.
+    // KK20-190 (upload-guidance follow-up).
+    if (isKnaufCappedEndpoint) {
+      throw new Error(
+        knaufLegacyOfficeErrorKey(file.mimetype, file.originalname) ??
+          'com_knauf_error_unsupported_type',
+      );
+    }
+    // End [knauf]
     throw new Error('Unsupported file type');
   }
 
   // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) on top of
   // the endpoint fileSizeLimit. Throws the i18n key, surfaced to the client via
-  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Scoped to the
-  // endpoints that carry the Knauf upload allow-list in librechat.yaml
-  // (&knauf_allowed_mime → azureOpenAI + agents) so a future non-Knauf endpoint or the
-  // broad upstream default doesn't silently inherit the caps; mergeWithDefault always
-  // backfills endpointFileConfig.supportedMimeTypes, so its presence can't serve as the
-  // opt-in signal. Skipped for avatars (own size limit). KK20-190.
-  const isKnaufCappedEndpoint =
-    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Skipped for
+  // avatars (own size limit). KK20-190.
   if (isAvatar !== true && isKnaufCappedEndpoint) {
     const knaufCategoryCap = knaufCategorySizeLimit(file.mimetype);
     if (knaufCategoryCap && file.size > knaufCategoryCap) {

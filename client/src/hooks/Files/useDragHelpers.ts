@@ -111,6 +111,31 @@ export default function useDragHelpers() {
       const codeEnabled = capabilities.includes(AgentCapabilities.execute_code) === true;
       const contextEnabled = capabilities.includes(AgentCapabilities.context) === true;
 
+      // [knauf] Drag-drop parity with the "Upload files" menu (AttachFileMenu).
+      // On the Knauf Azure File Search chat, route dropped files straight into
+      // File Search (RAG) — documents embed, and useFileHandling's per-file image
+      // override diverts images to the vision path — instead of popping the
+      // capability-picker modal, which exposes the file_search/code/context
+      // mechanism the menu deliberately hides. We gate on the platform capability
+      // (fileSearchEnabled), NOT fileSearchAllowedByAgent (the same chicken-and-egg
+      // reasoning as the menu: this drop is what enables file_search on the
+      // ephemeral agent). Assistants (handled above), custom agents, and non-Azure
+      // endpoints fall through to the upstream modal. KK20-190 (upload-guidance).
+      const conv = conversationRef.current;
+      const knaufFileSearchChat =
+        conv?.endpoint === EModelEndpoint.azureOpenAI &&
+        conv?.useResponsesApi === true &&
+        fileSearchEnabled;
+      if (knaufFileSearchChat) {
+        setEphemeralAgent((prev) => ({
+          ...prev,
+          [EToolResources.file_search]: true,
+        }));
+        handleFilesRef.current(item.files, EToolResources.file_search);
+        return;
+      }
+      // End [knauf]
+
       let fileSearchAllowedByAgent = true;
       let codeAllowedByAgent = true;
 
@@ -144,7 +169,9 @@ export default function useDragHelpers() {
       setDraggedFiles(item.files);
       setShowModal(true);
     },
-    [isAssistants, queryClient, showToast, localize],
+    // [knauf] setEphemeralAgent added for the File Search drag-drop parity block. KK20-190.
+    [isAssistants, queryClient, showToast, localize, setEphemeralAgent],
+    // End [knauf]
   );
 
   const [{ canDrop, isOver }, drop] = useDrop(

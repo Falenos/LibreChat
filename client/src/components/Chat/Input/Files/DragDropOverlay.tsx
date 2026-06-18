@@ -1,4 +1,11 @@
 import { memo } from 'react';
+// [knauf] Gate the supported-formats hint to the endpoints that carry the Knauf
+// upload allow-list (azureOpenAI chat + agents); other endpoints have no restricted
+// list, so the hint would be inaccurate. KK20-190 (upload-guidance follow-up).
+import { useRecoilValue } from 'recoil';
+import { EModelEndpoint } from 'librechat-data-provider';
+import store from '~/store';
+// End [knauf]
 import { useLocalize } from '~/hooks';
 
 interface DragDropOverlayProps {
@@ -7,6 +14,12 @@ interface DragDropOverlayProps {
 
 const DragDropOverlay = memo(({ isActive }: DragDropOverlayProps) => {
   const localize = useLocalize();
+  // [knauf] Only show the supported-formats hint on the Knauf allow-list surfaces. KK20-190.
+  const conversation = useRecoilValue(store.conversationByIndex(0));
+  const showFormatsHint =
+    conversation?.endpoint === EModelEndpoint.azureOpenAI ||
+    conversation?.endpoint === EModelEndpoint.agents;
+  // End [knauf]
   return (
     <>
       {/** Modal backdrop overlay */}
@@ -91,6 +104,16 @@ const DragDropOverlay = memo(({ isActive }: DragDropOverlayProps) => {
           </svg>
           <h3 className="mt-4 text-lg font-semibold">{localize('com_ui_upload_files')}</h3>
           <h4 className="text-sm text-text-secondary">{localize('com_ui_drag_drop')}</h4>
+          {/* [knauf] Supported-formats hint on the drop target, shown only on the
+              Knauf allow-list surfaces (gated above). The allow-list is shared across
+              azureOpenAI + agents via one YAML anchor, so the copy is accurate for
+              both. KK20-190 (upload-guidance follow-up). */}
+          {showFormatsHint && (
+            <p className="mt-2 max-w-xs text-center text-xs text-text-secondary">
+              {localize('com_knauf_upload_formats_hint')}
+            </p>
+          )}
+          {/* End [knauf] */}
         </div>
       </div>
     </>

@@ -14,6 +14,7 @@ import {
   megabyte,
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
+  knaufLegacyOfficeErrorKey,
 } from './file-config';
 import { EModelEndpoint } from './schemas';
 
@@ -1370,6 +1371,44 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
     expect(knaufCategorySizeLimit('video/mp4')).toBeUndefined();
     expect(knaufCategorySizeLimit('')).toBeUndefined();
     expect(knaufCategorySizeLimit()).toBeUndefined();
+  });
+});
+
+describe('knaufLegacyOfficeErrorKey', () => {
+  it('maps legacy Office MIME types to their conversion-help key', () => {
+    expect(knaufLegacyOfficeErrorKey('application/msword')).toBe('com_knauf_error_legacy_doc');
+    expect(knaufLegacyOfficeErrorKey('application/vnd.ms-excel')).toBe(
+      'com_knauf_error_legacy_xls',
+    );
+    expect(knaufLegacyOfficeErrorKey('application/vnd.ms-powerpoint')).toBe(
+      'com_knauf_error_legacy_ppt',
+    );
+  });
+
+  it('falls back to the filename extension when the MIME is generic', () => {
+    expect(knaufLegacyOfficeErrorKey('application/octet-stream', 'report.doc')).toBe(
+      'com_knauf_error_legacy_doc',
+    );
+    expect(knaufLegacyOfficeErrorKey('', 'budget.v2.xls')).toBe('com_knauf_error_legacy_xls');
+    expect(knaufLegacyOfficeErrorKey(null, 'deck.ppt')).toBe('com_knauf_error_legacy_ppt');
+  });
+
+  it('does NOT match the modern OOXML formats (by mime or extension)', () => {
+    expect(
+      knaufLegacyOfficeErrorKey(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'report.docx',
+      ),
+    ).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('application/octet-stream', 'sheet.xlsx')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey(undefined, 'deck.pptx')).toBeUndefined();
+  });
+
+  it('returns undefined for unrelated / empty input', () => {
+    expect(knaufLegacyOfficeErrorKey('application/pdf', 'a.pdf')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('image/png', 'a.png')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey()).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('', '')).toBeUndefined();
   });
 });
 // End [knauf]
