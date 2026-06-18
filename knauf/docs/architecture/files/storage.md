@@ -1,3 +1,24 @@
+---
+title: Files — Storage Adapter
+spec-id: AGK-ARCH-files-storage
+status: implemented
+owners: ["@jorgecostak"]
+last-reviewed: 2026-06-17
+code-refs:
+  - api/server/services/Files/strategies.js
+  - api/server/services/Files/Azure/crud.js
+  - api/server/services/Files/Azure/images.js
+  - api/server/services/Files/Azure/refreshMessageAttachments.js
+  - packages/api/src/cdn/azure.ts
+tests:
+  - api/test/server/services/Files/Azure/crud.test.js
+  - api/test/server/services/Files/Azure/refreshMessageAttachments.test.js
+acceptance:
+  - "Azure Blob private-container with SAS-signed URLs"
+  - "SAS refresh chain honoring TTL"
+  - "Message-attachment refresh shim (KK20-182)"
+---
+
 # Files — storage (`fileStrategy` & Azure Blob)
 
 How and where the **bytes** are stored and served once an upload lands. Covers the pluggable `fileStrategy` abstraction, the backend adapters, size/MIME enforcement, and the full Azure Blob + SAS-signed-URL machinery that runs in production today.

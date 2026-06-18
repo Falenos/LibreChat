@@ -1,3 +1,18 @@
+---
+title: Files — RAG File Search
+spec-id: AGK-ARCH-files-rag-search
+status: implemented
+owners: ["@jorgecostak"]
+last-reviewed: 2026-06-17
+code-refs:
+  - api/server/services/Files/process.js
+tests: []
+acceptance:
+  - "RAG grounding = top-k retrieval (k=4 augmentation + on-demand file_search tool)"
+  - "RAG_USE_FULL_CONTEXT=false respected"
+  - "entity_id scoping per chat-scope"
+---
+
 # Files — RAG & file search
 
 How file search works: the `rag_api` + pgvector pipeline, the embed/query/delete HTTP contract, `entity_id` scoping (ephemeral vs persistent agent), the `file_search` tool, and citation rendering. This is the machinery behind the two file_search upload paths in [`overview.md`](./overview.md) §2e / §2f.

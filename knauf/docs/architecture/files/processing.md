@@ -1,3 +1,27 @@
+---
+title: Files — Format processing & allow-list
+spec-id: AGK-ARCH-files-processing
+status: implemented
+owners: ["@jorgecostak"]
+last-reviewed: 2026-06-17
+code-refs:
+  - api/server/services/Files/process.js
+  - api/server/routes/files/files.js
+  - client/src/components/Chat/Input/Files/AttachFileMenu.tsx
+  - client/src/hooks/Files/useFileHandling.ts
+  - client/src/utils/files.ts
+  - packages/api/src/files/validation.ts
+  - packages/data-provider/src/file-config.ts
+tests:
+  - packages/api/src/files/validation.spec.ts
+  - packages/data-provider/src/file-config.spec.ts
+acceptance:
+  - "Documents .pdf .doc .docx .pptx .txt .md .json accepted"
+  - "Per-file size: Documents 25 MB; Data 50 MB; Images 20 MB"
+  - "Batch: 5 files/chat message; 50 MB combined"
+  - "Encrypted PDF + OOXML rejected with localized error (en/de)"
+---
+
 # Files — formats & content processing
 
 Which file **formats** each upload mode accepts, where those allow-lists are defined, and **what happens to the bytes** once a file is accepted — image transforms, document parsing, OCR, speech-to-text, RAG embedding, code files.

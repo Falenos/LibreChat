@@ -1,3 +1,22 @@
+---
+title: Files — Overview & upload paths
+spec-id: AGK-ARCH-files-overview
+status: implemented
+owners: ["@jorgecostak"]
+last-reviewed: 2026-06-17
+code-refs:
+  - client/src/components/Chat/Input/Files/AttachFileMenu.tsx
+  - api/server/routes/files/files.js
+tests:
+  - packages/api/src/files/validation.spec.ts
+acceptance:
+  - "Six upload paths covered (chat / agent knowledge / vision / etc.)"
+  - "Visibility matrix per upload mode"
+  - "Lifecycle + delete behaviour documented"
+relations:
+  - links: [AGK-ARCH-files-storage, AGK-ARCH-files-processing, AGK-ARCH-files-rag-search]
+---
+
 # Files — overview & upload taxonomy
 
 The **map** of file handling in KARL: every way a file can enter, what each path does, what the model actually receives, and how long the file survives. Start here, then follow the links into the two domain docs for depth.
