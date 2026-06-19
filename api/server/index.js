@@ -266,10 +266,13 @@ const startServer = async () => {
       process.exit(1);
     }
 
-    // [knauf] Startup is complete once the server is accepting connections. The
-    // unhandledRejection handler below uses this to keep the worker alive only for
-    // request-scoped rejections; a rejection BEFORE this point (DB connect, config
-    // load, route init) is fatal and must crash so the container restarts. KK20-190.
+    // [knauf] serverReady gates the unhandledRejection handler (keep-alive for
+    // request-scoped runtime faults vs fatal during startup). The server is now
+    // accepting connections, but the post-listen startup tasks below (MCPs, OAuth
+    // reconnect, migrations, job manager) still have to complete — they are wrapped
+    // in an explicit fatal try/catch so their failure crashes the worker for a
+    // container restart rather than being swallowed by the handler's runtime branch.
+    // KK20-190.
     serverReady = true;
     // End [knauf]
 
@@ -281,21 +284,37 @@ const startServer = async () => {
       logger.info(`Server listening at http://${host == '0.0.0.0' ? 'localhost' : host}:${port}`);
     }
 
-    await runAsSystem(async () => {
-      await initializeMCPs();
-      await initializeOAuthReconnectManager();
-    });
-    await checkMigrations();
+    // [knauf] Wrap the post-listen startup tasks in a fatal catch. Without it, a
+    // rejection from initializeMCPs / initializeOAuthReconnectManager / checkMigrations
+    // (all awaited here, AFTER serverReady flipped true) would land in the
+    // unhandledRejection RUNTIME branch and keep a half-initialized worker alive.
+    // GenerationJobManager.configure/initialize are synchronous (initialize(): void),
+    // so a throw there is caught here too. Startup must fail fast → exit non-zero so
+    // the orchestrator restarts the container. KK20-190.
+    try {
+      await runAsSystem(async () => {
+        await initializeMCPs();
+        await initializeOAuthReconnectManager();
+      });
+      await checkMigrations();
 
-    // Configure stream services (auto-detects Redis from USE_REDIS env var)
-    const streamServices = createStreamServices();
-    GenerationJobManager.configure(streamServices);
-    GenerationJobManager.initialize();
+      // Configure stream services (auto-detects Redis from USE_REDIS env var)
+      const streamServices = createStreamServices();
+      GenerationJobManager.configure(streamServices);
+      GenerationJobManager.initialize();
 
-    const inspectFlags = process.execArgv.some((arg) => arg.startsWith('--inspect'));
-    if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {
-      memoryDiagnostics.start();
+      const inspectFlags = process.execArgv.some((arg) => arg.startsWith('--inspect'));
+      if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {
+        memoryDiagnostics.start();
+      }
+    } catch (startupError) {
+      logger.error(
+        '[startup] Post-listen initialization failed; exiting so the container restarts.',
+        { name: startupError?.name, message: startupError?.message, stack: startupError?.stack },
+      );
+      process.exit(1);
     }
+    // End [knauf]
   });
 };
 
