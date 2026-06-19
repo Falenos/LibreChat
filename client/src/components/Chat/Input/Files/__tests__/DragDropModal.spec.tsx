@@ -1,8 +1,55 @@
 import {
   EModelEndpoint,
+  EToolResources,
   isDocumentSupportedProvider,
   inferMimeType,
 } from 'librechat-data-provider';
+
+// [knauf] Seam-test harness for the single-option auto-select (KK20-190). Renders
+// DragDropModal with its hook dependencies mocked; librechat-data-provider stays
+// REAL (the provider-detection suite below relies on it). The matching `describe`
+// is at the bottom of this file. KK20-190.
+import { render, screen } from '@testing-library/react';
+import DragDropModal from '../DragDropModal';
+
+let mockCapabilities = { fileSearchEnabled: true, codeEnabled: false, contextEnabled: false };
+let mockToolPerms: {
+  fileSearchAllowedByAgent: boolean;
+  codeAllowedByAgent: boolean;
+  provider: string;
+} = {
+  fileSearchAllowedByAgent: true,
+  codeAllowedByAgent: false,
+  provider: EModelEndpoint.openAI,
+};
+
+jest.mock('~/hooks', () => ({
+  useLocalize: () => (key: string) => key,
+  useGetAgentsConfig: () => ({ agentsConfig: { capabilities: [] } }),
+  useAgentCapabilities: () => mockCapabilities,
+  useAgentToolPermissions: () => mockToolPerms,
+}));
+jest.mock('~/Providers', () => ({
+  useDragDropContext: () => ({
+    conversationId: 'c1',
+    agentId: 'agent_1',
+    endpoint: 'agents',
+    endpointType: 'openAI',
+    useResponsesApi: false,
+  }),
+}));
+jest.mock('~/store', () => ({ ephemeralAgentByConvoId: (id: string) => id }));
+jest.mock('recoil', () => ({ useRecoilValue: () => ({}) }));
+jest.mock('@librechat/client', () => {
+  const ReactLib = jest.requireActual('react');
+  return {
+    OGDialog: ({ open, children }: { open?: boolean; children?: unknown }) =>
+      open ? ReactLib.createElement('div', null, children) : null,
+    OGDialogTemplate: ({ title, main }: { title?: unknown; main?: unknown }) =>
+      ReactLib.createElement('div', null, ReactLib.createElement('div', null, title), main),
+  };
+});
+// End [knauf]
 
 describe('DragDropModal - Provider Detection', () => {
   describe('endpointType priority over currentProvider', () => {
@@ -181,3 +228,58 @@ describe('DragDropModal - Provider Detection', () => {
     });
   });
 });
+
+// [knauf] Seam test — single-option auto-select (KK20-190). When the drag-drop
+// picker would show exactly one applicable option, DragDropModal auto-selects it and
+// renders no dialog (matching the "Upload files" menu / default chat — no second
+// popup). The picker still renders for a genuine multi-way choice. KK20-190.
+describe('DragDropModal — single-option auto-select (Knauf KK20-190)', () => {
+  const makeFile = (name: string, type: string) => new File([new ArrayBuffer(8)], name, { type });
+
+  beforeEach(() => {
+    mockCapabilities = { fileSearchEnabled: true, codeEnabled: false, contextEnabled: false };
+    mockToolPerms = {
+      fileSearchAllowedByAgent: true,
+      codeAllowedByAgent: false,
+      provider: EModelEndpoint.openAI,
+    };
+  });
+
+  it('auto-selects File Search and renders no dialog when it is the only option', () => {
+    const onOptionSelect = jest.fn();
+    // A .docx is not a valid provider file (not image/pdf), so the provider option is
+    // filtered out — File Search is the lone option.
+    render(
+      <DragDropModal
+        files={[
+          makeFile(
+            'report.docx',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          ),
+        ]}
+        isVisible={true}
+        setShowModal={jest.fn()}
+        onOptionSelect={onOptionSelect}
+      />,
+    );
+    expect(onOptionSelect).toHaveBeenCalledTimes(1);
+    expect(onOptionSelect).toHaveBeenCalledWith(EToolResources.file_search);
+    expect(screen.queryByText('com_ui_upload_type')).not.toBeInTheDocument();
+  });
+
+  it('renders the picker (no auto-select) when more than one option applies', () => {
+    const onOptionSelect = jest.fn();
+    // A PDF IS a valid provider file, so "Upload to provider" + File Search = two options.
+    render(
+      <DragDropModal
+        files={[makeFile('report.pdf', 'application/pdf')]}
+        isVisible={true}
+        setShowModal={jest.fn()}
+        onOptionSelect={onOptionSelect}
+      />,
+    );
+    expect(onOptionSelect).not.toHaveBeenCalled();
+    expect(screen.getByText('com_ui_upload_type')).toBeInTheDocument();
+  });
+});
+// End [knauf]

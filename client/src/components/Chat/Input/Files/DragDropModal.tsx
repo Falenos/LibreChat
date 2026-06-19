@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useRecoilValue } from 'recoil';
 import { OGDialog, OGDialogTemplate } from '@librechat/client';
 import {
@@ -149,9 +149,38 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     fileSearchAllowedByAgent,
   ]);
 
-  if (!isVisible) {
+  // [knauf] A drag-drop upload picker with a single applicable option is a
+  // redundant click — e.g. on an agent chat where only File Search applies (the
+  // "Upload to provider" / image option is hidden for non-provider documents, and
+  // there's no code/context capability). Auto-select the lone option so the drop
+  // routes straight through, matching the "Upload files" menu and the default
+  // azureOpenAI chat (no second popup). This is equivalent to the user clicking the
+  // single button — same handler (onOptionSelect), same tool_resource — so it adds
+  // no new routing behavior, it just removes the click. The picker still appears for
+  // a genuine choice (File Search + Code, or a PDF that also allows provider-upload).
+  // KK20-190.
+  const visibleOptions = useMemo(
+    () => options.filter((option) => option.condition !== false),
+    [options],
+  );
+  const autoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (!isVisible) {
+      autoSelectedRef.current = false;
+      return;
+    }
+    if (visibleOptions.length === 1 && !autoSelectedRef.current) {
+      autoSelectedRef.current = true;
+      onOptionSelect(visibleOptions[0].value);
+    }
+  }, [isVisible, visibleOptions, onOptionSelect]);
+
+  // Skip the render for the single-option case (auto-selected above) so the dialog
+  // never flashes; otherwise keep the upstream not-visible guard. KK20-190.
+  if (!isVisible || visibleOptions.length === 1) {
     return null;
   }
+  // End [knauf]
 
   return (
     <OGDialog open={isVisible} onOpenChange={setShowModal}>
