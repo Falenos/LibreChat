@@ -16,6 +16,7 @@ RUN uv --version
 # Set configurable max-old-space-size with default
 # [knauf] The default is set to 8GB to accommodate larger builds and runtime needs, especially for the React client build.
 ARG NODE_MAX_OLD_SPACE_SIZE=8192
+# End [knauf]
 
 RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
@@ -28,6 +29,9 @@ COPY --chown=node:node client/package.json ./client/package.json
 COPY --chown=node:node packages/data-provider/package.json ./packages/data-provider/package.json
 COPY --chown=node:node packages/data-schemas/package.json ./packages/data-schemas/package.json
 COPY --chown=node:node packages/api/package.json ./packages/api/package.json
+# [knauf] include knauf workspace so npm ci resolves its dependencies (e.g. @datadog/browser-*)
+COPY --chown=node:node packages/knauf/package.json ./packages/knauf/package.json
+# End [knauf]
 # [knauf] embed librechat.yaml at build time — Knauf config, not shipped by upstream
 COPY --chown=node:node librechat.yaml ./librechat.yaml
 # End [knauf]
@@ -46,7 +50,9 @@ COPY --chown=node:node . .
 
 RUN \
     # React client build with configurable memory
-    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend; \
+    # [knauf] use && so Docker build fails fast if frontend build fails
+    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend && \
+    # End [knauf]
     npm prune --production; \
     npm cache clean --force
 
