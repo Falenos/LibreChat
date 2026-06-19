@@ -775,6 +775,13 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 // NOTE: this block exceeds the Tier-4c 30-line guideline; extract to
 // packages/knauf/ once ADR-017 lands. Until then it stays here as an additive
 // export with near-zero merge surface (appended at end of file). KK20-190.
+//
+// LOCKSTEP: these numbers are also stated in plain text in the locale strings
+// (`com_knauf_error_file_too_large_{document,data,image}` and the `com_knauf_
+// upload_formats_*` copy) in client/src/locales/{en,de}/translation.json — the
+// errors are thrown server-side as bare i18n keys, so the MB value can't be
+// interpolated from here. If you change a cap, update those strings too. (The
+// dialog's per-category badge does derive its number from this map.)
 export const knaufCategorySizeLimits = {
   document: mbToBytes(25),
   data: mbToBytes(50),
@@ -784,37 +791,60 @@ export const knaufCategorySizeLimits = {
 /** CSV arrives as text/csv or application/csv; classified as "data", not document. */
 const knaufCsvMimeTypes = /^(text\/csv|application\/csv)$/;
 
+type KnaufSizeCategory = keyof typeof knaufCategorySizeLimits;
+
+/** Per-category "file too large" i18n key per category (localized client-side). */
+const knaufCategorySizeErrorKeys: Record<KnaufSizeCategory, string> = {
+  document: 'com_knauf_error_file_too_large_document',
+  data: 'com_knauf_error_file_too_large_data',
+  image: 'com_knauf_error_file_too_large_image',
+};
+
 /**
- * Per-category upload size cap (bytes) for a MIME type, or `undefined` when the
- * type isn't in a capped category (caller then falls back to endpoint fileSizeLimit).
- * Order matters: image → data (xlsx/csv) → document (other text/application).
+ * Single source of the MIME → category cascade, so the size cap and the error key
+ * can't drift. Order matters: image → data (xlsx/csv) → document (other
+ * text/application). Returns `undefined` for types outside a capped category.
  */
-export function knaufCategorySizeLimit(mimetype?: string | null): number | undefined {
+function classifyKnaufCategory(mimetype?: string | null): KnaufSizeCategory | undefined {
   if (!mimetype) {
     return undefined;
   }
   if (imageMimeTypes.test(mimetype)) {
-    return knaufCategorySizeLimits.image;
+    return 'image';
   }
   if (excelMimeTypes.test(mimetype) || knaufCsvMimeTypes.test(mimetype)) {
-    return knaufCategorySizeLimits.data;
+    return 'data';
   }
   if (textMimeTypes.test(mimetype) || applicationMimeTypes.test(mimetype)) {
-    return knaufCategorySizeLimits.document;
+    return 'document';
   }
   return undefined;
 }
 
-/** i18n key for the per-category "file too large" rejection (localized client-side). */
-export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
-  if (mimetype && imageMimeTypes.test(mimetype)) {
-    return 'com_knauf_error_file_too_large_image';
-  }
-  if (mimetype && (excelMimeTypes.test(mimetype) || knaufCsvMimeTypes.test(mimetype))) {
-    return 'com_knauf_error_file_too_large_data';
-  }
-  return 'com_knauf_error_file_too_large_document';
+/**
+ * Per-category upload size cap (bytes) for a MIME type, or `undefined` when the
+ * type isn't in a capped category (caller then falls back to endpoint fileSizeLimit).
+ */
+export function knaufCategorySizeLimit(mimetype?: string | null): number | undefined {
+  const category = classifyKnaufCategory(mimetype);
+  return category ? knaufCategorySizeLimits[category] : undefined;
 }
+
+/** i18n key for the per-category "file too large" rejection (localized client-side).
+ * Only meaningful when `knaufCategorySizeLimit` returned a cap; out-of-scope types
+ * fall back to the document key (matching the prior behavior). */
+export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
+  return knaufCategorySizeErrorKeys[classifyKnaufCategory(mimetype) ?? 'document'];
+}
+
+/**
+ * Single source for the chat file-picker `accept` attribute (extensions + image
+ * MIME types). Mirrors the server-side allow-list (`supportedMimeTypes:
+ * &knauf_allowed_mime` in librechat.yaml); keep the two in sync. Imported by
+ * AttachFileMenu and pinned by its spec so a change here surfaces in review.
+ */
+export const knaufChatUploadAccept =
+  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
 // End [knauf]
 
 // [knauf] Legacy Office binary detection (KK20-190 upload-guidance follow-up).

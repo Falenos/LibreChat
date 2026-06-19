@@ -737,3 +737,95 @@ describe('File Routes - Agent Files Endpoint', () => {
     });
   });
 });
+
+// [knauf] KK20-190 — the POST /files encryption call-site. filterFile (mocked
+// here) passes, then the route inspects the bytes via detectEncryptedFileAtPath
+// and rejects an encrypted PDF/OOXML with the localized i18n key. This pins the
+// route WIRING (not just the lib fn): an encrypted file is rejected, and an
+// unreadable path is tolerated (fail-open) rather than 500-ing the upload.
+describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const router = require('./files');
+
+  const tmpFiles = [];
+  const writeTmp = (buf, name) => {
+    const file = path.join(os.tmpdir(), `knauf-files-enc-${uuidv4()}-${name}`);
+    fs.writeFileSync(file, buf);
+    tmpFiles.push(file);
+    return file;
+  };
+
+  afterAll(() => {
+    for (const file of tmpFiles) {
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  });
+
+  // Mounts the real files router with a mock-multer that points req.file at the
+  // given on-disk path (so the real encryption check reads actual bytes).
+  const buildApp = (file) => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, res, next) => {
+      req.file = {
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        path: file.path,
+      };
+      req.file_id = uuidv4();
+      next();
+    });
+    app.use((req, res, next) => {
+      req.user = { id: new mongoose.Types.ObjectId().toString(), role: SystemRoles.USER };
+      req.app = { locals: {} };
+      req.config = { fileStrategy: 'local' };
+      next();
+    });
+    app.use('/files', router);
+    return app;
+  };
+
+  it('rejects an encrypted PDF (message attachment) with the localized key', async () => {
+    const encPdf = Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF', 'binary');
+    const filePath = writeTmp(encPdf, 'enc.pdf');
+    const app = buildApp({
+      originalname: 'enc.pdf',
+      mimetype: 'application/pdf',
+      size: encPdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    expect(response.body.message).toBe('com_knauf_error_file_encrypted');
+    expect(processAgentFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('does not reject a plain PDF on the encryption check (proceeds past it)', async () => {
+    const plainPdf = Buffer.from('%PDF-1.4\nplain content, no encrypt dict\n%%EOF', 'binary');
+    const filePath = writeTmp(plainPdf, 'plain.pdf');
+    const app = buildApp({
+      originalname: 'plain.pdf',
+      mimetype: 'application/pdf',
+      size: plainPdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    // Not rejected for encryption — the encrypted-file key is never returned.
+    expect(response.body.message).not.toBe('com_knauf_error_file_encrypted');
+  });
+});
+// End [knauf]

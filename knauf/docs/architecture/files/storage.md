@@ -58,8 +58,8 @@ Upload dispatch (`processFileUpload` / `processAgentFileUpload` in [process.js](
 
 Client-side `validateFiles()` ([client/src/utils/files.ts](../../../../client/src/utils/files.ts)) runs before upload against the merged `fileConfig.endpoints.<name>` config: disabled → empty → file-count → MIME inference/fix → MIME allowlist → per-file size → total size → duplicate. The server re-enforces the size cap in [process.js#L1028](../../../../api/server/services/Files/process.js#L1028).
 
-- Server-wide ceiling: `serverFileSizeLimit` (default 512 MB) in [file-config.ts](../../../../packages/data-provider/src/file-config.ts).
-- Knauf tightens the per-endpoint cap to **25 MB** for `azureOpenAI` + `agents` ([librechat.yaml#L115-L122](../../../../librechat.yaml#L115)) to control Azure Blob spend and avoid oversized PDFs blowing the model context.
+- Server-wide ceiling: `serverFileSizeLimit` (default 512 MB) in [file-config.ts](../../../../packages/data-provider/src/file-config.ts); Knauf pins it to **50 MB** in [librechat.yaml](../../../../librechat.yaml) so multer aborts oversized streams before they land on disk.
+- Knauf sets per-endpoint caps of **50 MB** per file for `azureOpenAI` + `agents` (`totalSizeLimit` 50 MB chat / 100 MB agent) in [librechat.yaml](../../../../librechat.yaml), and enforces **tighter per-category caps on top** — documents 25 MB / data 50 MB / images 20 MB (`knaufCategorySizeLimit`, client `validateFiles` + server `filterFile`) — to control Azure Blob spend and avoid oversized PDFs blowing the model context. See [processing.md](./processing.md) §5 for the per-category breakdown.
 - For `tool_resource: context`, the allowlist merges the `text` / `ocr` / `stt` supported-type sets; MIME routing into OCR vs text-parse vs STT is configured via `fileConfig.ocr|text|stt.supportedMimeTypes`.
 
 **No `cloudfront.*` block.** Despite signed-CloudFront delivery often being mentioned as a `fileStrategy` option, the Zod schema in [config.ts](../../../../packages/data-provider/src/config.ts) does not expose `cloudfront` / `urlExpiry` / `cookieExpiry`. Signed-CDN delivery would be a code change, not config.

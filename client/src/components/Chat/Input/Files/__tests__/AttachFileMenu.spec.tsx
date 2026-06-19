@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { RecoilRoot } from 'recoil';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { EModelEndpoint, Providers } from 'librechat-data-provider';
+import { EModelEndpoint, Providers, knaufChatUploadAccept } from 'librechat-data-provider';
 import AttachFileMenu from '../AttachFileMenu';
 
 jest.mock('~/hooks', () => ({
@@ -29,10 +29,11 @@ jest.mock('~/components/SharePoint', () => ({
 
 // [knauf] The "Supported file types" dialog has its own seam test; stub it here so
 // this menu test doesn't pull in OGDialog (absent from the @librechat/client mock
-// above). KK20-190 (upload-guidance follow-up).
+// above). A jest.fn so this spec can assert the dialog's `open` prop flips to true
+// when the standalone formats menu item is clicked. KK20-190 (upload-guidance).
 jest.mock('~/knauf/components/Chat/KnaufUploadFormatsDialog', () => ({
   __esModule: true,
-  default: () => null,
+  default: jest.fn(() => null),
 }));
 
 jest.mock('@librechat/client', () => {
@@ -112,6 +113,8 @@ function setupMocks(overrides: { provider?: string } = {}) {
     com_ui_upload_code_files: 'Upload Code Files',
     com_sidepanel_attach_files: 'Attach Files',
     com_files_upload_sharepoint: 'Upload from SharePoint',
+    // [knauf] Label of the standalone "View supported formats" menu item. KK20-190.
+    com_knauf_upload_formats_title: 'Supported file types',
   };
   mockUseLocalize.mockReturnValue((key: string) => translations[key] || key);
   mockUseAgentCapabilities.mockReturnValue({
@@ -365,9 +368,9 @@ describe('AttachFileMenu', () => {
   // string, which mirrors fileConfig.supportedMimeTypes in librechat.yaml — if
   // the YAML allow-list changes, this assertion fails so the two stay in sync.
   describe('Knauf File Search routing', () => {
-    // Mirrors the &knauf_allowed_mime allow-list in librechat.yaml.
-    const KNAUF_ALLOWED_ACCEPT =
-      '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+    // Single source: the picker accept string is the exported knaufChatUploadAccept
+    // (which mirrors the &knauf_allowed_mime allow-list in librechat.yaml).
+    const KNAUF_ALLOWED_ACCEPT = knaufChatUploadAccept;
 
     function clickUploadFilesCapturingAccept(): string | undefined {
       let capturedAccept: string | undefined;
@@ -405,6 +408,40 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
       expect(clickUploadFilesCapturingAccept()).not.toBe(KNAUF_ALLOWED_ACCEPT);
+    });
+
+    // The supported-formats help is a standalone role=menuitem (not a button
+    // nested inside the upload row) so it's keyboard/SR-reachable. These pin that
+    // it exists only under the File Search gate and opens the dialog on click.
+    it('opens the supported-formats dialog from its own menu item when File Search is enabled', () => {
+      const formatsDialog = jest.requireMock(
+        '~/knauf/components/Chat/KnaufUploadFormatsDialog',
+      ).default;
+      formatsDialog.mockClear();
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: true,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      openMenu();
+      // Dialog starts closed, then the menu item click flips `open` to true.
+      expect(formatsDialog.mock.calls.at(-1)[0].open).toBe(false);
+      fireEvent.click(screen.getByText('Supported file types'));
+      expect(formatsDialog.mock.calls.at(-1)[0].open).toBe(true);
+    });
+
+    it('does not render the supported-formats menu item when File Search is disabled', () => {
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: false,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      openMenu();
+      expect(screen.queryByText('Supported file types')).toBeNull();
     });
   });
   // End [knauf]

@@ -1,4 +1,4 @@
-import { megabyte, fileConfig as defaultFileConfig } from 'librechat-data-provider';
+import { megabyte, EModelEndpoint, fileConfig as defaultFileConfig } from 'librechat-data-provider';
 import type { EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { validateFiles } from '../files';
@@ -118,10 +118,19 @@ describe('validateFiles', () => {
   // [knauf] Per-category size caps (KK20-190): documents 25 / data 50 / images 20 MB,
   // enforced on top of the endpoint fileSizeLimit via knaufCategorySizeLimit. The
   // endpoint fileSizeLimit is set to 50 MB here so the per-category cap is what fires.
+  // The caps + Knauf messaging are scoped to the allow-list endpoints (azureOpenAI /
+  // agents) — mirroring filterFile server-side — so these pass `endpoint`.
   it('rejects a document over the 25 MB per-category cap with the localized key', () => {
     endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
     const fileList = [makeFile('big.pdf', 'application/pdf', 30 * megabyte)];
-    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
     expect(result).toBe(false);
     expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_document');
   });
@@ -129,7 +138,14 @@ describe('validateFiles', () => {
   it('rejects an image over the 20 MB per-category cap with the localized key', () => {
     endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
     const fileList = [makeFile('big.png', 'image/png', 26 * megabyte)];
-    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.agents,
+    });
     expect(result).toBe(false);
     expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_image');
   });
@@ -137,7 +153,65 @@ describe('validateFiles', () => {
   it('allows a document exactly at the 25 MB per-category cap (strict > boundary)', () => {
     endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
     const fileList = [makeFile('exact.pdf', 'application/pdf', 25 * megabyte)];
-    const result = validateFiles({ files, fileList, setError, endpointFileConfig, fileConfig });
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  // The Knauf allow-list (librechat.yaml &knauf_allowed_mime) excludes legacy
+  // binaries, so these two cases use a restrictive supportedMimeTypes that mirrors
+  // production — the broad upstream default would accept .doc and the message would
+  // never fire (the exact gap this messaging exists to cover).
+  const knaufAllowList = [/^application\/pdf$/, /^image\/(png|jpeg|webp)$/];
+
+  it('returns the legacy-Office key for a .doc on a Knauf endpoint', () => {
+    endpointFileConfig = makeEndpointConfig({ supportedMimeTypes: knaufAllowList });
+    const fileList = [makeFile('report.doc', 'application/msword', 1024)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_legacy_doc');
+  });
+
+  it('returns the friendly unsupported-type key for an unknown type on a Knauf endpoint', () => {
+    endpointFileConfig = makeEndpointConfig({ supportedMimeTypes: knaufAllowList });
+    const fileList = [makeFile('data.xyz', 'application/x-unknown', 1024)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_unsupported_type');
+  });
+
+  it('does NOT apply the per-category cap on a non-Knauf endpoint (keeps upstream behavior)', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.pdf', 'application/pdf', 30 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.bedrock,
+    });
     expect(result).toBe(true);
     expect(setError).not.toHaveBeenCalled();
   });

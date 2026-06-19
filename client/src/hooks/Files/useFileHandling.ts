@@ -291,6 +291,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         fileConfig,
         endpointFileConfig,
         toolResource: _toolResource,
+        // [knauf] Gate the Knauf per-category caps + legacy/unsupported messaging
+        // to the allow-list endpoints (azureOpenAI/agents), matching filterFile
+        // server-side. KK20-190.
+        endpoint,
       });
     } catch (error) {
       console.error('file validation error', error);

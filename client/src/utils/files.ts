@@ -12,6 +12,7 @@ import {
   inferMimeType,
   excelMimeTypes,
   EToolResources,
+  EModelEndpoint,
   fileConfig as defaultFileConfig,
   // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
   knaufCategorySizeLimit,
@@ -232,6 +233,7 @@ export const validateFiles = ({
   endpointFileConfig,
   toolResource,
   fileConfig,
+  endpoint,
 }: {
   fileList: File[];
   files: Map<string, ExtendedFile>;
@@ -239,9 +241,25 @@ export const validateFiles = ({
   endpointFileConfig: EndpointFileConfig;
   toolResource?: string;
   fileConfig: FileConfig | null;
+  // [knauf] Conversation endpoint id — gates the Knauf-specific rejection
+  // messaging + per-category caps to the endpoints carrying the allow-list
+  // (azureOpenAI chat + agents), mirroring filterFile's isKnaufCappedEndpoint
+  // server-side. Other endpoints keep upstream validation. KK20-190.
+  endpoint?: string;
 }) => {
   const { fileLimit, fileSizeLimit, totalSizeLimit, supportedMimeTypes, disabled } =
     endpointFileConfig;
+  // [knauf] Only the Knauf upload endpoints carry the restricted allow-list and
+  // per-category caps; scope the Knauf branches below to them so non-Knauf
+  // endpoints keep upstream behavior (matches process.js filterFile). The explicit
+  // `endpoint != null` guard avoids a footgun: without it, an absent endpoint would
+  // satisfy `undefined === EModelEndpoint.azureOpenAI` if that enum ever resolved to
+  // `undefined` (circular import / partial build), wrongly flagging every upload as
+  // Knauf-capped. KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint != null &&
+    (endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents);
+  // End [knauf]
   /** Block all uploads if the endpoint is explicitly disabled */
   if (disabled === true) {
     setError('com_ui_attach_error_disabled');
@@ -287,14 +305,18 @@ export const validateFiles = ({
     }
 
     if (!checkType(originalFile.type, mimeTypesToCheck)) {
-      // [knauf] Turn the bare "unsupported type" into actionable guidance:
-      // legacy Office binaries (.doc/.xls/.ppt) get specific Save-As-to-OOXML
-      // help; anything else gets a friendly message listing supported formats.
-      // Both are i18n keys localized in useFileHandling (localize(key)||key).
+      // [knauf] On the Knauf allow-list endpoints, turn the bare "unsupported
+      // type" into actionable guidance: legacy Office binaries (.doc/.xls/.ppt)
+      // get specific Save-As-to-OOXML help; anything else gets a friendly message
+      // listing supported formats. Both are i18n keys localized in useFileHandling
+      // (localize(key)||key). Other endpoints keep the upstream generic message.
       // KK20-190 (upload-guidance follow-up).
-      const legacyKey = knaufLegacyOfficeErrorKey(originalFile.type, originalFile.name);
-      setError(legacyKey ?? 'com_knauf_error_unsupported_type');
+      const unsupportedError = isKnaufCappedEndpoint
+        ? (knaufLegacyOfficeErrorKey(originalFile.type, originalFile.name) ??
+          'com_knauf_error_unsupported_type')
+        : `Unsupported file type: ${originalFile.type}`;
       // End [knauf]
+      setError(unsupportedError);
       return false;
     }
 
@@ -304,9 +326,16 @@ export const validateFiles = ({
     }
 
     // [knauf] Per-category size cap on top of the endpoint fileSizeLimit:
-    // documents 25 MB / data (xlsx,csv) 50 MB / images 20 MB. The error is a
-    // localized i18n key (rendered via localize(key) in useFileHandling). KK20-190.
-    const knaufCategoryCap = knaufCategorySizeLimit(originalFile.type);
+    // documents 25 MB / data (xlsx,csv) 50 MB / images 20 MB. Scoped to the Knauf
+    // allow-list endpoints so non-Knauf endpoints keep upstream behavior (matches
+    // filterFile server-side). The error is a localized i18n key (rendered via
+    // localize(key) in useFileHandling). NB: the cap uses strict `>` (a file
+    // exactly at the cap is allowed — server filterFile + the spec boundary test
+    // match), whereas the endpoint fileSizeLimit above uses `>=` (exactly at the
+    // limit is rejected). The asymmetry is intentional; don't "align" them. KK20-190.
+    const knaufCategoryCap = isKnaufCappedEndpoint
+      ? knaufCategorySizeLimit(originalFile.type)
+      : undefined;
     if (knaufCategoryCap && originalFile.size > knaufCategoryCap) {
       setError(knaufCategorySizeErrorKey(originalFile.type));
       return false;

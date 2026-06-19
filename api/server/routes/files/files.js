@@ -410,12 +410,20 @@ router.post('/', async (req, res) => {
     // forwards to the client (USER_FACING_UPLOAD_ERRORS) for localization.
     // KARL's active Azure path never hits upstream's Anthropic-only PDF check.
     if (req.file?.path) {
-      const { encrypted, error: encryptionError } = await detectEncryptedFileAtPath(
-        req.file.path,
-        req.file.mimetype,
-      );
-      if (encrypted) {
-        throw new Error(encryptionError);
+      let encryptionCheck = { encrypted: false };
+      try {
+        encryptionCheck = await detectEncryptedFileAtPath(req.file.path, req.file.mimetype);
+      } catch (encryptionReadError) {
+        // Best-effort guard: if the bytes can't be read (e.g. transient fs error),
+        // don't hard-fail the upload — log and let downstream processing handle it.
+        // The intentional encrypted-file rejection is thrown OUTSIDE this catch so
+        // it still propagates to the route handler. KK20-190.
+        logger.warn(
+          `[/files] encrypted-file check skipped (file unreadable): ${encryptionReadError.message}`,
+        );
+      }
+      if (encryptionCheck.encrypted) {
+        throw new Error(encryptionCheck.error);
       }
     }
     // End [knauf]

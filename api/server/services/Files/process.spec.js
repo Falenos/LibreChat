@@ -403,4 +403,56 @@ describe('filterFile per-category size caps', () => {
     expect(() => filterFile({ req, isAvatar: true })).not.toThrow();
   });
 });
+
+// [knauf] filterFile actionable rejection for off-allow-list types (KK20-190). When
+// the endpoint's restricted allow-list rejects the mime, the Knauf endpoints throw
+// an actionable i18n key (legacy-Office Save-As help, or a friendly unsupported-type
+// message); other endpoints keep the upstream generic 'Unsupported file type'.
+describe('filterFile legacy-Office / unsupported-type rejection', () => {
+  const VALID_UUID = '123e4567-e89b-12d3-a456-426614174000';
+  const MB = 1024 * 1024;
+
+  // Restrictive allow-list (only PDF) so off-list types hit the !isSupportedMimeType
+  // branch — mirrors the production librechat.yaml &knauf_allowed_mime behavior.
+  const makeRestrictiveConfig = () => ({
+    checkType: (mime, types) => (types || []).some((re) => re.test(mime)),
+    endpoints: {
+      default: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/^application\/pdf$/] },
+      azureOpenAI: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/^application\/pdf$/] },
+      agents: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/^application\/pdf$/] },
+      bedrock: { fileSizeLimit: 200 * MB, supportedMimeTypes: [/^application\/pdf$/] },
+    },
+  });
+
+  const makeReq = ({ endpoint = 'azureOpenAI', mimetype, originalname }) => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/upload.bin', originalname, filename: originalname, mimetype, size: 1024 },
+    body: { endpoint, file_id: VALID_UUID },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mergeFileConfig.mockReturnValue(makeRestrictiveConfig());
+  });
+
+  test('throws the legacy-Office key for a legacy .xls on azureOpenAI', () => {
+    const req = makeReq({ endpoint: 'azureOpenAI', mimetype: XLS_MIME, originalname: 'sheet.xls' });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_legacy_xls');
+  });
+
+  test('throws the friendly unsupported-type key for an unknown type on agents', () => {
+    const req = makeReq({
+      endpoint: 'agents',
+      mimetype: 'application/x-unknown',
+      originalname: 'data.xyz',
+    });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_unsupported_type');
+  });
+
+  test('keeps the upstream generic message on a non-Knauf endpoint', () => {
+    const req = makeReq({ endpoint: 'bedrock', mimetype: XLS_MIME, originalname: 'sheet.xls' });
+    expect(() => filterFile({ req })).toThrow('Unsupported file type');
+  });
+});
 // End [knauf]

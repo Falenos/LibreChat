@@ -869,9 +869,22 @@ describe('detectEncryptedFile', () => {
     expect(detectEncryptedFile(buf, XLSX).encrypted).toBe(false);
   });
 
-  it('ignores types outside the PDF/OOXML scope (e.g. png)', () => {
+  // [knauf] MIME-spoof regression (KK20-190): CFBF magic is flagged regardless of
+  // the declared (attacker-controlled) mimetype, so an encrypted OOXML can't slip
+  // past by claiming an allow-listed non-OOXML type.
+  it('flags an encrypted OOXML spoofed as application/pdf (declared mime ignored)', () => {
     const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
-    // Even with CFBF bytes, a non-OOXML mime is out of scope → not flagged.
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(true);
+  });
+
+  it('flags an encrypted OOXML spoofed as application/zip (declared mime ignored)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, 'application/zip').encrypted).toBe(true);
+  });
+
+  it('does not flag a genuine (non-CFBF) image regardless of mime', () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const buf = Buffer.concat([png, Buffer.alloc(64)]);
     expect(detectEncryptedFile(buf, 'image/png').encrypted).toBe(false);
   });
 
@@ -935,8 +948,21 @@ describe('detectEncryptedFileAtPath', () => {
     expect((await detectEncryptedFileAtPath(file, XLSX)).encrypted).toBe(false);
   });
 
-  it('does not flag a non-PDF/OOXML type even with CFBF bytes', async () => {
+  // [knauf] MIME-spoof regression (KK20-190): same byte-sniffed verdict as the
+  // buffer variant — CFBF magic is flagged whatever the declared mimetype claims.
+  it('flags an encrypted OOXML spoofed as application/pdf', async () => {
     const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(true);
+  });
+
+  it('flags an encrypted OOXML spoofed as application/zip', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'application/zip')).encrypted).toBe(true);
+  });
+
+  it('does not flag a genuine (non-CFBF) image regardless of mime', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const file = await writeTmp(Buffer.concat([png, Buffer.alloc(64)]));
     expect((await detectEncryptedFileAtPath(file, 'image/png')).encrypted).toBe(false);
   });
 

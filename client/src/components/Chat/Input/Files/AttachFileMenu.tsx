@@ -24,6 +24,8 @@ import {
   defaultAgentCapabilities,
   bedrockDocumentExtensions,
   isDocumentSupportedProvider,
+  // [knauf] Single source for the chat allow-list picker `accept` (mirrors librechat.yaml). KK20-190.
+  knaufChatUploadAccept,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
@@ -144,12 +146,11 @@ const AttachFileMenu = ({
       } else if (fileType === 'image_document_video_audio') {
         inputRef.current.accept = 'image/*,.heif,.heic,.pdf,application/pdf,video/*,audio/*';
       } else if (fileType === 'knauf_allowed') {
-        // [knauf] Restrict the chat file picker to the Knauf allow-list
-        // (mirrors fileConfig.supportedMimeTypes in librechat.yaml). Documents
-        // route to File Search (RAG); images route to the vision path
-        // (per-file split in useFileHandling). KK20-190.
-        inputRef.current.accept =
-          '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+        // [knauf] Restrict the chat file picker to the Knauf allow-list (single
+        // source: knaufChatUploadAccept, mirrors fileConfig.supportedMimeTypes in
+        // librechat.yaml). Documents route to File Search (RAG); images route to
+        // the vision path (per-file split in useFileHandling). KK20-190.
+        inputRef.current.accept = knaufChatUploadAccept;
       } else {
         inputRef.current.accept = '';
       }
@@ -227,35 +228,22 @@ const AttachFileMenu = ({
           },
           icon: <FileImageIcon className="icon-md" />,
         });
-        // [knauf] On the Knauf File Search chat, add a trailing ⓘ button to the
-        // "Upload files" row that opens KnaufUploadFormatsDialog (accepted formats
-        // + limits + the legacy .doc/.xls/.ppt → OOXML conversion steps). The row's
-        // primary click still uploads; the ⓘ stops propagation, closes the menu, and
-        // opens the dialog. `label`/`icon` stay set so the seam tests (which mock
-        // DropdownPopup and ignore `render`) still resolve the item. Same gate as the
-        // routing above. KK20-190 (upload-guidance follow-up).
+        // [knauf] On the Knauf File Search chat, add a separate "View supported
+        // formats" menu item that opens KnaufUploadFormatsDialog (accepted formats
+        // + limits + the legacy .doc/.xls/.ppt → OOXML conversion steps). It is a
+        // standalone role=menuitem row — NOT a <button> nested inside the upload
+        // item's render — so it's reachable by keyboard and screen readers (arrow
+        // keys move between menu items, never into a nested control). Same gate as
+        // the routing above. KK20-190 (upload-guidance follow-up).
         if (isAzureWithResponsesApi && capabilities.fileSearchEnabled) {
-          const uploadItem = items[items.length - 1];
-          uploadItem.render = (props) => (
-            <div {...props}>
-              <span className="flex items-center gap-2">
-                <FileImageIcon className="icon-md" />
-                {localize('com_ui_upload_files')}
-              </span>
-              <button
-                type="button"
-                aria-label={localize('com_knauf_upload_formats_title')}
-                className="ml-auto rounded p-1 text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsPopoverActive(false);
-                  setFormatsDialogOpen(true);
-                }}
-              >
-                <Info className="icon-sm" aria-hidden="true" />
-              </button>
-            </div>
-          );
+          items.push({
+            label: localize('com_knauf_upload_formats_title'),
+            onClick: () => {
+              setIsPopoverActive(false);
+              setFormatsDialogOpen(true);
+            },
+            icon: <Info className="icon-md" />,
+          });
         }
         // End [knauf]
       } else {

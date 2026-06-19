@@ -266,6 +266,13 @@ const startServer = async () => {
       process.exit(1);
     }
 
+    // [knauf] Startup is complete once the server is accepting connections. The
+    // unhandledRejection handler below uses this to keep the worker alive only for
+    // request-scoped rejections; a rejection BEFORE this point (DB connect, config
+    // load, route init) is fatal and must crash so the container restarts. KK20-190.
+    serverReady = true;
+    // End [knauf]
+
     if (host === '0.0.0.0') {
       logger.info(
         `Server listening on all interfaces at port ${port}. Use http://localhost:${port} to access it`,
@@ -292,6 +299,9 @@ const startServer = async () => {
   });
 };
 
+// [knauf] Declared before startServer() — flipped true in the app.listen callback
+// inside it; gates the unhandledRejection handler's keep-alive vs crash decision. KK20-190.
+let serverReady = false;
 startServer();
 
 let messageCount = 0;
@@ -356,18 +366,40 @@ process.on('uncaughtException', (err) => {
 // un-awaited Azure SDK / fetch call on the file path — can terminate the
 // worker, printing only to stderr and never through winston. That produced
 // the "socket hang up" on in-flight /api/files requests with an empty error
-// log. Log the rejection through winston (so it lands in api/logs/error-*.log)
-// and keep the process alive instead of crashing.
+// log. Log the rejection through winston (so it lands in api/logs/error-*.log),
+// and — once the server is ready — keep the worker alive instead of crashing.
 //
-// Intentionally UNCONDITIONAL, unlike the CONTINUE_ON_UNCAUGHT_EXCEPTION-gated
-// uncaughtException handler above: an unhandled rejection is a request-scoped
-// async fault, far less likely to indicate corrupted global state than a sync
-// uncaught exception, and the goal here is to eliminate the silent worker crash.
-// The rejection is still surfaced via winston (not swallowed silently). KK20-190.
+// Keep-alive is request-scoped only: once the server is listening (serverReady),
+// an unhandled rejection is far more likely a per-request async fault than
+// corrupted global state, so we log via winston and continue — eliminating the
+// silent worker crash. BEFORE the server is ready, a rejection means startup
+// itself failed (DB connect, config load, route init); swallowing that would
+// leave a half-initialized worker "running" but broken and hide a CrashLoopBackOff,
+// so it stays fatal and the process exits non-zero for the orchestrator to restart.
+//
+// NOTE: the runtime keep-alive is a deliberate availability trade-off, NOT a
+// substitute for handling the rejection. The durable fix is to await/`.catch()`
+// the originating un-awaited Azure/RAG file-path call at its source; this global
+// handler is a safety net. Runtime rejections carry a distinct `[runtime]` marker
+// so they can be alerted on (a spike means a missing `.catch()` somewhere). KK20-190.
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
+  if (!serverReady) {
+    logger.error(
+      '[unhandledRejection][startup] Promise rejection before the server was ready; exiting so the container restarts.',
+      { name: err?.name, message: err?.message, stack: err?.stack },
+    );
+    // process.exit() can truncate winston's async transports, losing the line
+    // above. Flush the logger, then exit non-zero; the timeout backstops the exit
+    // in case the 'finish' event never fires.
+    const exitFatal = () => process.exit(1);
+    logger.on('finish', exitFatal);
+    logger.end();
+    setTimeout(exitFatal, 1000);
+    return;
+  }
   logger.error(
-    '[unhandledRejection] A promise rejection was not handled; the app will continue running.',
+    '[unhandledRejection][runtime] A promise rejection was not handled; the worker will continue running.',
     { name: err?.name, message: err?.message, stack: err?.stack },
   );
 });

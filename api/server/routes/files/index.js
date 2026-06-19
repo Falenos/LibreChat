@@ -8,7 +8,10 @@ const {
 } = require('~/server/middleware');
 const { avatar: asstAvatarRouter } = require('~/server/routes/assistants/v1');
 const { avatar: agentAvatarRouter } = require('~/server/routes/agents/v1');
-const { createMulterInstance } = require('./multer');
+// [knauf] knaufUploadRejectionHandler forwards allow-list fileFilter rejections
+// (which fire during streaming, before the files.js route catch) as localizable
+// 415 JSON instead of a generic 500. KK20-190.
+const { createMulterInstance, knaufUploadRejectionHandler } = require('./multer');
 
 const files = require('./files');
 const images = require('./images');
@@ -43,7 +46,11 @@ const initialize = async () => {
     next();
   });
 
-  router.post('/', upload.single('file'));
+  // [knauf] Trailing error handler catches the allow-list fileFilter rejection for
+  // the chat upload route and returns a localizable 415; on success the request
+  // falls through to `router.use('/', files)` as before. KK20-190.
+  router.post('/', upload.single('file'), knaufUploadRejectionHandler);
+  // End [knauf]
   router.post('/images', upload.single('file'));
   router.post('/images/avatar', upload.single('file'));
   router.post('/images/agents/:agent_id/avatar', upload.single('file'));

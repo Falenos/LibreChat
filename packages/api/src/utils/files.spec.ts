@@ -122,6 +122,22 @@ describe('resolveUploadErrorMessage', () => {
       expect(resolveUploadErrorMessage({ message: key })).toBe(key);
     }
   });
+
+  test('forwards each legacy-Office i18n key via the `com_knauf_error_legacy_` prefix', () => {
+    for (const key of [
+      'com_knauf_error_legacy_doc',
+      'com_knauf_error_legacy_xls',
+      'com_knauf_error_legacy_ppt',
+    ]) {
+      expect(resolveUploadErrorMessage({ message: key })).toBe(key);
+    }
+  });
+
+  test('forwards the friendly unsupported-type i18n key verbatim', () => {
+    expect(resolveUploadErrorMessage({ message: 'com_knauf_error_unsupported_type' })).toBe(
+      'com_knauf_error_unsupported_type',
+    );
+  });
   // End [knauf]
 });
 

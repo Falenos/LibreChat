@@ -120,7 +120,11 @@ export default function useDragHelpers() {
       // (fileSearchEnabled), NOT fileSearchAllowedByAgent (the same chicken-and-egg
       // reasoning as the menu: this drop is what enables file_search on the
       // ephemeral agent). Assistants (handled above), custom agents, and non-Azure
-      // endpoints fall through to the upstream modal. KK20-190 (upload-guidance).
+      // endpoints fall through to the upstream modal. NB: parity here covers the
+      // default ephemeral azureOpenAI chat only — a custom Azure-Responses *agent*
+      // runs under endpoint `agents` (not `azureOpenAI`), so on drop it intentionally
+      // keeps the upstream modal even though the menu would route it to File Search.
+      // KK20-190 (upload-guidance).
       const conv = conversationRef.current;
       const knaufFileSearchChat =
         conv?.endpoint === EModelEndpoint.azureOpenAI &&
