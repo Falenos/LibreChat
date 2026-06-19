@@ -16,7 +16,7 @@ tests:
   - packages/api/src/files/validation.spec.ts
   - packages/data-provider/src/file-config.spec.ts
 acceptance:
-  - "Documents .pdf .doc .docx .pptx .txt .md .json accepted"
+  - "Documents .pdf .docx .pptx .txt .md .json accepted"
   - "Per-file size: Documents 25 MB; Data 50 MB; Images 20 MB"
   - "Batch: 5 files/chat message; 50 MB combined"
   - "Encrypted PDF + OOXML rejected with localized error (en/de)"

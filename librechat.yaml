@@ -361,9 +361,16 @@ interface:
   # Built-in USER is forced back to the restricted baseline by
   # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
   # Custom roles remain Admin UI controlled.
-  webSearch: true
-  runCode: true
-  fileSearch: true
+  #
+  # [knauf] Hide the BYOK web-search / code / file-search badges in the composer.
+  # Those capabilities are surfaced another way — web search via the model spec
+  # (addParams web_search:true on the Azure group, KK20-175), file upload via the
+  # chat "Upload files" routing (gated on endpoints.agents.capabilities, KK20-190).
+  # The badges would be redundant/confusing, so they stay off. Re-disabled after
+  # the v0.73.0 main-merge reset them to upstream defaults (true).
+  webSearch: false
+  runCode: false
+  fileSearch: false
   agents:
     use: true
     create: true
