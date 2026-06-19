@@ -142,7 +142,13 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
 
   const dropdownItems: MenuItemProps[] = [];
 
-  if (fileSearchEnabled && canUseFileSearch) {
+  // [knauf] Don't surface the file-search tool in the composer tools menu. The
+  // chip itself is hidden (FileSearch.tsx) and document uploads go through the
+  // "Upload files" menu (KK20-190), so a file-search toggle here would be a
+  // confusing no-op. Hidden in the UI (not via the FILE_SEARCH permission) so
+  // librechat.yaml stays = main. `as boolean` keeps the body reachable. KK20-190.
+  const KNAUF_HIDE_FILE_SEARCH_TOOL = true as boolean;
+  if (!KNAUF_HIDE_FILE_SEARCH_TOOL && fileSearchEnabled && canUseFileSearch) {
     dropdownItems.push({
       onClick: handleFileSearchToggle,
       hideOnClick: false,
@@ -173,6 +179,7 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
       ),
     });
   }
+  // End [knauf]
 
   if (canUseWebSearch && webSearchEnabled) {
     dropdownItems.push({
