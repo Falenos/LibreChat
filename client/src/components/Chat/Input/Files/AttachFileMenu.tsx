@@ -218,6 +218,19 @@ const AttachFileMenu = ({
             // be a chicken-and-egg that falls back to the provider path and the
             // picker would only offer images + PDF. `capabilities.fileSearchEnabled`
             // (from endpoints.agents.capabilities) is the correct platform gate.
+            //
+            // NORMAL CHAT vs AGENT CHAT — `isAzureWithResponsesApi` follows the
+            // conversation/agent provider, so this ephemeral routing fires for the
+            // default Karl chat (endpoint `azureOpenAI` + Responses API) and, of
+            // custom agents, ONLY one explicitly built as Azure + Responses. The
+            // drag-drop handler (useDragHelpers.handleDrop) instead gates on
+            // `conv.endpoint === azureOpenAI`, which a custom agent (endpoint
+            // `agents`) never satisfies — so on an agent chat a DROP shows the
+            // capability-picker modal while this MENU may still route to ephemeral
+            // File Search. That asymmetry is intentional: custom agents are meant to
+            // get file search from their OWN pre-configured `file_search` tool, not
+            // the ephemeral mechanism, so the modal is the correct path for them. On
+            // the default chat the two are symmetric (both route here). KK20-190.
             const useKnaufFileSearch = isAzureWithResponsesApi && capabilities.fileSearchEnabled;
             if (useKnaufFileSearch) {
               setToolResource(EToolResources.file_search);

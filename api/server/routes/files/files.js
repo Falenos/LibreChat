@@ -409,6 +409,14 @@ router.post('/', async (req, res) => {
     // key `com_knauf_error_file_encrypted`, which resolveUploadErrorMessage
     // forwards to the client (USER_FACING_UPLOAD_ERRORS) for localization.
     // KARL's active Azure path never hits upstream's Anthropic-only PDF check.
+    //
+    // INTENTIONALLY NOT gated to the Knauf endpoints (unlike the allow-list +
+    // per-category caps, which key off isKnaufCappedEndpoint in filterFile): an
+    // encrypted/password-protected PDF or OOXML is unprocessable on EVERY endpoint
+    // (rag_api can't embed it, Azure DI / OpenAI can't parse it), so rejecting it
+    // up front with an actionable message beats a downstream parse failure
+    // everywhere. The check is byte-sniffed and self-limiting (returns early for
+    // non-PDF/OOXML), so it's effectively a no-op for other formats. KK20-190.
     if (req.file?.path) {
       let encryptionCheck = { encrypted: false };
       try {

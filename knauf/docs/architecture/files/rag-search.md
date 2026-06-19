@@ -157,6 +157,26 @@ Beyond the on-demand tool, an attached embedded file **also** gets context injec
 
 > **Asymmetry:** custom **agents** (endpoint `agents`) skip `createContextHandlers` entirely — they're **tool-only** (no auto-injection). The chat path augments context (top-k) *and* exposes the `file_search` tool (k=5). We keep `RAG_USE_FULL_CONTEXT=false` so chat uploads don't dump the whole document into the prompt.
 
+### Upload routing — how a file reaches File Search (normal chat vs agent chat)
+
+A file enters the chat-scoped File Search corpus through one of two UI affordances, and they
+deliberately behave differently per chat type:
+
+| Chat type | `conversation.endpoint` | "Upload files" menu | Drag-drop |
+|---|---|---|---|
+| **Normal Karl chat** (default spec) | `azureOpenAI` + Responses API | routes to ephemeral File Search | routes to ephemeral File Search (**symmetric**) |
+| **Custom agent chat** | `agents` | routes to ephemeral File Search **only** if the agent is itself Azure + Responses | shows the capability-picker **modal** |
+
+The menu gates on the agent/conversation **provider** (`isAzureWithResponsesApi`,
+[AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)); the
+drag-drop handler gates on `conversation.endpoint === azureOpenAI`
+([useDragHelpers.ts](../../../../client/src/hooks/Files/useDragHelpers.ts)), which a custom agent
+(endpoint `agents`) never satisfies. The asymmetry is **intentional**: a custom agent is expected to
+get file search from its **own pre-configured `file_search` tool**, not the ephemeral mechanism, so
+the modal (which lets the user pick the agent's tool) is the correct path there. On the default chat
+the two affordances are symmetric. Images always divert to the vision path regardless of route (the
+server rejects images for the `file_search` resource — split per-file in `useFileHandling`).
+
 ---
 
 ## 6. Delete — `DELETE /documents`
