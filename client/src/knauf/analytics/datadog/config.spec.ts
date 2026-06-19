@@ -28,6 +28,11 @@ describe('config', () => {
       expect(config.env).toBe('prod');
     });
 
+    it('uses sessionSampleRate from config when provided', () => {
+      const config = getRumConfig({ ...baseConfig, sessionSampleRate: 25 });
+      expect(config.sessionSampleRate).toBe(25);
+    });
+
     it('applies Knauf defaults', () => {
       const config = getRumConfig(baseConfig);
 

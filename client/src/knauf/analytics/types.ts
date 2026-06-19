@@ -17,6 +17,7 @@ export type DatadogConfig = {
   rumEnabled: boolean;
   browserLogsEnabled: boolean;
   rumApplicationId?: string;
+  sessionSampleRate?: number;
 };
 
 export type KnaufStartupConfig = TStartupConfig & {

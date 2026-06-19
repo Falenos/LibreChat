@@ -59,6 +59,14 @@ function getKnaufDatadogConfig() {
       return undefined;
     }
     config.rumApplicationId = applicationId;
+
+    const sampleRateRaw = process.env.DATADOG_RUM_SESSION_SAMPLE_RATE?.trim();
+    if (sampleRateRaw != null && sampleRateRaw !== '') {
+      const parsed = Number(sampleRateRaw);
+      if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 100) {
+        config.sessionSampleRate = parsed;
+      }
+    }
   }
 
   return config;

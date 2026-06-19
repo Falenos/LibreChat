@@ -16,6 +16,7 @@ const DATADOG_ENV_KEYS = [
   'DATADOG_SERVICE',
   'DATADOG_ENV',
   'DATADOG_RUM_APPLICATION_ID',
+  'DATADOG_RUM_SESSION_SAMPLE_RATE',
 ];
 
 afterEach(() => {
@@ -131,6 +132,38 @@ describe('getKnaufDatadogConfig', () => {
     expect(getKnaufDatadogConfig()).toEqual(
       expect.objectContaining({ env: 'unknown' }),
     );
+  });
+
+  it('passes sessionSampleRate when DATADOG_RUM_SESSION_SAMPLE_RATE is set', () => {
+    process.env.DATADOG_RUM_ENABLED = 'true';
+    process.env.DATADOG_CLIENT_TOKEN = 'pub-test-token';
+    process.env.DATADOG_SITE = 'datadoghq.eu';
+    process.env.DATADOG_RUM_APPLICATION_ID = 'test-app-id';
+    process.env.DATADOG_RUM_SESSION_SAMPLE_RATE = '25';
+
+    const config = getKnaufDatadogConfig();
+    expect(config.sessionSampleRate).toBe(25);
+  });
+
+  it('omits sessionSampleRate when env var is not set', () => {
+    process.env.DATADOG_RUM_ENABLED = 'true';
+    process.env.DATADOG_CLIENT_TOKEN = 'pub-test-token';
+    process.env.DATADOG_SITE = 'datadoghq.eu';
+    process.env.DATADOG_RUM_APPLICATION_ID = 'test-app-id';
+
+    const config = getKnaufDatadogConfig();
+    expect(config.sessionSampleRate).toBeUndefined();
+  });
+
+  it('ignores invalid sessionSampleRate values', () => {
+    process.env.DATADOG_RUM_ENABLED = 'true';
+    process.env.DATADOG_CLIENT_TOKEN = 'pub-test-token';
+    process.env.DATADOG_SITE = 'datadoghq.eu';
+    process.env.DATADOG_RUM_APPLICATION_ID = 'test-app-id';
+    process.env.DATADOG_RUM_SESSION_SAMPLE_RATE = 'abc';
+
+    const config = getKnaufDatadogConfig();
+    expect(config.sessionSampleRate).toBeUndefined();
   });
 
   it('treats case-insensitive toggle values', () => {

@@ -22,7 +22,7 @@ export function getRumConfig(config: DatadogConfig): RumInitConfiguration {
     env: config.env,
 
     // Knauf defaults (matching @knauf-group/datadog)
-    sessionSampleRate: 100,
+    sessionSampleRate: config.sessionSampleRate ?? 100,
     sessionReplaySampleRate: 0,
     trackUserInteractions: true,
     trackResources: true,
