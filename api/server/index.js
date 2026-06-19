@@ -266,16 +266,6 @@ const startServer = async () => {
       process.exit(1);
     }
 
-    // [knauf] serverReady gates the unhandledRejection handler (keep-alive for
-    // request-scoped runtime faults vs fatal during startup). The server is now
-    // accepting connections, but the post-listen startup tasks below (MCPs, OAuth
-    // reconnect, migrations, job manager) still have to complete — they are wrapped
-    // in an explicit fatal try/catch so their failure crashes the worker for a
-    // container restart rather than being swallowed by the handler's runtime branch.
-    // KK20-190.
-    serverReady = true;
-    // End [knauf]
-
     if (host === '0.0.0.0') {
       logger.info(
         `Server listening on all interfaces at port ${port}. Use http://localhost:${port} to access it`,
@@ -284,13 +274,16 @@ const startServer = async () => {
       logger.info(`Server listening at http://${host == '0.0.0.0' ? 'localhost' : host}:${port}`);
     }
 
-    // [knauf] Wrap the post-listen startup tasks in a fatal catch. Without it, a
-    // rejection from initializeMCPs / initializeOAuthReconnectManager / checkMigrations
-    // (all awaited here, AFTER serverReady flipped true) would land in the
-    // unhandledRejection RUNTIME branch and keep a half-initialized worker alive.
+    // [knauf] Run the post-listen startup tasks (MCPs, OAuth reconnect, migrations,
+    // job manager) inside a fatal try/catch, and flip `serverReady` true ONLY AFTER
+    // they all succeed. `serverReady` gates the unhandledRejection handler: while it
+    // is false a stray rejection is treated as a fatal startup failure (the worker
+    // exits so the container restarts); once true, request-scoped runtime rejections
+    // keep the worker alive. So a failure in these awaited startup tasks crashes the
+    // worker rather than landing in the keep-alive runtime branch (addresses the
+    // review: both "move serverReady after the tasks" AND "wrap in a fatal catch").
     // GenerationJobManager.configure/initialize are synchronous (initialize(): void),
-    // so a throw there is caught here too. Startup must fail fast → exit non-zero so
-    // the orchestrator restarts the container. KK20-190.
+    // so a throw there is caught here too. KK20-190.
     try {
       await runAsSystem(async () => {
         await initializeMCPs();
@@ -307,6 +300,10 @@ const startServer = async () => {
       if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {
         memoryDiagnostics.start();
       }
+
+      // Startup fully complete — only now treat a stray rejection as a request-scoped
+      // runtime fault (worker kept alive) rather than a fatal startup failure.
+      serverReady = true;
     } catch (startupError) {
       logger.error(
         '[startup] Post-listen initialization failed; exiting so the container restarts.',
