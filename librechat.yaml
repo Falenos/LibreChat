@@ -405,21 +405,43 @@ fileConfig:
   endpoints:
     gptPlugins:
       fileLimit: 5
-    # 25 MB per-file cap on chat composer uploads (default Karl spec + any
-    # Azure-backed conversation). Upstream default is 512 MB — tightened
-    # here to control Azure Blob spend and avoid oversized PDFs blowing
-    # the model context. totalSizeLimit matches fileSizeLimit so multiple
-    # files in one send can't sidestep the per-file cap. Values are MB;
-    # the loader (packages/data-provider/src/file-config.ts) converts to
-    # bytes at load time.
-    azureOpenAI:
-      fileSizeLimit: 25
-      totalSizeLimit: 25
-    # Mirror the cap on the agents endpoint so custom-agent chats are
-    # subject to the same policy as the default-spec chat.
-    agents:
-      fileSizeLimit: 25
-      totalSizeLimit: 25
+    # [knauf] Restricted upload allow-list (KK20-190). Only these formats are
+    # accepted; everything else (video, audio, archives, SVG, code/text types,
+    # etc.) is rejected client-side (client/src/utils/files.ts) and server-side
+    # (api/server/services/Files/process.js). `supportedMimeTypes` entries are
+    # strings compiled to RegExp by the loader
+    # (packages/data-provider/src/file-config.ts). The same allow-list is shared
+    # by chat (azureOpenAI) and agent file_search (agents) via the YAML anchor;
+    # only the size/count limits differ. Caveats: `.jpg`/`.jpeg` are both
+    # image/jpeg; `.csv` arrives as text/csv OR application/csv (both listed).
+    # Legacy binary `.doc` is intentionally NOT accepted — rag_api can't embed it
+    # (no loader) and Azure DI only ingests OOXML; users save as `.docx`. KK20-190.
+    #
+    # Limits are MB (loader converts to bytes). `fileSizeLimit` here is the
+    # per-endpoint backstop set to the LARGEST per-category cap (50 MB); the
+    # tighter PER-CATEGORY caps — documents 25 / data 50 / images 20 MB — are
+    # enforced on top of it by `knaufCategorySizeLimit` in
+    # packages/data-provider/src/file-config.ts (client validateFiles + server
+    # filterFile). `totalSizeLimit` caps a single multi-file send (50 MB chat /
+    # 100 MB agent); `fileLimit` caps the file count per send (5 chat / 20 agent).
+    azureOpenAI:                        # chat composer (default Karl spec)
+      supportedMimeTypes: &knauf_allowed_mime
+        - "^application/pdf$"                                                                  # .pdf
+        - "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$"    # .docx
+        - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$"  # .pptx
+        - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"          # .xlsx
+        - "^application/(csv|json)$"                                                           # .csv / .json
+        - "^text/(plain|markdown|csv)$"                                                        # .txt / .md / .csv
+        - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
+      fileLimit: 5
+      fileSizeLimit: 50
+      totalSizeLimit: 50
+    agents:                             # agent + chat-time File Search
+      supportedMimeTypes: *knauf_allowed_mime
+      fileLimit: 20
+      fileSizeLimit: 50
+      totalSizeLimit: 100
+    # End [knauf]
 
 endpoints:
 
