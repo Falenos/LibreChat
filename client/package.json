@@ -29,6 +29,8 @@
   },
   "homepage": "https://librechat.ai",
   "dependencies": {
+    "@datadog/browser-logs": "^7.3.0",
+    "@datadog/browser-rum": "^7.3.0",
     "@ariakit/react": "^0.4.15",
     "@ariakit/react-core": "^0.4.17",
     "@codesandbox/sandpack-react": "^2.19.10",
