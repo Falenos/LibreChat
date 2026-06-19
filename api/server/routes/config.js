@@ -8,9 +8,6 @@ const { getAppConfig } = require('~/server/services/Config/app');
 // [knauf] Load consent-gated OneTrust and Adobe Analytics config from a Knauf-only helper. (NO-TICKET)
 const { getKnaufAnalyticsConfig } = require('~/server/routes/knauf/analyticsConfig');
 // End [knauf]
-// [knauf] KK20-186 — Load Datadog Browser RUM + Logs config from deployment ConfigMap env vars.
-const { getKnaufDatadogConfig } = require('~/server/routes/knauf/datadogConfig');
-// End [knauf]
 
 const router = express.Router();
 const emailLoginEnabled =
@@ -47,9 +44,6 @@ function buildSharedPayload() {
   const ldap = getLdapConfig();
   // [knauf] Resolve Knauf analytics once per config response so legacy GTM can be suppressed. (NO-TICKET)
   const knaufAnalyticsConfig = getKnaufAnalyticsConfig();
-  // End [knauf]
-  // [knauf] KK20-186 — Resolve Datadog Browser RUM + Logs config from env vars.
-  const knaufDatadogConfig = getKnaufDatadogConfig();
   // End [knauf]
 
   /** @type {Partial<TStartupConfig>} */
@@ -117,12 +111,9 @@ function buildSharedPayload() {
       : 'Agentic Karl | Knauf AI Platform';
   // End [knauf]
 
-  // [knauf] Expose post-login OneTrust/Adobe Analytics + Datadog config under a namespaced key. (NO-TICKET, KK20-186)
-  if (knaufAnalyticsConfig || knaufDatadogConfig) {
-    payload.knauf = {
-      ...(knaufAnalyticsConfig && { analytics: knaufAnalyticsConfig }),
-      ...(knaufDatadogConfig && { datadog: knaufDatadogConfig }),
-    };
+  // [knauf] Expose post-login OneTrust/Adobe Analytics config under a namespaced key. (NO-TICKET)
+  if (knaufAnalyticsConfig) {
+    payload.knauf = { analytics: knaufAnalyticsConfig };
   }
   // End [knauf]
 
