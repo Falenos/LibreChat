@@ -35,10 +35,10 @@ interface:
   customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
   privacyPolicy:
     externalUrl: '/privacy'
-    openNewTab: false
+    openNewTab: true
   termsOfService:
-    externalUrl: '/privacy'
-    openNewTab: false
+    externalUrl: '/eula'
+    openNewTab: true
     modalAcceptance: true
     modalTitle: 'End User License Agreement (EULA)'
     modalContent: |
@@ -169,11 +169,11 @@ interface:
   prompts:
     use: true
     create: true
-    share: true
-    public: true
+    share: false
+    public: false
   bookmarks: true
   memories: true
-  multiConvo: true
+  multiConvo: false
   # Knauf-specific interface options, namespaced to avoid colliding with
   # future upstream `interface.*` fields.
   knauf:
@@ -384,15 +384,16 @@ interface:
     use: true
   fileCitations: true
   mcpServers:
-    use: true
-    create: true
-    share: true
-    public: true
-  remoteAgents:
-    use: true
-    create: true
-    share: true
-    public: true
+    use: true       # activates the MCP_SERVERS permission type for all roles
+    # [knauf] create / share / public intentionally omitted — they are role-driven
+    # via packages/data-provider/src/roles.ts: ADMIN gets create+share+public,
+    # USER gets none. Setting them here would override BOTH roles (the YAML loop in
+    # packages/api/src/app/permissions.ts iterates USER + ADMIN and the explicit
+    # config value beats the role default), which would also lock admins out of
+    # creating MCP server definitions. Re-removed after the v0.73.0 merge added them.
+  # [knauf] `remoteAgents` (a v0.73.0 capability the merge enabled for all roles)
+  # intentionally NOT exposed — it isn't part of the curated Knauf surface. Re-add
+  # deliberately with role-driven permissions if/when it's wanted.
 
 registration:
   socialLogins: ['openid']
