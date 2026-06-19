@@ -1032,14 +1032,20 @@ function filterFile({ req, image, isAvatar }) {
   // Knauf-specific rejection messaging + per-category caps to them, so a future
   // non-Knauf endpoint or the broad upstream default keeps upstream behavior.
   // (mergeWithDefault always backfills endpointFileConfig.supportedMimeTypes, so
-  // its presence can't be the opt-in signal — the endpoint id is.) On these
+  // its presence can't be the opt-in signal — the endpoint id is.) A file_search
+  // upload (agent knowledge) ALSO follows this policy regardless of the agent's
+  // model-provider endpoint: KnaufFileSearch resolves the agents policy client-side,
+  // and this `tool_resource` check is the server-side backstop so the per-category
+  // caps can't be bypassed by a non-Knauf endpoint on a file_search upload. On these
   // endpoints the per-category cap (enforced below) is the AUTHORITATIVE per-file
   // size gate, so compute it here and skip the generic endpoint fileSizeLimit check
   // for capped types — keeping the boundary + message in lockstep with the client
   // (validateFiles), which would otherwise diverge at the data=50 MB cap (which
   // equals fileSizeLimit). Every allow-listed type is capped. KK20-190.
   const isKnaufCappedEndpoint =
-    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+    endpoint === EModelEndpoint.azureOpenAI ||
+    endpoint === EModelEndpoint.agents ||
+    req.body.tool_resource === EToolResources.file_search;
   const knaufCategoryCap =
     isAvatar !== true && isKnaufCappedEndpoint ? knaufCategorySizeLimit(file.mimetype) : undefined;
   // End [knauf]

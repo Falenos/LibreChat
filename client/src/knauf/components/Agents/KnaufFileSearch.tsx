@@ -41,16 +41,21 @@ import { Folder } from 'lucide-react';
 import * as Ariakit from '@ariakit/react';
 import { useRecoilState } from 'recoil';
 import { SharePointIcon, AttachmentIcon, DropdownPopup, useToastContext } from '@librechat/client';
-import { EModelEndpoint, EToolResources } from 'librechat-data-provider';
+import {
+  EModelEndpoint,
+  EToolResources,
+  getEndpointFileConfig,
+  mergeFileConfig,
+} from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { isEphemeralAgent } from '~/common';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useFileHandlingNoChatContext } from '~/hooks/Files/useFileHandling';
-import { useAgentFileConfig, useLocalize, useLazyEffect } from '~/hooks';
+import { useLocalize, useLazyEffect } from '~/hooks';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import FileRow from '~/components/Chat/Input/Files/FileRow';
 import FileContainer from '~/components/Chat/Input/Files/FileContainer';
-import { useGetStartupConfig } from '~/data-provider';
+import { useGetFileConfig, useGetStartupConfig } from '~/data-provider';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
 
@@ -104,14 +109,28 @@ function KnaufFileSearch({
   const [isSharePointDialogOpen, setIsSharePointDialogOpen] = useState(false);
 
   const { data: startupConfig } = useGetStartupConfig();
-  const { endpointFileConfig, providerValue, endpointType } = useAgentFileConfig();
-  const endpointOverride = providerValue || EModelEndpoint.agents;
+  // [knauf] Agent knowledge uploads always follow the AGENTS upload policy (allow-list
+  // + per-category caps + 20-file / 100 MB limits), independent of the agent's model
+  // provider. Upstream `useAgentFileConfig` resolves the file config from the agent's
+  // PROVIDER endpoint (LibreChat #12117), which for a Knauf Azure-backed agent yields
+  // the CHAT policy (5 files / 50 MB) — wrong for agent knowledge — and skips the Knauf
+  // gate entirely for custom providers. Pin everything to `agents` so client validation,
+  // the picker's max-selection count, and the server (endpoint=agents) all agree. KK20-190.
+  const { data: fileConfig = null } = useGetFileConfig({
+    select: (data) => mergeFileConfig(data),
+  });
+  const endpointFileConfig = useMemo(
+    () => getEndpointFileConfig({ fileConfig, endpoint: EModelEndpoint.agents }),
+    [fileConfig],
+  );
+  const endpointOverride = EModelEndpoint.agents;
+  const endpointTypeOverride = EModelEndpoint.agents;
 
   const { handleFileChange, handleFiles } = useFileHandlingNoChatContext(
     {
       additionalMetadata: { agent_id, tool_resource: EToolResources.file_search },
       endpointOverride,
-      endpointTypeOverride: endpointType,
+      endpointTypeOverride,
       fileSetter: setFiles,
     },
     fileHandlingState,
@@ -122,7 +141,7 @@ function KnaufFileSearch({
       {
         additionalMetadata: { agent_id, tool_resource: EToolResources.file_search },
         endpointOverride,
-        endpointTypeOverride: endpointType,
+        endpointTypeOverride,
         fileSetter: setFiles,
       },
       fileHandlingState,

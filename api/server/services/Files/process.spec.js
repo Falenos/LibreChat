@@ -361,10 +361,15 @@ describe('filterFile per-category size caps', () => {
     },
   });
 
-  const makeFilterReq = ({ endpoint = 'azureOpenAI', mimetype = PDF_MIME, size }) => ({
+  const makeFilterReq = ({
+    endpoint = 'azureOpenAI',
+    mimetype = PDF_MIME,
+    size,
+    tool_resource,
+  }) => ({
     user: { id: 'user-123' },
     file: { path: '/tmp/upload.bin', originalname: 'u.bin', filename: 'u.bin', mimetype, size },
-    body: { endpoint, file_id: VALID_UUID },
+    body: { endpoint, file_id: VALID_UUID, tool_resource },
     config: { fileConfig: {}, fileStrategy: 'local' },
   });
 
@@ -425,6 +430,19 @@ describe('filterFile per-category size caps', () => {
   test('throws the localized category key (not the generic message) when a capped file exceeds fileSizeLimit', () => {
     mergeFileConfig.mockReturnValue(makeFiftyMbConfig());
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 60 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_document');
+  });
+
+  // Server backstop: a file_search (agent-knowledge) upload follows the per-category
+  // caps even when the agent's model-provider endpoint is NOT azureOpenAI/agents, so a
+  // mis-sent endpoint can't bypass the size caps. KK20-190.
+  test('applies the per-category cap to a file_search upload on a non-Knauf endpoint', () => {
+    const req = makeFilterReq({
+      endpoint: 'bedrock',
+      mimetype: PDF_MIME,
+      size: 30 * MB,
+      tool_resource: EToolResources.file_search,
+    });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_document');
   });
 });
