@@ -35,10 +35,10 @@ interface:
   customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
   privacyPolicy:
     externalUrl: '/privacy'
-    openNewTab: true
+    openNewTab: false
   termsOfService:
-    externalUrl: '/eula'
-    openNewTab: true
+    externalUrl: '/privacy'
+    openNewTab: false
     modalAcceptance: true
     modalTitle: 'End User License Agreement (EULA)'
     modalContent: |
@@ -169,11 +169,11 @@ interface:
   prompts:
     use: true
     create: true
-    share: false
-    public: false
+    share: true
+    public: true
   bookmarks: true
   memories: true
-  multiConvo: false
+  multiConvo: true
   # Knauf-specific interface options, namespaced to avoid colliding with
   # future upstream `interface.*` fields.
   knauf:
@@ -361,16 +361,9 @@ interface:
   # Built-in USER is forced back to the restricted baseline by
   # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
   # Custom roles remain Admin UI controlled.
-  #
-  # [knauf] Hide the BYOK web-search / code / file-search badges in the composer.
-  # Those capabilities are surfaced another way — web search via the model spec
-  # (addParams web_search:true on the Azure group, KK20-175), file upload via the
-  # chat "Upload files" routing (gated on endpoints.agents.capabilities, KK20-190).
-  # The badges would be redundant/confusing, so they stay off. Re-disabled after
-  # the v0.73.0 main-merge reset them to upstream defaults (true).
-  webSearch: false
-  runCode: false
-  fileSearch: false
+  webSearch: true
+  runCode: true
+  fileSearch: true
   agents:
     use: true
     create: true
@@ -384,16 +377,15 @@ interface:
     use: true
   fileCitations: true
   mcpServers:
-    use: true       # activates the MCP_SERVERS permission type for all roles
-    # [knauf] create / share / public intentionally omitted — they are role-driven
-    # via packages/data-provider/src/roles.ts: ADMIN gets create+share+public,
-    # USER gets none. Setting them here would override BOTH roles (the YAML loop in
-    # packages/api/src/app/permissions.ts iterates USER + ADMIN and the explicit
-    # config value beats the role default), which would also lock admins out of
-    # creating MCP server definitions. Re-removed after the v0.73.0 merge added them.
-  # [knauf] `remoteAgents` (a v0.73.0 capability the merge enabled for all roles)
-  # intentionally NOT exposed — it isn't part of the curated Knauf surface. Re-add
-  # deliberately with role-driven permissions if/when it's wanted.
+    use: true
+    create: true
+    share: true
+    public: true
+  remoteAgents:
+    use: true
+    create: true
+    share: true
+    public: true
 
 registration:
   socialLogins: ['openid']
