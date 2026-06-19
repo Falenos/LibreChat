@@ -27,7 +27,7 @@ import {
   // [knauf] Single source for the chat allow-list picker `accept` (mirrors librechat.yaml). KK20-190.
   knaufChatUploadAccept,
 } from 'librechat-data-provider';
-import type { EndpointFileConfig, TConversation } from 'librechat-data-provider';
+import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
@@ -56,6 +56,21 @@ type FileUploadType =
   | 'image_document_video_audio'
   // [knauf] Chat "Upload files" allow-list (mirrors librechat.yaml fileConfig). KK20-190.
   | 'knauf_allowed';
+// End [knauf]
+
+// [knauf] Recoil updaters for the ephemeral-agent tool flags, lifted to module
+// scope so the `setEphemeralAgent(...)` calls inside the menu-item onClick
+// handlers don't nest an inline updater arrow five functions deep
+// (component → useMemo → createMenuItems → onClick → updater) — SonarCloud S2004
+// caps nesting at four. KK20-190.
+const enableEphemeralFileSearch = (prev: TEphemeralAgent | null): TEphemeralAgent => ({
+  ...prev,
+  [EToolResources.file_search]: true,
+});
+const enableEphemeralCodeExecution = (prev: TEphemeralAgent | null): TEphemeralAgent => ({
+  ...prev,
+  [EToolResources.execute_code]: true,
+});
 // End [knauf]
 
 interface AttachFileMenuProps {
@@ -206,10 +221,7 @@ const AttachFileMenu = ({
             const useKnaufFileSearch = isAzureWithResponsesApi && capabilities.fileSearchEnabled;
             if (useKnaufFileSearch) {
               setToolResource(EToolResources.file_search);
-              setEphemeralAgent((prev) => ({
-                ...prev,
-                [EToolResources.file_search]: true,
-              }));
+              setEphemeralAgent(enableEphemeralFileSearch);
               onAction('knauf_allowed');
               return;
             }
@@ -288,10 +300,7 @@ const AttachFileMenu = ({
           label: localize('com_ui_upload_file_search'),
           onClick: () => {
             setToolResource(EToolResources.file_search);
-            setEphemeralAgent((prev) => ({
-              ...prev,
-              [EToolResources.file_search]: true,
-            }));
+            setEphemeralAgent(enableEphemeralFileSearch);
             onAction();
           },
           icon: <FileSearch className="icon-md" />,
@@ -304,10 +313,9 @@ const AttachFileMenu = ({
           label: localize('com_ui_upload_code_files'),
           onClick: () => {
             setToolResource(EToolResources.execute_code);
-            setEphemeralAgent((prev) => ({
-              ...prev,
-              [EToolResources.execute_code]: true,
-            }));
+            // [knauf] updater lifted to module scope to satisfy S2004 (max nesting). KK20-190.
+            setEphemeralAgent(enableEphemeralCodeExecution);
+            // End [knauf]
             onAction();
           },
           icon: <TerminalSquareIcon className="icon-md" />,
