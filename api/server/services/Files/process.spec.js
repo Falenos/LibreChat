@@ -402,6 +402,31 @@ describe('filterFile per-category size caps', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 30 * MB });
     expect(() => filterFile({ req, isAvatar: true })).not.toThrow();
   });
+
+  // The data cap (50 MB) equals the production endpoint fileSizeLimit (50 MB). The
+  // per-category cap must be authoritative so a file exactly at 50 MB is allowed and
+  // the generic endpoint check is skipped — keeping the boundary + message in lockstep
+  // with the client (validateFiles). KK20-190.
+  const makeFiftyMbConfig = () => ({
+    checkType: () => true,
+    endpoints: {
+      default: { fileSizeLimit: 50 * MB, supportedMimeTypes: [/.*/] },
+      azureOpenAI: { fileSizeLimit: 50 * MB, supportedMimeTypes: [/.*/] },
+      agents: { fileSizeLimit: 50 * MB, supportedMimeTypes: [/.*/] },
+    },
+  });
+
+  test('allows an XLSX exactly at the 50 MB data cap even when it equals fileSizeLimit', () => {
+    mergeFileConfig.mockReturnValue(makeFiftyMbConfig());
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: XLSX_MIME, size: 50 * MB });
+    expect(() => filterFile({ req })).not.toThrow();
+  });
+
+  test('throws the localized category key (not the generic message) when a capped file exceeds fileSizeLimit', () => {
+    mergeFileConfig.mockReturnValue(makeFiftyMbConfig());
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 60 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_document');
+  });
 });
 
 // [knauf] filterFile actionable rejection for off-allow-list types (KK20-190). When

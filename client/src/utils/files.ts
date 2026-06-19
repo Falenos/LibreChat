@@ -320,24 +320,29 @@ export const validateFiles = ({
       return false;
     }
 
-    if (fileSizeLimit && originalFile.size >= fileSizeLimit) {
-      setError(`File size limit exceeded: ${fileSizeLimit / megabyte} MB`);
-      return false;
-    }
-
-    // [knauf] Per-category size cap on top of the endpoint fileSizeLimit:
-    // documents 25 MB / data (xlsx,csv) 50 MB / images 20 MB. Scoped to the Knauf
-    // allow-list endpoints so non-Knauf endpoints keep upstream behavior (matches
-    // filterFile server-side). The error is a localized i18n key (rendered via
-    // localize(key) in useFileHandling). NB: the cap uses strict `>` (a file
-    // exactly at the cap is allowed — server filterFile + the spec boundary test
-    // match), whereas the endpoint fileSizeLimit above uses `>=` (exactly at the
-    // limit is rejected). The asymmetry is intentional; don't "align" them. KK20-190.
+    // [knauf] On the Knauf allow-list endpoints the per-category cap is the
+    // AUTHORITATIVE per-file size gate (documents 25 / data 50 / images 20 MB):
+    // when a cap applies we enforce only it (strict `>`, localized i18n key
+    // rendered via localize(key) in useFileHandling) and skip the generic endpoint
+    // `fileSizeLimit` check. This resolves a client/server boundary mismatch: the
+    // largest cap (data, 50 MB) equals the endpoint fileSizeLimit, but the upstream
+    // generic check uses `>=` (rejecting a file *exactly* at 50 MB, with a
+    // non-localized English string) while server filterFile uses `>` (allowing it).
+    // Without this, a 50 MB spreadsheet is accepted server-side yet rejected
+    // client-side, and German users get an English error at the boundary. Every
+    // allow-listed type maps to a capped category, so on Knauf endpoints this branch
+    // always wins; non-Knauf endpoints (no cap) keep the upstream `>=` check verbatim.
+    // KK20-190.
     const knaufCategoryCap = isKnaufCappedEndpoint
       ? knaufCategorySizeLimit(originalFile.type)
       : undefined;
-    if (knaufCategoryCap && originalFile.size > knaufCategoryCap) {
-      setError(knaufCategorySizeErrorKey(originalFile.type));
+    if (knaufCategoryCap != null) {
+      if (originalFile.size > knaufCategoryCap) {
+        setError(knaufCategorySizeErrorKey(originalFile.type));
+        return false;
+      }
+    } else if (fileSizeLimit && originalFile.size >= fileSizeLimit) {
+      setError(`File size limit exceeded: ${fileSizeLimit / megabyte} MB`);
       return false;
     }
     // End [knauf]

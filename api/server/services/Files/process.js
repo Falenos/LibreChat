@@ -1027,28 +1027,38 @@ function filterFile({ req, image, isAvatar }) {
   const fileSizeLimit =
     isAvatar === true ? fileConfig.avatarSizeLimit : endpointFileConfig.fileSizeLimit;
 
-  if (file.size > fileSizeLimit) {
+  // [knauf] The Knauf upload endpoints (azureOpenAI chat + agents) carry the
+  // restricted allow-list in librechat.yaml (&knauf_allowed_mime). Gate all
+  // Knauf-specific rejection messaging + per-category caps to them, so a future
+  // non-Knauf endpoint or the broad upstream default keeps upstream behavior.
+  // (mergeWithDefault always backfills endpointFileConfig.supportedMimeTypes, so
+  // its presence can't be the opt-in signal — the endpoint id is.) On these
+  // endpoints the per-category cap (enforced below) is the AUTHORITATIVE per-file
+  // size gate, so compute it here and skip the generic endpoint fileSizeLimit check
+  // for capped types — keeping the boundary + message in lockstep with the client
+  // (validateFiles), which would otherwise diverge at the data=50 MB cap (which
+  // equals fileSizeLimit). Every allow-listed type is capped. KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+  const knaufCategoryCap =
+    isAvatar !== true && isKnaufCappedEndpoint ? knaufCategorySizeLimit(file.mimetype) : undefined;
+  // End [knauf]
+
+  // [knauf] Skip the generic endpoint size check when a Knauf per-category cap
+  // applies (the category check below is authoritative for capped types). KK20-190.
+  if (knaufCategoryCap == null && file.size > fileSizeLimit) {
     throw new Error(
       `File size limit of ${fileSizeLimit / megabyte} MB exceeded for ${
         isAvatar ? 'avatar upload' : `${endpoint} endpoint`
       }`,
     );
   }
+  // End [knauf]
 
   const isSupportedMimeType = fileConfig.checkType(
     file.mimetype,
     endpointFileConfig.supportedMimeTypes,
   );
-
-  // [knauf] The Knauf upload endpoints (azureOpenAI chat + agents) carry the
-  // restricted allow-list in librechat.yaml (&knauf_allowed_mime). Gate all
-  // Knauf-specific rejection messaging + per-category caps to them, so a future
-  // non-Knauf endpoint or the broad upstream default keeps upstream behavior.
-  // (mergeWithDefault always backfills endpointFileConfig.supportedMimeTypes, so
-  // its presence can't be the opt-in signal — the endpoint id is.) KK20-190.
-  const isKnaufCappedEndpoint =
-    endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
-  // End [knauf]
 
   if (!isSupportedMimeType) {
     // [knauf] Actionable rejection on the Knauf endpoints: legacy Office binaries
@@ -1066,15 +1076,14 @@ function filterFile({ req, image, isAvatar }) {
     throw new Error('Unsupported file type');
   }
 
-  // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) on top of
-  // the endpoint fileSizeLimit. Throws the i18n key, surfaced to the client via
-  // resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize(). Skipped for
-  // avatars (own size limit). KK20-190.
-  if (isAvatar !== true && isKnaufCappedEndpoint) {
-    const knaufCategoryCap = knaufCategorySizeLimit(file.mimetype);
-    if (knaufCategoryCap && file.size > knaufCategoryCap) {
-      throw new Error(knaufCategorySizeErrorKey(file.mimetype));
-    }
+  // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) — the
+  // authoritative size gate on the Knauf endpoints (replaces the generic check,
+  // which is skipped above for capped types). Throws the i18n key, surfaced to the
+  // client via resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize().
+  // `knaufCategoryCap` is undefined for avatars / non-Knauf endpoints / uncapped
+  // types, so this is a no-op there. Strict `>` mirrors validateFiles. KK20-190.
+  if (knaufCategoryCap != null && file.size > knaufCategoryCap) {
+    throw new Error(knaufCategorySizeErrorKey(file.mimetype));
   }
   // End [knauf]
 
