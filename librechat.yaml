@@ -395,12 +395,13 @@ registration:
 # catalogue (Confluence, Jira, SharePoint, ...) is shipped.
 
 fileConfig:
-  # Global hard cap (MB) enforced by multer's `limits.fileSize` — multer ABORTS an
-  # oversized stream before the whole payload lands on disk, instead of writing it
-  # and rejecting afterwards. Set to the largest per-category cap (50 MB / data) so
-  # nothing legitimate is blocked; the tighter per-category caps (25/50/20) and the
-  # per-endpoint fileSizeLimit still apply on top. Default is 512 MB. (KK20-190)
-  serverFileSizeLimit: 50
+  # NOTE: serverFileSizeLimit is intentionally left at the upstream default (512 MB).
+  # multer uses ONE shared instance across every file route (avatars, images, STT, all
+  # endpoints), and its limits.fileSize aborts mid-stream BEFORE endpoint-specific
+  # validation — so lowering it here caps *all* routes, not just the Knauf chat/agent
+  # uploads. The Knauf per-file limits are enforced after upload by the per-category caps
+  # (documents 25 / data 50 / images 20 MB) in api/server/services/Files/process.js and
+  # client-side validateFiles. (KK20-190)
   endpoints:
     gptPlugins:
       fileLimit: 5
