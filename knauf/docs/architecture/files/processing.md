@@ -236,7 +236,7 @@ fileConfig:
 
 Enforced client-side ([files.ts#L284](../../../../client/src/utils/files.ts#L284)) and server-side ([process.js#L1039](../../../../api/server/services/Files/process.js#L1039)). Caveats: `.jpg`/`.jpeg` are both `image/jpeg`; `.csv` is `text/csv` *or* `application/csv` (both listed). Legacy binary `.doc` is **not** accepted (only `.docx`) — rag_api can't embed it (§4e), so it's excluded from the allow-list rather than failing at embed time.
 
-**Encrypted / password-protected rejection — implemented (Tier 5), PDF + OOXML.** A provider-agnostic guard `detectEncryptedFile(buffer, mimetype)` ([packages/api/src/files/validation.ts](../../../../packages/api/src/files/validation.ts), `[knauf]` block) runs in the upload route ([files.js](../../../../api/server/routes/files/files.js), right after `filterFile`) on KARL's active Azure path:
+**Encrypted / password-protected rejection — implemented (Tier 5), PDF + OOXML.** A provider-agnostic guard `detectEncryptedFile(buffer, mimetype)` ([packages/api/src/files/validation.ts](../../../../packages/api/src/files/validation.ts), `[knauf]` block) runs in the upload route ([files.js](../../../../api/server/routes/files/files.js), right after `filterFile`) on **all** endpoints — intentionally not gated to the Knauf endpoints, since an encrypted PDF/OOXML is unprocessable everywhere:
 - **PDF** → reject if the bytes contain `/Encrypt`.
 - **OOXML** (`.docx/.xlsx/.pptx`) → a normal file is a ZIP (`PK\x03\x04`); an encrypted one is an OLE/CFBF compound file (magic `D0CF11E0`). Declared-OOXML + CFBF magic ⇒ reject.
 

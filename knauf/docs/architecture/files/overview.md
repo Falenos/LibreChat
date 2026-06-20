@@ -106,17 +106,17 @@ The four components, in one line each (deep-dives linked):
 ### 2c. Image attachment (vision)
 
 - **`tool_resource`**: `undefined`. **Reached via** the "Upload files" item (§2b) for image files, or "Upload Image" on non-document providers.
-- **Server entry**: `processImageFile()` ([process.js#L293](../../../../api/server/services/Files/process.js#L293)).
+- **Server entry**: `processImageFile()` ([process.js#L297](../../../../api/server/services/Files/process.js#L297)).
 - **Reader at chat time**: `addImageURLs()` ([agents/client.js#L169](../../../../api/server/controllers/agents/client.js#L169)) → `encodeAndFormat()` reads bytes from blob and base64-encodes them. **Re-fetched + re-encoded every turn — no caching**; on `azure_blob` that's a fresh download per turn per image.
 - **What the model receives**: an `{ type: 'image_url', image_url: { url: 'data:image/...;base64,...' } }` content part. **Binding**: message-level (§3a).
-- **Why images don't use File Search or the provider:** `file_search` rejects images ([process.js#L488](../../../../api/server/services/Files/process.js#L488)), and images never go to the provider Files API — vision is always inline base64, independent of `useResponsesApi`. So "Upload to Provider" is **not needed** for image support. Limited to **PNG/JPG/JPEG/WebP** by the allow-list.
+- **Why images don't use File Search or the provider:** `file_search` rejects images ([process.js#L492](../../../../api/server/services/Files/process.js#L492)), and images never go to the provider Files API — vision is always inline base64, independent of `useResponsesApi`. So "Upload to Provider" is **not needed** for image support. Limited to **PNG/JPG/JPEG/WebP** by the allow-list.
 
 ### 2d. Upload as Text (OCR / extraction)
 
 - **UI label**: "Upload as Text". **`tool_resource`**: `context`.
-- **When visible**: when `capabilities.contextEnabled` is true. *Not* enabled on the curated `agents` endpoint ([librechat.yaml#L141-L143](../../../../librechat.yaml#L141) lists only `file_search` + `tools`).
+- **When visible**: when `capabilities.contextEnabled` is true. *Not* enabled on the curated `agents` endpoint ([librechat.yaml#L463-L465](../../../../librechat.yaml#L463) lists only `file_search` + `tools`).
 - **Server entry**: `processFileUpload()` → text extraction via the configured document_parser / OCR strategy (`pdf-parse`, `mammoth`, Mistral OCR, …).
-- **Reader at chat time**: `encodeAndFormatDocuments()` ([BaseClient.js#L1089](../../../../api/app/clients/BaseClient.js#L1089)) injects extracted text inline into the user message. Bounded by `fileConfig.fileTokenLimit`; hard cap **15 MB extracted text** ([process.js#L537](../../../../api/server/services/Files/process.js#L537)).
+- **Reader at chat time**: `encodeAndFormatDocuments()` ([BaseClient.js#L1089](../../../../api/app/clients/BaseClient.js#L1089)) injects extracted text inline into the user message. Bounded by `fileConfig.fileTokenLimit`; hard cap **15 MB extracted text** ([process.js#L539](../../../../api/server/services/Files/process.js#L539)).
 - **What the model receives**: plain text concatenated into the user message. **Binding**: message-level (§3a).
 
 ### 2e. File Search — chat-time RAG via ephemeral agent

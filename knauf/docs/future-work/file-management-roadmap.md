@@ -26,7 +26,7 @@ KK20-190 controls **what** gets uploaded. It does **not** address the **lifecycl
 | Download access control                  | ✅       | [fileAccess.js](../../../api/server/middleware/accessResources/fileAccess.js) — owner + agent-ACL check                                |
 | Filename sanitization                    | ✅       | `sanitizeFilename` across upload flows                                                                                                 |
 | Malware / virus scanning                 | ❌       | none — **S1**                                                                                                                          |
-| MIME-spoof rejection (sniff vs declared) | ❌       | `filterFile` trusts `req.file.mimetype`; `file-type` sniffing exists but only for unknown-type + KK20-190 encryption — **S2**          |
+| MIME-spoof rejection (sniff vs declared) | ⚠️ partial | Encrypted PDF/OOXML **are** byte-sniffed + rejected on all endpoints (`detectEncryptedFileAtPath`, KK20-190); general content-vs-declared MIME sniffing still missing — `filterFile` trusts `req.file.mimetype` — **S2** |
 | Per-user storage quota                   | ❌       | Balance tracks token credits only — **S3**                                                                                             |
 | Audit-grade logging                      | ❌       | debug/error logs only, not a structured immutable trail — **S4**                                                                       |
 | App-level encryption at rest             | ❌       | relies on storage-layer encryption — **S5**                                                                                            |

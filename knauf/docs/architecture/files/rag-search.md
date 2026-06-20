@@ -61,7 +61,7 @@ Only the two file_search paths touch this component. Every other upload path (pr
 
 ## 3. Ingest — `POST /embed`
 
-`uploadVectors()` in [VectorDB/crud.js#L67-L120](../../../../api/server/services/Files/VectorDB/crud.js#L67), called from `processAgentFileUpload()` ([process.js#L662](../../../../api/server/services/Files/process.js#L662)).
+`uploadVectors()` in [VectorDB/crud.js#L67-L120](../../../../api/server/services/Files/VectorDB/crud.js#L67), called from `processAgentFileUpload()` ([process.js#L666](../../../../api/server/services/Files/process.js#L666)).
 
 ```mermaid
 sequenceDiagram
@@ -164,18 +164,19 @@ deliberately behave differently per chat type:
 
 | Chat type | `conversation.endpoint` | "Upload files" menu | Drag-drop |
 |---|---|---|---|
-| **Normal Karl chat** (default spec) | `azureOpenAI` + Responses API | routes to ephemeral File Search | routes to ephemeral File Search (**symmetric**) |
-| **Custom agent chat** | `agents` | routes to ephemeral File Search **only** if the agent is itself Azure + Responses | shows the capability-picker **modal** |
+| **Normal Karl chat** (default spec) | `azureOpenAI` + Responses API | routes to ephemeral File Search | routes to ephemeral File Search |
+| **Custom agent chat** — File Search only | `agents` | routes to the agent's File Search | **auto-routes** to File Search (no modal) |
+| **Custom agent chat** — also Code/Context | `agents` | per-item menu | capability-picker **modal** (a real choice) |
 
-The menu gates on the agent/conversation **provider** (`isAzureWithResponsesApi`,
-[AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)); the
-drag-drop handler gates on `conversation.endpoint === azureOpenAI`
-([useDragHelpers.ts](../../../../client/src/hooks/Files/useDragHelpers.ts)), which a custom agent
-(endpoint `agents`) never satisfies. The asymmetry is **intentional**: a custom agent is expected to
-get file search from its **own pre-configured `file_search` tool**, not the ephemeral mechanism, so
-the modal (which lets the user pick the agent's tool) is the correct path there. On the default chat
-the two affordances are symmetric. Images always divert to the vision path regardless of route (the
-server rejects images for the `file_search` resource — split per-file in `useFileHandling`).
+Both affordances now **prefer auto-routing over the picker** on the Knauf surfaces, so a drop behaves
+like the normal chat: documents → File Search, images → vision. The drag-drop handler
+([useDragHelpers.ts](../../../../client/src/hooks/Files/useDragHelpers.ts)) auto-routes both the
+default chat (endpoint `azureOpenAI` + Responses) **and** custom agent chats (endpoint `agents`) when
+File Search is the **sole** upload destination (`agentFileSearchOnly`). The capability-picker modal is
+kept only when an agent genuinely offers a second destination (code execution / context) — and even
+then, a single-option picker auto-selects (`DragDropModal`). Images always divert to the vision path
+regardless of route (the server rejects images for the `file_search` resource — split per-file in
+`useFileHandling`).
 
 ---
 
