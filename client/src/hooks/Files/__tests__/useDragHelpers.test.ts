@@ -14,6 +14,7 @@ import {
   EToolResources,
   QueryKeys,
   AgentCapabilities,
+  Tools,
 } from 'librechat-data-provider';
 
 // Capture the `drop` handler react-dnd would bind, so we can invoke it directly.
@@ -106,6 +107,63 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
     // Modal path: files are staged for the picker, not handed to File Search.
     expect(mockHandleFiles).not.toHaveBeenCalled();
     expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
+
+  it('auto-routes a drop into File Search on a custom agent chat when File Search is the only destination', () => {
+    mockConversation = {
+      conversationId: 'c1',
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent_abc',
+    };
+    mockGetQueryData.mockImplementation((key: unknown) => {
+      if (Array.isArray(key) && key[0] === QueryKeys.endpoints) {
+        return { [EModelEndpoint.agents]: { capabilities: [AgentCapabilities.file_search] } };
+      }
+      if (Array.isArray(key) && key[0] === QueryKeys.agent) {
+        return { id: 'agent_abc', tools: [Tools.file_search] };
+      }
+      return undefined;
+    });
+    renderHook(() => useDragHelpers());
+
+    const file = pdf();
+    act(() => {
+      mockCapturedDrop?.({ files: [file] });
+    });
+
+    // Auto-routed like the normal chat (no popup); no ephemeral toggle since the
+    // persisted agent already carries the file_search tool.
+    expect(mockHandleFiles).toHaveBeenCalledWith([file], EToolResources.file_search);
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
+
+  it('keeps the modal on a custom agent chat that also offers code execution (a real choice)', () => {
+    mockConversation = {
+      conversationId: 'c1',
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent_abc',
+    };
+    mockGetQueryData.mockImplementation((key: unknown) => {
+      if (Array.isArray(key) && key[0] === QueryKeys.endpoints) {
+        return {
+          [EModelEndpoint.agents]: {
+            capabilities: [AgentCapabilities.file_search, AgentCapabilities.execute_code],
+          },
+        };
+      }
+      if (Array.isArray(key) && key[0] === QueryKeys.agent) {
+        return { id: 'agent_abc', tools: [Tools.file_search, Tools.execute_code] };
+      }
+      return undefined;
+    });
+    renderHook(() => useDragHelpers());
+
+    act(() => {
+      mockCapturedDrop?.({ files: [pdf()] });
+    });
+
+    // Two real destinations (File Search + Code) → keep the picker, don't auto-route.
+    expect(mockHandleFiles).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

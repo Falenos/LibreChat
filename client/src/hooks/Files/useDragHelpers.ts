@@ -154,6 +154,27 @@ export default function useDragHelpers() {
         }
       }
 
+      // [knauf] Custom agent chats: auto-route on drop the same way the default Knauf
+      // chat does — documents → File Search (RAG via the agent's file_search tool),
+      // images → vision (per-file override in useFileHandling) — and skip the
+      // capability-picker modal, which otherwise forces an "Upload to provider vs File
+      // Search" choice the normal chat never shows. Gated to when File Search is the
+      // SOLE destination: if the agent also offers code execution or context, keep the
+      // modal so the user can still choose. Equivalent to picking "Upload for File
+      // Search" in the modal (handleOptionSelect) — no ephemeral toggle, since a
+      // persisted agent already carries the file_search tool. KK20-190.
+      const agentFileSearchOnly =
+        conv?.endpoint === EModelEndpoint.agents &&
+        fileSearchEnabled &&
+        fileSearchAllowedByAgent &&
+        !(codeEnabled && codeAllowedByAgent) &&
+        !contextEnabled;
+      if (agentFileSearchOnly) {
+        handleFilesRef.current(item.files, EToolResources.file_search);
+        return;
+      }
+      // End [knauf]
+
       /** Determine if dragged files are all images (enables the base image option) */
       const allImages = item.files.every((f) =>
         inferMimeType(f.name, f.type)?.startsWith('image/'),
