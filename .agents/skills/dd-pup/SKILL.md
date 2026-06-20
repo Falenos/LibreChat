@@ -322,22 +322,3 @@ pup --version
 | AP1 | `ap1.datadoghq.com` |
 | AP2 | `ap2.datadoghq.com` |
 | US1-FED | `ddog-gov.com` |
-
-## Verifying Browser RUM Data
-
-Agentic Karl uses DD Browser RUM (`agentic-karl-frontend`, app ID `1268732f-...`, site `datadoghq.eu`).
-
-### Check RUM is flowing
-```bash
-# List RUM applications
-pup rum apps list
-
-# List recent RUM sessions (last 15 min)
-pup rum sessions list --from 15m
-```
-
-### Check browser logs
-Browser logs appear in Logs Explorer with `source:browser` and `service:agentic-karl`. Use pup or the DD UI:
-```bash
-pup logs search --query "source:browser service:agentic-karl" --from 1h
-```

@@ -25,9 +25,6 @@ import { Banner } from '~/components/Banners';
 // [knauf] Mount post-login OneTrust and Adobe Analytics consent controller. (NO-TICKET)
 import KnaufConsentAnalytics from '~/knauf/analytics/KnaufConsentAnalytics';
 // End [knauf]
-// [knauf] KK20-186 — Datadog Browser RUM + Logs with OneTrust consent gating.
-import { KnaufDatadogRum } from '~/knauf/analytics/datadog';
-// End [knauf]
 // [knauf] KK20-173 — full-width top header (logo left + user menu right).
 // Renders above the sidebar+chat split; the layout height calc below
 // subtracts KNAUF_HEADER_HEIGHT so the inner flex doesn't overflow.
@@ -106,9 +103,6 @@ export default function Root() {
     <SetConvoProvider>
       {/* [knauf] OneTrust prompts after login and any required EULA acceptance; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
       {shouldMountKnaufConsentAnalytics && <KnaufConsentAnalytics />}
-      {/* End [knauf] */}
-      {/* [knauf] KK20-186 — Datadog Browser RUM + Logs (PROD-only, consent-gated via OneTrust C0002). */}
-      <KnaufDatadogRum />
       {/* End [knauf] */}
       {/* [knauf] KK20-173 — full-width top header. Sits above Banner so it
           spans the entire viewport width; the height calc below subtracts
