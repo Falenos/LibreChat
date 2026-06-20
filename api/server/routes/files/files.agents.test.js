@@ -744,9 +744,9 @@ describe('File Routes - Agent Files Endpoint', () => {
 // route WIRING (not just the lib fn): an encrypted file is rejected, and an
 // unreadable path is tolerated (fail-open) rather than 500-ing the upload.
 describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', () => {
-  const fs = require('fs');
-  const os = require('os');
-  const path = require('path');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
   const router = require('./files');
 
   const tmpFiles = [];
