@@ -204,33 +204,9 @@ def sanitize_log(message: str) -> str:
 | Search slow | Narrow time range, use indexes |
 | Missing attributes | Check grok parser |
 
-## Browser Logs SDK
-
-Agentic Karl also sends **browser-side logs** via `@datadog/browser-logs`. This is separate from backend APM logs (which use the Datadog Agent DaemonSet).
-
-### How It Works
-- `DATADOG_BROWSER_LOGS_ENABLED: "true"` in ConfigMap enables the SDK
-- Forwards `console.error` calls + uncaught errors to Datadog Logs
-- `logsBeforeSend` filter in `client/src/knauf/analytics/datadog/beforeSend.ts` drops noise (404s for known-missing assets, favicon probes, etc.)
-- OneTrust C0002 consent gating — logs only flow after user accepts performance cookies
-
-### Config Flow
-ConfigMap `DATADOG_*` → backend `getKnaufDatadogConfig()` → startup config API → frontend `useGetStartupConfig()` → `datadogLogs.init(getLogsConfig(config))`
-
-### Key Difference from Backend Logs
-| Aspect | Backend (Agent) | Browser (SDK) |
-|--------|----------------|---------------|
-| Toggle | `DD_APM_enabled` | `DATADOG_BROWSER_LOGS_ENABLED` |
-| Source | Node.js server | User's browser |
-| Transport | Agent DaemonSet | Direct HTTPS to DD |
-| Consent | N/A | OneTrust C0002 |
-
-Browser logs are enabled in **both dev and prod**. Backend APM logs are independent.
-
 ## References/Documentation
 
 - [Log Search Syntax](https://docs.datadoghq.com/logs/explorer/search_syntax/)
 - [Pipelines](https://docs.datadoghq.com/logs/log_configuration/pipelines/)
 - [Exclusion Filters](https://docs.datadoghq.com/logs/indexes/#exclusion-filters)
 - [Archives](https://docs.datadoghq.com/logs/archives/)
-- [Browser Log Collection](https://docs.datadoghq.com/logs/log_collection/javascript/)

@@ -9,21 +9,9 @@ export type KnaufAnalyticsConfig = {
   adobeAppName: string;
 };
 
-export type DatadogConfig = {
-  clientToken: string;
-  site: string;
-  service: string;
-  env: string;
-  rumEnabled: boolean;
-  browserLogsEnabled: boolean;
-  rumApplicationId?: string;
-  sessionSampleRate?: number;
-};
-
 export type KnaufStartupConfig = TStartupConfig & {
   knauf?: {
     analytics?: Partial<KnaufAnalyticsConfig>;
-    datadog?: Partial<DatadogConfig>;
   };
 };
 
