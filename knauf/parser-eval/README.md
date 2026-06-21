@@ -6,7 +6,7 @@ and **liteparse**. It runs each strategy over a categorized corpus, **stores eve
 output**, and scores them with industry-standard metrics.
 
 > **Why this exists:** it's the evidence basis for the parser-routing decisions in
-> [knauf/docs/reference/rag-file-search-architecture.md](../docs/reference/rag-file-search-architecture.md)
+> [knauf/docs/architecture/files/rag-search.md](../docs/architecture/files/rag-search.md)
 > — Azure DI for documents, the native lean loader for spreadsheets.
 
 Modeled on [OmniDocBench](https://github.com/opendatalab/OmniDocBench) (categorized corpus),

@@ -1,12 +1,74 @@
-# Azure Blob Storage — flows, concepts & diagrams
+---
+title: Files — Storage Adapter
+spec-id: AGK-ARCH-files-storage
+status: implemented
+owners: ["@jorgecostak"]
+last-reviewed: 2026-06-17
+code-refs:
+  - api/server/services/Files/strategies.js
+  - api/server/services/Files/Azure/crud.js
+  - api/server/services/Files/Azure/images.js
+  - api/server/services/Files/Azure/refreshMessageAttachments.js
+  - packages/api/src/cdn/azure.ts
+tests:
+  - api/test/server/services/Files/Azure/crud.test.js
+  - api/test/server/services/Files/Azure/refreshMessageAttachments.test.js
+acceptance:
+  - "Azure Blob private-container with SAS-signed URLs"
+  - "SAS refresh chain honoring TTL"
+  - "Message-attachment refresh shim (KK20-182)"
+---
 
-Stable how-it-works reference for how KARL stores and serves user files via Azure Blob Storage with **SAS-signed URLs**. Covers what's running today, what it replaced, and the concepts (SAS, TTL, caching) you need to reason about it.
+# Files — storage (`fileStrategy` & Azure Blob)
 
-> Companion docs: rollout status + still-pending workstreams live in [`../implementation-plans/azure-blob-and-private-files.md`](../implementation-plans/azure-blob-and-private-files.md). This doc is the *architecture*; that doc is the *plan*.
+How and where the **bytes** are stored and served once an upload lands. Covers the pluggable `fileStrategy` abstraction, the backend adapters, size/MIME enforcement, and the full Azure Blob + SAS-signed-URL machinery that runs in production today.
+
+> Part of the files docs: [`overview.md`](./overview.md) (taxonomy, binding, lifecycle) · **storage.md** (this doc) · [`rag-search.md`](./rag-search.md) (RAG / file search).
+> Rollout status + still-pending workstreams live in [`../../implementation-plans/azure-blob-and-private-files.md`](../../implementation-plans/azure-blob-and-private-files.md). This doc is the *architecture*; that doc is the *plan*.
 
 ---
 
-## 1. The 30-second version
+## 1. `fileStrategy` — the storage abstraction
+
+The blob backend is pluggable via the top-level `fileStrategy` key in [librechat.yaml](../../../../librechat.yaml), validated by [config.ts](../../../../packages/data-provider/src/config.ts). A per-context split is also possible via `fileStrategies: { default, avatar, image, document }`.
+
+All backends implement the same adapter interface, registered in [strategies.js](../../../../api/server/services/Files/strategies.js) and selected at runtime by [getFileStrategy.js](../../../../api/server/utils/getFileStrategy.js):
+
+| Method | Purpose |
+|---|---|
+| `handleFileUpload` / `saveBuffer` | Write bytes for a document/image |
+| `getFileURL` / `saveURL` | Produce / persist the URL the client fetches |
+| `getDownloadStream` | Stream bytes back (download endpoint) |
+| `processAvatar` / `handleImageUpload` | Image-specific write + URL |
+| `deleteFile` | Remove bytes |
+
+Upload dispatch (`processFileUpload` / `processAgentFileUpload` in [process.js](../../../../api/server/services/Files/process.js)) calls `getFileStrategy(appConfig, { isImage, isAvatar })` to pick the adapter, then routes text-extraction vs blob vs vector accordingly. The same selector also exposes internal pseudo-strategies (`openai`, `vectordb`, `execute_code`, `document_parser`, `mistral_ocr`, `text` → alias for `local`) that route to non-blob destinations and are not user-selectable as the global default.
+
+### Backends
+
+| Value | What it uses | Where bytes go | Best fit |
+|---|---|---|---|
+| `azure_blob` **(active — [librechat.yaml#L15](../../../../librechat.yaml#L15))** | Azure SDK | Private blob container, SAS-served (§3+) | Azure-native (Knauf stack) |
+| `local` (schema default) | Node `fs` | `./uploads/<userId>/...` on the api container disk | Dev only |
+| `s3` | AWS SDK | S3 bucket via `AWS_*` env | AWS / S3-compatible |
+| `firebase` | Firebase SDK | Firebase Storage | Firebase deployments |
+| `openai` / `vectordb` | (internal) | Provider Files API / rag_api | Not user-selectable as default |
+
+### Size & MIME enforcement
+
+Client-side `validateFiles()` ([client/src/utils/files.ts](../../../../client/src/utils/files.ts)) runs before upload against the merged `fileConfig.endpoints.<name>` config: disabled → empty → file-count → MIME inference/fix → MIME allowlist → per-file size → total size → duplicate. The server re-enforces the size cap in [process.js#L1028](../../../../api/server/services/Files/process.js#L1028).
+
+- Server-wide ceiling: `serverFileSizeLimit` (default **512 MB**) in [file-config.ts](../../../../packages/data-provider/src/file-config.ts), **kept at the upstream default** in [librechat.yaml](../../../../librechat.yaml) — multer uses one shared instance across every file route (avatars, images, STT, all endpoints), so lowering it would cap those too, not just chat/agent uploads. The Knauf per-file limits are enforced after upload by the per-category caps (documents 25 / data 50 / images 20 MB) in client `validateFiles` + server `filterFile`, not by `serverFileSizeLimit`.
+- Knauf sets per-endpoint caps of **50 MB** per file for `azureOpenAI` + `agents` (`totalSizeLimit` 50 MB chat / 100 MB agent) in [librechat.yaml](../../../../librechat.yaml), and enforces **tighter per-category caps on top** — documents 25 MB / data 50 MB / images 20 MB (`knaufCategorySizeLimit`, client `validateFiles` + server `filterFile`) — to control Azure Blob spend and avoid oversized PDFs blowing the model context. See [processing.md](./processing.md) §5 for the per-category breakdown.
+- For `tool_resource: context`, the allowlist merges the `text` / `ocr` / `stt` supported-type sets; MIME routing into OCR vs text-parse vs STT is configured via `fileConfig.ocr|text|stt.supportedMimeTypes`.
+
+**No `cloudfront.*` block.** Despite signed-CloudFront delivery often being mentioned as a `fileStrategy` option, the Zod schema in [config.ts](../../../../packages/data-provider/src/config.ts) does not expose `cloudfront` / `urlExpiry` / `cookieExpiry`. Signed-CDN delivery would be a code change, not config.
+
+The rest of this doc is the **`azure_blob`** implementation — the only backend running in production.
+
+---
+
+## 2. The 30-second version (Azure)
 
 - Files (avatars, image attachments, file_search PDFs, etc.) live in a **private** Azure Blob Storage container.
 - The backend never proxies the binary. It hands the client a **SAS URL** — a normal `https://…/blob` URL with a signed query string proving the client is allowed to read this one blob for the next 5 minutes.
@@ -16,13 +78,13 @@ Stable how-it-works reference for how KARL stores and serves user files via Azur
 
 Why this shape:
 
-- **No persistent disk on the pod** — KARL runs on AKS, pods are ephemeral, multi-replica. Local files vanish on restart and don't cross replicas.
+- **No persistent disk on the pod** — KARL runs on AKS, pods are ephemeral and multi-replica. Local files vanish on restart and don't cross replicas.
 - **No public container** — Knauf compliance requires private storage. Plain blob URLs don't work; you need a signed credential per request.
-- **No backend bandwidth burning** — proxying the binary through the backend means 1× ingress + 1× egress on every file view. Direct fetch from Azure offloads it.
+- **No backend bandwidth burning** — proxying the binary means 1× ingress + 1× egress per view. Direct fetch from Azure offloads it.
 
 ---
 
-## 2. Before vs. after — the same upload, two architectures
+## 3. Before vs. after — the same upload, two architectures
 
 ### Before: `fileStrategy: "local"` + SMB-mounted persistent share
 
@@ -84,7 +146,7 @@ What changes:
 
 ---
 
-## 3. SAS URL anatomy — what each part does
+## 4. SAS URL anatomy — what each part does
 
 ```
 https://karlblob.blob.core.windows.net/files/uploads/<userId>/<file_id>__name.pdf
@@ -112,7 +174,7 @@ Three security properties built into the URL:
 
 ---
 
-## 4. Upload flow — what actually happens in code
+## 5. Upload flow — what actually happens in code
 
 ```mermaid
 sequenceDiagram
@@ -144,13 +206,13 @@ sequenceDiagram
 
 Key steps the diagram glosses over:
 
-- **`createIfNotExists({ access: undefined })`** — `undefined` here means "create as private, no anonymous access". In dev with `AZURE_STORAGE_PUBLIC_ACCESS=true` we'd pass `"blob"` instead. The default is `false` so a missing env var doesn't create a public container.
+- **`createIfNotExists({ access: undefined })`** — `undefined` means "create as private, no anonymous access". In dev with `AZURE_STORAGE_PUBLIC_ACCESS=true` we'd pass `"blob"` instead. The default is `false` so a missing env var doesn't create a public container.
 - **`getUserDelegationKey`** is called on the Managed Identity path only. The key is cached as a **promise** (not the resolved value) — N concurrent first-callers all await the same in-flight fetch instead of each firing their own AAD round-trip. Cached for ~7 days minus a 5-minute renewal buffer.
-- **`generateBlobSASQueryParameters`** is pure local crypto. No network call. The key here is the User Delegation Key (MI) or `StorageSharedKeyCredential` (Account Key).
+- **`generateBlobSASQueryParameters`** is pure local crypto. No network call. The key is the User Delegation Key (MI) or `StorageSharedKeyCredential` (Account Key).
 
 ---
 
-## 5. Image fetch — yes, it's a signed URL
+## 6. Image fetch — yes, it's a signed URL
 
 **The browser fetches the blob directly from Azure using the SAS URL.** KARL is not in the path on the read. The SAS URL is just a normal `https://…` link.
 
@@ -181,22 +243,18 @@ Practical implications:
 
 ---
 
-## 6. Why URLs need to be **cached** (in MongoDB)
+## 7. Why URLs need to be **cached** (in MongoDB)
 
-You might ask: *why store the SAS URL in MongoDB instead of regenerating one every time someone asks for the file?*
-
-Two reasons:
+Why store the SAS URL in MongoDB instead of regenerating one every time someone asks for the file?
 
 1. **Cost on hot paths.** Listing 50 files in `/api/files` would cost 50 signing operations on every page-load. Signing is cheap but not free — especially in Managed Identity mode where the User Delegation Key may need refreshing.
-2. **Stable URL across page loads.** A `<img src="…">` rendered on the page benefits from browser-level URL caching. If the URL changed every request, the browser would treat each render as a new image and re-fetch.
+2. **Stable URL across page loads.** A `<img src="…">` benefits from browser-level URL caching. If the URL changed every request, the browser would treat each render as a new image and re-fetch.
 
-So we store the signed URL with the file's metadata. But — SAS URLs **expire**. After 5 minutes the stored URL is dead. We need a way to refresh it without re-signing on every request.
-
-That's the **refresh chain**.
+So we store the signed URL with the file's metadata. But SAS URLs **expire** — after 5 minutes the stored URL is dead. We need to refresh it without re-signing on every request. That's the **refresh chain**.
 
 ---
 
-## 7. The refresh chain — `needsRefresh*` + `getNew*URL` + `refresh*FileUrls`
+## 8. The refresh chain — `needsRefresh*` + `getNew*URL` + `refresh*FileUrls`
 
 ```mermaid
 flowchart TD
@@ -253,7 +311,7 @@ Why a separate shim instead of folding it into the existing chain:
 
 ---
 
-## 8. TTL math — why URL TTL ≠ cache TTL
+## 9. TTL math — why URL TTL ≠ cache TTL
 
 Three timers, all related, easy to confuse:
 
@@ -278,19 +336,17 @@ entry:   └─┬──────────┘
        After cache TTL expires, next `/api/files` call re-runs the refresh chain.
 ```
 
-The invariant we need to hold: **cache TTL ≤ URL TTL / 2**.
+The invariant: **cache TTL ≤ URL TTL / 2**.
 
-Why halve it: if the cache TTL equalled the URL TTL, then in the worst case a URL signed at T=0 (expires T=5min) could be re-cached at T=4:59 (cache hit returns "skip refresh"). At T=5:01 the URL has expired but the cache entry is still alive until T=4:59+5min = T=9:59. Result: ~5 minutes of serving expired URLs.
+Why halve it: if the cache TTL equalled the URL TTL, then in the worst case a URL signed at T=0 (expires T=5min) could be re-cached at T=4:59 (cache hit returns "skip refresh"). At T=5:01 the URL has expired but the cache entry is still alive until T=9:59. Result: ~5 minutes of serving expired URLs. Halving guarantees that when the cache says "refreshed recently", the covered URLs have at least half their TTL left. The floor is 1 minute (prevents pathological rapid re-refreshes when `AZURE_URL_EXPIRY_SECONDS` is set very low).
 
-Halving guarantees that when the cache says "you refreshed recently", the URLs covered by that cache entry have at least half their TTL still left. The minimum floor is 1 minute (prevents pathological rapid re-refreshes when someone sets `AZURE_URL_EXPIRY_SECONDS` very low).
+This is what `getFileURLRefreshCacheTime(strategy)` does — cache TTL = `Math.max(urlTTL_ms / 2, ONE_MINUTE)`.
 
-This is what `getFileURLRefreshCacheTime(strategy)` does — pick the cache TTL = `Math.max(urlTTL_ms / 2, ONE_MINUTE)`.
-
-> **The bug we just fixed**: the agent-list cache was hardcoded to **30 minutes** with the S3 cache namespace, regardless of strategy. With Azure's 5-min URL TTL, cached entries served expired SAS for ~25 minutes of the cache window. Strategy-aware namespace + `getFileURLRefreshCacheTime` resolves it.
+> **The bug this fixed**: the agent-list cache was hardcoded to **30 minutes** with the S3 cache namespace, regardless of strategy. With Azure's 5-min URL TTL, cached entries served expired SAS for ~25 minutes. Strategy-aware namespace + `getFileURLRefreshCacheTime` resolves it.
 
 ---
 
-## 9. Signing modes — Account Key (dev) vs Managed Identity (prod)
+## 10. Signing modes — Account Key (dev) vs Managed Identity (prod)
 
 ```mermaid
 flowchart LR
@@ -314,18 +370,16 @@ flowchart LR
 
 Why two modes:
 
-- **Account Key** (`AZURE_STORAGE_CONNECTION_STRING`): the storage account's master key is in the env. Anyone with that key can do anything to any blob. Fine for dev, **dangerous in prod**. If the key leaks (logs, snapshots, cluster secret leak), revocation is "rotate the key" — invalidates every SAS ever signed with the old key, including legitimate ones in flight.
-- **Managed Identity → User Delegation SAS**: no account key in the cluster. The AKS pod has an AAD identity. KARL asks Azure "give me a delegation key" (Azure verifies the identity, returns a key valid for ≤7 days). KARL signs SAS with that delegation key. Compromise of one delegation key only affects ~7 days of in-flight URLs; rotating the AAD identity is fast and doesn't break the world.
+- **Account Key** (`AZURE_STORAGE_CONNECTION_STRING`): the storage account's master key is in the env. Anyone with it can do anything to any blob. Fine for dev, **dangerous in prod**. If it leaks, revocation is "rotate the key" — invalidating every SAS ever signed with the old key, including legitimate ones in flight.
+- **Managed Identity → User Delegation SAS**: no account key in the cluster. The AKS pod has an AAD identity. KARL asks Azure for a delegation key (valid ≤7 days) and signs SAS with it. Compromise of one delegation key only affects ~7 days of in-flight URLs; rotating the AAD identity is fast.
 
-Production should always be Managed Identity. The deployment-configs PR is what wires the AKS Workload Identity → Storage Blob Data Contributor role. After that proves out, you can flip the storage account to **"Allow storage account key access: Disabled"** in the portal — at which point even if someone tries to use the account key, Azure refuses.
+Production should always be Managed Identity. The deployment-configs PR wires AKS Workload Identity → Storage Blob Data Contributor. After that proves out, flip the storage account to **"Allow storage account key access: Disabled"** — then even the account key won't work.
 
-The **singleton** in `getManagedIdentityBlobServiceClient(accountName)` is what makes this fast: the credential's AAD token cache lives on the credential instance. Recreating the credential per-request means every signed-URL request cold-starts the AAD cache.
+The **singleton** in `getManagedIdentityBlobServiceClient(accountName)` is what makes this fast: the credential's AAD token cache lives on the credential instance. Recreating it per-request cold-starts the AAD cache every time.
 
 ---
 
-## 10. The three-layer security model (recap)
-
-Once you understand the flows, this diagram says it all:
+## 11. The three-layer security model (recap)
 
 ```mermaid
 flowchart TB
@@ -352,25 +406,26 @@ flowchart TB
   L2 --> L3
 ```
 
-**The blob path's userId (`files/uploads/<userId>/...`) is a naming convention, not Azure-enforced.** Per-user isolation lives at Layer 3 — if the backend correctly signs only blobs the requesting user owns, and SAS TTL is short enough to bound leak damage, this is the same pattern Slack/GitHub/etc. use for hosted assets. If KARL's `fileAccess` middleware is bypassed (it shouldn't be), Azure can't catch it.
+**The blob path's userId (`files/uploads/<userId>/...`) is a naming convention, not Azure-enforced.** Per-user isolation lives at Layer 3 — if the backend correctly signs only blobs the requesting user owns, and SAS TTL is short enough to bound leak damage, this is the same pattern Slack/GitHub use for hosted assets. If KARL's `fileAccess` middleware is bypassed (it shouldn't be), Azure can't catch it.
 
 ---
 
-## 11. Where the code lives
+## 12. Where the code lives
 
 | Concern | File |
 |---|---|
-| Signing, refresh, extractor, delete | [`api/server/services/Files/Azure/crud.js`](../../../api/server/services/Files/Azure/crud.js) |
-| Avatar processing (signed URL out) | [`api/server/services/Files/Azure/images.js`](../../../api/server/services/Files/Azure/images.js) |
-| **Message-attachment refresh shim (KK20-182)** | [`api/server/services/Files/Azure/refreshMessageAttachments.js`](../../../api/server/services/Files/Azure/refreshMessageAttachments.js) |
-| Container client + startup | [`packages/api/src/cdn/azure.ts`](../../../packages/api/src/cdn/azure.ts) |
-| Strategy factory (picks Azure vs S3 vs local) | [`api/server/services/Files/strategies.js`](../../../api/server/services/Files/strategies.js) |
-| Upload routing (text-extraction vs blob) | [`api/server/services/Files/process.js`](../../../api/server/services/Files/process.js) |
-| `/api/files` list + refresh dispatch | [`api/server/routes/files/files.js`](../../../api/server/routes/files/files.js) |
-| User-avatar refresh dispatch | [`api/server/controllers/UserController.js`](../../../api/server/controllers/UserController.js) |
-| Agent-avatar refresh dispatch + cache | [`api/server/controllers/agents/v1.js`](../../../api/server/controllers/agents/v1.js) |
-| Refresh-cache TTL helper | [`api/server/utils/getFileStrategy.js`](../../../api/server/utils/getFileStrategy.js) |
-| Cache namespaces | [`api/cache/getLogStores.js`](../../../api/cache/getLogStores.js) |
+| `fileStrategy` selector + refresh-cache TTL helper | [`api/server/utils/getFileStrategy.js`](../../../../api/server/utils/getFileStrategy.js) |
+| Strategy registry (Azure vs S3 vs local) | [`api/server/services/Files/strategies.js`](../../../../api/server/services/Files/strategies.js) |
+| Upload routing (text-extraction vs blob) | [`api/server/services/Files/process.js`](../../../../api/server/services/Files/process.js) |
+| Azure signing, refresh, extractor, delete | [`api/server/services/Files/Azure/crud.js`](../../../../api/server/services/Files/Azure/crud.js) |
+| Avatar processing (signed URL out) | [`api/server/services/Files/Azure/images.js`](../../../../api/server/services/Files/Azure/images.js) |
+| **Message-attachment refresh shim (KK20-182)** | [`api/server/services/Files/Azure/refreshMessageAttachments.js`](../../../../api/server/services/Files/Azure/refreshMessageAttachments.js) |
+| Container client + startup | [`packages/api/src/cdn/azure.ts`](../../../../packages/api/src/cdn/azure.ts) |
+| `/api/files` list + refresh dispatch | [`api/server/routes/files/files.js`](../../../../api/server/routes/files/files.js) |
+| User-avatar refresh dispatch | [`api/server/controllers/UserController.js`](../../../../api/server/controllers/UserController.js) |
+| Agent-avatar refresh dispatch + cache | [`api/server/controllers/agents/v1.js`](../../../../api/server/controllers/agents/v1.js) |
+| Cache namespaces | [`api/cache/getLogStores.js`](../../../../api/cache/getLogStores.js) |
+| Client-side validation | [`client/src/utils/files.ts`](../../../../client/src/utils/files.ts) |
 | Tests | `api/test/server/services/Files/Azure/crud.test.js` |
 
-For the rollout sequence and what's still pending, see [`../implementation-plans/azure-blob-and-private-files.md`](../implementation-plans/azure-blob-and-private-files.md).
+For the rollout sequence and what's still pending, see [`../../implementation-plans/azure-blob-and-private-files.md`](../../implementation-plans/azure-blob-and-private-files.md).

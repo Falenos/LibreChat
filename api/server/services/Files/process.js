@@ -17,6 +17,10 @@ const {
   isAssistantsEndpoint,
   getEndpointFileConfig,
   documentParserMimeTypes,
+  // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
+  knaufLegacyOfficeErrorKey,
 } = require('librechat-data-provider');
 const { EnvVar } = require('@librechat/agents');
 const { logger } = require('@librechat/data-schemas');
@@ -1023,13 +1027,39 @@ function filterFile({ req, image, isAvatar }) {
   const fileSizeLimit =
     isAvatar === true ? fileConfig.avatarSizeLimit : endpointFileConfig.fileSizeLimit;
 
-  if (file.size > fileSizeLimit) {
+  // [knauf] The Knauf upload endpoints (azureOpenAI chat + agents) carry the
+  // restricted allow-list in librechat.yaml (&knauf_allowed_mime). Gate all
+  // Knauf-specific rejection messaging + per-category caps to them, so a future
+  // non-Knauf endpoint or the broad upstream default keeps upstream behavior.
+  // (mergeWithDefault always backfills endpointFileConfig.supportedMimeTypes, so
+  // its presence can't be the opt-in signal — the endpoint id is.) A file_search
+  // upload (agent knowledge) ALSO follows this policy regardless of the agent's
+  // model-provider endpoint: KnaufFileSearch resolves the agents policy client-side,
+  // and this `tool_resource` check is the server-side backstop so the per-category
+  // caps can't be bypassed by a non-Knauf endpoint on a file_search upload. On these
+  // endpoints the per-category cap (enforced below) is the AUTHORITATIVE per-file
+  // size gate, so compute it here and skip the generic endpoint fileSizeLimit check
+  // for capped types — keeping the boundary + message in lockstep with the client
+  // (validateFiles), which would otherwise diverge at the data=50 MB cap (which
+  // equals fileSizeLimit). Every allow-listed type is capped. KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint === EModelEndpoint.azureOpenAI ||
+    endpoint === EModelEndpoint.agents ||
+    req.body.tool_resource === EToolResources.file_search;
+  const knaufCategoryCap =
+    isAvatar !== true && isKnaufCappedEndpoint ? knaufCategorySizeLimit(file.mimetype) : undefined;
+  // End [knauf]
+
+  // [knauf] Skip the generic endpoint size check when a Knauf per-category cap
+  // applies (the category check below is authoritative for capped types). KK20-190.
+  if (knaufCategoryCap == null && file.size > fileSizeLimit) {
     throw new Error(
       `File size limit of ${fileSizeLimit / megabyte} MB exceeded for ${
         isAvatar ? 'avatar upload' : `${endpoint} endpoint`
       }`,
     );
   }
+  // End [knauf]
 
   const isSupportedMimeType = fileConfig.checkType(
     file.mimetype,
@@ -1037,8 +1067,31 @@ function filterFile({ req, image, isAvatar }) {
   );
 
   if (!isSupportedMimeType) {
+    // [knauf] Actionable rejection on the Knauf endpoints: legacy Office binaries
+    // (.doc/.xls/.ppt) get specific Save-As-to-OOXML help; anything else gets a
+    // friendly supported-formats message. Forwarded via resolveUploadErrorMessage
+    // + localized client-side. Other endpoints keep the upstream generic error.
+    // KK20-190 (upload-guidance follow-up).
+    if (isKnaufCappedEndpoint) {
+      throw new Error(
+        knaufLegacyOfficeErrorKey(file.mimetype, file.originalname) ??
+          'com_knauf_error_unsupported_type',
+      );
+    }
+    // End [knauf]
     throw new Error('Unsupported file type');
   }
+
+  // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) — the
+  // authoritative size gate on the Knauf endpoints (replaces the generic check,
+  // which is skipped above for capped types). Throws the i18n key, surfaced to the
+  // client via resolveUploadErrorMessage (USER_FACING_UPLOAD_ERRORS) + localize().
+  // `knaufCategoryCap` is undefined for avatars / non-Knauf endpoints / uncapped
+  // types, so this is a no-op there. Strict `>` mirrors validateFiles. KK20-190.
+  if (knaufCategoryCap != null && file.size > knaufCategoryCap) {
+    throw new Error(knaufCategorySizeErrorKey(file.mimetype));
+  }
+  // End [knauf]
 
   if (!image || isAvatar === true) {
     return;

@@ -274,24 +274,50 @@ const startServer = async () => {
       logger.info(`Server listening at http://${host == '0.0.0.0' ? 'localhost' : host}:${port}`);
     }
 
-    await runAsSystem(async () => {
-      await initializeMCPs();
-      await initializeOAuthReconnectManager();
-    });
-    await checkMigrations();
+    // [knauf] Run the post-listen startup tasks (MCPs, OAuth reconnect, migrations,
+    // job manager) inside a fatal try/catch, and flip `serverReady` true ONLY AFTER
+    // they all succeed. `serverReady` gates the unhandledRejection handler: while it
+    // is false a stray rejection is treated as a fatal startup failure (the worker
+    // exits so the container restarts); once true, request-scoped runtime rejections
+    // keep the worker alive. So a failure in these awaited startup tasks crashes the
+    // worker rather than landing in the keep-alive runtime branch (addresses the
+    // review: both "move serverReady after the tasks" AND "wrap in a fatal catch").
+    // GenerationJobManager.configure/initialize are synchronous (initialize(): void),
+    // so a throw there is caught here too. KK20-190.
+    try {
+      await runAsSystem(async () => {
+        await initializeMCPs();
+        await initializeOAuthReconnectManager();
+      });
+      await checkMigrations();
 
-    // Configure stream services (auto-detects Redis from USE_REDIS env var)
-    const streamServices = createStreamServices();
-    GenerationJobManager.configure(streamServices);
-    GenerationJobManager.initialize();
+      // Configure stream services (auto-detects Redis from USE_REDIS env var)
+      const streamServices = createStreamServices();
+      GenerationJobManager.configure(streamServices);
+      GenerationJobManager.initialize();
 
-    const inspectFlags = process.execArgv.some((arg) => arg.startsWith('--inspect'));
-    if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {
-      memoryDiagnostics.start();
+      const inspectFlags = process.execArgv.some((arg) => arg.startsWith('--inspect'));
+      if (inspectFlags || isEnabled(process.env.MEM_DIAG)) {
+        memoryDiagnostics.start();
+      }
+
+      // Startup fully complete — only now treat a stray rejection as a request-scoped
+      // runtime fault (worker kept alive) rather than a fatal startup failure.
+      serverReady = true;
+    } catch (startupError) {
+      logger.error(
+        '[startup] Post-listen initialization failed; exiting so the container restarts.',
+        { name: startupError?.name, message: startupError?.message, stack: startupError?.stack },
+      );
+      process.exit(1);
     }
+    // End [knauf]
   });
 };
 
+// [knauf] Declared before startServer() — flipped true in the app.listen callback
+// inside it; gates the unhandledRejection handler's keep-alive vs crash decision. KK20-190.
+let serverReady = false;
 startServer();
 
 let messageCount = 0;
@@ -350,6 +376,50 @@ process.on('uncaughtException', (err) => {
 
   process.exit(1);
 });
+
+// [knauf] No `unhandledRejection` handler existed (only `uncaughtException`
+// above). Under Node >=15 a stray promise rejection in a request — e.g. an
+// un-awaited Azure SDK / fetch call on the file path — can terminate the
+// worker, printing only to stderr and never through winston. That produced
+// the "socket hang up" on in-flight /api/files requests with an empty error
+// log. Log the rejection through winston (so it lands in api/logs/error-*.log),
+// and — once the server is ready — keep the worker alive instead of crashing.
+//
+// Keep-alive is request-scoped only: once the server is listening (serverReady),
+// an unhandled rejection is far more likely a per-request async fault than
+// corrupted global state, so we log via winston and continue — eliminating the
+// silent worker crash. BEFORE the server is ready, a rejection means startup
+// itself failed (DB connect, config load, route init); swallowing that would
+// leave a half-initialized worker "running" but broken and hide a CrashLoopBackOff,
+// so it stays fatal and the process exits non-zero for the orchestrator to restart.
+//
+// NOTE: the runtime keep-alive is a deliberate availability trade-off, NOT a
+// substitute for handling the rejection. The durable fix is to await/`.catch()`
+// the originating un-awaited Azure/RAG file-path call at its source; this global
+// handler is a safety net. Runtime rejections carry a distinct `[runtime]` marker
+// so they can be alerted on (a spike means a missing `.catch()` somewhere). KK20-190.
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  if (!serverReady) {
+    logger.error(
+      '[unhandledRejection][startup] Promise rejection before the server was ready; exiting so the container restarts.',
+      { name: err?.name, message: err?.message, stack: err?.stack },
+    );
+    // process.exit() can truncate winston's async transports, losing the line
+    // above. Flush the logger, then exit non-zero; the timeout backstops the exit
+    // in case the 'finish' event never fires.
+    const exitFatal = () => process.exit(1);
+    logger.on('finish', exitFatal);
+    logger.end();
+    setTimeout(exitFatal, 1000);
+    return;
+  }
+  logger.error(
+    '[unhandledRejection][runtime] A promise rejection was not handled; the worker will continue running.',
+    { name: err?.name, message: err?.message, stack: err?.stack },
+  );
+});
+// End [knauf]
 
 /** Export app for easier testing purposes */
 module.exports = app;

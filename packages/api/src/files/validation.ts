@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs';
 import { Providers } from '@librechat/agents';
 import { mbToBytes, isOpenAILikeProvider } from 'librechat-data-provider';
 
@@ -396,3 +397,132 @@ export async function validateImage(
 
   return { isValid: true };
 }
+
+// [knauf] Encrypted / password-protected file detection (KK20-190).
+// Upstream only checks PDF encryption inside the Anthropic path
+// (`validateAnthropicPdf`); KARL's active Azure path never reaches it. This
+// is a provider-agnostic guard covering the two encryptable formats in the
+// Knauf allow-list: PDF and OOXML (.docx/.xlsx/.pptx). Other allowed types
+// (txt/md/csv/json/png/jpg) have no password-protection concept, and `.zip`
+// isn't in the allow-list. Legacy binary `.doc`/`.xls` aren't in the allow-list
+// either (rag_api can't embed them — users save as OOXML), so they're out of scope.
+// NOTE: this block exceeds the Tier-4c 30-line guideline; extract to
+// packages/knauf/ once ADR-017 lands. Until then it stays here as an additive
+// export with near-zero merge surface (appended at end of file).
+export interface EncryptionCheckResult {
+  encrypted: boolean;
+  /** i18n key (NOT English) forwarded verbatim by resolveUploadErrorMessage and
+   * localized client-side via `localize(msg) || msg` — see utils/files.ts
+   * (USER_FACING_UPLOAD_ERRORS) and client locales `com_knauf_error_file_encrypted`. */
+  error?: string;
+}
+
+/** OLE2 / Compound File Binary Format magic. A *normal* OOXML file is a ZIP
+ * (`PK\x03\x04`); an encrypted one is wrapped in a CFBF "EncryptedPackage".
+ * Detection is byte-sniffed, NOT gated on the declared mimetype: req.file.mimetype
+ * is the verbatim multipart Content-Type and is attacker-controlled, so an
+ * encrypted .docx sent as application/zip / application/pdf must not slip past.
+ * No allow-listed format (pdf / modern-OOXML=zip / png / jpeg / webp / txt / md /
+ * csv / json) begins with CFBF magic; legacy .doc/.xls binaries are also CFBF but
+ * are rejected by the allow-list before this check runs. (Edge case: a legacy .doc
+ * renamed to .docx slips past the allow-list and is reported as "encrypted" here —
+ * CFBF can't distinguish encrypted-OOXML from a mislabeled OLE2 binary; both are
+ * unprocessable, so the rejection is correct even if the wording isn't precise.)
+ * KK20-190. */
+const CFBF_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+
+/** Localized client-side (en/de). Same key for PDF + OOXML — the message is identical. */
+const FILE_ENCRYPTED_ERROR_KEY = 'com_knauf_error_file_encrypted';
+
+/** PDF "/Encrypt" trailer marker, searched as bytes (no full-buffer toString). */
+const PDF_ENCRYPT_MARKER = Buffer.from('/Encrypt');
+
+/** Bytes from the END of a PDF to scan for the /Encrypt trailer marker. The
+ * `/Encrypt` entry lives in the trailer dictionary near EOF; scanning only the
+ * tail avoids false positives from the literal `/Encrypt` appearing inside a
+ * (typically uncompressed) content stream, and avoids materializing the file.
+ *
+ * Best-effort, not a guarantee: PDF 1.5+ files that use a cross-reference STREAM
+ * (instead of a classic `trailer << >>` dictionary) carry `/Encrypt` in the xref
+ * stream's dictionary, which precedes its compressed body. If that body pushes
+ * `/Encrypt` more than this window before EOF, the scan misses it and the
+ * encrypted PDF passes the guard — it then fails downstream in rag_api parsing
+ * (the pre-feature behavior). Compressed xref bodies are usually sub-1 KB so this
+ * is rare; widen the window if real-world false negatives appear. (KK20-190) */
+const PDF_TRAILER_SCAN_BYTES = 4096;
+
+/** Scan only the trailing region of a PDF buffer for the /Encrypt marker, so the
+ * result is identical whether the whole file or just its tail is passed in. */
+function pdfTailHasEncryptMarker(buffer: Buffer): boolean {
+  const start = buffer.length > PDF_TRAILER_SCAN_BYTES ? buffer.length - PDF_TRAILER_SCAN_BYTES : 0;
+  return buffer.subarray(start).includes(PDF_ENCRYPT_MARKER);
+}
+
+/**
+ * Detects encrypted / password-protected PDF and OOXML files from their bytes.
+ * Pure function — the PDF check scans only the buffer tail (trailer region), so
+ * passing either the whole file or just its tail yields the same verdict. On the
+ * upload path prefer `detectEncryptedFileAtPath`, which avoids reading the file.
+ */
+export function detectEncryptedFile(buffer: Buffer, mimetype: string): EncryptionCheckResult {
+  if (!buffer || buffer.length < 8) {
+    return { encrypted: false };
+  }
+
+  // CFBF magic is byte-sniffed first, independent of the declared mimetype, so a
+  // spoofed Content-Type can't hide an encrypted OOXML (see CFBF_MAGIC note).
+  if (buffer.subarray(0, 8).equals(CFBF_MAGIC)) {
+    return { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY };
+  }
+
+  const isPdf = mimetype === 'application/pdf' || buffer.subarray(0, 5).toString() === '%PDF-';
+  if (isPdf && pdfTailHasEncryptMarker(buffer)) {
+    return { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY };
+  }
+
+  return { encrypted: false };
+}
+
+/**
+ * Path-based variant for the upload route. Reads only the bytes the detector can
+ * act on — an 8-byte head (to sniff `%PDF-` even when the declared mimetype lies,
+ * and to test the OOXML CFBF magic) plus, for PDFs only, the trailer region —
+ * instead of loading the entire upload into memory. Returns `{ encrypted: false }`
+ * with no tail read for types outside the PDF/OOXML scope.
+ */
+export async function detectEncryptedFileAtPath(
+  filePath: string,
+  mimetype: string,
+): Promise<EncryptionCheckResult> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const head = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(head, 0, 8, 0);
+    if (bytesRead < 8) {
+      return { encrypted: false };
+    }
+
+    // CFBF magic byte-sniffed first, independent of the declared mimetype (see
+    // CFBF_MAGIC note) — keeps the verdict identical to detectEncryptedFile.
+    if (head.equals(CFBF_MAGIC)) {
+      return { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY };
+    }
+
+    const isPdf = mimetype === 'application/pdf' || head.subarray(0, 5).toString() === '%PDF-';
+    if (isPdf) {
+      const { size } = await handle.stat();
+      const length = Math.min(PDF_TRAILER_SCAN_BYTES, size);
+      const start = size > length ? size - length : 0;
+      const tail = Buffer.alloc(length);
+      await handle.read(tail, 0, length, start);
+      return tail.includes(PDF_ENCRYPT_MARKER)
+        ? { encrypted: true, error: FILE_ENCRYPTED_ERROR_KEY }
+        : { encrypted: false };
+    }
+
+    return { encrypted: false };
+  } finally {
+    await handle.close();
+  }
+}
+// End [knauf]

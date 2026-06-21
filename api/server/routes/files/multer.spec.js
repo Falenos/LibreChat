@@ -547,3 +547,95 @@ describe('Multer Configuration', () => {
     });
   });
 });
+
+// [knauf] KK20-190 — chat-upload allow-list rejection messaging. The multer
+// fileFilter rejects unsupported types DURING multipart streaming (before the
+// files.js route body) and tags the error; the paired knaufUploadRejectionHandler
+// turns that into a localizable 415 JSON {message:<i18n key>}, so the client shows
+// actionable Save-As-OOXML guidance instead of a generic 500. This pins the whole
+// wiring end-to-end (real multer instance + handler) so it can't silently break.
+describe('[knauf] chat-upload allow-list rejection (fileFilter + knaufUploadRejectionHandler)', () => {
+  const express = require('express');
+  const request = require('supertest');
+  const { getAppConfig } = require('~/server/services/Config');
+  const { knaufUploadRejectionHandler } = require('./multer');
+
+  let app;
+  let tmp;
+
+  const buildApp = (upload) => {
+    const a = express();
+    a.post(
+      '/',
+      (req, _res, next) => {
+        req.user = { id: 'u1' };
+        req.config = { paths: { uploads: tmp } };
+        next();
+      },
+      upload.single('file'),
+      knaufUploadRejectionHandler,
+      // Success terminal — only reached when the file is accepted (mirrors the
+      // real `router.use('/', files)` fall-through after the error handler).
+      (req, res) => res.status(200).json({ ok: true, file: Boolean(req.file) }),
+    );
+    return a;
+  };
+
+  beforeEach(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'knauf-upload-'));
+    getAppConfig.mockResolvedValue({
+      paths: { uploads: tmp },
+      fileConfig: {
+        endpoints: {
+          // Mirrors the librechat.yaml &knauf_allowed_mime allow-list (restrictive
+          // — excludes legacy .doc/.xls and everything off-list).
+          azureOpenAI: { supportedMimeTypes: ['^application/pdf$', '^image/(png|jpeg|webp)$'] },
+        },
+      },
+    });
+    app = buildApp(await createMulterInstance());
+  });
+
+  afterEach(() => {
+    if (tmp && fs.existsSync(tmp)) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a legacy .doc on azureOpenAI with 415 + the legacy-Office key', async () => {
+    const res = await request(app)
+      .post('/')
+      .field('endpoint', 'azureOpenAI')
+      .attach('file', Buffer.from('legacy-binary'), {
+        filename: 'report.doc',
+        contentType: 'application/msword',
+      });
+    expect(res.status).toBe(415);
+    expect(res.body.message).toBe('com_knauf_error_legacy_doc');
+  });
+
+  it('rejects an unknown type on azureOpenAI with 415 + the friendly key', async () => {
+    const res = await request(app)
+      .post('/')
+      .field('endpoint', 'azureOpenAI')
+      .attach('file', Buffer.from('x'), {
+        filename: 'data.xyz',
+        contentType: 'application/x-unknown',
+      });
+    expect(res.status).toBe(415);
+    expect(res.body.message).toBe('com_knauf_error_unsupported_type');
+  });
+
+  it('accepts an allow-listed PDF (falls through to the success handler)', async () => {
+    const res = await request(app)
+      .post('/')
+      .field('endpoint', 'azureOpenAI')
+      .attach('file', Buffer.from('%PDF-1.7 ...'), {
+        filename: 'ok.pdf',
+        contentType: 'application/pdf',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.file).toBe(true);
+  });
+});
+// End [knauf]

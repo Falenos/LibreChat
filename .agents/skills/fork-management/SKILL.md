@@ -11,7 +11,7 @@ This is a thin fork of LibreChat (`danny-avila/LibreChat`). Every modification t
 
 Read `SEAMS.md` before doing anything else — it is the live inventory of every existing seam and shows the exact auto-sentinel format you must follow.
 
-> If you hit a decision the tier table below doesn't resolve, consult `knauf/docs/reference/code-change-protocol.md` for the full tier rationale and decision framework. Don't read it proactively.
+> If you hit a decision the tier table below doesn't resolve, consult `knauf/docs/contributing/code-change-protocol.md` for the full tier rationale and decision framework. Don't read it proactively.
 
 If the change touches React/TypeScript in `client/` or `packages/`, also invoke the [`knauf-coding-style`](../knauf-coding-style/SKILL.md) skill once you've picked the tier — it codifies the i18n flow, list-rendering patterns, useRef-for-unstable-closures pattern, Knauf-namespaced schema additions, and other style rules you'll otherwise re-learn through review.
 
@@ -30,7 +30,7 @@ Walk the ladder from the top. Stop at the first "yes".
 | Must it modify ≤30 lines in 1–3 upstream files? | **Tier 4c** — `[knauf]` inline markers |
 | Must it replace an entire upstream file? | **Tier 4d** — last resort, justify in SEAMS.md |
 
-If stuck, check `knauf/docs/reference/code-change-protocol.md` for the full tier rationale and decision framework.
+If stuck, check `knauf/docs/contributing/code-change-protocol.md` for the full tier rationale and decision framework.
 
 ---
 
@@ -76,7 +76,7 @@ When a Tier 4c marker adds a new field to a Mongoose schema (`packages/data-sche
 
 Out of scope (no prefix): form-only/UI-only TS fields that never persist (`avatar_action`, `avatar_preview`); net-new Knauf entities under `packages/knauf/` (already path-isolated). Zod validators inherit the rule from the type they validate.
 
-When in doubt, prefix — the cost of a `knauf_` prefix is cosmetic; renaming a persisted field post-launch costs a data migration. Full rationale in `knauf/docs/reference/code-change-protocol.md` (Schema / Type Extensions).
+When in doubt, prefix — the cost of a `knauf_` prefix is cosmetic; renaming a persisted field post-launch costs a data migration. Full rationale in `knauf/docs/contributing/code-change-protocol.md` (Schema / Type Extensions).
 
 ---
 

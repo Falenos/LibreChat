@@ -42,6 +42,13 @@ jest.mock('~/components/SharePoint', () => ({
   SharePointPickerDialog: () => null,
 }));
 
+// [knauf] Stub the upload-formats dialog (own seam test) so this menu test doesn't
+// pull in OGDialog (absent from the @librechat/client mock below). KK20-190.
+jest.mock('~/knauf/components/Chat/KnaufUploadFormatsDialog', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+
 jest.mock('~/knauf/analytics/adobe', () => ({
   dispatchAdobeAppInteraction: (payload: unknown) => mockDispatchAdobeAppInteraction(payload),
 }));

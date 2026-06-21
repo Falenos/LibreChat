@@ -6,7 +6,7 @@ This is the live ritual for picking up an `upstream-sync` issue (opened weekday 
 
 ## How upstream sync works in this repo
 
-`Knauf-Group/agentic-karl-v2` has native shared ancestry with `danny-avila/LibreChat` anchored at `v0.8.5`. `git merge upstream/<tag>` produces normal 3-way merges with no special setup — no replace refs, no preflight to fetch a graft, no `--allow-unrelated-histories`. See [`migration.md`](../migration.md) for the one-time event that established this state.
+`Knauf-Group/agentic-karl-v2` has native shared ancestry with `danny-avila/LibreChat` anchored at `v0.8.5`. `git merge upstream/<tag>` produces normal 3-way merges with no special setup — no replace refs, no preflight to fetch a graft, no `--allow-unrelated-histories`. See [`migration.md`](migration.md) for the one-time event that established this state.
 
 Upstream `v*` tags are fetched into the `upstream/v*` namespace so they don't collide with Knauf's own `v*` release tags. Baseline anchors (the Knauf-side merge commits) are tagged `knauf/base-vX.Y.Z`.
 
@@ -126,8 +126,8 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 ## Related
 
-- [code-change-protocol.md](../reference/code-change-protocol.md) — marker format + SEAMS.md authoring
-- [testing-and-rollback.md](../reference/testing-and-rollback.md) — verification + revert procedure
+- [code-change-protocol.md](code-change-protocol.md) — marker format + SEAMS.md authoring
+- [testing-and-rollback.md](testing-and-rollback.md) — verification + revert procedure
 - [SEAMS.md](../../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
-- [migration.md](../migration.md) — the one-time event that established native shared ancestry
+- [migration.md](migration.md) — the one-time event that established native shared ancestry
 - [upstream-release-watcher.yml](../../../.github/workflows/upstream-release-watcher.yml) — cron job that opens the `upstream-sync` issue

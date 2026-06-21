@@ -4,6 +4,7 @@ const { EnvVar } = require('@librechat/agents');
 const { logger, SystemCapabilities } = require('@librechat/data-schemas');
 const {
   refreshS3FileUrls,
+  detectEncryptedFileAtPath,
   resolveUploadErrorMessage,
   verifyAgentUploadPermission,
 } = require('@librechat/api');
@@ -400,6 +401,40 @@ router.post('/', async (req, res) => {
 
   try {
     filterFile({ req });
+
+    // [knauf] Reject encrypted / password-protected PDFs and OOXML files
+    // (KK20-190). filterFile already validated size + mime; now inspect the
+    // bytes. detectEncryptedFileAtPath reads only the file head (+ the PDF
+    // trailer region) — not the whole upload — and on a match throws the i18n
+    // key `com_knauf_error_file_encrypted`, which resolveUploadErrorMessage
+    // forwards to the client (USER_FACING_UPLOAD_ERRORS) for localization.
+    // KARL's active Azure path never hits upstream's Anthropic-only PDF check.
+    //
+    // INTENTIONALLY NOT gated to the Knauf endpoints (unlike the allow-list +
+    // per-category caps, which key off isKnaufCappedEndpoint in filterFile): an
+    // encrypted/password-protected PDF or OOXML is unprocessable on EVERY endpoint
+    // (rag_api can't embed it, Azure DI / OpenAI can't parse it), so rejecting it
+    // up front with an actionable message beats a downstream parse failure
+    // everywhere. The check is byte-sniffed and self-limiting (returns early for
+    // non-PDF/OOXML), so it's effectively a no-op for other formats. KK20-190.
+    if (req.file?.path) {
+      let encryptionCheck = { encrypted: false };
+      try {
+        encryptionCheck = await detectEncryptedFileAtPath(req.file.path, req.file.mimetype);
+      } catch (encryptionReadError) {
+        // Best-effort guard: if the bytes can't be read (e.g. transient fs error),
+        // don't hard-fail the upload — log and let downstream processing handle it.
+        // The intentional encrypted-file rejection is thrown OUTSIDE this catch so
+        // it still propagates to the route handler. KK20-190.
+        logger.warn(
+          `[/files] encrypted-file check skipped (file unreadable): ${encryptionReadError.message}`,
+        );
+      }
+      if (encryptionCheck.encrypted) {
+        throw new Error(encryptionCheck.error);
+      }
+    }
+    // End [knauf]
 
     metadata.temp_file_id = metadata.file_id;
     metadata.file_id = req.file_id;

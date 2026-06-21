@@ -143,7 +143,7 @@ Exit criteria: `lib/manifest.js` is now just `lib/render-md.js`. Net: -300 lines
 | Every contributor's muscle memory ("edit SEAMS.md") | Phase 2b lands with a loud CHANGELOG entry, a banner in the README, and `seams.js write` failing loudly if you try to edit md by hand (until Phase 3) |
 | The agent skill doc | Rewritten as part of PR 2b. The `seam-manifest` SKILL.md becomes simpler — yaml is easier to edit programmatically than markdown tables |
 | CI workflow | `seams check` already gates SEAMS.md/yaml consistency once Phase 2 lands. The existing [.github/workflows/seam-validator.yml](../../../.github/workflows/seam-validator.yml) needs one line changed (the file it watches) |
-| Upstream-sync ritual ([knauf/docs/guides/upstream-sync.md](../guides/upstream-sync.md)) | Update during PR 2b. The line-number-shift step now edits structured `lines: [[200, 202]]` arrays instead of `200–202` strings — easier for humans, trivial for tools |
+| Upstream-sync ritual ([knauf/docs/contributing/upstream-sync.md](../contributing/upstream-sync.md)) | Update during PR 2b. The line-number-shift step now edits structured `lines: [[200, 202]]` arrays instead of `200–202` strings — easier for humans, trivial for tools |
 | External consumers of SEAMS.md | The md still exists; it's just generated. Read paths don't change |
 
 ---

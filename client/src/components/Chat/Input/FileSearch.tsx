@@ -14,6 +14,18 @@ function FileSearch() {
     permission: Permissions.USE,
   });
 
+  // [knauf] Hide the BYOK file-search chip on the Knauf chat. Document uploads go
+  // through the "Upload files" menu into chat-scoped File Search (KK20-190), so a
+  // user-toggled file-search chip is redundant and confusing. Hidden in the UI
+  // here — NOT via the FILE_SEARCH permission / interface.fileSearch — so
+  // librechat.yaml stays aligned with main and the agent builder is unaffected.
+  // `as boolean` keeps the upstream body reachable for clean merges. KK20-190.
+  const KNAUF_HIDE_FILE_SEARCH_CHIP = true as boolean;
+  if (KNAUF_HIDE_FILE_SEARCH_CHIP) {
+    return null;
+  }
+  // End [knauf]
+
   if (!canUseFileSearch) {
     return null;
   }

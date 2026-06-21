@@ -220,5 +220,5 @@ Hard stops — reject in code review.
 
 ## Related
 
-- [upstream-sync.md](../guides/upstream-sync.md) — the merge ritual that uses the markers and SEAMS.md you authored
+- [upstream-sync.md](upstream-sync.md) — the merge ritual that uses the markers and SEAMS.md you authored
 - [testing-and-rollback.md](testing-and-rollback.md) — seam-test patterns and emergency rollback

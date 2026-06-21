@@ -1,6 +1,16 @@
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { Providers } from '@librechat/agents';
 import { mbToBytes } from 'librechat-data-provider';
-import { validatePdf, validateBedrockDocument, validateVideo, validateAudio } from './validation';
+import {
+  validatePdf,
+  validateBedrockDocument,
+  validateVideo,
+  validateAudio,
+  detectEncryptedFile,
+  detectEncryptedFileAtPath,
+} from './validation';
 
 describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
   /** Helper to create a PDF buffer with valid header */
@@ -816,3 +826,149 @@ describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
     });
   });
 });
+
+// [knauf] detectEncryptedFile — PDF + OOXML encryption detection (KK20-190).
+describe('detectEncryptedFile', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const CFBF_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  const ZIP_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+
+  it('rejects an encrypted PDF (has /Encrypt)', () => {
+    const buf = Buffer.from('%PDF-1.6\n... /Encrypt 12 0 R ... trailer', 'binary');
+    const result = detectEncryptedFile(buf, 'application/pdf');
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
+  });
+
+  it('accepts a plain PDF (no /Encrypt)', () => {
+    const buf = Buffer.from('%PDF-1.4\nhello world plain content', 'binary');
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
+  });
+
+  it('accepts a non-encrypted PDF with /Encrypt only in an early content stream (F6 regression)', () => {
+    // The /Encrypt entry is authoritative only in the trailer dictionary near EOF.
+    // A non-encrypted PDF can carry the literal bytes "/Encrypt" inside an
+    // (uncompressed) content stream; the tail-only scan must NOT false-positive.
+    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
+    const padding = Buffer.alloc(5000, 0x20); // > the 4096-byte trailer scan window
+    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
+    const buf = Buffer.concat([head, padding, trailer]);
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
+  });
+
+  it('rejects an encrypted OOXML file (CFBF magic, declared docx)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    const result = detectEncryptedFile(buf, DOCX);
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
+  });
+
+  it('accepts a normal OOXML file (ZIP magic, declared xlsx)', () => {
+    const buf = Buffer.concat([ZIP_HEADER, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, XLSX).encrypted).toBe(false);
+  });
+
+  // [knauf] MIME-spoof regression (KK20-190): CFBF magic is flagged regardless of
+  // the declared (attacker-controlled) mimetype, so an encrypted OOXML can't slip
+  // past by claiming an allow-listed non-OOXML type.
+  it('flags an encrypted OOXML spoofed as application/pdf (declared mime ignored)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(true);
+  });
+
+  it('flags an encrypted OOXML spoofed as application/zip (declared mime ignored)', () => {
+    const buf = Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, 'application/zip').encrypted).toBe(true);
+  });
+
+  it('does not flag a genuine (non-CFBF) image regardless of mime', () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const buf = Buffer.concat([png, Buffer.alloc(64)]);
+    expect(detectEncryptedFile(buf, 'image/png').encrypted).toBe(false);
+  });
+
+  it('handles tiny/empty buffers safely', () => {
+    expect(detectEncryptedFile(Buffer.alloc(0), 'application/pdf').encrypted).toBe(false);
+    expect(detectEncryptedFile(Buffer.from([0x25]), 'application/pdf').encrypted).toBe(false);
+  });
+});
+
+// detectEncryptedFileAtPath — partial-read variant used on the upload route. It
+// must reach the same verdict as detectEncryptedFile while reading only the file
+// head (+ PDF trailer region), never the whole file.
+describe('detectEncryptedFileAtPath', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const CFBF_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  const ZIP_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+  const tmpFiles: string[] = [];
+
+  async function writeTmp(buf: Buffer): Promise<string> {
+    const file = path.join(
+      os.tmpdir(),
+      `knauf-enc-${Date.now()}-${Math.random().toString(36).slice(2)}.bin`,
+    );
+    await fs.writeFile(file, buf);
+    tmpFiles.push(file);
+    return file;
+  }
+
+  afterAll(async () => {
+    await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
+  });
+
+  it('rejects an encrypted PDF (/Encrypt in trailer)', async () => {
+    const file = await writeTmp(Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer', 'binary'));
+    const result = await detectEncryptedFileAtPath(file, 'application/pdf');
+    expect(result.encrypted).toBe(true);
+    expect(result.error).toBe('com_knauf_error_file_encrypted');
+  });
+
+  it('accepts a plain PDF', async () => {
+    const file = await writeTmp(Buffer.from('%PDF-1.4\nhello world plain content', 'binary'));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
+  });
+
+  it('does not false-positive on /Encrypt outside the trailer window (F6 regression)', async () => {
+    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
+    const padding = Buffer.alloc(5000, 0x20);
+    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
+    const file = await writeTmp(Buffer.concat([head, padding, trailer]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
+  });
+
+  it('rejects an encrypted OOXML file (CFBF magic, head-only read)', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, DOCX)).encrypted).toBe(true);
+  });
+
+  it('accepts a normal OOXML file (ZIP magic)', async () => {
+    const file = await writeTmp(Buffer.concat([ZIP_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, XLSX)).encrypted).toBe(false);
+  });
+
+  // [knauf] MIME-spoof regression (KK20-190): same byte-sniffed verdict as the
+  // buffer variant — CFBF magic is flagged whatever the declared mimetype claims.
+  it('flags an encrypted OOXML spoofed as application/pdf', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(true);
+  });
+
+  it('flags an encrypted OOXML spoofed as application/zip', async () => {
+    const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'application/zip')).encrypted).toBe(true);
+  });
+
+  it('does not flag a genuine (non-CFBF) image regardless of mime', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const file = await writeTmp(Buffer.concat([png, Buffer.alloc(64)]));
+    expect((await detectEncryptedFileAtPath(file, 'image/png')).encrypted).toBe(false);
+  });
+
+  it('handles tiny files safely', async () => {
+    const file = await writeTmp(Buffer.from([0x25]));
+    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
+  });
+});
+// End [knauf]
