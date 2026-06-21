@@ -25,6 +25,61 @@ import useFileHandling from './useFileHandling';
 import { isEphemeralAgent } from '~/common';
 import useLocalize from '../useLocalize';
 
+// [knauf] Knauf File Search drag-routing, extracted from useDragHelpers.handleDrop to
+// keep that handler under SonarQube's cognitive-complexity limit (S3776). Decides
+// whether a drop should auto-route into File Search instead of the upstream
+// capability-picker modal, applies the routing through injected callbacks, and returns
+// true when it handled the drop (the caller then returns early):
+//   • Default Knauf chat (azureOpenAI + Responses API): enable file_search on the
+//     ephemeral agent, then route. Gated on the platform capability, NOT
+//     fileSearchAllowedByAgent — this drop is what enables file_search (chicken-and-egg).
+//   • Custom agent chat (endpoint `agents`) where File Search is the SOLE destination:
+//     route into the agent's own file_search tool (no ephemeral toggle). If the agent
+//     also offers code execution / context, returns false so the modal still shows.
+// Documents embed; images divert to vision via the per-file override in useFileHandling.
+// KK20-190.
+function routeKnaufFileSearchDrop({
+  endpoint,
+  useResponsesApi,
+  fileSearchEnabled,
+  fileSearchAllowedByAgent,
+  codeEnabled,
+  codeAllowedByAgent,
+  contextEnabled,
+  enableEphemeralFileSearch,
+  routeToFileSearch,
+}: {
+  endpoint?: string;
+  useResponsesApi: boolean;
+  fileSearchEnabled: boolean;
+  fileSearchAllowedByAgent: boolean;
+  codeEnabled: boolean;
+  codeAllowedByAgent: boolean;
+  contextEnabled: boolean;
+  enableEphemeralFileSearch: () => void;
+  routeToFileSearch: () => void;
+}): boolean {
+  if (!fileSearchEnabled) {
+    return false;
+  }
+  if (endpoint === EModelEndpoint.azureOpenAI && useResponsesApi) {
+    enableEphemeralFileSearch();
+    routeToFileSearch();
+    return true;
+  }
+  const agentFileSearchOnly =
+    endpoint === EModelEndpoint.agents &&
+    fileSearchAllowedByAgent &&
+    !(codeEnabled && codeAllowedByAgent) &&
+    !contextEnabled;
+  if (agentFileSearchOnly) {
+    routeToFileSearch();
+    return true;
+  }
+  return false;
+}
+// End [knauf]
+
 export default function useDragHelpers() {
   const queryClient = useQueryClient();
   const { showToast } = useToastContext();
@@ -111,35 +166,6 @@ export default function useDragHelpers() {
       const codeEnabled = capabilities.includes(AgentCapabilities.execute_code) === true;
       const contextEnabled = capabilities.includes(AgentCapabilities.context) === true;
 
-      // [knauf] Drag-drop parity with the "Upload files" menu (AttachFileMenu).
-      // On the Knauf Azure File Search chat, route dropped files straight into
-      // File Search (RAG) — documents embed, and useFileHandling's per-file image
-      // override diverts images to the vision path — instead of popping the
-      // capability-picker modal, which exposes the file_search/code/context
-      // mechanism the menu deliberately hides. We gate on the platform capability
-      // (fileSearchEnabled), NOT fileSearchAllowedByAgent (the same chicken-and-egg
-      // reasoning as the menu: this drop is what enables file_search on the
-      // ephemeral agent). Assistants (handled above), custom agents, and non-Azure
-      // endpoints fall through to the upstream modal. NB: parity here covers the
-      // default ephemeral azureOpenAI chat only — a custom Azure-Responses *agent*
-      // runs under endpoint `agents` (not `azureOpenAI`), so on drop it intentionally
-      // keeps the upstream modal even though the menu would route it to File Search.
-      // KK20-190 (upload-guidance).
-      const conv = conversationRef.current;
-      const knaufFileSearchChat =
-        conv?.endpoint === EModelEndpoint.azureOpenAI &&
-        conv?.useResponsesApi === true &&
-        fileSearchEnabled;
-      if (knaufFileSearchChat) {
-        setEphemeralAgent((prev) => ({
-          ...prev,
-          [EToolResources.file_search]: true,
-        }));
-        handleFilesRef.current(item.files, EToolResources.file_search);
-        return;
-      }
-      // End [knauf]
-
       let fileSearchAllowedByAgent = true;
       let codeAllowedByAgent = true;
 
@@ -154,23 +180,22 @@ export default function useDragHelpers() {
         }
       }
 
-      // [knauf] Custom agent chats: auto-route on drop the same way the default Knauf
-      // chat does — documents → File Search (RAG via the agent's file_search tool),
-      // images → vision (per-file override in useFileHandling) — and skip the
-      // capability-picker modal, which otherwise forces an "Upload to provider vs File
-      // Search" choice the normal chat never shows. Gated to when File Search is the
-      // SOLE destination: if the agent also offers code execution or context, keep the
-      // modal so the user can still choose. Equivalent to picking "Upload for File
-      // Search" in the modal (handleOptionSelect) — no ephemeral toggle, since a
-      // persisted agent already carries the file_search tool. KK20-190.
-      const agentFileSearchOnly =
-        conv?.endpoint === EModelEndpoint.agents &&
-        fileSearchEnabled &&
-        fileSearchAllowedByAgent &&
-        !(codeEnabled && codeAllowedByAgent) &&
-        !contextEnabled;
-      if (agentFileSearchOnly) {
-        handleFilesRef.current(item.files, EToolResources.file_search);
+      // [knauf] Auto-route Knauf File Search drops (default chat + agent chats) instead
+      // of the upstream capability-picker modal — see routeKnaufFileSearchDrop. KK20-190.
+      const conv = conversationRef.current;
+      const handledByKnauf = routeKnaufFileSearchDrop({
+        endpoint: conv?.endpoint,
+        useResponsesApi: conv?.useResponsesApi === true,
+        fileSearchEnabled,
+        fileSearchAllowedByAgent,
+        codeEnabled,
+        codeAllowedByAgent,
+        contextEnabled,
+        enableEphemeralFileSearch: () =>
+          setEphemeralAgent((prev) => ({ ...prev, [EToolResources.file_search]: true })),
+        routeToFileSearch: () => handleFilesRef.current(item.files, EToolResources.file_search),
+      });
+      if (handledByKnauf) {
         return;
       }
       // End [knauf]
