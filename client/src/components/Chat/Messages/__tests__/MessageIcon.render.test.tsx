@@ -135,6 +135,50 @@ describe('MessageIcon render cycles', () => {
     );
     expect(queryByTestId('icon')).not.toBeInTheDocument();
   });
+
+  it('renders the Knauf logo for agent messages without an uploaded avatar', () => {
+    const iconData: TMessageIcon = {
+      endpoint: EModelEndpoint.agents,
+      model: 'agent_123',
+      iconURL: undefined,
+      modelLabel: 'No Avatar Agent',
+      isCreatedByUser: false,
+    };
+
+    const { getByTestId, queryByTestId } = render(
+      <MessageIcon
+        iconData={iconData}
+        agent={makeAgent({ name: 'No Avatar Agent', avatar: undefined })}
+      />,
+    );
+
+    expect(getByTestId('convo-icon-url')).toHaveAttribute(
+      'data-icon-url',
+      '/assets/knauf-logo.png',
+    );
+    expect(getByTestId('convo-icon-url').parentElement).not.toHaveAttribute('title');
+    expect(queryByTestId('icon')).not.toBeInTheDocument();
+  });
+
+  it('keeps legacy string agent avatars instead of treating them as missing', () => {
+    const iconData: TMessageIcon = {
+      endpoint: EModelEndpoint.agents,
+      model: 'agent_123',
+      iconURL: undefined,
+      modelLabel: 'Legacy Avatar Agent',
+      isCreatedByUser: false,
+    };
+
+    const { getByTestId, queryByTestId } = render(
+      <MessageIcon
+        iconData={iconData}
+        agent={makeAgent({ name: 'Legacy Avatar Agent', avatar: '/images/legacy-avatar.png' })}
+      />,
+    );
+
+    expect(getByTestId('icon')).toHaveAttribute('data-icon-url', '/images/legacy-avatar.png');
+    expect(queryByTestId('convo-icon-url')).not.toBeInTheDocument();
+  });
   // End [knauf]
 
   it('does not re-render when parent re-renders with same field values but new object references', () => {

@@ -14,7 +14,7 @@ type MessageIconProps = {
   agent?: Agent;
 };
 
-// [knauf] Default Karl assistant turns use the Knauf wordmark when no custom avatar is set.
+// [knauf] Default Karl assistant and no-avatar agent turns use the Knauf wordmark.
 const KNAUF_DEFAULT_MODEL = 'gpt-5.4';
 const KNAUF_DEFAULT_MODEL_LABEL = 'GPT-5.4';
 const KNAUF_CHAT_ASSISTANT_NAME = 'Karl';
@@ -43,6 +43,9 @@ const isDefaultKarlAssistantIcon = (iconData?: TMessageIcon, avatarURL = '') => 
   );
 };
 
+const getKnaufAgentAvatar = (agent?: Agent) =>
+  typeof agent?.avatar === 'string' ? agent.avatar : (agent?.avatar?.filepath ?? '');
+
 const getKarlTooltipModelLabel = (iconData?: TMessageIcon) => {
   const modelLabel = iconData?.modelLabel?.trim();
   if (modelLabel && normalizeKnaufLabel(modelLabel) !== KNAUF_CHAT_ASSISTANT_NAME.toLowerCase()) {
@@ -69,7 +72,9 @@ export function arePropsEqual(prev: MessageIconProps, next: MessageIconProps): b
     [prev.iconData?.modelLabel, next.iconData?.modelLabel],
     [prev.iconData?.isCreatedByUser, next.iconData?.isCreatedByUser],
     [prev.agent?.name, next.agent?.name],
-    [prev.agent?.avatar?.filepath, next.agent?.avatar?.filepath],
+    // [knauf] Compare the normalized avatar URL so legacy string avatars do not collapse to fallback.
+    [getKnaufAgentAvatar(prev.agent), getKnaufAgentAvatar(next.agent)],
+    // End [knauf]
     [prev.assistant?.name, next.assistant?.name],
     [prev.assistant?.metadata?.avatar, next.assistant?.metadata?.avatar],
   ];
@@ -89,7 +94,7 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
   // End [knauf]
 
   const agentName = agent?.name ?? '';
-  const agentAvatar = agent?.avatar?.filepath ?? '';
+  const agentAvatar = getKnaufAgentAvatar(agent);
   const assistantName = assistant?.name ?? '';
   const assistantAvatar = assistant?.metadata?.avatar ?? '';
   let avatarURL = '';
@@ -100,9 +105,12 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
   }
 
   const iconURL = iconData?.iconURL;
-  // [knauf] Use the local Knauf logo for default Karl/modelSpec assistant messages.
+  // [knauf] Use the local Knauf logo for default Karl turns and no-avatar agent turns.
   const useKnaufDefaultIcon = isDefaultKarlAssistantIcon(iconData, avatarURL);
-  const effectiveIconURL = useKnaufDefaultIcon ? KNAUF_LOGO_ICON_URL : iconURL;
+  const useKnaufAgentFallbackIcon =
+    iconData?.isCreatedByUser !== true && Boolean(agent && !avatarURL);
+  const effectiveIconURL =
+    useKnaufDefaultIcon || useKnaufAgentFallbackIcon ? KNAUF_LOGO_ICON_URL : iconURL;
   const knaufModelTooltip = useKnaufDefaultIcon
     ? localize('com_knauf_powered_by_model', { 0: getKarlTooltipModelLabel(iconData) })
     : undefined;
