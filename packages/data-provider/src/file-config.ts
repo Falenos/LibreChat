@@ -764,3 +764,124 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 
   return mergedConfig;
 }
+
+// [knauf] Per-format-category upload size caps (KK20-190). The fileConfig schema
+// exposes only a single `fileSizeLimit` per endpoint, but the product spec needs
+// different per-file caps by category: documents 25 MB, data/spreadsheets 50 MB,
+// images 20 MB. Centralized here so the client (validateFiles) and server
+// (filterFile) classify + enforce identically, reusing the MIME regexes above.
+// Endpoint `fileSizeLimit` is set to the largest cap (50 MB) as a backstop; this
+// applies the tighter per-category limit on top.
+// NOTE: this block exceeds the Tier-4c 30-line guideline; extract to
+// packages/knauf/ once ADR-017 lands. Until then it stays here as an additive
+// export with near-zero merge surface (appended at end of file). KK20-190.
+//
+// LOCKSTEP: these numbers are also stated in plain text in the locale strings
+// (`com_knauf_error_file_too_large_{document,data,image}` and the `com_knauf_
+// upload_formats_*` copy) in client/src/locales/{en,de}/translation.json — the
+// errors are thrown server-side as bare i18n keys, so the MB value can't be
+// interpolated from here. If you change a cap, update those strings too. (The
+// dialog's per-category badge does derive its number from this map.)
+export const knaufCategorySizeLimits = {
+  document: mbToBytes(25),
+  data: mbToBytes(50),
+  image: mbToBytes(20),
+} as const;
+
+/** CSV arrives as text/csv or application/csv; classified as "data", not document. */
+const knaufCsvMimeTypes = /^(text\/csv|application\/csv)$/;
+
+type KnaufSizeCategory = keyof typeof knaufCategorySizeLimits;
+
+/** Per-category "file too large" i18n key per category (localized client-side). */
+const knaufCategorySizeErrorKeys: Record<KnaufSizeCategory, string> = {
+  document: 'com_knauf_error_file_too_large_document',
+  data: 'com_knauf_error_file_too_large_data',
+  image: 'com_knauf_error_file_too_large_image',
+};
+
+/**
+ * Single source of the MIME → category cascade, so the size cap and the error key
+ * can't drift. Order matters: image → data (xlsx/csv) → document (other
+ * text/application). Returns `undefined` for types outside a capped category.
+ */
+function classifyKnaufCategory(mimetype?: string | null): KnaufSizeCategory | undefined {
+  if (!mimetype) {
+    return undefined;
+  }
+  if (imageMimeTypes.test(mimetype)) {
+    return 'image';
+  }
+  if (excelMimeTypes.test(mimetype) || knaufCsvMimeTypes.test(mimetype)) {
+    return 'data';
+  }
+  if (textMimeTypes.test(mimetype) || applicationMimeTypes.test(mimetype)) {
+    return 'document';
+  }
+  return undefined;
+}
+
+/**
+ * Per-category upload size cap (bytes) for a MIME type, or `undefined` when the
+ * type isn't in a capped category (caller then falls back to endpoint fileSizeLimit).
+ */
+export function knaufCategorySizeLimit(mimetype?: string | null): number | undefined {
+  const category = classifyKnaufCategory(mimetype);
+  return category ? knaufCategorySizeLimits[category] : undefined;
+}
+
+/** i18n key for the per-category "file too large" rejection (localized client-side).
+ * Only meaningful when `knaufCategorySizeLimit` returned a cap; out-of-scope types
+ * fall back to the document key (matching the prior behavior). */
+export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
+  return knaufCategorySizeErrorKeys[classifyKnaufCategory(mimetype) ?? 'document'];
+}
+
+/**
+ * Single source for the chat file-picker `accept` attribute (extensions + image
+ * MIME types). Mirrors the server-side allow-list (`supportedMimeTypes:
+ * &knauf_allowed_mime` in librechat.yaml); keep the two in sync. Imported by
+ * AttachFileMenu and pinned by its spec so a change here surfaces in review.
+ */
+export const knaufChatUploadAccept =
+  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+// End [knauf]
+
+// [knauf] Legacy Office binary detection (KK20-190 upload-guidance follow-up).
+// The allow-list rejects pre-OOXML formats (.doc/.xls/.ppt) because rag_api can't
+// embed them. Rather than a bare "unsupported type", return a specific i18n key
+// that tells the user to Save As the modern format. Detected by MIME, with the
+// filename extension as a backstop (some browsers report a generic type for
+// legacy binaries). Shared by client (validateFiles) and server (filterFile).
+const knaufLegacyOfficeByMime: Record<string, string> = {
+  'application/msword': 'com_knauf_error_legacy_doc',
+  'application/vnd.ms-excel': 'com_knauf_error_legacy_xls',
+  'application/vnd.ms-powerpoint': 'com_knauf_error_legacy_ppt',
+};
+const knaufLegacyOfficeByExt: Record<string, string> = {
+  doc: 'com_knauf_error_legacy_doc',
+  xls: 'com_knauf_error_legacy_xls',
+  ppt: 'com_knauf_error_legacy_ppt',
+};
+
+/**
+ * i18n key for a legacy-Office rejection ("Save As .docx/.xlsx/.pptx"), or
+ * `undefined` when the file isn't a recognized legacy binary. Caller uses this to
+ * upgrade a generic "unsupported type" rejection into actionable migration help.
+ * `.docx`/`.xlsx`/`.pptx` end in their own extensions, so the ext backstop never
+ * matches them.
+ */
+export function knaufLegacyOfficeErrorKey(
+  mimetype?: string | null,
+  filename?: string | null,
+): string | undefined {
+  if (mimetype && knaufLegacyOfficeByMime[mimetype]) {
+    return knaufLegacyOfficeByMime[mimetype];
+  }
+  const ext = filename?.split('.').pop()?.toLowerCase();
+  if (ext && knaufLegacyOfficeByExt[ext]) {
+    return knaufLegacyOfficeByExt[ext];
+  }
+  return undefined;
+}
+// End [knauf]

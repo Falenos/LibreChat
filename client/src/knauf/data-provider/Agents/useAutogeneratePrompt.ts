@@ -6,7 +6,8 @@ import {
   type AutogeneratePromptResponse,
 } from '~/knauf/data-provider/data-service';
 
-export const useAutogeneratePrompt = () =>
+export const useAutogeneratePrompt = (key?: string) =>
   useMutation<AutogeneratePromptResponse, Error, AutogeneratePromptRequest>({
+    mutationKey: key ? ['knauf-autogenerate', key] : undefined,
     mutationFn: postAutogeneratePrompt,
   });

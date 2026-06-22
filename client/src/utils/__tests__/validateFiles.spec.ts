@@ -1,7 +1,16 @@
-import { megabyte, fileConfig as defaultFileConfig } from 'librechat-data-provider';
+import {
+  megabyte,
+  EModelEndpoint,
+  fileConfig as defaultFileConfig,
+  // [knauf] per-category caps — single source of truth for the locale lockstep drift-guard. KK20-190.
+  knaufCategorySizeLimits,
+} from 'librechat-data-provider';
 import type { EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { validateFiles } from '../files';
+// [knauf] locale JSON for the cap↔copy lockstep drift-guard (KK20-190).
+import enTranslation from '~/locales/en/translation.json';
+import deTranslation from '~/locales/de/translation.json';
 
 const supportedMimeTypes = defaultFileConfig.endpoints.default.supportedMimeTypes;
 
@@ -115,6 +124,151 @@ describe('validateFiles', () => {
     expect(result).toBe(true);
   });
 
+  // [knauf] Per-category size caps (KK20-190): documents 25 / data 50 / images 20 MB,
+  // enforced on top of the endpoint fileSizeLimit via knaufCategorySizeLimit. The
+  // endpoint fileSizeLimit is set to 50 MB here so the per-category cap is what fires.
+  // The caps + Knauf messaging are scoped to the allow-list endpoints (azureOpenAI /
+  // agents) — mirroring filterFile server-side — so these pass `endpoint`.
+  it('rejects a document over the 25 MB per-category cap with the localized key', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.pdf', 'application/pdf', 30 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_document');
+  });
+
+  it('rejects an image over the 20 MB per-category cap with the localized key', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.png', 'image/png', 26 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.agents,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_image');
+  });
+
+  it('allows a document exactly at the 25 MB per-category cap (strict > boundary)', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('exact.pdf', 'application/pdf', 25 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  // The data cap (50 MB) EQUALS the endpoint fileSizeLimit (50 MB). The per-category
+  // cap must be authoritative so a file exactly at 50 MB is allowed (strict `>`) and
+  // the generic endpoint check (`>=`, non-localized) is skipped — otherwise the client
+  // rejects a 50 MB spreadsheet that the server (filterFile, `>`) accepts. KK20-190.
+  const xlsxMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const xlsxAllowList = [/^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet$/];
+
+  it('allows a spreadsheet exactly at the 50 MB data cap (== endpoint fileSizeLimit)', () => {
+    endpointFileConfig = makeEndpointConfig({
+      fileSizeLimit: 50 * megabyte,
+      supportedMimeTypes: xlsxAllowList,
+    });
+    const fileList = [makeFile('exact.xlsx', xlsxMimeType, 50 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  it('rejects a spreadsheet over the 50 MB data cap with the localized key', () => {
+    endpointFileConfig = makeEndpointConfig({
+      fileSizeLimit: 50 * megabyte,
+      supportedMimeTypes: xlsxAllowList,
+    });
+    const fileList = [makeFile('big.xlsx', xlsxMimeType, 50 * megabyte + 1)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_file_too_large_data');
+  });
+
+  // The Knauf allow-list (librechat.yaml &knauf_allowed_mime) excludes legacy
+  // binaries, so these two cases use a restrictive supportedMimeTypes that mirrors
+  // production — the broad upstream default would accept .doc and the message would
+  // never fire (the exact gap this messaging exists to cover).
+  const knaufAllowList = [/^application\/pdf$/, /^image\/(png|jpeg|webp)$/];
+
+  it('returns the legacy-Office key for a .doc on a Knauf endpoint', () => {
+    endpointFileConfig = makeEndpointConfig({ supportedMimeTypes: knaufAllowList });
+    const fileList = [makeFile('report.doc', 'application/msword', 1024)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_legacy_doc');
+  });
+
+  it('returns the friendly unsupported-type key for an unknown type on a Knauf endpoint', () => {
+    endpointFileConfig = makeEndpointConfig({ supportedMimeTypes: knaufAllowList });
+    const fileList = [makeFile('data.xyz', 'application/x-unknown', 1024)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_knauf_error_unsupported_type');
+  });
+
+  it('does NOT apply the per-category cap on a non-Knauf endpoint (keeps upstream behavior)', () => {
+    endpointFileConfig = makeEndpointConfig({ fileSizeLimit: 50 * megabyte });
+    const fileList = [makeFile('big.pdf', 'application/pdf', 30 * megabyte)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.bedrock,
+    });
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+  // End [knauf]
+
   it('rejects when totalSizeLimit would be exceeded', () => {
     const limit = 10 * megabyte;
     endpointFileConfig = makeEndpointConfig({ totalSizeLimit: limit });
@@ -170,3 +324,36 @@ describe('validateFiles', () => {
     expect(setError).toHaveBeenCalledWith('File limit reached: 1 files');
   });
 });
+
+// [knauf] Lockstep drift-guard (KK20-190). The per-category caps are the single
+// source of truth in `knaufCategorySizeLimits`, but the "file too large" error
+// strings hardcode the MB number in plain text (server throws bare i18n keys, so
+// the number can't be interpolated — see the LOCKSTEP note in file-config.ts).
+// This pins the copy to the map: if a cap changes without the locale string being
+// updated, this fails in CI instead of shipping a wrong number to users. Covers en
+// + de (the two locales Knauf maintains). KK20-190.
+describe('Knauf per-category cap ↔ locale copy lockstep', () => {
+  const localesByName: Record<string, Record<string, string>> = {
+    en: enTranslation,
+    de: deTranslation,
+  };
+  const categoryToKey: Record<keyof typeof knaufCategorySizeLimits, string> = {
+    document: 'com_knauf_error_file_too_large_document',
+    data: 'com_knauf_error_file_too_large_data',
+    image: 'com_knauf_error_file_too_large_image',
+  };
+
+  for (const [locale, translation] of Object.entries(localesByName)) {
+    for (const [category, key] of Object.entries(categoryToKey)) {
+      const mb =
+        knaufCategorySizeLimits[category as keyof typeof knaufCategorySizeLimits] / megabyte;
+      it(`${locale}: "${key}" states ${mb} MB`, () => {
+        const message = translation[key];
+        expect(message).toBeDefined();
+        // Match the integer MB as a whole word so e.g. 25 doesn't satisfy a "250" check.
+        expect(message).toMatch(new RegExp(String.raw`\b${mb}\b`));
+      });
+    }
+  }
+});
+// End [knauf]

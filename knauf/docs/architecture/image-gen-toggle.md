@@ -246,4 +246,4 @@ Order of operations, smallest to largest:
 - [librechat.yaml](../../../librechat.yaml) — `includedTools: image_gen_oai` (line 19), `interface.knauf.imageGen` (default `true`).
 - [packages/api/src/tools/toolkits/oai.ts](../../../packages/api/src/tools/toolkits/oai.ts) — definitions of `image_gen_oai` and `image_edit_oai`.
 - [CLAUDE.local.md](../../../CLAUDE.local.md) — FEAT-03 (admin/user view split) and FEAT-04 (agent-config capability flags) for adjacent work.
-- [knauf/docs/reference/code-change-protocol.md](code-change-protocol.md) — tier ladder and SEAMS append-only convention.
+- [knauf/docs/contributing/code-change-protocol.md](../contributing/code-change-protocol.md) — tier ladder and SEAMS append-only convention.

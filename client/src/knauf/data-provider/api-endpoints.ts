@@ -10,3 +10,4 @@ import { apiBaseUrl } from 'librechat-data-provider';
 const knaufBase = `${apiBaseUrl()}/api/knauf`;
 
 export const autogeneratePrompt = () => `${knaufBase}/autogenerate-prompt`;
+export const promptTemplates = () => `${knaufBase}/prompt-templates`;

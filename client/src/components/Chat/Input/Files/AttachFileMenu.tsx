@@ -2,6 +2,7 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
+  Info,
   FileSearch,
   ImageUpIcon,
   FileType2Icon,
@@ -23,8 +24,10 @@ import {
   defaultAgentCapabilities,
   bedrockDocumentExtensions,
   isDocumentSupportedProvider,
+  // [knauf] Single source for the chat allow-list picker `accept` (mirrors librechat.yaml). KK20-190.
+  knaufChatUploadAccept,
 } from 'librechat-data-provider';
-import type { EndpointFileConfig, TConversation } from 'librechat-data-provider';
+import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
@@ -41,6 +44,8 @@ import { MenuItemProps } from '~/common';
 import { cn } from '~/utils';
 // [knauf] Emit Adobe data-layer app_interaction events for chat file upload selections.
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// [knauf] "Supported file types" dialog opened from the upload-menu hint row.
+import KnaufUploadFormatsDialog from '~/knauf/components/Chat/KnaufUploadFormatsDialog';
 // End [knauf]
 
 type FileUploadType =
@@ -48,7 +53,25 @@ type FileUploadType =
   | 'document'
   | 'image_document'
   | 'image_document_extended'
-  | 'image_document_video_audio';
+  | 'image_document_video_audio'
+  // [knauf] Chat "Upload files" allow-list (mirrors librechat.yaml fileConfig). KK20-190.
+  | 'knauf_allowed';
+// End [knauf]
+
+// [knauf] Recoil updaters for the ephemeral-agent tool flags, lifted to module
+// scope so the `setEphemeralAgent(...)` calls inside the menu-item onClick
+// handlers don't nest an inline updater arrow five functions deep
+// (component → useMemo → createMenuItems → onClick → updater) — SonarCloud S2004
+// caps nesting at four. KK20-190.
+const enableEphemeralFileSearch = (prev: TEphemeralAgent | null): TEphemeralAgent => ({
+  ...prev,
+  [EToolResources.file_search]: true,
+});
+const enableEphemeralCodeExecution = (prev: TEphemeralAgent | null): TEphemeralAgent => ({
+  ...prev,
+  [EToolResources.execute_code]: true,
+});
+// End [knauf]
 
 interface AttachFileMenuProps {
   agentId?: string | null;
@@ -85,6 +108,8 @@ const AttachFileMenu = ({
     ephemeralAgentByConvoId(conversationId),
   );
   const [toolResource, setToolResource] = useState<EToolResources | undefined>();
+  // [knauf] Controls the "Supported file types" dialog (opened from the menu hint row). KK20-190.
+  const [formatsDialogOpen, setFormatsDialogOpen] = useState(false);
   const { handleFileChange } = useFileHandlingNoChatContext(undefined, {
     files,
     setFiles,
@@ -135,6 +160,12 @@ const AttachFileMenu = ({
         inputRef.current.accept = `image/*,.heif,.heic,${bedrockDocumentExtensions}`;
       } else if (fileType === 'image_document_video_audio') {
         inputRef.current.accept = 'image/*,.heif,.heic,.pdf,application/pdf,video/*,audio/*';
+      } else if (fileType === 'knauf_allowed') {
+        // [knauf] Restrict the chat file picker to the Knauf allow-list (single
+        // source: knaufChatUploadAccept, mirrors fileConfig.supportedMimeTypes in
+        // librechat.yaml). Documents route to File Search (RAG); images route to
+        // the vision path (per-file split in useFileHandling). KK20-190.
+        inputRef.current.accept = knaufChatUploadAccept;
       } else {
         inputRef.current.accept = '';
       }
@@ -164,13 +195,50 @@ const AttachFileMenu = ({
         isAzureWithResponsesApi
       ) {
         items.push({
-          // [knauf] Use the generic "Upload files" label instead of upstream's
-          // "Upload to Provider" — Knauf users don't think in
-          // provider/endpoint terms, and the item already accepts images +
-          // PDFs / docs (handled by the FileUploadType chosen below).
+          // [knauf] Generic "Upload files" label instead of upstream's "Upload
+          // to Provider" — Knauf users don't think in provider/endpoint terms.
+          // On the Knauf Azure chat this item routes documents to File Search
+          // (see onClick); the label deliberately hides that mechanism.
           label: localize('com_ui_upload_files'),
           // End [knauf]
           onClick: () => {
+            // [knauf] On the Knauf Azure chat, "Upload files" feeds documents
+            // into the chat-scoped File Search (RAG) corpus via an ephemeral
+            // agent, instead of the provider whole-document upload. Images
+            // still go to the vision path (split per-file in useFileHandling,
+            // since the server rejects images for the file_search resource).
+            // Keep the "Upload files" label — no file-search jargon for users.
+            // Other document-capable providers keep upstream provider-upload.
+            // KK20-190.
+            //
+            // NB: do NOT gate on `fileSearchAllowedByAgent` here — for an
+            // ephemeral (default) chat that flag is `ephemeralAgent.file_search
+            // ?? false`, i.e. false until file_search is enabled. This click is
+            // what enables it (setEphemeralAgent below), so gating on it would
+            // be a chicken-and-egg that falls back to the provider path and the
+            // picker would only offer images + PDF. `capabilities.fileSearchEnabled`
+            // (from endpoints.agents.capabilities) is the correct platform gate.
+            //
+            // NORMAL CHAT vs AGENT CHAT — `isAzureWithResponsesApi` follows the
+            // conversation/agent provider, so this ephemeral routing fires for the
+            // default Karl chat (endpoint `azureOpenAI` + Responses API) and, of
+            // custom agents, ONLY one explicitly built as Azure + Responses. The
+            // drag-drop handler (useDragHelpers.handleDrop) instead gates on
+            // `conv.endpoint === azureOpenAI`, which a custom agent (endpoint
+            // `agents`) never satisfies — so on an agent chat a DROP shows the
+            // capability-picker modal while this MENU may still route to ephemeral
+            // File Search. That asymmetry is intentional: custom agents are meant to
+            // get file search from their OWN pre-configured `file_search` tool, not
+            // the ephemeral mechanism, so the modal is the correct path for them. On
+            // the default chat the two are symmetric (both route here). KK20-190.
+            const useKnaufFileSearch = isAzureWithResponsesApi && capabilities.fileSearchEnabled;
+            if (useKnaufFileSearch) {
+              setToolResource(EToolResources.file_search);
+              setEphemeralAgent(enableEphemeralFileSearch);
+              onAction('knauf_allowed');
+              return;
+            }
+            // End [knauf]
             setToolResource(undefined);
             let fileType: Exclude<FileUploadType, 'image' | 'document'> = 'image_document';
             if (currentProvider === Providers.GOOGLE || currentProvider === Providers.OPENROUTER) {
@@ -185,6 +253,24 @@ const AttachFileMenu = ({
           },
           icon: <FileImageIcon className="icon-md" />,
         });
+        // [knauf] On the Knauf File Search chat, add a separate "View supported
+        // formats" menu item that opens KnaufUploadFormatsDialog (accepted formats
+        // + limits + the legacy .doc/.xls/.ppt → OOXML conversion steps). It is a
+        // standalone role=menuitem row — NOT a <button> nested inside the upload
+        // item's render — so it's reachable by keyboard and screen readers (arrow
+        // keys move between menu items, never into a nested control). Same gate as
+        // the routing above. KK20-190 (upload-guidance follow-up).
+        if (isAzureWithResponsesApi && capabilities.fileSearchEnabled) {
+          items.push({
+            label: localize('com_knauf_upload_formats_title'),
+            onClick: () => {
+              setIsPopoverActive(false);
+              setFormatsDialogOpen(true);
+            },
+            icon: <Info className="icon-md" />,
+          });
+        }
+        // End [knauf]
       } else {
         items.push({
           label: localize('com_ui_upload_image_input'),
@@ -227,10 +313,7 @@ const AttachFileMenu = ({
           label: localize('com_ui_upload_file_search'),
           onClick: () => {
             setToolResource(EToolResources.file_search);
-            setEphemeralAgent((prev) => ({
-              ...prev,
-              [EToolResources.file_search]: true,
-            }));
+            setEphemeralAgent(enableEphemeralFileSearch);
             onAction();
           },
           icon: <FileSearch className="icon-md" />,
@@ -243,10 +326,9 @@ const AttachFileMenu = ({
           label: localize('com_ui_upload_code_files'),
           onClick: () => {
             setToolResource(EToolResources.execute_code);
-            setEphemeralAgent((prev) => ({
-              ...prev,
-              [EToolResources.execute_code]: true,
-            }));
+            // [knauf] updater lifted to module scope to satisfy S2004 (max nesting). KK20-190.
+            setEphemeralAgent(enableEphemeralCodeExecution);
+            // End [knauf]
             onAction();
           },
           icon: <TerminalSquareIcon className="icon-md" />,
@@ -287,6 +369,10 @@ const AttachFileMenu = ({
     codeAllowedByAgent,
     fileSearchAllowedByAgent,
     setIsSharePointDialogOpen,
+    // [knauf] trailing ⓘ on the Upload files row opens the formats dialog + closes the menu
+    setFormatsDialogOpen,
+    setIsPopoverActive,
+    // End [knauf]
   ]);
 
   const menuTrigger = (
@@ -372,6 +458,9 @@ const AttachFileMenu = ({
         downloadProgress={downloadProgress}
         maxSelectionCount={endpointFileConfig?.fileLimit}
       />
+      {/* [knauf] Supported-formats + legacy-migration guidance (opened from the menu hint row). */}
+      <KnaufUploadFormatsDialog open={formatsDialogOpen} onOpenChange={setFormatsDialogOpen} />
+      {/* End [knauf] */}
     </>
   );
 };

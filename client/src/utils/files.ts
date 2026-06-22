@@ -12,7 +12,13 @@ import {
   inferMimeType,
   excelMimeTypes,
   EToolResources,
+  EModelEndpoint,
   fileConfig as defaultFileConfig,
+  // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
+  // [knauf] Legacy Office binary detection for actionable rejection messages. KK20-190.
+  knaufLegacyOfficeErrorKey,
 } from 'librechat-data-provider';
 import type { TFile, EndpointFileConfig, FileConfig } from 'librechat-data-provider';
 import type { QueryClient } from '@tanstack/react-query';
@@ -227,6 +233,7 @@ export const validateFiles = ({
   endpointFileConfig,
   toolResource,
   fileConfig,
+  endpoint,
 }: {
   fileList: File[];
   files: Map<string, ExtendedFile>;
@@ -234,9 +241,25 @@ export const validateFiles = ({
   endpointFileConfig: EndpointFileConfig;
   toolResource?: string;
   fileConfig: FileConfig | null;
+  // [knauf] Conversation endpoint id — gates the Knauf-specific rejection
+  // messaging + per-category caps to the endpoints carrying the allow-list
+  // (azureOpenAI chat + agents), mirroring filterFile's isKnaufCappedEndpoint
+  // server-side. Other endpoints keep upstream validation. KK20-190.
+  endpoint?: string;
 }) => {
   const { fileLimit, fileSizeLimit, totalSizeLimit, supportedMimeTypes, disabled } =
     endpointFileConfig;
+  // [knauf] Only the Knauf upload endpoints carry the restricted allow-list and
+  // per-category caps; scope the Knauf branches below to them so non-Knauf
+  // endpoints keep upstream behavior (matches process.js filterFile). The explicit
+  // `endpoint != null` guard avoids a footgun: without it, an absent endpoint would
+  // satisfy `undefined === EModelEndpoint.azureOpenAI` if that enum ever resolved to
+  // `undefined` (circular import / partial build), wrongly flagging every upload as
+  // Knauf-capped. KK20-190.
+  const isKnaufCappedEndpoint =
+    endpoint != null &&
+    (endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents);
+  // End [knauf]
   /** Block all uploads if the endpoint is explicitly disabled */
   if (disabled === true) {
     setError('com_ui_attach_error_disabled');
@@ -282,14 +305,47 @@ export const validateFiles = ({
     }
 
     if (!checkType(originalFile.type, mimeTypesToCheck)) {
-      setError(`Unsupported file type: ${originalFile.type}`);
+      // [knauf] On the Knauf allow-list endpoints, turn the bare "unsupported
+      // type" into actionable guidance: legacy Office binaries (.doc/.xls/.ppt)
+      // get specific Save-As-to-OOXML help; anything else gets a friendly message
+      // listing supported formats. Both are i18n keys localized in useFileHandling
+      // (localize(key)||key). Other endpoints keep the upstream generic message.
+      // KK20-190 (upload-guidance follow-up).
+      const unsupportedError = isKnaufCappedEndpoint
+        ? (knaufLegacyOfficeErrorKey(originalFile.type, originalFile.name) ??
+          'com_knauf_error_unsupported_type')
+        : `Unsupported file type: ${originalFile.type}`;
+      // End [knauf]
+      setError(unsupportedError);
       return false;
     }
 
-    if (fileSizeLimit && originalFile.size >= fileSizeLimit) {
+    // [knauf] On the Knauf allow-list endpoints the per-category cap is the
+    // AUTHORITATIVE per-file size gate (documents 25 / data 50 / images 20 MB):
+    // when a cap applies we enforce only it (strict `>`, localized i18n key
+    // rendered via localize(key) in useFileHandling) and skip the generic endpoint
+    // `fileSizeLimit` check. This resolves a client/server boundary mismatch: the
+    // largest cap (data, 50 MB) equals the endpoint fileSizeLimit, but the upstream
+    // generic check uses `>=` (rejecting a file *exactly* at 50 MB, with a
+    // non-localized English string) while server filterFile uses `>` (allowing it).
+    // Without this, a 50 MB spreadsheet is accepted server-side yet rejected
+    // client-side, and German users get an English error at the boundary. Every
+    // allow-listed type maps to a capped category, so on Knauf endpoints this branch
+    // always wins; non-Knauf endpoints (no cap) keep the upstream `>=` check verbatim.
+    // KK20-190.
+    const knaufCategoryCap = isKnaufCappedEndpoint
+      ? knaufCategorySizeLimit(originalFile.type)
+      : undefined;
+    if (knaufCategoryCap != null) {
+      if (originalFile.size > knaufCategoryCap) {
+        setError(knaufCategorySizeErrorKey(originalFile.type));
+        return false;
+      }
+    } else if (fileSizeLimit && originalFile.size >= fileSizeLimit) {
       setError(`File size limit exceeded: ${fileSizeLimit / megabyte} MB`);
       return false;
     }
+    // End [knauf]
   }
 
   if (totalSizeLimit && currentTotalSize + incomingTotalSize > totalSizeLimit) {

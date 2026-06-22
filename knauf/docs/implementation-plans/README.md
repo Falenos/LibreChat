@@ -8,8 +8,8 @@ Time-bound, multi-PR workstreams currently being executed. Each plan in this fol
 
 This folder is **not** for:
 
-- Stable how-tos or process docs → use [`../reference/`](../reference/).
-- Step-by-step rituals reviewers walk through repeatedly → use [`../guides/`](../guides/).
+- How a product feature or system works (stable architecture reference) → use [`../architecture/`](../architecture/).
+- Engineering-process docs and step-by-step rituals (tier ladder, git workflow, seam testing, upstream sync) → use [`../contributing/`](../contributing/).
 - Designs we're still deciding on → use [`../proposals/`](../proposals/).
 
 ---
@@ -21,7 +21,7 @@ Every plan in this folder ends in one of three ways. **Don't let them accumulate
 | Outcome | When | Action |
 |---|---|---|
 | **Delete** | Plan was purely operational; no enduring value once the work shipped. | `git rm` the file in the same PR that completes the last rollout step. |
-| **Promote to `../reference/`** | The architecture context is worth keeping but the rollout steps are stale. | Move + trim aggressively. Drop the "Still pending" section, the rollout sequence, the dated verifications. Keep the architecture model, the env-var spec, and any post-mortem-worthy decisions. |
+| **Promote to `../architecture/`** | The architecture context is worth keeping but the rollout steps are stale. | Move + trim aggressively. Drop the "Still pending" section, the rollout sequence, the dated verifications. Keep the architecture model, the env-var spec, and any post-mortem-worthy decisions. |
 | **Archive to `archive/`** | The history of the rollout is worth keeping for postmortem / institutional memory, but the doc shouldn't sit in the active list. | Move to `knauf/docs/implementation-plans/archive/`. Date-prefix the filename (`2026-05-azure-blob-…md`) so it's clear it's frozen. |
 
 If you can't decide between promote and archive: archive.

@@ -3,9 +3,9 @@
 This doc is the running record of KARL's file-storage strategy on Azure: how it works, what's been landed (locally + upstream), what's still open, and where each piece lives in the code.
 
 Related docs:
-- [**`../reference/azure-blob-storage.md`**](../reference/azure-blob-storage.md) — **how it works**. Architecture, flows, SAS-token anatomy, TTL math, refresh chain, signing modes, before/after diagrams. Start there for understanding; come back here for status + rollout.
-- [`../reference/code-change-protocol.md`](../reference/code-change-protocol.md) — tier ladder referenced in the Tier 5 / SEAMS decisions below.
-- [`../guides/upstream-sync.md`](../guides/upstream-sync.md) — how the Tier 5 overlay gets retired if/when upstream adopts equivalent behavior.
+- [**`../architecture/files/storage.md`**](../architecture/files/storage.md) — **how it works**. The `fileStrategy` abstraction plus the Azure Blob deep-dive: SAS-token anatomy, TTL math, refresh chain, signing modes, before/after diagrams. Start there for understanding; come back here for status + rollout. (Companion docs: [`../architecture/files/overview.md`](../architecture/files/overview.md) for the upload taxonomy, [`../architecture/files/rag-search.md`](../architecture/files/rag-search.md) for file search.)
+- [`../contributing/code-change-protocol.md`](../contributing/code-change-protocol.md) — tier ladder referenced in the Tier 5 / SEAMS decisions below.
+- [`../contributing/upstream-sync.md`](../contributing/upstream-sync.md) — how the Tier 5 overlay gets retired if/when upstream adopts equivalent behavior.
 - [`../../../SEAMS.md`](../../../SEAMS.md) — `[knauf]` marker index that this rollout appends rows to.
 
 Background notes (local-only, not committed — `.claude/*` is gitignored):

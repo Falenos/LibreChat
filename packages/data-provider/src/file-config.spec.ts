@@ -11,6 +11,10 @@ import {
   mergeFileConfig,
   inferMimeType,
   textMimeTypes,
+  megabyte,
+  knaufCategorySizeLimit,
+  knaufCategorySizeErrorKey,
+  knaufLegacyOfficeErrorKey,
 } from './file-config';
 import { EModelEndpoint } from './schemas';
 
@@ -1320,3 +1324,91 @@ describe('isPermissiveMimeConfig', () => {
     expect(isPermissiveMimeConfig(converted)).toBe(true);
   });
 });
+
+// [knauf] Per-category upload size caps (KK20-190).
+describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
+  const cases: Array<[string, number, string]> = [
+    ['application/pdf', 25, 'com_knauf_error_file_too_large_document'],
+    ['application/msword', 25, 'com_knauf_error_file_too_large_document'],
+    [
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      25,
+      'com_knauf_error_file_too_large_document',
+    ],
+    [
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      25,
+      'com_knauf_error_file_too_large_document',
+    ],
+    ['text/plain', 25, 'com_knauf_error_file_too_large_document'],
+    ['text/markdown', 25, 'com_knauf_error_file_too_large_document'],
+    ['application/json', 25, 'com_knauf_error_file_too_large_document'],
+    [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      50,
+      'com_knauf_error_file_too_large_data',
+    ],
+    ['text/csv', 50, 'com_knauf_error_file_too_large_data'],
+    ['application/csv', 50, 'com_knauf_error_file_too_large_data'],
+    ['image/png', 20, 'com_knauf_error_file_too_large_image'],
+    ['image/jpeg', 20, 'com_knauf_error_file_too_large_image'],
+    ['image/webp', 20, 'com_knauf_error_file_too_large_image'],
+  ];
+
+  it.each(cases)('classifies %s → %i MB cap + %s', (mime, mb, key) => {
+    expect(knaufCategorySizeLimit(mime)).toBe(mb * megabyte);
+    expect(knaufCategorySizeErrorKey(mime)).toBe(key);
+  });
+
+  it('spreadsheet (data) is checked before document classification', () => {
+    // xlsx matches both excel and application regexes; must resolve to data (50), not document (25)
+    expect(
+      knaufCategorySizeLimit('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ).toBe(50 * megabyte);
+  });
+
+  it('returns undefined for an out-of-scope / empty mime (falls back to endpoint fileSizeLimit)', () => {
+    expect(knaufCategorySizeLimit('video/mp4')).toBeUndefined();
+    expect(knaufCategorySizeLimit('')).toBeUndefined();
+    expect(knaufCategorySizeLimit()).toBeUndefined();
+  });
+});
+
+describe('knaufLegacyOfficeErrorKey', () => {
+  it('maps legacy Office MIME types to their conversion-help key', () => {
+    expect(knaufLegacyOfficeErrorKey('application/msword')).toBe('com_knauf_error_legacy_doc');
+    expect(knaufLegacyOfficeErrorKey('application/vnd.ms-excel')).toBe(
+      'com_knauf_error_legacy_xls',
+    );
+    expect(knaufLegacyOfficeErrorKey('application/vnd.ms-powerpoint')).toBe(
+      'com_knauf_error_legacy_ppt',
+    );
+  });
+
+  it('falls back to the filename extension when the MIME is generic', () => {
+    expect(knaufLegacyOfficeErrorKey('application/octet-stream', 'report.doc')).toBe(
+      'com_knauf_error_legacy_doc',
+    );
+    expect(knaufLegacyOfficeErrorKey('', 'budget.v2.xls')).toBe('com_knauf_error_legacy_xls');
+    expect(knaufLegacyOfficeErrorKey(null, 'deck.ppt')).toBe('com_knauf_error_legacy_ppt');
+  });
+
+  it('does NOT match the modern OOXML formats (by mime or extension)', () => {
+    expect(
+      knaufLegacyOfficeErrorKey(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'report.docx',
+      ),
+    ).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('application/octet-stream', 'sheet.xlsx')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey(undefined, 'deck.pptx')).toBeUndefined();
+  });
+
+  it('returns undefined for unrelated / empty input', () => {
+    expect(knaufLegacyOfficeErrorKey('application/pdf', 'a.pdf')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('image/png', 'a.png')).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey()).toBeUndefined();
+    expect(knaufLegacyOfficeErrorKey('', '')).toBeUndefined();
+  });
+});
+// End [knauf]

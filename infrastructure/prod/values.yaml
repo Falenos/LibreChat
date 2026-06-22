@@ -1,9 +1,9 @@
 agentic-karl:
   image:
-    tag: 'v0.57.0'
+    tag: 'v0.73.0'
 
   configmap:
-    SERVICE_VERSION: v0.57.0
+    SERVICE_VERSION: v0.73.0
     KNAUF_RESTRICT_USER_PERMISSIONS: 'true'
     KNAUF_RESTRICT_PROD_USER_PERMISSIONS: 'true'
     KNAUF_DISABLE_FIRST_USER_ADMIN: 'true'

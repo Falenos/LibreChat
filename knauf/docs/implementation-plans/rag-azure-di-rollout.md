@@ -10,7 +10,7 @@
 ## TL;DR
 
 The overlay code (DI parser + xlsx loader) is built and verified locally and the runtime
-design is documented in [rag-file-search-architecture.md](../reference/rag-file-search-architecture.md).
+design is documented in [rag-search.md](../architecture/files/rag-search.md).
 What's left is **deploying it to dev**, which is *not* covered by any existing pipeline — the
 release pipeline only builds the main KARL app, never the `rag_api` overlay. So the overlay
 image is built **manually with `az acr build`** (once, for now), and the dev `rag_api` Helm
@@ -156,7 +156,7 @@ gh pr create --repo Knauf-Group/ct-shared-deployment-configs --base main \
 File-search (RAG) currently parses PDFs with text-only extraction, so scanned PDFs ingest empty
 and unsearchable, and large spreadsheets blow up chunking. The overlay (built + verified locally)
 fixes both; this PR rolls it to dev. Runtime design:
-`agentic-karl-v2 → knauf/docs/reference/rag-file-search-architecture.md`.
+`agentic-karl-v2 → knauf/docs/architecture/files/rag-search.md`.
 
 ## What changed
 
@@ -226,7 +226,7 @@ Confirm dev egress reaches `*.services.ai.azure.com`.
 |---|---|---|
 | agentic-karl-v2 | [knauf/rag-api-overlay/Dockerfile.knauf-rag](../../rag-api-overlay/Dockerfile.knauf-rag) | overlay image (FROM upstream base) |
 | agentic-karl-v2 | [knauf/rag-api-overlay/document_loader.py](../../rag-api-overlay/document_loader.py) | DI parser + fallback + lean xlsx loader |
-| agentic-karl-v2 | [knauf/docs/reference/rag-file-search-architecture.md](../reference/rag-file-search-architecture.md) | runtime design + diagrams |
+| agentic-karl-v2 | [knauf/docs/architecture/files/rag-search.md](../architecture/files/rag-search.md) | runtime design + diagrams |
 | ct-shared-deployment-configs | `dev/services/agentic-karl-rag-api/agentic-karl-rag-api/values.yaml` | dev image tag + DI env + secret ref |
 
 ---

@@ -103,6 +103,42 @@ describe('resolveUploadErrorMessage', () => {
       'Upload failed: file_ids limit',
     );
   });
+
+  // [knauf] KK20-190 — forward the encrypted-file + per-category-too-large i18n
+  // keys verbatim so the client localizes them via `localize(msg) || msg`. The
+  // too-large entry is a prefix matched as a substring against all three suffixes.
+  test('forwards the encrypted-file i18n key verbatim', () => {
+    expect(resolveUploadErrorMessage({ message: 'com_knauf_error_file_encrypted' })).toBe(
+      'com_knauf_error_file_encrypted',
+    );
+  });
+
+  test('forwards each per-category too-large i18n key via the shared prefix', () => {
+    for (const key of [
+      'com_knauf_error_file_too_large_document',
+      'com_knauf_error_file_too_large_data',
+      'com_knauf_error_file_too_large_image',
+    ]) {
+      expect(resolveUploadErrorMessage({ message: key })).toBe(key);
+    }
+  });
+
+  test('forwards each legacy-Office i18n key via the `com_knauf_error_legacy_` prefix', () => {
+    for (const key of [
+      'com_knauf_error_legacy_doc',
+      'com_knauf_error_legacy_xls',
+      'com_knauf_error_legacy_ppt',
+    ]) {
+      expect(resolveUploadErrorMessage({ message: key })).toBe(key);
+    }
+  });
+
+  test('forwards the friendly unsupported-type i18n key verbatim', () => {
+    expect(resolveUploadErrorMessage({ message: 'com_knauf_error_unsupported_type' })).toBe(
+      'com_knauf_error_unsupported_type',
+    );
+  });
+  // End [knauf]
 });
 
 describe('sanitizeFilename with real crypto', () => {

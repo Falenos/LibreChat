@@ -2,11 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
-const { sanitizeFilename } = require('@librechat/api');
+// [knauf] resolveUploadErrorMessage forwards Knauf rejection i18n keys verbatim. KK20-190.
+const { sanitizeFilename, resolveUploadErrorMessage } = require('@librechat/api');
 const {
   mergeFileConfig,
   getEndpointFileConfig,
   fileConfig: defaultFileConfig,
+  // [knauf] Actionable allow-list rejection (legacy-Office Save-As help) on the
+  // Knauf upload endpoints, mirroring filterFile's messaging. KK20-190.
+  EModelEndpoint,
+  knaufLegacyOfficeErrorKey,
 } = require('librechat-data-provider');
 const { getAppConfig } = require('~/server/services/Config');
 
@@ -65,6 +70,26 @@ const createFileFilter = (customFileConfig) => {
     });
 
     if (!defaultFileConfig.checkType(file.mimetype, endpointFileConfig.supportedMimeTypes)) {
+      // [knauf] On the Knauf allow-list endpoints, reject with an actionable i18n
+      // key — legacy Office binaries (.doc/.xls/.ppt) get Save-As-to-OOXML help;
+      // anything else gets a friendly supported-formats message — instead of the
+      // bare generic error. fileFilter runs during multipart streaming, before the
+      // files.js route body, so this error bypasses that resolveUploadErrorMessage
+      // catch; it's tagged `knaufUploadRejection` so the paired error handler
+      // (knaufUploadRejectionHandler, wired in ./index) forwards it as JSON
+      // {message:<key>} for the client to localize. Other endpoints keep the
+      // upstream generic message. KK20-190.
+      const isKnaufCappedEndpoint =
+        endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents;
+      if (isKnaufCappedEndpoint) {
+        const rejection = new Error(
+          knaufLegacyOfficeErrorKey(file.mimetype, file.originalname) ??
+            'com_knauf_error_unsupported_type',
+        );
+        rejection.knaufUploadRejection = true;
+        return cb(rejection, false);
+      }
+      // End [knauf]
       return cb(new Error('Unsupported file type: ' + file.mimetype), false);
     }
 
@@ -85,4 +110,26 @@ const createMulterInstance = async () => {
   });
 };
 
-module.exports = { createMulterInstance, storage, importFileFilter };
+// [knauf] Route-scoped error handler for the chat upload POST. The fileFilter
+// above rejects unsupported types DURING multipart streaming (before the files.js
+// route body), so those errors never reach files.js's resolveUploadErrorMessage
+// catch and would otherwise surface to the client as a generic 500. Only errors
+// tagged `knaufUploadRejection` are handled here (returned as a localizable
+// 415 JSON `{ message: <i18n key> }`); MulterError (size/limits) and anything
+// else fall through to the global ErrorController unchanged. Wired as the trailing
+// handler on `router.post('/')` in ./index. KK20-190.
+const knaufUploadRejectionHandler = (err, req, res, next) => {
+  if (err?.knaufUploadRejection === true) {
+    return res.status(415).json({ message: resolveUploadErrorMessage(err) });
+  }
+  return next(err);
+};
+// End [knauf]
+
+module.exports = {
+  createMulterInstance,
+  storage,
+  importFileFilter,
+  // [knauf] exported for ./index wiring + multer.spec.js seam test. KK20-190.
+  knaufUploadRejectionHandler,
+};

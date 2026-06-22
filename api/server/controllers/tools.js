@@ -13,6 +13,13 @@ const { getRoleByName, createToolCall, getToolCallsByConvo, getMessage } = requi
 const { processFileURL, uploadImageBuffer } = require('~/server/services/Files/process');
 const { processCodeOutput } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
+// [knauf] KK20-182 — Re-sign Azure SAS URLs in toolcalls[].attachments[]
+// on read; same snapshot decay as message attachments. See
+// `knauf/docs/reference/azure-blob-storage.md` §7.1.
+const {
+  refreshMessageAttachmentUrls,
+} = require('~/server/services/Files/Azure/refreshMessageAttachments');
+// End [knauf]
 const { loadTools } = require('~/app/clients/tools/util');
 
 const fieldsMap = {
@@ -236,6 +243,9 @@ const getToolCalls = async (req, res) => {
   try {
     const { conversationId } = req.query;
     const toolCalls = await getToolCallsByConvo(conversationId, req.user.id);
+    // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
+    await refreshMessageAttachmentUrls(toolCalls);
+    // End [knauf]
     res.status(200).json(toolCalls);
   } catch (error) {
     logger.error('Error getting tool calls', error);
