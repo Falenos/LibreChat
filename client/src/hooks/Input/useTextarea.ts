@@ -18,16 +18,16 @@ import { useInteractionHealthCheck } from '~/data-provider';
 import { useChatContext } from '~/Providers/ChatContext';
 import { globalAudioId } from '~/common';
 import { useLocalize } from '~/hooks';
+import {
+  KARL_CHAT_ASSISTANT_NAME,
+  isKarlModelName,
+  isKarlSpecName,
+} from '~/knauf/common/constants';
 import store from '~/store';
 
 type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
 
 // [knauf] Brand default Karl model-spec chats in the composer placeholder without changing custom agent names.
-const KNAUF_CHAT_ASSISTANT_NAME = 'Karl';
-const KNAUF_DEFAULT_SPEC_NAME = 'karl';
-const KNAUF_PERSONALITY_SPEC_PREFIX = 'karl-personality-';
-const KNAUF_DEFAULT_MODEL = 'gpt-5.4';
-
 const getKnaufComposerSender = ({
   isAgent,
   isAssistant,
@@ -45,12 +45,12 @@ const getKnaufComposerSender = ({
     return sender;
   }
 
-  if (spec === KNAUF_DEFAULT_SPEC_NAME || spec?.startsWith(KNAUF_PERSONALITY_SPEC_PREFIX)) {
-    return KNAUF_CHAT_ASSISTANT_NAME;
+  if (isKarlSpecName(spec)) {
+    return KARL_CHAT_ASSISTANT_NAME;
   }
 
-  if (model === KNAUF_DEFAULT_MODEL) {
-    return KNAUF_CHAT_ASSISTANT_NAME;
+  if (isKarlModelName(model)) {
+    return KARL_CHAT_ASSISTANT_NAME;
   }
 
   return sender;

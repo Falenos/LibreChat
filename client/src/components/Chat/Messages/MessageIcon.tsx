@@ -5,6 +5,13 @@ import type { TMessageIcon } from '~/common';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { useGetEndpointsQuery } from '~/data-provider';
 import useLocalize from '~/hooks/useLocalize';
+import {
+  KARL_CHAT_ASSISTANT_NAME,
+  KNAUF_LOGO_ICON_URL,
+  getKarlModelLabel,
+  isKarlModelName,
+  normalizeKarlLabel,
+} from '~/knauf/common/constants';
 import { getIconEndpoint } from '~/utils';
 import Icon from '~/components/Endpoints/Icon';
 
@@ -15,31 +22,22 @@ type MessageIconProps = {
 };
 
 // [knauf] Default Karl assistant and no-avatar agent turns use the Knauf wordmark.
-const KNAUF_DEFAULT_MODEL = 'gpt-5.4';
-const KNAUF_DEFAULT_MODEL_LABEL = 'GPT-5.4';
-const KNAUF_CHAT_ASSISTANT_NAME = 'Karl';
-const KNAUF_LOGO_ICON_URL = '/assets/knauf-logo.png';
-
 const isRenderableKnaufIconURL = (iconURL?: string | null): iconURL is string =>
   !!(
     iconURL &&
     (iconURL.includes('http') || iconURL.startsWith('/images/') || iconURL.startsWith('/assets/'))
   );
 
-const normalizeKnaufLabel = (value?: string | null) => value?.trim().toLowerCase() ?? '';
-
 const isDefaultKarlAssistantIcon = (iconData?: TMessageIcon, avatarURL = '') => {
-  const model = normalizeKnaufLabel(iconData?.model);
-  const modelLabel = normalizeKnaufLabel(iconData?.modelLabel);
+  const modelLabel = normalizeKarlLabel(iconData?.modelLabel);
 
   return (
     !!iconData &&
     iconData.isCreatedByUser !== true &&
     !avatarURL &&
-    (model === KNAUF_DEFAULT_MODEL ||
-      modelLabel === KNAUF_DEFAULT_MODEL ||
-      modelLabel === KNAUF_DEFAULT_MODEL_LABEL.toLowerCase() ||
-      modelLabel === KNAUF_CHAT_ASSISTANT_NAME.toLowerCase())
+    (isKarlModelName(iconData.model) ||
+      isKarlModelName(iconData.modelLabel) ||
+      modelLabel === normalizeKarlLabel(KARL_CHAT_ASSISTANT_NAME))
   );
 };
 
@@ -47,15 +45,7 @@ const getKnaufAgentAvatar = (agent?: Agent) =>
   typeof agent?.avatar === 'string' ? agent.avatar : (agent?.avatar?.filepath ?? '');
 
 const getKarlTooltipModelLabel = (iconData?: TMessageIcon) => {
-  const modelLabel = iconData?.modelLabel?.trim();
-  if (modelLabel && normalizeKnaufLabel(modelLabel) !== KNAUF_CHAT_ASSISTANT_NAME.toLowerCase()) {
-    return modelLabel;
-  }
-
-  const model = iconData?.model?.trim();
-  return normalizeKnaufLabel(model) === KNAUF_DEFAULT_MODEL
-    ? KNAUF_DEFAULT_MODEL_LABEL
-    : (model ?? KNAUF_DEFAULT_MODEL_LABEL);
+  return getKarlModelLabel(iconData?.modelLabel, iconData?.model);
 };
 // End [knauf]
 

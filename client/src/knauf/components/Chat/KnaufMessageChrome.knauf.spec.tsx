@@ -1,6 +1,10 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { KnaufMessageHeading, KnaufMessageTimestamp } from './KnaufMessageChrome';
+import {
+  KnaufMessageActionRow,
+  KnaufMessageHeading,
+  KnaufMessageTimestamp,
+} from './KnaufMessageChrome';
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, values?: Record<number, string>) =>
@@ -44,6 +48,19 @@ describe('KnaufMessageChrome', () => {
     expect(screen.queryByText(/Powered by/)).not.toBeInTheDocument();
   });
 
+  it('does not treat a differently-cased Karl label as a model attribution', () => {
+    render(
+      <KnaufMessageHeading
+        isCreatedByUser={false}
+        label="KARL"
+        fontSize="text-base"
+        screenReaderPrefix="Assistant:"
+      />,
+    );
+
+    expect(screen.getByText('Karl')).not.toHaveAttribute('title');
+  });
+
   it('renders a semantic timestamp for valid message dates', () => {
     const createdAt = '2026-06-16T10:05:00.000Z';
     const expectedTimestamp = formatExpectedTimestamp(createdAt);
@@ -69,5 +86,19 @@ describe('KnaufMessageChrome', () => {
     const { container } = render(<KnaufMessageTimestamp createdAt="not-a-date" />);
 
     expect(container.querySelector('time')).toBeNull();
+  });
+
+  it('keeps message actions and timestamp in the shared action row', () => {
+    const createdAt = '2026-06-16T10:05:00.000Z';
+    const expectedTimestamp = formatExpectedTimestamp(createdAt);
+
+    render(
+      <KnaufMessageActionRow createdAt={createdAt}>
+        <button type="button" data-testid="copy-action" />
+      </KnaufMessageActionRow>,
+    );
+
+    expect(screen.getByTestId('copy-action')).toBeInTheDocument();
+    expect(screen.getByText(expectedTimestamp)).toHaveAttribute('dateTime', createdAt);
   });
 });

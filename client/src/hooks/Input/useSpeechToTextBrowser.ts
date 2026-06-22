@@ -7,6 +7,10 @@ import useGetAudioSettings from './useGetAudioSettings';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
 
+// [knauf] Manual-stop recording still needs a hard safety cap for forgotten open mics.
+const KNAUF_MAX_RECORDING_MS = 10 * 60 * 1000;
+// End [knauf]
+
 const useSpeechToTextBrowser = (
   setText: (text: string) => void,
   onTranscriptionComplete: (text: string) => void,
@@ -19,13 +23,28 @@ const useSpeechToTextBrowser = (
   const sttExternal = Boolean(speechConfig?.sttExternal);
 
   const lastTranscript = useRef<string | null>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // [knauf] Safety cap for manual-stop browser recording.
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // End [knauf]
   const [autoSendText] = useRecoilState(store.autoSendText);
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
-  const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
   // [knauf] Keep microphone capture active until the user presses the mic button again.
-  const KNAUF_KEEP_RECORDING_UNTIL_STOP = true;
+  const clearRecordingTimeout = () => {
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+  };
+
+  const startRecordingTimeout = () => {
+    clearRecordingTimeout();
+    recordingTimeoutRef.current = setTimeout(() => {
+      SpeechRecognition.stopListening();
+      recordingTimeoutRef.current = null;
+    }, KNAUF_MAX_RECORDING_MS);
+  };
   // End [knauf]
 
   const {
@@ -98,14 +117,17 @@ const useSpeechToTextBrowser = (
     }
 
     if (isListening === true) {
+      // [knauf] Stop is only user-driven or the hard safety timeout.
+      clearRecordingTimeout();
+      // End [knauf]
       SpeechRecognition.stopListening();
     } else {
       // [knauf] Silence should not flip the mic off; user owns the stop action.
-      const shouldListenContinuously = KNAUF_KEEP_RECORDING_UNTIL_STOP ? true : autoTranscribeAudio;
+      startRecordingTimeout();
       // End [knauf]
       SpeechRecognition.startListening({
         language: languageSTT,
-        continuous: shouldListenContinuously,
+        continuous: true,
       });
     }
   };
@@ -118,7 +140,13 @@ const useSpeechToTextBrowser = (
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      // [knauf] Clear the manual-stop safety timer when the hook unmounts.
+      clearRecordingTimeout();
+      // End [knauf]
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {

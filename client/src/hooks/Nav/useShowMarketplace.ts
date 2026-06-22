@@ -47,6 +47,10 @@ export default function useShowMarketplace(): boolean {
     },
     {
       enabled: hasBaseMarketplaceAccess && isBuiltInUser,
+      // [knauf] Keep the last successful USER gate result during background
+      // refreshes. Cold loads still stay hidden until the server confirms at
+      // least one accessible agent.
+      keepPreviousData: true,
     },
   );
 

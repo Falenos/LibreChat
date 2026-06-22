@@ -1,7 +1,8 @@
+import type { ReactNode } from 'react';
+import SubRow from '~/components/Chat/Messages/SubRow';
+import { KARL_CHAT_ASSISTANT_NAME, normalizeKarlLabel } from '~/knauf/common/constants';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
-
-const KNAUF_CHAT_ASSISTANT_NAME = 'Karl';
 
 type KnaufTimestampValue = string | Date | null | undefined;
 
@@ -17,12 +18,12 @@ export function KnaufMessageHeading({
   screenReaderPrefix: string;
 }>) {
   const localize = useLocalize();
-  const visibleLabel = label?.trim() || KNAUF_CHAT_ASSISTANT_NAME;
+  const visibleLabel = label?.trim() || KARL_CHAT_ASSISTANT_NAME;
   const isAssistantTurn = isCreatedByUser !== true;
   const modelLabel = isAssistantTurn ? visibleLabel : '';
-  const assistantLabel = isAssistantTurn ? KNAUF_CHAT_ASSISTANT_NAME : visibleLabel;
+  const assistantLabel = isAssistantTurn ? KARL_CHAT_ASSISTANT_NAME : visibleLabel;
   const modelTooltip =
-    modelLabel && modelLabel !== KNAUF_CHAT_ASSISTANT_NAME
+    modelLabel && normalizeKarlLabel(modelLabel) !== normalizeKarlLabel(KARL_CHAT_ASSISTANT_NAME)
       ? localize('com_knauf_powered_by_model', { 0: modelLabel })
       : undefined;
 
@@ -31,6 +32,29 @@ export function KnaufMessageHeading({
       <span className="sr-only">{screenReaderPrefix}</span>
       <span title={modelTooltip}>{assistantLabel}</span>
     </h2>
+  );
+}
+
+export function KnaufMessageActionRow({
+  children,
+  clientTimestamp,
+  createdAt,
+  updatedAt,
+}: Readonly<{
+  children: ReactNode;
+  clientTimestamp?: KnaufTimestampValue;
+  createdAt?: KnaufTimestampValue;
+  updatedAt?: KnaufTimestampValue;
+}>) {
+  return (
+    <SubRow classes="w-full items-center justify-between text-xs">
+      <div className="flex min-w-0 items-center gap-3">{children}</div>
+      <KnaufMessageTimestamp
+        clientTimestamp={clientTimestamp}
+        createdAt={createdAt}
+        updatedAt={updatedAt}
+      />
+    </SubRow>
   );
 }
 

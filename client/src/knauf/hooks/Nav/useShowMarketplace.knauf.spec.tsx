@@ -32,6 +32,11 @@ const accessByType = new Map<PermissionTypes, boolean>();
 function renderMarketplaceHook(role: SystemRoles | string = SystemRoles.USER) {
   const authValue = {
     isAuthenticated: true,
+    token: undefined,
+    error: undefined,
+    login: jest.fn(),
+    logout: jest.fn(),
+    setError: jest.fn(),
     user: {
       id: 'user-1',
       role,
@@ -40,7 +45,7 @@ function renderMarketplaceHook(role: SystemRoles | string = SystemRoles.USER) {
 
   return renderHook(() => useShowMarketplace(), {
     wrapper: ({ children }) => (
-      <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>
+      <AuthContext.Provider value={authValue as never}>{children}</AuthContext.Provider>
     ),
   });
 }
@@ -85,6 +90,10 @@ describe('useShowMarketplace — Knauf USER accessible-agent gate', () => {
     const { result } = renderMarketplaceHook(SystemRoles.USER);
 
     expect(result.current).toBe(true);
+    expect(mockUseListAgentsQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 1 }),
+      expect.objectContaining({ keepPreviousData: true }),
+    );
   });
 
   it('does not require accessible-agent data for ADMIN', () => {

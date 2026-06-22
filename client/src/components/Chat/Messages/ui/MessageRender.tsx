@@ -10,11 +10,10 @@ import PlaceholderRow from '~/components/Chat/Messages/ui/PlaceholderRow';
 import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
 import HoverButtons from '~/components/Chat/Messages/HoverButtons';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
-import SubRow from '~/components/Chat/Messages/SubRow';
 // [knauf] Use branded Karl heading and generated-time chrome in message rows.
 import {
+  KnaufMessageActionRow,
   KnaufMessageHeading,
-  KnaufMessageTimestamp,
 } from '~/knauf/components/Chat/KnaufMessageChrome';
 // End [knauf]
 import { fontSizeAtom } from '~/store/fontSize';
@@ -252,36 +251,31 @@ const MessageRender = memo(function MessageRender({
           {hasNoChildren && isSubmitting ? (
             <PlaceholderRow />
           ) : (
-            <SubRow classes="w-full items-center justify-between text-xs">
-              {/* [knauf] Keep actions left and put the generated timestamp on the opposite side. */}
-              <div className="flex min-w-0 items-center gap-3">
-                <SiblingSwitch
-                  siblingIdx={siblingIdx}
-                  siblingCount={siblingCount}
-                  setSiblingIdx={setSiblingIdx}
-                />
-                <HoverButtons
-                  index={index}
-                  isEditing={edit}
-                  message={msg}
-                  enterEdit={enterEdit}
-                  isSubmitting={chatContext.isSubmitting}
-                  conversation={conversation ?? null}
-                  regenerate={handleRegenerateMessage}
-                  copyToClipboard={copyToClipboard}
-                  handleContinue={handleContinue}
-                  latestMessageId={latestMessageId}
-                  handleFeedback={handleFeedback}
-                  isLast={isLast}
-                />
-              </div>
-              <KnaufMessageTimestamp
-                clientTimestamp={msg.clientTimestamp}
-                createdAt={msg.createdAt}
-                updatedAt={msg.updatedAt}
+            <KnaufMessageActionRow
+              clientTimestamp={msg.clientTimestamp}
+              createdAt={msg.createdAt}
+              updatedAt={msg.updatedAt}
+            >
+              <SiblingSwitch
+                siblingIdx={siblingIdx}
+                siblingCount={siblingCount}
+                setSiblingIdx={setSiblingIdx}
               />
-              {/* End [knauf] */}
-            </SubRow>
+              <HoverButtons
+                index={index}
+                isEditing={edit}
+                message={msg}
+                enterEdit={enterEdit}
+                isSubmitting={chatContext.isSubmitting}
+                conversation={conversation ?? null}
+                regenerate={handleRegenerateMessage}
+                copyToClipboard={copyToClipboard}
+                handleContinue={handleContinue}
+                latestMessageId={latestMessageId}
+                handleFeedback={handleFeedback}
+                isLast={isLast}
+              />
+            </KnaufMessageActionRow>
           )}
         </div>
       </div>

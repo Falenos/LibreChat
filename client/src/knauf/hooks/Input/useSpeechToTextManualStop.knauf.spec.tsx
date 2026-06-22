@@ -99,6 +99,10 @@ describe('speech-to-text manual stop behavior', () => {
     });
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('starts browser recognition in continuous mode until the user stops it', () => {
     mockSpeechToTextEndpoint = 'browser';
 
@@ -112,6 +116,22 @@ describe('speech-to-text manual stop behavior', () => {
       language: 'en-US',
       continuous: true,
     });
+  });
+
+  it('stops browser recognition after the manual-stop safety cap', () => {
+    jest.useFakeTimers();
+    mockSpeechToTextEndpoint = 'browser';
+
+    const { result, unmount } = renderHook(() => useSpeechToTextBrowser(jest.fn(), jest.fn()));
+
+    act(() => {
+      result.current.startRecording();
+      jest.advanceTimersByTime(10 * 60 * 1000);
+    });
+
+    expect(SpeechRecognition.stopListening).toHaveBeenCalled();
+
+    unmount();
   });
 
   it('keeps finalized browser transcript visible while appending interim words', async () => {

@@ -1,9 +1,9 @@
 /**
- * Knauf seam test — agent FileSearch uploads have no count cap.
+ * Knauf seam test — agent FileSearch uploads use the configured agents cap.
  *
  * Pins the `[knauf]` block inside `client/src/hooks/Files/useFileHandling.ts`:
- * agent-scoped `file_search` uploads pass validation with `fileLimit`
- * stripped, while other upload resources retain the endpoint limit.
+ * agent-scoped `file_search` uploads pass validation with the agents endpoint
+ * limit from config instead of overriding it in the client.
  */
 import { act, renderHook } from '@testing-library/react';
 import { EModelEndpoint, EToolResources } from 'librechat-data-provider';
@@ -39,7 +39,17 @@ jest.mock('@tanstack/react-query', () => ({
 }));
 
 jest.mock('~/data-provider', () => ({
-  useGetFileConfig: jest.fn(() => ({ data: null })),
+  useGetFileConfig: jest.fn(() => ({
+    data: {
+      endpoints: {
+        agents: {
+          fileLimit: 35,
+          fileSizeLimit: 50,
+          totalSizeLimit: 100,
+        },
+      },
+    },
+  })),
   useUploadFileMutation: jest.fn(() => ({
     mutate: mockMutate,
   })),
@@ -89,7 +99,7 @@ jest.mock('~/utils', () => ({
 
 const mockValidateFiles = jest.requireMock('~/utils').validateFiles as jest.Mock;
 
-describe('useFileHandling — Knauf FileSearch count limit', () => {
+describe('useFileHandling — Knauf FileSearch configured count limit', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -125,10 +135,10 @@ describe('useFileHandling — Knauf FileSearch count limit', () => {
     return mockValidateFiles.mock.calls[0][0].endpointFileConfig;
   }
 
-  it('removes the default file count limit for agent FileSearch uploads', async () => {
+  it('uses the agents file count limit for agent FileSearch uploads', async () => {
     const endpointFileConfig = await runValidation(EToolResources.file_search);
 
-    expect(endpointFileConfig.fileLimit).toBeUndefined();
+    expect(endpointFileConfig.fileLimit).toBe(35);
     expect(endpointFileConfig.disabled).toBe(false);
     expect(endpointFileConfig.fileSizeLimit).toBeGreaterThan(0);
     expect(endpointFileConfig.supportedMimeTypes.length).toBeGreaterThan(0);
@@ -137,6 +147,6 @@ describe('useFileHandling — Knauf FileSearch count limit', () => {
   it('keeps the file count limit for non-FileSearch agent uploads', async () => {
     const endpointFileConfig = await runValidation(EToolResources.context);
 
-    expect(endpointFileConfig.fileLimit).toBe(10);
+    expect(endpointFileConfig.fileLimit).toBe(35);
   });
 });
