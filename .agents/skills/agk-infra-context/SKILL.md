@@ -1,6 +1,6 @@
 ---
 name: agk-infra-context
-description: Use when working on Agentic Karl / AGK infrastructure, Azure CLI access, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform resources, Helm values, deployment-config repos, release pipelines, adding services, choosing infra ownership/state/workflows, or debugging dev/prod deployment behavior for this fork.
+description: Use when working on Agentic Karl / AGK infrastructure, architecture maps, dependency/onboarding docs, Azure CLI access, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform resources, Helm values, deployment-config repos, release pipelines, adding services, choosing infra ownership/state/workflows, or debugging dev/prod deployment behavior for this fork.
 ---
 
 # AGK Infra Context
@@ -21,6 +21,14 @@ Last verified: 2026-06-15.
 - Before changing AGK deploy workflow logic, use `.github/workflows/agk-deploy-smoke.yaml` to validate Azure login, Key Vault reads, GitHub writes, ACR import, deployment-config repo writes, and ArgoCD API access without waiting for the full release pipeline.
 - Before adding a Terraform root, backend key, GitHub workflow, or pipeline state, prove that no existing root/workflow owns the resource. Default to the smallest existing layer that owns the lifecycle.
 - For external providers such as Datadog, do not create a separate root/workflow just because the provider is not Azure. State ownership follows the app/platform lifecycle, not the vendor.
+
+## Architecture Reference
+
+For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agk-infrastructure`, and `agk-deployment-configs`.
+
+Treat that README as a shareable architecture snapshot, not a substitute for live state. Verify mutable facts such as image tags, domains, secrets mappings, Azure resources, ArgoCD health, and model deployments in the owning repo or cloud service before answering "current" or "latest" questions.
+
+Do not duplicate the full README into this skill. Keep this skill as the workflow and safety guide; use the README as reference material loaded only when architecture context is needed.
 
 ## Repos
 
