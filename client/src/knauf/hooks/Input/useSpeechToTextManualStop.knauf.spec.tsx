@@ -5,6 +5,27 @@ import useSpeechToTextBrowser from '~/hooks/Input/useSpeechToTextBrowser';
 import useSpeechToTextExternal from '~/hooks/Input/useSpeechToTextExternal';
 
 let mockSpeechToTextEndpoint = 'browser';
+type MockSpeechRecognitionState = {
+  listening: boolean;
+  transcript: string;
+  finalTranscript: string;
+  resetTranscript: jest.Mock;
+  interimTranscript: string;
+  isMicrophoneAvailable: boolean;
+  browserSupportsSpeechRecognition: boolean;
+};
+
+const mockDefaultSpeechRecognitionState = (): MockSpeechRecognitionState => ({
+  listening: false,
+  transcript: '',
+  finalTranscript: '',
+  resetTranscript: jest.fn(),
+  interimTranscript: '',
+  isMicrophoneAvailable: true,
+  browserSupportsSpeechRecognition: true,
+});
+
+let mockSpeechRecognitionState = mockDefaultSpeechRecognitionState();
 
 jest.mock('~/store', () => ({
   __esModule: true,
@@ -52,18 +73,14 @@ jest.mock('react-speech-recognition', () => ({
     stopListening: jest.fn(),
   },
   useSpeechRecognition: () => ({
-    listening: false,
-    finalTranscript: '',
-    resetTranscript: jest.fn(),
-    interimTranscript: '',
-    isMicrophoneAvailable: true,
-    browserSupportsSpeechRecognition: true,
+    ...mockSpeechRecognitionState,
   }),
 }));
 
 describe('speech-to-text manual stop behavior', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSpeechRecognitionState = mockDefaultSpeechRecognitionState();
     (useRecoilState as jest.Mock).mockImplementation((atom) => {
       switch (atom) {
         case 'autoSendText':
@@ -95,6 +112,41 @@ describe('speech-to-text manual stop behavior', () => {
       language: 'en-US',
       continuous: true,
     });
+  });
+
+  it('keeps finalized browser transcript visible while appending interim words', async () => {
+    mockSpeechToTextEndpoint = 'browser';
+    const setText = jest.fn();
+    mockSpeechRecognitionState = {
+      ...mockDefaultSpeechRecognitionState(),
+      transcript: 'hello',
+      finalTranscript: 'hello',
+    };
+
+    const { rerender } = renderHook(() => useSpeechToTextBrowser(setText, jest.fn()));
+
+    await waitFor(() => expect(setText).toHaveBeenLastCalledWith('hello'));
+    setText.mockClear();
+
+    mockSpeechRecognitionState = {
+      ...mockSpeechRecognitionState,
+      transcript: 'hello world',
+      finalTranscript: 'hello',
+      interimTranscript: 'world',
+    };
+    rerender();
+
+    await waitFor(() => expect(setText).toHaveBeenLastCalledWith('hello world'));
+    setText.mockClear();
+
+    mockSpeechRecognitionState = {
+      ...mockSpeechRecognitionState,
+      finalTranscript: 'hello world',
+      interimTranscript: '',
+    };
+    rerender();
+
+    expect(setText).not.toHaveBeenCalled();
   });
 
   it('does not arm external silence monitoring after recording starts', async () => {

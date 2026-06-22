@@ -19,7 +19,6 @@ const useSpeechToTextBrowser = (
   const sttExternal = Boolean(speechConfig?.sttExternal);
 
   const lastTranscript = useRef<string | null>(null);
-  const lastInterim = useRef<string | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>();
   const [autoSendText] = useRecoilState(store.autoSendText);
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
@@ -31,38 +30,39 @@ const useSpeechToTextBrowser = (
 
   const {
     listening,
+    transcript,
     finalTranscript,
     resetTranscript,
-    interimTranscript,
     isMicrophoneAvailable,
     browserSupportsSpeechRecognition,
   } = useSpeechRecognition();
   const isListening = useMemo(() => listening, [listening]);
 
+  // [knauf] Show the full live browser transcript (final + interim) while the mic
+  // stays open. Using only interim text hides the already-finalized words until
+  // the next pause, which makes continuous dictation feel like it is replacing text.
   useEffect(() => {
-    if (interimTranscript == null || interimTranscript === '') {
+    if (transcript == null || transcript === '') {
+      lastTranscript.current = null;
       return;
     }
 
-    if (lastInterim.current === interimTranscript) {
+    if (lastTranscript.current === transcript) {
       return;
     }
 
-    setText(interimTranscript);
-    lastInterim.current = interimTranscript;
-  }, [setText, interimTranscript]);
+    setText(transcript);
+    lastTranscript.current = transcript;
+  }, [setText, transcript]);
+  // End [knauf]
 
+  // [knauf] Text display is handled by the live `transcript` effect above; this
+  // effect only owns delayed auto-send once browser STT marks text as final.
   useEffect(() => {
     if (finalTranscript == null || finalTranscript === '') {
       return;
     }
 
-    if (lastTranscript.current === finalTranscript) {
-      return;
-    }
-
-    setText(finalTranscript);
-    lastTranscript.current = finalTranscript;
     if (autoSendText > -1 && finalTranscript.length > 0) {
       timeoutRef.current = setTimeout(() => {
         onTranscriptionComplete(finalTranscript);
@@ -75,7 +75,8 @@ const useSpeechToTextBrowser = (
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [setText, onTranscriptionComplete, resetTranscript, finalTranscript, autoSendText]);
+  }, [onTranscriptionComplete, resetTranscript, finalTranscript, autoSendText]);
+  // End [knauf]
 
   const toggleListening = () => {
     if (!browserSupportsSpeechRecognition) {
