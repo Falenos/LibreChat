@@ -151,26 +151,65 @@ jobs:
       - name: Check out AGK deployment config repository
         run: git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
 
+      # The agk-deployment-configs main branch is protected (PR required, Sonar
+      # "test" check, no direct pushes), so the bump is landed via an
+      # auto-merged PR instead of a direct `git push origin main`.
       - name: Update AGK deployment config values
         working-directory: agk-deployment-configs
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
           VERSION="${{ steps.version.outputs.new-version }}"
-          git pull --ff-only origin main
-          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          BRANCH="release/agk-dev-$VERSION"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add "$AGK_CONFIG_DIRECTORY/values.yaml"
 
-          if ! git diff --cached --quiet; then
-            git commit -m "Update agentic-karl dev to $VERSION"
-            git push origin main
-          else
+          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+
+          if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
             echo "AGK deployment config already points at $VERSION"
+            echo "| Deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          git add "$AGK_CONFIG_DIRECTORY/values.yaml"
+          git commit -m "Update agentic-karl dev to $VERSION"
+          git push --force-with-lease origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main --head "$BRANCH" \
+              --title "Update agentic-karl dev to $VERSION" \
+              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps \`$AGK_CONFIG_DIRECTORY/values.yaml\` image tag to \`$VERSION\`.")
+          fi
+          echo "Deployment config PR: $PR_URL"
+
+          gh pr merge "$PR_URL" --auto --squash --delete-branch
+
+          STATE=""
+          for attempt in {1..60}; do
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+            echo "Attempt $attempt: PR state=$STATE"
+            if [ "$STATE" = "MERGED" ]; then
+              break
+            fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "Deployment config PR was closed without merging"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "Deployment config PR did not merge in time (state=$STATE)"
+            exit 1
           fi
 
           {
-            echo "| Deployment config commit | \`$(git rev-parse --short HEAD)\` |"
+            echo "| Deployment config PR | $PR_URL (merged) |"
             echo "| Deployment config file | \`$AGK_CONFIG_REPOSITORY/$AGK_CONFIG_DIRECTORY/values.yaml\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
