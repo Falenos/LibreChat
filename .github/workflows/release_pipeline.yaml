@@ -176,7 +176,10 @@ jobs:
           git checkout -b "$BRANCH"
           git add "$AGK_CONFIG_DIRECTORY/values.yaml"
           git commit -m "Update agentic-karl dev to $VERSION"
-          git push --force-with-lease origin "$BRANCH"
+          # Plain --force: this is an automation-owned throwaway branch and a
+          # fresh clone has no remote-tracking ref, so --force-with-lease would
+          # reject the push on re-runs where the branch already exists.
+          git push --force origin "$BRANCH"
 
           PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
           if [ -z "$PR_URL" ]; then
@@ -190,8 +193,10 @@ jobs:
           gh pr merge "$PR_URL" --auto --squash --delete-branch
 
           STATE=""
-          for attempt in {1..60}; do
-            STATE=$(gh pr view "$PR_URL" --json state --jq '.state')
+          for attempt in {1..90}; do
+            # Tolerate transient API errors so a blip does not fail a release
+            # whose PR is about to merge.
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
             echo "Attempt $attempt: PR state=$STATE"
             if [ "$STATE" = "MERGED" ]; then
               break
@@ -204,7 +209,8 @@ jobs:
           done
 
           if [ "$STATE" != "MERGED" ]; then
-            echo "Deployment config PR did not merge in time (state=$STATE)"
+            echo "Deployment config PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled, so it will merge once the 'test' check passes; re-run this job afterwards or check $PR_URL."
             exit 1
           fi
 
