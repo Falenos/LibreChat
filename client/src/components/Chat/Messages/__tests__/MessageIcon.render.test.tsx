@@ -92,7 +92,7 @@ describe('MessageIcon render cycles', () => {
     expect(queryByTestId('icon')).not.toBeInTheDocument();
   });
 
-  it('uses the Knauf logo when the stored sender label identifies the default Karl model', () => {
+  it('does not infer Karl identity from runtime model labels', () => {
     const iconData: TMessageIcon = {
       endpoint: EModelEndpoint.azureOpenAI,
       model: 'azure-deployment-name',
@@ -105,12 +105,9 @@ describe('MessageIcon render cycles', () => {
 
     expect(getByTestId('convo-icon-url')).toHaveAttribute(
       'data-icon-url',
-      '/assets/knauf-logo.png',
+      'https://example.test/chatgpt-icon.svg',
     );
-    expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
-      'title',
-      'Powered by GPT-5.4',
-    );
+    expect(getByTestId('convo-icon-url').parentElement).not.toHaveAttribute('title');
     expect(queryByTestId('icon')).not.toBeInTheDocument();
   });
 

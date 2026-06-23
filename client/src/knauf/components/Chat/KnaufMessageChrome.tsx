@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import SubRow from '~/components/Chat/Messages/SubRow';
-import { KARL_CHAT_ASSISTANT_NAME, normalizeKarlLabel } from '~/knauf/common/constants';
+import { KARL_CHAT_ASSISTANT_NAME, KARL_POWERED_BY_LABEL } from '~/knauf/common/constants';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
@@ -20,12 +20,10 @@ export function KnaufMessageHeading({
   const localize = useLocalize();
   const visibleLabel = label?.trim() || KARL_CHAT_ASSISTANT_NAME;
   const isAssistantTurn = isCreatedByUser !== true;
-  const modelLabel = isAssistantTurn ? visibleLabel : '';
   const assistantLabel = isAssistantTurn ? KARL_CHAT_ASSISTANT_NAME : visibleLabel;
-  const modelTooltip =
-    modelLabel && normalizeKarlLabel(modelLabel) !== normalizeKarlLabel(KARL_CHAT_ASSISTANT_NAME)
-      ? localize('com_knauf_powered_by_model', { 0: modelLabel })
-      : undefined;
+  const modelTooltip = isAssistantTurn
+    ? localize('com_knauf_powered_by_model', { 0: KARL_POWERED_BY_LABEL })
+    : undefined;
 
   return (
     <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>

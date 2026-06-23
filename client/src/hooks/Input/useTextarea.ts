@@ -18,11 +18,7 @@ import { useInteractionHealthCheck } from '~/data-provider';
 import { useChatContext } from '~/Providers/ChatContext';
 import { globalAudioId } from '~/common';
 import { useLocalize } from '~/hooks';
-import {
-  KARL_CHAT_ASSISTANT_NAME,
-  isKarlModelName,
-  isKarlSpecName,
-} from '~/knauf/common/constants';
+import { KARL_CHAT_ASSISTANT_NAME, isKarlSpecName } from '~/knauf/common/constants';
 import store from '~/store';
 
 type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
@@ -31,13 +27,11 @@ type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
 const getKnaufComposerSender = ({
   isAgent,
   isAssistant,
-  model,
   spec,
   sender,
 }: {
   isAgent: boolean;
   isAssistant: boolean;
-  model?: string | null;
   spec?: string | null;
   sender: string;
 }) => {
@@ -46,10 +40,6 @@ const getKnaufComposerSender = ({
   }
 
   if (isKarlSpecName(spec)) {
-    return KARL_CHAT_ASSISTANT_NAME;
-  }
-
-  if (isKarlModelName(model)) {
     return KARL_CHAT_ASSISTANT_NAME;
   }
 
@@ -137,7 +127,6 @@ export default function useTextarea({
       const composerSender = getKnaufComposerSender({
         isAgent,
         isAssistant,
-        model: conversation?.model,
         spec: conversation?.spec,
         sender,
       });

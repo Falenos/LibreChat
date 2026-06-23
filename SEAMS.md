@@ -212,6 +212,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/utils/__tests__/agents.spec.tsx` | `should render Knauf logo fallback when no avatar` | 66–80 | Seam test — shared `renderAgentAvatar` fallback asserts the Knauf logo asset and contained image styling | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/MessageIcon.tsx` | `getKnaufAgentAvatar`, `useKnaufAgentFallbackIcon` | 46–47, 75–77, 108–116 | Message avatar branding — agent replies without uploaded avatars use the Knauf logo while legacy string avatars remain custom images | `MessageIcon.render.test.tsx` | NO-TICKET |
 | `client/src/components/Chat/Messages/__tests__/MessageIcon.render.test.tsx` | `agent no-avatar message icon cases` | 72–182 | Seam test — chat message icons assert no-avatar agents use the Knauf logo and legacy string avatars bypass the fallback | Self | NO-TICKET |
+| `client/src/components/Chat/Input/AudioRecorder.tsx` | `AudioRecorder` first-paint render guard | 81–84 | Mic control visibility — renders the STT button before the textarea DOM ref is assigned so first paint cannot permanently hide recording controls | `AudioRecorder.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration

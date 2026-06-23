@@ -6,11 +6,9 @@ import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { useGetEndpointsQuery } from '~/data-provider';
 import useLocalize from '~/hooks/useLocalize';
 import {
-  KARL_CHAT_ASSISTANT_NAME,
+  KARL_POWERED_BY_LABEL,
   KNAUF_LOGO_ICON_URL,
-  getKarlModelLabel,
-  isKarlModelName,
-  normalizeKarlLabel,
+  isKarlDisplayName,
 } from '~/knauf/common/constants';
 import { getIconEndpoint } from '~/utils';
 import Icon from '~/components/Endpoints/Icon';
@@ -28,25 +26,15 @@ const isRenderableKnaufIconURL = (iconURL?: string | null): iconURL is string =>
     (iconURL.includes('http') || iconURL.startsWith('/images/') || iconURL.startsWith('/assets/'))
   );
 
-const isDefaultKarlAssistantIcon = (iconData?: TMessageIcon, avatarURL = '') => {
-  const modelLabel = normalizeKarlLabel(iconData?.modelLabel);
-
-  return (
-    !!iconData &&
-    iconData.isCreatedByUser !== true &&
-    !avatarURL &&
-    (isKarlModelName(iconData.model) ||
-      isKarlModelName(iconData.modelLabel) ||
-      modelLabel === normalizeKarlLabel(KARL_CHAT_ASSISTANT_NAME))
-  );
-};
+const isDefaultKarlAssistantIcon = (iconData?: TMessageIcon, avatarURL = '') =>
+  !!iconData &&
+  iconData.isCreatedByUser !== true &&
+  !avatarURL &&
+  isKarlDisplayName(iconData.modelLabel);
 
 const getKnaufAgentAvatar = (agent?: Agent) =>
   typeof agent?.avatar === 'string' ? agent.avatar : (agent?.avatar?.filepath ?? '');
 
-const getKarlTooltipModelLabel = (iconData?: TMessageIcon) => {
-  return getKarlModelLabel(iconData?.modelLabel, iconData?.model);
-};
 // End [knauf]
 
 /**
@@ -102,7 +90,7 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
   const effectiveIconURL =
     useKnaufDefaultIcon || useKnaufAgentFallbackIcon ? KNAUF_LOGO_ICON_URL : iconURL;
   const knaufModelTooltip = useKnaufDefaultIcon
-    ? localize('com_knauf_powered_by_model', { 0: getKarlTooltipModelLabel(iconData) })
+    ? localize('com_knauf_powered_by_model', { 0: KARL_POWERED_BY_LABEL })
     : undefined;
   // End [knauf]
   const endpoint = useMemo(

@@ -139,13 +139,13 @@ describe('useTextarea — Knauf composer placeholder', () => {
     expect(textarea).toHaveAttribute('placeholder', 'Message Karl');
   });
 
-  it('uses Karl for legacy default model chats without a stored spec', () => {
+  it('does not infer Karl from runtime model names without a stored spec', () => {
     const textarea = renderUseTextarea({
       endpoint: 'azureOpenAI',
       model: 'gpt-5.4',
     });
 
-    expect(textarea).toHaveAttribute('placeholder', 'Message Karl');
+    expect(textarea).toHaveAttribute('placeholder', 'Message GPT-5.4');
   });
 
   it('keeps custom agent names', () => {

@@ -48,7 +48,7 @@ describe('KnaufMessageChrome', () => {
     expect(screen.queryByText(/Powered by/)).not.toBeInTheDocument();
   });
 
-  it('does not treat a differently-cased Karl label as a model attribution', () => {
+  it('uses the static Karl attribution even when upstream passes Karl as the label', () => {
     render(
       <KnaufMessageHeading
         isCreatedByUser={false}
@@ -58,7 +58,7 @@ describe('KnaufMessageChrome', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).not.toHaveAttribute('title');
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
   });
 
   it('renders a semantic timestamp for valid message dates', () => {

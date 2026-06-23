@@ -11,7 +11,6 @@ export default memo(function AudioRecorder({
   disabled,
   ask,
   methods,
-  textAreaRef,
   isSubmitting,
 }: {
   disabled: boolean;
@@ -79,9 +78,10 @@ export default memo(function AudioRecorder({
     onTranscriptionComplete,
   );
 
-  if (!textAreaRef.current) {
-    return null;
-  }
+  // [knauf] Render the mic on first paint. `textAreaRef.current` is assigned
+  // after render, and hiding on that ref can leave STT invisible if no later
+  // state update happens.
+  // End [knauf]
 
   const handleStartRecording = async () => {
     existingTextRef.current = getValues('text') || '';
