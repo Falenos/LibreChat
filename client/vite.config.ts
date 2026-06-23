@@ -195,6 +195,16 @@ export default defineConfig(({ command }) => ({
               return 'security-ui';
             }
 
+            // [knauf] KK20-186 — isolate Datadog Browser SDKs into their own chunk.
+            // Without this they fall into the generic `vendor` chunk, which shifts
+            // vendor's module init order and triggers a temporal-dead-zone crash in
+            // the circular `vendor -> sandpack -> codemirror-view -> vendor` chunk
+            // graph ("can't access lexical declaration 'y' before initialization").
+            if (normalizedId.includes('@datadog')) {
+              return 'datadog';
+            }
+            // End [knauf]
+
             if (normalizedId.includes('@codemirror/view')) {
               return 'codemirror-view';
             }
