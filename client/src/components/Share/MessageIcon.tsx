@@ -6,6 +6,10 @@ import MessageEndpointIcon from '../Endpoints/MessageEndpointIcon';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { getIconEndpoint, logger } from '~/utils';
 
+// [knauf] Shared-message user avatar fallback uses Knauf dark blue instead of upstream purple.
+const KNAUF_USER_AVATAR_BACKGROUND = 'rgb(33, 58, 117)';
+// End [knauf]
+
 export default function MessageIcon(
   props: Pick<TMessageProps, 'message' | 'conversation'> & {
     assistant?: false | Assistant;
@@ -67,7 +71,9 @@ export default function MessageIcon(
     return (
       <div
         style={{
-          backgroundColor: 'rgb(121, 137, 255)',
+          // [knauf] Keep shared user avatar fallback on Knauf dark blue.
+          backgroundColor: KNAUF_USER_AVATAR_BACKGROUND,
+          // End [knauf]
           width: '20px',
           height: '20px',
           boxShadow: 'rgba(240, 246, 252, 0.1) 0px 0px 0px 1px',

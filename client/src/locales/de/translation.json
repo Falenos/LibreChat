@@ -419,6 +419,7 @@
   "com_knauf_no_agent_matches": "Keine Agenten entsprechen Ihrer Suche",
   "com_knauf_no_agents_available": "Keine Agenten verfügbar",
   "com_knauf_pinned": "Angeheftet",
+  "com_knauf_powered_by_model": "Bereitgestellt von {{0}}",
   "com_knauf_search_agents": "Agenten suchen…",
   "com_knauf_show_reasoning_description": "Zeigt, wie der Agent zu seiner Antwort gelangt ist. Hilfreich, wenn Sie die Überlegungen des Modells sehen möchten, nicht nur das Ergebnis.",
   "com_knauf_show_reasoning_label": "Denkschritte anzeigen",

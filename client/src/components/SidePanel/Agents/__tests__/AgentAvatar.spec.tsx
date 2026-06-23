@@ -3,7 +3,7 @@
  */
 /* eslint-disable i18next/no-literal-string */
 import { describe, it, expect } from '@jest/globals';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, screen } from '@testing-library/react';
 import { FormProvider, useForm, type UseFormReturn } from 'react-hook-form';
 import type { AgentForm } from '~/common';
 import AgentAvatar from '../AgentAvatar';
@@ -61,6 +61,18 @@ const defaultFormValues: AgentForm = {
 };
 
 describe('AgentAvatar reset menu', () => {
+  // [knauf] Empty agent avatar state uses the Knauf logo while keeping upload/reset tests mocked.
+  it('renders the Knauf logo for the empty avatar state', () => {
+    const { NoImage } = jest.requireActual('../Images') as typeof import('../Images');
+
+    render(<NoImage />);
+
+    const logo = screen.getByAltText('Knauf');
+    expect(logo).toHaveAttribute('src', '/assets/knauf-logo.png');
+    expect(logo).toHaveClass('object-contain');
+  });
+  // End [knauf]
+
   it('clears preview and file state when reset is triggered', () => {
     let methodsRef: UseFormReturn<AgentForm>;
     const Wrapper = () => {

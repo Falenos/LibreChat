@@ -12,8 +12,25 @@
 /** Prefix for personality modelSpecs in librechat.yaml `modelSpecs.list`. */
 export const KARL_PERSONALITY_PREFIX = 'karl-personality-';
 
+/** Default Karl modelSpec name in librechat.yaml `modelSpecs.list`. */
+export const KARL_DEFAULT_SPEC_NAME = 'karl';
+
 /** Default personality if none is selected and no model is loaded yet. */
 export const KARL_DEFAULT_PERSONALITY_NAME = 'karl-personality-balanced';
 
 /** ModelSpec name that drives the ✦ Autogenerate Prompt button. */
 export const KARL_AUTOGENERATE_SPEC_NAME = 'karl-autogenerate-prompt';
+
+/** Visible assistant name for the default Karl chat experience. */
+export const KARL_CHAT_ASSISTANT_NAME = 'Karl';
+
+/** Knauf logo used when Karl or a new no-avatar agent needs a fallback icon. */
+export const KNAUF_LOGO_ICON_URL = '/assets/knauf-logo.png';
+
+export const normalizeKarlLabel = (value?: string | null) => value?.trim().toLowerCase() ?? '';
+
+export const isKarlSpecName = (spec?: string | null) =>
+  spec === KARL_DEFAULT_SPEC_NAME || spec?.startsWith(KARL_PERSONALITY_PREFIX) === true;
+
+export const isKarlDisplayName = (value?: string | null) =>
+  normalizeKarlLabel(value) === normalizeKarlLabel(KARL_CHAT_ASSISTANT_NAME);

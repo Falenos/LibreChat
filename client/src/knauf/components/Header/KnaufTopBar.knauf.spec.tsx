@@ -1,8 +1,7 @@
 /**
  * [knauf] Seam test for the KK20-173 top header (`KnaufTopBar`).
  *
- * Mocks every upstream dependency and pins the menu contract — same
- * items the sidebar `AccountSettings` exposes, on the same handlers.
+ * Mocks every upstream dependency and pins the Knauf user-menu contract.
  */
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -45,7 +44,6 @@ jest.mock('@librechat/client', () => ({
   Avatar: () => <div data-testid="avatar" />,
   DropdownMenuSeparator: () => <div role="separator" />,
   GearIcon: () => <span aria-label="gear" />,
-  LinkIcon: () => <span aria-label="link" />,
 }));
 
 function setAuth(user = { email: 'jorge@knauf.com', name: 'Jorge' }) {
@@ -111,18 +109,11 @@ describe('[knauf] KnaufTopBar — KK20-173 top header user menu', () => {
     expect(screen.getByTestId('my-files-modal')).toBeInTheDocument();
   });
 
-  it('opens Help & FAQ in a new tab when the item is clicked', () => {
-    render(<KnaufTopBar />);
-    fireEvent.click(screen.getByTestId('knauf-topbar-user'));
-    fireEvent.click(screen.getByText('com_nav_help_faq'));
-    expect(window.open).toHaveBeenCalledWith('https://help.example.com', '_blank');
-  });
-
-  it('hides the Help & FAQ item when helpAndFaqURL is the placeholder "/"', () => {
-    setStartupConfig({ helpAndFaqURL: '/' });
+  it('hides the Help & FAQ item even when a URL is configured', () => {
     render(<KnaufTopBar />);
     fireEvent.click(screen.getByTestId('knauf-topbar-user'));
     expect(screen.queryByText('com_nav_help_faq')).not.toBeInTheDocument();
+    expect(window.open).not.toHaveBeenCalled();
   });
 
   it('opens the Settings dialog when the Settings item is clicked', () => {

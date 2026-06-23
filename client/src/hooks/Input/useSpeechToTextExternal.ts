@@ -5,6 +5,10 @@ import { useSpeechToTextMutation } from '~/data-provider';
 import useGetAudioSettings from './useGetAudioSettings';
 import store from '~/store';
 
+// [knauf] Manual-stop recording still needs a hard safety cap for forgotten open mics.
+const KNAUF_MAX_RECORDING_MS = 10 * 60 * 1000;
+// End [knauf]
+
 const useSpeechToTextExternal = (
   setText: (text: string) => void,
   onTranscriptionComplete: (text: string) => void,
@@ -13,9 +17,10 @@ const useSpeechToTextExternal = (
   const { speechToTextEndpoint } = useGetAudioSettings();
   const isExternalSTTEnabled = speechToTextEndpoint === 'external';
   const audioStream = useRef<MediaStream | null>(null);
-  const animationFrameIdRef = useRef<number | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // [knauf] Safety cap for manual-stop external recording.
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // End [knauf]
 
   const audioChunksRef = useRef<Blob[]>([]);
   const [permission, setPermission] = useState(false);
@@ -23,11 +28,9 @@ const useSpeechToTextExternal = (
   const [isRequestBeingMade, setIsRequestBeingMade] = useState(false);
   const [audioMimeType, setAudioMimeType] = useState<string>(() => getBestSupportedMimeType());
 
-  const [minDecibels] = useRecoilState(store.decibelValue);
   const [autoSendText] = useRecoilState(store.autoSendText);
   const [languageSTT] = useRecoilState<string>(store.languageSTT);
   const [speechToText] = useRecoilState<boolean>(store.speechToText);
-  const [autoTranscribeAudio] = useRecoilState<boolean>(store.autoTranscribeAudio);
 
   const { mutate: processAudio, isLoading: isProcessing } = useSpeechToTextMutation({
     onSuccess: (data) => {
@@ -90,6 +93,24 @@ const useSpeechToTextExternal = (
     }
   };
 
+  // [knauf] Keep external STT recording active until the user stops the mic.
+  const clearRecordingTimeout = () => {
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+  };
+
+  const startRecordingTimeout = () => {
+    clearRecordingTimeout();
+    recordingTimeoutRef.current = setTimeout(() => {
+      if (mediaRecorderRef.current?.state === 'recording') {
+        stopRecording();
+      }
+    }, KNAUF_MAX_RECORDING_MS);
+  };
+  // End [knauf]
+
   const cleanup = () => {
     if (mediaRecorderRef.current) {
       mediaRecorderRef.current = null;
@@ -129,39 +150,6 @@ const useSpeechToTextExternal = (
     }
   };
 
-  const monitorSilence = (stream: MediaStream, stopRecording: () => void) => {
-    const audioContext = new AudioContext();
-    const audioStreamSource = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.minDecibels = minDecibels;
-    audioStreamSource.connect(analyser);
-
-    const bufferLength = analyser.frequencyBinCount;
-    const domainData = new Uint8Array(bufferLength);
-    let lastSoundTime = Date.now();
-
-    const detectSound = () => {
-      analyser.getByteFrequencyData(domainData);
-      const isSoundDetected = domainData.some((value) => value > 0);
-
-      if (isSoundDetected) {
-        lastSoundTime = Date.now();
-      }
-
-      const timeSinceLastSound = Date.now() - lastSoundTime;
-      const isOverSilenceThreshold = timeSinceLastSound > 3000;
-
-      if (isOverSilenceThreshold) {
-        stopRecording();
-        return;
-      }
-
-      animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
-    };
-
-    animationFrameIdRef.current = window.requestAnimationFrame(detectSound);
-  };
-
   const startRecording = async () => {
     if (isRequestBeingMade) {
       showToast({ message: 'A request is already being made. Please wait.', status: 'warning' });
@@ -186,9 +174,9 @@ const useSpeechToTextExternal = (
         });
         mediaRecorderRef.current.addEventListener('stop', handleStop);
         mediaRecorderRef.current.start(100);
-        if (!audioContextRef.current && autoTranscribeAudio && speechToText) {
-          monitorSilence(audioStream.current, stopRecording);
-        }
+        // [knauf] Silence should not flip the mic off; user owns the stop action.
+        startRecordingTimeout();
+        // End [knauf]
         setIsListening(true);
       } catch (error) {
         showToast({ message: `Error starting recording: ${error}`, status: 'error' });
@@ -199,6 +187,10 @@ const useSpeechToTextExternal = (
   };
 
   const stopRecording = () => {
+    // [knauf] Stop is only user-driven or the hard safety timeout.
+    clearRecordingTimeout();
+    // End [knauf]
+
     if (!mediaRecorderRef.current) {
       return;
     }
@@ -208,11 +200,6 @@ const useSpeechToTextExternal = (
 
       audioStream.current?.getTracks().forEach((track) => track.stop());
       audioStream.current = null;
-
-      if (animationFrameIdRef.current !== null) {
-        window.cancelAnimationFrame(animationFrameIdRef.current);
-        animationFrameIdRef.current = null;
-      }
 
       setIsListening(false);
     } else {
@@ -267,6 +254,9 @@ const useSpeechToTextExternal = (
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      // [knauf] Clear the manual-stop safety timer when the hook unmounts.
+      clearRecordingTimeout();
+      // End [knauf]
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isListening]);

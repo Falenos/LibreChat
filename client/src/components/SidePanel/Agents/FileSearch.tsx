@@ -185,6 +185,8 @@ function FileSearch({
         )}
       </div>
 
+      {/* [knauf] FileSearch knowledge uploads have no count cap; validation
+      still enforces disabled, file-size, total-size, and MIME rules. */}
       <SharePointPickerDialog
         isOpen={isSharePointDialogOpen}
         onOpenChange={setIsSharePointDialogOpen}
@@ -192,8 +194,8 @@ function FileSearch({
         disabled={disabledUploadButton}
         isDownloading={isProcessing}
         downloadProgress={downloadProgress}
-        maxSelectionCount={endpointFileConfig?.fileLimit}
       />
+      {/* End [knauf] */}
     </div>
   );
 }

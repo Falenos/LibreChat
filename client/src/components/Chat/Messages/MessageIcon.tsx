@@ -4,6 +4,8 @@ import type { Assistant, Agent } from 'librechat-data-provider';
 import type { TMessageIcon } from '~/common';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { useGetEndpointsQuery } from '~/data-provider';
+import useLocalize from '~/hooks/useLocalize';
+import { KNAUF_LOGO_ICON_URL, isKarlDisplayName } from '~/knauf/common/constants';
 import { getIconEndpoint } from '~/utils';
 import Icon from '~/components/Endpoints/Icon';
 
@@ -12,6 +14,24 @@ type MessageIconProps = {
   assistant?: Assistant;
   agent?: Agent;
 };
+
+// [knauf] Default Karl assistant and no-avatar agent turns use the Knauf wordmark.
+const isRenderableKnaufIconURL = (iconURL?: string | null): iconURL is string =>
+  !!(
+    iconURL &&
+    (iconURL.includes('http') || iconURL.startsWith('/images/') || iconURL.startsWith('/assets/'))
+  );
+
+const isDefaultKarlAssistantIcon = (iconData?: TMessageIcon, avatarURL = '') =>
+  !!iconData &&
+  iconData.isCreatedByUser !== true &&
+  !avatarURL &&
+  isKarlDisplayName(iconData.modelLabel);
+
+const getKnaufAgentAvatar = (agent?: Agent) =>
+  typeof agent?.avatar === 'string' ? agent.avatar : (agent?.avatar?.filepath ?? '');
+
+// End [knauf]
 
 /**
  * Compares only the fields MessageIcon actually renders.
@@ -26,7 +46,9 @@ export function arePropsEqual(prev: MessageIconProps, next: MessageIconProps): b
     [prev.iconData?.modelLabel, next.iconData?.modelLabel],
     [prev.iconData?.isCreatedByUser, next.iconData?.isCreatedByUser],
     [prev.agent?.name, next.agent?.name],
-    [prev.agent?.avatar?.filepath, next.agent?.avatar?.filepath],
+    // [knauf] Compare the normalized avatar URL so legacy string avatars do not collapse to fallback.
+    [getKnaufAgentAvatar(prev.agent), getKnaufAgentAvatar(next.agent)],
+    // End [knauf]
     [prev.assistant?.name, next.assistant?.name],
     [prev.assistant?.metadata?.avatar, next.assistant?.metadata?.avatar],
   ];
@@ -41,9 +63,12 @@ export function arePropsEqual(prev: MessageIconProps, next: MessageIconProps): b
 
 const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
   const { data: endpointsConfig } = useGetEndpointsQuery();
+  // [knauf] Match the Karl name tooltip so the icon no longer exposes the upstream ChatGPT title.
+  const localize = useLocalize();
+  // End [knauf]
 
   const agentName = agent?.name ?? '';
-  const agentAvatar = agent?.avatar?.filepath ?? '';
+  const agentAvatar = getKnaufAgentAvatar(agent);
   const assistantName = assistant?.name ?? '';
   const assistantAvatar = assistant?.metadata?.avatar ?? '';
   let avatarURL = '';
@@ -54,9 +79,26 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
   }
 
   const iconURL = iconData?.iconURL;
+  // [knauf] Use the local Knauf logo for default Karl turns and no-avatar agent turns.
+  const useKnaufDefaultIcon = isDefaultKarlAssistantIcon(iconData, avatarURL);
+  const useKnaufAgentFallbackIcon =
+    iconData?.isCreatedByUser !== true && Boolean(agent && !avatarURL);
+  const effectiveIconURL =
+    useKnaufDefaultIcon || useKnaufAgentFallbackIcon ? KNAUF_LOGO_ICON_URL : iconURL;
+  const runtimeModel = iconData?.model?.trim();
+  const knaufModelTooltip =
+    useKnaufDefaultIcon && runtimeModel
+      ? localize('com_knauf_powered_by_model', { 0: runtimeModel })
+      : undefined;
+  // End [knauf]
   const endpoint = useMemo(
-    () => getIconEndpoint({ endpointsConfig, iconURL, endpoint: iconData?.endpoint }),
-    [endpointsConfig, iconURL, iconData?.endpoint],
+    () =>
+      getIconEndpoint({
+        endpointsConfig,
+        iconURL: effectiveIconURL,
+        endpoint: iconData?.endpoint,
+      }),
+    [endpointsConfig, effectiveIconURL, iconData?.endpoint],
   );
 
   const endpointIconURL = useMemo(
@@ -64,18 +106,20 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
     [endpointsConfig, endpoint],
   );
 
-  if (iconData?.isCreatedByUser !== true && iconURL != null && iconURL.includes('http')) {
+  if (iconData?.isCreatedByUser !== true && isRenderableKnaufIconURL(effectiveIconURL)) {
     return (
-      <ConvoIconURL
-        iconURL={iconURL}
-        modelLabel={iconData?.modelLabel}
-        context="message"
-        assistantAvatar={assistantAvatar}
-        agentAvatar={agentAvatar}
-        endpointIconURL={endpointIconURL}
-        assistantName={assistantName}
-        agentName={agentName}
-      />
+      <span className="flex h-full w-full items-center justify-center" title={knaufModelTooltip}>
+        <ConvoIconURL
+          iconURL={effectiveIconURL}
+          modelLabel={iconData?.modelLabel}
+          context="message"
+          assistantAvatar={assistantAvatar}
+          agentAvatar={agentAvatar}
+          endpointIconURL={endpointIconURL}
+          assistantName={assistantName}
+          agentName={agentName}
+        />
+      </span>
     );
   }
 

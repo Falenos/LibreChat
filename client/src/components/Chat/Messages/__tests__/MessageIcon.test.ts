@@ -8,6 +8,12 @@ jest.mock('librechat-data-provider', () => ({
 }));
 jest.mock('~/components/Endpoints/ConvoIconURL', () => jest.fn());
 jest.mock('~/data-provider', () => ({ useGetEndpointsQuery: jest.fn(() => ({ data: {} })) }));
+// [knauf] MessageIcon localizes Karl icon tooltips; keep comparator tests isolated.
+jest.mock('~/hooks/useLocalize', () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+// End [knauf]
 jest.mock('~/utils', () => ({ getIconEndpoint: jest.fn(), logger: { log: jest.fn() } }));
 jest.mock('~/components/Endpoints/Icon', () => jest.fn());
 

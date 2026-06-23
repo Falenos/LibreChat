@@ -5,6 +5,10 @@ import type { TUser } from 'librechat-data-provider';
 
 const avatarCache: Record<string, string> = {};
 
+// [knauf] Generated user initials use the Knauf dark blue brand color, not upstream's varied purple palette.
+const KNAUF_USER_AVATAR_BACKGROUND_COLORS = ['213A75'];
+// End [knauf]
+
 const useAvatar = (user: TUser | undefined) => {
   return useMemo(() => {
     const { username, name } = user ?? {};
@@ -26,22 +30,9 @@ const useAvatar = (user: TUser | undefined) => {
       fontFamily: ['Verdana'],
       fontSize: 36,
       backgroundType: ['solid'],
-      backgroundColor: [
-        'd81b60',
-        '8e24aa',
-        '5e35b1',
-        '3949ab',
-        'DB3733',
-        '1B79CC',
-        '027CB8',
-        '008291',
-        '008577',
-        '58802F',
-        '8A761D',
-        '9C6D00',
-        'B06200',
-        'D1451A',
-      ],
+      // [knauf] Pin generated user avatars to Knauf dark blue.
+      backgroundColor: KNAUF_USER_AVATAR_BACKGROUND_COLORS,
+      // End [knauf]
       textColor: ['ffffff'],
     });
 

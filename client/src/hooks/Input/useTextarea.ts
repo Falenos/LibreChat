@@ -18,9 +18,34 @@ import { useInteractionHealthCheck } from '~/data-provider';
 import { useChatContext } from '~/Providers/ChatContext';
 import { globalAudioId } from '~/common';
 import { useLocalize } from '~/hooks';
+import { KARL_CHAT_ASSISTANT_NAME, isKarlSpecName } from '~/knauf/common/constants';
 import store from '~/store';
 
 type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
+
+// [knauf] Brand default Karl model-spec chats in the composer placeholder without changing custom agent names.
+const getKnaufComposerSender = ({
+  isAgent,
+  isAssistant,
+  spec,
+  sender,
+}: {
+  isAgent: boolean;
+  isAssistant: boolean;
+  spec?: string | null;
+  sender: string;
+}) => {
+  if (isAgent || isAssistant) {
+    return sender;
+  }
+
+  if (isKarlSpecName(spec)) {
+    return KARL_CHAT_ASSISTANT_NAME;
+  }
+
+  return sender;
+};
+// End [knauf]
 
 export default function useTextarea({
   textAreaRef,
@@ -98,9 +123,17 @@ export default function useTextarea({
         isAssistant || isAgent
           ? getEntityName({ name: entityName, isAgent, localize })
           : getSender(conversation as TEndpointOption);
+      // [knauf] Use Karl as the visible target for default Karl model-spec chats; keep raw sender for agents/assistants/other endpoints.
+      const composerSender = getKnaufComposerSender({
+        isAgent,
+        isAssistant,
+        spec: conversation?.spec,
+        sender,
+      });
+      // End [knauf]
 
       return `${localize('com_endpoint_message_new', {
-        0: sender ? sender : localize('com_endpoint_ai'),
+        0: composerSender ? composerSender : localize('com_endpoint_ai'),
       })}`;
     };
 

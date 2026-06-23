@@ -12,6 +12,10 @@ export interface AvatarProps {
   showDefaultWhenEmpty?: boolean;
 }
 
+// [knauf] User avatar fallback uses Knauf dark blue instead of upstream purple.
+const KNAUF_USER_AVATAR_BACKGROUND = 'rgb(33, 58, 117)';
+// End [knauf]
+
 const Avatar: React.FC<AvatarProps> = ({
   user,
   size = 32,
@@ -51,7 +55,9 @@ const Avatar: React.FC<AvatarProps> = ({
     () => (
       <div
         style={{
-          backgroundColor: 'rgb(121, 137, 255)',
+          // [knauf] Keep non-image user avatar fallback on Knauf dark blue.
+          backgroundColor: KNAUF_USER_AVATAR_BACKGROUND,
+          // End [knauf]
           width: `${size}px`,
           height: `${size}px`,
           boxShadow: 'rgba(240, 246, 252, 0.1) 0px 0px 0px 1px',

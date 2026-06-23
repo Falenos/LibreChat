@@ -4,9 +4,9 @@
  * Full-width horizontal bar that runs across the top of the application,
  * above the sidebar + chat split. Carries the Knauf wordmark on the
  * left and the user avatar with a dropdown menu on the right. The menu
- * items mirror the (now hidden) sidebar `AccountSettings` exactly —
- * Email row, optional Balance row, My Files, Help & FAQ, Settings,
- * Log out — so the top bar is the single user-menu surface.
+ * items mirror the (now hidden) sidebar `AccountSettings` —
+ * Email row, optional Balance row, My Files, Settings, Log out —
+ * so the top bar is the single user-menu surface.
  *
  * Reuses every dependency `AccountSettings` already pulled in
  * (`useAuthContext`, `useGetStartupConfig`, `useGetUserBalance`,
@@ -17,7 +17,7 @@ import { memo, useRef, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
 import * as Menu from '@ariakit/react/menu';
 import { FileText, LogOut } from 'lucide-react';
-import { Avatar, DropdownMenuSeparator, GearIcon, LinkIcon } from '@librechat/client';
+import { Avatar, DropdownMenuSeparator, GearIcon } from '@librechat/client';
 import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import Settings from '~/components/Nav/Settings';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
@@ -74,15 +74,6 @@ function KnaufTopBar() {
             <FileText className="icon-md" aria-hidden="true" />
             {localize('com_nav_my_files')}
           </Menu.MenuItem>
-          {startupConfig?.helpAndFaqURL !== '/' && (
-            <Menu.MenuItem
-              onClick={() => window.open(startupConfig?.helpAndFaqURL, '_blank')}
-              className="select-item text-sm"
-            >
-              <LinkIcon aria-hidden="true" />
-              {localize('com_nav_help_faq')}
-            </Menu.MenuItem>
-          )}
           <Menu.MenuItem onClick={() => setShowSettings(true)} className="select-item text-sm">
             <GearIcon className="icon-md" aria-hidden="true" />
             {localize('com_nav_settings')}

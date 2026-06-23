@@ -10,7 +10,12 @@ import PlaceholderRow from '~/components/Chat/Messages/ui/PlaceholderRow';
 import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
 import HoverButtons from '~/components/Chat/Messages/HoverButtons';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
-import SubRow from '~/components/Chat/Messages/SubRow';
+// [knauf] Use branded Karl heading and generated-time chrome in message rows.
+import {
+  KnaufMessageActionRow,
+  KnaufMessageHeading,
+} from '~/knauf/components/Chat/KnaufMessageChrome';
+// End [knauf]
 import { fontSizeAtom } from '~/store/fontSize';
 import { MessageContext } from '~/Providers';
 import store from '~/store';
@@ -79,6 +84,9 @@ function areMessageRenderPropsEqual(prev: MessageRenderProps, next: MessageRende
     prevMsg.model === nextMsg.model &&
     prevMsg.endpoint === nextMsg.endpoint &&
     prevMsg.iconURL === nextMsg.iconURL &&
+    prevMsg.clientTimestamp === nextMsg.clientTimestamp &&
+    prevMsg.createdAt === nextMsg.createdAt &&
+    prevMsg.updatedAt === nextMsg.updatedAt &&
     prevMsg.feedback?.rating === nextMsg.feedback?.rating &&
     (prevMsg.files?.length ?? 0) === (nextMsg.files?.length ?? 0)
   );
@@ -209,10 +217,17 @@ const MessageRender = memo(function MessageRender({
         )}
       >
         {!hasParallelContent && (
-          <h2 className={cn('select-none font-semibold', fontSize)}>
-            <span className="sr-only">{getHeaderPrefixForScreenReader(msg, localize)}</span>
-            {messageLabel}
-          </h2>
+          <>
+            {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+            <KnaufMessageHeading
+              isCreatedByUser={msg.isCreatedByUser}
+              label={messageLabel}
+              fontSize={fontSize}
+              poweredByModel={msg.model ?? conversation?.model}
+              screenReaderPrefix={getHeaderPrefixForScreenReader(msg, localize)}
+            />
+            {/* End [knauf] */}
+          </>
         )}
 
         <div className="flex flex-col gap-1">
@@ -237,7 +252,11 @@ const MessageRender = memo(function MessageRender({
           {hasNoChildren && isSubmitting ? (
             <PlaceholderRow />
           ) : (
-            <SubRow classes="text-xs">
+            <KnaufMessageActionRow
+              clientTimestamp={msg.clientTimestamp}
+              createdAt={msg.createdAt}
+              updatedAt={msg.updatedAt}
+            >
               <SiblingSwitch
                 siblingIdx={siblingIdx}
                 siblingCount={siblingCount}
@@ -257,7 +276,7 @@ const MessageRender = memo(function MessageRender({
                 handleFeedback={handleFeedback}
                 isLast={isLast}
               />
-            </SubRow>
+            </KnaufMessageActionRow>
           )}
         </div>
       </div>

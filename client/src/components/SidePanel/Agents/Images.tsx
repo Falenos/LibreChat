@@ -3,28 +3,17 @@ import * as Ariakit from '@ariakit/react';
 import { DropdownPopup, Skeleton } from '@librechat/client';
 import type { MenuItemProps } from '~/common/menus';
 import { useLocalize } from '~/hooks';
+// [knauf] Empty agent avatars use the shared Knauf logo fallback.
+import KnaufLogoAvatar from '~/knauf/components/Brand/KnaufLogoAvatar';
+// End [knauf]
 
+// [knauf] New agents without uploaded images show the Knauf logo instead of the upstream plus icon.
 export function NoImage() {
   return (
-    <div className="border-token-border-medium flex h-full w-full items-center justify-center rounded-full border-2 border-dashed border-black">
-      <svg
-        stroke="currentColor"
-        fill="none"
-        strokeWidth="2"
-        viewBox="0 0 24 24"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="text-4xl"
-        height="1em"
-        width="1em"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
-    </div>
+    <KnaufLogoAvatar className="border-token-border-medium border-2 border-dashed border-black" />
   );
 }
+// End [knauf]
 
 export const AgentAvatarRender = ({ url }: { url?: string }) => {
   const [isLoaded, setIsLoaded] = useState(false);

@@ -7,11 +7,16 @@ import { useMessageHelpers, useLocalize, useAttachments, useContentMetadata } fr
 import { cn, getHeaderPrefixForScreenReader, getMessageAriaLabel } from '~/utils';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import ContentParts from './Content/ContentParts';
+// [knauf] Use branded Karl heading and generated-time chrome in message rows.
+import {
+  KnaufMessageActionRow,
+  KnaufMessageHeading,
+} from '~/knauf/components/Chat/KnaufMessageChrome';
+// End [knauf]
 import { fontSizeAtom } from '~/store/fontSize';
 import SiblingSwitch from './SiblingSwitch';
 import MultiMessage from './MultiMessage';
 import HoverButtons from './HoverButtons';
-import SubRow from './SubRow';
 import store from '~/store';
 
 export default function Message(props: TMessageProps) {
@@ -124,12 +129,17 @@ export default function Message(props: TMessageProps) {
               )}
             >
               {!hasParallelContent && (
-                <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>
-                  <span className="sr-only">
-                    {getHeaderPrefixForScreenReader(message, localize)}
-                  </span>
-                  {name}
-                </h2>
+                <>
+                  {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+                  <KnaufMessageHeading
+                    isCreatedByUser={message.isCreatedByUser}
+                    label={name || message.sender || message.model || conversation?.model}
+                    fontSize={fontSize}
+                    poweredByModel={message.model ?? conversation?.model}
+                    screenReaderPrefix={getHeaderPrefixForScreenReader(message, localize)}
+                  />
+                  {/* End [knauf] */}
+                </>
               )}
               <div className="flex flex-col gap-1">
                 <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
@@ -152,7 +162,11 @@ export default function Message(props: TMessageProps) {
                 {isLast && isSubmitting ? (
                   <div className="mt-1 h-[31px] bg-transparent" />
                 ) : (
-                  <SubRow classes="text-xs">
+                  <KnaufMessageActionRow
+                    clientTimestamp={message.clientTimestamp}
+                    createdAt={message.createdAt}
+                    updatedAt={message.updatedAt}
+                  >
                     <SiblingSwitch
                       siblingIdx={siblingIdx}
                       siblingCount={siblingCount}
@@ -171,7 +185,7 @@ export default function Message(props: TMessageProps) {
                       latestMessageId={latestMessageId}
                       isLast={isLast}
                     />
-                  </SubRow>
+                  </KnaufMessageActionRow>
                 )}
               </div>
             </div>
