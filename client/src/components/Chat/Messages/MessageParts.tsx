@@ -135,6 +135,7 @@ export default function Message(props: TMessageProps) {
                     isCreatedByUser={message.isCreatedByUser}
                     label={name || message.sender || message.model || conversation?.model}
                     fontSize={fontSize}
+                    poweredByModel={message.model ?? conversation?.model}
                     screenReaderPrefix={getHeaderPrefixForScreenReader(message, localize)}
                   />
                   {/* End [knauf] */}

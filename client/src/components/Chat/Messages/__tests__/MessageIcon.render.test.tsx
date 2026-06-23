@@ -73,7 +73,7 @@ describe('MessageIcon render cycles', () => {
   it('renders the Knauf logo for default Karl assistant messages without a custom avatar', () => {
     const iconData: TMessageIcon = {
       endpoint: EModelEndpoint.azureOpenAI,
-      model: 'gpt-5.4',
+      model: 'azure-gpt-runtime',
       iconURL: undefined,
       modelLabel: 'Karl',
       isCreatedByUser: false,
@@ -87,7 +87,7 @@ describe('MessageIcon render cycles', () => {
     );
     expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
       'title',
-      'Powered by GPT-5.4',
+      'Powered by azure-gpt-runtime',
     );
     expect(queryByTestId('icon')).not.toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe('MessageIcon render cycles', () => {
   it('routes local asset icon URLs through ConvoIconURL', () => {
     const iconData: TMessageIcon = {
       endpoint: EModelEndpoint.azureOpenAI,
-      model: 'gpt-5.4',
+      model: 'azure-gpt-runtime',
       iconURL: '/assets/knauf-logo.png',
       modelLabel: 'Karl',
       isCreatedByUser: false,
@@ -128,7 +128,7 @@ describe('MessageIcon render cycles', () => {
     );
     expect(getByTestId('convo-icon-url').parentElement).toHaveAttribute(
       'title',
-      'Powered by GPT-5.4',
+      'Powered by azure-gpt-runtime',
     );
     expect(queryByTestId('icon')).not.toBeInTheDocument();
   });

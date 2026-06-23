@@ -27,9 +27,6 @@ export const KARL_CHAT_ASSISTANT_NAME = 'Karl';
 /** Knauf logo used when Karl or a new no-avatar agent needs a fallback icon. */
 export const KNAUF_LOGO_ICON_URL = '/assets/knauf-logo.png';
 
-/** User-facing model attribution for Karl hover tooltips. */
-export const KARL_POWERED_BY_LABEL = 'GPT-5.4';
-
 export const normalizeKarlLabel = (value?: string | null) => value?.trim().toLowerCase() ?? '';
 
 export const isKarlSpecName = (spec?: string | null) =>

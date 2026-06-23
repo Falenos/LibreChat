@@ -51,7 +51,11 @@ jest.mock('~/hooks', () => ({
     agent: undefined,
     assistant: undefined,
     enterEdit: jest.fn(),
-    conversation: { conversationId: 'conversation-1', endpoint: 'openAI', model: 'gpt-5.4' },
+    conversation: {
+      conversationId: 'conversation-1',
+      endpoint: 'openAI',
+      model: 'azure-gpt-runtime',
+    },
     messageLabel: 'GPT-5.4',
     handleFeedback: jest.fn(),
     handleContinue: jest.fn(),
@@ -69,7 +73,11 @@ jest.mock('~/hooks', () => ({
     assistant: undefined,
     enterEdit: jest.fn(),
     handleScroll: jest.fn(),
-    conversation: { conversationId: 'conversation-1', endpoint: 'openAI', model: 'gpt-5.4' },
+    conversation: {
+      conversationId: 'conversation-1',
+      endpoint: 'openAI',
+      model: 'azure-gpt-runtime',
+    },
     isSubmitting: false,
     latestMessageId: 'message-1',
     handleContinue: jest.fn(),
@@ -171,8 +179,8 @@ describe('message chrome integration', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
-    expect(screen.queryByText('Powered by GPT-5.4')).not.toBeInTheDocument();
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
+    expect(screen.queryByText('Powered by azure-gpt-runtime')).not.toBeInTheDocument();
     expect(container.querySelector('time')).toHaveAttribute('dateTime', '2026-06-16T10:05:00.000Z');
     expect(container.querySelector('time')).toHaveTextContent(
       formatExpectedTimestamp('2026-06-16T10:05:00.000Z'),
@@ -197,8 +205,8 @@ describe('message chrome integration', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
-    expect(screen.queryByText('Powered by GPT-5.4')).not.toBeInTheDocument();
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
+    expect(screen.queryByText('Powered by azure-gpt-runtime')).not.toBeInTheDocument();
     expect(container.querySelector('time')).toHaveAttribute('dateTime', '2026-06-16T10:05:00.000Z');
     expect(container.querySelector('time')).toHaveTextContent(
       formatExpectedTimestamp('2026-06-16T10:05:00.000Z'),
@@ -217,8 +225,8 @@ describe('message chrome integration', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
-    expect(screen.queryByText('Powered by GPT-5.4')).not.toBeInTheDocument();
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
+    expect(screen.queryByText('Powered by azure-gpt-runtime')).not.toBeInTheDocument();
     expect(container.querySelector('time')).toHaveAttribute('dateTime', '2026-06-16T10:05:00.000Z');
     expect(container.querySelector('time')).toHaveTextContent(
       formatExpectedTimestamp('2026-06-16T10:05:00.000Z'),
@@ -243,7 +251,7 @@ describe('message chrome integration', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
     expect(container.querySelector('time')).toHaveAttribute('dateTime', '2026-06-16T10:06:00.000Z');
     expect(container.querySelector('time')).toHaveTextContent(
       formatExpectedTimestamp('2026-06-16T10:06:00.000Z'),

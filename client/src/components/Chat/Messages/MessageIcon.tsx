@@ -5,11 +5,7 @@ import type { TMessageIcon } from '~/common';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { useGetEndpointsQuery } from '~/data-provider';
 import useLocalize from '~/hooks/useLocalize';
-import {
-  KARL_POWERED_BY_LABEL,
-  KNAUF_LOGO_ICON_URL,
-  isKarlDisplayName,
-} from '~/knauf/common/constants';
+import { KNAUF_LOGO_ICON_URL, isKarlDisplayName } from '~/knauf/common/constants';
 import { getIconEndpoint } from '~/utils';
 import Icon from '~/components/Endpoints/Icon';
 
@@ -89,9 +85,11 @@ const MessageIcon = memo(({ iconData, assistant, agent }: MessageIconProps) => {
     iconData?.isCreatedByUser !== true && Boolean(agent && !avatarURL);
   const effectiveIconURL =
     useKnaufDefaultIcon || useKnaufAgentFallbackIcon ? KNAUF_LOGO_ICON_URL : iconURL;
-  const knaufModelTooltip = useKnaufDefaultIcon
-    ? localize('com_knauf_powered_by_model', { 0: KARL_POWERED_BY_LABEL })
-    : undefined;
+  const runtimeModel = iconData?.model?.trim();
+  const knaufModelTooltip =
+    useKnaufDefaultIcon && runtimeModel
+      ? localize('com_knauf_powered_by_model', { 0: runtimeModel })
+      : undefined;
   // End [knauf]
   const endpoint = useMemo(
     () =>

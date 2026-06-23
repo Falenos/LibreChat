@@ -214,6 +214,7 @@ const ContentRender = memo(function ContentRender({
               isCreatedByUser={msg.isCreatedByUser}
               label={messageLabel}
               fontSize={fontSize}
+              poweredByModel={msg.model ?? conversation?.model}
               screenReaderPrefix={getHeaderPrefixForScreenReader(msg, localize)}
             />
             {/* End [knauf] */}

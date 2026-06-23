@@ -24,12 +24,13 @@ describe('KnaufMessageChrome', () => {
         isCreatedByUser={false}
         label="GPT-5.4"
         fontSize="text-base"
+        poweredByModel="azure-gpt-runtime"
         screenReaderPrefix="Assistant:"
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
-    expect(screen.queryByText('Powered by GPT-5.4')).not.toBeInTheDocument();
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
+    expect(screen.queryByText('Powered by azure-gpt-runtime')).not.toBeInTheDocument();
     expect(screen.getByText('Assistant:')).toHaveClass('sr-only');
   });
 
@@ -48,7 +49,21 @@ describe('KnaufMessageChrome', () => {
     expect(screen.queryByText(/Powered by/)).not.toBeInTheDocument();
   });
 
-  it('uses the static Karl attribution even when upstream passes Karl as the label', () => {
+  it('uses runtime model attribution even when upstream passes Karl as the label', () => {
+    render(
+      <KnaufMessageHeading
+        isCreatedByUser={false}
+        label="KARL"
+        fontSize="text-base"
+        poweredByModel="new-runtime-model"
+        screenReaderPrefix="Assistant:"
+      />,
+    );
+
+    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by new-runtime-model');
+  });
+
+  it('omits model attribution when no runtime model is available', () => {
     render(
       <KnaufMessageHeading
         isCreatedByUser={false}
@@ -58,7 +73,7 @@ describe('KnaufMessageChrome', () => {
       />,
     );
 
-    expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by GPT-5.4');
+    expect(screen.getByText('Karl')).not.toHaveAttribute('title');
   });
 
   it('renders a semantic timestamp for valid message dates', () => {
