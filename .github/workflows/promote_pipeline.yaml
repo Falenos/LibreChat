@@ -225,8 +225,13 @@ jobs:
             --query "[?@=='$RAG_API_VERSION']" \
             -o tsv | grep -Fx "$RAG_API_VERSION"
 
+      # agk-deployment-configs main is protected (PR required, Sonar "test"
+      # check, no direct pushes), so the prod bump is landed via an auto-merged
+      # PR instead of a direct `git push origin main`.
       - name: Update AGK prod deployment config values
         working-directory: agk-deployment-configs
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
           set -euo pipefail
 
@@ -305,16 +310,61 @@ jobs:
           path.write_text(text)
           PY
 
+          BRANCH="release/agk-prod-$VERSION"
+
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml" "$PROD_RAG_VALUES"
 
-          if ! git diff --cached --quiet; then
-            git commit -m "Update agentic-karl prod to $VERSION and RAG API $RAG_API_VERSION"
-            git push origin main
-          else
+          if git diff --quiet -- "$AGK_PROD_CONFIG_DIRECTORY/values.yaml" "$PROD_RAG_VALUES"; then
             echo "AGK prod deployment config already points at $VERSION and RAG API $RAG_API_VERSION"
+            echo "| Prod deployment config | already at \`$VERSION\` / RAG \`$RAG_API_VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+
+          git checkout -b "$BRANCH"
+          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml" "$PROD_RAG_VALUES"
+          git commit -m "Update agentic-karl prod to $VERSION and RAG API $RAG_API_VERSION"
+          # Plain --force: automation-owned throwaway branch and a fresh clone has
+          # no remote-tracking ref, so --force-with-lease would reject re-runs.
+          git push --force origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main --head "$BRANCH" \
+              --title "Update agentic-karl prod to $VERSION (RAG $RAG_API_VERSION)" \
+              --body "Automated prod GitOps promotion from the agentic-karl promote pipeline (run ${{ github.run_id }}). Bumps prod app values to \`$VERSION\` and prod RAG API values to \`$RAG_API_VERSION\`.")
+          fi
+          echo "Prod deployment config PR: $PR_URL"
+
+          gh pr merge "$PR_URL" --auto --squash --delete-branch
+
+          STATE=""
+          for attempt in {1..90}; do
+            # Tolerate transient API errors so a blip does not fail a promotion
+            # whose PR is about to merge.
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
+            echo "Attempt $attempt: PR state=$STATE"
+            if [ "$STATE" = "MERGED" ]; then
+              break
+            fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "Prod deployment config PR was closed without merging"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "Prod deployment config PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled, so it will merge once the 'test' check passes; re-run this job afterwards or check $PR_URL."
+            exit 1
+          fi
+
+          {
+            echo "| Prod deployment config PR | $PR_URL (merged) |"
+            echo "| Prod deployment config files | \`$AGK_PROD_CONFIG_DIRECTORY/values.yaml\`, \`$PROD_RAG_VALUES\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update AGK prod app overlay values
         run: |
