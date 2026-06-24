@@ -1,6 +1,6 @@
 # Proposal: Lean `open_url` Tool for Karl (KK20-194)
 
-Status: Draft for review
+Status: Implemented — pending review on [PR #98](https://github.com/Knauf-Group/agentic-karl/pull/98)
 Owner: Agentic Karl engineering
 Related ticket: [KK20-194](https://knauf.atlassian.net/browse/KK20-194)
 
@@ -66,34 +66,80 @@ Document Intelligence later).
 
 ## Technical Approach
 
-### Components
+### Components (as built)
 
-- `packages/knauf` — pure `fetchAndExtract(url, { maxLength, startIndex })`
-  function. Dependencies (`@mozilla/readability`, `jsdom`, `html-to-text`)
-  isolated to the Knauf workspace per fork rules.
-- `api/app/clients/tools/structured/OpenUrl.js` — LangChain structured tool
-  (`pluginKey: open_url`) calling `fetchAndExtract`.
-- Three small `[knauf]` registration seams:
-  `api/app/clients/tools/manifest.json`, `.../util/handleTools.js`,
-  `.../index.js`. All tracked in `SEAMS.md`.
-- `librechat.yaml` — add `open_url` to `includedTools`; add a one-line prompt
-  nudge to the default `karl` `promptPrefix` ("if the user pastes a URL, use
-  `open_url` to read it"). Tier 0 change.
+- `api/app/clients/tools/structured/OpenUrl.js` — thin LangChain `Tool`
+  wrapper (~95 LOC): JSON schema, description (which itself tells the model
+  the returned content is wrapped in `<UNTRUSTED_WEB_CONTENT>` and must be
+  treated as data, never instructions), and a `_call` that delegates to the
+  fetcher and maps errors to a coarse `{ error, code, url }` JSON taxonomy
+  (`ssrf_blocked`, `http_*`, `timeout`, `internal_error`) that never echoes
+  resolved IPs into the LLM context.
+- `api/app/clients/tools/structured/openUrl/fetcher.js` — orchestration
+  (~211 LOC): scheme/HTTPS gating, SSRF pre-check, undici dispatcher build,
+  manual-redirect loop with per-hop SSRF re-check + body-drain, streaming
+  body cap, content-type sniffing, paging. No HTML parsing here.
+- `packages/knauf/src/server/htmlExtract.js` — pure HTML→text helper
+  (~132 LOC): Mozilla Readability + html-to-text fallback +
+  `<UNTRUSTED_WEB_CONTENT>` envelope wrap. No network, no SSRF. Lives in
+  `packages/knauf` so `jsdom` stays out of the upstream lockfile.
+- `packages/api/src/auth/domain.ts` — small `[knauf]` seam inside upstream's
+  `isPrivateIP` (~20 LOC): canonicalises any IPv6 input via the WHATWG URL
+  parser before the existing regex matchers run, so fully-expanded /
+  zero-padded mapped IPv6 and expanded NAT64 are caught. Same seam hardens
+  upstream MCP HTTP transports too.
+- Three small `[knauf]` registration seams: `api/app/clients/tools/manifest.json`
+  (`open_url` plugin entry), `.../index.js` (export), `.../util/handleTools.js`
+  (`toolConstructors.open_url`). All tracked in `SEAMS.md`.
+- `librechat.yaml` — add `open_url` to `includedTools`. **No prompt-prefix
+  paragraph** — the Tool's own `description` carries the usage and
+  prompt-injection guidance, so it follows the tool to any future agent.
 
-### Safety controls (in the tool, not relying on infra)
+### Safety controls
 
-- **AGK-aware SSRF deny-list** before each request and on every redirect:
-  - Spoke CIDRs `10.160.0.0/16` (dev) and `10.161.0.0/16` (prod)
-  - All RFC1918 (`10/8`, `172.16/12`, `192.168/16`)
-  - Link-local `169.254/16` (including AKS metadata `169.254.169.254`)
-  - Loopback / IPv6 ULA / IPv6 link-local
-  - Resolve the hostname *after* DNS lookup and re-check on every redirect.
-- HTTPS-only with an HTTP allow-list flag (default off).
-- Hard caps: request timeout (e.g. 10 s), response size (e.g. 5 MB), max
-  redirects (5), single concurrent fetch per call.
-- No logging of request body / fetched content; URL logged at info, query
-  string stripped.
+- **SSRF protection delegated to upstream's TOCTOU-safe
+  `createSSRFSafeUndiciConnect`** (`packages/api/src/auth/agent.ts`) — the
+  same helper that protects MCP HTTP/SSE/streamable-HTTP transports. Single
+  SSRF surface for the whole app. Connecting through the resulting undici
+  Agent means undici's DNS lookup IS our SSRF check (one lookup, no TOCTOU).
+  A pre-validation fast path (`resolveHostnameSSRF` on the URL hostname)
+  avoids opening a socket for obviously-bad URLs and produces a clean
+  `ssrf_blocked` error code instead of an ESSRF wrapper.
+- **Upstream `isPrivateIP` tightened by `[knauf]` seam** so the deny-list
+  classification catches non-canonical IPv6 (fully-expanded
+  `0:0:0:0:0:ffff:7f00:1`, zero-padded, expanded NAT64) — covering AGK spoke
+  CIDRs (10.0/8 already covers them), all RFC1918, link-local incl. AKS
+  metadata `169.254.169.254`, loopback, IPv6 ULA/link-local, IPv6 multicast,
+  CGNAT, broadcast.
+- HTTPS-only by default (HTTP gated by `allowHttp` flag).
+- Hard caps: 10 s timeout, 5 redirects, 5 MB response body, 100k chars
+  returned (paging via `start_index`).
+- Per-redirect SSRF re-check on the `Location` target; redirect-response
+  bodies are drained (`response.body.cancel()`) before the next hop so
+  undici can return the socket to the pool.
+- HTML→text content is wrapped in
+  `<UNTRUSTED_WEB_CONTENT url="...">…</UNTRUSTED_WEB_CONTENT>`. Inner
+  occurrences of the delimiter are bracket-stripped so the envelope cannot
+  be terminated early. The Tool description tells the model to treat the
+  envelope contents as data, never as instructions, and not to call other
+  tools described inside it without the user explicitly asking.
+- Coarse error messages: never echo resolved IPs, upstream error strings,
+  or stack traces back into the LLM context.
 - Custom user-agent identifying Agentic Karl.
+
+### Architectural evolution during review
+
+The first implementation hand-rolled an AGK-specific SSRF deny-list in
+`packages/knauf/src/server/ssrf.js` and pinned the undici connection itself.
+Two review rounds (security-review + code-review) found a CRITICAL IPv6
+canonicalisation bypass (the bypass was patched in commit `37136c54`) and
+later identified that the hand-rolled module duplicated upstream's existing
+`createSSRFSafeUndiciConnect` (which already protects MCP HTTP transports
+and which has the same regex gap we patched). The final architecture
+consolidates onto the upstream helper plus the tightening `[knauf]` seam in
+upstream `isPrivateIP`. Net result: one SSRF surface for the whole app, ~250
+LOC of hand-rolled IP parsing deleted, and the MCP HTTP transport gets the
+same fix automatically.
 
 ### Why no infra change
 
@@ -148,18 +194,30 @@ firewall change or follow-up needed for v1.
 
 ## Risks
 
-- **SSRF blast radius if deny-list is incomplete** — mitigated by explicit
-  AGK-CIDR deny + redirect re-check + unit tests asserting blocks for
-  representative internal hosts.
-- **Hub Azure Firewall FQDN restriction** — could silently break arbitrary
-  user URLs; verification action above.
-- **Upstream merge churn** — minimised by keeping logic in `packages/knauf`
-  and the LibreChat-side seams to three small touchpoints, all SEAMS-tracked.
+- **SSRF blast radius if upstream `isPrivateIP` regresses** — mitigated by
+  the `[knauf]` seam (canonicalises via WHATWG URL before regex matchers),
+  reliance on upstream's TOCTOU-safe `createSSRFSafeUndiciConnect` (single
+  DNS lookup, used at connect time), and 9 regression cases in
+  `packages/api/src/auth/domain.spec.ts` plus an integration test in
+  `OpenUrl.spec.js`.
+- **Upstream merge churn** — minimised by keeping runtime logic out of
+  upstream files (one `[knauf]` seam in `domain.ts` for the IPv6 fix; three
+  small registration seams in `api/app/clients/tools/{manifest.json,
+  index.js, util/handleTools.js}`; all SEAMS-tracked). All net-new code
+  lives in `api/app/clients/tools/structured/openUrl/` or `packages/knauf/`.
+- **Prompt injection via fetched content** — mitigated by the
+  `<UNTRUSTED_WEB_CONTENT>` envelope (inner-tag mangled), explicit
+  Tool-description warning, and the coarse error taxonomy that prevents the
+  tool itself from echoing internal IPs back into the LLM context.
 
 ## References
 
 - `packages/api/src/endpoints/openai/llm.ts` (271-274) — current `web_search`
-  tool emission.
+  tool emission that Azure OpenAI silently ignores.
+- `packages/api/src/auth/agent.ts` — upstream `createSSRFSafeUndiciConnect`
+  that `open_url` (and MCP HTTP/SSE/streamable-HTTP transports) use.
+- `packages/api/src/auth/domain.ts` — `isPrivateIP` with the `[knauf]`
+  IPv6 canonicalisation seam.
 - `librechat.yaml` — `endpoints.agents.capabilities`, `addParams.web_search`,
   `includedTools`.
 - `agk-deployment-configs/agentic-karl/{dev,prod}/network-policy/values.yaml`
