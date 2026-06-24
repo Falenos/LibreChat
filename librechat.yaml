@@ -16,13 +16,13 @@ fileStrategy: "azure_blob"
 
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
-# KK20-194 — open_url is the native server-side fetch + Readability tool
-# (no external SaaS, AGK SSRF-hardened). See
-# docs/kk20-194-open-url-tool-proposal.md.
+# KK20-194 — open_url (native server-side fetch + Readability, no external SaaS,
+# AGK SSRF-hardened) is intentionally NOT listed here: it is hidden from the
+# tool pickers and instead rides the web-search switch (injected by ToolService
+# whenever web_search is enabled). See docs/kk20-194-open-url-tool-proposal.md.
 includedTools:
   - "image_gen_oai"
   - "calculator"
-  - "open_url"
 
 memory:
   disabled: false

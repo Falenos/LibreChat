@@ -561,6 +561,17 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
     return true;
   });
 
+  // [knauf] KK20-194 — open_url rides the web-search switch. It is hidden as a
+  // user-selectable tool (not in includedTools), so we inject it into the
+  // model-facing definitions whenever web_search survived the capability
+  // filter above. This is the definitions half; loadAgentTools mirrors it for
+  // execution. Keyed on web_search only (independent of the generic `tools`
+  // capability) so it tracks the switch exactly for main chat and agents alike.
+  if (filteredTools?.includes(Tools.web_search) && !filteredTools.includes('open_url')) {
+    filteredTools.push('open_url');
+  }
+  // End [knauf]
+
   if (!filteredTools || filteredTools.length === 0) {
     return { toolDefinitions: [] };
   }
@@ -940,6 +951,14 @@ async function loadAgentTools({
     }
     return true;
   });
+
+  // [knauf] KK20-194 — execution half of the open_url/web-search pairing (see
+  // loadToolDefinitionsWrapper). When web_search is enabled, also construct the
+  // hidden open_url tool so a model call to it actually resolves at runtime.
+  if (includesWebSearch && _agentTools && !_agentTools.includes('open_url')) {
+    _agentTools.push('open_url');
+  }
+  // End [knauf]
 
   if (!_agentTools || _agentTools.length === 0) {
     return {};
