@@ -72,6 +72,34 @@ function extractHtml(html, finalUrl) {
   };
 }
 
+/**
+ * Wrap fetched content in a delimited, machine-identifiable envelope so
+ * downstream LLM prompts are less likely to obey injected instructions from
+ * the page body. The envelope name is bespoke (low collision with real page
+ * text) and the tool description (in OpenUrl.js) tells the model to treat
+ * everything inside as data, not instructions. KK20-194.
+ */
+function wrapAsUntrusted(content, finalUrl) {
+  // Defensive scrub: if the page happens to already contain our delimiter,
+  // mangle it so it cannot terminate the envelope early.
+  const sanitised = content
+    .replace(/<\/?UNTRUSTED_WEB_CONTENT[^>]*>/gi, (m) => m.replace(/[<>]/g, ''));
+  return (
+    `<UNTRUSTED_WEB_CONTENT url=${JSON.stringify(finalUrl)}>\n` +
+    sanitised +
+    `\n</UNTRUSTED_WEB_CONTENT>`
+  );
+}
+
+/**
+ * Cheap content-sniff for upstreams that mislabel HTML. Returns true if the
+ * first ~1 KiB of the body looks like HTML/XHTML.
+ */
+function looksLikeHtml(text) {
+  const head = text.slice(0, 1024).toLowerCase();
+  return head.includes('<!doctype html') || /<html\b/.test(head) || /<head\b/.test(head);
+}
+
 async function readBodyWithCap(response, maxBytes) {
   const body = response.body;
   if (!body || typeof body.getReader !== 'function') {
@@ -191,9 +219,23 @@ async function fetchAndExtract(rawUrl, opts = {}) {
         throw new FetchError(`Upstream returned HTTP ${response.status}`, `http_${response.status}`);
       }
 
-      const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml');
-      const isText =
+      const declaredHtml =
+        contentType.includes('text/html') || contentType.includes('application/xhtml');
+      const declaredText =
         contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml');
+      const declaredOctet =
+        contentType === '' ||
+        contentType.includes('application/octet-stream') ||
+        contentType.includes('binary/');
+
+      // Read a short preview first so we can content-sniff. If the upstream
+      // declared a binary/unknown content-type but the body is actually HTML,
+      // treat it as HTML — common with misconfigured CDNs/proxies. We never
+      // sniff in the opposite direction (declared HTML stays HTML).
+      const { text, truncated: bodyTruncated } = await readBodyWithCap(response, cfg.maxBytes);
+
+      const isHtml = declaredHtml || (declaredOctet && looksLikeHtml(text));
+      const isText = declaredText || isHtml;
 
       if (!isHtml && !isText) {
         return {
@@ -202,15 +244,16 @@ async function fetchAndExtract(rawUrl, opts = {}) {
           status: response.status,
           contentType,
           title: null,
-          content:
+          content: wrapAsUntrusted(
             `[non-text content: ${contentType || 'unknown'}]\n` +
-            'This URL points to a binary/document file. For PDF/Office documents, ' +
-            'consider attaching the file to chat for Document Intelligence parsing.',
+              'This URL points to a binary/document file. For PDF/Office documents, ' +
+              'consider attaching the file to chat for Document Intelligence parsing.',
+            finalUrl,
+          ),
           truncated: false,
         };
       }
 
-      const { text, truncated: bodyTruncated } = await readBodyWithCap(response, cfg.maxBytes);
       let title = null;
       let content;
       if (isHtml) {
@@ -237,7 +280,7 @@ async function fetchAndExtract(rawUrl, opts = {}) {
         status: response.status,
         contentType,
         title,
-        content: sliced,
+        content: wrapAsUntrusted(sliced, finalUrl),
         truncated: contentTruncated,
       };
     }
@@ -250,5 +293,5 @@ module.exports = {
   fetchAndExtract,
   FetchError,
   DEFAULTS,
-  __internal__: { extractHtml, readBodyWithCap, pinnedAgent },
+  __internal__: { extractHtml, readBodyWithCap, pinnedAgent, wrapAsUntrusted, looksLikeHtml },
 };
