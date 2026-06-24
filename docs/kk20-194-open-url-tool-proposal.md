@@ -95,6 +95,25 @@ Document Intelligence later).
   paragraph** — the Tool's own `description` carries the usage and
   prompt-injection guidance, so it follows the tool to any future agent.
 
+### Default enablement (as built)
+
+Per stakeholder feedback the tool is on by default rather than an opt-in in
+the builder. Two `[knauf]` seams achieve this:
+
+- `packages/api/src/agents/load.ts` (`loadEphemeralAgent`) — unconditionally
+  seeds `open_url`, so the **main Karl chat and all ephemeral chats** are
+  URL-capable. Ephemeral chats keep no per-agent tool record, so always-on is
+  the only place this can live.
+- `api/server/controllers/agents/v1.js` (`createAgentHandler`) — seeds
+  `open_url` into a **newly created agent's** stored tools. It remains
+  **removable in the builder**: seeding happens only at creation, so a
+  deliberate removal via update sticks. Forked agents inherit the source's
+  choice and are not re-seeded.
+
+Both paths route through the existing `filterAuthorizedTools` check, so
+seeding is a self-healing no-op if `open_url` is ever pulled from
+`includedTools`.
+
 ### Safety controls
 
 - **SSRF protection delegated to upstream's TOCTOU-safe
