@@ -498,6 +498,27 @@ async function processRequiredActions(client, requiredActions) {
 /** Native LibreChat tools that are not in the manifest */
 const nativeTools = new Set([Tools.execute_code, Tools.file_search, Tools.web_search]);
 
+// [knauf] KK20-194 — open_url presence is bound *exactly* to the web-search switch.
+// open_url is hidden as a user-selectable tool (absent from `includedTools`), so its
+// availability must be decided solely by web_search — never by whatever happens to be
+// sitting in an agent's stored `tools`. We therefore strip any pre-existing open_url
+// and re-add it only when web_search is enabled. The strip half is load-bearing:
+// agents created during an earlier default-on iteration (or hand-edited) can have
+// open_url baked into their stored tools; without stripping, the toggle would not
+// fully control it and open_url could run with web search OFF.
+const OPEN_URL_TOOL = 'open_url';
+function gateOpenUrlOnWebSearch(tools, webSearchEnabled) {
+  if (!Array.isArray(tools)) {
+    return tools;
+  }
+  const gated = tools.filter((tool) => tool !== OPEN_URL_TOOL);
+  if (webSearchEnabled) {
+    gated.push(OPEN_URL_TOOL);
+  }
+  return gated;
+}
+// End [knauf]
+
 /** Checks if a tool name is a known built-in tool */
 const isBuiltInTool = (toolName) =>
   Boolean(
@@ -542,7 +563,7 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   const actionsEnabled = checkCapability(AgentCapabilities.actions);
   const deferredToolsEnabled = checkCapability(AgentCapabilities.deferred_tools);
 
-  const filteredTools = agent.tools?.filter((tool) => {
+  let filteredTools = agent.tools?.filter((tool) => {
     if (tool === Tools.file_search) {
       return checkCapability(AgentCapabilities.file_search);
     }
@@ -562,14 +583,12 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   });
 
   // [knauf] KK20-194 — open_url rides the web-search switch. It is hidden as a
-  // user-selectable tool (not in includedTools), so we inject it into the
-  // model-facing definitions whenever web_search survived the capability
-  // filter above. This is the definitions half; loadAgentTools mirrors it for
-  // execution. Keyed on web_search only (independent of the generic `tools`
-  // capability) so it tracks the switch exactly for main chat and agents alike.
-  if (filteredTools?.includes(Tools.web_search) && !filteredTools.includes('open_url')) {
-    filteredTools.push('open_url');
-  }
+  // user-selectable tool (not in includedTools); its presence is bound exactly to
+  // web_search via gateOpenUrlOnWebSearch (add when on, strip when off). This is
+  // the authoritative model-facing gate; loadAgentTools/loadToolsForExecution
+  // mirror it for execution. Keyed on web_search only (independent of the generic
+  // `tools` capability) so it tracks the switch exactly for main chat and agents.
+  filteredTools = gateOpenUrlOnWebSearch(filteredTools, filteredTools?.includes(Tools.web_search));
   // End [knauf]
 
   if (!filteredTools || filteredTools.length === 0) {
@@ -936,7 +955,7 @@ async function loadAgentTools({
   const actionsEnabled = checkCapability(AgentCapabilities.actions);
 
   let includesWebSearch = false;
-  const _agentTools = agent.tools?.filter((tool) => {
+  let _agentTools = agent.tools?.filter((tool) => {
     if (tool === Tools.file_search) {
       return checkCapability(AgentCapabilities.file_search);
     } else if (tool === Tools.execute_code) {
@@ -953,11 +972,10 @@ async function loadAgentTools({
   });
 
   // [knauf] KK20-194 — execution half of the open_url/web-search pairing (see
-  // loadToolDefinitionsWrapper). When web_search is enabled, also construct the
-  // hidden open_url tool so a model call to it actually resolves at runtime.
-  if (includesWebSearch && _agentTools && !_agentTools.includes('open_url')) {
-    _agentTools.push('open_url');
-  }
+  // loadToolDefinitionsWrapper). Bind open_url to web_search exactly so it is
+  // constructed at runtime when (and only when) web_search is enabled — strips
+  // any baked-in open_url so the toggle stays authoritative.
+  _agentTools = gateOpenUrlOnWebSearch(_agentTools, includesWebSearch);
   // End [knauf]
 
   if (!_agentTools || _agentTools.length === 0) {
@@ -1246,6 +1264,19 @@ async function loadToolsForExecution({
   const appConfig = req.config;
   const allLoadedTools = [];
   const configurable = { userMCPAuthMap };
+
+  // [knauf] KK20-194 — fail-closed execution guard. This path loads whatever tool
+  // the model requested to call; never honour an open_url call unless web_search is
+  // part of this agent's tools. Defense-in-depth behind the definitions gate so the
+  // web-search toggle stays authoritative even if open_url leaks into a call list.
+  if (
+    Array.isArray(toolNames) &&
+    toolNames.includes(OPEN_URL_TOOL) &&
+    !(Array.isArray(agent?.tools) && agent.tools.includes(Tools.web_search))
+  ) {
+    toolNames = toolNames.filter((name) => name !== OPEN_URL_TOOL);
+  }
+  // End [knauf]
 
   if (actionsEnabled === undefined) {
     const enabledCapabilities = await resolveAgentCapabilities(req, appConfig, agent?.id);
