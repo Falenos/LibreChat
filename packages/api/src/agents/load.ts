@@ -82,22 +82,6 @@ export async function loadEphemeralAgent(
   }
   // End [knauf]
 
-  // [knauf] KK20-194 — open_url is a read-only, SSRF-guarded fetch tool. Make
-  // it default-on for the main Karl chat and every ephemeral/quick chat so a
-  // user can paste a URL and have Karl read it without building a custom
-  // agent. Pushed unconditionally because ephemeral chats have no per-agent
-  // tool record to honour; the persistent-agent default is seeded at creation
-  // time instead (api/server/controllers/agents/v1.js createAgentHandler) so
-  // it remains a real stored tool the user can remove in the builder. Literal
-  // string because open_url is registered in the tools registry, not the
-  // AgentCapabilities/Tools enum. filterAuthorizedTools / capability checks
-  // drop it downstream if the `tools` capability or includedTools ever
-  // exclude it, so this self-heals.
-  if (!tools.includes('open_url')) {
-    tools.push('open_url');
-  }
-  // End [knauf]
-
   const addedServers = new Set<string>();
   if (mcpServers.size > 0) {
     for (const mcpServer of mcpServers) {
