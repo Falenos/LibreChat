@@ -89,11 +89,42 @@ Document Intelligence later).
   zero-padded mapped IPv6 and expanded NAT64 are caught. Same seam hardens
   upstream MCP HTTP transports too.
 - Three small `[knauf]` registration seams: `api/app/clients/tools/manifest.json`
-  (`open_url` plugin entry), `.../index.js` (export), `.../util/handleTools.js`
+  (`open_url` plugin entry, kept so `isBuiltInTool` recognises it),
+  `.../index.js` (export), `.../util/handleTools.js`
   (`toolConstructors.open_url`). All tracked in `SEAMS.md`.
-- `librechat.yaml` — add `open_url` to `includedTools`. **No prompt-prefix
-  paragraph** — the Tool's own `description` carries the usage and
-  prompt-injection guidance, so it follows the tool to any future agent.
+- `packages/api/src/tools/registry/definitions.ts` — `[knauf]` seam registering
+  `open_url` in the upstream tool-definitions registry. This is the load-bearing
+  fix: the live agents chat builds the model-facing tool list via the
+  *definitions* path (`loadToolDefinitions` → `getToolDefinition`), and without
+  a registry entry `getToolDefinition('open_url')` returned `undefined`, so the
+  model never received the tool's schema. The canonical schema + description
+  live here; `OpenUrl.js` pulls them via `getToolDefinition` so the picker, the
+  model-facing schema and the instance description cannot drift.
+
+### Exposure model (web-search-gated, hidden tool)
+
+Per stakeholder feedback, `open_url` is **not** a user-selectable tool. It is a
+hidden companion of web search:
+
+- **Hidden from pickers** — `open_url` is intentionally *removed* from
+  `includedTools` in `librechat.yaml`, so it never appears in either
+  agent-builder tool picker.
+- **Rides the web-search switch** — two `[knauf]` seams in
+  `api/server/services/ToolService.js` inject `open_url` whenever `web_search`
+  survives the capability filter, at both chokepoints:
+  `loadToolDefinitionsWrapper` (model-facing definitions) and `loadAgentTools`
+  (runtime execution). Keyed on `web_search` only (independent of the generic
+  `tools` capability), so it tracks the switch exactly for the main Karl chat
+  and every agent, and is guarded against double-add.
+- **Why still a tool, not auto-fetch** — the model decides *when* a URL should
+  be read (user pastes a link / asks to read a page). Auto-fetching every
+  pasted URL is a larger UX change and removes that judgement. Folding the fetch
+  into upstream's `web_search` scraper toolkit would mean overriding upstream
+  search internals and reintroduces the external-search-service concern this
+  ticket set out to avoid.
+- **No prompt-prefix paragraph** — the Tool's own `description` carries the
+  usage and prompt-injection guidance, so it follows the tool wherever it is
+  injected.
 
 ### Safety controls
 
@@ -141,6 +172,16 @@ upstream `isPrivateIP`. Net result: one SSRF surface for the whole app, ~250
 LOC of hand-rolled IP parsing deleted, and the MCP HTTP transport gets the
 same fix automatically.
 
+A later round of stakeholder feedback changed the *exposure* model. The tool
+was briefly made default-on (seeded into the main chat and new agents); review
+then found that wiring never reached the model, because the live agents chat
+loads tool schemas via the registry-backed *definitions* path and `open_url`
+was never in the registry. That default-on work was reverted and replaced by
+the current design: register `open_url` in the registry (the actual fix) and
+inject it from `ToolService` whenever `web_search` is enabled, while hiding it
+from the tool pickers. The tool is now driven entirely by the existing
+web-search switch rather than being a separately selectable capability.
+
 ### Why no infra change
 
 The AKS NetworkPolicy (`agk-deployment-configs/.../network-policy/values.yaml`)
@@ -173,8 +214,10 @@ firewall change or follow-up needed for v1.
 
 1. Dev release via the standard pipeline (image tag bump in
    `infrastructure/dev/values.yaml` + GitOps).
-2. Manual smoke: paste an article URL and a PDF URL into Karl; verify
-   extraction + the non-HTML notice.
+2. Manual smoke: **enable the web-search switch**, then paste an article URL
+   and a PDF URL into Karl; verify extraction + the non-HTML notice. With the
+   switch off, confirm `open_url` is not offered. Confirm `open_url` does not
+   appear in the agent-builder tool picker.
 3. Validate against an *internal* hostname to confirm SSRF deny.
 4. Gather feedback for one week, then promote to prod via the existing
    promotion flow.
@@ -201,10 +244,13 @@ firewall change or follow-up needed for v1.
   `packages/api/src/auth/domain.spec.ts` plus an integration test in
   `OpenUrl.spec.js`.
 - **Upstream merge churn** — minimised by keeping runtime logic out of
-  upstream files (one `[knauf]` seam in `domain.ts` for the IPv6 fix; three
-  small registration seams in `api/app/clients/tools/{manifest.json,
-  index.js, util/handleTools.js}`; all SEAMS-tracked). All net-new code
-  lives in `api/app/clients/tools/structured/openUrl/` or `packages/knauf/`.
+  upstream files: one `[knauf]` seam in `domain.ts` (IPv6 fix); three small
+  registration seams in `api/app/clients/tools/{manifest.json, index.js,
+  util/handleTools.js}`; one registry seam in
+  `packages/api/src/tools/registry/definitions.ts`; and two small injection
+  seams in `api/server/services/ToolService.js` (the web-search gating). All
+  SEAMS-tracked. Net-new code lives in
+  `api/app/clients/tools/structured/openUrl/` or `packages/knauf/`.
 - **Prompt injection via fetched content** — mitigated by the
   `<UNTRUSTED_WEB_CONTENT>` envelope (inner-tag mangled), explicit
   Tool-description warning, and the coarse error taxonomy that prevents the
@@ -218,8 +264,13 @@ firewall change or follow-up needed for v1.
   that `open_url` (and MCP HTTP/SSE/streamable-HTTP transports) use.
 - `packages/api/src/auth/domain.ts` — `isPrivateIP` with the `[knauf]`
   IPv6 canonicalisation seam.
+- `packages/api/src/tools/registry/definitions.ts` — `[knauf]` `open_url`
+  registry entry (canonical schema + description).
+- `api/server/services/ToolService.js` — `[knauf]` web-search-gated injection
+  in `loadToolDefinitionsWrapper` (definitions) and `loadAgentTools` (execution).
 - `librechat.yaml` — `endpoints.agents.capabilities`, `addParams.web_search`,
-  `includedTools`.
+  `includedTools` (note: `open_url` is deliberately absent — it rides the
+  web-search switch instead).
 - `agk-deployment-configs/agentic-karl/{dev,prod}/network-policy/values.yaml`
   — current egress posture.
 - `knauf/docs/reference/agentic-karl-architecture.md` § Networking — hub/spoke
