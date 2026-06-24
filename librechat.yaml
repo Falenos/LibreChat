@@ -16,9 +16,13 @@ fileStrategy: "azure_blob"
 
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
+# KK20-194 — open_url is the native server-side fetch + Readability tool
+# (no external SaaS, AGK SSRF-hardened). See
+# docs/kk20-194-open-url-tool-proposal.md.
 includedTools:
   - "image_gen_oai"
   - "calculator"
+  - "open_url"
 
 memory:
   disabled: false
@@ -542,6 +546,8 @@ modelSpecs:
           Files: Do not suggest or offer to create, export, or generate any files other than images (including PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP/archives, audio, and video). Do not ask the user whether they want you to generate a file. If a user requests a non-image file, explain that file generation is not supported and provide the content inline in chat or concise steps for creating it using common tools. Only generate images when explicitly requested, using the available image tool; otherwise, respond as text within the chat.
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
+
+          Opening links: When the user pastes an http(s) URL or asks you to read a specific page, call the `open_url` tool with the exact URL. Use the returned title and content as the basis for your answer and cite the source URL. If `open_url` returns an error (for example a binary/document URL or a blocked address), explain briefly and suggest the user attach the file instead. Do not guess the contents of a URL you have not fetched.
 
     # Knauf personalities for the agent builder. Filtered client-side by the
     # `karl-personality-` name prefix in

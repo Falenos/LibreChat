@@ -1,5 +1,12 @@
 [
   {
+    "name": "Open URL",
+    "pluginKey": "open_url",
+    "description": "[Knauf KK20-194] Open a specific http(s) URL and return its main readable text. Server-side fetch + Mozilla Readability + AGK SSRF deny-list. Data stays in the Knauf Azure tenant; no external SaaS.",
+    "icon": "assets/open-url.svg",
+    "authConfig": []
+  },
+  {
     "name": "Traversaal",
     "pluginKey": "traversaal_search",
     "description": "Traversaal is a robust search API tailored for LLM Agents. Get an API key here: https://api.traversaal.ai",
