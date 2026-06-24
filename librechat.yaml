@@ -547,8 +547,6 @@ modelSpecs:
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
 
-          Opening links: When the user pastes an http(s) URL or asks you to read a specific page, call the `open_url` tool with the exact URL. Use the returned title and content as the basis for your answer and cite the source URL. If `open_url` returns an error (for example a binary/document URL or a blocked address), explain briefly and suggest the user attach the file instead. Do not guess the contents of a URL you have not fetched.
-
     # Knauf personalities for the agent builder. Filtered client-side by the
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
