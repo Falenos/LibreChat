@@ -9,6 +9,10 @@
  *  - HTTPS-only by default (HTTP behind explicit allowHttp flag).
  *  - AGK-aware SSRF deny-list (see ./ssrf.js) on the initial URL AND on
  *    every redirect.
+ *  - DNS rebinding closed by pinning the connection to the IP that
+ *    `isUrlAllowed` validated, via a per-request undici `Agent` whose
+ *    `connect.lookup` returns that IP regardless of what undici would
+ *    otherwise resolve.
  *  - Hard caps: timeout, max redirects, response body size.
  *  - HTML  -> Mozilla Readability article body, falling back to html-to-text.
  *  - Non-HTML -> short notice ("not HTML") + content-type (handled by caller
@@ -22,6 +26,7 @@
 const { Readability } = require('@mozilla/readability');
 const { JSDOM } = require('jsdom');
 const { convert: htmlToText } = require('html-to-text');
+const { Agent, fetch: undiciFetch } = require('undici');
 
 const { isUrlAllowed } = require('./ssrf');
 
@@ -68,20 +73,19 @@ function extractHtml(html, finalUrl) {
 }
 
 async function readBodyWithCap(response, maxBytes) {
-  const reader = response.body && response.body.getReader ? response.body.getReader() : null;
-  if (!reader) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-      return { text: text.slice(0, maxBytes), truncated: true };
-    }
-    return { text, truncated: false };
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') {
+    // Streams API is required so the body is capped BEFORE buffering.
+    throw new FetchError('upstream response body is not streamable', 'unstreamable_body');
   }
+  const reader = body.getReader();
   const chunks = [];
   let total = 0;
   let truncated = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    if (!value || value.byteLength === 0) continue;
     total += value.byteLength;
     if (total > maxBytes) {
       truncated = true;
@@ -97,6 +101,21 @@ async function readBodyWithCap(response, maxBytes) {
 }
 
 /**
+ * Build an undici Agent that pins outbound connections to the given IP.
+ * `host` is preserved on the URL (for Host header + SNI) — only the underlying
+ * socket destination is overridden. This is what closes the DNS-rebinding
+ * TOCTOU: `isUrlAllowed` resolved + validated the IP, and we now make undici
+ * connect to exactly that IP without re-resolving.
+ */
+function pinnedAgent(address, family) {
+  return new Agent({
+    connect: {
+      lookup: (_host, _opts, cb) => cb(null, address, family),
+    },
+  });
+}
+
+/**
  * fetchAndExtract — see module docstring for behaviour.
  *
  * @param {string} rawUrl
@@ -104,12 +123,14 @@ async function readBodyWithCap(response, maxBytes) {
  * @param {number} [opts.maxLength]
  * @param {number} [opts.startIndex]
  * @param {object} [opts.overrides] internal — override DEFAULTS in tests
+ * @param {Function} [opts.fetchImpl] internal — override fetch in tests
  * @returns {Promise<{ url:string, finalUrl:string, status:number, contentType:string, title:string|null, content:string, truncated:boolean }>}
  */
 async function fetchAndExtract(rawUrl, opts = {}) {
   const cfg = { ...DEFAULTS, ...(opts.overrides || {}) };
   const maxLength = opts.maxLength ?? cfg.maxLength;
   const startIndex = Math.max(0, Number(opts.startIndex) || 0);
+  const fetchImpl = opts.fetchImpl || undiciFetch;
 
   let current = rawUrl;
   let redirects = 0;
@@ -120,27 +141,40 @@ async function fetchAndExtract(rawUrl, opts = {}) {
     while (true) {
       const check = await isUrlAllowed(current);
       if (!check.allowed) {
-        throw new FetchError(`URL blocked by SSRF policy (${check.reason})`, 'ssrf_blocked');
+        throw new FetchError('URL blocked by SSRF policy', 'ssrf_blocked');
       }
       const parsed = new URL(current);
       if (parsed.protocol === 'http:' && !cfg.allowHttp) {
         throw new FetchError('http:// URLs are not allowed (https only)', 'http_not_allowed');
       }
 
-      const response = await fetch(current, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: {
-          'User-Agent': cfg.userAgent,
-          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
-        },
-      });
+      // Pin the connection to the IP we validated. Without this, undici would
+      // re-resolve and a malicious TTL=0 record could swap the public IP for
+      // a private one (DNS rebinding).
+      const dispatcher = pinnedAgent(check.address, check.family);
+
+      let response;
+      try {
+        response = await fetchImpl(current, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: controller.signal,
+          dispatcher,
+          headers: {
+            'User-Agent': cfg.userAgent,
+            Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+          },
+        });
+      } finally {
+        // Agent is per-request — release it ASAP. close() returns a promise;
+        // we don't await it because the response stream may still own sockets.
+        try { dispatcher.close && dispatcher.close(); } catch { /* noop */ }
+      }
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
         if (!location) {
-          throw new FetchError(`Redirect ${response.status} with no Location header`, 'bad_redirect');
+          throw new FetchError('Redirect with no Location header', 'bad_redirect');
         }
         redirects += 1;
         if (redirects > cfg.maxRedirects) {
@@ -216,5 +250,5 @@ module.exports = {
   fetchAndExtract,
   FetchError,
   DEFAULTS,
-  __internal__: { extractHtml, readBodyWithCap },
+  __internal__: { extractHtml, readBodyWithCap, pinnedAgent },
 };

@@ -67,6 +67,10 @@ class OpenUrl extends Tool {
       });
       return JSON.stringify(result);
     } catch (err) {
+      // Coarse error taxonomy. We deliberately do NOT echo back resolved IPs,
+      // upstream error strings, or stack traces — those would leak internal
+      // network details (e.g. `ECONNREFUSED 10.160.7.4:5432`) to the LLM
+      // context, which is itself a side-channel for internal mapping.
       if (err instanceof FetchError) {
         return JSON.stringify({ error: err.message, code: err.code, url });
       }
@@ -77,7 +81,6 @@ class OpenUrl extends Tool {
         error: 'open_url: unexpected error fetching URL',
         code: 'internal_error',
         url,
-        detail: err && err.message ? err.message : String(err),
       });
     }
   }
