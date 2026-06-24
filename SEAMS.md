@@ -216,6 +216,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/__tests__/MessageIcon.render.test.tsx` | `agent no-avatar message icon cases` | 72–182 | Seam test — chat message icons assert no-avatar agents use the Knauf logo and legacy string avatars bypass the fallback | Self | NO-TICKET |
 | `client/src/components/Chat/Input/AudioRecorder.tsx` | `AudioRecorder` first-paint render guard | 81–84 | Mic control visibility — renders the STT button before the textarea DOM ref is assigned so first paint cannot permanently hide recording controls | `AudioRecorder.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Nav/AccountSettings.tsx` | `AccountSettings` Help & FAQ tombstone | 76–77 | Hide the upstream Help & FAQ link from the user avatar menu because the configured/default destinations point to LibreChat docs, not Knauf support content | `KnaufTopBar.knauf.spec.tsx` | NO-TICKET |
+| `api/app/clients/tools/index.js` | `OpenUrl` import + module exports | 15–17, 33–35 | Wire the net-new `OpenUrl` structured tool into the upstream tools barrel so `handleTools.js` can import it like the rest. | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | KK20-194 |
+| `api/app/clients/tools/structured/OpenUrl.js` | whole file | 1–88 | Net-new Knauf-authored structured tool wrapping `@knauf/knauf/server/openUrl` (server-side fetch + Mozilla Readability + AGK-aware SSRF deny-list). Returns JSON payload (url, finalUrl, status, contentType, title, content, truncated) for the agent. Lives at an upstream-class path because the tools registry is upstream; entire file wrapped in `[knauf]…End [knauf]` per the same convention as `*.knauf.spec.ts` co-located tests. | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | KK20-194 |
+| `api/app/clients/tools/util/handleTools.js` | `OpenUrl` import + `toolConstructors.open_url` | 40–42, 188–190 | Register the `open_url` plugin key against the new `OpenUrl` constructor so the agent runtime can instantiate it like any other built-in tool. | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | KK20-194 |
+| `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | whole file | 1–191 | KK20-194 — Knauf-authored Jest suite at an upstream-class path covering 22 cases: SSRF deny-list (spoke CIDRs / RFC1918 / metadata / loopback / IPv6 LL/ULA), scheme rejection, HTTPS-only gating, HTML→Readability extraction, paging, non-text notice, 4xx error, redirect cap, tool wrapper JSON contract, plain-string input. Entire file wrapped in `[knauf]…End [knauf]` per the convention used for other `*.knauf.spec.ts` co-located tests. | Self | KK20-194 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -243,6 +247,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `infrastructure/dev/values.yaml` | AGK dev Helm overlay enables built-in `USER` lockdown so dev matches prod role governance while retaining the legacy prod-named env alias during rollout |
 | `infrastructure/prod/values.yaml` | AGK prod Helm overlay enables the generalized `KNAUF_RESTRICT_USER_PERMISSIONS` flag alongside the legacy prod-named alias for built-in `USER` lockdown |
 | `client/src/locales/{en,de}/translation.json` | Landing capability copy — replaces the old default landing tip strings with localized titles/descriptions for file Q&A, image generation, and direct web browsing |
+| `librechat.yaml` | KK20-194 — exposes the native `open_url` tool via `includedTools` and adds a prompt-prefix paragraph in the default `karl` modelSpec instructing the assistant to call `open_url` whenever the user pastes a URL. See `docs/kk20-194-open-url-tool-proposal.md`. |
+| `api/app/clients/tools/manifest.json` | KK20-194 — registers the `open_url` plugin entry (no `authConfig`, no API key). JSON has no comment syntax, so a `[knauf]` marker is not possible — tracked here instead. |
+| `packages/knauf/package.json` | KK20-194 — adds server-side deps (`@mozilla/readability`, `jsdom`, `html-to-text`) and an `exports` map (`./server/openUrl`, `./server/ssrf`) so `api/` can require the Knauf fetch helpers without bundling them into the upstream lockfile. |
 
 ## Net-New Files
 
@@ -344,6 +351,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/analytics/datadog/isEnabled.spec.ts` | Subject under test | Low — test-only | Self | KK20-186 |
 | `client/src/knauf/analytics/datadog/KnaufDatadogRum.spec.tsx` | Subject under test | Low — test-only | Self | KK20-186 |
 | `client/src/knauf/components/Chat/AudioRecorder.knauf.spec.tsx` | `~/components/Chat/Input/AudioRecorder`; mocked upstream hooks/client dependencies | Low — test-only; pins STT mic first-paint visibility without requiring a live microphone or browser media APIs | Self | NO-TICKET |
+| `packages/knauf/src/server/openUrl.js` | `@mozilla/readability`, `jsdom`, `html-to-text`, `./ssrf` | Low — pure Node module under the Knauf workspace; no upstream-contract surface. Server-side fetch + Mozilla Readability extraction with hard caps (timeout, max redirects, max bytes) and SSRF re-check on every redirect. Powers the `open_url` structured tool. | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | KK20-194 |
+| `packages/knauf/src/server/ssrf.js` | `node:dns`, `node:net` | Low — AGK-aware deny-list. Denies spoke CIDRs (`10.160.0.0/16` dev, `10.161.0.0/16` prod), all RFC1918, link-local incl. `169.254.169.254`, loopback, IPv6 ULA/link-local. Resolves hostnames and rejects if any A/AAAA record falls in a denied range. Re-invoked by `openUrl.js` on every redirect. | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | KK20-194 |
+| `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | Subject under test (`api/app/clients/tools/structured/OpenUrl`, `@knauf/knauf/server/{openUrl,ssrf}`) | Low — also tracked in Inline Modifications because the spec file lives at an upstream-class path and is wrapped in `[knauf]…End [knauf]`; this row captures the net-new-file lineage. | Self | KK20-194 |
+| `docs/kk20-194-open-url-tool-proposal.md` | None | Low — proposal/decision document for KK20-194. Mirrors the style of `docs/dedicated-subscription-proposal.md`. | Docs only | KK20-194 |
+| `knauf/docs/implementation-plans/KK20-194.md` | None | Low — Branch Scaffold implementation tracking doc for KK20-194. | Docs only | KK20-194 |
 <!-- seams:new:end -->
 
 ## Static Assets
