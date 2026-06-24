@@ -4,15 +4,13 @@
   "private": true,
   "description": "Knauf-specific shared code (isolated from upstream lockfile)",
   "exports": {
-    "./server/openUrl": "./src/server/openUrl.js",
-    "./server/ssrf": "./src/server/ssrf.js"
+    "./server/htmlExtract": "./src/server/htmlExtract.js"
   },
   "dependencies": {
     "@datadog/browser-rum": "^6.11.1",
     "@datadog/browser-logs": "^6.11.1",
     "@mozilla/readability": "^0.6.0",
     "html-to-text": "^9.0.5",
-    "ipaddr.js": "^2.2.0",
     "jsdom": "^26.1.0"
   }
 }
