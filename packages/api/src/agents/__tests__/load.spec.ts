@@ -226,7 +226,10 @@ describe('loadAgent', () => {
     );
 
     if (result) {
-      expect(result.tools).toEqual([]);
+      // [knauf] KK20-194 — ephemeral agents are seeded with open_url by default
+      // (see loadEphemeralAgent open_url branch in load.ts).
+      expect(result.tools).toEqual(['open_url']);
+      // End [knauf]
       expect(result.instructions).toBe('Simple instructions');
     } else {
       expect(result).toBeFalsy();
@@ -254,7 +257,9 @@ describe('loadAgent', () => {
     );
 
     if (result) {
-      expect(result.tools).toEqual([]);
+      // [knauf] KK20-194 — open_url is the default ephemeral tool.
+      expect(result.tools).toEqual(['open_url']);
+      // End [knauf]
     } else {
       expect(result).toBeFalsy();
     }
@@ -387,7 +392,9 @@ describe('loadAgent', () => {
       );
 
       if (result) {
-        expect(result.tools).toEqual(['tool_mcp_server1']);
+        // [knauf] KK20-194 — open_url is seeded ahead of MCP tools by default.
+        expect(result.tools).toEqual(['open_url', 'tool_mcp_server1']);
+        // End [knauf]
         expect(result.tools).not.toContain('malformed_tool_name');
         expect(result.tools).not.toContain('tool__server1');
         expect(result.tools).not.toContain('tool_mcp_server2');

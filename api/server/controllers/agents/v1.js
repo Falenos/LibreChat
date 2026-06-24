@@ -218,13 +218,24 @@ const createAgentHandler = async (req, res) => {
     agentData.author = userId;
     agentData.tools = [];
 
-    const hasMCPTools = tools.some((t) => t?.includes(Constants.mcp_delimiter));
+    // [knauf] KK20-194 — seed open_url into every newly created agent's tool
+    // set so URL reading is on by default for new agents, while staying a real
+    // stored tool the user can remove in the builder. Only applied here at
+    // creation; updates (updateAgentHandler) remain authoritative, so a
+    // deliberate removal sticks. Forked agents (line ~619) inherit the
+    // source agent's choice and are intentionally not seeded.
+    // filterAuthorizedTools drops it if open_url is not available/authorized,
+    // so this is a no-op when the tool is disabled.
+    const toolsWithDefault = tools.includes('open_url') ? tools : [...tools, 'open_url'];
+    // End [knauf]
+
+    const hasMCPTools = toolsWithDefault.some((t) => t?.includes(Constants.mcp_delimiter));
     const [availableTools, configServers] = await Promise.all([
       getCachedTools().then((t) => t ?? {}),
       hasMCPTools ? resolveConfigServers(req) : Promise.resolve(undefined),
     ]);
     agentData.tools = await filterAuthorizedTools({
-      tools,
+      tools: toolsWithDefault,
       userId,
       availableTools,
       configServers,
