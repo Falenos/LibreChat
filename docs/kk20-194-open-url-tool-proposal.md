@@ -16,19 +16,33 @@ preserved and the bill / compute stay inside the existing Azure tenant.
 When a user pastes a link, Karl either refuses or replies "could not extract
 the page contents". Verified causes:
 
-- The Azure OpenAI **Responses API has no built-in `web_search` / URL-opener
-  tool**. Our config currently passes `addParams.web_search: true`, which
-  `packages/api/src/endpoints/openai/llm.ts` translates into
-  `tools: [{ type: 'web_search' }]`. Azure silently ignores it.
+- The Azure OpenAI **Responses API has no built-in URL-opener** for a *specific*
+  user-named page — the model can search the web but cannot be told to open and
+  read exactly the link the user pasted. That gap is what `open_url` fills.
 - Agent builder capabilities are intentionally restricted to `file_search` and
-  `tools` (`librechat.yaml`). Native LibreChat web search would also need a
-  search/scraper/reranker provider, none of which are provisioned.
+  `tools` (`librechat.yaml`). The provider-less LibreChat LangChain web-search
+  tool would also need a search/scraper/reranker provider, none of which are
+  provisioned (and a third-party search provider is the GDPR concern this ticket
+  set out to avoid).
+
+> **Correction (verified by live testing against `cst-karl-dev` / gpt-5.4,
+> 2026-06).** An earlier draft of this proposal claimed "Azure silently ignores
+> `web_search`". That is **outdated**. The app's real request path
+> (`/openai/v1/responses?api-version=preview`, with the `tools:[{type:'web_search'}]`
+> emitted from `addParams.web_search: true` →
+> `packages/api/src/endpoints/openai/llm.ts`) executes a real `web_search_call` and
+> returns live results with `url_citation` annotations. LibreChat rewrites Responses
+> calls to the `/v1` endpoint with `api-version=preview`
+> (`packages/api/src/endpoints/openai/config.ts`), so the stale group
+> `version: 2025-01-01-preview` is never sent to `/responses`. **Azure-native,
+> model-level `web_search` works and is GDPR-clean** (stays inside the Azure DPA) —
+> so it is the right *complement and fallback* to `open_url`, not a dead end.
 
 ## Options Considered
 
 | Option | Opens specific URL? | Data stays on Azure? | Effort | Status |
 |---|---|---|---|---|
-| A. Config-only ("tell Azure to view the link") | No | n/a | n/a | Not possible — tool does not exist on Azure |
+| A. Config-only — Azure-native `web_search` | No (query-only, not a *named* URL opener) | **Yes** (Azure DPA) | None (already enabled) | **Works — kept as the complement/fallback to `open_url`** |
 | B. Grounding with Bing Search / Web Search tool (Foundry) | No (query-only) | **No** — MS docs: data leaves Azure compliance/Geo boundary, DPA does not apply | Low | **GDPR blocker** |
 | C. Foundry Browser Automation Tool (BAT) + Playwright Workspaces | Yes | Yes (own subscription/region) | Medium (new Azure resource, preview SDK) | Public preview, no SLA |
 | D. Self-host LibreChat native web-search stack (SearXNG + self-host Firecrawl) | Indirectly (query-driven) | Yes | High (2-3 services to operate) | Heavy for the actual symptom |
@@ -103,19 +117,35 @@ Document Intelligence later).
 
 ### Exposure model (web-search-gated, hidden tool)
 
-Per stakeholder feedback, `open_url` is **not** a user-selectable tool. It is a
-hidden companion of web search:
+Per stakeholder feedback, `open_url` is **not** a user-selectable tool. It is the
+prioritised half of a single "Browse the internet" capability that drives **two
+complementary engines**, neither of which is the provider-less LangChain
+web_search tool:
+
+1. **`open_url`** (ours) — authoritative for a *named/pasted* page. Prioritised.
+2. **Azure-native, model-level `web_search`** — open-ended discovery, and the
+   **fallback when `open_url` errors** (the tool description tells the model to
+   fall back on an error/blocked code such as `blocked_or_js_required`). Injected
+   from `model_parameters.web_search` by `packages/api/src/endpoints/openai/llm.ts`;
+   stays inside the Azure DPA. No third-party search provider.
+
+How that is wired:
 
 - **Hidden from pickers** — `open_url` is intentionally *removed* from
   `includedTools` in `librechat.yaml`, so it never appears in either
   agent-builder tool picker.
-- **Rides the web-search switch** — two `[knauf]` seams in
-  `api/server/services/ToolService.js` inject `open_url` whenever `web_search`
-  survives the capability filter, at both chokepoints:
-  `loadToolDefinitionsWrapper` (model-facing definitions) and `loadAgentTools`
-  (runtime execution). Keyed on `web_search` only (independent of the generic
-  `tools` capability), so it tracks the switch exactly for the main Karl chat
-  and every agent, and is guarded against double-add.
+- **Gated on the RAW browse intent** — `[knauf]` seams in
+  `api/server/services/ToolService.js` inject `open_url` whenever the agent's OWN
+  tools include `web_search` (the raw "Browse the internet" intent), *independent
+  of* the capability filter, at `loadToolDefinitionsWrapper` (model-facing
+  definitions) and `loadAgentTools` (runtime execution), with a fail-closed guard
+  in `loadToolsForExecution`. `web_search` is deliberately kept **out** of
+  `endpoints.agents.capabilities`, so the capability filter strips the
+  provider-less LangChain web_search tool (it never surfaces to the model), while
+  `open_url` is still injected. The model therefore sees exactly `open_url` +
+  Azure-native `web_search` — an unambiguous fallback target. Guarded against
+  double-add, and strips any baked-in `open_url` when browse is off so the switch
+  stays authoritative.
 - **Why still a tool, not auto-fetch** — the model decides *when* a URL should
   be read (user pastes a link / asks to read a page). Auto-fetching every
   pasted URL is a larger UX change and removes that judgement. Folding the fetch
@@ -177,10 +207,22 @@ was briefly made default-on (seeded into the main chat and new agents); review
 then found that wiring never reached the model, because the live agents chat
 loads tool schemas via the registry-backed *definitions* path and `open_url`
 was never in the registry. That default-on work was reverted and replaced by
-the current design: register `open_url` in the registry (the actual fix) and
-inject it from `ToolService` whenever `web_search` is enabled, while hiding it
-from the tool pickers. The tool is now driven entirely by the existing
-web-search switch rather than being a separately selectable capability.
+registering `open_url` in the registry (the actual fix) and injecting it from
+`ToolService` driven by the existing browse switch, while hiding it from the
+tool pickers.
+
+A final round (verified that Azure-native `web_search` works — see the
+Correction above) settled the UX: **"Browse the internet" is default-ON** for
+both the main KARL chat and newly-created agents, managed by the single builder
+toggle. KARL has no UI capability toggle (simplified view), so it is
+config-default-on: `webSearch: true` on the `karl` (and `karl-personality-*`)
+modelSpecs pushes the raw browse intent that surfaces `open_url`, and the
+azureOpenAI group `addParams.web_search: true` keeps Azure-native search
+always-on. New agents default the toggle on via `getDefaultAgentFormValues`
+(`client/src/utils/forms.tsx`), replicating `browseInternet.applyToForm(true)`.
+The earlier gate keyed on the capability-filtered list (which, with `web_search`
+excluded from capabilities, never fired); the gate now keys on the **raw** browse
+intent so `open_url` loads without surfacing the dead LangChain web_search tool.
 
 ### Why no infra change
 
@@ -301,8 +343,12 @@ empty shells).
 
 ## References
 
-- `packages/api/src/endpoints/openai/llm.ts` (271-274) — current `web_search`
-  tool emission that Azure OpenAI silently ignores.
+- `packages/api/src/endpoints/openai/llm.ts` (181-274) — emits the Azure-native
+  `web_search` hosted tool from `model_parameters.web_search` (works on gpt-5.4 —
+  see the Correction in Current Behaviour).
+- `packages/api/src/endpoints/openai/config.ts` (150-174) — `constructAzureResponsesApi`
+  rewrites Responses calls to `/openai/v1` with `api-version=preview`, so the stale
+  group version never reaches `/responses`.
 - `packages/api/src/auth/agent.ts` — upstream `createSSRFSafeUndiciConnect`
   that `open_url` (and MCP HTTP/SSE/streamable-HTTP transports) use.
 - `packages/api/src/auth/domain.ts` — `isPrivateIP` with the `[knauf]`
