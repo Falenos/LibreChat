@@ -69,6 +69,27 @@ function looksLikeHtml(text) {
   return head.includes('<!doctype html') || /<html\b/.test(head) || /<head\b/.test(head);
 }
 
+// R2b (KK20-194 review): anti-bot / JS-challenge interstitials return HTTP 200
+// with an HTML body that has no real content — left unflagged the model would
+// "summarise" the challenge page (or confabulate). Detect the common providers'
+// markers on the raw HTML so the tool can report `blocked_or_js_required`
+// instead of handing an empty shell to the LLM.
+const CHALLENGE_MARKERS = [
+  'cf-browser-verification',
+  '__cf_chl',
+  'cf_chl_opt',
+  'just a moment',
+  'checking your browser',
+  'enable javascript and cookies',
+  'datadome',
+  'px-captcha',
+];
+
+function looksLikeChallenge(text) {
+  const head = text.slice(0, 4096).toLowerCase();
+  return CHALLENGE_MARKERS.some((marker) => head.includes(marker));
+}
+
 /**
  * Validate scheme + (if needed) SSRF for a URL string. Throws FetchError on
  * any rejection. Used both for the initial URL and each redirect target.
@@ -169,6 +190,13 @@ async function fetchAndExtract(rawUrl, opts = {}) {
       const isHtml = declaredHtml || (declaredOctet && looksLikeHtml(text));
       const isText = declaredText || isHtml;
 
+      if (isHtml && looksLikeChallenge(text)) {
+        throw new FetchError(
+          'the page returned an anti-bot/JS challenge instead of content',
+          'blocked_or_js_required',
+        );
+      }
+
       if (!isHtml && !isText) {
         return extractAndWrap({
           kind: 'non-text',
@@ -205,6 +233,7 @@ module.exports = {
   assertUrlAllowed,
   readBodyWithCap,
   looksLikeHtml,
+  looksLikeChallenge,
   FetchError,
   DEFAULTS,
 };

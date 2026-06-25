@@ -43,6 +43,7 @@
     "@azure/storage-blob": "^12.30.0",
     "@google/genai": "^1.19.0",
     "@keyv/redis": "^4.3.3",
+    "@knauf/knauf": "*",
     "@langchain/core": "^0.3.80",
     "@librechat/agents": "^3.1.68",
     "@librechat/api": "*",

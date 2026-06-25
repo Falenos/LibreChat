@@ -12,6 +12,7 @@ const {
   FetchError,
 } = require('../openUrl/fetcher');
 const { extractAndWrap, __internal__ } = require('@knauf/knauf/server/htmlExtract');
+const { MAX_PARSE_BYTES } = __internal__;
 
 function mockHtmlResponse({
   body = '<html><head><title>Hello</title></head><body><article><h1>H</h1><p>Paragraph text body.</p></article></body></html>',
@@ -216,6 +217,91 @@ describe('[knauf] envelope (prompt-injection framing)', () => {
     const wrapped = __internal__.wrapAsUntrusted(evil, 'https://example.com/');
     const closes = (wrapped.match(/<\/UNTRUSTED_WEB_CONTENT>/g) || []).length;
     expect(closes).toBe(1);
+  });
+});
+
+describe('[knauf] R2b — anti-bot/JS challenge detection (fetcher)', () => {
+  test('Cloudflare "Just a moment" interstitial → blocked_or_js_required', async () => {
+    const body =
+      '<!DOCTYPE html><html><head><title>Just a moment...</title></head>' +
+      '<body>Checking your browser before accessing. cf-browser-verification</body></html>';
+    await expect(
+      fetchAndExtract('https://8.8.8.8/x', { fetchImpl: mockHtmlResponse({ body }) }),
+    ).rejects.toMatchObject({ code: 'blocked_or_js_required' });
+  });
+
+  test('DataDome challenge → blocked_or_js_required', async () => {
+    const body = '<html><head></head><body>datadome px-captcha</body></html>';
+    await expect(
+      fetchAndExtract('https://8.8.8.8/x', { fetchImpl: mockHtmlResponse({ body }) }),
+    ).rejects.toMatchObject({ code: 'blocked_or_js_required' });
+  });
+
+  test('a normal article is NOT misflagged as a challenge', async () => {
+    const out = await fetchAndExtract('https://8.8.8.8/x', { fetchImpl: mockHtmlResponse() });
+    expect(out.outcome).toBe('ok');
+  });
+});
+
+describe('[knauf] R3 — oversized HTML is not DOM-parsed', () => {
+  test('body over MAX_PARSE_BYTES → too_large notice, never paged', () => {
+    const huge = '<html><body>' + 'x'.repeat(MAX_PARSE_BYTES + 100) + '</body></html>';
+    const out = extractAndWrap({
+      kind: 'html',
+      rawUrl: 'https://example.com/',
+      finalUrl: 'https://example.com/',
+      status: 200,
+      contentType: 'text/html',
+      body: huge,
+      maxLength: 10, // must be ignored for the fixed notice
+      startIndex: 5,
+    });
+    expect(out.outcome).toBe('too_large');
+    expect(out.content).toMatch(/\[page too large to parse\]/);
+    expect(out.truncated).toBe(false);
+  });
+});
+
+describe('[knauf] structured-data fallback (boost for thin/marketing pages)', () => {
+  test('recovers og:description when Readability yields nothing', () => {
+    const html =
+      '<html><head><title>Diamant</title>' +
+      '<meta property="og:description" content="Knauf Diamant ist eine besonders harte Gipsplatte ' +
+      'fuer hoch beanspruchte Waende und Decken im Innenausbau."></head>' +
+      '<body><div id="app"></div></body></html>';
+    const out = __internal__.extractHtml(html, 'https://example.com/');
+    expect(out.outcome).toBe('ok');
+    expect(out.content).toMatch(/Knauf Diamant ist eine besonders harte Gipsplatte/);
+  });
+
+  test('recovers JSON-LD Product name + description', () => {
+    const html =
+      '<html><head><script type="application/ld+json">' +
+      JSON.stringify({
+        '@type': 'Product',
+        name: 'AQUAPANEL Cement Board',
+        description: 'A 100% water-resistant cement board for wet rooms and tile backing.',
+      }) +
+      '</script></head><body></body></html>';
+    const structured = __internal__.extractStructuredData(html);
+    expect(structured.content).toMatch(/AQUAPANEL Cement Board/);
+    expect(structured.content).toMatch(/water-resistant cement board/);
+  });
+
+  test('ignores navigation-only JSON-LD (BreadcrumbList) — no false content', () => {
+    const html =
+      '<html><head><script type="application/ld+json">' +
+      JSON.stringify({ '@type': 'BreadcrumbList', itemListElement: [] }) +
+      '</script></head><body></body></html>';
+    expect(__internal__.extractStructuredData(html)).toBeNull();
+  });
+
+  test('genuinely empty JS shell → low outcome (no content to confabulate from)', () => {
+    const out = __internal__.extractHtml(
+      '<html><head></head><body></body></html>',
+      'https://example.com/',
+    );
+    expect(out.outcome).toBe('low');
   });
 });
 

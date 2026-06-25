@@ -11,14 +11,6 @@ const { logger } = require('@librechat/data-schemas');
 
 const { fetchAndExtract, FetchError } = require('./openUrl/fetcher');
 
-// Length of the fixed UNTRUSTED_WEB_CONTENT envelope wrapper (open + close
-// tags + url attribute scaffolding) is variable, so we approximate "usable
-// extracted text" by the raw content length. Anything below this is almost
-// certainly a JS-heavy SPA shell with no readable body — the exact case that
-// tempts the model to confabulate a summary instead of reporting an empty
-// fetch. We log it as a warning so it is visible in server logs / APM.
-const LOW_CONTENT_CHARS = 200;
-
 /**
  * Best-effort hostname for log tags without throwing on malformed input.
  */
@@ -28,6 +20,44 @@ function safeHost(url) {
   } catch {
     return 'invalid-url';
   }
+}
+
+/**
+ * R1 + Residual A (KK20-194 review) — Phase-1 observability only, no blocking.
+ *
+ * The model fully controls the `url` argument, so a prompt-injected page could
+ * coax it into fetching an attacker host (exfil via path) or appending a secret
+ * to a legitimate, user-pasted host's query string. We can't safely *block*
+ * yet (false positives would break normal "open this link" usage), but we can
+ * make both anomalies visible: compare the fetched URL against the set of URLs
+ * the user actually pasted in THIS message.
+ *
+ * Limitation (deferred to the Phase-2 follow-up ticket): only the current
+ * message's text is in scope, so a URL pasted several turns earlier reads as
+ * "not user-provided". That is acceptable for a log-only signal.
+ *
+ * @param {string[]} userProvidedUrls  URLs extracted from the current user message
+ * @returns {{ hosts: Set<string>, queryKeysByHost: Map<string, Set<string>> }}
+ */
+function indexUserProvidedUrls(userProvidedUrls) {
+  const hosts = new Set();
+  const queryKeysByHost = new Map();
+  for (const raw of userProvidedUrls || []) {
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      continue;
+    }
+    hosts.add(parsed.host);
+    if (!queryKeysByHost.has(parsed.host)) {
+      queryKeysByHost.set(parsed.host, new Set());
+    }
+    for (const key of parsed.searchParams.keys()) {
+      queryKeysByHost.get(parsed.host).add(key);
+    }
+  }
+  return { hosts, queryKeysByHost };
 }
 
 // Single source of truth for the schema + description lives in the registry
@@ -50,6 +80,41 @@ class OpenUrl extends Tool {
     this.name = 'open_url';
     this.description = openUrlDescription;
     this.schema = openUrlJsonSchema;
+    // R1 (KK20-194): request-scoped provenance inputs, injected by the
+    // customConstructor in handleTools.js. Absent in unit/standalone use, in
+    // which case provenance logging is simply skipped.
+    this.userProvidedUrls = Array.isArray(fields.userProvidedUrls) ? fields.userProvidedUrls : [];
+  }
+
+  /**
+   * Log-only host-provenance + query-anomaly checks (R1 + Residual A). Never
+   * throws and never blocks — purely emits structured warnings for APM.
+   */
+  logProvenance(requestedUrl, host) {
+    if (this.userProvidedUrls.length === 0) {
+      return;
+    }
+    let parsed;
+    try {
+      parsed = new URL(requestedUrl);
+    } catch {
+      return;
+    }
+    const { hosts, queryKeysByHost } = indexUserProvidedUrls(this.userProvidedUrls);
+    if (!hosts.has(parsed.host)) {
+      logger.warn(
+        `[open_url] url_not_user_provided host=${host} — fetched host was not in the user's pasted URLs`,
+      );
+      return;
+    }
+    const allowedKeys = queryKeysByHost.get(parsed.host) || new Set();
+    const novelKeys = [...parsed.searchParams.keys()].filter((k) => !allowedKeys.has(k));
+    if (novelKeys.length > 0) {
+      logger.warn(
+        `[open_url] query_param_not_user_provided host=${host} keys=${novelKeys.join(',')} ` +
+          '— fetched URL carried query params absent from the pasted URL(s)',
+      );
+    }
   }
 
   async _call(input) {
@@ -66,6 +131,7 @@ class OpenUrl extends Tool {
     const startedAt = Date.now();
     const host = safeHost(url);
     logger.info(`[open_url] fetch start host=${host}`);
+    this.logProvenance(url, host);
 
     try {
       const result = await fetchAndExtract(url, {
@@ -76,12 +142,24 @@ class OpenUrl extends Tool {
       const contentChars = typeof result.content === 'string' ? result.content.length : 0;
       const meta =
         `host=${host} status=${result.status} chars=${contentChars} ` +
-        `truncated=${!!result.truncated} durationMs=${durationMs}`;
-      if (contentChars < LOW_CONTENT_CHARS) {
-        // The fetch succeeded but yielded almost no readable text. Flag it so
-        // an empty-but-"successful" open_url is distinguishable from a model
-        // that never called the tool at all.
-        logger.warn(`[open_url] fetch ok but low extracted content — likely JS-heavy page. ${meta}`);
+        `outcome=${result.outcome} truncated=${!!result.truncated} durationMs=${durationMs}`;
+
+      // R2a (KK20-194 review): a fetch that succeeds at the HTTP layer but
+      // yields no readable text (after the structured-data fallback in
+      // htmlExtract) must NOT be handed to the model as an empty envelope — it
+      // would invite confabulation. Surface it as an explicit error code,
+      // mirroring the anti-bot challenge case detected in the fetcher (R2b).
+      if (result.outcome === 'low') {
+        logger.warn(`[open_url] no readable content — likely JS-only/blocked page. ${meta}`);
+        return JSON.stringify({
+          error:
+            'open_url: the page returned no readable content (likely JavaScript-only or bot-blocked)',
+          code: 'blocked_or_js_required',
+          url,
+        });
+      }
+      if (result.outcome === 'too_large') {
+        logger.warn(`[open_url] page too large to parse. ${meta}`);
       } else {
         logger.info(`[open_url] fetch ok ${meta}`);
       }

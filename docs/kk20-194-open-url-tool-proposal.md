@@ -226,8 +226,17 @@ firewall change or follow-up needed for v1.
 
 ## Deferred / Future Work
 
-- **JS-heavy SPA pages** → Azure Foundry Browser Automation Tool once GA;
-  add as a second structured tool that falls back from `open_url`.
+- **Truly client-only-rendered SPA pages** → Azure Foundry Browser Automation
+  Tool once GA; add as a second structured tool that falls back from `open_url`.
+  Note (empirically verified during PR #98 review): the knauf.com product pages
+  that prompted concern are **not** empty SPA shells — they ship full content in
+  the initial HTML (JSON-LD + `og:description` + body text), and `open_url`
+  already extracts them well (8,424 chars for the Diamant highlight page, 1,371
+  chars for an AQUAPANEL product page). Earlier "near-empty shell" reports were
+  model confabulation (the tool was never actually invoked), now mitigated by R1
+  provenance logging. A headless-render microservice only helps genuinely
+  client-only pages and greatly expands the fetch/exfil/SSRF surface, so it is a
+  deferred spike rather than a near-term need.
 - **Document URLs (PDF/Office)** → Azure Document Intelligence (already partly
   wired in dev via `RAG_AZURE_DI_ENDPOINT`).
 - **Multi-result web search** → out of scope; revisit if/when an
@@ -255,6 +264,40 @@ firewall change or follow-up needed for v1.
   `<UNTRUSTED_WEB_CONTENT>` envelope (inner-tag mangled), explicit
   Tool-description warning, and the coarse error taxonomy that prevents the
   tool itself from echoing internal IPs back into the LLM context.
+
+## PR #98 security-review hardening
+
+A security review (reviewer `jorgecostak`) raised four findings, all addressed:
+
+- **R4 (LOW)** — `@knauf/knauf` was imported in `api/` but only resolved via
+  workspace hoisting. Now declared in `api/package.json` `dependencies`; lockfile
+  refreshed.
+- **R3 (MEDIUM)** — jsdom/Readability parse is synchronous and was unbounded over
+  the ≤5 MB fetch cap; the fetch `AbortController` cannot interrupt CPU work →
+  event-loop DoS risk. `htmlExtract.js` now enforces a 2 MB `MAX_PARSE_BYTES`
+  ceiling; oversized bodies skip the DOM parse and route through the existing
+  notice envelope (`outcome: 'too_large'`, never paged).
+- **R2 (MED-HIGH)** — low-content/challenge bodies were logged but still returned
+  to the model. (a) `OpenUrl._call` now maps the extractor `outcome: 'low'` to a
+  `{ error, code: 'blocked_or_js_required', url }` result instead of a blank
+  envelope; (b) `fetcher.js` detects anti-bot/JS-challenge markers
+  (Cloudflare / DataDome / PerimeterX) on the raw HTML **before** extraction and
+  throws `blocked_or_js_required`.
+- **R1 + Residual A (HIGH, log-only Phase 1)** — `open_url` migrated from
+  `toolConstructors` to the request-scoped `customConstructors` map (mirrors
+  `image_gen_oai`) so the instance can read the current request. It derives the
+  set of URLs the user pasted in the current message and **logs a metric** (never
+  blocks) when the fetched host wasn't user-provided, or when a fetched URL on a
+  user-provided host carries query params absent from the pasted URLs. Phase-2
+  enforcement and full-history host-set are deferred to a follow-up ticket.
+
+**Structured-data fallback (boost, zero new deps):** when Readability + html-to-text
+yield below `LOW_YIELD_CHARS`, `htmlExtract.js` backstops thin/marketing pages by
+extracting from JSON-LD (`Product`/`Article`), `og:description`, the meta
+description, and `<title>` before `'low'` is declared. This improves resilience on
+thin pages and provides a high-quality backstop on the knauf.com product pages
+(see Deferred / Future Work for the empirical finding that those pages are not
+empty shells).
 
 ## References
 
