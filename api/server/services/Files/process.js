@@ -5,6 +5,9 @@ const { v4 } = require('uuid');
 const {
   isUUID,
   megabyte,
+  // [knauf] KK20-203 — Constants.NEW_CONVO sentinel guard for the conversationId stamp below.
+  Constants,
+  // End [knauf]
   FileContext,
   FileSources,
   imageExtRegex,
@@ -716,6 +719,15 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
 
   const fileInfo = removeNullishValues({
     user: req.user.id,
+    // [knauf] KK20-203 — stamp the originating conversation so chat deletion can
+    // cascade-clean this file (chat file_search uploads carried no conversationId
+    // before, which is why they orphaned). removeNullishValues drops it when
+    // absent; the NEW_CONVO sentinel ('new') is not a real id, so treat as absent.
+    conversationId:
+      req.body.conversationId && req.body.conversationId !== Constants.NEW_CONVO
+        ? req.body.conversationId
+        : undefined,
+    // End [knauf]
     file_id,
     temp_file_id,
     bytes,

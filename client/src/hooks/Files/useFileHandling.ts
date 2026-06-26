@@ -222,6 +222,17 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       if (conversation?.agent_id != null && formData.get('agent_id') == null) {
         formData.append('agent_id', conversation.agent_id);
       }
+      // [knauf] KK20-203 — send the originating conversationId so the server stamps
+      // it on the File record and chat deletion can cascade-clean the file. Skip the
+      // NEW_CONVO sentinel ('new') — a brand-new chat has no real id yet.
+      if (
+        conversation?.conversationId != null &&
+        conversation.conversationId !== Constants.NEW_CONVO &&
+        formData.get('conversationId') == null
+      ) {
+        formData.append('conversationId', conversation.conversationId);
+      }
+      // End [knauf]
 
       uploadFile.mutate(formData);
       return;

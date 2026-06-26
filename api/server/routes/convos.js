@@ -16,6 +16,11 @@ const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const { importConversations } = require('~/server/utils/import');
 const getLogStores = require('~/cache/getLogStores');
 const db = require('~/models');
+// [knauf] KK20-203 — cascade file/embedding cleanup when a chat is deleted.
+const {
+  deleteConvosWithCleanup,
+} = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
+// End [knauf]
 
 const assistantClients = {
   [EModelEndpoint.azureAssistants]: require('~/server/services/Endpoints/azureAssistants'),
@@ -126,7 +131,13 @@ router.delete('/', async (req, res) => {
   }
 
   try {
-    const dbResponse = await db.deleteConvos(req.user.id, filter);
+    // [knauf] KK20-203 — cascade-clean the chat's files (blobs, Mongo rows,
+    // pgvector embeddings) on a targeted delete instead of orphaning them. The
+    // rare filter-less (assistant thread-only) path keeps upstream behavior.
+    const dbResponse = filter.conversationId
+      ? await deleteConvosWithCleanup({ req, filter })
+      : await db.deleteConvos(req.user.id, filter);
+    // End [knauf]
     if (filter.conversationId) {
       await db.deleteToolCalls(req.user.id, filter.conversationId);
       await db.deleteConvoSharedLink(req.user.id, filter.conversationId);
@@ -140,7 +151,9 @@ router.delete('/', async (req, res) => {
 
 router.delete('/all', async (req, res) => {
   try {
-    const dbResponse = await db.deleteConvos(req.user.id, {});
+    // [knauf] KK20-203 — cascade-clean all of the user's chat files on delete-all.
+    const dbResponse = await deleteConvosWithCleanup({ req, filter: {} });
+    // End [knauf]
     await db.deleteToolCalls(req.user.id);
     await db.deleteAllSharedLinks(req.user.id);
     res.status(201).json(dbResponse);

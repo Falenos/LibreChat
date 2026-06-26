@@ -216,6 +216,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/__tests__/MessageIcon.render.test.tsx` | `agent no-avatar message icon cases` | 72–182 | Seam test — chat message icons assert no-avatar agents use the Knauf logo and legacy string avatars bypass the fallback | Self | NO-TICKET |
 | `client/src/components/Chat/Input/AudioRecorder.tsx` | `AudioRecorder` first-paint render guard | 81–84 | Mic control visibility — renders the STT button before the textarea DOM ref is assigned so first paint cannot permanently hide recording controls | `AudioRecorder.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Nav/AccountSettings.tsx` | `AccountSettings` Help & FAQ tombstone | 76–77 | Hide the upstream Help & FAQ link from the user avatar menu because the configured/default destinations point to LibreChat docs, not Knauf support content | `KnaufTopBar.knauf.spec.tsx` | NO-TICKET |
+| `api/server/routes/convos.js` | DELETE `/` and `/all` → `deleteConvosWithCleanup` | 19–23, 134–140, 154–156 | Wrap `deleteConvos` so a deleted chat's files (blobs, Mongo rows, pgvector embeddings) are cascade-cleaned via `processDeleteRequest` instead of orphaned; files still referenced by another conversation are kept | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | KK20-203 |
+| `api/server/services/Files/VectorDB/crud.js` | `deleteVectorsByIds` / `deleteVectors` | 20–78, 153–155 | Bounded-retry, 404-tolerant batched pgvector delete — the cascade's vector backstop so a transient RAG failure doesn't silently leak embeddings | `api/server/services/Files/VectorDB/crud.spec.js` | KK20-203 |
+| `api/server/services/Files/process.js` | `processAgentFileUpload` conversationId stamp | 8–10, 722–730 | Stamp the originating `conversationId` on agent/file_search uploads (they carried none) so chat deletion can find and cascade-clean them; the NEW_CONVO sentinel is treated as absent | `api/server/services/Files/process.spec.js` | KK20-203 |
+| `client/src/hooks/Files/useFileHandling.ts` | `startUpload` conversationId FormData append | 225–235 | Send the originating `conversationId` on chat uploads so the server can stamp it for cascade cleanup; skips the NEW_CONVO sentinel | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | KK20-203 |
+| `api/server/services/Files/process.spec.js` | `processAgentFileUpload conversationId stamp` describe | 65–72, 512–562 | Seam test — file_search uploads stamp `conversationId`; the NEW_CONVO sentinel is omitted | Self | KK20-203 |
+| `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | `conversationId on chat file uploads` describe | 336–377 | Seam test — chat uploads append `conversationId` to the upload FormData; NEW_CONVO omitted | Self | KK20-203 |
+| `api/server/services/Files/VectorDB/crud.spec.js` | `deleteVectorsByIds (KK20-203)` describe | 1–67 | Seam test — batched vector delete retries a transient 5xx then throws, treats 404 as success, and fails fast on a non-transient 4xx | Self | KK20-203 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -344,6 +351,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/analytics/datadog/isEnabled.spec.ts` | Subject under test | Low — test-only | Self | KK20-186 |
 | `client/src/knauf/analytics/datadog/KnaufDatadogRum.spec.tsx` | Subject under test | Low — test-only | Self | KK20-186 |
 | `client/src/knauf/components/Chat/AudioRecorder.knauf.spec.tsx` | `~/components/Chat/Input/AudioRecorder`; mocked upstream hooks/client dependencies | Low — test-only; pins STT mic first-paint visibility without requiring a live microphone or browser media APIs | Self | NO-TICKET |
+| `api/server/services/Files/knauf/cascadeDeleteConvoFiles.js` | `~/models`; lazy `~/server/services/Files/{process,Config,VectorDB/crud}`; `mongoose`; `@librechat/data-schemas` | Medium — reuses `processDeleteRequest` and queries the `Conversation`/`Message`/`File` models directly; an upstream rename of those models or of `processDeleteRequest`'s contract surfaces here | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | KK20-203 |
+| `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | Subject under test; mocked `process`/`VectorDB/crud`; in-memory Mongo via `@librechat/data-schemas` | Low — test-only | Self | KK20-203 |
 <!-- seams:new:end -->
 
 ## Static Assets
