@@ -71,6 +71,14 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
 }));
 // End [knauf]
 
+// [knauf] KK20-204 — the file_search path now hashes the bytes + looks up a canonical
+// for per-user dedup; stub both so tests don't touch the disk or the DB. Default = MISS.
+jest.mock('~/server/services/Files/knauf/contentDedup', () => ({
+  computeContentHash: jest.fn().mockResolvedValue('deadbeefhash'),
+  findCanonicalForHash: jest.fn().mockResolvedValue(null),
+}));
+// End [knauf]
+
 jest.mock('~/server/utils', () => ({
   determineFileType: jest.fn(),
 }));
@@ -557,6 +565,72 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
     });
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.conversationId).toBeUndefined();
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-204 — per-user content-hash dedup on the file_search upload path.
+describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
+  const {
+    findCanonicalForHash,
+    computeContentHash,
+  } = require('~/server/services/Files/knauf/contentDedup');
+  const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
+  const db = require('~/models');
+  const handleFileUpload = jest
+    .fn()
+    .mockResolvedValue({ bytes: 10, filename: 'doc.pdf', filepath: '/blob/doc.pdf' });
+
+  const fsMeta = () => ({
+    agent_id: 'agent-abc',
+    tool_resource: EToolResources.file_search,
+    file_id: 'up-1',
+  });
+  const fsReq = () => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/u.pdf', originalname: 'doc.pdf', filename: 'u.pdf', mimetype: PDF_MIME },
+    body: { model: 'gpt-4o', conversationId: 'convo-x' },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    checkCapability.mockResolvedValue(true);
+    mergeFileConfig.mockReturnValue(makeFileConfig());
+    getStrategyFunctions.mockReturnValue({ handleFileUpload });
+    computeContentHash.mockResolvedValue('hashABC');
+  });
+
+  test('MISS — uploads + embeds USER-owned and stamps the content hash (no pointer)', async () => {
+    findCanonicalForHash.mockResolvedValue(null);
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
+    expect(uploadVectors).toHaveBeenCalledTimes(1);
+    expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_content_hash).toBe('hashABC');
+    expect(fileInfo.knauf_canonical_file_id).toBeUndefined(); // this row IS the canonical
+  });
+
+  test('HIT — reuses the canonical blob + embeddings; skips upload + embed; writes a pointer', async () => {
+    findCanonicalForHash.mockResolvedValue({
+      file_id: 'canon-1',
+      filepath: '/blob/canon',
+      bytes: 5,
+      filename: 'doc.pdf',
+      embedded: true,
+      source: 'local',
+    });
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(handleFileUpload).not.toHaveBeenCalled(); // no storage upload
+    expect(uploadVectors).not.toHaveBeenCalled(); // no embed
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_canonical_file_id).toBe('canon-1'); // pointer → canonical
+    expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the canonical blob
+    expect(fileInfo.knauf_content_hash).toBe('hashABC');
+    expect(fileInfo.embedded).toBe(true);
   });
 });
 // End [knauf]

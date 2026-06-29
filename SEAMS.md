@@ -223,6 +223,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/process.spec.js` | `processAgentFileUpload conversationId stamp` describe | 65–72, 512–562 | Seam test — file_search uploads stamp `conversationId`; the NEW_CONVO sentinel is omitted | Self | KK20-203 |
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | `conversationId on chat file uploads` describe | 336–377 | Seam test — chat uploads append `conversationId` to the upload FormData; NEW_CONVO omitted | Self | KK20-203 |
 | `api/server/services/Files/VectorDB/crud.spec.js` | `deleteVectorsByIds (KK20-203)` describe | 1–67 | Seam test — batched vector delete retries a transient 5xx then throws, treats 404 as success, and fails fast on a non-transient 4xx | Self | KK20-203 |
+| `packages/data-schemas/src/schema/file.ts` | content-hash dedup fields + `(user, knauf_content_hash)` partial index | 85–96, 108–115 | Per-user dedup — add `knauf_content_hash` + `knauf_canonical_file_id` to the File schema plus a non-unique partial index serving the upload dedup-lookup and the delete-time content-hash-group recount | `api/server/services/Files/knauf/contentDedup.spec.js` | KK20-204 |
+| `packages/data-schemas/src/types/file.ts` | `IMongoFile` dedup fields | 29–32 | Type `knauf_content_hash` + `knauf_canonical_file_id` on the Mongo File type | Self (compile) | KK20-204 |
+| `packages/data-provider/src/types/files.ts` | `TFile` dedup fields | 121–124 | Type the dedup fields on the shared `TFile` so API file payloads can carry them | Self (compile) | KK20-204 |
+| `api/server/services/Files/process.js` | `processAgentFileUpload` file_search dedup | 653–656, 659–698, 768–773 | On a file_search upload, hash the bytes and look up a canonical — HIT → pointer row reusing the canonical blob+embeddings (skip upload+embed); MISS → upload + embed USER-owned (`entity_id = req.user.id`) as the canonical; stamp the dedup fields on the File | `api/server/services/Files/process.spec.js` | KK20-204 |
+| `api/app/clients/tools/util/fileSearch.js` | `primeFiles` + `createQueryBody` canonical resolution | 73–76, 109–112 | Resolve a deduped pointer to its canonical `file_id` before `/query` (the pointer's own id has no vectors of its own) | `api/app/clients/tools/util/fileSearch.spec.js` | KK20-204 |
+| `api/server/services/Files/process.spec.js` | `content-hash dedup (KK20-204)` describe + contentDedup mock | 74–80, 572–636 | Seam test — file_search HIT reuses the canonical (no upload/embed); MISS embeds user-owned + stamps the hash | Self | KK20-204 |
+| `api/app/clients/tools/util/fileSearch.spec.js` | `fileSearch canonical resolution (KK20-204)` | 1–45 | Seam test — a deduped pointer's `/query` resolves to the canonical file_id, not its own | Self | KK20-204 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -353,6 +360,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Chat/AudioRecorder.knauf.spec.tsx` | `~/components/Chat/Input/AudioRecorder`; mocked upstream hooks/client dependencies | Low — test-only; pins STT mic first-paint visibility without requiring a live microphone or browser media APIs | Self | NO-TICKET |
 | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.js` | `~/models`; lazy `~/server/services/Files/{process,Config,VectorDB/crud}`; `mongoose`; `@librechat/data-schemas` | Medium — reuses `processDeleteRequest` and queries the `Conversation`/`Message`/`File` models directly; an upstream rename of those models or of `processDeleteRequest`'s contract surfaces here | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | KK20-203 |
 | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | Subject under test; mocked `process`/`VectorDB/crud`; in-memory Mongo via `@librechat/data-schemas` | Low — test-only | Self | KK20-203 |
+| `api/server/services/Files/knauf/contentDedup.js` | `~/models` (`getFiles`); `fs`, `crypto` | Low — pure helper (SHA-256 + a `(user, hash)` canonical lookup); no upstream contract surface | `api/server/services/Files/knauf/contentDedup.spec.js` | KK20-204 |
+| `api/server/services/Files/knauf/contentDedup.spec.js` | Subject under test; in-memory Mongo via `@librechat/data-schemas` | Low — test-only | Self | KK20-204 |
 <!-- seams:new:end -->
 
 ## Static Assets

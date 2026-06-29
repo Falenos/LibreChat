@@ -70,6 +70,10 @@ const primeFiles = async (options) => {
     files.push({
       file_id: file.file_id,
       filename: file.filename,
+      // [knauf] KK20-204 — carry the canonical pointer so the /query below resolves a
+      // deduped pointer's vectors (stored under the canonical file_id), not its own id.
+      knauf_canonical_file_id: file.knauf_canonical_file_id,
+      // End [knauf]
     });
   }
 
@@ -102,7 +106,10 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
        */
       const createQueryBody = (file) => {
         const body = {
-          file_id: file.file_id,
+          // [knauf] KK20-204 — a deduped pointer's embeddings live under the canonical
+          // file_id; query that, not the pointer's own id (which has no vectors).
+          file_id: file.knauf_canonical_file_id ?? file.file_id,
+          // End [knauf]
           query,
           k: 5,
         };

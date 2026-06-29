@@ -82,6 +82,18 @@ const file: Schema<IMongoFile> = new Schema(
       type: String,
       index: true,
     },
+    // [knauf] KK20-204 — per-user content-hash deduplication.
+    // knauf_content_hash = SHA-256 of the uploaded bytes (per-user dedup key).
+    // knauf_canonical_file_id, when set, marks this row as a POINTER that reuses
+    // the canonical row's blob + embeddings; the canonical row leaves it unset.
+    // See knauf/docs/proposals/file-dedup-content-hash.md.
+    knauf_content_hash: {
+      type: String,
+    },
+    knauf_canonical_file_id: {
+      type: String,
+    },
+    // End [knauf]
   },
   {
     timestamps: true,
@@ -93,5 +105,13 @@ file.index(
   { filename: 1, conversationId: 1, context: 1, tenantId: 1 },
   { unique: true, partialFilterExpression: { context: FileContext.execute_code } },
 );
+// [knauf] KK20-204 — per-user dedup lookup on upload + content-hash-group refcount
+// at delete. Non-unique (a group = the canonical + N pointers share (user, hash));
+// partial so legacy rows without a hash never enter the index.
+file.index(
+  { user: 1, knauf_content_hash: 1 },
+  { partialFilterExpression: { knauf_content_hash: { $exists: true } } },
+);
+// End [knauf]
 
 export default file;

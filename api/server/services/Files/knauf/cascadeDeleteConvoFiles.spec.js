@@ -29,6 +29,14 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   deleteVectorsByIds: (...args) => mockDeleteVectorsByIds(...args),
 }));
 
+// [knauf] KK20-204 — the dedup GC deletes the shared blob via the per-source strategy.
+const mockStrategyDeleteFile = jest.fn().mockResolvedValue(undefined);
+jest.mock('~/server/services/Files/strategies', () => ({
+  getStrategyFunctions: jest.fn(() => ({
+    deleteFile: (...args) => mockStrategyDeleteFile(...args),
+  })),
+}));
+
 jest.mock('~/models', () => {
   const m = require('mongoose');
   const { createMethods } = require('@librechat/data-schemas');
@@ -202,4 +210,97 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(deletable.map((f) => f.file_id)).toEqual(['f-y']);
     });
   });
+
+  // [knauf] KK20-204 — two-stage delete for content-hash-deduped rows: delete the
+  // rows always; GC the shared physical asset only when the (user, hash) group is
+  // empty, always targeting the canonical file_id.
+  describe('content-hash dedup delete (KK20-204)', () => {
+    const db = require('~/models');
+    const dedupExtra = (extra) => ({
+      knauf_content_hash: 'HASH-1',
+      embedded: true,
+      source: FileSources.local,
+      filepath: '/blob/canon',
+      ...extra,
+    });
+
+    test('pointer chat deleted, canonical survives → physical asset kept', async () => {
+      await seedFile('canon-1', dedupExtra({ conversationId: 'chatA' }));
+      await seedFile(
+        'ptr-2',
+        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-1' }),
+      );
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['ptr-2'] } });
+
+      const result = await cascadeDeleteCollectedFiles({
+        req: buildReq(),
+        collected: { conversationIds: ['chatB'], files },
+      });
+
+      expect(await File.findOne({ file_id: 'ptr-2' })).toBeNull(); // pointer row gone
+      expect(await File.findOne({ file_id: 'canon-1' })).not.toBeNull(); // canonical survives
+      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // group not empty → asset kept
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
+      expect(result.deleted).toBe(1);
+    });
+
+    test('whole group deleted → GC targets the canonical id exactly once', async () => {
+      await seedFile('canon-1', dedupExtra({ conversationId: 'chatA' }));
+      await seedFile(
+        'ptr-2',
+        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-1' }),
+      );
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1', 'ptr-2'] } });
+
+      await cascadeDeleteCollectedFiles({
+        req: buildReq(),
+        collected: { conversationIds: ['chatA', 'chatB'], files },
+      });
+
+      expect(await File.countDocuments({ knauf_content_hash: 'HASH-1' })).toBe(0); // both rows gone
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1);
+      expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['canon-1']); // canonical id, not ptr-2
+      expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1);
+      expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-1');
+      expect(mockStrategyDeleteFile.mock.calls[0][1].filepath).toBe('/blob/canon');
+    });
+
+    test('last row is a pointer (canonical row already gone) → GC resolves the canonical id', async () => {
+      await seedFile(
+        'ptr-only',
+        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-gone' }),
+      );
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['ptr-only'] } });
+
+      await cascadeDeleteCollectedFiles({
+        req: buildReq(),
+        collected: { conversationIds: ['chatB'], files },
+      });
+
+      expect(await File.findOne({ file_id: 'ptr-only' })).toBeNull();
+      expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['canon-gone']); // from the pointer's canonical ref
+      expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-gone');
+    });
+
+    test('legacy/no-hash file → unchanged PR1 path (processDeleteRequest, not the dedup GC)', async () => {
+      await seedFile('legacy', {
+        conversationId: 'chatA',
+        embedded: true,
+        source: FileSources.local,
+      });
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['legacy'] } });
+
+      await cascadeDeleteCollectedFiles({
+        req: buildReq(),
+        collected: { conversationIds: ['chatA'], files },
+      });
+
+      expect(mockProcessDeleteRequest).toHaveBeenCalledTimes(1);
+      expect(mockProcessDeleteRequest.mock.calls[0][0].files.map((f) => f.file_id)).toEqual([
+        'legacy',
+      ]);
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC path not taken
+    });
+  });
+  // End [knauf]
 });

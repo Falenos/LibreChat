@@ -204,9 +204,157 @@ async function collectConvoFilesForCleanup({ req, filter }) {
 }
 
 /**
+ * [knauf] KK20-204 — physically delete one canonical asset (its pgvector embeddings +
+ * its blob). Best-effort + idempotent: the vector delete is 404-tolerant and the blob
+ * strategy tolerates a missing file, so a benign double-GC under concurrent deletes
+ * can't corrupt. `embedded:false` on the strategy call keeps it blob-only (vectors are
+ * handled here explicitly, keyed on the canonical id).
+ * @param {{ req: import('express').Request, canonicalId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
+ */
+async function gcCanonicalAsset({
+  req,
+  canonicalId,
+  asset,
+  deleteVectorsByIds,
+  getStrategyFunctions,
+}) {
+  if (asset.embedded) {
+    try {
+      await deleteVectorsByIds(req, [canonicalId]);
+    } catch (error) {
+      logger.warn(
+        `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${canonicalId}; may remain in pgvector`,
+        error,
+      );
+    }
+  }
+  if (!asset.filepath) {
+    logger.warn(
+      `[knauf][cascadeDeleteConvoFiles] no filepath for ${canonicalId}; skipping blob GC`,
+    );
+    return;
+  }
+  try {
+    const { deleteFile } = getStrategyFunctions(asset.source ?? 'local');
+    await deleteFile(req, {
+      file_id: canonicalId,
+      filepath: asset.filepath,
+      source: asset.source,
+      embedded: false,
+    });
+  } catch (error) {
+    logger.warn(
+      `[knauf][cascadeDeleteConvoFiles] blob GC failed for ${canonicalId} (asset may leak)`,
+      error,
+    );
+  }
+}
+
+/**
+ * [knauf] KK20-204 — two-stage delete for content-hash-deduped rows. Under dedup one
+ * physical asset (blob at the canonical filepath + embeddings under the canonical
+ * file_id) is shared across DIFFERENT logical file_ids (canonical id1, pointer id2),
+ * so the per-file_id refcount can't decide physical deletion. Instead:
+ *
+ *   Stage 1 — delete the File ROWS (always; keyed on the deleted ids).
+ *   Stage 2 — GC the physical asset only for (user, content-hash) groups that are
+ *             EMPTY after stage 1, targeting the CANONICAL file_id for vectors and
+ *             the shared filepath for the blob.
+ *
+ * Recounting AFTER the row delete makes "two concurrent deletes both skip → orphan"
+ * impossible; the residual double-GC is benign (404-tolerant vectors + missing-file-
+ * tolerant blob delete). A pointer carries its canonical's filepath/source/embedded
+ * (copied at upload), so it can GC the canonical asset even if the canonical row is
+ * already gone. Handles the rare double-embed (≥1 canonical per group) by GC-ing each
+ * distinct canonical asset.
+ *
+ * @param {{ req: import('express').Request, dedupRows: object[] }} params
+ */
+async function gcDedupRows({ req, dedupRows }) {
+  if (!dedupRows.length) {
+    return;
+  }
+  const user = req.user.id;
+
+  // Build (content-hash → distinct canonical assets) from the in-memory rows BEFORE
+  // deleting. Keyed by canonical file_id so a double-embed's two canonicals are both
+  // captured; a pointer alone yields its canonical asset (filepath copied at upload).
+  const groups = new Map();
+  for (const f of dedupRows) {
+    const canonicalId = f.knauf_canonical_file_id ?? f.file_id;
+    let assets = groups.get(f.knauf_content_hash);
+    if (!assets) {
+      assets = new Map();
+      groups.set(f.knauf_content_hash, assets);
+    }
+    const prev = assets.get(canonicalId);
+    assets.set(canonicalId, {
+      filepath: prev?.filepath ?? f.filepath,
+      source: prev?.source ?? f.source,
+      embedded: (prev?.embedded ?? false) || !!f.embedded,
+    });
+  }
+
+  // Stage 1 — delete the logical rows (ids only; never pass a user arg — deleteFiles
+  // would then ignore the ids and delete every file the user owns).
+  const dedupIds = dedupRows.map((f) => f.file_id);
+  await db.deleteFiles(dedupIds);
+  try {
+    await db.removeAgentResourceFilesFromAllAgents({ file_ids: dedupIds });
+  } catch (error) {
+    logger.error('[knauf][cascadeDeleteConvoFiles] agent-ref strip failed', error);
+  }
+
+  // Stage 2 — GC physical assets for groups now empty (recount AFTER stage 1).
+  const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
+  const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+  for (const [hash, assets] of groups) {
+    const survivors =
+      (await db.getFiles({ user, knauf_content_hash: hash }, null, { file_id: 1 })) ?? [];
+    if (survivors.length) {
+      continue; // group still referenced elsewhere → keep the shared asset(s)
+    }
+    for (const [canonicalId, asset] of assets) {
+      await gcCanonicalAsset({ req, canonicalId, asset, deleteVectorsByIds, getStrategyFunctions });
+    }
+  }
+}
+
+/**
+ * Delete legacy / non-deduped rows the PR1 way: processDeleteRequest (blob + vectors +
+ * Mongo row + agent-ref strip), then a best-effort retried vector backstop for the
+ * embedded ones (the storage strategy's vector delete swallows transient failures).
+ * @param {{ req: import('express').Request, plainRows: object[] }} params
+ */
+async function deletePlainRows({ req, plainRows }) {
+  if (!plainRows.length) {
+    return;
+  }
+  // Lazy require (see top-of-file note) — only load the deletion chain when needed.
+  const { processDeleteRequest } = require('~/server/services/Files/process');
+  await processDeleteRequest({ req, files: plainRows });
+
+  const embeddedIds = plainRows.filter((file) => file.embedded).map((file) => file.file_id);
+  if (!embeddedIds.length) {
+    return;
+  }
+  const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
+  try {
+    await deleteVectorsByIds(req, embeddedIds);
+  } catch (vectorError) {
+    logger.warn(
+      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedIds.length} file(s); ` +
+        'they may remain in pgvector',
+      vectorError,
+    );
+  }
+}
+
+/**
  * Cascade-delete the collected files (blob + pgvector + Mongo row + agent-resource
- * refs) via the existing `processDeleteRequest`, skipping any still referenced
- * outside the deleted conversations. Call AFTER `deleteConvos`.
+ * refs), skipping any still referenced outside the deleted conversations. Call AFTER
+ * `deleteConvos`. Legacy/no-hash rows go through the upstream `processDeleteRequest`
+ * (`deletePlainRows`); content-hash-deduped rows go through the two-stage `gcDedupRows`.
  *
  * Best-effort: never throws into the convo-delete response path. The collected
  * File docs are passed by value, so it works after the convos/messages are gone.
@@ -226,12 +374,10 @@ async function cascadeDeleteCollectedFiles({ req, collected }) {
     });
 
     if (deletable.length) {
-      // Lazy require (see top-of-file note) — only load the deletion chain when
-      // there's actually something to delete.
-      const { processDeleteRequest } = require('~/server/services/Files/process');
-      // processDeleteRequest needs req.config (appConfig). The convos delete
-      // routes don't run configMiddleware, so populate it here when absent
-      // rather than coupling the routes to that middleware.
+      // req.config (appConfig) is needed by processDeleteRequest AND by the strategy
+      // blob delete inside the dedup GC. The convos delete routes don't run
+      // configMiddleware, so populate it here when absent rather than coupling the
+      // routes to that middleware.
       if (!req.config) {
         const { getAppConfig } = require('~/server/services/Config');
         req.config = await getAppConfig({
@@ -240,27 +386,19 @@ async function cascadeDeleteCollectedFiles({ req, collected }) {
           tenantId: req.user?.tenantId,
         });
       }
-      // processDeleteRequest deletes blob (per-source strategy) + vectors +
-      // Mongo row + strips file_id from all agents' tool_resources.
-      await processDeleteRequest({ req, files: deletable });
 
-      // Best-effort vector backstop: the storage-strategy path deletes vectors
-      // via deleteRagFile, which swallows transient failures. Re-issue a single
-      // retried, 404-tolerant batched delete for the embedded ids so a transient
-      // RAG hiccup doesn't silently leak embeddings.
-      const embeddedIds = deletable.filter((file) => file.embedded).map((file) => file.file_id);
-      if (embeddedIds.length) {
-        const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
-        try {
-          await deleteVectorsByIds(req, embeddedIds);
-        } catch (vectorError) {
-          logger.warn(
-            `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedIds.length} file(s); ` +
-              'they may remain in pgvector',
-            vectorError,
-          );
-        }
-      }
+      // [knauf] KK20-204 — content-hash-deduped rows share one physical asset across
+      // file_ids, so they need group-aware two-stage deletion (gcDedupRows). Legacy /
+      // no-hash rows keep the PR1 path (deletePlainRows → processDeleteRequest).
+      await deletePlainRows({
+        req,
+        plainRows: deletable.filter((file) => !file.knauf_content_hash),
+      });
+      await gcDedupRows({
+        req,
+        dedupRows: deletable.filter((file) => file.knauf_content_hash),
+      });
+      // End [knauf]
     }
 
     if (sharedStillReferenced.length) {

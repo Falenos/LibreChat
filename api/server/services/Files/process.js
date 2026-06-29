@@ -649,29 +649,53 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   // Dual storage pattern for RAG files: Storage + Vector DB
   let storageResult, embeddingResult;
   const isImageFile = file.mimetype.startsWith('image');
-  const source = getFileStrategy(appConfig, { isImage: isImageFile });
+  let source = getFileStrategy(appConfig, { isImage: isImageFile });
+  // [knauf] KK20-204 — per-user content-hash dedup bookkeeping (file_search path only).
+  let knaufContentHash;
+  let knaufCanonicalFileId;
+  // End [knauf]
 
   if (tool_resource === EToolResources.file_search) {
-    // FIRST: Upload to Storage for permanent backup (S3/local/etc.)
-    const { handleFileUpload } = getStrategyFunctions(source);
-    const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
-    storageResult = await sanitizedUploadFn({
-      req,
-      file,
-      file_id,
-      basePath,
-      entity_id,
+    // [knauf] KK20-204 — per-user content-hash dedup. Hash the bytes; if this user
+    // already has this exact content, reuse the canonical blob + embeddings (this
+    // upload becomes a lightweight pointer) instead of re-uploading + re-embedding.
+    const { computeContentHash, findCanonicalForHash } = require('./knauf/contentDedup');
+    knaufContentHash = await computeContentHash(file.path);
+    const knaufCanonical = await findCanonicalForHash({
+      user: req.user.id,
+      knauf_content_hash: knaufContentHash,
     });
+    if (knaufCanonical) {
+      // HIT — reuse the canonical's blob + embeddings; skip storage upload + embed.
+      knaufCanonicalFileId = knaufCanonical.file_id;
+      source = knaufCanonical.source ?? source;
+      storageResult = {
+        bytes: knaufCanonical.bytes,
+        filename: knaufCanonical.filename,
+        filepath: knaufCanonical.filepath,
+        embedded: knaufCanonical.embedded,
+      };
+      embeddingResult = { embedded: knaufCanonical.embedded, filename: knaufCanonical.filename };
+      // No storage upload on a hit, so the temp file isn't consumed here — the
+      // files.js route's `finally` cleans it up (don't unlink it twice).
+    } else {
+      // MISS — upload + embed as the canonical. Embed USER-owned (entity_id = user
+      // id, not the agent) so the single embedding is reusable across all of this
+      // user's chats/agents via the RAG JWT-user fallback (spike-confirmed); other
+      // users are denied. This user-ownership is what makes cross-chat dedup work.
+      const { handleFileUpload } = getStrategyFunctions(source);
+      const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
+      storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
-    // SECOND: Upload to Vector DB
-    const { uploadVectors } = require('./VectorDB/crud');
-
-    embeddingResult = await uploadVectors({
-      req,
-      file,
-      file_id,
-      entity_id,
-    });
+      const { uploadVectors } = require('./VectorDB/crud');
+      embeddingResult = await uploadVectors({
+        req,
+        file,
+        file_id,
+        entity_id: req.user.id,
+      });
+    }
+    // End [knauf]
 
     // Vector status will be stored at root level, no need for metadata
     fileInfoMetadata = {};
@@ -741,6 +765,12 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     source,
     height,
     width,
+    // [knauf] KK20-204 — content-hash dedup bookkeeping. Both undefined on non-
+    // file_search paths (→ dropped by removeNullishValues). knauf_canonical_file_id
+    // is set only when this row is a pointer reusing a canonical's blob + embeddings.
+    knauf_content_hash: knaufContentHash,
+    knauf_canonical_file_id: knaufCanonicalFileId,
+    // End [knauf]
   });
 
   const result = await db.createFile(fileInfo, true);
