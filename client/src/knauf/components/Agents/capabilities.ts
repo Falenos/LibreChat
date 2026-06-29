@@ -50,11 +50,20 @@ export interface KnaufCapability {
 }
 
 /**
- * "Browse the internet" — model-level web search via OpenAI's Responses
- * API. Activates the model's built-in web_search tool at chat time. NOT
- * gated by `endpoints.agents.capabilities` because the toggle works at
- * `model_parameters` level (the BYOK Tools.web_search path is the gated
- * one and we deliberately don't surface it).
+ * "Browse the internet" — KK20-194. One switch, two complementary engines,
+ * no third-party search provider (GDPR):
+ *   1. Azure-native, model-level web_search — activated at chat time via the
+ *      Responses API by setting `model_parameters.web_search` (open-ended
+ *      discovery + the fallback when open_url fails).
+ *   2. `open_url` — our authoritative reader for a user-named/pasted page,
+ *      surfaced server-side (ToolService.js) whenever this switch puts
+ *      `Tools.web_search` into the agent's tools (the "raw browse intent").
+ * NOT gated by `endpoints.agents.capabilities`: we deliberately keep
+ * `web_search` out of that list so the provider-less LangChain web_search
+ * tool stays stripped/unsurfaced. The switch therefore writes BOTH the
+ * `web_search` form flag (→ raw browse intent → open_url) AND
+ * `model_parameters.web_search` (→ Azure-native search). Default-ON for KARL
+ * (librechat.yaml modelSpecs) and new agents (getDefaultAgentFormValues).
  */
 const browseInternet: KnaufCapability = {
   id: 'web',

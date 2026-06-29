@@ -1,5 +1,6 @@
 import { EarthIcon } from 'lucide-react';
 import {
+  Tools,
   FileSources,
   alternateName,
   EModelEndpoint,
@@ -55,6 +56,21 @@ export const getDefaultAgentFormValues = () => ({
   avatar_file: null,
   avatar_preview: '',
   avatar_action: null,
+  // [knauf] KK20-194 — default the "Browse the internet" capability ON for new
+  // agents, mirroring the always-on default for KARL. This replicates exactly
+  // what browseInternet.applyToForm(true) writes (client/src/knauf/components/
+  // Agents/capabilities.ts): the `web_search` form flag drives `open_url` (our
+  // prioritised tool for named/pasted pages, gated on the raw browse intent in
+  // ToolService.js), while model_parameters.web_search + useResponsesApi enable
+  // Azure's model-level web_search (open-ended discovery + fallback when open_url
+  // errors). Users can still toggle it off in the builder.
+  [Tools.web_search]: true,
+  model_parameters: {
+    ...defaultAgentFormValues.model_parameters,
+    web_search: true,
+    useResponsesApi: true,
+  },
+  // End [knauf]
 });
 
 export const processAgentOption = ({

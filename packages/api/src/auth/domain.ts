@@ -119,10 +119,30 @@ function hasPrivateEmbeddedIPv4(ipv6: string): boolean {
  * Handles IPv4, IPv6, and IPv4-mapped IPv6 addresses (::ffff:A.B.C.D).
  */
 export function isPrivateIP(ip: string): boolean {
-  const normalized = ip
+  // [knauf] KK20-194 — close non-canonical IPv6 bypass. The regex-based
+  // matchers below only recognise the canonical compressed forms
+  // (`::ffff:7f00:1`, `64:ff9b::a9fe:a9fe`). Inputs like
+  // `0:0:0:0:0:ffff:7f00:1`, `0000:...:ffff:7f00:0001` or
+  // `64:ff9b:0:0:0:0:a9fe:a9fe` would slip past and connect to a private IP.
+  // Canonicalise IPv6 inputs via the WHATWG URL parser (which compresses
+  // and zero-pads) before re-feeding the existing matchers. This fix
+  // hardens BOTH the upstream MCP HTTP transport (uses this function via
+  // `createSSRFSafeUndiciConnect`) AND Knauf's open_url tool. Closes the
+  // same class as the bypass patched in commit 37136c54 for `open_url`.
+  let normalizedSource = ip;
+  try {
+    const bare = ip.trim().replace(/^\[|\]$/g, '');
+    if (bare.includes(':')) {
+      normalizedSource = new URL(`http://[${bare}]/`).hostname.slice(1, -1);
+    }
+  } catch {
+    // Not parseable as bracketed IPv6 — fall through to the existing matchers.
+  }
+  const normalized = normalizedSource
     .toLowerCase()
     .trim()
     .replace(/^\[|\]$/g, '');
+  // End [knauf]
 
   const mappedMatch = normalized.match(/^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (mappedMatch) {

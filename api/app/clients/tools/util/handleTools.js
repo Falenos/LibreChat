@@ -37,6 +37,9 @@ const {
   TavilySearchResults,
   createGeminiImageTool,
   createOpenAIImageTools,
+  // [knauf] KK20-194
+  OpenUrl,
+  // End [knauf]
 } = require('../');
 const { createMCPTool, createMCPTools, resolveConfigServers } = require('~/server/services/MCP');
 const { createFileSearchTool, primeFiles: primeSearchFiles } = require('./fileSearch');
@@ -46,6 +49,19 @@ const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
 const { getMCPServersRegistry } = require('~/config');
 const { getRoleByName } = require('~/models');
+
+// [knauf] KK20-194 — extract http(s) URLs from the current user message so the
+// request-scoped open_url instance can flag fetches of hosts/query params the
+// user never actually pasted (R1 + Residual A, log-only). Kept deliberately
+// permissive: a missed URL just means a benign provenance warning, never a block.
+const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]}]+/gi;
+function extractUserProvidedUrls(text) {
+  if (!text || typeof text !== 'string') {
+    return [];
+  }
+  return text.match(URL_IN_TEXT) || [];
+}
+// End [knauf]
 
 /**
  * Validates the availability and authentication of tools for a user based on environment variables or user-specific plugin authentication values.
@@ -185,6 +201,16 @@ const loadTools = async ({
   };
 
   const customConstructors = {
+    // [knauf] KK20-194 — request-scoped so the instance can read the current
+    // user message (options.req.body.text) for host-provenance logging (R1).
+    // Mirrors image_gen_oai below, which already threads options.req through.
+    open_url: async () => {
+      return new OpenUrl({
+        userProvidedUrls: extractUserProvidedUrls(options.req?.body?.text),
+        req: options.req,
+      });
+    },
+    // End [knauf]
     image_gen_oai: async (toolContextMap) => {
       const authFields = getAuthFields('image_gen_oai');
       const authValues = await loadAuthValues({ userId: user, authFields });
