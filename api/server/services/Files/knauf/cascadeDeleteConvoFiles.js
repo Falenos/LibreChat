@@ -7,10 +7,12 @@
 // ones that nothing else still references — reuse, don't reinvent the deletion.
 //
 // Reference-count guard (`partitionByRefCount`) is the seam KK20-204 (per-user
-// content-hash dedup) plugs into: today it counts surviving conversations +
-// messages (which already protects files shared via fork/duplicate); once dedup
-// makes one physical blob/vector set shared across chats, the same seam gains a
-// content-hash dimension so cascade never deletes a still-shared asset.
+// content-hash dedup) plugs into: it counts surviving conversations, messages
+// (which protects files shared via fork/duplicate), AND any agent still holding
+// the file in tool_resources.*.file_ids (so deleting the chat a file was uploaded
+// in never strips it out from under an agent); once dedup makes one physical
+// blob/vector set shared across chats, the same seam gains a content-hash
+// dimension so cascade never deletes a still-shared asset.
 //
 // Boundary (documented in knauf/docs/implementation-plans/file-lifecycle-dedup-cleanup.md):
 // collection is scoped to chat-context uploads (File.conversationId — stamped on
@@ -21,6 +23,7 @@
 
 const mongoose = require('mongoose');
 const { logger } = require('@librechat/data-schemas');
+const { TOOL_RESOURCE_KEYS, collectToolResourceFileIds } = require('@librechat/api');
 const db = require('~/models');
 // processDeleteRequest + deleteVectorsByIds are required lazily inside
 // cascadeDeleteCollectedFiles (only when there's actually something to delete):
@@ -52,6 +55,21 @@ function fileIdOf(entry) {
 }
 
 /**
+ * Add to the `acc` Set every resolvable file id in `entries`, optionally filtered
+ * to the `only` Set. Entries may be bare strings or `{ file_id }` objects
+ * (fileIdOf normalizes both), so one scan serves File ids, Conversation.files[],
+ * Message.files[] and agent tool_resources file_ids[].
+ */
+function collectFileIds(acc, entries, only) {
+  for (const entry of entries ?? []) {
+    const id = fileIdOf(entry);
+    if (id && (!only || only.has(id))) {
+      acc.add(id);
+    }
+  }
+}
+
+/**
  * Collect the candidate File docs a set of conversations referenced, via the
  * union of the three linkages — no single one is complete:
  *   1. File.conversationId      — set on chat file_search uploads + execute_code outputs.
@@ -76,11 +94,7 @@ async function collectConvoFileDocs({ user, conversationIds }) {
   const directIds = await File.find({ user, conversationId: { $in: conversationIds } }).distinct(
     'file_id',
   );
-  for (const id of directIds) {
-    if (id) {
-      fileIds.add(id);
-    }
-  }
+  collectFileIds(fileIds, directIds);
 
   // 2. Conversation.files[]
   const convos = await Conversation.find(
@@ -88,11 +102,7 @@ async function collectConvoFileDocs({ user, conversationIds }) {
     'files',
   ).lean();
   for (const convo of convos) {
-    for (const id of convo.files ?? []) {
-      if (id) {
-        fileIds.add(id);
-      }
-    }
+    collectFileIds(fileIds, convo.files);
   }
 
   // 3. Message.files[]
@@ -101,12 +111,7 @@ async function collectConvoFileDocs({ user, conversationIds }) {
     'files',
   ).lean();
   for (const message of messages) {
-    for (const entry of message.files ?? []) {
-      const id = fileIdOf(entry);
-      if (id) {
-        fileIds.add(id);
-      }
-    }
+    collectFileIds(fileIds, message.files);
   }
 
   if (!fileIds.size) {
@@ -148,29 +153,43 @@ async function partitionByRefCount(files, { user, deletedConversationIds }) {
     'files',
   ).lean();
   for (const convo of convoRefs) {
-    for (const id of convo.files ?? []) {
-      if (candidateIds.has(id)) {
-        stillReferenced.add(id);
-      }
-    }
+    collectFileIds(stillReferenced, convo.files, candidateIds);
   }
 
   // A surviving message (outside the deleted convos) references the file.
+  // Message.files[] is Mixed: entries are normally `{ file_id, ... }` but legacy/
+  // imported messages can store bare-string ids (fileIdOf handles both). Match
+  // BOTH shapes — `files.file_id` for object entries, `files: { $in }` for string
+  // entries — or a still-referenced legacy file slips through and gets deleted.
   const msgRefs = await Message.find(
     {
       user,
-      'files.file_id': { $in: ids },
       conversationId: { $nin: deletedConversationIds },
+      $or: [{ 'files.file_id': { $in: ids } }, { files: { $in: ids } }],
     },
     'files',
   ).lean();
   for (const message of msgRefs) {
-    for (const entry of message.files ?? []) {
-      const id = fileIdOf(entry);
-      if (id && candidateIds.has(id)) {
-        stillReferenced.add(id);
-      }
-    }
+    collectFileIds(stillReferenced, message.files, candidateIds);
+  }
+
+  // An agent still references the file via tool_resources.<resource>.file_ids —
+  // e.g. a file uploaded to an agent inside a chat lives on both the File row
+  // (with conversationId) AND the agent. Deleting that chat would otherwise mark
+  // it deletable, and processDeleteRequest destroys the blob/vectors AND strips
+  // the id from every agent (removeAgentResourceFilesFromAllAgents) — silently
+  // wiping an agent's knowledge file. Not scoped to author: any agent that holds
+  // the asset still needs it. tool_resources is Mixed, so filter DB-side over the
+  // canonical file-bearing resource keys, then extract via the same canonical
+  // helper. We scan `.file_ids` (the PERSISTED reference that deletion strips),
+  // NOT the runtime-only `.files[]` array that primeResources hydrates.
+  const Agent = mongoose.models.Agent;
+  const resourceFileIdPaths = TOOL_RESOURCE_KEYS.map((resource) => ({
+    [`tool_resources.${resource}.file_ids`]: { $in: ids },
+  }));
+  const agentRefs = await Agent.find({ $or: resourceFileIdPaths }, 'tool_resources').lean();
+  for (const agent of agentRefs) {
+    collectFileIds(stillReferenced, collectToolResourceFileIds(agent.tool_resources), candidateIds);
   }
 
   const deletable = [];

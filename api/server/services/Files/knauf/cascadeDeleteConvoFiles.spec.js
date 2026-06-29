@@ -47,6 +47,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
   let File;
   let Conversation;
   let Message;
+  let Agent;
   const userId = new mongoose.Types.ObjectId();
 
   beforeAll(async () => {
@@ -57,6 +58,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     File = mongoose.models.File;
     Conversation = mongoose.models.Conversation;
     Message = mongoose.models.Message;
+    Agent = mongoose.models.Agent;
   }, 30000);
 
   afterAll(async () => {
@@ -65,7 +67,12 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
   });
 
   beforeEach(async () => {
-    await Promise.all([File.deleteMany({}), Conversation.deleteMany({}), Message.deleteMany({})]);
+    await Promise.all([
+      File.deleteMany({}),
+      Conversation.deleteMany({}),
+      Message.deleteMany({}),
+      Agent.deleteMany({}),
+    ]);
     mockProcessDeleteRequest.mockClear();
     mockDeleteVectorsByIds.mockClear();
   });
@@ -95,6 +102,20 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       user: userId,
       text: 'hi',
       files: fileIds.map((file_id) => ({ file_id })),
+    });
+
+  // Message.files[] is Mixed: legacy/imported messages can carry bare-string ids.
+  const seedRawMessage = (messageId, conversationId, rawFiles) =>
+    Message.create({ messageId, conversationId, user: userId, text: 'hi', files: rawFiles });
+
+  const seedAgent = (id, toolResources, extra = {}) =>
+    Agent.create({
+      id,
+      author: userId,
+      provider: 'openAI',
+      model: 'gpt-4o',
+      tool_resources: toolResources,
+      ...extra,
     });
 
   /** file_ids passed to the (single) processDeleteRequest call, sorted */
@@ -201,5 +222,82 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(sharedStillReferenced).toHaveLength(0);
       expect(deletable.map((f) => f.file_id)).toEqual(['f-y']);
     });
+
+    // Review comment 1: a file still attached to an agent's tool_resources must
+    // NOT be deletable — otherwise processDeleteRequest destroys the blob/vectors
+    // and strips it from the agent, silently wiping the agent's knowledge file.
+    test('an agent file_search reference keeps the file out of the deletable set', async () => {
+      await seedFile('f-agent');
+      await seedAgent('agent-1', { file_search: { file_ids: ['f-agent'] } });
+
+      const { deletable, sharedStillReferenced } = await partitionByRefCount(
+        [{ file_id: 'f-agent' }],
+        { user: userId.toString(), deletedConversationIds: ['convo-deleted'] },
+      );
+
+      expect(deletable).toHaveLength(0);
+      expect(sharedStillReferenced.map((f) => f.file_id)).toEqual(['f-agent']);
+    });
+
+    test('an agent reference via a non-file_search resource (execute_code) also protects', async () => {
+      await seedFile('f-code');
+      await seedAgent('agent-2', { execute_code: { file_ids: ['f-code'] } });
+
+      const { deletable, sharedStillReferenced } = await partitionByRefCount(
+        [{ file_id: 'f-code' }],
+        { user: userId.toString(), deletedConversationIds: ['convo-deleted'] },
+      );
+
+      expect(deletable).toHaveLength(0);
+      expect(sharedStillReferenced.map((f) => f.file_id)).toEqual(['f-code']);
+    });
+
+    test('an agent that references a DIFFERENT file does not protect the candidate', async () => {
+      await seedFile('f-z');
+      await seedAgent('agent-3', { file_search: { file_ids: ['some-other-file'] } });
+
+      const { deletable, sharedStillReferenced } = await partitionByRefCount([{ file_id: 'f-z' }], {
+        user: userId.toString(),
+        deletedConversationIds: ['convo-deleted'],
+      });
+
+      expect(sharedStillReferenced).toHaveLength(0);
+      expect(deletable.map((f) => f.file_id)).toEqual(['f-z']);
+    });
+
+    // Review comment 2: a surviving message can store bare-string file ids (legacy/
+    // imported). The object-only `files.file_id` query missed them; both shapes
+    // must be matched or the still-referenced file is wrongly deleted.
+    test('a surviving message with a bare-string files[] entry keeps the file', async () => {
+      await seedFile('f-legacy');
+      await seedRawMessage('m-legacy', 'survivor-convo', ['f-legacy']);
+
+      const { deletable, sharedStillReferenced } = await partitionByRefCount(
+        [{ file_id: 'f-legacy' }],
+        { user: userId.toString(), deletedConversationIds: ['convo-deleted'] },
+      );
+
+      expect(deletable).toHaveLength(0);
+      expect(sharedStillReferenced.map((f) => f.file_id)).toEqual(['f-legacy']);
+    });
+  });
+
+  // Review comment 1, end-to-end: a file collected from a deleted chat but still
+  // attached to an agent must never reach the physical delete path.
+  test('does not delete a collected file still referenced by an agent', async () => {
+    await seedConvo('convo-agent');
+    await seedFile('f-shared-agent', { conversationId: 'convo-agent' });
+    await seedAgent('agent-keep', { file_search: { file_ids: ['f-shared-agent'] } });
+
+    const collected = await collectConvoFilesForCleanup({
+      req: buildReq(),
+      filter: { conversationId: 'convo-agent' },
+    });
+    expect(collected.files.map((f) => f.file_id)).toContain('f-shared-agent');
+
+    const result = await cascadeDeleteCollectedFiles({ req: buildReq(), collected });
+
+    expect(mockProcessDeleteRequest).not.toHaveBeenCalled();
+    expect(result).toEqual({ deleted: 0, kept: 1 });
   });
 });
