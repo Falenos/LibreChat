@@ -109,24 +109,34 @@ Real logic lives in a **Tier 3 Knauf module** (`api/server/services/Files/knauf/
 get thin **Tier 4c `[knauf]`** markers + SEAMS.md rows (`convos.js`, `process.js`, `crud.js`,
 `useFileHandling.ts`).
 
-### Step 2 — RAG `/query` `entity_id` spike (gates Step 3 vector dedup)
+### Step 2 — RAG `/query` `entity_id` spike — ✅ RESOLVED (2026-06-26)
 
-Against a live `rag_api` (compose stack):
+Resolved by **reading the `rag_api` source** (no live run / embeddings needed — the auth logic is
+plain Python), then confirming the **deployed image** (`knauf/rag-api:local`, base
+`librechat-rag-api-dev-lite:latest`) carries the identical code (no version drift). Source:
+`danny-avila/rag_api` `app/routes/document_routes.py`.
 
-1. `POST /embed` a doc with `file_id=F`, `entity_id=A`.
-2. `POST /query` `{file_id:F, query}` — **no** `entity_id` → hits?
-3. `POST /query` `{file_id:F, entity_id:B}` (mismatched) → hits or empty?
-4. Inspect `langchain_pg_embedding.cmetadata` for an `entity_id` filter column; check for any way
-   to associate existing vectors with a new `entity_id`.
+**Findings:**
 
-| Outcome | Meaning | Action |
-|---|---|---|
-| Step 3 returns hits | query filters loosely / ignores `entity_id` | full cross-agent vector dedup is safe → proceed Option C |
-| Step 3 empty | strict `(file_id, entity_id)` partition | cross-agent vector dedup needs a **Tier-2 RAG-image overlay** (scope separately); otherwise vector dedup is limited to the inline `context` path + same-agent re-uploads, cross-agent falls back to blob-only |
+- `/query` (and `/query_multiple`) retrieve by **`file_id` only** — `filter={"file_id": {"$eq": ...}}`
+  (`document_routes.py:385/390/1078`). `entity_id` is **not** a pgvector partition.
+- `entity_id` is a **post-retrieval authorization check** on `documents[0].user_id`: authorize iff
+  the doc's stored `user_id` is `None`, equals the query's `entity_id`, **or equals the JWT user id**
+  (the fallback, `:402-408`). Otherwise → empty result (warning only).
+- At embed, stored `user_id = entity_id` if provided, else the JWT user (`get_user_id`, `:107-112`;
+  metadata write `:719`).
 
-Record the verdict in the dedup ticket before writing Step 3 code.
+**Verdict — full cross-agent, per-user vector dedup is viable WITHOUT a RAG-image overlay.** The lever
+is the embed-time owner: embed the canonical/deduped file **user-owned** (`entity_id = userId`, or omit
+it). Then any of that user's agents/chats can read it via the JWT-user fallback, while other users are
+denied (per-user privacy holds). The earlier "strict `(file_id, entity_id)` partition → Tier-2 overlay"
+fear is disproven. → **Proceed with Option C** (Step 3); the canonical `uploadVectors` call must pass
+`entity_id = req.user.id` (not the agent id).
 
 ### Step 3 — PR2: full per-user content-hash dedup (T1)
+
+> End-to-end walkthrough of the resulting behavior (same doc in two chats → no duplication):
+> [proposals/file-dedup-content-hash.md](../proposals/file-dedup-content-hash.md).
 
 Branch `feat/KK20-204-content-hash-dedup`. **⚠️ `packages/*` rebuild gotcha applies** (below).
 
@@ -149,10 +159,58 @@ Branch `feat/KK20-204-content-hash-dedup`. **⚠️ `packages/*` rebuild gotcha 
 5. **Resolve canonical at retrieval** — map `file_id → knauf_canonical_file_id` before `/query` in
    [fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js#L103) and
    [createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js).
-6. **Wire real refcount into PR1's guard** — blob count = `File.countDocuments({user, knauf_content_hash})`;
-   vector count = canonical-group size. Delete Mongo rows first (or exclude in-flight ids), then
-   physically delete only assets now at 0.
+6. **Delete-with-dedup (the PR1↔PR2 coupling)** — do **not** extend `partitionByRefCount` to decide
+   *physical* deletion (the "minimal" approach has a data-loss race — see below). Use a **two-stage
+   delete**. Full design in the next subsection.
 7. **No backfill** — dedup applies to new uploads only.
+
+#### Delete behavior with dedup (two-stage) — designed + adversarially verified
+
+PR1's `partitionByRefCount` decides deletability per `file_id` (correct for the *row*). But dedup
+shares one physical asset — blob at the canonical `filepath` + embeddings under the canonical
+`file_id` (`id1`) — across **different** logical file_ids (`id1` canonical, `id2` pointer). Deleting
+the chat holding the canonical row leaves no surviving reference to `id1` (the other chat references
+`id2`), so PR1's guard would free the blob + embeddings and **break the pointer**. The refcount must
+be taken over the **content-hash group**, not the file_id.
+
+| Delete | File rows | Physical asset (blob + `id1` vectors) |
+|---|---|---|
+| pointer chat (F2/`id2`) | F2 row removed; strip `id2` from agents | **kept** — group still has F1 |
+| canonical chat (F1/`id1`) | F1 row removed; strip `id1` | **kept** — F2 resolves `id2→id1`; the canonical *row* being gone is irrelevant |
+| both chats | both rows removed | **deleted once** — vectors under `id1` (not `id2`), blob at shared `filepath` |
+
+`partitionByRefCount` stays unchanged (still correctly decides the *row*). In
+`cascadeDeleteCollectedFiles`, split `deletable`: legacy/no-hash rows take the unchanged PR1 path;
+deduped rows two-stage:
+
+```js
+const dedupRows = deletable.filter(f => f.knauf_content_hash);
+// capture {hash → canonicalId, filepath, source, embedded} from the in-memory rows BEFORE deleting
+// STAGE 1 — delete the File rows, ALWAYS, keyed on the deleted ids only:
+await db.deleteFiles(dedupRows.map(f => f.file_id));            // ids only — never a user arg (file.ts footgun)
+await db.removeAgentResourceFilesFromAllAgents({ file_ids });   // strips id2/id1, never a survivor's id
+// STAGE 2 — physical GC, only when the (user, hash) group is now EMPTY (recount AFTER stage 1):
+for (const g of groups) {
+  if ((await db.getFiles({ user, knauf_content_hash: g.hash }, null, { file_id: 1 }))?.length) continue;
+  await deleteVectorsByIds(req, [g.canonicalId]);              // CANONICAL id only; wrap (it throws after retries)
+  await getStrategyFunctions(g.source).deleteFile(req, { file_id: g.canonicalId, filepath: g.filepath, embedded: false });
+}
+```
+
+Recounting *after* the row delete makes the "both concurrent deletes skip → orphan" race impossible;
+residual double-GC is benign (404-tolerant vectors + missing-file-tolerant blob). **Must-handle:**
+(a) canonical-row-gone-but-group-alive → asset kept, never promote a survivor (canonicalId derives
+from `knauf_canonical_file_id`); (b) pointer-is-last-row → GC targets `id1`, never `id2`; (c) an
+upload-HIT racing the last-row delete must re-validate the asset under a per-`(user,hash)` guard;
+(d) **account deletion** ([`deleteUserFiles`](../../../api/server/controllers/UserController.js))
+bypasses this GC (batches all files through `processDeleteRequest`) — reconcile it; (e) one-blob-per-group
+invariant — both upload paths must stamp pointers with the canonical `filepath`; (f) null-`filepath`
+guard + the `deleteFiles` user-arg footgun + `req.user.id` string-vs-ObjectId on the recount.
+
+**Tests:** pointer-survives (delete canonical chat → F2 still retrieves `id1`); group-empty GC targets
+`id1` exactly once; last-row-is-pointer GCs `id1` not `id2`; two concurrent whole-group deletes → no
+broken pointer; upload-HIT vs last-row-delete → pointer never born against a GC'd asset; legacy/no-hash
+file deletes through the unchanged PR1 path.
 
 ---
 
@@ -216,7 +274,7 @@ T3 deferred). No epic — two standalone tasks.
 
 ## Open questions
 
-- **RAG `/query` `entity_id` semantics** — the spike; gates Step 3. Cannot be answered from this repo.
+- ~~**RAG `/query` `entity_id` semantics** — the spike; gates Step 3.~~ ✅ Resolved (see Step 2): `entity_id` is post-retrieval auth with a JWT-user fallback, not a vector partition → user-owned canonical embeds enable cross-agent per-user dedup, no overlay.
 - **Field case** — `knauf_content_hash` (snake, matches `knauf_fast_mode` precedent) vs `knaufContentHash`; prefix mandatory either way.
 - **Ephemeral conversationId** — first-upload-to-new-chat files rely on `Message.files[]` for
   cleanup, not the `conversationId` stamp (sentinel chat has no real id yet).
