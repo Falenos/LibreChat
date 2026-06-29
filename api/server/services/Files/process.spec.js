@@ -44,6 +44,9 @@ jest.mock('~/models', () => ({
   deleteFiles: jest.fn(),
   addAgentResourceFile: jest.fn().mockResolvedValue({}),
   removeAgentResourceFiles: jest.fn(),
+  // [knauf] KK20-204 — within-chat idempotency check loads the agent + its file_search files.
+  getAgent: jest.fn(),
+  getFiles: jest.fn(),
 }));
 
 jest.mock('~/server/utils/getFileStrategy', () => ({
@@ -599,6 +602,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     mergeFileConfig.mockReturnValue(makeFileConfig());
     getStrategyFunctions.mockReturnValue({ handleFileUpload });
     computeContentHash.mockResolvedValue('hashABC');
+    // default: this agent has nothing attached → within-chat idempotency check is skipped
+    db.getAgent.mockResolvedValue(null);
   });
 
   test('MISS — uploads + embeds USER-owned and stamps the content hash (no pointer)', async () => {
@@ -631,6 +636,56 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the canonical blob
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
     expect(fileInfo.embedded).toBe(true);
+  });
+
+  test('within-chat idempotency — content already attached to THIS agent returns the existing file', async () => {
+    // Same content (hash matches) is already in this agent's file_search.file_ids,
+    // so re-uploading it to the same chat must NOT add a second entry.
+    const existing = {
+      file_id: 'canon-1',
+      filename: 'doc.pdf',
+      filepath: '/blob/canon',
+      embedded: true,
+      knauf_content_hash: 'hashABC',
+    };
+    db.getAgent.mockResolvedValue({
+      id: 'agent-abc',
+      tool_resources: { file_search: { file_ids: ['canon-1'] } },
+    });
+    db.getFiles.mockResolvedValue([existing]); // matched by (file_ids ∩ agent) + hash
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    // Short-circuits before the canonical lookup and any write/upload.
+    expect(findCanonicalForHash).not.toHaveBeenCalled();
+    expect(db.createFile).not.toHaveBeenCalled();
+    expect(db.addAgentResourceFile).not.toHaveBeenCalled();
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(uploadVectors).not.toHaveBeenCalled();
+    expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ file_id: 'canon-1' }));
+  });
+
+  test('cross-chat — same content, different agent (nothing attached here) still creates a pointer', async () => {
+    db.getAgent.mockResolvedValue({
+      id: 'agent-abc',
+      tool_resources: { file_search: { file_ids: [] } }, // this agent has nothing yet
+    });
+    findCanonicalForHash.mockResolvedValue({
+      file_id: 'canon-1',
+      filepath: '/blob/canon',
+      bytes: 5,
+      filename: 'doc.pdf',
+      embedded: true,
+      source: 'local',
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    // Idempotency does NOT fire (content not attached to THIS agent) → normal HIT path.
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_canonical_file_id).toBe('canon-1'); // pointer created for this agent
+    expect(handleFileUpload).not.toHaveBeenCalled(); // still reuses canonical (no re-upload/embed)
+    expect(uploadVectors).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

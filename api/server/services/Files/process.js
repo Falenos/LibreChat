@@ -661,6 +661,32 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     // upload becomes a lightweight pointer) instead of re-uploading + re-embedding.
     const { computeContentHash, findCanonicalForHash } = require('./knauf/contentDedup');
     knaufContentHash = await computeContentHash(file.path);
+
+    // Within-chat idempotency: if this exact content is ALREADY attached to THIS
+    // agent's file_search, return the existing file instead of adding a second entry
+    // — so re-uploading the same doc to one chat stays a single file, not a confusing
+    // duplicate (and we don't query the same vectors twice). Match by content hash so
+    // an existing canonical OR pointer both count. A different agent has its own list,
+    // so cross-chat re-uploads still create a pointer below.
+    if (!messageAttachment && agent_id) {
+      const agent = await db.getAgent({ id: agent_id });
+      const attachedFileIds = agent?.tool_resources?.[EToolResources.file_search]?.file_ids ?? [];
+      if (attachedFileIds.length) {
+        const [alreadyAttached] =
+          (await db.getFiles({
+            user: req.user.id,
+            file_id: { $in: attachedFileIds },
+            knauf_content_hash: knaufContentHash,
+          })) ?? [];
+        if (alreadyAttached) {
+          return res.status(200).json({
+            message: 'Agent file uploaded and processed successfully',
+            ...alreadyAttached,
+          });
+        }
+      }
+    }
+
     const knaufCanonical = await findCanonicalForHash({
       user: req.user.id,
       knauf_content_hash: knaufContentHash,
