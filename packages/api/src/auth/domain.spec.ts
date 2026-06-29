@@ -1433,3 +1433,47 @@ describe('validateEndpointURL', () => {
     expect(parsed.message).toContain('targets a restricted address');
   });
 });
+
+// [knauf] KK20-194 — regression suite for the IPv6 canonicalisation seam
+// added to isPrivateIP. Upstream's regex matchers only catch canonical
+// compressed forms; the seam canonicalises any IPv6 input via WHATWG URL
+// before the regex matchers run. These cases pin the bypass-class fix and
+// also exercise resolveHostnameSSRF for end-to-end IP-literal handling.
+describe('[knauf] isPrivateIP — non-canonical IPv6 (KK20-194)', () => {
+  it('catches fully-expanded IPv4-mapped IPv6', () => {
+    expect(isPrivateIP('0:0:0:0:0:ffff:7f00:1')).toBe(true);
+    expect(isPrivateIP('0:0:0:0:0:ffff:a9fe:a9fe')).toBe(true);
+    expect(isPrivateIP('0:0:0:0:0:ffff:0aa0:7')).toBe(true);
+  });
+  it('catches zero-padded expanded IPv4-mapped IPv6', () => {
+    expect(isPrivateIP('0000:0000:0000:0000:0000:ffff:7f00:0001')).toBe(true);
+    expect(isPrivateIP('0000:0000:0000:0000:0000:ffff:a9fe:a9fe')).toBe(true);
+  });
+  it('catches NAT64 fully-expanded', () => {
+    expect(isPrivateIP('64:ff9b:0:0:0:0:a9fe:a9fe')).toBe(true);
+    expect(isPrivateIP('0064:ff9b:0000:0000:0000:0000:a9fe:a9fe')).toBe(true);
+  });
+  it('catches IPv6 loopback fully-expanded', () => {
+    expect(isPrivateIP('0:0:0:0:0:0:0:1')).toBe(true);
+    expect(isPrivateIP('0000:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
+  });
+  it('catches IPv6 link-local fully-expanded', () => {
+    expect(isPrivateIP('fe80:0:0:0:0:0:0:1')).toBe(true);
+  });
+  it('still allows public IPv6', () => {
+    expect(isPrivateIP('2606:4700:4700::1111')).toBe(false);
+  });
+});
+
+describe('[knauf] resolveHostnameSSRF — IP literals + canonicalisation (KK20-194)', () => {
+  it('blocks IPv4 spoke literal without DNS', async () => {
+    expect(await resolveHostnameSSRF('10.160.0.7')).toBe(true);
+  });
+  it('blocks non-canonical IPv4-mapped IPv6 bracketed literal', async () => {
+    expect(await resolveHostnameSSRF('[0:0:0:0:0:ffff:7f00:1]')).toBe(true);
+  });
+  it('blocks NAT64 fully-expanded bracketed literal', async () => {
+    expect(await resolveHostnameSSRF('[64:ff9b:0:0:0:0:a9fe:a9fe]')).toBe(true);
+  });
+});
+// End [knauf]

@@ -12,6 +12,9 @@ const TraversaalSearch = require('./structured/TraversaalSearch');
 const createOpenAIImageTools = require('./structured/OpenAIImageTools');
 const TavilySearchResults = require('./structured/TavilySearchResults');
 const createGeminiImageTool = require('./structured/GeminiImageGen');
+// [knauf] KK20-194 — native open_url tool (server-side fetch + Readability).
+const OpenUrl = require('./structured/OpenUrl');
+// End [knauf]
 
 module.exports = {
   ...manifest,
@@ -27,4 +30,7 @@ module.exports = {
   TavilySearchResults,
   createOpenAIImageTools,
   createGeminiImageTool,
+  // [knauf] KK20-194
+  OpenUrl,
+  // End [knauf]
 };
