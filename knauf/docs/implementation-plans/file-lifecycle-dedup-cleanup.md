@@ -313,3 +313,11 @@ T3 deferred). No epic — two standalone tasks.
   cleanup, not the `conversationId` stamp (sentinel chat has no real id yet).
 - **pgvector orphan capture** — whether PR1 also records terminally-failed vector deletes to a
   Knauf collection now (cheap T3 hook) or defers it to T3.
+- **Cross-user physical-GC under the deleter's identity (follow-up ticket).** When a shared-agent
+  editor B deletes author A's *last* reference to a deduped asset, the group correctly empties and GC
+  fires — but the physical delete runs under B's `req`: the RAG JWT (`deleteVectorsByIds`) and the
+  storage user-in-path guard (Azure/Local `deleteFile`) are scoped to B, so A's vectors + blob can't
+  be removed and **leak** (orphaned bytes; the row + group are gone, so retrieval is unaffected and
+  there is no cross-user exposure). This is **pre-existing** (the old `processDeleteRequest` had the
+  same user-in-path coupling on branch B), not introduced by dedup. Fix later by running the physical
+  GC under the asset owner's identity (or a privileged RAG delete). Low severity — storage cost only.
