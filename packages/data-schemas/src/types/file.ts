@@ -28,6 +28,6 @@ export interface IMongoFile extends Omit<Document, 'model'> {
   tenantId?: string;
   // [knauf] KK20-204 — per-user content-hash dedup (see schema/file.ts)
   knauf_content_hash?: string;
-  knauf_canonical_file_id?: string;
+  knauf_asset_id?: string;
   // End [knauf]
 }

@@ -223,47 +223,40 @@ async function collectConvoFilesForCleanup({ req, filter }) {
 }
 
 /**
- * [knauf] KK20-204 — physically delete one canonical asset (its pgvector embeddings +
- * its blob). Best-effort + idempotent: the vector delete is 404-tolerant and the blob
- * strategy tolerates a missing file, so a benign double-GC under concurrent deletes
- * can't corrupt. `embedded:false` on the strategy call keeps it blob-only (vectors are
- * handled here explicitly, keyed on the canonical id).
- * @param {{ req: import('express').Request, canonicalId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
+ * [knauf] KK20-204 — physically delete one shared asset (its pgvector embeddings +
+ * its blob), keyed on the stable `knauf_asset_id`. Best-effort + idempotent: the
+ * vector delete is 404-tolerant and the blob strategy tolerates a missing file, so a
+ * benign double-GC under concurrent deletes can't corrupt. `embedded:false` on the
+ * strategy call keeps it blob-only (vectors are handled here explicitly, keyed on
+ * the asset id).
+ * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
  */
-async function gcCanonicalAsset({
-  req,
-  canonicalId,
-  asset,
-  deleteVectorsByIds,
-  getStrategyFunctions,
-}) {
+async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }) {
   if (asset.embedded) {
     try {
-      await deleteVectorsByIds(req, [canonicalId]);
+      await deleteVectorsByIds(req, [assetId]);
     } catch (error) {
       logger.warn(
-        `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${canonicalId}; may remain in pgvector`,
+        `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
         error,
       );
     }
   }
   if (!asset.filepath) {
-    logger.warn(
-      `[knauf][cascadeDeleteConvoFiles] no filepath for ${canonicalId}; skipping blob GC`,
-    );
+    logger.warn(`[knauf][cascadeDeleteConvoFiles] no filepath for ${assetId}; skipping blob GC`);
     return;
   }
   try {
     const { deleteFile } = getStrategyFunctions(asset.source ?? 'local');
     await deleteFile(req, {
-      file_id: canonicalId,
+      file_id: assetId,
       filepath: asset.filepath,
       source: asset.source,
       embedded: false,
     });
   } catch (error) {
     logger.warn(
-      `[knauf][cascadeDeleteConvoFiles] blob GC failed for ${canonicalId} (asset may leak)`,
+      `[knauf][cascadeDeleteConvoFiles] blob GC failed for ${assetId} (asset may leak)`,
       error,
     );
   }
@@ -271,21 +264,21 @@ async function gcCanonicalAsset({
 
 /**
  * [knauf] KK20-204 — two-stage delete for content-hash-deduped rows. Under dedup one
- * physical asset (blob at the canonical filepath + embeddings under the canonical
- * file_id) is shared across DIFFERENT logical file_ids (canonical id1, pointer id2),
- * so the per-file_id refcount can't decide physical deletion. Instead:
+ * physical asset (blob + embeddings, both keyed on the stable `knauf_asset_id`) is
+ * shared across DIFFERENT logical file_ids (the embed owner + N reuse rows), so the
+ * per-file_id refcount can't decide physical deletion. Instead:
  *
  *   Stage 1 — delete the File ROWS (always; keyed on the deleted ids).
  *   Stage 2 — GC the physical asset only for (user, content-hash) groups that are
- *             EMPTY after stage 1, targeting the CANONICAL file_id for vectors and
+ *             EMPTY after stage 1, targeting the `knauf_asset_id` for vectors and
  *             the shared filepath for the blob.
  *
  * Recounting AFTER the row delete makes "two concurrent deletes both skip → orphan"
  * impossible; the residual double-GC is benign (404-tolerant vectors + missing-file-
- * tolerant blob delete). A pointer carries its canonical's filepath/source/embedded
- * (copied at upload), so it can GC the canonical asset even if the canonical row is
- * already gone. Handles the rare double-embed (≥1 canonical per group) by GC-ing each
- * distinct canonical asset.
+ * tolerant blob delete). Every deduped row carries the asset's filepath/source/
+ * embedded (copied at upload), so the asset is GC'able even if the embed-owner row is
+ * already gone. Handles a rare double-embed (≥1 distinct asset id per group) by GC-ing
+ * each distinct asset.
  *
  * @param {{ req: import('express').Request, dedupRows: object[] }} params
  */
@@ -295,19 +288,19 @@ async function gcDedupRows({ req, dedupRows }) {
   }
   const user = req.user.id;
 
-  // Build (content-hash → distinct canonical assets) from the in-memory rows BEFORE
-  // deleting. Keyed by canonical file_id so a double-embed's two canonicals are both
-  // captured; a pointer alone yields its canonical asset (filepath copied at upload).
+  // Build (content-hash → distinct shared assets) from the in-memory rows BEFORE
+  // deleting. Keyed by knauf_asset_id so a double-embed's two assets are both
+  // captured; any single row yields its asset (filepath copied at upload).
   const groups = new Map();
   for (const f of dedupRows) {
-    const canonicalId = f.knauf_canonical_file_id ?? f.file_id;
+    const assetId = f.knauf_asset_id ?? f.file_id;
     let assets = groups.get(f.knauf_content_hash);
     if (!assets) {
       assets = new Map();
       groups.set(f.knauf_content_hash, assets);
     }
-    const prev = assets.get(canonicalId);
-    assets.set(canonicalId, {
+    const prev = assets.get(assetId);
+    assets.set(assetId, {
       filepath: prev?.filepath ?? f.filepath,
       source: prev?.source ?? f.source,
       embedded: (prev?.embedded ?? false) || !!f.embedded,
@@ -333,8 +326,8 @@ async function gcDedupRows({ req, dedupRows }) {
     if (survivors.length) {
       continue; // group still referenced elsewhere → keep the shared asset(s)
     }
-    for (const [canonicalId, asset] of assets) {
-      await gcCanonicalAsset({ req, canonicalId, asset, deleteVectorsByIds, getStrategyFunctions });
+    for (const [assetId, asset] of assets) {
+      await gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions });
     }
   }
 }

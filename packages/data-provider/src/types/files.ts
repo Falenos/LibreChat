@@ -120,7 +120,7 @@ export type TFile = {
   updatedAt?: string | Date;
   // [knauf] KK20-204 — per-user content-hash dedup (see packages/data-schemas/src/schema/file.ts)
   knauf_content_hash?: string;
-  knauf_canonical_file_id?: string;
+  knauf_asset_id?: string;
   // End [knauf]
 };
 

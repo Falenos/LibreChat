@@ -652,22 +652,22 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   let source = getFileStrategy(appConfig, { isImage: isImageFile });
   // [knauf] KK20-204 — per-user content-hash dedup bookkeeping (file_search path only).
   let knaufContentHash;
-  let knaufCanonicalFileId;
+  let knaufAssetId;
   // End [knauf]
 
   if (tool_resource === EToolResources.file_search) {
     // [knauf] KK20-204 — per-user content-hash dedup. Hash the bytes; if this user
-    // already has this exact content, reuse the canonical blob + embeddings (this
-    // upload becomes a lightweight pointer) instead of re-uploading + re-embedding.
-    const { computeContentHash, findCanonicalForHash } = require('./knauf/contentDedup');
+    // already has this exact content, reuse the existing shared asset (blob +
+    // embeddings, keyed on knauf_asset_id) instead of re-uploading + re-embedding.
+    const { computeContentHash, findAssetForHash } = require('./knauf/contentDedup');
     knaufContentHash = await computeContentHash(file.path);
 
     // Within-chat idempotency: if this exact content is ALREADY attached to THIS
     // agent's file_search, return the existing file instead of adding a second entry
     // — so re-uploading the same doc to one chat stays a single file, not a confusing
     // duplicate (and we don't query the same vectors twice). Match by content hash so
-    // an existing canonical OR pointer both count. A different agent has its own list,
-    // so cross-chat re-uploads still create a pointer below.
+    // any existing deduped row (owner or reuse) counts. A different agent has its own
+    // list, so cross-chat re-uploads still create a reuse row below.
     if (!messageAttachment && agent_id) {
       const agent = await db.getAgent({ id: agent_id });
       const attachedFileIds = agent?.tool_resources?.[EToolResources.file_search]?.file_ids ?? [];
@@ -687,28 +687,31 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       }
     }
 
-    const knaufCanonical = await findCanonicalForHash({
+    const knaufAsset = await findAssetForHash({
       user: req.user.id,
       knauf_content_hash: knaufContentHash,
     });
-    if (knaufCanonical) {
-      // HIT — reuse the canonical's blob + embeddings; skip storage upload + embed.
-      knaufCanonicalFileId = knaufCanonical.file_id;
-      source = knaufCanonical.source ?? source;
+    if (knaufAsset) {
+      // HIT — reuse the shared asset's blob + embeddings; skip storage upload + embed.
+      // This row points at the SAME asset id (knauf_asset_id), so it keeps working even
+      // if the row that first embedded the content is later deleted.
+      knaufAssetId = knaufAsset.knauf_asset_id;
+      source = knaufAsset.source ?? source;
       storageResult = {
-        bytes: knaufCanonical.bytes,
-        filename: knaufCanonical.filename,
-        filepath: knaufCanonical.filepath,
-        embedded: knaufCanonical.embedded,
+        bytes: knaufAsset.bytes,
+        filename: knaufAsset.filename,
+        filepath: knaufAsset.filepath,
+        embedded: knaufAsset.embedded,
       };
-      embeddingResult = { embedded: knaufCanonical.embedded, filename: knaufCanonical.filename };
+      embeddingResult = { embedded: knaufAsset.embedded, filename: knaufAsset.filename };
       // No storage upload on a hit, so the temp file isn't consumed here — the
       // files.js route's `finally` cleans it up (don't unlink it twice).
     } else {
-      // MISS — upload + embed as the canonical. Embed USER-owned (entity_id = user
+      // MISS — this upload becomes the asset owner. Embed USER-owned (entity_id = user
       // id, not the agent) so the single embedding is reusable across all of this
       // user's chats/agents via the RAG JWT-user fallback (spike-confirmed); other
-      // users are denied. This user-ownership is what makes cross-chat dedup work.
+      // users are denied. The asset id is this file's own id (vectors live under it).
+      knaufAssetId = file_id;
       const { handleFileUpload } = getStrategyFunctions(source);
       const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
       storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
@@ -792,10 +795,11 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     height,
     width,
     // [knauf] KK20-204 — content-hash dedup bookkeeping. Both undefined on non-
-    // file_search paths (→ dropped by removeNullishValues). knauf_canonical_file_id
-    // is set only when this row is a pointer reusing a canonical's blob + embeddings.
+    // file_search paths (→ dropped by removeNullishValues). knauf_asset_id is the
+    // file_id the shared blob + embeddings live under (own id when this row is the
+    // asset owner; the owner's id when this row reuses an existing asset).
     knauf_content_hash: knaufContentHash,
-    knauf_canonical_file_id: knaufCanonicalFileId,
+    knauf_asset_id: knaufAssetId,
     // End [knauf]
   });
 

@@ -2,9 +2,10 @@
 //
 // On a file_search upload, processAgentFileUpload hashes the bytes and looks up
 // whether THIS user already has a File whose content matches. On a hit, the new
-// upload becomes a lightweight POINTER row that reuses the canonical row's blob +
-// embeddings (no re-upload, no re-embed). Per-user only — the lookup is keyed on
-// (user, knauf_content_hash) — so content is never shared across users.
+// upload becomes a lightweight reuse row that points at the existing asset
+// (knauf_asset_id) — the shared blob + embeddings — instead of re-uploading and
+// re-embedding. Per-user only — the lookup is keyed on (user, knauf_content_hash)
+// — so content is never shared across users.
 // See knauf/docs/proposals/file-dedup-content-hash.md.
 
 const fs = require('fs');
@@ -28,27 +29,30 @@ function computeContentHash(filePath) {
 }
 
 /**
- * Find the canonical File row for (user, content hash) — the row that owns the
- * shared blob + embeddings. A canonical has no knauf_canonical_file_id (pointers
- * set it). Returns null when this content is new for the user.
+ * Find the existing shared asset for (user, content hash) — ANY surviving row for
+ * the group works, because every deduped row carries `knauf_asset_id` (the file_id
+ * the blob + embeddings physically live under). Returns the representative row
+ * (oldest, deterministic) so the caller can reuse its asset_id + storage metadata
+ * (filepath / bytes / filename / embedded / source); returns null when this content
+ * is new for the user.
  *
- * A rare concurrent first-upload race can leave two canonicals for one hash; we
- * return the oldest deterministically so later uploads converge on one, and the
- * delete-time GC cleans every distinct canonical asset in the group regardless.
+ * Resolving via `knauf_asset_id` on any row — rather than requiring a special
+ * "canonical" row to still exist — is what makes deletion of the embed owner while
+ * other rows survive NOT trigger a redundant re-embed (KK20-204 Issue 2).
  * @param {{ user: string, knauf_content_hash: string }} params
  * @returns {Promise<object|null>}
  */
-async function findCanonicalForHash({ user, knauf_content_hash }) {
+async function findAssetForHash({ user, knauf_content_hash }) {
   if (!knauf_content_hash) {
     return null;
   }
   const rows = (await db.getFiles({ user, knauf_content_hash })) ?? [];
-  const canonicals = rows.filter((row) => !row.knauf_canonical_file_id);
-  if (!canonicals.length) {
+  const withAsset = rows.filter((row) => row.knauf_asset_id);
+  if (!withAsset.length) {
     return null;
   }
-  canonicals.sort((a, b) => new Date(a.createdAt ?? 0) - new Date(b.createdAt ?? 0));
-  return canonicals[0];
+  withAsset.sort((a, b) => new Date(a.createdAt ?? 0) - new Date(b.createdAt ?? 0));
+  return withAsset[0];
 }
 
-module.exports = { computeContentHash, findCanonicalForHash };
+module.exports = { computeContentHash, findAssetForHash };

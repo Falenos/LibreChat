@@ -74,11 +74,11 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
 }));
 // End [knauf]
 
-// [knauf] KK20-204 — the file_search path now hashes the bytes + looks up a canonical
-// for per-user dedup; stub both so tests don't touch the disk or the DB. Default = MISS.
+// [knauf] KK20-204 — the file_search path now hashes the bytes + looks up the shared
+// asset for per-user dedup; stub both so tests don't touch the disk or the DB. Default = MISS.
 jest.mock('~/server/services/Files/knauf/contentDedup', () => ({
   computeContentHash: jest.fn().mockResolvedValue('deadbeefhash'),
-  findCanonicalForHash: jest.fn().mockResolvedValue(null),
+  findAssetForHash: jest.fn().mockResolvedValue(null),
 }));
 // End [knauf]
 
@@ -575,7 +575,7 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
 // [knauf] KK20-204 — per-user content-hash dedup on the file_search upload path.
 describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
   const {
-    findCanonicalForHash,
+    findAssetForHash,
     computeContentHash,
   } = require('~/server/services/Files/knauf/contentDedup');
   const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
@@ -606,8 +606,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     db.getAgent.mockResolvedValue(null);
   });
 
-  test('MISS — uploads + embeds USER-owned and stamps the content hash (no pointer)', async () => {
-    findCanonicalForHash.mockResolvedValue(null);
+  test('MISS — uploads + embeds USER-owned and becomes the asset owner', async () => {
+    findAssetForHash.mockResolvedValue(null);
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
     expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
@@ -615,12 +615,13 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
-    expect(fileInfo.knauf_canonical_file_id).toBeUndefined(); // this row IS the canonical
+    expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
   });
 
-  test('HIT — reuses the canonical blob + embeddings; skips upload + embed; writes a pointer', async () => {
-    findCanonicalForHash.mockResolvedValue({
+  test('HIT — reuses the shared asset blob + embeddings; skips upload + embed', async () => {
+    findAssetForHash.mockResolvedValue({
       file_id: 'canon-1',
+      knauf_asset_id: 'canon-1',
       filepath: '/blob/canon',
       bytes: 5,
       filename: 'doc.pdf',
@@ -632,8 +633,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     expect(handleFileUpload).not.toHaveBeenCalled(); // no storage upload
     expect(uploadVectors).not.toHaveBeenCalled(); // no embed
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
-    expect(fileInfo.knauf_canonical_file_id).toBe('canon-1'); // pointer → canonical
-    expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the canonical blob
+    expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row points at the shared asset
+    expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the shared blob
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
     expect(fileInfo.embedded).toBe(true);
   });
@@ -656,8 +657,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
 
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
-    // Short-circuits before the canonical lookup and any write/upload.
-    expect(findCanonicalForHash).not.toHaveBeenCalled();
+    // Short-circuits before the asset lookup and any write/upload.
+    expect(findAssetForHash).not.toHaveBeenCalled();
     expect(db.createFile).not.toHaveBeenCalled();
     expect(db.addAgentResourceFile).not.toHaveBeenCalled();
     expect(handleFileUpload).not.toHaveBeenCalled();
@@ -665,13 +666,14 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ file_id: 'canon-1' }));
   });
 
-  test('cross-chat — same content, different agent (nothing attached here) still creates a pointer', async () => {
+  test('cross-chat — same content, different agent (nothing attached here) still reuses the asset', async () => {
     db.getAgent.mockResolvedValue({
       id: 'agent-abc',
       tool_resources: { file_search: { file_ids: [] } }, // this agent has nothing yet
     });
-    findCanonicalForHash.mockResolvedValue({
+    findAssetForHash.mockResolvedValue({
       file_id: 'canon-1',
+      knauf_asset_id: 'canon-1',
       filepath: '/blob/canon',
       bytes: 5,
       filename: 'doc.pdf',
@@ -683,8 +685,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
 
     // Idempotency does NOT fire (content not attached to THIS agent) → normal HIT path.
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
-    expect(fileInfo.knauf_canonical_file_id).toBe('canon-1'); // pointer created for this agent
-    expect(handleFileUpload).not.toHaveBeenCalled(); // still reuses canonical (no re-upload/embed)
+    expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row for this agent points at the shared asset
+    expect(handleFileUpload).not.toHaveBeenCalled(); // still reuses the asset (no re-upload/embed)
     expect(uploadVectors).not.toHaveBeenCalled();
   });
 });

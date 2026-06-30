@@ -317,6 +317,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     const db = require('~/models');
     const dedupExtra = (extra) => ({
       knauf_content_hash: 'HASH-1',
+      knauf_asset_id: 'canon-1',
       embedded: true,
       source: FileSources.local,
       filepath: '/blob/canon',
@@ -325,10 +326,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('pointer chat deleted, canonical survives → physical asset kept', async () => {
       await seedFile('canon-1', dedupExtra({ conversationId: 'chatA' }));
-      await seedFile(
-        'ptr-2',
-        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-1' }),
-      );
+      await seedFile('ptr-2', dedupExtra({ conversationId: 'chatB' }));
       const files = await db.getFiles({ user: userId, file_id: { $in: ['ptr-2'] } });
 
       const result = await cascadeDeleteCollectedFiles({
@@ -345,10 +343,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('whole group deleted → GC targets the canonical id exactly once', async () => {
       await seedFile('canon-1', dedupExtra({ conversationId: 'chatA' }));
-      await seedFile(
-        'ptr-2',
-        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-1' }),
-      );
+      await seedFile('ptr-2', dedupExtra({ conversationId: 'chatB' }));
       const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1', 'ptr-2'] } });
 
       await cascadeDeleteCollectedFiles({
@@ -367,7 +362,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     test('last row is a pointer (canonical row already gone) → GC resolves the canonical id', async () => {
       await seedFile(
         'ptr-only',
-        dedupExtra({ conversationId: 'chatB', knauf_canonical_file_id: 'canon-gone' }),
+        dedupExtra({ conversationId: 'chatB', knauf_asset_id: 'canon-gone' }),
       );
       const files = await db.getFiles({ user: userId, file_id: { $in: ['ptr-only'] } });
 
@@ -409,6 +404,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     const db = require('~/models');
     const dedupExtra = (extra) => ({
       knauf_content_hash: 'HASH-1',
+      knauf_asset_id: 'canon-1',
       embedded: true,
       source: FileSources.local,
       filepath: '/blob/canon',
@@ -417,7 +413,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('deleting a pointer directly keeps the shared asset (canonical survives)', async () => {
       await seedFile('canon-1', dedupExtra({}));
-      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      await seedFile('ptr-2', dedupExtra({}));
       const [ptr] = await db.getFiles({ user: userId, file_id: { $in: ['ptr-2'] } });
 
       await deleteFilesWithDedupAwareness({ req: buildReq(), files: [ptr] });
@@ -432,7 +428,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     // pointer in another chat still references the hash must NOT GC the shared asset.
     test('deleting the canonical directly while a pointer survives keeps the asset', async () => {
       await seedFile('canon-1', dedupExtra({}));
-      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      await seedFile('ptr-2', dedupExtra({}));
       const [canon] = await db.getFiles({ user: userId, file_id: { $in: ['canon-1'] } });
 
       await deleteFilesWithDedupAwareness({ req: buildReq(), files: [canon] });
@@ -445,7 +441,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('deleting the last reference GCs the shared asset exactly once', async () => {
       await seedFile('canon-1', dedupExtra({}));
-      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      await seedFile('ptr-2', dedupExtra({}));
       const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1', 'ptr-2'] } });
 
       await deleteFilesWithDedupAwareness({ req: buildReq(), files });

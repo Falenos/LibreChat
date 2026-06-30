@@ -24,7 +24,7 @@ jest.mock('~/models', () => {
 });
 
 require('module-alias/register');
-const { computeContentHash, findCanonicalForHash } = require('./contentDedup');
+const { computeContentHash, findAssetForHash } = require('./contentDedup');
 
 describe('contentDedup (KK20-204)', () => {
   describe('computeContentHash', () => {
@@ -41,7 +41,7 @@ describe('contentDedup (KK20-204)', () => {
     });
   });
 
-  describe('findCanonicalForHash', () => {
+  describe('findAssetForHash', () => {
     let mongoServer;
     let File;
     const userId = new mongoose.Types.ObjectId();
@@ -78,30 +78,43 @@ describe('contentDedup (KK20-204)', () => {
 
     test('returns null when the content is new for the user', async () => {
       await expect(
-        findCanonicalForHash({ user: userId, knauf_content_hash: 'UNSEEN' }),
+        findAssetForHash({ user: userId, knauf_content_hash: 'UNSEEN' }),
       ).resolves.toBeNull();
     });
 
     test('returns null when knauf_content_hash is falsy', async () => {
       await expect(
-        findCanonicalForHash({ user: userId, knauf_content_hash: undefined }),
+        findAssetForHash({ user: userId, knauf_content_hash: undefined }),
       ).resolves.toBeNull();
     });
 
-    test('returns the canonical row, ignoring pointer rows', async () => {
-      await seed('canon', { knauf_content_hash: 'H' });
-      await seed('ptr', { knauf_content_hash: 'H', knauf_canonical_file_id: 'canon' });
-      const found = await findCanonicalForHash({ user: userId, knauf_content_hash: 'H' });
-      expect(found.file_id).toBe('canon');
+    test('resolves the shared asset id from any row in the group', async () => {
+      await seed('owner', { knauf_content_hash: 'H', knauf_asset_id: 'owner' });
+      await seed('reuse', { knauf_content_hash: 'H', knauf_asset_id: 'owner' });
+      const found = await findAssetForHash({ user: userId, knauf_content_hash: 'H' });
+      expect(found.knauf_asset_id).toBe('owner');
     });
 
-    test('returns the oldest canonical when a race left two', async () => {
-      await seed('old', { knauf_content_hash: 'H' });
-      await seed('new', { knauf_content_hash: 'H' });
+    // Issue 2: even if the embed-owner row is gone, a surviving reuse row still
+    // carries the asset id, so the next upload reuses it instead of re-embedding.
+    test('still resolves the asset when only a reuse row survives (owner gone)', async () => {
+      await seed('reuse', { knauf_content_hash: 'H', knauf_asset_id: 'gone-owner' });
+      const found = await findAssetForHash({ user: userId, knauf_content_hash: 'H' });
+      expect(found.knauf_asset_id).toBe('gone-owner');
+    });
+
+    test('ignores legacy/non-deduped rows that carry no knauf_asset_id', async () => {
+      await seed('legacy', { knauf_content_hash: 'H' }); // no asset id
+      await expect(findAssetForHash({ user: userId, knauf_content_hash: 'H' })).resolves.toBeNull();
+    });
+
+    test('returns the oldest row deterministically when several share the asset', async () => {
+      await seed('old', { knauf_content_hash: 'H', knauf_asset_id: 'old' });
+      await seed('new', { knauf_content_hash: 'H', knauf_asset_id: 'old' });
       // timestamps:true sets createdAt on insert; override on update to make order deterministic.
       await File.updateOne({ file_id: 'old' }, { $set: { createdAt: new Date('2020-01-01') } });
       await File.updateOne({ file_id: 'new' }, { $set: { createdAt: new Date('2021-01-01') } });
-      const found = await findCanonicalForHash({ user: userId, knauf_content_hash: 'H' });
+      const found = await findAssetForHash({ user: userId, knauf_content_hash: 'H' });
       expect(found.file_id).toBe('old');
     });
   });
