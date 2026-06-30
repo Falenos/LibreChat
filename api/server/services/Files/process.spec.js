@@ -1,7 +1,7 @@
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid') }));
 
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
+  logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
 jest.mock('@librechat/agents', () => ({
@@ -616,6 +616,26 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
     expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
+    expect(fileInfo.knauf_dedup_owner).toBe(true); // claims the unique owner slot
+  });
+
+  test('concurrent owner race — duplicate-key on insert → falls back to a non-owner row', async () => {
+    findAssetForHash.mockResolvedValue(null); // MISS → tries to claim owner
+    // First createFile rejects with the unique-owner index collision; retry succeeds.
+    const dupErr = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+    db.createFile.mockRejectedValueOnce(dupErr).mockResolvedValueOnce({ file_id: 'up-1' });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile).toHaveBeenCalledTimes(2);
+    const firstAttempt = db.createFile.mock.calls[0][0];
+    const retry = db.createFile.mock.calls[1][0];
+    expect(firstAttempt.knauf_dedup_owner).toBe(true); // tried to own
+    expect(retry.knauf_dedup_owner).toBeUndefined(); // retried as a non-owner duplicate
+    expect(retry.knauf_asset_id).toBe('up-1'); // still its own embedded asset (transient dup, GC-cleaned)
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.any(String) }),
+    );
   });
 
   test('HIT — reuses the shared asset blob + embeddings; skips upload + embed', async () => {

@@ -96,6 +96,15 @@ const file: Schema<IMongoFile> = new Schema(
     knauf_asset_id: {
       type: String,
     },
+    // knauf_dedup_owner marks the single row per (user, content_hash) that first
+    // embedded the asset. The unique partial index below enforces "at most one
+    // owner per group" — a concurrent first-upload that loses the race inserts a
+    // non-owner row instead (its own embedding is a transient duplicate the
+    // delete-time group GC reclaims). Used to detect/instrument the race; retrieval
+    // and GC key on knauf_asset_id, not this flag.
+    knauf_dedup_owner: {
+      type: Boolean,
+    },
     // End [knauf]
   },
   {
@@ -114,6 +123,14 @@ file.index(
 file.index(
   { user: 1, knauf_content_hash: 1 },
   { partialFilterExpression: { knauf_content_hash: { $exists: true } } },
+);
+// Unique-owner invariant: at most one embed-owner per (user, content-hash). A
+// concurrent first-upload that loses this race fails the insert with a duplicate-key
+// error and falls back to a non-owner row (handled in processAgentFileUpload). The
+// knauf_dedup_owner key disambiguates this key pattern from the lookup index above.
+file.index(
+  { user: 1, knauf_content_hash: 1, knauf_dedup_owner: 1 },
+  { unique: true, partialFilterExpression: { knauf_dedup_owner: true } },
 );
 // End [knauf]
 

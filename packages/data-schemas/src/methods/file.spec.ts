@@ -529,4 +529,62 @@ describe('File Methods', () => {
       await expect(fileMethods.batchUpdateFiles([])).resolves.toBeUndefined();
     });
   });
+
+  // [knauf] KK20-204 — the unique partial index enforces the one-embed-owner-per
+  // (user, content-hash) invariant that bounds the concurrent first-upload race.
+  describe('KK20-204 content-hash dedup owner index', () => {
+    beforeAll(async () => {
+      await File.init(); // ensure the partial unique index is built before these tests
+    });
+
+    const ownerDoc = (
+      user: mongoose.Types.ObjectId,
+      knauf_content_hash: string,
+      asset: string,
+    ) => ({
+      file_id: uuidv4(),
+      user,
+      filename: 'doc.pdf',
+      filepath: `/blob/${asset}`,
+      type: 'application/pdf',
+      bytes: 1,
+      knauf_content_hash,
+      knauf_asset_id: asset,
+      knauf_dedup_owner: true,
+    });
+
+    it('rejects a second owner for the same (user, content_hash) with a duplicate-key error', async () => {
+      const user = new mongoose.Types.ObjectId();
+      await File.create(ownerDoc(user, 'HASH', 'a1'));
+      await expect(File.create(ownerDoc(user, 'HASH', 'a2'))).rejects.toMatchObject({
+        code: 11000,
+      });
+    });
+
+    it('allows non-owner rows for the same (user, content_hash) — reuse + transient duplicates', async () => {
+      const user = new mongoose.Types.ObjectId();
+      await File.create(ownerDoc(user, 'HASH2', 'b1'));
+      // a reuse row (no owner flag) sharing the asset, and a non-owner row with its own
+      // asset id (a transient race duplicate) both coexist with the single owner.
+      await expect(
+        File.create({
+          file_id: uuidv4(),
+          user,
+          filename: 'doc.pdf',
+          filepath: '/blob/b1',
+          type: 'application/pdf',
+          bytes: 1,
+          knauf_content_hash: 'HASH2',
+          knauf_asset_id: 'b1',
+        }),
+      ).resolves.toBeTruthy();
+    });
+
+    it('allows owners across different (user, content_hash) groups', async () => {
+      const user = new mongoose.Types.ObjectId();
+      await File.create(ownerDoc(user, 'G1', 'g1'));
+      await expect(File.create(ownerDoc(user, 'G2', 'g2'))).resolves.toBeTruthy();
+    });
+  });
+  // End [knauf]
 });
