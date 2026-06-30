@@ -17,36 +17,65 @@ const { logAxiosError, generateShortLivedToken } = require('@librechat/api');
  *          A promise that resolves when the file has been successfully deleted, or throws an error if the
  *          file path is invalid or if there is an error in deletion.
  */
+// [knauf] KK20-203 — bounded retry so the chat-delete cascade
+// (cascadeDeleteConvoFiles) doesn't silently leak embeddings on a transient RAG
+// failure. A 404 is treated as success (already gone — idempotent); 5xx / 429 /
+// no-response are retried with linear backoff; other 4xx fail fast. The RAG
+// `/documents` endpoint accepts an array of ids, so `deleteVectorsByIds` deletes
+// a whole chat's embeddings in one call and `deleteVectors` delegates to it.
+const RAG_DELETE_MAX_ATTEMPTS = 3;
+const ragDeleteSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Delete embeddings for a batch of file ids from the vector database, with a
+ * bounded retry on transient failures.
+ * @param {ServerRequest} req
+ * @param {string[]} fileIds
+ * @returns {Promise<void>}
+ */
+const deleteVectorsByIds = async (req, fileIds) => {
+  const ids = (fileIds ?? []).filter(Boolean);
+  if (!ids.length || !process.env.RAG_API_URL) {
+    return;
+  }
+  const jwtToken = generateShortLivedToken(req.user.id);
+  let lastError;
+  for (let attempt = 1; attempt <= RAG_DELETE_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await axios.delete(`${process.env.RAG_API_URL}/documents`, {
+        headers: {
+          Authorization: `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
+          accept: 'application/json',
+        },
+        data: ids,
+      });
+    } catch (error) {
+      const status = error.response?.status;
+      if (status === 404) {
+        // Already deleted — idempotent success.
+        return;
+      }
+      lastError = error;
+      const isTransient = status == null || status >= 500 || status === 429;
+      if (!isTransient || attempt === RAG_DELETE_MAX_ATTEMPTS) {
+        break;
+      }
+      await ragDeleteSleep(200 * attempt);
+    }
+  }
+  logAxiosError({ error: lastError, message: 'Error deleting vectors (after retries)' });
+  logger.warn('Error deleting vectors, embeddings may remain');
+  throw new Error(lastError?.message || 'An error occurred during file deletion.');
+};
+
 const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
-  try {
-    const jwtToken = generateShortLivedToken(req.user.id);
-
-    return await axios.delete(`${process.env.RAG_API_URL}/documents`, {
-      headers: {
-        Authorization: `Bearer ${jwtToken}`,
-        'Content-Type': 'application/json',
-        accept: 'application/json',
-      },
-      data: [file.file_id],
-    });
-  } catch (error) {
-    logAxiosError({
-      error,
-      message: 'Error deleting vectors',
-    });
-    if (
-      error.response &&
-      error.response.status !== 404 &&
-      (error.response.status < 200 || error.response.status >= 300)
-    ) {
-      logger.warn('Error deleting vectors, file will not be deleted');
-      throw new Error(error.message || 'An error occurred during file deletion.');
-    }
-  }
+  return deleteVectorsByIds(req, [file.file_id]);
 };
+// End [knauf]
 
 /**
  * Uploads a file to the configured Vector database
@@ -121,5 +150,8 @@ async function uploadVectors({ req, file, file_id, entity_id, storageMetadata })
 
 module.exports = {
   deleteVectors,
+  // [knauf] KK20-203 — batched, retried vector delete for the chat-delete cascade.
+  deleteVectorsByIds,
+  // End [knauf]
   uploadVectors,
 };

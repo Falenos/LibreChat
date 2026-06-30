@@ -332,4 +332,47 @@ describe('useFileHandling', () => {
     });
   });
   // End [knauf]
+
+  // [knauf] KK20-203 — chat uploads send the originating conversationId so the
+  // server stamps it on the File record and chat deletion can cascade-clean it.
+  describe('conversationId on chat file uploads', () => {
+    it('appends the conversationId to the upload FormData', async () => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const pdfFile = new File([new ArrayBuffer(1024)], 'doc.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([pdfFile], EToolResources.file_search);
+      });
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('conversationId')).toBe('convo-1');
+    });
+
+    it('omits the conversationId for a brand-new (NEW_CONVO) chat', async () => {
+      mockConversation = {
+        conversationId: Constants.NEW_CONVO as string,
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const pdfFile = new File([new ArrayBuffer(1024)], 'doc.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([pdfFile], EToolResources.file_search);
+      });
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('conversationId')).toBeNull();
+    });
+  });
+  // End [knauf]
 });

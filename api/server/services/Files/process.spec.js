@@ -62,6 +62,15 @@ jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: jest.fn(),
 }));
 
+// [knauf] KK20-203 — the file_search path embeds via uploadVectors; stub it so the
+// conversationId-stamp test can exercise that path without a live RAG API.
+jest.mock('~/server/services/Files/VectorDB/crud', () => ({
+  uploadVectors: jest.fn().mockResolvedValue({ embedded: true, filename: 'doc.pdf' }),
+  deleteVectors: jest.fn(),
+  deleteVectorsByIds: jest.fn(),
+}));
+// End [knauf]
+
 jest.mock('~/server/utils', () => ({
   determineFileType: jest.fn(),
 }));
@@ -496,6 +505,58 @@ describe('filterFile legacy-Office / unsupported-type rejection', () => {
   test('keeps the upstream generic message on a non-Knauf endpoint', () => {
     const req = makeReq({ endpoint: 'bedrock', mimetype: XLS_MIME, originalname: 'sheet.xls' });
     expect(() => filterFile({ req })).toThrow('Unsupported file type');
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-203 — seam test: chat file_search uploads stamp the originating
+// conversationId on the File record so chat deletion can cascade-clean them.
+describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
+  const db = require('~/models');
+
+  const fileSearchMeta = () => ({
+    agent_id: 'agent-abc',
+    tool_resource: EToolResources.file_search,
+    file_id: 'fid-1',
+  });
+  const fileSearchReq = (conversationId) => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/u.pdf', originalname: 'doc.pdf', filename: 'u.pdf', mimetype: PDF_MIME },
+    body: { model: 'gpt-4o', conversationId },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    checkCapability.mockResolvedValue(true);
+    mergeFileConfig.mockReturnValue(makeFileConfig());
+    getStrategyFunctions.mockReturnValue({
+      handleFileUpload: jest
+        .fn()
+        .mockResolvedValue({ bytes: 10, filename: 'doc.pdf', filepath: '/blob/doc.pdf' }),
+    });
+  });
+
+  test('stamps the conversationId on the created File', async () => {
+    await processAgentFileUpload({
+      req: fileSearchReq('convo-xyz'),
+      res: mockRes,
+      metadata: fileSearchMeta(),
+    });
+    expect(db.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'convo-xyz' }),
+      true,
+    );
+  });
+
+  test('omits the conversationId for the NEW_CONVO sentinel', async () => {
+    await processAgentFileUpload({
+      req: fileSearchReq('new'),
+      res: mockRes,
+      metadata: fileSearchMeta(),
+    });
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.conversationId).toBeUndefined();
   });
 });
 // End [knauf]
