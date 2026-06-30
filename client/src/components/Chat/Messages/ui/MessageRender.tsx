@@ -218,12 +218,15 @@ const MessageRender = memo(function MessageRender({
       >
         {!hasParallelContent && (
           <>
-            {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+            {/* [knauf] Brand default Karl spec turns as Karl while preserving custom agent names. */}
             <KnaufMessageHeading
               isCreatedByUser={msg.isCreatedByUser}
+              isAgent={Boolean(agent)}
+              isAssistant={Boolean(assistant)}
               label={messageLabel}
               fontSize={fontSize}
               poweredByModel={msg.model ?? conversation?.model}
+              spec={conversation?.spec}
               screenReaderPrefix={getHeaderPrefixForScreenReader(msg, localize)}
             />
             {/* End [knauf] */}

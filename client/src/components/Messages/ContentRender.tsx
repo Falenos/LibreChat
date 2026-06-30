@@ -209,12 +209,15 @@ const ContentRender = memo(function ContentRender({
       >
         {!hasParallelContent && (
           <>
-            {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+            {/* [knauf] Brand default Karl spec turns as Karl while preserving custom agent names. */}
             <KnaufMessageHeading
               isCreatedByUser={msg.isCreatedByUser}
+              isAgent={Boolean(agent)}
+              isAssistant={Boolean(assistant)}
               label={messageLabel}
               fontSize={fontSize}
               poweredByModel={msg.model ?? conversation?.model}
+              spec={conversation?.spec}
               screenReaderPrefix={getHeaderPrefixForScreenReader(msg, localize)}
             />
             {/* End [knauf] */}
@@ -242,31 +245,36 @@ const ContentRender = memo(function ContentRender({
           {hasNoChildren && isSubmitting ? (
             <PlaceholderRow />
           ) : (
-            <KnaufMessageActionRow
-              clientTimestamp={msg.clientTimestamp}
-              createdAt={msg.createdAt}
-              updatedAt={msg.updatedAt}
-            >
-              <SiblingSwitch
-                siblingIdx={siblingIdx}
-                siblingCount={siblingCount}
-                setSiblingIdx={setSiblingIdx}
-              />
-              <HoverButtons
-                index={index}
-                message={msg}
-                isEditing={edit}
-                enterEdit={enterEdit}
-                isSubmitting={chatContext.isSubmitting}
-                conversation={conversation ?? null}
-                regenerate={handleRegenerateMessage}
-                copyToClipboard={copyToClipboard}
-                handleContinue={handleContinue}
-                latestMessageId={latestMessageId}
-                handleFeedback={handleFeedback}
-                isLast={isLast}
-              />
-            </KnaufMessageActionRow>
+            <>
+              {/* [knauf] Correlate rendered messages with transaction-derived cost summaries. */}
+              <KnaufMessageActionRow
+                clientTimestamp={msg.clientTimestamp}
+                createdAt={msg.createdAt}
+                messageId={msg.messageId}
+                updatedAt={msg.updatedAt}
+              >
+                <SiblingSwitch
+                  siblingIdx={siblingIdx}
+                  siblingCount={siblingCount}
+                  setSiblingIdx={setSiblingIdx}
+                />
+                <HoverButtons
+                  index={index}
+                  message={msg}
+                  isEditing={edit}
+                  enterEdit={enterEdit}
+                  isSubmitting={chatContext.isSubmitting}
+                  conversation={conversation ?? null}
+                  regenerate={handleRegenerateMessage}
+                  copyToClipboard={copyToClipboard}
+                  handleContinue={handleContinue}
+                  latestMessageId={latestMessageId}
+                  handleFeedback={handleFeedback}
+                  isLast={isLast}
+                />
+              </KnaufMessageActionRow>
+              {/* End [knauf] */}
+            </>
           )}
         </div>
       </div>

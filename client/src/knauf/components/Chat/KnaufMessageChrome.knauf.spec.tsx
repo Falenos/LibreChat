@@ -18,13 +18,14 @@ const formatExpectedTimestamp = (value: string) =>
   }).format(new Date(value));
 
 describe('KnaufMessageChrome', () => {
-  it('renders assistant turns as Karl with model attribution as a hover tooltip', () => {
+  it('renders default Karl spec turns as Karl with model attribution as a hover tooltip', () => {
     render(
       <KnaufMessageHeading
         isCreatedByUser={false}
         label="GPT-5.4"
         fontSize="text-base"
         poweredByModel="azure-gpt-runtime"
+        spec="karl"
         screenReaderPrefix="Assistant:"
       />,
     );
@@ -32,6 +33,23 @@ describe('KnaufMessageChrome', () => {
     expect(screen.getByText('Karl')).toHaveAttribute('title', 'Powered by azure-gpt-runtime');
     expect(screen.queryByText('Powered by azure-gpt-runtime')).not.toBeInTheDocument();
     expect(screen.getByText('Assistant:')).toHaveClass('sr-only');
+  });
+
+  it('preserves shared agent utility names instead of branding them as Karl', () => {
+    render(
+      <KnaufMessageHeading
+        isCreatedByUser={false}
+        isAgent={true}
+        label="Procurement Helper"
+        fontSize="text-base"
+        poweredByModel="agent-runtime-id"
+        screenReaderPrefix="Assistant:"
+      />,
+    );
+
+    expect(screen.getByText('Procurement Helper')).toBeInTheDocument();
+    expect(screen.queryByText('Karl')).not.toBeInTheDocument();
+    expect(screen.getByText('Procurement Helper')).not.toHaveAttribute('title');
   });
 
   it('keeps user turns named by their existing label', () => {
@@ -56,6 +74,7 @@ describe('KnaufMessageChrome', () => {
         label="KARL"
         fontSize="text-base"
         poweredByModel="new-runtime-model"
+        spec="karl"
         screenReaderPrefix="Assistant:"
       />,
     );
@@ -69,6 +88,7 @@ describe('KnaufMessageChrome', () => {
         isCreatedByUser={false}
         label="KARL"
         fontSize="text-base"
+        spec="karl"
         screenReaderPrefix="Assistant:"
       />,
     );

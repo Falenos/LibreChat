@@ -40,18 +40,13 @@ jobs:
       AGK_PROD_ACR_NAME: acragkhubprod001
       AGK_DEV_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
-      AGK_DEV_RAG_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-rag-api
-      AGK_PROD_RAG_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl-rag-api
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
-      AGK_DEV_RAG_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl-rag-api
-      AGK_PROD_RAG_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-rag-api
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
       AGK_PROD_DOMAIN: https://agentic-karl.knauf.com
       AGK_ARGOCD_DOMAIN: argocd.agk.prod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-prod-agentic-karl
-      AGK_ARGOCD_RAG_APP: agentic-karl-prod-agentic-karl-rag-api
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-prod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
     steps:
@@ -109,23 +104,14 @@ jobs:
             exit 1
           fi
 
-          RAG_API_VERSION=$(tr -d '[:space:]' < knauf/rag-api-overlay/VERSION)
-          if ! grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$RAG_API_VERSION"; then
-            echo "Invalid RAG API overlay version: $RAG_API_VERSION"
-            exit 1
-          fi
-
           echo "Version to promote: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "RAG API overlay version to promote: $RAG_API_VERSION"
-          echo "rag_api_version=$RAG_API_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Validate promotion inputs and prod config shape
         run: |
           set -euo pipefail
 
           VERSION="${{ steps.version.outputs.version }}"
-          RAG_API_VERSION="${{ steps.version.outputs.rag_api_version }}"
 
           test -f infrastructure/prod/values.yaml
           grep -Eq "tag: ['\"]v[0-9]+\.[0-9]+\.[0-9]+['\"]" infrastructure/prod/values.yaml
@@ -133,19 +119,11 @@ jobs:
 
           test -f "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
-          test -f "agk-deployment-configs/$AGK_DEV_RAG_CONFIG_DIRECTORY/values.yaml"
-          test -f "agk-deployment-configs/$AGK_PROD_RAG_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_DEV_ACR_NAME.azurecr.io/$AGK_DEV_IMAGE_REPOSITORY" \
             "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_IMAGE_REPOSITORY" \
             "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
-          grep -F "repository: $AGK_DEV_ACR_NAME.azurecr.io/$AGK_DEV_RAG_IMAGE_REPOSITORY" \
-            "agk-deployment-configs/$AGK_DEV_RAG_CONFIG_DIRECTORY/values.yaml"
-          grep -F "RAG_AZURE_DI_KEY: AGK-OPENAI-API-KEY" \
-            "agk-deployment-configs/$AGK_DEV_RAG_CONFIG_DIRECTORY/values.yaml"
-          grep -F "RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/" \
-            "agk-deployment-configs/$AGK_DEV_RAG_CONFIG_DIRECTORY/values.yaml"
           grep -F "DOMAIN_SERVER: \"$AGK_PROD_DOMAIN\"" \
             "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" \
@@ -159,13 +137,6 @@ jobs:
             --repository "$AGK_DEV_IMAGE_REPOSITORY" \
             --query "[?@=='$VERSION']" \
             -o tsv | grep -Fx "$VERSION"
-
-          az acr repository show-tags \
-            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
-            --name "$AGK_DEV_ACR_NAME" \
-            --repository "$AGK_DEV_RAG_IMAGE_REPOSITORY" \
-            --query "[?@=='$RAG_API_VERSION']" \
-            -o tsv | grep -Fx "$RAG_API_VERSION"
 
       - name: Import image into AGK prod ACR
         run: |
@@ -186,25 +157,6 @@ jobs:
             --image "$AGK_PROD_IMAGE_REPOSITORY:$VERSION" \
             --force
 
-      - name: Import RAG API overlay image into AGK prod ACR
-        run: |
-          set -euo pipefail
-
-          RAG_API_VERSION="${{ steps.version.outputs.rag_api_version }}"
-          SOURCE_REGISTRY_ID=$(az acr show \
-            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
-            --name "$AGK_DEV_ACR_NAME" \
-            --query id \
-            -o tsv)
-
-          az acr import \
-            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
-            --name "$AGK_PROD_ACR_NAME" \
-            --registry "$SOURCE_REGISTRY_ID" \
-            --source "$AGK_DEV_RAG_IMAGE_REPOSITORY:$RAG_API_VERSION" \
-            --image "$AGK_PROD_RAG_IMAGE_REPOSITORY:$RAG_API_VERSION" \
-            --force
-
       - name: Verify AGK prod image tag
         run: |
           set -euo pipefail
@@ -217,14 +169,6 @@ jobs:
             --query "[?@=='$VERSION']" \
             -o tsv | grep -Fx "$VERSION"
 
-          RAG_API_VERSION="${{ steps.version.outputs.rag_api_version }}"
-          az acr repository show-tags \
-            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
-            --name "$AGK_PROD_ACR_NAME" \
-            --repository "$AGK_PROD_RAG_IMAGE_REPOSITORY" \
-            --query "[?@=='$RAG_API_VERSION']" \
-            -o tsv | grep -Fx "$RAG_API_VERSION"
-
       # agk-deployment-configs main is protected (PR required, Sonar "test"
       # check, no direct pushes), so the prod bump is landed via an auto-merged
       # PR instead of a direct `git push origin main`.
@@ -236,94 +180,23 @@ jobs:
           set -euo pipefail
 
           VERSION="${{ steps.version.outputs.version }}"
-          RAG_API_VERSION="${{ steps.version.outputs.rag_api_version }}"
           git pull --ff-only origin main
           sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
-
-          export PROD_RAG_VALUES="$AGK_PROD_RAG_CONFIG_DIRECTORY/values.yaml"
-          export PROD_RAG_REPOSITORY="$AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_RAG_IMAGE_REPOSITORY"
-          export RAG_API_VERSION
-          python3 - <<'PY'
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          path = Path(os.environ["PROD_RAG_VALUES"])
-          repo = os.environ["PROD_RAG_REPOSITORY"]
-          tag = os.environ["RAG_API_VERSION"]
-          text = path.read_text()
-
-          image_pattern = re.compile(
-              r"(\n  image:\n    repository: )[^\n]+"
-              r"(\n    tag: )[^\n]+"
-              r"(\n    pullPolicy: )[^\n]+"
-          )
-          text, image_count = image_pattern.subn(
-              lambda match: (
-                  f"{match.group(1)}{repo}"
-                  f'{match.group(2)}"{tag}"'
-                  f"{match.group(3)}Always"
-              ),
-              text,
-              count=1,
-          )
-          if image_count != 1:
-              print(f"Expected to update exactly one image block in {path}", file=sys.stderr)
-              sys.exit(1)
-
-          secret_line = "      RAG_AZURE_DI_KEY: AGK-OPENAI-API-KEY\n"
-          if secret_line not in text:
-              marker = "      RAG_OPENAI_API_KEY: AGK-OPENAI-API-KEY\n"
-              if marker not in text:
-                  print(f"Missing RAG_OPENAI_API_KEY marker in {path}", file=sys.stderr)
-                  sys.exit(1)
-              text = text.replace(marker, marker + secret_line, 1)
-
-          config_block = (
-              "    RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/\n"
-              "    RAG_AZURE_DI_API_MODEL: prebuilt-layout\n"
-              "    RAG_AZURE_DI_MODE: markdown\n"
-              "    RAG_AZURE_DI_FILE_EXTS: pdf,docx,pptx,html\n"
-              '    RAG_XLSX_MAX_CHARS: "1500000"\n'
-              '    RAG_XLSX_SUMMARY_ROWS: "50"\n'
-          )
-          if "RAG_AZURE_DI_ENDPOINT:" not in text:
-              marker = "    RAG_USE_FULL_CONTEXT: true\n"
-              if marker not in text:
-                  print(f"Missing RAG_USE_FULL_CONTEXT marker in {path}", file=sys.stderr)
-                  sys.exit(1)
-              text = text.replace(marker, marker + config_block, 1)
-
-          required = [
-              f"repository: {repo}",
-              f'tag: "{tag}"',
-              "RAG_AZURE_DI_KEY: AGK-OPENAI-API-KEY",
-              "RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/",
-              'RAG_XLSX_MAX_CHARS: "1500000"',
-          ]
-          missing = [value for value in required if value not in text]
-          if missing:
-              print(f"Missing expected RAG prod values in {path}: {missing}", file=sys.stderr)
-              sys.exit(1)
-
-          path.write_text(text)
-          PY
 
           BRANCH="release/agk-prod-$VERSION"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          if git diff --quiet -- "$AGK_PROD_CONFIG_DIRECTORY/values.yaml" "$PROD_RAG_VALUES"; then
-            echo "AGK prod deployment config already points at $VERSION and RAG API $RAG_API_VERSION"
-            echo "| Prod deployment config | already at \`$VERSION\` / RAG \`$RAG_API_VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+          if git diff --quiet -- "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"; then
+            echo "AGK prod deployment config already points at $VERSION"
+            echo "| Prod deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           git checkout -b "$BRANCH"
-          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml" "$PROD_RAG_VALUES"
-          git commit -m "Update agentic-karl prod to $VERSION and RAG API $RAG_API_VERSION"
+          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          git commit -m "Update agentic-karl prod to $VERSION"
           # Plain --force: automation-owned throwaway branch and a fresh clone has
           # no remote-tracking ref, so --force-with-lease would reject re-runs.
           git push --force origin "$BRANCH"
@@ -332,8 +205,8 @@ jobs:
           if [ -z "$PR_URL" ]; then
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
-              --title "Update agentic-karl prod to $VERSION (RAG $RAG_API_VERSION)" \
-              --body "Automated prod GitOps promotion from the agentic-karl promote pipeline (run ${{ github.run_id }}). Bumps prod app values to \`$VERSION\` and prod RAG API values to \`$RAG_API_VERSION\`.")
+              --title "Update agentic-karl prod to $VERSION" \
+              --body "Automated prod GitOps promotion from the agentic-karl promote pipeline (run ${{ github.run_id }}). Bumps prod app values to \`$VERSION\`.")
           fi
           echo "Prod deployment config PR: $PR_URL"
 
@@ -363,7 +236,7 @@ jobs:
 
           {
             echo "| Prod deployment config PR | $PR_URL (merged) |"
-            echo "| Prod deployment config files | \`$AGK_PROD_CONFIG_DIRECTORY/values.yaml\`, \`$PROD_RAG_VALUES\` |"
+            echo "| Prod deployment config files | \`$AGK_PROD_CONFIG_DIRECTORY/values.yaml\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update AGK prod app overlay values
@@ -391,7 +264,6 @@ jobs:
           set -euo pipefail
 
           VERSION="${{ steps.version.outputs.version }}"
-          RAG_API_VERSION="${{ steps.version.outputs.rag_api_version }}"
           ARGOCD_PASSWORD=$(az keyvault secret show \
             --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
             --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
@@ -417,40 +289,28 @@ jobs:
           }
 
           refresh_app "$AGK_ARGOCD_APP"
-          refresh_app "$AGK_ARGOCD_RAG_APP"
 
           for attempt in {1..60}; do
             APP_JSON=$(curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
               -H "Accept: application/json")
-            RAG_APP_JSON=$(curl -fsS \
-              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_RAG_APP" \
-              -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              -H "Accept: application/json")
 
             SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
             HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
             IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | grep -F "$AGK_PROD_IMAGE_REPOSITORY:$VERSION" || true)
-            RAG_SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$RAG_APP_JSON")
-            RAG_HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$RAG_APP_JSON")
-            RAG_IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$RAG_APP_JSON" | grep -F "$AGK_PROD_RAG_IMAGE_REPOSITORY:$RAG_API_VERSION" || true)
 
-            echo "Attempt $attempt: app sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}; rag sync=$RAG_SYNC_STATUS health=$RAG_HEALTH_STATUS image=${RAG_IMAGE_MATCH:-missing}"
+            echo "Attempt $attempt: app sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
 
             if [ "$SYNC_STATUS" = "Synced" ] \
               && [ "$HEALTH_STATUS" = "Healthy" ] \
-              && [ -n "$IMAGE_MATCH" ] \
-              && [ "$RAG_SYNC_STATUS" = "Synced" ] \
-              && [ "$RAG_HEALTH_STATUS" = "Healthy" ] \
-              && [ -n "$RAG_IMAGE_MATCH" ]; then
+              && [ -n "$IMAGE_MATCH" ]; then
               exit 0
             fi
 
             refresh_app "$AGK_ARGOCD_APP"
-            refresh_app "$AGK_ARGOCD_RAG_APP"
             sleep 10
           done
 
-          echo "AGK prod ArgoCD did not report app $VERSION and RAG API $RAG_API_VERSION as Synced/Healthy in time"
+          echo "AGK prod ArgoCD did not report app $VERSION as Synced/Healthy in time"
           exit 1

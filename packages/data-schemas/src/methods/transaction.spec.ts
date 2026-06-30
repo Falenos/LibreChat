@@ -70,6 +70,23 @@ beforeEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
+// [knauf] Cost monitor fingerprint checks must use a compound lookup + latest-row index.
+test('Transaction schema includes the Knauf cost lookup index', () => {
+  const indexes = Transaction.schema.indexes();
+  const costIndex = indexes.find(
+    ([fields]) =>
+      fields.user === 1 &&
+      fields.conversationId === 1 &&
+      fields.updatedAt === -1 &&
+      fields._id === -1,
+  );
+
+  expect(costIndex?.[1]).toMatchObject({
+    name: 'knauf_cost_user_conversation_updatedAt_id',
+  });
+});
+// End [knauf]
+
 describe('Regular Token Spending Tests', () => {
   test('Balance should decrease when spending tokens with spendTokens', async () => {
     // Arrange

@@ -130,12 +130,15 @@ export default function Message(props: TMessageProps) {
             >
               {!hasParallelContent && (
                 <>
-                  {/* [knauf] Brand assistant turns as Karl while preserving the model label as a hover tooltip. */}
+                  {/* [knauf] Brand default Karl spec turns as Karl while preserving custom agent names. */}
                   <KnaufMessageHeading
                     isCreatedByUser={message.isCreatedByUser}
+                    isAgent={Boolean(agent)}
+                    isAssistant={Boolean(assistant)}
                     label={name || message.sender || message.model || conversation?.model}
                     fontSize={fontSize}
                     poweredByModel={message.model ?? conversation?.model}
+                    spec={conversation?.spec}
                     screenReaderPrefix={getHeaderPrefixForScreenReader(message, localize)}
                   />
                   {/* End [knauf] */}

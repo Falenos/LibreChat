@@ -7,9 +7,15 @@ const { tool } = require('@langchain/core/tools');
 const { logger } = require('@librechat/data-schemas');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { ContentTypes, EImageOutputType } = require('librechat-data-provider');
-const { logAxiosError, oaiToolkit, extractBaseURL } = require('@librechat/api');
+const {
+  logAxiosError,
+  oaiToolkit,
+  extractBaseURL,
+  getBalanceConfig,
+  getTransactionsConfig,
+} = require('@librechat/api');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { getFiles } = require('~/models');
+const { spendTokens, getFiles } = require('~/models');
 
 const displayMessage =
   "The tool displayed an image. All generated images are already plainly visible, so don't repeat the descriptions in detail. Do not list download links as they are available in the UI already. The user may download the images by clicking on them, but do not mention anything about downloading to the user.";
@@ -43,6 +49,42 @@ function createAbortHandler() {
     logger.debug('[ImageGenOAI] Image generation aborted');
   };
 }
+
+// [knauf] Track gpt-image-1 token usage in the existing transaction ledger.
+async function recordOpenAIImageUsage({ usage, req, model, conversationId, messageId }) {
+  if (!usage || !req?.user?.id || !conversationId) {
+    return;
+  }
+
+  const promptTokens = Number(usage.input_tokens) || 0;
+  const completionTokens = Number(usage.output_tokens) || 0;
+  if (promptTokens === 0 && completionTokens === 0) {
+    return;
+  }
+
+  const balance = getBalanceConfig(req.config);
+  const transactions = getTransactionsConfig(req.config);
+  if (!balance?.enabled && transactions?.enabled === false) {
+    return;
+  }
+
+  await spendTokens(
+    {
+      user: req.user.id,
+      model,
+      messageId,
+      conversationId,
+      context: 'image_generation',
+      balance,
+      transactions,
+    },
+    {
+      promptTokens,
+      completionTokens,
+    },
+  );
+}
+// End [knauf]
 
 /**
  * Creates OpenAI Image tools (generation and editing)
@@ -193,7 +235,21 @@ Error Message: ${error.message}`);
       }
 
       // For gpt-image-1, the response contains base64-encoded images
-      // TODO: handle cost in `resp.usage`
+      // [knauf] Persist image model usage so FinOps can show generation token cost next to chats.
+      const conversationId = runnableConfig?.configurable?.thread_id;
+      const messageId =
+        runnableConfig?.configurable?.run_id ??
+        runnableConfig?.configurable?.requestBody?.messageId;
+      recordOpenAIImageUsage({
+        usage: resp.usage,
+        req,
+        model: imageModel,
+        conversationId,
+        messageId,
+      }).catch((error) => {
+        logger.error('[ImageGenOAI] Failed to record token usage:', error);
+      });
+      // End [knauf]
       const base64Image = resp.data[0].b64_json;
 
       if (!base64Image) {
@@ -366,6 +422,22 @@ Error Message: ${error.message}`);
             'No image data returned from OpenAI API. There may be a problem with the API or your configuration.',
           );
         }
+
+        // [knauf] Persist image edit usage through the same transaction path as generation.
+        const conversationId = runnableConfig?.configurable?.thread_id;
+        const messageId =
+          runnableConfig?.configurable?.run_id ??
+          runnableConfig?.configurable?.requestBody?.messageId;
+        recordOpenAIImageUsage({
+          usage: response.data.usage,
+          req,
+          model: imageModel,
+          conversationId,
+          messageId,
+        }).catch((error) => {
+          logger.error('[ImageEditOAI] Failed to record token usage:', error);
+        });
+        // End [knauf]
 
         const base64Image = response.data.data[0].b64_json;
         if (!base64Image) {
