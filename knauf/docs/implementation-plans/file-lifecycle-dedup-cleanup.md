@@ -242,6 +242,15 @@ Where they differ, **this section is authoritative**.
 - **`createContextHandlers.js` is NOT modified** — dedup is `file_search`-only; the inline-context
   path never creates reuse rows, so there is no asset id to resolve there. The file-map row below is
   corrected accordingly.
+- **Dedup + user-owned embed are scoped to CHAT attachments only; agent-library knowledge stays
+  agent-scoped.** The `file_search` upload branch splits on `messageAttachment`: a chat attachment
+  (`message_file`) takes the per-user dedup path (`entity_id = req.user.id`); an agent-library upload
+  (no `message_file`; builder; EDIT-gated) embeds `entity_id = agent_id` with no dedup bookkeeping —
+  restoring the pre-204 behavior so **every user with access to a shared agent can read its knowledge
+  files**. KK20-204's blanket `entity_id = req.user.id` had broken that (a shared agent's knowledge
+  answered only for its uploader). OpenAI-Assistants model: agent vector store = shared scope, thread
+  file = private scope; dedup only within a scope. No backfill (KK20-204 unshipped); re-upload any
+  agent-knowledge files added during the KK20-204 dev/test window to re-embed agent-scoped.
 
 ---
 

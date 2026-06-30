@@ -149,6 +149,14 @@ GC) before committing its pointer.
 
 ## Scope & edge cases
 
+- **Dedup applies to CHAT/message attachments only.** Per-user dedup + the user-owned embed are
+  scoped to chat attachments (`message_file`). **Agent-library** knowledge — files added to an
+  agent's `file_search` in the builder — is embedded **agent-scoped** (`entity_id = agent_id`) so
+  **every user with access to the agent can retrieve it**, and is deliberately **not** per-user
+  deduped. This is the OpenAI-Assistants model: the agent's vector store is a *shared* visibility
+  scope; a thread/message file is a *private* scope; dedup happens only *within* a scope. The
+  discriminator is `messageAttachment` (already the gate that decides whether an upload mutates the
+  agent's persistent `tool_resources`, and EDIT-permission-gated for library uploads).
 - **Per-user only.** Different users never dedup against each other (privacy).
 - **Same content, different filename** → still dedups (the hash is of the bytes); the pointer row keeps
   its own display filename.

@@ -31,8 +31,8 @@ describe('fileSearch asset-id resolution (KK20-204)', () => {
       userId: 'u1',
       entity_id: 'agentB',
       files: [
-        { file_id: 'id2', filename: 'a.pdf', knauf_asset_id: 'id1' }, // deduped reuse row
-        { file_id: 'plain', filename: 'b.pdf' }, // non-deduped
+        { file_id: 'id2', filename: 'a.pdf', knauf_asset_id: 'id1' }, // deduped reuse row → asset id
+        { file_id: 'plain', filename: 'b.pdf' }, // agent-library / non-deduped row → own file_id
       ],
     });
 
