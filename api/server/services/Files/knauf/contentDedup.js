@@ -46,13 +46,20 @@ async function findAssetForHash({ user, knauf_content_hash }) {
   if (!knauf_content_hash) {
     return null;
   }
-  const rows = (await db.getFiles({ user, knauf_content_hash })) ?? [];
-  const withAsset = rows.filter((row) => row.knauf_asset_id);
-  if (!withAsset.length) {
+  // Only rows that carry an asset id are dedup candidates — filter DB-side over the
+  // (user, knauf_content_hash) partial index instead of fetching the whole group and
+  // dropping the rest in JS.
+  const rows =
+    (await db.getFiles({ user, knauf_content_hash, knauf_asset_id: { $exists: true } })) ?? [];
+  if (!rows.length) {
     return null;
   }
-  withAsset.sort((a, b) => new Date(a.createdAt ?? 0) - new Date(b.createdAt ?? 0));
-  return withAsset[0];
+  // Pick the OLDEST row deterministically (the original owner's asset in the normal
+  // case; a stable choice in the rare double-embed case). Sorted here rather than via
+  // getFiles' sortOptions, whose hard-coded `{ updatedAt: -1 }` default always dominates
+  // the sort key order and would change which row is chosen.
+  rows.sort((a, b) => new Date(a.createdAt ?? 0) - new Date(b.createdAt ?? 0));
+  return rows[0];
 }
 
 module.exports = { computeContentHash, findAssetForHash };

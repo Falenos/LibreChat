@@ -108,6 +108,25 @@ describe('contentDedup (KK20-204)', () => {
       await expect(findAssetForHash({ user: userId, knauf_content_hash: 'H' })).resolves.toBeNull();
     });
 
+    // The DB-side `knauf_asset_id: { $exists: true }` filter is the only thing
+    // excluding no-asset rows now (the JS post-filter was removed), so a legacy row —
+    // even an OLDER one — must never be returned in preference to the real asset row.
+    test('ignores an older legacy row and resolves the asset row in a mixed group', async () => {
+      await seed('legacy-old', { knauf_content_hash: 'H' }); // no asset id, older
+      await seed('asset-new', { knauf_content_hash: 'H', knauf_asset_id: 'asset-new' });
+      await File.updateOne(
+        { file_id: 'legacy-old' },
+        { $set: { createdAt: new Date('2019-01-01') } },
+      );
+      await File.updateOne(
+        { file_id: 'asset-new' },
+        { $set: { createdAt: new Date('2022-01-01') } },
+      );
+      const found = await findAssetForHash({ user: userId, knauf_content_hash: 'H' });
+      expect(found.file_id).toBe('asset-new');
+      expect(found.knauf_asset_id).toBe('asset-new');
+    });
+
     test('returns the oldest row deterministically when several share the asset', async () => {
       await seed('old', { knauf_content_hash: 'H', knauf_asset_id: 'old' });
       await seed('new', { knauf_content_hash: 'H', knauf_asset_id: 'old' });

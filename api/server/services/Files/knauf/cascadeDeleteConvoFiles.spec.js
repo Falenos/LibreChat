@@ -512,6 +512,69 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // asset KEPT (owner still references it)
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
     });
+
+    // Delete-last-ref vs. concurrent re-upload race: stage 1 deletes asset A's last
+    // row; a concurrent re-upload MISSed and embedded a NEW asset C under the SAME
+    // hash. A per-(user,hash)-group recount would see C's row, call the group
+    // non-empty, and skip GC of A — orphaning A forever. The per-ASSET recount keys
+    // on knauf_asset_id, so C (a different asset) doesn't mask A: A is GC'd, C is kept.
+    test('GCs an orphaned asset even when a different asset survives under the same hash', async () => {
+      await seedFile('asset-A', {
+        knauf_content_hash: 'HH',
+        knauf_asset_id: 'asset-A',
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/A',
+      });
+      await seedFile('asset-C', {
+        knauf_content_hash: 'HH', // same hash, but the concurrent re-upload's NEW owner
+        knauf_asset_id: 'asset-C',
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/C',
+      });
+      const [a] = await db.getFiles({ user: userId, file_id: { $in: ['asset-A'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files: [a] });
+
+      expect(await File.findOne({ file_id: 'asset-A' })).toBeNull(); // A's row deleted
+      expect(await File.findOne({ file_id: 'asset-C' })).not.toBeNull(); // C survives untouched
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1);
+      expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['asset-A']); // A GC'd, not C
+      expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1);
+      expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('asset-A');
+      expect(mockStrategyDeleteFile.mock.calls[0][1].filepath).toBe('/blob/A');
+    });
+
+    // Double-embed: a concurrent first-upload race-loser left two distinct assets in
+    // one (user, hash) group. Deleting both rows GCs EACH distinct asset independently
+    // (the per-asset loop), not just the group as a whole.
+    test('GCs each distinct asset when a double-embed group is fully deleted', async () => {
+      await seedFile('dup-A', {
+        knauf_content_hash: 'HD',
+        knauf_asset_id: 'dup-A',
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/dupA',
+      });
+      await seedFile('dup-B', {
+        knauf_content_hash: 'HD',
+        knauf_asset_id: 'dup-B',
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/dupB',
+      });
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['dup-A', 'dup-B'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      expect(await File.countDocuments({ knauf_content_hash: 'HD' })).toBe(0);
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(2);
+      const gcdVectorIds = mockDeleteVectorsByIds.mock.calls.map((c) => c[1][0]).sort();
+      expect(gcdVectorIds).toEqual(['dup-A', 'dup-B']);
+      const gcdBlobIds = mockStrategyDeleteFile.mock.calls.map((c) => c[1].file_id).sort();
+      expect(gcdBlobIds).toEqual(['dup-A', 'dup-B']);
+    });
   });
   // End [knauf]
 });

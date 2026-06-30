@@ -330,3 +330,14 @@ T3 deferred). No epic — two standalone tasks.
   there is no cross-user exposure). This is **pre-existing** (the old `processDeleteRequest` had the
   same user-in-path coupling on branch B), not introduced by dedup. Fix later by running the physical
   GC under the asset owner's identity (or a privileged RAG delete). Low severity — storage cost only.
+- ~~**Delete-last-ref vs. concurrent re-upload orphan**~~ ✅ Resolved. The delete-time GC now
+  recounts **per `knauf_asset_id`** (does any surviving row still point at *this* asset?) instead of
+  per `(user, content-hash)`-group emptiness. The old group check leaked the prior asset when a
+  re-upload landing between stage-1 (row delete) and the recount MISSed and embedded a NEW asset under
+  the same hash — the new row made the group look non-empty, so the now-unreferenced old asset was
+  never reclaimed. Per-asset recount also reclaims a double-embed's duplicate as soon as *its* last
+  reference is gone (not when the whole hash group empties). **Residual (accepted):** a HIT re-upload
+  landing in the tiny window *between* the zero-survivor recount and the physical delete can still have
+  its fresh pointer's asset removed out from under it — inherent to any check-then-act without a lock
+  (the old group logic had the same window); storage/retrieval-only on one just-created row. Closing it
+  fully would need a transaction or asset tombstone — out of scope.
