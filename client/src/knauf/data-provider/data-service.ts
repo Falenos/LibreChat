@@ -31,6 +31,38 @@ export function postAutogeneratePrompt(
   return request.post(endpoints.autogeneratePrompt(), body);
 }
 
+export interface ConversationCostSummary {
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  imageInputTokens: number;
+  imageOutputTokens: number;
+  unsupportedTokens: number;
+  hasUnsupported: boolean;
+}
+
+export type MessageCostSummary = ConversationCostSummary;
+
+export interface ConversationCostsResponse {
+  currency: 'EUR';
+  source: string;
+  rates: Record<
+    string,
+    {
+      inputPerMillion?: number;
+      outputPerMillion?: number;
+      cachedInputPerMillion?: number;
+    }
+  >;
+  conversation: ConversationCostSummary;
+  messages: Record<string, MessageCostSummary>;
+}
+
+export function getConversationCosts(conversationId: string): Promise<ConversationCostsResponse> {
+  return request.get(endpoints.conversationCosts(conversationId));
+}
+
 export interface PromptTemplate {
   id: string;
   label: string;

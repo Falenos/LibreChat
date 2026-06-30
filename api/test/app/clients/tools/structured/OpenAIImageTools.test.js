@@ -1,6 +1,10 @@
 const OpenAI = require('openai');
 const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIImageTools');
 
+// [knauf] Mock image usage transaction ledger used by the FinOps cost visibility seam.
+const mockSpendTokens = jest.fn();
+// End [knauf]
+
 jest.mock('openai');
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
@@ -25,6 +29,10 @@ jest.mock('@librechat/api', () => ({
     },
   },
   extractBaseURL: jest.fn((url) => url),
+  // [knauf] Provide cost-ledger config helpers consumed by image usage recording.
+  getBalanceConfig: jest.fn(() => ({ enabled: false })),
+  getTransactionsConfig: jest.fn(() => ({ enabled: true })),
+  // End [knauf]
 }));
 
 jest.mock('~/server/services/Files/strategies', () => ({
@@ -33,6 +41,9 @@ jest.mock('~/server/services/Files/strategies', () => ({
 
 jest.mock('~/models', () => ({
   getFiles: jest.fn().mockResolvedValue([]),
+  // [knauf] Assert image usage flows through the same transaction path as chat tokens.
+  spendTokens: (...args) => mockSpendTokens(...args),
+  // End [knauf]
 }));
 
 describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
@@ -40,6 +51,9 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // [knauf] Reset image usage transaction mock between cost visibility cases.
+    mockSpendTokens.mockResolvedValue(undefined);
+    // End [knauf]
     originalEnv = { ...process.env };
 
     process.env.IMAGE_GEN_OAI_API_KEY = 'test-api-key';
@@ -159,4 +173,54 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
       expect.any(Object),
     );
   });
+
+  // [knauf] Pin gpt-image-1 usage to conversation/message transaction records for cost visibility.
+  it('records image generation token usage in the transaction ledger', async () => {
+    delete process.env.IMAGE_GEN_OAI_MODEL;
+
+    const mockGenerate = jest.fn().mockResolvedValue({
+      data: [
+        {
+          b64_json: 'base64-encoded-image-data',
+        },
+      ],
+      usage: {
+        input_tokens: 123,
+        output_tokens: 456,
+      },
+    });
+
+    OpenAI.mockImplementation(() => ({
+      images: {
+        generate: mockGenerate,
+      },
+    }));
+
+    const [imageGenTool] = createOpenAIImageTools({
+      isAgent: true,
+      override: false,
+      req: { user: { id: 'test-user' }, config: {} },
+    });
+
+    await imageGenTool.func({ prompt: 'test prompt' }, undefined, {
+      configurable: { thread_id: 'conversation-1', run_id: 'message-1' },
+    });
+
+    expect(mockSpendTokens).toHaveBeenCalledWith(
+      {
+        user: 'test-user',
+        model: 'gpt-image-1',
+        messageId: 'message-1',
+        conversationId: 'conversation-1',
+        context: 'image_generation',
+        balance: { enabled: false },
+        transactions: { enabled: true },
+      },
+      {
+        promptTokens: 123,
+        completionTokens: 456,
+      },
+    );
+  });
+  // End [knauf]
 });
