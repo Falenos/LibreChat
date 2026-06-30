@@ -35,6 +35,9 @@ import SendButton from './SendButton';
 import EditBadges from './EditBadges';
 import BadgeRow from './BadgeRow';
 import Mention from './Mention';
+// [knauf] Conversation total belongs with the composer controls, not inside the tool-chip cluster.
+import { KnaufConversationCostTotal } from '~/knauf/components/Chat/KnaufCostDisplay';
+// End [knauf]
 import store from '~/store';
 
 interface ChatFormProps {
@@ -368,6 +371,9 @@ const ChatForm = memo(function ChatForm({
                 }
               />
               <div className="mx-auto flex" />
+              {/* [knauf] Keep tool chips in BadgeRow; place the cost readout with mic/send controls. */}
+              <KnaufConversationCostTotal isSubmitting={isSubmitting} />
+              {/* End [knauf] */}
               {SpeechToText && (
                 <AudioRecorder
                   methods={methods}

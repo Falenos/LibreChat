@@ -40,8 +40,21 @@ jest.mock('~/utils', () => {
 });
 
 jest.mock('~/hooks', () => ({
-  useLocalize: () => (key: string, values?: Record<number, string>) =>
-    key === 'com_knauf_powered_by_model' ? `Powered by ${values?.[0]}` : key,
+  useLocalize: () => (key: string, values?: Record<number, string>) => {
+    if (key === 'com_knauf_powered_by_model') {
+      return `Powered by ${values?.[0]}`;
+    }
+    if (key === 'com_knauf_cost_message') {
+      return `Message cost: ${values?.[0]}`;
+    }
+    if (key === 'com_knauf_cost_input') {
+      return `Input tokens: ${values?.[0]}`;
+    }
+    if (key === 'com_knauf_cost_output') {
+      return `Output tokens: ${values?.[0]}`;
+    }
+    return key;
+  },
   useContentMetadata: () => ({ hasParallelContent: false }),
   useAttachments: () => ({ attachments: undefined, searchResults: undefined }),
   useMessageActions: () => ({
@@ -55,6 +68,7 @@ jest.mock('~/hooks', () => ({
       conversationId: 'conversation-1',
       endpoint: 'openAI',
       model: 'azure-gpt-runtime',
+      spec: 'karl',
     },
     messageLabel: 'GPT-5.4',
     handleFeedback: jest.fn(),
@@ -77,6 +91,7 @@ jest.mock('~/hooks', () => ({
       conversationId: 'conversation-1',
       endpoint: 'openAI',
       model: 'azure-gpt-runtime',
+      spec: 'karl',
     },
     isSubmitting: false,
     latestMessageId: 'message-1',
@@ -119,6 +134,26 @@ jest.mock('~/components/Chat/Messages/HoverButtons', () => ({
 jest.mock('~/components/Chat/Messages/MultiMessage', () => ({
   __esModule: true,
   default: () => null,
+}));
+
+jest.mock('~/knauf/components/Chat/KnaufCostContext', () => ({
+  useKnaufConversationCosts: () => ({
+    data: { source: 'test-rates' },
+    refetch: jest.fn(),
+    getMessageCost: (messageId?: string | null) =>
+      messageId === 'message-1'
+        ? {
+            cost: 0.5,
+            inputTokens: 10,
+            outputTokens: 20,
+            cachedInputTokens: 0,
+            imageInputTokens: 0,
+            imageOutputTokens: 0,
+            unsupportedTokens: 0,
+            hasUnsupported: false,
+          }
+        : null,
+  }),
 }));
 
 const assistantMessage = {
@@ -184,6 +219,10 @@ describe('message chrome integration', () => {
     expect(container.querySelector('time')).toHaveAttribute('dateTime', '2026-06-16T10:05:00.000Z');
     expect(container.querySelector('time')).toHaveTextContent(
       formatExpectedTimestamp('2026-06-16T10:05:00.000Z'),
+    );
+    expect(screen.getByLabelText(/Message cost:/)).toHaveAttribute(
+      'title',
+      expect.stringContaining('Input tokens: 10'),
     );
   });
 

@@ -326,6 +326,73 @@ App code references:
 - `$KNAUF_ROOT/agentic-karl/api/strategies/openidStrategy.js`
 - `$KNAUF_ROOT/agentic-karl/api/server/routes/oauth.js`
 
+## Langfuse And LangGraph Observability
+
+Use the generic `langfuse` skill for official CLI/API syntax and docs. Use this section for AGK-specific wiring and interpretation.
+
+AGK dev Langfuse:
+
+- Host/base URL: `https://langfuse.agk.dev.knauf.digital`
+- Project: `agentic-karl` (`Agentic Karl`)
+- Organization: `knauf-agk` (`Knauf AGK`)
+- Public key: `pk-lf-agk-dev-agentic-karl-001`
+- Secret key source: Key Vault `kv-agntkarl-nonprod-001`, secret `langfuse-dev-LANGFUSE-INIT-PROJECT-SECRET-KEY`
+- Okta is for browser UI login only. CLI/API access uses the project public/secret key pair. The Key Vault secret may not be shaped like `sk-lf-...`; trust the authenticated project check, not the prefix.
+
+Repo-local CLI:
+
+- `agentic-karl` has `langfuse-cli` installed as a dev dependency.
+- `npm run langfuse:project` verifies auth and project scope.
+- `npm run langfuse:traces` lists recent traces.
+
+Safe ad hoc trace reads:
+
+```bash
+LANGFUSE_HOST=https://langfuse.agk.dev.knauf.digital \
+LANGFUSE_PUBLIC_KEY=pk-lf-agk-dev-agentic-karl-001 \
+LANGFUSE_SECRET_KEY="$(az keyvault secret show \
+  --vault-name kv-agntkarl-nonprod-001 \
+  --name langfuse-dev-LANGFUSE-INIT-PROJECT-SECRET-KEY \
+  --query value -o tsv)" \
+./node_modules/.bin/langfuse api traces get <trace-id> \
+  --fields core,io,observations,metrics,scores \
+  --json
+```
+
+For summaries, do not dump full inputs/outputs by default. Start with:
+
+```bash
+... ./node_modules/.bin/langfuse api traces get <trace-id> \
+  --fields core,io,observations,metrics,scores --json \
+| jq '{id:.body.id,name:.body.name,timestamp:.body.timestamp,userId:.body.userId,sessionId:.body.sessionId,environment:.body.environment,latency:.body.latency,errorCount:([.body.observations[]? | select(.level=="ERROR")]|length),errors:[.body.observations[]? | select(.level=="ERROR") | {name,type,model,statusMessage}]}'
+```
+
+UI trace IDs:
+
+- In the trace detail page, use the value after `Trace <name>:` (for example `AgentRun: fc2233d7c764699401c3b075817b388f`) as the API trace ID.
+- A URL `peek=<id>` is not always a fetchable trace ID; it can point to stale UI state or a missing row. If `traces get` returns `Trace <id> not found within authorized project`, list by timestamp/session before assuming auth is wrong.
+
+LangGraph trace interpretation:
+
+- Agent runs usually appear as trace name `AgentRun`.
+- Common observation stack: `AgentRun` -> `LangGraph` -> `agent__...` / `agent=...` -> `RunnableSequence` -> `prompt` -> `ChatOpenAI`.
+- `prompt` observations contain the rendered system/user prompt messages.
+- `ChatOpenAI` observations are the generation call; inspect `model`, `input`, `output`, `usage`, and `statusMessage`.
+- `2 hidden observations below DEFAULT level` in the UI means DEBUG spans such as `__start__` are hidden; use API fields `observations` to see them.
+- The trace `input`/`output` can contain the full conversation state and file-search snippets. Treat as sensitive; summarize unless the user explicitly asks for full JSON.
+
+Common AGK LangGraph failure signatures:
+
+- `Error while downloading file. Upstream status code: 403` with `innererror.code=StorageAccessDenied` on `ChatOpenAI` means the model/provider could not fetch an uploaded-file URL. This is a file URL/SAS/storage access issue, not a Langfuse auth issue.
+- Empty or missing old traces while sessions still exist usually means ClickHouse trace data is absent/stale even though Postgres session metadata survived.
+
+Langfuse runtime in AGK dev:
+
+- Namespace: `agentic-karl-dev`
+- Services/deployments: `langfuse-web`, `langfuse-worker`, `langfuse-clickhouse`, `langfuse-redis`
+- GitOps paths on `agk-deployment-configs` `main`: `agentic-karl/dev/services/langfuse-web`, `langfuse-worker`, `langfuse-clickhouse`
+- Trace reads require ClickHouse tables; project/session APIs can still work if ClickHouse trace tables or worker ingestion are broken.
+
 ## Azure AI And Model Map
 
 The main Agentic Karl and CST KARL model backend is the shared Azure AI Services account `cst-karl-dev` in the prod shared subscription:

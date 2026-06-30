@@ -65,4 +65,12 @@ const transactionSchema: Schema<ITransaction> = new Schema(
   },
 );
 
+// [knauf] Cost monitoring reads conversation ledgers by user + conversationId and checks
+// the latest transaction for cache invalidation, so keep lookup + sort on one index.
+transactionSchema.index(
+  { user: 1, conversationId: 1, updatedAt: -1, _id: -1 },
+  { name: 'knauf_cost_user_conversation_updatedAt_id' },
+);
+// End [knauf]
+
 export default transactionSchema;

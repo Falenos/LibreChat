@@ -10,6 +10,9 @@ import { ChatContext, AddedChatContext, ChatFormProvider, useFileMapContext } fr
 import { useAddedResponse, useResumeOnLoad, useAdaptiveSSE, useChatHelpers } from '~/hooks';
 import ConversationStarters from './Input/ConversationStarters';
 import { useGetMessagesByConvoId } from '~/data-provider';
+// [knauf] Conversation-scoped transaction cost state for message chrome and composer totals.
+import { KnaufChatCostProvider } from '~/knauf/components/Chat/KnaufCostContext';
+// End [knauf]
 import MessagesView from './Messages/MessagesView';
 import Presentation from './Presentation';
 import ChatForm from './Input/ChatForm';
@@ -80,33 +83,37 @@ function ChatView({ index = 0 }: { index?: number }) {
     <ChatFormProvider {...methods}>
       <ChatContext.Provider value={chatHelpers}>
         <AddedChatContext.Provider value={addedChatHelpers}>
-          <Presentation>
-            <div className="relative flex h-full w-full flex-col">
-              <Header />
-              <>
-                <div
-                  className={cn(
-                    'flex flex-col',
-                    isLandingPage
-                      ? 'flex-1 items-center justify-end sm:justify-center'
-                      : 'h-full overflow-y-auto',
-                  )}
-                >
-                  {content}
+          {/* [knauf] Share transaction-derived cost estimates across the visible conversation. */}
+          <KnaufChatCostProvider conversationId={conversationId}>
+            <Presentation>
+              <div className="relative flex h-full w-full flex-col">
+                <Header />
+                <>
                   <div
                     className={cn(
-                      'w-full',
-                      isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
+                      'flex flex-col',
+                      isLandingPage
+                        ? 'flex-1 items-center justify-end sm:justify-center'
+                        : 'h-full overflow-y-auto',
                     )}
                   >
-                    <ChatForm index={index} />
-                    {isLandingPage ? <ConversationStarters /> : <Footer />}
+                    {content}
+                    <div
+                      className={cn(
+                        'w-full',
+                        isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
+                      )}
+                    >
+                      <ChatForm index={index} />
+                      {isLandingPage ? <ConversationStarters /> : <Footer />}
+                    </div>
                   </div>
-                </div>
-                {isLandingPage && <Footer />}
-              </>
-            </div>
-          </Presentation>
+                  {isLandingPage && <Footer />}
+                </>
+              </div>
+            </Presentation>
+          </KnaufChatCostProvider>
+          {/* End [knauf] */}
         </AddedChatContext.Provider>
       </ChatContext.Provider>
     </ChatFormProvider>
