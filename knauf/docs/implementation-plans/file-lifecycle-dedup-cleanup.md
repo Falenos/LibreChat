@@ -214,6 +214,37 @@ file deletes through the unchanged PR1 path.
 
 ---
 
+## Implemented — KK20-204 (deltas from the design above)
+
+The design above is the original intent; the shipped implementation refined three points.
+Where they differ, **this section is authoritative**.
+
+- **Asset identity is a stable `knauf_asset_id`, not an elected "canonical" row.** Every deduped
+  row stores `knauf_asset_id` = the `file_id` the shared blob + embeddings live under (the embed
+  owner stores its own id; reuse rows store the owner's). `findAssetForHash` resolves the asset from
+  **any** surviving row in the `(user, hash)` group. This **supersedes** the `knauf_canonical_file_id`
+  / "pointer→canonical" language in Step 3.4–3.5 and the two-stage delete (the GC now keys on
+  `knauf_asset_id`). It fully closes the "canonical-row-deleted-while-pointers-survive → re-embed"
+  hole: deleting the owner row no longer loses the asset, so the next upload reuses it (no re-embed).
+- **Concurrent first-upload race (AC #3): unique-owner index, not a pre-embed `claimContentHash`.**
+  A pre-embed claim stub would need TTL/orphan reconciliation and still couldn't save the second
+  embed without blocking the loser (a true racer always arrives mid-embed). Instead: a **unique
+  partial index** `{ user, knauf_content_hash, knauf_dedup_owner } WHERE knauf_dedup_owner=true`
+  enforces one embed-owner per group; the MISS path claims ownership and a concurrent loser's insert
+  fails with a duplicate-key error → recorded as a **non-owner** row (its own embedding is a transient
+  duplicate the group GC reclaims) + a `logger.info('[knauf][dedup] …')` so the race frequency is
+  observable. No upload blocks. Accepted trade (confirmed with the product owner): a rare, bounded,
+  self-healing duplicate over guaranteed multi-second upload stalls.
+- **Direct file-delete is now dedup-aware too.** Beyond the chat-delete cascade, the explicit
+  `DELETE /api/files` path (branches A/B) routes through `deleteFilesWithDedupAwareness`, so removing
+  a file chip that owns a shared asset GCs the blob/vectors only once its `(user, hash)` group is
+  empty. Closes a data-integrity gap the original two-stage design only covered for the cascade.
+- **`createContextHandlers.js` is NOT modified** — dedup is `file_search`-only; the inline-context
+  path never creates reuse rows, so there is no asset id to resolve there. The file-map row below is
+  corrected accordingly.
+
+---
+
 ## Critical file map
 
 | File | Repo role | PR1 | PR2 |
@@ -223,11 +254,12 @@ file deletes through the unchanged PR1 path.
 | [api/server/services/Files/process.js](../../../api/server/services/Files/process.js) | upstream — upload/delete | `conversationId` stamp | dedup lookup + reuse branch |
 | [api/server/services/Files/VectorDB/crud.js](../../../api/server/services/Files/VectorDB/crud.js) | upstream — pgvector | retry hardening | — |
 | [client/src/hooks/Files/useFileHandling.ts](../../../client/src/hooks/Files/useFileHandling.ts) | upstream — upload client | FormData `conversationId` | — |
-| [packages/data-schemas/src/schema/file.ts](../../../packages/data-schemas/src/schema/file.ts) | shared schema (`dist/`!) | — | `knauf_content_hash` + index |
-| [packages/data-schemas/src/methods/file.ts](../../../packages/data-schemas/src/methods/file.ts) | shared methods (`dist/`!) | — | `claimContentHash`, refcount helpers |
-| [packages/data-provider/src/types/files.ts](../../../packages/data-provider/src/types/files.ts) | shared types (`dist/`!) | — | `knauf_content_hash?` on `TFile` |
-| [api/app/clients/tools/util/fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js) | upstream — RAG query | spike target | canonical resolve |
-| [api/app/clients/prompts/createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js) | upstream — inline RAG | — | canonical resolve |
+| [packages/data-schemas/src/schema/file.ts](../../../packages/data-schemas/src/schema/file.ts) | shared schema (`dist/`!) | — | `knauf_content_hash` + `knauf_asset_id` + `knauf_dedup_owner`; lookup + unique-owner indexes |
+| [packages/data-schemas/src/methods/file.ts](../../../packages/data-schemas/src/methods/file.ts) | shared methods (`dist/`!) | — | (no new method — unique index replaces `claimContentHash`) |
+| [packages/data-provider/src/types/files.ts](../../../packages/data-provider/src/types/files.ts) | shared types (`dist/`!) | — | `knauf_content_hash?` / `knauf_asset_id?` / `knauf_dedup_owner?` on `TFile` |
+| [api/app/clients/tools/util/fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js) | upstream — RAG query | spike target | `knauf_asset_id` resolve |
+| [api/app/clients/prompts/createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js) | upstream — inline RAG | — | **not modified** — inline-context is non-dedup |
+| [api/server/routes/files/files.js](../../../api/server/routes/files/files.js) | upstream — file delete | — | branches A/B → `deleteFilesWithDedupAwareness` |
 
 ---
 
@@ -275,7 +307,8 @@ T3 deferred). No epic — two standalone tasks.
 ## Open questions
 
 - ~~**RAG `/query` `entity_id` semantics** — the spike; gates Step 3.~~ ✅ Resolved (see Step 2): `entity_id` is post-retrieval auth with a JWT-user fallback, not a vector partition → user-owned canonical embeds enable cross-agent per-user dedup, no overlay.
-- **Field case** — `knauf_content_hash` (snake, matches `knauf_fast_mode` precedent) vs `knaufContentHash`; prefix mandatory either way.
+- ~~**Field case** — `knauf_content_hash` vs `knaufContentHash`.~~ ✅ Resolved: snake_case (`knauf_content_hash`, `knauf_asset_id`, `knauf_dedup_owner`), matching the `knauf_fast_mode` precedent.
+- ~~**Concurrent first-upload race**~~ ✅ Resolved (see *Implemented* above): unique-owner index + non-blocking duplicate-key fallback + `[knauf][dedup]` race log. A future revisit could add loser-blocking only if the logged race frequency ever justifies it.
 - **Ephemeral conversationId** — first-upload-to-new-chat files rely on `Message.files[]` for
   cleanup, not the `conversationId` stamp (sentinel chat has no real id yet).
 - **pgvector orphan capture** — whether PR1 also records terminally-failed vector deletes to a

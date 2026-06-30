@@ -1,6 +1,11 @@
 # Content-hash file deduplication — how it works (KK20-204)
 
-> **Status:** design walkthrough (pre-implementation), part of the file-lifecycle workstream — see
+> **Status:** design walkthrough. The implemented model refined the terminology: the shared asset is
+> keyed by a stable **`knauf_asset_id`** carried on every deduped row (not an elected "canonical"
+> row with `knauf_canonical_file_id`), and the concurrent-first-upload race is bounded by a
+> **unique-owner index** rather than a pre-embed claim. Where this walkthrough says
+> "canonical/pointer", read "asset owner / reuse row." The authoritative final design is the
+> **Implemented — KK20-204** section of
 > [implementation-plans/file-lifecycle-dedup-cleanup.md](../implementation-plans/file-lifecycle-dedup-cleanup.md).
 > Pairs with KK20-203 (cascade cleanup on chat delete), which is already built.
 >
