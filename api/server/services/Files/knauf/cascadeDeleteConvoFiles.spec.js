@@ -479,6 +479,39 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       // canon-1 was the last row in its group → asset GC'd via the dedup path
       expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-1');
     });
+
+    // Cross-user regression: a shared-agent EDITOR (req.user = B) deletes a file
+    // OWNED by author A. The group recount must be scoped to A (the owner), not B —
+    // otherwise it finds none of B's rows, thinks the group is empty, and destroys
+    // A's still-referenced shared asset. (Reachable via branch B / authorizedFiles.)
+    test('a cross-user delete does not GC an asset the owner still references', async () => {
+      const ownerId = new mongoose.Types.ObjectId(); // author A (≠ buildReq() user B)
+      await seedFile('xa-owner', {
+        user: ownerId,
+        knauf_content_hash: 'HX',
+        knauf_asset_id: 'xa-owner',
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/xa',
+      });
+      await seedFile('xa-reuse', {
+        user: ownerId,
+        knauf_content_hash: 'HX',
+        knauf_asset_id: 'xa-owner', // A's other chat still references the same asset
+        embedded: true,
+        source: FileSources.local,
+        filepath: '/blob/xa',
+      });
+      const [ownerDoc] = await db.getFiles({ user: ownerId, file_id: { $in: ['xa-owner'] } });
+
+      // Deleter is buildReq()'s user (B), different from ownerId (A).
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files: [ownerDoc] });
+
+      expect(await File.findOne({ file_id: 'xa-owner' })).toBeNull(); // A's row deleted
+      expect(await File.findOne({ file_id: 'xa-reuse' })).not.toBeNull(); // A's reuse survives
+      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // asset KEPT (owner still references it)
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
+    });
   });
   // End [knauf]
 });

@@ -286,21 +286,29 @@ async function gcDedupRows({ req, dedupRows }) {
   if (!dedupRows.length) {
     return;
   }
-  const user = req.user.id;
 
-  // Build (content-hash → distinct shared assets) from the in-memory rows BEFORE
-  // deleting. Keyed by knauf_asset_id so a double-embed's two assets are both
-  // captured; any single row yields its asset (filepath copied at upload).
+  // Build the groups from the in-memory rows BEFORE deleting. A dedup group — and
+  // therefore the recount that decides physical GC — is per (OWNER, content-hash):
+  // content is deduped per-user and embeddings are user-owned, so the survivors of a
+  // group are the OWNER's remaining rows, NOT the deleter's. (The direct-delete route
+  // can hand us another user's file via a shared agent — keying on req.user.id would
+  // recount the wrong user, find zero survivors, and destroy the owner's still-shared
+  // asset. The chat cascade only ever collects req.user.id's own files, so this is a
+  // no-op there.) Within a group, key distinct assets by knauf_asset_id so a rare
+  // double-embed's two assets are both captured; any single row yields its asset
+  // (filepath/source/embedded copied at upload).
   const groups = new Map();
   for (const f of dedupRows) {
-    const assetId = f.knauf_asset_id ?? f.file_id;
-    let assets = groups.get(f.knauf_content_hash);
-    if (!assets) {
-      assets = new Map();
-      groups.set(f.knauf_content_hash, assets);
+    const ownerId = String(f.user);
+    const groupKey = `${ownerId} ${f.knauf_content_hash}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { user: f.user, hash: f.knauf_content_hash, assets: new Map() };
+      groups.set(groupKey, group);
     }
-    const prev = assets.get(assetId);
-    assets.set(assetId, {
+    const assetId = f.knauf_asset_id ?? f.file_id;
+    const prev = group.assets.get(assetId);
+    group.assets.set(assetId, {
       filepath: prev?.filepath ?? f.filepath,
       source: prev?.source ?? f.source,
       embedded: (prev?.embedded ?? false) || !!f.embedded,
@@ -317,10 +325,12 @@ async function gcDedupRows({ req, dedupRows }) {
     logger.error('[knauf][cascadeDeleteConvoFiles] agent-ref strip failed', error);
   }
 
-  // Stage 2 — GC physical assets for groups now empty (recount AFTER stage 1).
+  // Stage 2 — GC physical assets for (owner, hash) groups now empty (recount AFTER
+  // stage 1, scoped to the asset OWNER so a cross-user delete can't nuke a still-
+  // referenced asset).
   const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
   const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-  for (const [hash, assets] of groups) {
+  for (const { user, hash, assets } of groups.values()) {
     const survivors =
       (await db.getFiles({ user, knauf_content_hash: hash }, null, { file_id: 1 })) ?? [];
     if (survivors.length) {
