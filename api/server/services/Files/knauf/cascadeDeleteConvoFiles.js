@@ -451,8 +451,45 @@ async function deleteConvosWithCleanup({ req, filter }) {
   return dbResponse;
 }
 
+/**
+ * [knauf] KK20-204 — dedup-aware physical delete for an EXPLICIT set of files (the
+ * direct `DELETE /api/files` route), mirroring the chat-delete cascade's delete
+ * stage. Without this, removing a file that owns a content-hash-deduped blob /
+ * embedding set destroys the shared asset out from under other chats still
+ * pointing at it (the upstream `processDeleteRequest` is not group-aware).
+ *
+ * Content-hash-deduped rows go through the two-stage `gcDedupRows` (delete rows,
+ * then GC the shared asset only once its `(user, hash)` group is empty); legacy /
+ * no-hash rows keep the upstream `processDeleteRequest` path via `deletePlainRows`.
+ * `req.config` is ensured here (mirrors `cascadeDeleteCollectedFiles`) so the
+ * helper is self-sufficient even though the files route's middleware sets it.
+ *
+ * @param {{ req: import('express').Request, files: object[] }} params - `files`
+ *   MUST be full File DB docs (carrying `knauf_content_hash` / `filepath` /
+ *   `source` / `embedded`), NOT client `BatchFile`s: a deduped pointer routed as
+ *   "plain" would re-introduce the shared-asset deletion bug this closes.
+ * @returns {Promise<void>}
+ */
+async function deleteFilesWithDedupAwareness({ req, files }) {
+  if (!files?.length) {
+    return;
+  }
+  if (!req.config) {
+    const { getAppConfig } = require('~/server/services/Config');
+    req.config = await getAppConfig({
+      role: req.user?.role,
+      userId: req.user?.id,
+      tenantId: req.user?.tenantId,
+    });
+  }
+  await deletePlainRows({ req, plainRows: files.filter((file) => !file.knauf_content_hash) });
+  await gcDedupRows({ req, dedupRows: files.filter((file) => file.knauf_content_hash) });
+}
+
 module.exports = {
   deleteConvosWithCleanup,
+  // [knauf] KK20-204 — dedup-aware direct file delete (used by the files route).
+  deleteFilesWithDedupAwareness,
   // exported for unit tests + KK20-204 extension:
   collectConvoFilesForCleanup,
   cascadeDeleteCollectedFiles,

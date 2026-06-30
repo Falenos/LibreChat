@@ -48,6 +48,7 @@ const {
   collectConvoFilesForCleanup,
   cascadeDeleteCollectedFiles,
   partitionByRefCount,
+  deleteFilesWithDedupAwareness,
 } = require('./cascadeDeleteConvoFiles');
 
 describe('cascadeDeleteConvoFiles (KK20-203)', () => {
@@ -398,6 +399,89 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
         'legacy',
       ]);
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC path not taken
+    });
+  });
+
+  // [knauf] KK20-204 — the DIRECT file-delete path (DELETE /api/files → the files
+  // route) routes owned/authorized files through deleteFilesWithDedupAwareness so a
+  // deduped pointer's removal never destroys the shared asset another chat needs.
+  describe('deleteFilesWithDedupAwareness (KK20-204 direct delete)', () => {
+    const db = require('~/models');
+    const dedupExtra = (extra) => ({
+      knauf_content_hash: 'HASH-1',
+      embedded: true,
+      source: FileSources.local,
+      filepath: '/blob/canon',
+      ...extra,
+    });
+
+    test('deleting a pointer directly keeps the shared asset (canonical survives)', async () => {
+      await seedFile('canon-1', dedupExtra({}));
+      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      const [ptr] = await db.getFiles({ user: userId, file_id: { $in: ['ptr-2'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files: [ptr] });
+
+      expect(await File.findOne({ file_id: 'ptr-2' })).toBeNull(); // pointer row gone
+      expect(await File.findOne({ file_id: 'canon-1' })).not.toBeNull(); // asset owner survives
+      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // group not empty → asset kept
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
+    });
+
+    // The exact bug this fix closes: directly deleting the canonical ROW while a
+    // pointer in another chat still references the hash must NOT GC the shared asset.
+    test('deleting the canonical directly while a pointer survives keeps the asset', async () => {
+      await seedFile('canon-1', dedupExtra({}));
+      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      const [canon] = await db.getFiles({ user: userId, file_id: { $in: ['canon-1'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files: [canon] });
+
+      expect(await File.findOne({ file_id: 'canon-1' })).toBeNull(); // canonical row gone
+      expect(await File.findOne({ file_id: 'ptr-2' })).not.toBeNull(); // pointer survives
+      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // group not empty → asset kept
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
+    });
+
+    test('deleting the last reference GCs the shared asset exactly once', async () => {
+      await seedFile('canon-1', dedupExtra({}));
+      await seedFile('ptr-2', dedupExtra({ knauf_canonical_file_id: 'canon-1' }));
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1', 'ptr-2'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      expect(await File.countDocuments({ knauf_content_hash: 'HASH-1' })).toBe(0);
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1);
+      expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['canon-1']);
+      expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1);
+      expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-1');
+    });
+
+    test('a legacy/no-hash file goes through the upstream processDeleteRequest path', async () => {
+      await seedFile('legacy', { embedded: true, source: FileSources.local });
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['legacy'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      expect(mockProcessDeleteRequest).toHaveBeenCalledTimes(1);
+      expect(mockProcessDeleteRequest.mock.calls[0][0].files.map((f) => f.file_id)).toEqual([
+        'legacy',
+      ]);
+      expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC not taken for plain rows
+    });
+
+    test('a mixed batch splits: plain → processDeleteRequest, deduped → group GC', async () => {
+      await seedFile('legacy', { embedded: true, source: FileSources.local });
+      await seedFile('canon-1', dedupExtra({}));
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['legacy', 'canon-1'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      expect(mockProcessDeleteRequest.mock.calls[0][0].files.map((f) => f.file_id)).toEqual([
+        'legacy',
+      ]);
+      // canon-1 was the last row in its group → asset GC'd via the dedup path
+      expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-1');
     });
   });
   // End [knauf]

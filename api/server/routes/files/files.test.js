@@ -24,6 +24,14 @@ jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: jest.fn(() => ({})),
 }));
 
+// [knauf] KK20-204 — branches A/B of DELETE /files route owned/authorized deletes
+// through the dedup-aware dispatcher; mock it so these route tests assert routing,
+// not the (separately unit-tested) two-stage GC.
+jest.mock('~/server/services/Files/knauf/cascadeDeleteConvoFiles', () => ({
+  deleteFilesWithDedupAwareness: jest.fn().mockResolvedValue(undefined),
+}));
+// End [knauf]
+
 jest.mock('~/server/controllers/assistants/helpers', () => ({
   getOpenAIClient: jest.fn(),
 }));
@@ -61,6 +69,11 @@ jest.mock('~/config', () => ({
 }));
 
 const { processDeleteRequest } = require('~/server/services/Files/process');
+// [knauf] KK20-204 — dedup-aware delete dispatcher used by branches A/B.
+const {
+  deleteFilesWithDedupAwareness,
+} = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
+// End [knauf]
 
 // Import the router after mocks
 const router = require('./files');
@@ -203,7 +216,8 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.message).toBe('Files deleted successfully');
-      expect(processDeleteRequest).toHaveBeenCalled();
+      // KK20-204: branch A (owned files) now routes through the dedup-aware delete.
+      expect(deleteFilesWithDedupAwareness).toHaveBeenCalled();
     });
 
     it('should prevent deleting files not owned by user without agent context', async () => {
@@ -264,7 +278,8 @@ describe('File Routes - Delete with Agent Access', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.message).toBe('Files deleted successfully');
-      expect(processDeleteRequest).toHaveBeenCalled();
+      // KK20-204: branch B (agent-authorized) now routes through the dedup-aware delete.
+      expect(deleteFilesWithDedupAwareness).toHaveBeenCalled();
     });
 
     it('should prevent deleting files not attached to the specified agent', async () => {
