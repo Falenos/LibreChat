@@ -3,6 +3,11 @@ const { tool } = require('@langchain/core/tools');
 const { logger } = require('@librechat/data-schemas');
 const { generateShortLivedToken } = require('@librechat/api');
 const { Tools, EToolResources } = require('librechat-data-provider');
+
+// [knauf] Azure AI Search routing for agent file queries
+const useAzureSearchForAgents = () =>
+  (process.env.AZURE_SEARCH_ENABLED || '').toLowerCase() === 'true';
+// End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getFiles } = require('~/models');
 
@@ -114,9 +119,15 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
         return body;
       };
 
+      // [knauf] Route agent file queries to Azure AI Search endpoint when enabled
+      const queryUrl = useAzureSearchForAgents() && entity_id
+        ? `${process.env.RAG_API_URL}/agent/query`
+        : `${process.env.RAG_API_URL}/query`;
+      // End [knauf]
+
       const queryPromises = files.map((file) =>
         axios
-          .post(`${process.env.RAG_API_URL}/query`, createQueryBody(file), {
+          .post(queryUrl, createQueryBody(file), {
             headers: {
               Authorization: `Bearer ${jwtToken}`,
               'Content-Type': 'application/json',
