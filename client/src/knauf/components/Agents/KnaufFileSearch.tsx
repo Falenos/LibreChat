@@ -2,7 +2,7 @@
  * [knauf] fork of upstream
  * client/src/components/SidePanel/Agents/FileSearch.tsx.
  *
- * Four intentional changes vs upstream:
+ * Five intentional changes vs upstream:
  *   1. Inner "<label>" heading reading com_assistants_file_search — dropped;
  *      the enclosing KnaufSection already provides the section title.
  *   2. <FileSearchCheckbox /> — dropped; KnaufAgentConfig drives the
@@ -14,29 +14,26 @@
  *   4. KK20-123 — uploads are allowed on unsaved (ephemeral) agents. Local
  *      files picked before save are queued in `knaufPendingAgentFilesAtom`
  *      (Recoil, scoped by `knaufPendingForAgentIdAtom`) and rendered
- *      alongside real knowledge files via the same `FileContainer`
- *      primitive. The primary drain happens in AgentPanel's create
+ *      alongside real knowledge files in the condensed list (change 5).
+ *      The primary drain happens in AgentPanel's create
  *      mutation `onSuccess`: it awaits `useDrainPendingKnaufFiles(newId)`
  *      BEFORE calling `setCurrentAgentId`, so the panel transitions from
  *      Create to Edit only after every queued upload has settled. Failed
  *      files surface in Edit mode as red retry cards; clicking re-fires
  *      this file's local drain effect (handles the retry path through
  *      upstream's `handleFiles` pipeline).
+ *   5. KK20-188 — the saved-file <FileRow> and the pending-file card strip are
+ *      replaced by a single <KnaufKnowledgeFileList>: one condensed, searchable,
+ *      sortable list rendering saved + pending files as compact single-line
+ *      rows. It reuses getFileType()/useFileDeletion()/useDeleteFilesMutation
+ *      (same delete + icon behaviour as FileRow), so only the presentation
+ *      diverges. `removePending`/`retryPending` are passed straight through.
  *
- * Everything else (file row, SharePoint dropdown, endpointFileConfig.disabled
- * early-return) is preserved verbatim. When upstream FileSearch.tsx changes,
- * this file is the merge surface — diff it line-by-line.
+ * Everything else (SharePoint dropdown, endpointFileConfig.disabled early-return,
+ * the pending-file drain machinery) is preserved verbatim. When upstream
+ * FileSearch.tsx changes, this file is the merge surface — diff it line-by-line.
  */
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type ReactNode,
-} from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Folder } from 'lucide-react';
 import * as Ariakit from '@ariakit/react';
 import { useRecoilState } from 'recoil';
@@ -53,15 +50,10 @@ import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePo
 import { useFileHandlingNoChatContext } from '~/hooks/Files/useFileHandling';
 import { useLocalize, useLazyEffect } from '~/hooks';
 import { SharePointPickerDialog } from '~/components/SharePoint';
-import FileRow from '~/components/Chat/Input/Files/FileRow';
-import FileContainer from '~/components/Chat/Input/Files/FileContainer';
 import { useGetFileConfig, useGetStartupConfig } from '~/data-provider';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
-
-const FileRowWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
-  <div className="flex flex-wrap gap-2">{children}</div>
-);
+import KnaufKnowledgeFileList from './KnaufKnowledgeFileList';
 
 type UploadedFileLike = { filename?: string; bytes?: number; size?: number };
 
@@ -363,52 +355,20 @@ function KnaufFileSearch({
     });
   };
 
-  const retryLabel = localize('com_knauf_retry_upload');
-
   return (
     <div className="w-full">
       <div className="flex flex-col gap-3">
-        <FileRow
+        {/* KK20-188 — condensed, searchable list replacing upstream FileRow +
+            the pending-card strip. Saved + pending files render as one list. */}
+        <KnaufKnowledgeFileList
           files={files}
           setFiles={setFiles}
           agent_id={agent_id}
           tool_resource={EToolResources.file_search}
-          Wrapper={FileRowWrapper}
+          pendingFiles={pendingFiles}
+          onRemovePending={removePending}
+          onRetryPending={retryPending}
         />
-        {pendingFiles.size > 0 ? (
-          <FileRowWrapper>
-            {Array.from(pendingFiles.entries()).map(([tempId, entry]) => {
-              const isError = entry.status === 'error';
-              const isUploading = entry.status === 'uploading';
-              // Reuse upstream's existing in-icon Spinner via FilePreview's
-              // `progress < 1` branch (see FilePreview.tsx:24-30). Passing
-              // `progress: 0.5` while uploading mirrors how the real
-              // ExtendedFile entries render mid-upload — same visual
-              // language, no custom overlay needed.
-              return (
-                <FileContainer
-                  key={tempId}
-                  file={{
-                    filename: entry.file.name,
-                    type: entry.file.type,
-                    progress: isUploading ? 0.5 : 1,
-                  }}
-                  containerClassName={isError ? 'ring-1 ring-red-500/60 rounded-2xl' : undefined}
-                  buttonClassName={isError ? 'cursor-pointer' : undefined}
-                  onClick={
-                    isError
-                      ? () => {
-                          retryPending(tempId);
-                          showToast({ message: retryLabel, status: 'info' });
-                        }
-                      : undefined
-                  }
-                  onDelete={isUploading ? undefined : () => removePending(tempId)}
-                />
-              );
-            })}
-          </FileRowWrapper>
-        ) : null}
         <div>
           {sharePointEnabled ? (
             <DropdownPopup

@@ -390,6 +390,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/knauf/costs*.js` | `@librechat/api` cache helpers (lazy), `librechat-data-provider` time constants | Medium — aggregates transaction rows and caches summaries via the existing Keyv/Redis cache infrastructure | `costs.spec.js` | NO-TICKET |
 | `client/src/knauf/components/Chat/KnaufCost*.tsx` | `@tanstack/react-query`, `librechat-data-provider`, `lucide-react`, `~/hooks`, `~/utils`, `~/knauf/data-provider/*` | Medium — conversation-scoped cost query/provider and display widgets consume upstream query/runtime hooks but keep rendering Knauf-owned | `KnaufCostDisplay.knauf.spec.tsx`, `MessageChromeIntegration.knauf.spec.tsx` | NO-TICKET |
 | `client/src/knauf/components/Chat/ChatViewCostProvider.knauf.spec.tsx` | `~/components/Chat/ChatView`; upstream chat providers/hooks mocked | Low — test-only; pins ChatView to the Knauf cost provider mount | Self | NO-TICKET |
+| `client/src/knauf/components/Agents/KnaufKnowledgeFileList.tsx` | `@librechat/client` (Input, Spinner, DropdownPopup), `@ariakit/react`, `~/hooks` (useLocalize, useDebounce), `~/hooks/Files` (useFileDeletion), `~/data-provider` (useDeleteFilesMutation), `~/utils` (getFileType) | Medium — condensed searchable knowledge-file list rendered inside KnaufFileSearch, replacing upstream FileRow/FileContainer for the agent knowledge list; reuses upstream delete/localize/debounce hooks + getFileType but extends no upstream contract | Manual | KK20-188 |
 <!-- seams:new:end -->
 
 ## Static Assets
