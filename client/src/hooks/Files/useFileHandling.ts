@@ -25,6 +25,9 @@ import { useChatContext } from '~/Providers/ChatContext';
 import { ephemeralAgentByConvoId } from '~/store';
 import useClientResize from './useClientResize';
 import useUpdateFiles from './useUpdateFiles';
+// [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
+import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
+// End [knauf]
 
 type UseFileHandling = {
   fileSetter?: FileSetter;
@@ -57,8 +60,8 @@ export function dedupeFilesByAsset(files: Map<string, ExtendedFile>): Map<string
   const seenAssets = new Set<string>();
   const duplicateKeys: string[] = [];
   for (const [key, file] of files) {
-    const assetId = file.knauf_asset_id;
-    if (assetId == null || assetId === '') {
+    const assetId = knaufAssetKey(file);
+    if (assetId === undefined) {
       continue;
     }
     if (seenAssets.has(assetId)) {

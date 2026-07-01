@@ -3,6 +3,9 @@ import type { TFile } from 'librechat-data-provider';
 import { OGDialog, OGDialogContent, OGDialogHeader, OGDialogTitle } from '@librechat/client';
 import { useGetFiles } from '~/data-provider';
 import { DataTable, columns } from './Table';
+// [knauf] KK20-204 — collapse content-hash dedup duplicates to one row per asset.
+import { dedupeLibraryFilesByAsset } from '~/knauf/hooks/Files/dedupeLibraryFiles';
+// End [knauf]
 import { useLocalize } from '~/hooks';
 
 export function MyFilesModal({
@@ -17,12 +20,16 @@ export function MyFilesModal({
   const localize = useLocalize();
 
   const { data: files = [] } = useGetFiles<TFile[]>({
+    // [knauf] KK20-204 — dedupe to one row per content-hash dedup asset (owner row
+    // preferred) BEFORE normalizing context/filterSource, so the manager shows each
+    // file once instead of once per upload.
     select: (files) =>
-      files.map((file) => {
+      dedupeLibraryFilesByAsset(files).map((file) => {
         file.context = file.context ?? FileContext.unknown;
         file.filterSource = file.source === FileSources.firebase ? FileSources.local : file.source;
         return file;
       }),
+    // End [knauf]
   });
 
   return (
