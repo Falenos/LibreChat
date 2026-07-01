@@ -5,6 +5,11 @@ const { logger } = require('@librechat/data-schemas');
 const { FileSources } = require('librechat-data-provider');
 const { logAxiosError, generateShortLivedToken } = require('@librechat/api');
 
+// [knauf] Azure AI Search routing — when enabled, agent files are routed to
+// the /agent/* endpoints (Azure AI Search) instead of the default pgvector ones.
+const useAzureSearchForAgents = () =>
+  (process.env.AZURE_SEARCH_ENABLED || '').toLowerCase() === 'true';
+
 /**
  * Deletes a file from the vector database. This function takes a file object, constructs the full path, and
  * verifies the path's validity before deleting the file. If the path is invalid, an error is thrown.
@@ -73,6 +78,18 @@ const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
+  // [knauf] Route agent file deletes to Azure AI Search endpoint when enabled
+  if (useAzureSearchForAgents() && file.context === 'agents') {
+    const jwtToken = generateShortLivedToken(req.user.id);
+    return axios.delete(`${process.env.RAG_API_URL}/agent/documents/${file.file_id}`, {
+      headers: {
+        Authorization: `Bearer ${jwtToken}`,
+        'Content-Type': 'application/json',
+        accept: 'application/json',
+      },
+    });
+  }
+  // End [knauf]
   return deleteVectorsByIds(req, [file.file_id]);
 };
 // End [knauf]
@@ -114,7 +131,13 @@ async function uploadVectors({ req, file, file_id, entity_id, storageMetadata })
 
     const formHeaders = formData.getHeaders();
 
-    const response = await axios.post(`${process.env.RAG_API_URL}/embed`, formData, {
+    // [knauf] Route agent file uploads to Azure AI Search endpoint when enabled
+    const embedUrl = useAzureSearchForAgents() && entity_id
+      ? `${process.env.RAG_API_URL}/agent/embed`
+      : `${process.env.RAG_API_URL}/embed`;
+    // End [knauf]
+
+    const response = await axios.post(embedUrl, formData, {
       headers: {
         Authorization: `Bearer ${jwtToken}`,
         accept: 'application/json',
