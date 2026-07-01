@@ -564,6 +564,13 @@ export interface ExtendedFile {
   embedded?: boolean;
   tool_resource?: string;
   metadata?: t.TFile['metadata'];
+  // [knauf] KK20-204 — content-hash dedup asset pointer. The server mints a
+  // distinct file_id per upload but points repeat uploads of identical content
+  // at one shared asset via knauf_asset_id. The client carries it so duplicate
+  // chat attachments (same asset) can be collapsed to a single row. See
+  // useFileHandling onSuccess.
+  knauf_asset_id?: string;
+  // End [knauf]
 }
 
 export interface ModelItemProps {
