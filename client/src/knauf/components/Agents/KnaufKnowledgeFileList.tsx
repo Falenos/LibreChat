@@ -129,24 +129,37 @@ const SavedFileRow = memo(function SavedFileRow({
   onDelete: (file: ExtendedFile) => void;
 }>) {
   const handleDelete = useCallback(() => onDelete(file), [file, onDelete]);
+  // During an agent upload the in-progress entry carries the native File but no
+  // `filename` yet — useFileHandling sets `filename` only after the server
+  // round-trip, and for agent uploads it refetches rather than updating the
+  // local entry (useFileHandling.ts onSuccess). Fall back to the File's name so
+  // the row shows the name throughout the upload instead of going blank. KK20-188
+  const displayName = file.filename || file.file?.name || '';
+  // A still-uploading entry (progress < 1) shows a spinner + name, no size/delete
+  // — mirrors the pending-row treatment and the upstream FilePreview spinner.
+  const uploading = (file.progress ?? 1) < 1;
   return (
-    <FileRowShell filename={file.filename ?? ''} type={file.type}>
-      {typeof file.size === 'number' && (
-        <span className="shrink-0 text-xs tabular-nums text-text-secondary">
-          {formatFileSize(file.size)}
-        </span>
+    <FileRowShell filename={displayName} type={file.type} uploading={uploading}>
+      {!uploading && (
+        <>
+          {typeof file.size === 'number' && (
+            <span className="shrink-0 text-xs tabular-nums text-text-secondary">
+              {formatFileSize(file.size)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleDelete}
+            aria-label={localize('com_ui_attach_remove')}
+            className={cn(
+              ACTION_CLASS,
+              'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+            )}
+          >
+            <Trash2 className="size-4" aria-hidden="true" />
+          </button>
+        </>
       )}
-      <button
-        type="button"
-        onClick={handleDelete}
-        aria-label={localize('com_ui_attach_remove')}
-        className={cn(
-          ACTION_CLASS,
-          'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
-        )}
-      >
-        <Trash2 className="size-4" aria-hidden="true" />
-      </button>
     </FileRowShell>
   );
 });
