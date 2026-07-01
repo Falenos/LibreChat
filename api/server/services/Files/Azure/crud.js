@@ -65,6 +65,31 @@ if (process.env.AZURE_URL_EXPIRY_SECONDS !== undefined) {
   }
 }
 
+// [knauf] KK20-199 — Backdate the SAS `startsOn` by a clock-skew buffer. A
+// short-TTL SAS (e.g. AZURE_URL_EXPIRY_SECONDS=600) signed "from now" is
+// rejected as *not yet valid* (403 AuthenticationError) when Azure's storage
+// clock runs slightly ahead of the app server. Industry standard is a few
+// minutes of start-time buffer; forward validity stays ~AZURE_URL_EXPIRY_SECONDS
+// because `expiresOn` is computed from `now`, not from the backdated start.
+const DEFAULT_AZURE_SAS_CLOCK_SKEW_SECONDS = 5 * 60;
+let azureSasClockSkewSeconds = DEFAULT_AZURE_SAS_CLOCK_SKEW_SECONDS;
+if (process.env.AZURE_SAS_CLOCK_SKEW_SECONDS !== undefined) {
+  const parsed = parseInt(process.env.AZURE_SAS_CLOCK_SKEW_SECONDS, 10);
+  if (!Number.isNaN(parsed) && parsed >= 0) {
+    azureSasClockSkewSeconds = Math.min(parsed, 60 * 60);
+  } else {
+    logger.warn(
+      `[Azure] Invalid AZURE_SAS_CLOCK_SKEW_SECONDS value: "${process.env.AZURE_SAS_CLOCK_SKEW_SECONDS}". Using ${DEFAULT_AZURE_SAS_CLOCK_SKEW_SECONDS}-second skew buffer.`,
+    );
+  }
+}
+
+// Just-in-time re-sign window for server-side blob downloads. The download
+// happens immediately, so we only re-sign a SAS URL that is within this many
+// seconds of expiry (rather than the aggressive read-path "always re-sign").
+const AZURE_DOWNLOAD_REFRESH_BUFFER_SECONDS = 60;
+// End [knauf]
+
 if (process.env.AZURE_REFRESH_EXPIRY_MS) {
   const parsed = parseInt(process.env.AZURE_REFRESH_EXPIRY_MS, 10);
   if (!Number.isNaN(parsed) && parsed > 0) {
@@ -140,7 +165,15 @@ function getUserDelegationKey(blobServiceClient) {
     _delegationKeyState = null;
   }
 
-  const startsOn = new Date();
+  // [knauf] KK20-199 — Backdate the delegation key's start by the same skew as
+  // the SAS (getSignedAzureURL). Azure rejects a user-delegation SAS whose
+  // `st` falls before the key's `signedStart`; since the SAS `st` is backdated
+  // by `azureSasClockSkewSeconds`, the key must start at least that far back or
+  // every SAS signed within `skew` seconds of a fresh key mint (e.g. right
+  // after a deploy) would 403 with AuthenticationFailed. Expiry is anchored to
+  // the same backdated start, so the key still lives ~7 days.
+  const startsOn = new Date(Date.now() - azureSasClockSkewSeconds * 1000);
+  // End [knauf]
   const expiresOn = new Date(startsOn.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
   const promise = blobServiceClient.getUserDelegationKey(startsOn, expiresOn).then(
@@ -174,8 +207,13 @@ async function getSignedAzureURL({ blobPath, containerName = AZURE_CONTAINER_NAM
     const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
     const accountName = process.env.AZURE_STORAGE_ACCOUNT_NAME;
 
-    const startsOn = new Date();
-    const expiresOn = new Date(startsOn.getTime() + azureUrlExpirySeconds * 1000);
+    // [knauf] KK20-199 — Backdate `startsOn` by the clock-skew buffer so a
+    // short-TTL SAS isn't rejected as "not yet valid" under clock drift.
+    // `expiresOn` is anchored to `now` so forward validity stays ~TTL.
+    const now = Date.now();
+    const startsOn = new Date(now - azureSasClockSkewSeconds * 1000);
+    const expiresOn = new Date(now + azureUrlExpirySeconds * 1000);
+    // End [knauf]
 
     if (connectionString) {
       const blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
@@ -491,6 +529,17 @@ async function uploadFileToAzure({
  */
 async function getAzureFileStream(_req, fileURL) {
   try {
+    // [knauf] KK20-199 — Just-in-time re-sign a near-expiry SAS URL before the
+    // download. This primitive fetches the blob *via the URL itself*, so a
+    // stale token 403s here — which is exactly what let `encodeAndFormat` fall
+    // back to embedding the raw stale URL and 403 the model. Re-signing at the
+    // fetch makes every server-side download (base64 inline, RAG ingest, file
+    // streaming) self-healing. Small buffer: the download is immediate, so we
+    // only re-sign when actually near expiry. No-op for fresh/non-Azure URLs.
+    if (needsRefreshAzure(fileURL, AZURE_DOWNLOAD_REFRESH_BUFFER_SECONDS)) {
+      fileURL = (await getNewAzureURL(fileURL)) ?? fileURL;
+    }
+    // End [knauf]
     const response = await axios({
       method: 'get',
       url: fileURL,

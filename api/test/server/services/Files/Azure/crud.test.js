@@ -13,6 +13,7 @@ const {
   getNewAzureURL,
   getSignedAzureURL,
   getAzureURL,
+  getAzureFileStream,
   deleteFileFromAzure,
   refreshAzureFileUrls,
   refreshAzureUrl,
@@ -28,6 +29,12 @@ jest.mock('@librechat/api', () => ({
   getAzureContainerClient: jest.fn(),
   deleteRagFile: jest.fn(),
 }));
+
+// [knauf] KK20-199 — getAzureFileStream downloads via the SAS URL itself, so
+// its JIT re-sign path exercises axios. Nothing else in this suite uses axios.
+jest.mock('axios', () => jest.fn());
+const axios = require('axios');
+// End [knauf]
 
 // Mock @azure/identity so the Managed Identity path can be exercised without
 // the real credential chain trying to reach IMDS / AAD. Both credential
@@ -376,6 +383,11 @@ describe('Azure crud.js - URL refresh tests', () => {
       // crud.js reads AZURE_URL_EXPIRY_SECONDS at module load. Re-require the module
       // in an isolated registry with the env var cleared so we exercise the default.
       delete process.env.AZURE_URL_EXPIRY_SECONDS;
+      // [knauf] KK20-199 — also clear the skew buffer so we exercise its 300s
+      // default; the signed window is now skew + TTL (~600s), while forward
+      // validity (se - now) stays ~300s.
+      delete process.env.AZURE_SAS_CLOCK_SKEW_SECONDS;
+      // End [knauf]
       let signed;
       const before = Date.now();
       await jest.isolateModulesAsync(async () => {
@@ -389,14 +401,65 @@ describe('Azure crud.js - URL refresh tests', () => {
       const url = new URL(signed);
       const expiresAt = new Date(url.searchParams.get('se')).getTime();
       const startsAt = new Date(url.searchParams.get('st')).getTime();
-      // Allow ±2s slack vs. the 300-second target.
-      expect(expiresAt - startsAt).toBeGreaterThanOrEqual(298_000);
-      expect(expiresAt - startsAt).toBeLessThanOrEqual(302_000);
-      // And `se` should be roughly 300s after "now".
+      // [knauf] KK20-199 — `st` is backdated by the default 300s skew buffer,
+      // so the full signed window spans skew + TTL (~600s), ±2s slack.
+      expect(expiresAt - startsAt).toBeGreaterThanOrEqual(598_000);
+      expect(expiresAt - startsAt).toBeLessThanOrEqual(602_000);
+      // `st` sits ~300s in the past relative to "now".
+      expect(before - startsAt).toBeGreaterThanOrEqual(298_000);
+      expect(after - startsAt).toBeLessThanOrEqual(302_000);
+      // End [knauf]
+      // And `se` should still be roughly 300s (the TTL) after "now".
       expect(expiresAt - before).toBeGreaterThanOrEqual(298_000);
       expect(expiresAt - after).toBeLessThanOrEqual(302_000);
     });
   });
+
+  // [knauf] KK20-199 — getAzureFileStream re-signs a near-expiry SAS URL just
+  // before the download. This primitive fetches the blob via the URL itself,
+  // so a stale token 403s here (which then leaks the raw URL to the model via
+  // encodeAndFormat's fallback). Re-signing makes every server-side download
+  // self-healing.
+  describe('getAzureFileStream - just-in-time SAS re-sign', () => {
+    beforeEach(() => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
+      process.env.AZURE_CONTAINER_NAME = 'files';
+      axios.mockReset();
+      axios.mockResolvedValue({ data: 'STREAM' });
+    });
+
+    it('re-signs a near-expiry SAS URL and downloads the fresh one', async () => {
+      const freshUrl = 'https://test.blob.core.windows.net/files/images/user123/x.pdf';
+      getAzureContainerClient.mockResolvedValue({
+        getBlockBlobClient: jest.fn().mockReturnValue({ url: freshUrl }),
+      });
+      const pastDate = new Date(Date.now() - 3_600_000).toISOString();
+      const stale = `https://test.blob.core.windows.net/files/images/user123/x.pdf?se=${encodeURIComponent(
+        pastDate,
+      )}&sp=r&sig=OLD`;
+
+      const stream = await getAzureFileStream({}, stale);
+
+      expect(stream).toBe('STREAM');
+      expect(axios).toHaveBeenCalledTimes(1);
+      expect(axios).toHaveBeenCalledWith(expect.objectContaining({ url: freshUrl }));
+    });
+
+    it('downloads a far-from-expiry URL unchanged (no re-sign)', async () => {
+      const futureDate = new Date(Date.now() + 7_200_000).toISOString();
+      const freshUrl = `https://test.blob.core.windows.net/files/images/user123/x.pdf?se=${encodeURIComponent(
+        futureDate,
+      )}&sp=r&sig=NEW`;
+
+      const stream = await getAzureFileStream({}, freshUrl);
+
+      expect(stream).toBe('STREAM');
+      expect(axios).toHaveBeenCalledWith(expect.objectContaining({ url: freshUrl }));
+      // getNewAzureURL is never reached, so the container client isn't consulted.
+      expect(getAzureContainerClient).not.toHaveBeenCalled();
+    });
+  });
+  // End [knauf]
 
   describe('deleteFileFromAzure', () => {
     const blobDelete = jest.fn();
@@ -672,5 +735,38 @@ describe('Azure crud.js - URL refresh tests', () => {
         process.env.NODE_ENV = originalNodeEnv;
       }
     });
+
+    // [knauf] KK20-199 — Azure rejects a user-delegation SAS whose `st` falls
+    // before the delegation key's `signedStart`. Since getSignedAzureURL
+    // backdates the SAS `st` by the clock-skew buffer, the key must start at
+    // least that far back too. This pins keyStart <= sasStart; without the fix
+    // (key minted at `new Date()`, SAS backdated 300s) it fails.
+    it('mints the delegation key with a start no later than the backdated SAS start', async () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'development';
+      delete process.env.AZURE_SAS_CLOCK_SKEW_SECONDS; // exercise the 300s default
+      try {
+        const before = Date.now();
+        await runWithMockedDelegationKey(async (fresh, getKeySpy) => {
+          const signed = await fresh.getSignedAzureURL({
+            blobPath: 'images/u/x.pdf',
+            containerName: 'files',
+          });
+          const sasStart = new Date(new URL(signed).searchParams.get('st')).getTime();
+          const keyStart = getKeySpy.mock.calls[0][0].getTime();
+          // The key window must open no later than the SAS window. The SAS `st`
+          // in the URL is truncated to whole seconds by the SDK, while keyStart
+          // is full-ms, so allow 1s of truncation slack.
+          expect(keyStart).toBeLessThanOrEqual(sasStart + 1000);
+          // The key start is backdated ~300s (the default skew) from "now" —
+          // this is the actual fix; without it keyStart ≈ now (0s backdate).
+          expect(before - keyStart).toBeGreaterThanOrEqual(298_000);
+          expect(before - keyStart).toBeLessThanOrEqual(302_000);
+        });
+      } finally {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    });
+    // End [knauf]
   });
 });
