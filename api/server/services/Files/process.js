@@ -649,29 +649,75 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   // Dual storage pattern for RAG files: Storage + Vector DB
   let storageResult, embeddingResult;
   const isImageFile = file.mimetype.startsWith('image');
-  const source = getFileStrategy(appConfig, { isImage: isImageFile });
+  let source = getFileStrategy(appConfig, { isImage: isImageFile });
+  // [knauf] KK20-204 — per-user content-hash dedup bookkeeping (file_search path only).
+  let knaufContentHash;
+  let knaufAssetId;
+  let knaufDedupOwner;
+  // End [knauf]
 
   if (tool_resource === EToolResources.file_search) {
-    // FIRST: Upload to Storage for permanent backup (S3/local/etc.)
-    const { handleFileUpload } = getStrategyFunctions(source);
-    const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
-    storageResult = await sanitizedUploadFn({
-      req,
-      file,
-      file_id,
-      basePath,
-      entity_id,
-    });
+    // [knauf] KK20-204 — per-user content-hash dedup is scoped to CHAT/message
+    // attachments ONLY. Agent-library knowledge (added to a persistent agent's
+    // file_search via the builder; EDIT-permission gated upstream) must stay
+    // agent-scoped so EVERY user with access to the agent can retrieve it — so it
+    // takes the pre-dedup path. messageAttachment is the discriminator: chat uploads
+    // always carry message_file='true' and never mutate the agent's tool_resources;
+    // builder uploads carry neither. See knauf/docs/proposals/file-dedup-content-hash.md.
+    if (messageAttachment) {
+      // Personal chat attachment: dedup + USER-owned embed (private to the uploader,
+      // reusable across the user's own chats via the RAG JWT-user fallback).
+      const { computeContentHash, findAssetForHash } = require('./knauf/contentDedup');
+      knaufContentHash = await computeContentHash(file.path);
 
-    // SECOND: Upload to Vector DB
-    const { uploadVectors } = require('./VectorDB/crud');
+      const knaufAsset = await findAssetForHash({
+        user: req.user.id,
+        knauf_content_hash: knaufContentHash,
+      });
+      if (knaufAsset) {
+        // HIT — reuse the shared asset's blob + embeddings; skip storage upload + embed.
+        // This row points at the SAME asset id (knauf_asset_id), so it keeps working even
+        // if the row that first embedded the content is later deleted.
+        knaufAssetId = knaufAsset.knauf_asset_id;
+        source = knaufAsset.source ?? source;
+        storageResult = {
+          bytes: knaufAsset.bytes,
+          filename: knaufAsset.filename,
+          filepath: knaufAsset.filepath,
+          embedded: knaufAsset.embedded,
+        };
+        embeddingResult = { embedded: knaufAsset.embedded, filename: knaufAsset.filename };
+        // No storage upload on a hit, so the temp file isn't consumed here — the
+        // files.js route's `finally` cleans it up (don't unlink it twice).
+      } else {
+        // MISS — this upload becomes the asset owner. Embed USER-owned (entity_id = user
+        // id) so the single embedding is reusable across all of this user's chats via the
+        // RAG JWT-user fallback (spike-confirmed). Claim ownership via knauf_dedup_owner —
+        // a concurrent first-upload that loses the unique-owner index race at createFile
+        // falls back to a non-owner row.
+        knaufAssetId = file_id;
+        knaufDedupOwner = true;
+        const { handleFileUpload } = getStrategyFunctions(source);
+        const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
+        storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
-    embeddingResult = await uploadVectors({
-      req,
-      file,
-      file_id,
-      entity_id,
-    });
+        const { uploadVectors } = require('./VectorDB/crud');
+        embeddingResult = await uploadVectors({ req, file, file_id, entity_id: req.user.id });
+      }
+    } else {
+      // Agent-library knowledge: embed AGENT-scoped (entity_id is already agent_id here)
+      // so everyone with access to the agent can read it. NOT per-user deduped — the
+      // knauf_content_hash / knauf_asset_id / knauf_dedup_owner fields stay undefined
+      // (dropped by removeNullishValues), so these rows never enter the per-user dedup
+      // lookup, the unique-owner index, or the dedup-aware GC.
+      const { handleFileUpload } = getStrategyFunctions(source);
+      const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
+      storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
+
+      const { uploadVectors } = require('./VectorDB/crud');
+      embeddingResult = await uploadVectors({ req, file, file_id, entity_id });
+    }
+    // End [knauf]
 
     // Vector status will be stored at root level, no need for metadata
     fileInfoMetadata = {};
@@ -741,9 +787,36 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     source,
     height,
     width,
+    // [knauf] KK20-204 — content-hash dedup bookkeeping. All undefined on non-
+    // file_search paths (→ dropped by removeNullishValues). knauf_asset_id is the
+    // file_id the shared blob + embeddings live under (own id when this row is the
+    // asset owner; the owner's id when this row reuses an existing asset).
+    // knauf_dedup_owner marks the embed owner (unique per (user, hash) via index).
+    knauf_content_hash: knaufContentHash,
+    knauf_asset_id: knaufAssetId,
+    knauf_dedup_owner: knaufDedupOwner,
+    // End [knauf]
   });
 
-  const result = await db.createFile(fileInfo, true);
+  // [knauf] KK20-204 — unique-owner index: at most one knauf_dedup_owner row per
+  // (user, content-hash). On a concurrent first-upload race the loser's insert hits
+  // a duplicate-key error; accept it as a non-owner row (its own embedding is a
+  // transient duplicate the delete-time group GC reclaims) and log so the race
+  // frequency is observable. Retrieval/GC key on knauf_asset_id, so the row works.
+  let result;
+  try {
+    result = await db.createFile(fileInfo, true);
+  } catch (error) {
+    if (error?.code === 11000 && fileInfo.knauf_dedup_owner) {
+      logger.info(
+        '[knauf][dedup] concurrent owner claim for content-hash; recording this upload as a non-owner duplicate (group GC will reclaim it)',
+      );
+      result = await db.createFile({ ...fileInfo, knauf_dedup_owner: undefined }, true);
+    } else {
+      throw error;
+    }
+  }
+  // End [knauf]
 
   res.status(200).json({ message: 'Agent file uploaded and processed successfully', ...result });
 };

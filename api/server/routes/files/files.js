@@ -36,6 +36,14 @@ const { refreshAzureFileUrls } = require('~/server/services/Files/Azure/crud');
 const { getFileURLRefreshCacheTime } = require('~/server/utils/getFileStrategy');
 // End [knauf]
 const { hasAccessToFilesViaAgent } = require('~/server/services/Files');
+// [knauf] KK20-204 — dedup-aware direct file delete: removing a file that owns a
+// content-hash-deduped blob/embedding set must GC the shared asset only when its
+// (user, hash) group is empty, mirroring the chat-delete cascade. Lazy require of
+// process.js stays inside the module, so this top-level import is load-cycle-safe.
+const {
+  deleteFilesWithDedupAwareness,
+} = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
+// End [knauf]
 const { cleanFileName } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
@@ -193,7 +201,11 @@ router.delete('/', async (req, res) => {
     }
 
     if (nonOwnedFiles.length === 0) {
-      await processDeleteRequest({ req, files: ownedFiles });
+      // [knauf] KK20-204 — route through the dedup-aware delete so a deduped
+      // pointer's removal GCs the shared blob/vectors only when its content-hash
+      // group is empty. `ownedFiles` are full DB docs (from db.getFiles above).
+      await deleteFilesWithDedupAwareness({ req, files: ownedFiles });
+      // End [knauf]
       logger.debug(
         `[/files] Files deleted successfully: ${ownedFiles
           .filter((f) => f.file_id)
@@ -271,7 +283,13 @@ router.delete('/', async (req, res) => {
         .json({ message: 'File associations removed successfully from Azure Assistant' });
     }
 
-    await processDeleteRequest({ req, files: authorizedFiles });
+    // [knauf] KK20-204 — dedup-aware delete for the owned + agent-authorized set
+    // (full DB docs); deduped pointers GC the shared asset only when their group
+    // is empty. Branches above (agent/assistant unlink with dbFiles.length === 0)
+    // stay on processDeleteRequest: they operate on client BatchFiles with no DB
+    // row and need the per-agent/assistant unlink scope this dispatcher lacks.
+    await deleteFilesWithDedupAwareness({ req, files: authorizedFiles });
+    // End [knauf]
 
     logger.debug(
       `[/files] Files deleted successfully: ${authorizedFiles

@@ -26,4 +26,9 @@ export interface IMongoFile extends Omit<Document, 'model'> {
   createdAt?: Date;
   updatedAt?: Date;
   tenantId?: string;
+  // [knauf] KK20-204 — per-user content-hash dedup (see schema/file.ts)
+  knauf_content_hash?: string;
+  knauf_asset_id?: string;
+  knauf_dedup_owner?: boolean;
+  // End [knauf]
 }

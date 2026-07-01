@@ -82,6 +82,30 @@ const file: Schema<IMongoFile> = new Schema(
       type: String,
       index: true,
     },
+    // [knauf] KK20-204 — per-user content-hash deduplication.
+    // knauf_content_hash = SHA-256 of the uploaded bytes (per-user dedup key).
+    // knauf_asset_id = the file_id under which the shared blob + embeddings
+    // physically live. Set on EVERY deduped row: the embed owner stores its own
+    // file_id; reuse rows store the owner's file_id. Keying the asset by a stable
+    // id (not an elected, deletable "canonical" row) means deleting any single row
+    // never orphans the asset or forces a re-embed. See
+    // knauf/docs/proposals/file-dedup-content-hash.md.
+    knauf_content_hash: {
+      type: String,
+    },
+    knauf_asset_id: {
+      type: String,
+    },
+    // knauf_dedup_owner marks the single row per (user, content_hash) that first
+    // embedded the asset. The unique partial index below enforces "at most one
+    // owner per group" — a concurrent first-upload that loses the race inserts a
+    // non-owner row instead (its own embedding is a transient duplicate the
+    // delete-time group GC reclaims). Used to detect/instrument the race; retrieval
+    // and GC key on knauf_asset_id, not this flag.
+    knauf_dedup_owner: {
+      type: Boolean,
+    },
+    // End [knauf]
   },
   {
     timestamps: true,
@@ -93,5 +117,21 @@ file.index(
   { filename: 1, conversationId: 1, context: 1, tenantId: 1 },
   { unique: true, partialFilterExpression: { context: FileContext.execute_code } },
 );
+// [knauf] KK20-204 — per-user dedup lookup on upload + content-hash-group refcount
+// at delete. Non-unique (a group = the embed owner + N reuse rows share (user,
+// hash)); partial so legacy rows without a hash never enter the index.
+file.index(
+  { user: 1, knauf_content_hash: 1 },
+  { partialFilterExpression: { knauf_content_hash: { $exists: true } } },
+);
+// Unique-owner invariant: at most one embed-owner per (user, content-hash). A
+// concurrent first-upload that loses this race fails the insert with a duplicate-key
+// error and falls back to a non-owner row (handled in processAgentFileUpload). The
+// knauf_dedup_owner key disambiguates this key pattern from the lookup index above.
+file.index(
+  { user: 1, knauf_content_hash: 1, knauf_dedup_owner: 1 },
+  { unique: true, partialFilterExpression: { knauf_dedup_owner: true } },
+);
+// End [knauf]
 
 export default file;

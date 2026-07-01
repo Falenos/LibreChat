@@ -1,7 +1,7 @@
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid') }));
 
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
+  logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
 jest.mock('@librechat/agents', () => ({
@@ -44,6 +44,9 @@ jest.mock('~/models', () => ({
   deleteFiles: jest.fn(),
   addAgentResourceFile: jest.fn().mockResolvedValue({}),
   removeAgentResourceFiles: jest.fn(),
+  // [knauf] KK20-204 — within-chat idempotency check loads the agent + its file_search files.
+  getAgent: jest.fn(),
+  getFiles: jest.fn(),
 }));
 
 jest.mock('~/server/utils/getFileStrategy', () => ({
@@ -68,6 +71,14 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   uploadVectors: jest.fn().mockResolvedValue({ embedded: true, filename: 'doc.pdf' }),
   deleteVectors: jest.fn(),
   deleteVectorsByIds: jest.fn(),
+}));
+// End [knauf]
+
+// [knauf] KK20-204 — the file_search path now hashes the bytes + looks up the shared
+// asset for per-user dedup; stub both so tests don't touch the disk or the DB. Default = MISS.
+jest.mock('~/server/services/Files/knauf/contentDedup', () => ({
+  computeContentHash: jest.fn().mockResolvedValue('deadbeefhash'),
+  findAssetForHash: jest.fn().mockResolvedValue(null),
 }));
 // End [knauf]
 
@@ -518,6 +529,7 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
     agent_id: 'agent-abc',
     tool_resource: EToolResources.file_search,
     file_id: 'fid-1',
+    message_file: 'true', // chat attachment (the conversationId stamp applies to this path)
   });
   const fileSearchReq = (conversationId) => ({
     user: { id: 'user-123' },
@@ -557,6 +569,169 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
     });
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.conversationId).toBeUndefined();
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-204 — per-user content-hash dedup on the file_search upload path.
+describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
+  const {
+    findAssetForHash,
+    computeContentHash,
+  } = require('~/server/services/Files/knauf/contentDedup');
+  const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
+  const db = require('~/models');
+  const handleFileUpload = jest
+    .fn()
+    .mockResolvedValue({ bytes: 10, filename: 'doc.pdf', filepath: '/blob/doc.pdf' });
+
+  // Personal chat attachment (message_file) — the only path that per-user dedups.
+  const fsMeta = () => ({
+    agent_id: 'agent-abc',
+    tool_resource: EToolResources.file_search,
+    file_id: 'up-1',
+    message_file: 'true',
+  });
+  const fsReq = () => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/u.pdf', originalname: 'doc.pdf', filename: 'u.pdf', mimetype: PDF_MIME },
+    body: { model: 'gpt-4o', conversationId: 'convo-x' },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    checkCapability.mockResolvedValue(true);
+    mergeFileConfig.mockReturnValue(makeFileConfig());
+    getStrategyFunctions.mockReturnValue({ handleFileUpload });
+    computeContentHash.mockResolvedValue('hashABC');
+  });
+
+  test('MISS — uploads + embeds USER-owned and becomes the asset owner', async () => {
+    findAssetForHash.mockResolvedValue(null);
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
+    expect(uploadVectors).toHaveBeenCalledTimes(1);
+    expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_content_hash).toBe('hashABC');
+    expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
+    expect(fileInfo.knauf_dedup_owner).toBe(true); // claims the unique owner slot
+  });
+
+  test('concurrent owner race — duplicate-key on insert → falls back to a non-owner row', async () => {
+    findAssetForHash.mockResolvedValue(null); // MISS → tries to claim owner
+    // First createFile rejects with the unique-owner index collision; retry succeeds.
+    const dupErr = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+    db.createFile.mockRejectedValueOnce(dupErr).mockResolvedValueOnce({ file_id: 'up-1' });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile).toHaveBeenCalledTimes(2);
+    const firstAttempt = db.createFile.mock.calls[0][0];
+    const retry = db.createFile.mock.calls[1][0];
+    expect(firstAttempt.knauf_dedup_owner).toBe(true); // tried to own
+    expect(retry.knauf_dedup_owner).toBeUndefined(); // retried as a non-owner duplicate
+    expect(retry.knauf_asset_id).toBe('up-1'); // still its own embedded asset (transient dup, GC-cleaned)
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.any(String) }),
+    );
+  });
+
+  test('HIT — reuses the shared asset blob + embeddings; skips upload + embed', async () => {
+    findAssetForHash.mockResolvedValue({
+      file_id: 'canon-1',
+      knauf_asset_id: 'canon-1',
+      filepath: '/blob/canon',
+      bytes: 5,
+      filename: 'doc.pdf',
+      embedded: true,
+      source: 'local',
+    });
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(handleFileUpload).not.toHaveBeenCalled(); // no storage upload
+    expect(uploadVectors).not.toHaveBeenCalled(); // no embed
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row points at the shared asset
+    expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the shared blob
+    expect(fileInfo.knauf_content_hash).toBe('hashABC');
+    expect(fileInfo.embedded).toBe(true);
+  });
+
+  test('cross-chat — same content uploaded in another of the user’s chats reuses the asset', async () => {
+    // Different chat (message attachment), same user + content → HIT, no re-embed.
+    findAssetForHash.mockResolvedValue({
+      file_id: 'canon-1',
+      knauf_asset_id: 'canon-1',
+      filepath: '/blob/canon',
+      bytes: 5,
+      filename: 'doc.pdf',
+      embedded: true,
+      source: 'local',
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row points at the shared asset
+    expect(handleFileUpload).not.toHaveBeenCalled(); // no re-upload/embed
+    expect(uploadVectors).not.toHaveBeenCalled();
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-204 — agent-library file_search uploads (added to a persistent agent's
+// knowledge in the builder; EDIT-permission gated upstream) embed AGENT-scoped so every
+// user with access to the agent can retrieve them, and are NOT per-user deduped.
+describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', () => {
+  const {
+    findAssetForHash,
+    computeContentHash,
+  } = require('~/server/services/Files/knauf/contentDedup');
+  const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
+  const db = require('~/models');
+  const handleFileUpload = jest
+    .fn()
+    .mockResolvedValue({ bytes: 10, filename: 'kb.pdf', filepath: '/blob/kb.pdf' });
+
+  // No message_file ⇒ agent-library (builder) upload, NOT a chat attachment.
+  const libMeta = () => ({
+    agent_id: 'agent-abc',
+    tool_resource: EToolResources.file_search,
+    file_id: 'lib-1',
+  });
+  const libReq = () => ({
+    user: { id: 'user-123' },
+    file: { path: '/tmp/kb.pdf', originalname: 'kb.pdf', filename: 'kb.pdf', mimetype: PDF_MIME },
+    body: { model: 'gpt-4o' },
+    config: { fileConfig: {}, fileStrategy: 'local' },
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    checkCapability.mockResolvedValue(true);
+    mergeFileConfig.mockReturnValue(makeFileConfig());
+    getStrategyFunctions.mockReturnValue({ handleFileUpload });
+  });
+
+  test('embeds AGENT-scoped, skips per-user dedup, and adds to the agent library', async () => {
+    await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
+
+    // No dedup work on the library path.
+    expect(computeContentHash).not.toHaveBeenCalled();
+    expect(findAssetForHash).not.toHaveBeenCalled();
+    // Embedded AGENT-scoped → readable by everyone with access to the agent.
+    expect(uploadVectors).toHaveBeenCalledTimes(1);
+    expect(uploadVectors.mock.calls[0][0].entity_id).toBe('agent-abc');
+    // Row carries no dedup bookkeeping (dropped by removeNullishValues).
+    const fileInfo = db.createFile.mock.calls.at(-1)[0];
+    expect(fileInfo.knauf_content_hash).toBeUndefined();
+    expect(fileInfo.knauf_asset_id).toBeUndefined();
+    expect(fileInfo.knauf_dedup_owner).toBeUndefined();
+    // Added to the agent's persistent file_search library.
+    expect(db.addAgentResourceFile).toHaveBeenCalled();
   });
 });
 // End [knauf]

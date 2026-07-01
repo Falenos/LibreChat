@@ -109,24 +109,34 @@ Real logic lives in a **Tier 3 Knauf module** (`api/server/services/Files/knauf/
 get thin **Tier 4c `[knauf]`** markers + SEAMS.md rows (`convos.js`, `process.js`, `crud.js`,
 `useFileHandling.ts`).
 
-### Step 2 — RAG `/query` `entity_id` spike (gates Step 3 vector dedup)
+### Step 2 — RAG `/query` `entity_id` spike — ✅ RESOLVED (2026-06-26)
 
-Against a live `rag_api` (compose stack):
+Resolved by **reading the `rag_api` source** (no live run / embeddings needed — the auth logic is
+plain Python), then confirming the **deployed image** (`knauf/rag-api:local`, base
+`librechat-rag-api-dev-lite:latest`) carries the identical code (no version drift). Source:
+`danny-avila/rag_api` `app/routes/document_routes.py`.
 
-1. `POST /embed` a doc with `file_id=F`, `entity_id=A`.
-2. `POST /query` `{file_id:F, query}` — **no** `entity_id` → hits?
-3. `POST /query` `{file_id:F, entity_id:B}` (mismatched) → hits or empty?
-4. Inspect `langchain_pg_embedding.cmetadata` for an `entity_id` filter column; check for any way
-   to associate existing vectors with a new `entity_id`.
+**Findings:**
 
-| Outcome | Meaning | Action |
-|---|---|---|
-| Step 3 returns hits | query filters loosely / ignores `entity_id` | full cross-agent vector dedup is safe → proceed Option C |
-| Step 3 empty | strict `(file_id, entity_id)` partition | cross-agent vector dedup needs a **Tier-2 RAG-image overlay** (scope separately); otherwise vector dedup is limited to the inline `context` path + same-agent re-uploads, cross-agent falls back to blob-only |
+- `/query` (and `/query_multiple`) retrieve by **`file_id` only** — `filter={"file_id": {"$eq": ...}}`
+  (`document_routes.py:385/390/1078`). `entity_id` is **not** a pgvector partition.
+- `entity_id` is a **post-retrieval authorization check** on `documents[0].user_id`: authorize iff
+  the doc's stored `user_id` is `None`, equals the query's `entity_id`, **or equals the JWT user id**
+  (the fallback, `:402-408`). Otherwise → empty result (warning only).
+- At embed, stored `user_id = entity_id` if provided, else the JWT user (`get_user_id`, `:107-112`;
+  metadata write `:719`).
 
-Record the verdict in the dedup ticket before writing Step 3 code.
+**Verdict — full cross-agent, per-user vector dedup is viable WITHOUT a RAG-image overlay.** The lever
+is the embed-time owner: embed the canonical/deduped file **user-owned** (`entity_id = userId`, or omit
+it). Then any of that user's agents/chats can read it via the JWT-user fallback, while other users are
+denied (per-user privacy holds). The earlier "strict `(file_id, entity_id)` partition → Tier-2 overlay"
+fear is disproven. → **Proceed with Option C** (Step 3); the canonical `uploadVectors` call must pass
+`entity_id = req.user.id` (not the agent id).
 
 ### Step 3 — PR2: full per-user content-hash dedup (T1)
+
+> End-to-end walkthrough of the resulting behavior (same doc in two chats → no duplication):
+> [proposals/file-dedup-content-hash.md](../proposals/file-dedup-content-hash.md).
 
 Branch `feat/KK20-204-content-hash-dedup`. **⚠️ `packages/*` rebuild gotcha applies** (below).
 
@@ -149,10 +159,98 @@ Branch `feat/KK20-204-content-hash-dedup`. **⚠️ `packages/*` rebuild gotcha 
 5. **Resolve canonical at retrieval** — map `file_id → knauf_canonical_file_id` before `/query` in
    [fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js#L103) and
    [createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js).
-6. **Wire real refcount into PR1's guard** — blob count = `File.countDocuments({user, knauf_content_hash})`;
-   vector count = canonical-group size. Delete Mongo rows first (or exclude in-flight ids), then
-   physically delete only assets now at 0.
+6. **Delete-with-dedup (the PR1↔PR2 coupling)** — do **not** extend `partitionByRefCount` to decide
+   *physical* deletion (the "minimal" approach has a data-loss race — see below). Use a **two-stage
+   delete**. Full design in the next subsection.
 7. **No backfill** — dedup applies to new uploads only.
+
+#### Delete behavior with dedup (two-stage) — designed + adversarially verified
+
+PR1's `partitionByRefCount` decides deletability per `file_id` (correct for the *row*). But dedup
+shares one physical asset — blob at the canonical `filepath` + embeddings under the canonical
+`file_id` (`id1`) — across **different** logical file_ids (`id1` canonical, `id2` pointer). Deleting
+the chat holding the canonical row leaves no surviving reference to `id1` (the other chat references
+`id2`), so PR1's guard would free the blob + embeddings and **break the pointer**. The refcount must
+be taken over the **content-hash group**, not the file_id.
+
+| Delete | File rows | Physical asset (blob + `id1` vectors) |
+|---|---|---|
+| pointer chat (F2/`id2`) | F2 row removed; strip `id2` from agents | **kept** — group still has F1 |
+| canonical chat (F1/`id1`) | F1 row removed; strip `id1` | **kept** — F2 resolves `id2→id1`; the canonical *row* being gone is irrelevant |
+| both chats | both rows removed | **deleted once** — vectors under `id1` (not `id2`), blob at shared `filepath` |
+
+`partitionByRefCount` stays unchanged (still correctly decides the *row*). In
+`cascadeDeleteCollectedFiles`, split `deletable`: legacy/no-hash rows take the unchanged PR1 path;
+deduped rows two-stage:
+
+```js
+const dedupRows = deletable.filter(f => f.knauf_content_hash);
+// capture {hash → canonicalId, filepath, source, embedded} from the in-memory rows BEFORE deleting
+// STAGE 1 — delete the File rows, ALWAYS, keyed on the deleted ids only:
+await db.deleteFiles(dedupRows.map(f => f.file_id));            // ids only — never a user arg (file.ts footgun)
+await db.removeAgentResourceFilesFromAllAgents({ file_ids });   // strips id2/id1, never a survivor's id
+// STAGE 2 — physical GC, only when the (user, hash) group is now EMPTY (recount AFTER stage 1):
+for (const g of groups) {
+  if ((await db.getFiles({ user, knauf_content_hash: g.hash }, null, { file_id: 1 }))?.length) continue;
+  await deleteVectorsByIds(req, [g.canonicalId]);              // CANONICAL id only; wrap (it throws after retries)
+  await getStrategyFunctions(g.source).deleteFile(req, { file_id: g.canonicalId, filepath: g.filepath, embedded: false });
+}
+```
+
+Recounting *after* the row delete makes the "both concurrent deletes skip → orphan" race impossible;
+residual double-GC is benign (404-tolerant vectors + missing-file-tolerant blob). **Must-handle:**
+(a) canonical-row-gone-but-group-alive → asset kept, never promote a survivor (canonicalId derives
+from `knauf_canonical_file_id`); (b) pointer-is-last-row → GC targets `id1`, never `id2`; (c) an
+upload-HIT racing the last-row delete must re-validate the asset under a per-`(user,hash)` guard;
+(d) **account deletion** ([`deleteUserFiles`](../../../api/server/controllers/UserController.js))
+bypasses this GC (batches all files through `processDeleteRequest`) — reconcile it; (e) one-blob-per-group
+invariant — both upload paths must stamp pointers with the canonical `filepath`; (f) null-`filepath`
+guard + the `deleteFiles` user-arg footgun + `req.user.id` string-vs-ObjectId on the recount.
+
+**Tests:** pointer-survives (delete canonical chat → F2 still retrieves `id1`); group-empty GC targets
+`id1` exactly once; last-row-is-pointer GCs `id1` not `id2`; two concurrent whole-group deletes → no
+broken pointer; upload-HIT vs last-row-delete → pointer never born against a GC'd asset; legacy/no-hash
+file deletes through the unchanged PR1 path.
+
+---
+
+## Implemented — KK20-204 (deltas from the design above)
+
+The design above is the original intent; the shipped implementation refined three points.
+Where they differ, **this section is authoritative**.
+
+- **Asset identity is a stable `knauf_asset_id`, not an elected "canonical" row.** Every deduped
+  row stores `knauf_asset_id` = the `file_id` the shared blob + embeddings live under (the embed
+  owner stores its own id; reuse rows store the owner's). `findAssetForHash` resolves the asset from
+  **any** surviving row in the `(user, hash)` group. This **supersedes** the `knauf_canonical_file_id`
+  / "pointer→canonical" language in Step 3.4–3.5 and the two-stage delete (the GC now keys on
+  `knauf_asset_id`). It fully closes the "canonical-row-deleted-while-pointers-survive → re-embed"
+  hole: deleting the owner row no longer loses the asset, so the next upload reuses it (no re-embed).
+- **Concurrent first-upload race (AC #3): unique-owner index, not a pre-embed `claimContentHash`.**
+  A pre-embed claim stub would need TTL/orphan reconciliation and still couldn't save the second
+  embed without blocking the loser (a true racer always arrives mid-embed). Instead: a **unique
+  partial index** `{ user, knauf_content_hash, knauf_dedup_owner } WHERE knauf_dedup_owner=true`
+  enforces one embed-owner per group; the MISS path claims ownership and a concurrent loser's insert
+  fails with a duplicate-key error → recorded as a **non-owner** row (its own embedding is a transient
+  duplicate the group GC reclaims) + a `logger.info('[knauf][dedup] …')` so the race frequency is
+  observable. No upload blocks. Accepted trade (confirmed with the product owner): a rare, bounded,
+  self-healing duplicate over guaranteed multi-second upload stalls.
+- **Direct file-delete is now dedup-aware too.** Beyond the chat-delete cascade, the explicit
+  `DELETE /api/files` path (branches A/B) routes through `deleteFilesWithDedupAwareness`, so removing
+  a file chip that owns a shared asset GCs the blob/vectors only once its `(user, hash)` group is
+  empty. Closes a data-integrity gap the original two-stage design only covered for the cascade.
+- **`createContextHandlers.js` is NOT modified** — dedup is `file_search`-only; the inline-context
+  path never creates reuse rows, so there is no asset id to resolve there. The file-map row below is
+  corrected accordingly.
+- **Dedup + user-owned embed are scoped to CHAT attachments only; agent-library knowledge stays
+  agent-scoped.** The `file_search` upload branch splits on `messageAttachment`: a chat attachment
+  (`message_file`) takes the per-user dedup path (`entity_id = req.user.id`); an agent-library upload
+  (no `message_file`; builder; EDIT-gated) embeds `entity_id = agent_id` with no dedup bookkeeping —
+  restoring the pre-204 behavior so **every user with access to a shared agent can read its knowledge
+  files**. KK20-204's blanket `entity_id = req.user.id` had broken that (a shared agent's knowledge
+  answered only for its uploader). OpenAI-Assistants model: agent vector store = shared scope, thread
+  file = private scope; dedup only within a scope. No backfill (KK20-204 unshipped); re-upload any
+  agent-knowledge files added during the KK20-204 dev/test window to re-embed agent-scoped.
 
 ---
 
@@ -165,11 +263,12 @@ Branch `feat/KK20-204-content-hash-dedup`. **⚠️ `packages/*` rebuild gotcha 
 | [api/server/services/Files/process.js](../../../api/server/services/Files/process.js) | upstream — upload/delete | `conversationId` stamp | dedup lookup + reuse branch |
 | [api/server/services/Files/VectorDB/crud.js](../../../api/server/services/Files/VectorDB/crud.js) | upstream — pgvector | retry hardening | — |
 | [client/src/hooks/Files/useFileHandling.ts](../../../client/src/hooks/Files/useFileHandling.ts) | upstream — upload client | FormData `conversationId` | — |
-| [packages/data-schemas/src/schema/file.ts](../../../packages/data-schemas/src/schema/file.ts) | shared schema (`dist/`!) | — | `knauf_content_hash` + index |
-| [packages/data-schemas/src/methods/file.ts](../../../packages/data-schemas/src/methods/file.ts) | shared methods (`dist/`!) | — | `claimContentHash`, refcount helpers |
-| [packages/data-provider/src/types/files.ts](../../../packages/data-provider/src/types/files.ts) | shared types (`dist/`!) | — | `knauf_content_hash?` on `TFile` |
-| [api/app/clients/tools/util/fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js) | upstream — RAG query | spike target | canonical resolve |
-| [api/app/clients/prompts/createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js) | upstream — inline RAG | — | canonical resolve |
+| [packages/data-schemas/src/schema/file.ts](../../../packages/data-schemas/src/schema/file.ts) | shared schema (`dist/`!) | — | `knauf_content_hash` + `knauf_asset_id` + `knauf_dedup_owner`; lookup + unique-owner indexes |
+| [packages/data-schemas/src/methods/file.ts](../../../packages/data-schemas/src/methods/file.ts) | shared methods (`dist/`!) | — | (no new method — unique index replaces `claimContentHash`) |
+| [packages/data-provider/src/types/files.ts](../../../packages/data-provider/src/types/files.ts) | shared types (`dist/`!) | — | `knauf_content_hash?` / `knauf_asset_id?` / `knauf_dedup_owner?` on `TFile` |
+| [api/app/clients/tools/util/fileSearch.js](../../../api/app/clients/tools/util/fileSearch.js) | upstream — RAG query | spike target | `knauf_asset_id` resolve |
+| [api/app/clients/prompts/createContextHandlers.js](../../../api/app/clients/prompts/createContextHandlers.js) | upstream — inline RAG | — | **not modified** — inline-context is non-dedup |
+| [api/server/routes/files/files.js](../../../api/server/routes/files/files.js) | upstream — file delete | — | branches A/B → `deleteFilesWithDedupAwareness` |
 
 ---
 
@@ -216,9 +315,29 @@ T3 deferred). No epic — two standalone tasks.
 
 ## Open questions
 
-- **RAG `/query` `entity_id` semantics** — the spike; gates Step 3. Cannot be answered from this repo.
-- **Field case** — `knauf_content_hash` (snake, matches `knauf_fast_mode` precedent) vs `knaufContentHash`; prefix mandatory either way.
+- ~~**RAG `/query` `entity_id` semantics** — the spike; gates Step 3.~~ ✅ Resolved (see Step 2): `entity_id` is post-retrieval auth with a JWT-user fallback, not a vector partition → user-owned canonical embeds enable cross-agent per-user dedup, no overlay.
+- ~~**Field case** — `knauf_content_hash` vs `knaufContentHash`.~~ ✅ Resolved: snake_case (`knauf_content_hash`, `knauf_asset_id`, `knauf_dedup_owner`), matching the `knauf_fast_mode` precedent.
+- ~~**Concurrent first-upload race**~~ ✅ Resolved (see *Implemented* above): unique-owner index + non-blocking duplicate-key fallback + `[knauf][dedup]` race log. A future revisit could add loser-blocking only if the logged race frequency ever justifies it.
 - **Ephemeral conversationId** — first-upload-to-new-chat files rely on `Message.files[]` for
   cleanup, not the `conversationId` stamp (sentinel chat has no real id yet).
 - **pgvector orphan capture** — whether PR1 also records terminally-failed vector deletes to a
   Knauf collection now (cheap T3 hook) or defers it to T3.
+- **Cross-user physical-GC under the deleter's identity (follow-up ticket).** When a shared-agent
+  editor B deletes author A's *last* reference to a deduped asset, the group correctly empties and GC
+  fires — but the physical delete runs under B's `req`: the RAG JWT (`deleteVectorsByIds`) and the
+  storage user-in-path guard (Azure/Local `deleteFile`) are scoped to B, so A's vectors + blob can't
+  be removed and **leak** (orphaned bytes; the row + group are gone, so retrieval is unaffected and
+  there is no cross-user exposure). This is **pre-existing** (the old `processDeleteRequest` had the
+  same user-in-path coupling on branch B), not introduced by dedup. Fix later by running the physical
+  GC under the asset owner's identity (or a privileged RAG delete). Low severity — storage cost only.
+- ~~**Delete-last-ref vs. concurrent re-upload orphan**~~ ✅ Resolved. The delete-time GC now
+  recounts **per `knauf_asset_id`** (does any surviving row still point at *this* asset?) instead of
+  per `(user, content-hash)`-group emptiness. The old group check leaked the prior asset when a
+  re-upload landing between stage-1 (row delete) and the recount MISSed and embedded a NEW asset under
+  the same hash — the new row made the group look non-empty, so the now-unreferenced old asset was
+  never reclaimed. Per-asset recount also reclaims a double-embed's duplicate as soon as *its* last
+  reference is gone (not when the whole hash group empties). **Residual (accepted):** a HIT re-upload
+  landing in the tiny window *between* the zero-survivor recount and the physical delete can still have
+  its fresh pointer's asset removed out from under it — inherent to any check-then-act without a lock
+  (the old group logic had the same window); storage/retrieval-only on one just-created row. Closing it
+  fully would need a transaction or asset tombstone — out of scope.
