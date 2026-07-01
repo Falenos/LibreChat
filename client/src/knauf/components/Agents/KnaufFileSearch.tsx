@@ -164,9 +164,33 @@ function KnaufFileSearch({
       // then `_files` will eventually catch up via the agent refetch and
       // a future invocation of this effect re-syncs cleanly.
       if (inFlightUploadRef.current) return;
-      if (_files) {
-        setFiles(new Map(_files));
-      }
+      if (!_files) return;
+      // KK20-188 — merge, don't replace. A direct upload on a saved agent lives
+      // only in the local `files` Map (progress < 1) until the post-upload agent
+      // refetch lands it in `_files`; a wholesale `new Map(_files)` on any interim
+      // refetch wipes those in-flight rows, so they vanish and pop back one by one
+      // as the server confirms each. Take `_files` as the saved-file truth but
+      // carry over any still-uploading local entry the server hasn't confirmed
+      // yet (matched by name+size) so an uploading row stays put and flips from
+      // spinner to done in place.
+      setFiles((prev) => {
+        const merged = new Map(_files);
+        for (const [key, entry] of prev) {
+          if ((entry.progress ?? 1) >= 1) {
+            continue;
+          }
+          const nativeFile = entry.file;
+          const confirmed =
+            nativeFile != null &&
+            Array.from(merged.values()).some((f) =>
+              uploadedFileMatchesPending(f as UploadedFileLike, nativeFile),
+            );
+          if (!confirmed) {
+            merged.set(key, entry);
+          }
+        }
+        return merged;
+      });
     },
     [_files],
     750,
