@@ -6,10 +6,10 @@
  * w-56, a 40px icon and a redundant type label such as "Document") for the
  * agent knowledge list only. This is a net-new Knauf component (Tier 5) — it
  * does NOT modify any upstream file. It reuses the upstream primitives that do
- * the real work, so behaviour stays identical to FileRow where it matters:
- *   - getFileType()          → type-aware icon colour + white glyph (utils/files.ts)
- *   - useFileDeletion()      → the exact 1s-debounced batch delete FileRow uses
- *   - useDeleteFilesMutation(), useDebounce()
+ * the real work:
+ *   - getFileType()            → type-aware icon colour + white glyph (utils/files.ts)
+ *   - useDeleteFilesMutation() → the server delete (awaited; see divergence 5)
+ *   - useDebounce()            → debounced search input
  *
  * Intentional divergences from upstream FileRow/FileContainer (KK20-188):
  *   1. One compact single-line row per file (~30px) instead of ~64px cards.
@@ -20,6 +20,11 @@
  *   4. Saved files and pending (queued/uploading/error) uploads render in ONE
  *      list with the same row so search covers both; KnaufFileSearch previously
  *      rendered pending uploads as a separate <FileContainer> card strip.
+ *   5. Delete is server-confirmed, not optimistic: clicking delete shows a
+ *      spinner and the row is removed only after the backend confirms (kept +
+ *      error toast on failure). Upstream FileRow deletes optimistically via
+ *      useFileDeletion's debounced batch, which silently reappears on reload if
+ *      the server delete fails.
  */
 import {
   memo,
@@ -34,11 +39,10 @@ import {
 import * as Ariakit from '@ariakit/react';
 import { Search, X, Trash2, RefreshCw, ChevronDown, Check } from 'lucide-react';
 import { DropdownPopup, Input, Spinner, useToastContext } from '@librechat/client';
-import type { EToolResources } from 'librechat-data-provider';
+import { FileSources, type EToolResources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
-import { getFileType, cn } from '~/utils';
+import { getFileType, cn, deletePreview } from '~/utils';
 import { useDeleteFilesMutation } from '~/data-provider';
-import { useFileDeletion } from '~/hooks/Files';
 import { useDebounce, useLocalize } from '~/hooks';
 
 type Localize = ReturnType<typeof useLocalize>;
@@ -79,12 +83,14 @@ function FileRowShell({
   type,
   uploading = false,
   error = false,
+  dimmed = false,
   children,
 }: Readonly<{
   filename: string;
   type?: string;
   uploading?: boolean;
   error?: boolean;
+  dimmed?: boolean;
   children?: ReactNode;
 }>) {
   const { fill, paths: Paths } = getFileType(type);
@@ -93,6 +99,7 @@ function FileRowShell({
       className={cn(
         'group flex items-center gap-2.5 rounded-lg px-2 py-1 transition-colors',
         error ? 'bg-red-500/5 hover:bg-red-500/10' : 'hover:bg-surface-hover',
+        dimmed && 'opacity-60',
       )}
       title={filename}
     >
@@ -122,10 +129,12 @@ function FileRowShell({
 const SavedFileRow = memo(function SavedFileRow({
   file,
   localize,
+  deleting,
   onDelete,
 }: Readonly<{
   file: ExtendedFile;
   localize: Localize;
+  deleting: boolean;
   onDelete: (file: ExtendedFile) => void;
 }>) {
   const handleDelete = useCallback(() => onDelete(file), [file, onDelete]);
@@ -139,7 +148,7 @@ const SavedFileRow = memo(function SavedFileRow({
   // — mirrors the pending-row treatment and the upstream FilePreview spinner.
   const uploading = (file.progress ?? 1) < 1;
   return (
-    <FileRowShell filename={displayName} type={file.type} uploading={uploading}>
+    <FileRowShell filename={displayName} type={file.type} uploading={uploading} dimmed={deleting}>
       {!uploading && (
         <>
           {typeof file.size === 'number' && (
@@ -147,17 +156,26 @@ const SavedFileRow = memo(function SavedFileRow({
               {formatFileSize(file.size)}
             </span>
           )}
-          <button
-            type="button"
-            onClick={handleDelete}
-            aria-label={localize('com_ui_attach_remove')}
-            className={cn(
-              ACTION_CLASS,
-              'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
-            )}
-          >
-            <Trash2 className="size-4" aria-hidden="true" />
-          </button>
+          {deleting ? (
+            <span
+              className="flex size-6 shrink-0 items-center justify-center"
+              aria-label={localize('com_ui_deleting_file')}
+            >
+              <Spinner className="size-4 text-text-secondary" />
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDelete}
+              aria-label={localize('com_ui_attach_remove')}
+              className={cn(
+                ACTION_CLASS,
+                'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+              )}
+            >
+              <Trash2 className="size-4" aria-hidden="true" />
+            </button>
+          )}
         </>
       )}
     </FileRowShell>
@@ -257,28 +275,73 @@ function KnaufKnowledgeFileList({
   const [sortOpen, setSortOpen] = useState(false);
 
   const { mutateAsync } = useDeleteFilesMutation();
-  const { deleteFile } = useFileDeletion({ mutateAsync, agent_id, tool_resource });
 
-  // Stable refs for closures that are recreated upstream every render (the
-  // useFileDeletion mutator + KnaufFileSearch's plain remove/retry functions),
-  // so the memo'd rows don't re-render on every keystroke.
-  const deleteFileRef = useRef(deleteFile);
+  // Rows awaiting a server-confirmed delete: they show a spinner and are removed
+  // only on success. The ref mirrors the state as a re-entrancy guard so a fast
+  // double-click can't fire two deletes for the same file.
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const inFlightDeletesRef = useRef<Set<string>>(new Set());
+
+  // Stable refs for KnaufFileSearch's plain remove/retry callbacks (recreated
+  // upstream every render) so the memo'd rows don't re-render on every keystroke.
   const removePendingRef = useRef(onRemovePending);
   const retryPendingRef = useRef(onRetryPending);
   useEffect(() => {
-    deleteFileRef.current = deleteFile;
     removePendingRef.current = onRemovePending;
     retryPendingRef.current = onRetryPending;
   });
 
+  // Server-confirmed delete (KK20-188): mark the row deleting (spinner), await
+  // the backend, then drop it from the Map on success; on failure keep the row
+  // and toast. Not optimistic — a file no longer silently reappears on reload
+  // when the server delete fails.
   const handleDeleteSaved = useCallback(
-    (file: ExtendedFile) => {
-      if ((file.progress ?? 1) >= 1) {
-        showToast({ message: localize('com_ui_deleting_file'), status: 'info' });
+    async (file: ExtendedFile) => {
+      const id = file.file_id;
+      if (inFlightDeletesRef.current.has(id)) {
+        return;
       }
-      deleteFileRef.current({ file, setFiles });
+      inFlightDeletesRef.current.add(id);
+      setDeletingIds((prev) => new Set(prev).add(id));
+      try {
+        await mutateAsync({
+          files: [
+            {
+              file_id: id,
+              filepath: file.filepath ?? '',
+              source: file.source ?? FileSources.local,
+              embedded: file.embedded ?? false,
+            },
+          ],
+          agent_id,
+          tool_resource,
+        });
+        deletePreview(id);
+        setFiles((prev) => {
+          const next = new Map(prev);
+          next.delete(id);
+          if (file.temp_file_id) {
+            next.delete(file.temp_file_id);
+          }
+          return next;
+        });
+      } catch {
+        showToast({
+          message: localize('com_knauf_knowledge_delete_failed', {
+            0: file.filename || file.file?.name || '',
+          }),
+          status: 'error',
+        });
+      } finally {
+        inFlightDeletesRef.current.delete(id);
+        setDeletingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
     },
-    [showToast, localize, setFiles],
+    [mutateAsync, agent_id, tool_resource, setFiles, showToast, localize],
   );
   const handleRemovePending = useCallback((tempId: string) => removePendingRef.current(tempId), []);
   const handleRetryPending = useCallback(
@@ -410,6 +473,7 @@ function KnaufKnowledgeFileList({
               key={file.file_id}
               file={file}
               localize={localize}
+              deleting={deletingIds.has(file.file_id)}
               onDelete={handleDeleteSaved}
             />
           ))}
