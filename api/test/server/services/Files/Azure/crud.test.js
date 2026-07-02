@@ -413,6 +413,69 @@ describe('Azure crud.js - URL refresh tests', () => {
       expect(expiresAt - before).toBeGreaterThanOrEqual(298_000);
       expect(expiresAt - after).toBeLessThanOrEqual(302_000);
     });
+
+    // [knauf] KK20-199 — AZURE_SAS_CLOCK_SKEW_SECONDS is read once at module
+    // load, so each case re-requires crud in an isolated registry with the env
+    // var set. We assert on the `st` backdate (`now - st`), which is TTL-agnostic.
+    it('backdates by an explicit AZURE_SAS_CLOCK_SKEW_SECONDS value', async () => {
+      process.env.AZURE_SAS_CLOCK_SKEW_SECONDS = '120';
+      let signed;
+      const before = Date.now();
+      await jest.isolateModulesAsync(async () => {
+        const fresh = require('../../../../../server/services/Files/Azure/crud');
+        signed = await fresh.getSignedAzureURL({
+          blobPath: 'images/u/test.pdf',
+          containerName: 'files',
+        });
+      });
+      const after = Date.now();
+      const startsAt = new Date(new URL(signed).searchParams.get('st')).getTime();
+      expect(before - startsAt).toBeGreaterThanOrEqual(118_000);
+      expect(after - startsAt).toBeLessThanOrEqual(122_000);
+    });
+
+    it('clamps AZURE_SAS_CLOCK_SKEW_SECONDS to a 3600s maximum', async () => {
+      process.env.AZURE_SAS_CLOCK_SKEW_SECONDS = '7200'; // 2h → clamped to 1h
+      let signed;
+      const before = Date.now();
+      await jest.isolateModulesAsync(async () => {
+        const fresh = require('../../../../../server/services/Files/Azure/crud');
+        signed = await fresh.getSignedAzureURL({
+          blobPath: 'images/u/test.pdf',
+          containerName: 'files',
+        });
+      });
+      const after = Date.now();
+      const startsAt = new Date(new URL(signed).searchParams.get('st')).getTime();
+      expect(before - startsAt).toBeGreaterThanOrEqual(3_598_000);
+      expect(after - startsAt).toBeLessThanOrEqual(3_602_000);
+    });
+
+    it('warns and keeps the 300s default when AZURE_SAS_CLOCK_SKEW_SECONDS is invalid', async () => {
+      process.env.AZURE_SAS_CLOCK_SKEW_SECONDS = 'abc';
+      let signed;
+      let warnMock;
+      const before = Date.now();
+      await jest.isolateModulesAsync(async () => {
+        // Require the logger inside the isolated registry so we get the same
+        // instance crud.js warns on during its module-load parsing.
+        const { logger } = require('@librechat/data-schemas');
+        const fresh = require('../../../../../server/services/Files/Azure/crud');
+        warnMock = logger.warn;
+        signed = await fresh.getSignedAzureURL({
+          blobPath: 'images/u/test.pdf',
+          containerName: 'files',
+        });
+      });
+      const after = Date.now();
+      expect(warnMock).toHaveBeenCalledWith(
+        expect.stringContaining('AZURE_SAS_CLOCK_SKEW_SECONDS'),
+      );
+      const startsAt = new Date(new URL(signed).searchParams.get('st')).getTime();
+      expect(before - startsAt).toBeGreaterThanOrEqual(298_000);
+      expect(after - startsAt).toBeLessThanOrEqual(302_000);
+    });
+    // End [knauf]
   });
 
   // [knauf] KK20-199 — getAzureFileStream re-signs a near-expiry SAS URL just
@@ -456,6 +519,26 @@ describe('Azure crud.js - URL refresh tests', () => {
       expect(stream).toBe('STREAM');
       expect(axios).toHaveBeenCalledWith(expect.objectContaining({ url: freshUrl }));
       // getNewAzureURL is never reached, so the container client isn't consulted.
+      expect(getAzureContainerClient).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the original stale URL when the re-sign yields undefined', async () => {
+      // `getAzureFileStream` uses `(await getNewAzureURL(fileURL)) ?? fileURL`, so a
+      // failed re-sign must degrade to attempting the download with the original
+      // (stale) URL rather than passing `undefined` to axios. A blob path shallower
+      // than `{basePath}/{userId}/{fileName}` makes getNewAzureURL return undefined
+      // (the `< 3` segments guard) before it ever consults the container client.
+      const pastDate = new Date(Date.now() - 3_600_000).toISOString();
+      const stale = `https://test.blob.core.windows.net/files/shallow.pdf?se=${encodeURIComponent(
+        pastDate,
+      )}&sp=r&sig=OLD`;
+
+      const stream = await getAzureFileStream({}, stale);
+
+      expect(stream).toBe('STREAM');
+      expect(axios).toHaveBeenCalledTimes(1);
+      expect(axios).toHaveBeenCalledWith(expect.objectContaining({ url: stale }));
+      // The shallow-path guard short-circuits before the container client.
       expect(getAzureContainerClient).not.toHaveBeenCalled();
     });
   });

@@ -650,7 +650,12 @@ function needsRefreshAzure(signedUrl, bufferSeconds) {
       const stParam = url.searchParams.get('st');
       if (stParam) {
         const urlCreationTime = new Date(stParam).getTime();
-        const urlAge = now.getTime() - urlCreationTime;
+        // [knauf] KK20-199 — `st` is backdated by azureSasClockSkewSeconds at
+        // signing, so compensate here to measure age from the true sign time.
+        // Without this, a URL signed moments ago reports an age of ~skew, and
+        // any AZURE_REFRESH_EXPIRY_MS <= skew would force perpetual re-signing.
+        const urlAge = now.getTime() - urlCreationTime - azureSasClockSkewSeconds * 1000;
+        // End [knauf]
         return urlAge >= azureRefreshExpiryMs;
       }
     }

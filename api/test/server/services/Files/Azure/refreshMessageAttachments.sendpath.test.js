@@ -1,13 +1,23 @@
-// [knauf] KK20-199 — Regression tests for the agent SEND-path SAS refresh.
+// [knauf] KK20-199 — Contract tests for the two input shapes the agent
+// SEND-path fix passes to `refreshMessageAttachmentUrls`.
+//
 // `AgentClient.buildMessages` (api/server/controllers/agents/client.js) calls
-// `refreshMessageAttachmentUrls` on two surfaces before the outbound provider
-// payload is built: the history `orderedMessages` and the current-turn
-// `this.options.attachments` array — which is an array of MongoFile objects
-// (not messages), so it is wrapped as `{ files: attachments }`. These tests
-// pin that wrapping + in-place SAS rewrite so a reopened conversation no longer
-// 403s ("Error while downloading file. Upstream status code: 403") on send.
-// Instantiating the full AgentClient is too heavy, so we test at the exact
-// seam the fix calls, mirroring `refreshMessageAttachments.test.js`.
+// the helper on two surfaces before the outbound provider payload is built:
+// the history `orderedMessages`, and the current-turn `this.options.attachments`
+// array — which is an array of MongoFile objects (not messages), so it is
+// wrapped as `{ files: attachments }`. These tests pin that the helper handles
+// both shapes with in-place SAS rewrite, so a helper refactor can't silently
+// break the send path.
+//
+// SCOPE / WHAT THIS DOES NOT COVER: this suite exercises the HELPER directly;
+// it does not require or run `AgentClient.buildMessages`. Requiring that
+// controller pulls in the full backend graph (`~/models`, `~/config`, MCP/Files
+// services), so a call-site test would be heavy and brittle against upstream
+// syncs. Consequence: removing the `refreshMessageAttachmentUrls(...)` calls
+// from client.js would NOT fail this suite — the presence and placement of
+// those two calls (before `processAttachments`) is verified by code review, not
+// here. The download self-heal half of the fix IS covered by crud.test.js
+// (getAzureFileStream JIT re-sign). Mirrors `refreshMessageAttachments.test.js`.
 // End [knauf]
 
 jest.mock('@librechat/data-schemas', () => ({
