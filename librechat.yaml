@@ -442,7 +442,7 @@ fileConfig:
       totalSizeLimit: 50
     agents:                             # agent + chat-time File Search
       supportedMimeTypes: *knauf_allowed_mime
-      fileLimit: 35
+      fileLimit: 0
       fileSizeLimit: 50
       totalSizeLimit: 100
     # End [knauf]

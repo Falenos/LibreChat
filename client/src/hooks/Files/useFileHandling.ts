@@ -25,6 +25,9 @@ import { useChatContext } from '~/Providers/ChatContext';
 import { ephemeralAgentByConvoId } from '~/store';
 import useClientResize from './useClientResize';
 import useUpdateFiles from './useUpdateFiles';
+// [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
+import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
+// End [knauf]
 
 type UseFileHandling = {
   fileSetter?: FileSetter;
@@ -44,6 +47,39 @@ export type FileHandlingState = {
 };
 
 const noop = () => {};
+
+// [knauf] KK20-204 — collapse a file Map so each content-hash dedup asset
+// appears once. The server mints a distinct file_id per upload but points
+// repeat uploads of identical content at one shared knauf_asset_id; keeping the
+// first entry per asset stops an identical re-attachment from showing/sending
+// twice. Entries without a knauf_asset_id (non-deduped uploads, images) are left
+// untouched. Returns the same Map reference when nothing changes so callers that
+// pass it to a React setter don't trigger a needless re-render. Pure + exported
+// for unit testing (useFileHandlingAssetDedup.knauf.spec.ts).
+export function dedupeFilesByAsset(files: Map<string, ExtendedFile>): Map<string, ExtendedFile> {
+  const seenAssets = new Set<string>();
+  const duplicateKeys: string[] = [];
+  for (const [key, file] of files) {
+    const assetId = knaufAssetKey(file);
+    if (assetId === undefined) {
+      continue;
+    }
+    if (seenAssets.has(assetId)) {
+      duplicateKeys.push(key);
+    } else {
+      seenAssets.add(assetId);
+    }
+  }
+  if (duplicateKeys.length === 0) {
+    return files;
+  }
+  const next = new Map(files);
+  for (const key of duplicateKeys) {
+    next.delete(key);
+  }
+  return next;
+}
+// End [knauf]
 
 const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: FileHandlingState) => {
   const localize = useLocalize();
@@ -151,9 +187,22 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               filename: data.filename,
               source: data.source,
               embedded: data.embedded,
+              // [knauf] KK20-204 — carry the dedup asset id (undefined for
+              // non-deduped uploads) so identical re-attachments collapse below.
+              knauf_asset_id: (data as { knauf_asset_id?: string }).knauf_asset_id,
+              // End [knauf]
             },
             assistant_id ? true : false,
           );
+          // [knauf] KK20-204 — collapse chat attachments that resolve to the same
+          // dedup asset so an identical re-attachment appears (and sends, via
+          // useChatFunctions `currentMsg.files = Array.from(files.values())`) once.
+          // Runs through the same setter updateFileById writes through; a no-op
+          // (returns the same Map ref) when there are no duplicates. The dropped
+          // pointer row left on the server is a cheap orphan the KK20-203
+          // convo-delete cascade reclaims. See dedupeFilesByAsset.
+          (params?.fileSetter ?? setFiles)(dedupeFilesByAsset);
+          // End [knauf]
         }, 300);
       },
       onError: (_error, body) => {
