@@ -404,6 +404,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/hooks/Files/useFileHandlingAssetDedup.knauf.spec.ts` | Subject under test (`~/hooks/Files/useFileHandling` `dedupeFilesByAsset`); `~/common` types | Low — pure-function unit test; no upstream contract surface | Self | KK20-204 |
 | `client/src/knauf/hooks/Files/dedupeLibraryFiles.ts` | `librechat-data-provider` (`TFile` type only) | Low — pure functions (asset-key accessor, list dedupe, group expansion), types only, no upstream contract surface | `dedupeLibraryFiles.knauf.spec.ts` | KK20-204 |
 | `client/src/knauf/hooks/Files/dedupeLibraryFiles.knauf.spec.ts` | Subject under test (`./dedupeLibraryFiles`); `librechat-data-provider` `TFile` type | Low — pure-function unit test; no upstream contract surface | Self | KK20-204 |
+| `knauf/docs/proposals/pii-masking-and-anonymization.md` | None (markdown doc; advisory relative links to `knauf/docs/future-work/file-management-roadmap.md`, `knauf/docs/implementation-plans/adobe-analytics-onetrust.md`, `knauf/docs/implementation-plans/langfuse-rollout.md`, and the sibling demo asset) | Low — discovery proposal doc only; no runtime coupling. Links are advisory and break loudly on file moves, surfacing in PR review rather than at runtime | Docs only | KK20-207 |
+| `knauf/docs/proposals/assets/pii-masking-demo.html` | None (self-contained HTML; inline CSS/JS/SVG, zero external requests) | Low — standalone demo artifact; opens offline, not imported or served by the app | Self (opens offline, light + dark) | KK20-207 |
 <!-- seams:new:end -->
 
 ## Static Assets
