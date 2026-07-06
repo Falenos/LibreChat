@@ -50,6 +50,10 @@ const {
 } = require('librechat-data-provider');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
+// [knauf] KK20-199 — Re-sign Azure Blob SAS URLs on the agent SEND path (pairs
+// with the KK20-182 read-path refreshers). See buildMessages below.
+const { refreshMessageAttachmentUrls } = require('~/server/services/Files/Azure');
+// End [knauf]
 const { createContextHandlers } = require('~/app/clients/prompts');
 const { resolveConfigServers } = require('~/server/services/MCP');
 const { getMCPServerTools } = require('~/server/services/Config');
@@ -217,8 +221,31 @@ class AgentClient extends BaseClient {
           }))
         : []),
     ];
+    // [knauf] KK20-199 — Just-in-time re-sign Azure Blob SAS URLs on the agent
+    // SEND path before they are baked into the outbound provider payload
+    // (chat-completions OR the Azure Responses API transport). The READ paths
+    // (messages/share/tools routes) already do this (KK20-182); the SEND path
+    // did not, so reopening an old conversation carried a stale SAS `filepath`
+    // that (a) 403s the server-side base64 download in `encodeAndFormat`
+    // (getAzureFileStream fetches via the URL itself) and (b) leaks the raw
+    // stale URL to the model -> "400 Error while downloading file. Upstream
+    // status code: 403". Refresh the history snapshots
+    // (`orderedMessages[].attachments[]` / `.files[]`) unconditionally here;
+    // the current-turn attachments are refreshed in place inside the block
+    // below. In-memory only (no Mongo writes); no-op for fresh / non-Azure.
+    await refreshMessageAttachmentUrls(orderedMessages);
+    // End [knauf]
     if (this.options.attachments) {
       const attachments = await this.options.attachments;
+      // [knauf] KK20-199 — `attachments` is an array of MongoFile objects (not
+      // messages), so wrap it as `{ files }` for the message-shaped walker. The
+      // helper mutates each entry's `filepath` in place, so the same objects
+      // flow into processAttachments / encodeAndFormat re-signed. Done inside
+      // the existing block (not by reassigning this.options.attachments) so the
+      // block's control flow is unchanged for a falsy-resolving attachments
+      // promise.
+      await refreshMessageAttachmentUrls({ files: attachments });
+      // End [knauf]
       const latestMessage = orderedMessages[orderedMessages.length - 1];
 
       if (this.message_file_map) {

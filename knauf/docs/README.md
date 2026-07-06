@@ -55,6 +55,7 @@ Designs under discussion — not approved, not implemented.
 | Doc | What it proposes |
 |---|---|
 | [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md) | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored) |
+| [proposals/pii-masking-and-anonymization.md](proposals/pii-masking-and-anonymization.md) | PII masking & data anonymization strategy (KK20-207) — data-classification, per-category handling matrix, LibreChat-OOTB verdict, engine options (Presidio / Azure AI Language), phased roadmap + follow-up tickets; includes an [interactive demo](proposals/assets/pii-masking-demo.html) |
 
 ## Future work
 
