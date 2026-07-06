@@ -4,9 +4,8 @@ const { logger } = require('@librechat/data-schemas');
 const { generateShortLivedToken } = require('@librechat/api');
 const { Tools, EToolResources } = require('librechat-data-provider');
 
-// [knauf] Azure AI Search routing for agent file queries
-const useAzureSearchForAgents = () =>
-  (process.env.AZURE_SEARCH_ENABLED || '').toLowerCase() === 'true';
+// [knauf] Shared flag — single source of truth for Azure Search routing.
+const { useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
 // End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getFiles } = require('~/models');

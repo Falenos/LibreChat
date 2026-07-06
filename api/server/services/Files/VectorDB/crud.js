@@ -254,7 +254,8 @@ module.exports = {
   // [knauf] Per-file Azure Search delete with bounded retry; used by
   // deleteVectorsForFiles and deleteVectors for agent-file routing.
   deleteAzureSearchVectors,
-  // [knauf] Flag check; used by deleteVectorsForFiles, deleteVectors, and fileSearch.js.
+  // [knauf] Flag check; used by deleteVectorsForFiles, deleteVectors, and
+  // fileSearch.js (query routing).
   useAzureSearchForAgents,
   // End [knauf]
   uploadVectors,
