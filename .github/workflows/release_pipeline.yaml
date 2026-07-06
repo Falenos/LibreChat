@@ -80,15 +80,7 @@ jobs:
           else
             MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
             MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
-            PATCH=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f3)
-
-            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'major-release') }}" == "true" ]]; then
-              NEW_VERSION="v$((MAJOR + 1)).0.0"
-            elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'patch-release') }}" == "true" ]]; then
-              NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-            else
-              NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
-            fi
+            NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
           fi
 
           echo "New version: $NEW_VERSION"
