@@ -44,7 +44,8 @@ jobs:
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
-      # CT ACR env vars removed — releases now go directly to AGK ACR
+      CT_ACR_LOGIN_SERVER: acrctshared001.azurecr.io
+      CT_IMAGE_REPOSITORY: tools-non-prod/agentic-karl
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -59,7 +60,9 @@ jobs:
           echo "::add-mask::$GITHUB_PAT"
           echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
 
-          # CT ACR password fetch removed — releases now go directly to AGK ACR
+          CT_ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
+          echo "::add-mask::$CT_ACR_PASSWORD"
+          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Check out app repository
         uses: actions/checkout@v4
@@ -96,35 +99,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Derive version from git tags (package.json is no longer bumped by the release pipeline)
-          GIT_VERSION=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-
-          # Prefer the git tag version if it exists in the AGK ACR
-          SOURCE_VERSION=""
-          if [ -n "$GIT_VERSION" ]; then
-            if az acr repository show-tags \
-              --subscription "$AGK_SUBSCRIPTION_ID" \
-              --name "$AGK_ACR_NAME" \
-              --repository "$AGK_IMAGE_REPOSITORY" \
-              --query "[?@=='$GIT_VERSION']" \
-              -o tsv | grep -Fx "$GIT_VERSION" >/dev/null 2>&1; then
-              SOURCE_VERSION="$GIT_VERSION"
-            fi
-          fi
-
-          # Fallback: latest semver tag in AGK ACR
-          if [ -z "$SOURCE_VERSION" ]; then
+          PACKAGE_VERSION="v$(npm pkg get version | tr -d '"')"
+          if az acr repository show-tags \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name acrctshared001 \
+            --repository "$CT_IMAGE_REPOSITORY" \
+            --query "[?@=='$PACKAGE_VERSION']" \
+            -o tsv | grep -Fx "$PACKAGE_VERSION" >/dev/null; then
+            SOURCE_VERSION="$PACKAGE_VERSION"
+          else
             SOURCE_VERSION=$(az acr repository show-tags \
               --subscription "$AGK_SUBSCRIPTION_ID" \
-              --name "$AGK_ACR_NAME" \
-              --repository "$AGK_IMAGE_REPOSITORY" \
+              --name acrctshared001 \
+              --repository "$CT_IMAGE_REPOSITORY" \
               --orderby time_desc \
               --top 20 \
               -o tsv | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
           fi
 
           if [ -z "$SOURCE_VERSION" ]; then
-            echo "No existing AGK source image tag found for smoke import"
+            echo "No existing CT source image tag found for smoke import"
             exit 1
           fi
 
@@ -146,11 +140,12 @@ jobs:
           }
           trap cleanup EXIT
 
-          # Re-tag an existing AGK image into the smoke repository to verify ACR write permissions
           az acr import \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
-            --source "$AGK_ACR_NAME.azurecr.io/$AGK_IMAGE_REPOSITORY:$SOURCE_VERSION" \
+            --source "$CT_ACR_LOGIN_SERVER/$CT_IMAGE_REPOSITORY:$SOURCE_VERSION" \
+            --username acrctshared001 \
+            --password "$CT_ACR_PASSWORD" \
             --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --force
 

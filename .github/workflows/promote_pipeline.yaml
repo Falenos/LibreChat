@@ -114,6 +114,8 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
 
           test -f infrastructure/prod/values.yaml
+          grep -Eq "tag: ['\"]v[0-9]+\.[0-9]+\.[0-9]+['\"]" infrastructure/prod/values.yaml
+          grep -Eq "SERVICE_VERSION: v[0-9]+\.[0-9]+\.[0-9]+" infrastructure/prod/values.yaml
 
           test -f "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
@@ -179,8 +181,7 @@ jobs:
 
           VERSION="${{ steps.version.outputs.version }}"
           git pull --ff-only origin main
-          # Anchor to the image.tag key path to avoid corrupting other tag: lines
-          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
 
           BRANCH="release/agk-prod-$VERSION"
 
@@ -209,13 +210,12 @@ jobs:
           fi
           echo "Prod deployment config PR: $PR_URL"
 
-          # --auto waits for required checks; fallback handles already-mergeable PRs on rerun
-          gh pr merge "$PR_URL" --auto --squash --delete-branch \
-            || gh pr merge "$PR_URL" --squash --delete-branch \
-            || true
+          gh pr merge "$PR_URL" --auto --squash --delete-branch
 
           STATE=""
           for attempt in {1..90}; do
+            # Tolerate transient API errors so a blip does not fail a promotion
+            # whose PR is about to merge.
             STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
             echo "Attempt $attempt: PR state=$STATE"
             if [ "$STATE" = "MERGED" ]; then
@@ -239,8 +239,25 @@ jobs:
             echo "| Prod deployment config files | \`$AGK_PROD_CONFIG_DIRECTORY/values.yaml\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # In-repo overlay version tracking removed — agk-deployment-configs is the
-      # single source of truth for both dev and prod image tags.
+      - name: Update AGK prod app overlay values
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: '$VERSION'/" infrastructure/prod/values.yaml
+          sed -i -E "s/SERVICE_VERSION: .*/SERVICE_VERSION: $VERSION/" infrastructure/prod/values.yaml
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
+          git add infrastructure/prod/values.yaml
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Update AGK prod version to $VERSION"
+            git push origin main
+          else
+            echo "AGK prod app overlay already points at $VERSION"
+          fi
 
       - name: Refresh AGK prod ArgoCD application
         run: |
@@ -268,7 +285,7 @@ jobs:
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$app_name?refresh=true" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
               -H "Accept: application/json" \
-              > /dev/null 2>&1 || true
+              > /dev/null
           }
 
           refresh_app "$AGK_ARGOCD_APP"
@@ -277,13 +294,7 @@ jobs:
             APP_JSON=$(curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              -H "Accept: application/json" 2>/dev/null || true)
-
-            if [ -z "$APP_JSON" ]; then
-              echo "Attempt $attempt: API blip — retrying"
-              sleep 10
-              continue
-            fi
+              -H "Accept: application/json")
 
             SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
             HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
