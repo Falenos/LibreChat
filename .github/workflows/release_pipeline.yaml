@@ -1,6 +1,6 @@
 name: Release Pipeline
 
-run-name: Release PR #${{ github.event.pull_request.number }} to shared dev and AGK dev
+run-name: Release PR #${{ github.event.pull_request.number }} to AGK dev
 
 on:
   pull_request:
@@ -19,27 +19,27 @@ concurrency:
 
 jobs:
   release:
-    name: Build and release to CT shared dev
-    if: >-
-      github.event.pull_request.merged == true
+    name: Build, release and deploy to AGK dev
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      new-version: ${{ steps.version.outputs.new-version }}
     env:
-      CT_ACR_NAME: acrctshared001
-      CT_NAMESPACE: tools-non-prod
-      CT_CONFIG_REPOSITORY: Knauf-Group/ct-shared-deployment-configs
-      CT_CONFIG_DIRECTORY: ./dev/services/agentic-karl/agentic-karl
-      CT_ARGOCD_DOMAIN: argocd-shared-dev.knauf.digital
-      CT_ARGOCD_APP: agentic-karl
+      AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_ACR_NAME: acragkhubnonprod001
+      AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
+      AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
+      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
+      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
     steps:
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get secrets from shared Key Vaults
+      - name: Get secrets from Key Vaults
         run: |
           set -euo pipefail
           for secret in GITHUB-PUSH-PAT GITHUB-PAT; do
@@ -49,13 +49,12 @@ jobs:
             echo "$ENV_NAME=$VALUE" >> "$GITHUB_ENV"
           done
 
-          ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
-          echo "::add-mask::$ACR_PASSWORD"
-          echo "ACR_PASSWORD=$ACR_PASSWORD" >> "$GITHUB_ENV"
-
-          ARGOCD_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name shared-dev-ARGOCD --query value -o tsv)
-          echo "::add-mask::$ARGOCD_PASSWORD"
-          echo "CT_ARGOCD_PASSWORD=$ARGOCD_PASSWORD" >> "$GITHUB_ENV"
+          AGK_ACR_PASSWORD=$(az acr credential show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --query "passwords[0].value" -o tsv)
+          echo "::add-mask::$AGK_ACR_PASSWORD"
+          echo "AGK_ACR_PASSWORD=$AGK_ACR_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -74,7 +73,6 @@ jobs:
           echo "Latest tag: $LATEST_TAG"
 
           # Idempotent: if the merge commit already has a version tag, reuse it
-          # (rerun scenario — tag was created in a previous attempt)
           EXISTING_TAG=$(git tag --points-at "$MERGE_SHA" | grep -E '^v[0-9]+\.' | head -1 || true)
           if [ -n "$EXISTING_TAG" ]; then
             echo "Merge commit already tagged as $EXISTING_TAG — reusing (rerun scenario)"
@@ -104,7 +102,7 @@ jobs:
             echo "| Source commit | \`${{ github.event.pull_request.merge_commit_sha }}\` |"
             echo "| Previous version | \`$LATEST_TAG\` |"
             echo "| Released version | \`$NEW_VERSION\` |"
-            echo "| CT image | \`${CT_ACR_NAME}.azurecr.io/${CT_NAMESPACE}/agentic-karl:$NEW_VERSION\` |"
+            echo "| Image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create .npmrc for Docker build
@@ -113,19 +111,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to CT shared ACR
+      - name: Login to AGK ACR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.CT_ACR_NAME }}.azurecr.io
-          username: ${{ env.CT_ACR_NAME }}
-          password: ${{ env.ACR_PASSWORD }}
+          registry: ${{ env.AGK_ACR_NAME }}.azurecr.io
+          username: ${{ env.AGK_ACR_NAME }}
+          password: ${{ env.AGK_ACR_PASSWORD }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.CT_ACR_NAME }}.azurecr.io/${{ env.CT_NAMESPACE }}/agentic-karl:${{ steps.version.outputs.new-version }}
+          tags: ${{ env.AGK_ACR_NAME }}.azurecr.io/${{ env.AGK_IMAGE_REPOSITORY }}:${{ steps.version.outputs.new-version }}
           build-args: |
             NPM_TOKEN=${{ env.GITHUB_PUSH_PAT }}
 
@@ -135,11 +133,10 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-
-          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
 
           # Idempotent: skip if tag already exists and points at the merge commit
           if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
@@ -167,129 +164,11 @@ jobs:
               -F generate_release_notes=true
           fi
 
-      - name: Update CT shared deployment config
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.new-version }}"
-          git clone "https://x-access-token:$GITHUB_PAT@github.com/$CT_CONFIG_REPOSITORY.git" ct-deployment-configs
-          cd ct-deployment-configs
+      - name: Check out AGK deployment config repository
+        run: git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
 
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-
-          sed -i -E "s/tag: .*$/tag: \"$VERSION\"/g" "$CT_CONFIG_DIRECTORY/values.yaml"
-          sed -i -E "s/SERVICE_VERSION:.*$/SERVICE_VERSION: $VERSION/g" "$CT_CONFIG_DIRECTORY/values.yaml"
-
-          git add "$CT_CONFIG_DIRECTORY/values.yaml"
-          if git diff --cached --quiet; then
-            echo "CT deployment config already points at $VERSION — skipping (rerun scenario)"
-          else
-            git commit -m "Update agentic-karl to $VERSION"
-            git push origin main
-          fi
-
-      - name: Refresh CT shared ArgoCD
-        run: |
-          set -euo pipefail
-          ARGOCD_TOKEN=$(curl -fsS "https://$CT_ARGOCD_DOMAIN/api/v1/session" \
-            -H "Content-Type: application/json" \
-            -d "$CT_ARGOCD_PASSWORD" \
-            | jq -r '.token')
-          echo "::add-mask::$ARGOCD_TOKEN"
-
-          curl -fsS \
-            "https://$CT_ARGOCD_DOMAIN/api/v1/applications/$CT_ARGOCD_APP?refresh=true" \
-            -H "Authorization: Bearer $ARGOCD_TOKEN" \
-            -H "Accept: application/json" \
-            > /dev/null
-
-          echo "CT shared ArgoCD refreshed for $CT_ARGOCD_APP"
-
-  deploy-agk-dev:
-    name: Deploy AGK dev
-    needs: release
-    if: >-
-      github.event.pull_request.merged == true
-      && needs.release.result == 'success'
-    runs-on: ubuntu-latest
-    env:
-      AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
-      AGK_ACR_NAME: acragkhubnonprod001
-      AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
-      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
-      AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
-      AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
-      AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
-      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
-      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
-      CT_ACR_LOGIN_SERVER: acrctshared001.azurecr.io
-      CT_IMAGE_REPOSITORY: tools-non-prod/agentic-karl
-    steps:
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Get release support secrets
-        run: |
-          set -euo pipefail
-          GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
-          echo "::add-mask::$GITHUB_PAT"
-          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
-
-          CT_ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
-          echo "::add-mask::$CT_ACR_PASSWORD"
-          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
-
-      - name: Determine released version
-        id: version
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          set -euo pipefail
-          NEW_VERSION="${{ needs.release.outputs.new-version }}"
-          echo "Released version: $NEW_VERSION"
-          echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
-          {
-            echo "## AGK dev rollout"
-            echo
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Source PR | #${{ github.event.pull_request.number }} $PR_TITLE |"
-            echo "| Released version | \`$NEW_VERSION\` |"
-            echo "| Expected AGK image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
-            echo "| ArgoCD app | \`$AGK_ARGOCD_APP\` on \`$AGK_ARGOCD_DOMAIN\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Import image into AGK nonprod ACR
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.new-version }}"
-          az acr import \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --source "$CT_ACR_LOGIN_SERVER/$CT_IMAGE_REPOSITORY:$VERSION" \
-            --username acrctshared001 \
-            --password "$CT_ACR_PASSWORD" \
-            --image "$AGK_IMAGE_REPOSITORY:$VERSION" \
-            --force
-
-      - name: Verify AGK image tag
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.new-version }}"
-          az acr repository show-tags \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --repository "$AGK_IMAGE_REPOSITORY" \
-            --query "[?@=='$VERSION']" \
-            -o tsv | grep -Fx "$VERSION"
-
-        run: git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
-
-      # The agk-deployment-configs main branch is protected (PR required, Sonar
-      # "test" check, no direct pushes), so the bump is landed via an
-      # auto-merged PR instead of a direct `git push origin main`.
+      # agk-deployment-configs main is branch-protected (PR required, Sonar
+      # "test" check), so the bump is landed via an auto-merged PR.
       - name: Update AGK deployment config values
         working-directory: agk-deployment-configs
         env:
