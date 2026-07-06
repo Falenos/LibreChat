@@ -124,6 +124,12 @@ const deleteVectorsForFiles = async (req, files) => {
   const agentFiles = azureEnabled ? validFiles.filter((f) => f.context === 'agents') : [];
   const pgFiles = validFiles.filter((f) => !azureEnabled || f.context !== 'agents');
 
+  // Non-agent files (or all files when Azure Search disabled) → pgvector
+  // Runs first so a mixed batch's chat cleanup is never blocked by Azure failures.
+  if (pgFiles.length) {
+    await deleteVectorsByIds(req, pgFiles.map((f) => f.file_id));
+  }
+
   // Agent files → Azure AI Search (when enabled), chunked 5-at-a-time
   const azureFailedIds = [];
   if (agentFiles.length) {
@@ -142,11 +148,6 @@ const deleteVectorsForFiles = async (req, files) => {
       logger.warn(msg);
       throw new Error(msg);
     }
-  }
-
-  // Non-agent files (or all files when Azure Search disabled) → pgvector
-  if (pgFiles.length) {
-    await deleteVectorsByIds(req, pgFiles.map((f) => f.file_id));
   }
 };
 // End [knauf]
@@ -250,9 +251,10 @@ module.exports = {
   deleteVectorsByIds,
   // [knauf] Context-aware batch delete — agent files to Azure Search, rest to pgvector.
   deleteVectorsForFiles,
-  // [knauf] Per-file Azure Search delete with bounded retry; also exported for
-  // gcCanonicalAsset in the dedup GC path.
+  // [knauf] Per-file Azure Search delete with bounded retry; used by
+  // deleteVectorsForFiles and deleteVectors for agent-file routing.
   deleteAzureSearchVectors,
+  // [knauf] Flag check; used by deleteVectorsForFiles, deleteVectors, and fileSearch.js.
   useAzureSearchForAgents,
   // End [knauf]
   uploadVectors,
