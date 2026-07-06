@@ -191,5 +191,88 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     await deleteVectorsForFiles(req, []);
     expect(axios.delete).not.toHaveBeenCalled();
   });
+
+  // [knauf] Azure-failure branch — pinning the round-2/round-3 semantics: pgvector
+  // runs first and unconditionally, an Azure failure aggregate-throws with the
+  // failed ids afterward, and a 404 on /agent/documents/:id is swallowed as success.
+  test('mixed batch: pgvector still runs and succeeds even when an Azure delete fails', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockImplementation((url) => {
+      if (url === 'http://rag.test/documents') {
+        return Promise.resolve({ status: 200 });
+      }
+      if (url.endsWith('/agent-fail')) {
+        return Promise.reject({ response: { status: 400 }, message: 'bad request' });
+      }
+      return Promise.resolve({ status: 200 });
+    });
+
+    await expect(
+      deleteVectorsForFiles(req, [
+        { file_id: 'agent-fail', context: 'agents' },
+        { file_id: 'chat-1', context: 'message_attachment' },
+      ]),
+    ).rejects.toThrow(/agent-fail/);
+
+    // pgvector call for the chat file happened despite the Azure failure.
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['chat-1'] }),
+    );
+  });
+
+  test('aggregate-throws listing every failed agent file id', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockImplementation((url) => {
+      if (url.endsWith('/agent-ok')) {
+        return Promise.resolve({ status: 200 });
+      }
+      return Promise.reject({ response: { status: 400 }, message: 'bad request' });
+    });
+
+    await expect(
+      deleteVectorsForFiles(req, [
+        { file_id: 'agent-ok', context: 'agents' },
+        { file_id: 'agent-bad-1', context: 'agents' },
+        { file_id: 'agent-bad-2', context: 'agents' },
+      ]),
+    ).rejects.toThrow(/agent-bad-1.*agent-bad-2|agent-bad-2.*agent-bad-1/);
+  });
+
+  test('a 404 on /agent/documents/:id resolves silently (no throw)', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockRejectedValue({ response: { status: 404 } });
+
+    await expect(
+      deleteVectorsForFiles(req, [{ file_id: 'agent-gone', context: 'agents' }]),
+    ).resolves.toBeUndefined();
+  });
+
+  test('chunks agent deletes into waves of AZURE_SEARCH_CONCURRENCY (5), sequentially', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    let inFlight = 0;
+    let maxInFlight = 0;
+    axios.delete.mockImplementation(() => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          inFlight--;
+          resolve({ status: 200 });
+        }, 5),
+      );
+    });
+
+    const files = Array.from({ length: 7 }, (_, i) => ({
+      file_id: `agent-${i}`,
+      context: 'agents',
+    }));
+    await deleteVectorsForFiles(req, files);
+
+    expect(axios.delete).toHaveBeenCalledTimes(7);
+    // Wave 1 = 5 concurrent, wave 2 = 2 — never all 7 at once.
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+  });
+  // End [knauf]
 });
 // End [knauf]

@@ -311,7 +311,7 @@ async function gcDedupRows({ req, dedupRows }) {
   const groups = new Map();
   for (const f of dedupRows) {
     const ownerId = String(f.user);
-    const groupKey = `${ownerId}${f.knauf_content_hash}`;
+    const groupKey = `${ownerId}\0${f.knauf_content_hash}`;
     let group = groups.get(groupKey);
     if (!group) {
       group = { user: f.user, hash: f.knauf_content_hash, assets: new Map() };

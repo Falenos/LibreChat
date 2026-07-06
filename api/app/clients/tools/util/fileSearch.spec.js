@@ -42,4 +42,80 @@ describe('fileSearch asset-id resolution (KK20-204)', () => {
     expect(queriedIds).toEqual(['id1', 'plain']); // reuse row resolved to id1 (NOT id2)
   });
 });
+
+// [knauf] KK20-203 — seam test: per-file query URL routing. Agent-context files
+// query Azure AI Search (`/agent/query`) only when AZURE_SEARCH_ENABLED is true;
+// chat/message-attachment files always query pgvector (`/query`), regardless of
+// the flag.
+describe('fileSearch query routing (KK20-203)', () => {
+  const OLD_URL = process.env.RAG_API_URL;
+  const OLD_SEARCH = process.env.AZURE_SEARCH_ENABLED;
+  beforeAll(() => {
+    process.env.RAG_API_URL = 'http://rag.test';
+  });
+  afterAll(() => {
+    if (OLD_URL === undefined) {
+      delete process.env.RAG_API_URL;
+    } else {
+      process.env.RAG_API_URL = OLD_URL;
+    }
+    if (OLD_SEARCH === undefined) {
+      delete process.env.AZURE_SEARCH_ENABLED;
+    } else {
+      process.env.AZURE_SEARCH_ENABLED = OLD_SEARCH;
+    }
+  });
+  beforeEach(() => {
+    jest.clearAllMocks();
+    axios.post.mockResolvedValue({ data: [] });
+  });
+
+  test('agent-context files query /agent/query when Azure Search is enabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    const searchTool = await createFileSearchTool({
+      userId: 'u1',
+      files: [{ file_id: 'agent-1', filename: 'a.pdf', context: 'agents' }],
+    });
+
+    await searchTool.invoke({ query: 'hello' });
+
+    expect(axios.post).toHaveBeenCalledWith(
+      'http://rag.test/agent/query',
+      expect.objectContaining({ file_id: 'agent-1' }),
+      expect.any(Object),
+    );
+  });
+
+  test('message_attachment files query /query even when Azure Search is enabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    const searchTool = await createFileSearchTool({
+      userId: 'u1',
+      files: [{ file_id: 'chat-1', filename: 'b.pdf', context: 'message_attachment' }],
+    });
+
+    await searchTool.invoke({ query: 'hello' });
+
+    expect(axios.post).toHaveBeenCalledWith(
+      'http://rag.test/query',
+      expect.objectContaining({ file_id: 'chat-1' }),
+      expect.any(Object),
+    );
+  });
+
+  test('agent-context files query /query when Azure Search is disabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'false';
+    const searchTool = await createFileSearchTool({
+      userId: 'u1',
+      files: [{ file_id: 'agent-1', filename: 'a.pdf', context: 'agents' }],
+    });
+
+    await searchTool.invoke({ query: 'hello' });
+
+    expect(axios.post).toHaveBeenCalledWith(
+      'http://rag.test/query',
+      expect.objectContaining({ file_id: 'agent-1' }),
+      expect.any(Object),
+    );
+  });
+});
 // End [knauf]
