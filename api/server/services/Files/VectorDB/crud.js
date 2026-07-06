@@ -105,9 +105,9 @@ const deleteVectorsByIds = async (req, fileIds) => {
   throw new Error(lastError?.message || 'An error occurred during file deletion.');
 };
 
-// [knauf] Batch-delete embeddings — route to Azure AI Search OR pgvector.
-// When Azure Search is enabled, files are stored in Azure Search (not pgvector),
-// so deletes go to Azure Search only. When disabled, normal pgvector path.
+// [knauf] Batch-delete embeddings — route agent files to Azure AI Search,
+// everything else to pgvector. Only files attached to agents (context 'agents')
+// are stored in Azure Search; chat/message attachments always go to pgvector.
 // Azure Search deletes are chunked (AZURE_SEARCH_CONCURRENCY) to avoid 429.
 const AZURE_SEARCH_CONCURRENCY = 5;
 const deleteVectorsForFiles = async (req, files) => {
@@ -115,30 +115,41 @@ const deleteVectorsForFiles = async (req, files) => {
     return;
   }
 
-  const ids = files.map((f) => f.file_id).filter(Boolean);
-  if (!ids.length) {
+  const validFiles = files.filter((f) => f.file_id);
+  if (!validFiles.length) {
     return;
   }
 
-  // Azure Search enabled → delete from Azure Search only
-  if (useAzureSearchForAgents()) {
+  const azureEnabled = useAzureSearchForAgents();
+  const agentFiles = azureEnabled ? validFiles.filter((f) => f.context === 'agents') : [];
+  const pgFiles = validFiles.filter((f) => !azureEnabled || f.context !== 'agents');
+
+  const promises = [];
+
+  // Agent files → Azure AI Search (when enabled)
+  if (agentFiles.length) {
+    const ids = agentFiles.map((f) => f.file_id);
     for (let i = 0; i < ids.length; i += AZURE_SEARCH_CONCURRENCY) {
       const chunk = ids.slice(i, i + AZURE_SEARCH_CONCURRENCY);
-      const results = await Promise.allSettled(
-        chunk.map((id) => deleteAzureSearchVectors(req, id)),
+      promises.push(
+        Promise.allSettled(chunk.map((id) => deleteAzureSearchVectors(req, id))).then((results) => {
+          const failed = results.filter((r) => r.status === 'rejected');
+          if (failed.length) {
+            logger.warn(
+              `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
+            );
+          }
+        }),
       );
-      const failed = results.filter((r) => r.status === 'rejected');
-      if (failed.length) {
-        logger.warn(
-          `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
-        );
-      }
     }
-    return;
   }
 
-  // Azure Search disabled → normal pgvector batch delete
-  return deleteVectorsByIds(req, ids);
+  // Non-agent files (or all files when Azure Search disabled) → pgvector
+  if (pgFiles.length) {
+    promises.push(deleteVectorsByIds(req, pgFiles.map((f) => f.file_id)));
+  }
+
+  return Promise.all(promises);
 };
 // End [knauf]
 
@@ -146,9 +157,8 @@ const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
-  // [knauf] Azure Search enabled → delete from Azure Search only;
-  // disabled → normal pgvector path.
-  if (useAzureSearchForAgents()) {
+  // [knauf] Agent files → Azure Search when enabled; everything else → pgvector.
+  if (useAzureSearchForAgents() && file.context === 'agents') {
     return deleteAzureSearchVectors(req, file.file_id);
   }
   // End [knauf]

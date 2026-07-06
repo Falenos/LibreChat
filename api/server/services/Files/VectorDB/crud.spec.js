@@ -88,7 +88,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
   });
   beforeEach(() => jest.clearAllMocks());
 
-  test('deletes from Azure Search only when Azure Search enabled', async () => {
+  test('agent files go to Azure Search when enabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -97,7 +97,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'agent-file-2', context: 'agents' },
     ]);
 
-    // Azure Search per-file deletes ONLY (no pgvector)
+    // Agent files → Azure Search only, no pgvector
     expect(axios.delete).toHaveBeenCalledTimes(2);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/agent-file-1',
@@ -109,7 +109,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     );
   });
 
-  test('deletes message_attachment files from Azure Search only when enabled', async () => {
+  test('chat/message_attachment files go to pgvector even when Azure Search enabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -117,15 +117,15 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'chat-file-1', context: 'message_attachment' },
     ]);
 
-    // Azure Search only — pgvector is not touched
+    // Chat files always go to pgvector, never Azure Search
     expect(axios.delete).toHaveBeenCalledTimes(1);
     expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/agent/documents/chat-file-1',
-      expect.any(Object),
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['chat-file-1'] }),
     );
   });
 
-  test('handles mixed files — all go to Azure Search only when enabled', async () => {
+  test('mixed batch — agent files to Azure Search, chat files to pgvector', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -135,23 +135,19 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'chat-2', context: 'message_attachment' },
     ]);
 
-    // 3 Azure Search per-file deletes, no pgvector
-    expect(axios.delete).toHaveBeenCalledTimes(3);
+    // 1 Azure Search for agent + 1 pgvector batch for chats = 2
+    expect(axios.delete).toHaveBeenCalledTimes(2);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/agent-1',
       expect.any(Object),
     );
     expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/agent/documents/chat-1',
-      expect.any(Object),
-    );
-    expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/agent/documents/chat-2',
-      expect.any(Object),
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['chat-1', 'chat-2'] }),
     );
   });
 
-  test('falls back to pgvector only when Azure Search disabled', async () => {
+  test('all files go to pgvector when Azure Search disabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'false';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -160,6 +156,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'chat-1', context: 'message_attachment' },
     ]);
 
+    // All to pgvector when Azure Search disabled
     expect(axios.delete).toHaveBeenCalledTimes(1);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/documents',
@@ -177,14 +174,10 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: null, context: 'message_attachment' },
     ]);
 
-    // Only good-1 should hit Azure Search (no pgvector when enabled)
+    // Only good-1 (agent) hits Azure Search; null/undefined filtered out
     expect(axios.delete).toHaveBeenCalledTimes(1);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/good-1',
-      expect.any(Object),
-    );
-    expect(axios.delete).not.toHaveBeenCalledWith(
-      expect.stringContaining('/agent/documents/undefined'),
       expect.any(Object),
     );
   });
