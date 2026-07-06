@@ -20,7 +20,9 @@ concurrency:
 jobs:
   release:
     name: Build and release to CT shared dev
-    if: ${{ github.event.pull_request.merged == true }}
+    if: >-
+      github.event.pull_request.merged == true
+      && !startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -68,19 +70,28 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -euo pipefail
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
           LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
           echo "Latest tag: $LATEST_TAG"
 
-          MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
-          MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
-          PATCH=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f3)
-
-          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'major-release') }}" == "true" ]]; then
-            NEW_VERSION="v$((MAJOR + 1)).0.0"
-          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'patch-release') }}" == "true" ]]; then
-            NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          # Idempotent: if the merge commit already has a version tag, reuse it
+          # (rerun scenario — tag was created in a previous attempt)
+          EXISTING_TAG=$(git tag --points-at "$MERGE_SHA" | grep -E '^v[0-9]+\.' | head -1 || true)
+          if [ -n "$EXISTING_TAG" ]; then
+            echo "Merge commit already tagged as $EXISTING_TAG — reusing (rerun scenario)"
+            NEW_VERSION="$EXISTING_TAG"
           else
-            NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f3)
+
+            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'major-release') }}" == "true" ]]; then
+              NEW_VERSION="v$((MAJOR + 1)).0.0"
+            elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'patch-release') }}" == "true" ]]; then
+              NEW_VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            else
+              NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
+            fi
           fi
 
           echo "New version: $NEW_VERSION"
@@ -119,7 +130,7 @@ jobs:
           build-args: |
             NPM_TOKEN=${{ env.GITHUB_PUSH_PAT }}
 
-      - name: Create git tag and GitHub release
+      - name: Create git tag and GitHub release (idempotent)
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
@@ -128,16 +139,27 @@ jobs:
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git tag -a "$VERSION" -m "$VERSION"
-          git push origin "$VERSION"
 
-          gh api \
-            --method POST \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/releases \
-            -f tag_name="$VERSION" \
-            -f name="$VERSION" \
-            -F generate_release_notes=true
+          # Idempotent: skip if tag already exists (safe for reruns)
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists — skipping tag creation (rerun scenario)"
+          else
+            git tag -a "$VERSION" -m "$VERSION"
+            git push origin "$VERSION"
+          fi
+
+          # Idempotent: skip if release already exists
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists — skipping release creation"
+          else
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              /repos/${{ github.repository }}/releases \
+              -f tag_name="$VERSION" \
+              -f name="$VERSION" \
+              -F generate_release_notes=true
+          fi
 
       - name: Update CT shared deployment config
         run: |
@@ -176,7 +198,10 @@ jobs:
   deploy-agk-dev:
     name: Deploy AGK dev
     needs: release
-    if: ${{ github.event.pull_request.merged == true && needs.release.result == 'success' }}
+    if: >-
+      github.event.pull_request.merged == true
+      && !startsWith(github.head_ref, 'release/')
+      && needs.release.result == 'success'
     runs-on: ubuntu-latest
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
@@ -294,6 +319,7 @@ jobs:
           fi
           gh pr merge "$PR_URL" --auto --squash --delete-branch
 
+          STATE=""
           for attempt in {1..30}; do
             STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
             echo "Attempt $attempt: PR state=$STATE"
@@ -302,8 +328,14 @@ jobs:
             sleep 5
           done
 
+          if [ "$STATE" != "MERGED" ]; then
+            echo "Overlay PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled; re-run this job afterwards or check $PR_URL."
+            exit 1
+          fi
+
           {
-            echo "| App overlay PR | $PR_URL |"
+            echo "| App overlay PR | $PR_URL (merged) |"
             echo "| App overlay file | \`infrastructure/dev/values.yaml\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
