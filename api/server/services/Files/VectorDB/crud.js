@@ -250,8 +250,7 @@ module.exports = {
   deleteVectors,
   // [knauf] KK20-203 — batched, retried vector delete for the chat-delete cascade.
   deleteVectorsByIds,
-  // [knauf] Azure-Search-aware batch delete for file objects — tries both Azure
-  // Search and pgvector when Azure Search is enabled.
+  // [knauf] Context-aware batch delete — agent files to Azure Search, rest to pgvector.
   deleteVectorsForFiles,
   // [knauf] Per-file Azure Search delete with bounded retry; also exported for
   // gcCanonicalAsset in the dedup GC path.

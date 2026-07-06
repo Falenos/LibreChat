@@ -351,7 +351,7 @@ async function gcDedupRows({ req, dedupRows }) {
   // AFTER stage 1, scoped to the asset OWNER so a cross-user delete can't nuke a
   // still-referenced asset).
   // [knauf] KK20-203 — Azure-Search-aware GC: when enabled, pass
-  // deleteAzureSearchVectors so gcCanonicalAsset tries both stores.
+  // deleteAzureSearchVectors so gcCanonicalAsset routes to Azure Search.
   const { deleteVectorsByIds, deleteAzureSearchVectors, useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
   const { getStrategyFunctions } = require('~/server/services/Files/strategies');
   const azureDelete = useAzureSearchForAgents() ? deleteAzureSearchVectors : undefined;
