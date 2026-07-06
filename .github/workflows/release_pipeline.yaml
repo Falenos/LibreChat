@@ -22,7 +22,7 @@ jobs:
     name: Build and release to CT shared dev
     if: >-
       github.event.pull_request.merged == true
-      && !startsWith(github.head_ref, 'release/')
+      && !startsWith(github.head_ref, 'release/agk-overlay-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -140,9 +140,16 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          # Idempotent: skip if tag already exists (safe for reruns)
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
-            echo "Tag $VERSION already exists — skipping tag creation (rerun scenario)"
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+
+          # Idempotent: skip if tag already exists and points at the merge commit
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-list -n1 "refs/tags/$VERSION")
+            if [ "$TAG_SHA" != "$MERGE_SHA" ]; then
+              echo "::error::Tag $VERSION exists but points at $TAG_SHA, not merge commit $MERGE_SHA — aborting to prevent image/tag mismatch"
+              exit 1
+            fi
+            echo "Tag $VERSION already exists at $MERGE_SHA — skipping tag creation (rerun scenario)"
           else
             git tag -a "$VERSION" -m "$VERSION"
             git push origin "$VERSION"
@@ -175,8 +182,12 @@ jobs:
           sed -i -E "s/SERVICE_VERSION:.*$/SERVICE_VERSION: $VERSION/g" "$CT_CONFIG_DIRECTORY/values.yaml"
 
           git add "$CT_CONFIG_DIRECTORY/values.yaml"
-          git commit -m "Update agentic-karl to $VERSION"
-          git push origin main
+          if git diff --cached --quiet; then
+            echo "CT deployment config already points at $VERSION — skipping (rerun scenario)"
+          else
+            git commit -m "Update agentic-karl to $VERSION"
+            git push origin main
+          fi
 
       - name: Refresh CT shared ArgoCD
         run: |
@@ -200,7 +211,7 @@ jobs:
     needs: release
     if: >-
       github.event.pull_request.merged == true
-      && !startsWith(github.head_ref, 'release/')
+      && !startsWith(github.head_ref, 'release/agk-overlay-')
       && needs.release.result == 'success'
     runs-on: ubuntu-latest
     env:
@@ -320,12 +331,12 @@ jobs:
           gh pr merge "$PR_URL" --auto --squash --delete-branch
 
           STATE=""
-          for attempt in {1..30}; do
+          for attempt in {1..60}; do
             STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
             echo "Attempt $attempt: PR state=$STATE"
             [ "$STATE" = "MERGED" ] && break
             [ "$STATE" = "CLOSED" ] && { echo "Overlay PR closed without merging"; exit 1; }
-            sleep 5
+            sleep 10
           done
 
           if [ "$STATE" != "MERGED" ]; then
