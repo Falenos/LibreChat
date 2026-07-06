@@ -22,7 +22,6 @@ jobs:
     name: Build and release to CT shared dev
     if: >-
       github.event.pull_request.merged == true
-      && !startsWith(github.head_ref, 'release/agk-overlay-')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -211,7 +210,6 @@ jobs:
     needs: release
     if: >-
       github.event.pull_request.merged == true
-      && !startsWith(github.head_ref, 'release/agk-overlay-')
       && needs.release.result == 'success'
     runs-on: ubuntu-latest
     env:
@@ -287,70 +285,6 @@ jobs:
             --query "[?@=='$VERSION']" \
             -o tsv | grep -Fx "$VERSION"
 
-      - name: Check out app repository
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      # Update the in-repo overlay so it stays in sync with the deployed version.
-      # Uses a PR branch instead of pushing directly to main.
-      - name: Update AGK app overlay values
-        env:
-          GH_TOKEN: ${{ env.GITHUB_PAT }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.new-version }}"
-
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
-
-          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: '$VERSION'/" infrastructure/dev/values.yaml
-          sed -i -E "s/SERVICE_VERSION: .*/SERVICE_VERSION: $VERSION/" infrastructure/dev/values.yaml
-
-          if git diff --quiet -- infrastructure/dev/values.yaml; then
-            echo "AGK app overlay already points at $VERSION"
-            exit 0
-          fi
-
-          BRANCH="release/agk-overlay-$VERSION"
-          git checkout -b "$BRANCH"
-          git add infrastructure/dev/values.yaml
-          git commit -m "Update AGK dev version to $VERSION"
-          git push --force origin "$BRANCH"
-
-          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
-          if [ -z "$PR_URL" ]; then
-            PR_URL=$(gh pr create \
-              --base main --head "$BRANCH" \
-              --title "Update AGK dev overlay to $VERSION" \
-              --body "Automated version bump from the release pipeline (run ${{ github.run_id }}).")
-          fi
-          gh pr merge "$PR_URL" --auto --squash --delete-branch
-
-          STATE=""
-          for attempt in {1..60}; do
-            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
-            echo "Attempt $attempt: PR state=$STATE"
-            [ "$STATE" = "MERGED" ] && break
-            [ "$STATE" = "CLOSED" ] && { echo "Overlay PR closed without merging"; exit 1; }
-            sleep 10
-          done
-
-          if [ "$STATE" != "MERGED" ]; then
-            echo "Overlay PR did not merge in time (state=$STATE)."
-            echo "Auto-merge stays enabled; re-run this job afterwards or check $PR_URL."
-            exit 1
-          fi
-
-          {
-            echo "| App overlay PR | $PR_URL (merged) |"
-            echo "| App overlay file | \`infrastructure/dev/values.yaml\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Check out AGK deployment config repository
         run: git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
 
       # The agk-deployment-configs main branch is protected (PR required, Sonar
