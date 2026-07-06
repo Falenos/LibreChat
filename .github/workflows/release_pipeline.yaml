@@ -20,7 +20,11 @@ concurrency:
 jobs:
   release:
     name: Build, release and deploy to AGK dev
-    if: github.event.pull_request.merged == true
+    # Branch protection enforces green tests on main — that is the release gate.
+    # Skip automation-owned branches to prevent release loops.
+    if: >-
+      github.event.pull_request.merged == true
+      && !startsWith(github.event.pull_request.head.ref, 'release/agk-overlay-')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -50,6 +54,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ env.GITHUB_PAT }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
       - name: Determine next version
@@ -59,11 +64,13 @@ jobs:
         run: |
           set -euo pipefail
           MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
-          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          # Use strict semver pattern to avoid matching prereleases / vendor tags
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST_TAG="${LATEST_TAG:-v0.0.0}"
           echo "Latest tag: $LATEST_TAG"
 
           # Idempotent: if the merge commit already has a version tag, reuse it
-          EXISTING_TAG=$(git tag --points-at "$MERGE_SHA" | grep -E '^v[0-9]+\.' | head -1 || true)
+          EXISTING_TAG=$(git tag --points-at "$MERGE_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           if [ -n "$EXISTING_TAG" ]; then
             echo "Merge commit already tagged as $EXISTING_TAG — reusing (rerun scenario)"
             NEW_VERSION="$EXISTING_TAG"
@@ -91,6 +98,18 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
+
+          # Idempotent: skip build if the image tag already exists in ACR (rerun scenario)
+          if az acr repository show-tags \
+               --subscription "$AGK_SUBSCRIPTION_ID" \
+               --name "$AGK_ACR_NAME" \
+               --repository "$AGK_IMAGE_REPOSITORY" \
+               --query "[?@=='$VERSION']" \
+               -o tsv 2>/dev/null | grep -Fxq "$VERSION"; then
+            echo "Image $AGK_IMAGE_REPOSITORY:$VERSION already in ACR — skipping build (rerun scenario)"
+            exit 0
+          fi
+
           az acr build \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --registry "$AGK_ACR_NAME" \
@@ -151,7 +170,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          sed -i -E "s/tag: ['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          # Anchor to the image.tag key path to avoid corrupting other tag: lines
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
             echo "AGK deployment config already points at $VERSION"
@@ -173,7 +193,10 @@ jobs:
           fi
           echo "Deployment config PR: $PR_URL"
 
-          gh pr merge "$PR_URL" --auto --squash --delete-branch
+          # --auto waits for required checks; fallback handles already-mergeable PRs on rerun
+          gh pr merge "$PR_URL" --auto --squash --delete-branch \
+            || gh pr merge "$PR_URL" --squash --delete-branch \
+            || true
 
           STATE=""
           for attempt in {1..90}; do
@@ -221,17 +244,25 @@ jobs:
             | jq -r '.token')
           echo "::add-mask::$ARGOCD_TOKEN"
 
+          # Initial refresh — tolerate transient errors
           curl -fsS \
             "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
             -H "Authorization: Bearer $ARGOCD_TOKEN" \
             -H "Accept: application/json" \
-            > /dev/null
+            > /dev/null 2>&1 || true
 
           for attempt in {1..60}; do
+            # Tolerate transient API blips so set -euo pipefail does not abort the loop
             APP_JSON=$(curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              -H "Accept: application/json")
+              -H "Accept: application/json" 2>/dev/null || true)
+
+            if [ -z "$APP_JSON" ]; then
+              echo "Attempt $attempt: API blip — retrying"
+              sleep 10
+              continue
+            fi
 
             SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
             HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
@@ -254,7 +285,7 @@ jobs:
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
               -H "Accept: application/json" \
-              > /dev/null
+              > /dev/null 2>&1 || true
             sleep 10
           done
 
