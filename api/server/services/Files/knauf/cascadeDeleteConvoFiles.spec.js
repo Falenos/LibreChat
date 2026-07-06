@@ -406,7 +406,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC path not taken
     });
 
-    test('when Azure Search enabled, gcCanonicalAsset deletes from Azure Search only', async () => {
+    test('deduped assets always GC from pgvector even when Azure Search enabled', async () => {
       mockUseAzureSearchForAgents.mockReturnValue(true);
       await seedFile('canon-az', dedupExtra({
         conversationId: 'chatA',
@@ -420,9 +420,9 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
         collected: { conversationIds: ['chatA'], files },
       });
 
-      expect(mockDeleteAzureSearchVectors).toHaveBeenCalledTimes(1);
-      expect(mockDeleteAzureSearchVectors.mock.calls[0][1]).toBe('canon-az');
-      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // pgvector NOT touched
+      // Deduped rows are always chat attachments → always pgvector
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledWith(expect.anything(), ['canon-az']);
+      expect(mockDeleteAzureSearchVectors).not.toHaveBeenCalled();
     });
   });
 

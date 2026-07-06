@@ -124,32 +124,30 @@ const deleteVectorsForFiles = async (req, files) => {
   const agentFiles = azureEnabled ? validFiles.filter((f) => f.context === 'agents') : [];
   const pgFiles = validFiles.filter((f) => !azureEnabled || f.context !== 'agents');
 
-  const promises = [];
-
-  // Agent files → Azure AI Search (when enabled)
+  // Agent files → Azure AI Search (when enabled), chunked 5-at-a-time
+  const azureFailedIds = [];
   if (agentFiles.length) {
     const ids = agentFiles.map((f) => f.file_id);
     for (let i = 0; i < ids.length; i += AZURE_SEARCH_CONCURRENCY) {
       const chunk = ids.slice(i, i + AZURE_SEARCH_CONCURRENCY);
-      promises.push(
-        Promise.allSettled(chunk.map((id) => deleteAzureSearchVectors(req, id))).then((results) => {
-          const failed = results.filter((r) => r.status === 'rejected');
-          if (failed.length) {
-            logger.warn(
-              `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
-            );
-          }
-        }),
-      );
+      const results = await Promise.allSettled(chunk.map((id) => deleteAzureSearchVectors(req, id)));
+      results.forEach((r, idx) => {
+        if (r.status === 'rejected') {
+          azureFailedIds.push(chunk[idx]);
+        }
+      });
+    }
+    if (azureFailedIds.length) {
+      const msg = `[knauf] Azure Search delete failed for: ${azureFailedIds.join(', ')}`;
+      logger.warn(msg);
+      throw new Error(msg);
     }
   }
 
   // Non-agent files (or all files when Azure Search disabled) → pgvector
   if (pgFiles.length) {
-    promises.push(deleteVectorsByIds(req, pgFiles.map((f) => f.file_id)));
+    await deleteVectorsByIds(req, pgFiles.map((f) => f.file_id));
   }
-
-  return Promise.all(promises);
 };
 // End [knauf]
 

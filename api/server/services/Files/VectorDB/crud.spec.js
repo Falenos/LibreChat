@@ -79,7 +79,11 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     process.env.RAG_API_URL = 'http://rag.test';
   });
   afterAll(() => {
-    process.env.RAG_API_URL = OLD_URL;
+    if (OLD_URL === undefined) {
+      delete process.env.RAG_API_URL;
+    } else {
+      process.env.RAG_API_URL = OLD_URL;
+    }
     if (OLD_SEARCH === undefined) {
       delete process.env.AZURE_SEARCH_ENABLED;
     } else {

@@ -230,32 +230,21 @@ async function collectConvoFilesForCleanup({ req, filter }) {
  * strategy call keeps it blob-only (vectors are handled here explicitly, keyed on
  * the asset id).
  *
- * [knauf] KK20-203 — Azure AI Search routing: when enabled, delete from Azure
- * Search only (files are stored there, not pgvector). When disabled, normal
- * pgvector path.
- * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, deleteAzureSearchVectors: Function, getStrategyFunctions: Function }} params
+ * [knauf] KK20-203 — Deduped rows are always chat file_search attachments
+ * (agent-library files are never deduped), so vectors always live in pgvector
+ * regardless of the Azure Search flag.
+ * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
  */
-async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, deleteAzureSearchVectors, getStrategyFunctions }) {
+async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }) {
   if (asset.embedded) {
-    // [knauf] Azure Search enabled → delete from Azure Search only; disabled → pgvector
-    if (deleteAzureSearchVectors) {
-      try {
-        await deleteAzureSearchVectors(req, assetId);
-      } catch (error) {
-        logger.warn(
-          `[knauf][cascadeDeleteConvoFiles] Azure Search vector GC failed for ${assetId}`,
-          error,
-        );
-      }
-    } else {
-      try {
-        await deleteVectorsByIds(req, [assetId]);
-      } catch (error) {
-        logger.warn(
-          `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
-          error,
-        );
-      }
+    // [knauf] Deduped assets are always chat attachments → always pgvector
+    try {
+      await deleteVectorsByIds(req, [assetId]);
+    } catch (error) {
+      logger.warn(
+        `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
+        error,
+      );
     }
     // End [knauf]
   }
@@ -350,11 +339,10 @@ async function gcDedupRows({ req, dedupRows }) {
   // Stage 2 — GC each distinct asset that NO surviving row still points at (recount
   // AFTER stage 1, scoped to the asset OWNER so a cross-user delete can't nuke a
   // still-referenced asset).
-  // [knauf] KK20-203 — Azure-Search-aware GC: when enabled, pass
-  // deleteAzureSearchVectors so gcCanonicalAsset routes to Azure Search.
-  const { deleteVectorsByIds, deleteAzureSearchVectors, useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
+  // [knauf] KK20-203 — Deduped rows are always chat attachments, so GC
+  // always deletes from pgvector (never Azure Search).
+  const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
   const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-  const azureDelete = useAzureSearchForAgents() ? deleteAzureSearchVectors : undefined;
   // End [knauf]
   for (const { user, hash, assets } of groups.values()) {
     for (const [assetId, asset] of assets) {
@@ -372,7 +360,7 @@ async function gcDedupRows({ req, dedupRows }) {
       if (survivors.length) {
         continue; // this asset still referenced elsewhere → keep it
       }
-      await gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, deleteAzureSearchVectors: azureDelete, getStrategyFunctions });
+      await gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions });
     }
   }
 }
