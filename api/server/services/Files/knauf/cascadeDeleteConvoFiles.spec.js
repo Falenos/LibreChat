@@ -408,7 +408,11 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('when Azure Search enabled, gcCanonicalAsset deletes from Azure Search only', async () => {
       mockUseAzureSearchForAgents.mockReturnValue(true);
-      await seedFile('canon-az', dedupExtra({ conversationId: 'chatA' }));
+      await seedFile('canon-az', dedupExtra({
+        conversationId: 'chatA',
+        knauf_content_hash: 'HASH-AZ',
+        knauf_asset_id: 'canon-az',
+      }));
       const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-az'] } });
 
       await cascadeDeleteCollectedFiles({
