@@ -22,7 +22,7 @@ jobs:
     name: Build, release and deploy to AGK dev
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_ACR_NAME: acragkhubnonprod001
@@ -42,12 +42,9 @@ jobs:
       - name: Get secrets from Key Vaults
         run: |
           set -euo pipefail
-          for secret in GITHUB-PUSH-PAT GITHUB-PAT; do
-            VALUE=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name "$secret" --query value -o tsv)
-            echo "::add-mask::$VALUE"
-            ENV_NAME="${secret//-/_}"
-            echo "$ENV_NAME=$VALUE" >> "$GITHUB_ENV"
-          done
+          GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
 
       - name: Check out repository code
         uses: actions/checkout@v4
@@ -90,9 +87,6 @@ jobs:
             echo "| Image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create .npmrc for Docker build
-        run: echo "//npm.pkg.github.com/:_authToken=${{ env.GITHUB_PUSH_PAT }}" > .npmrc
-
       - name: Build and push Docker image (ACR Tasks)
         run: |
           set -euo pipefail
@@ -101,8 +95,6 @@ jobs:
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --registry "$AGK_ACR_NAME" \
             --image "$AGK_IMAGE_REPOSITORY:$VERSION" \
-            --build-arg "NPM_TOKEN=${{ env.GITHUB_PUSH_PAT }}" \
-            --no-logs \
             .
 
       - name: Create git tag and GitHub release (idempotent)
@@ -125,7 +117,7 @@ jobs:
             fi
             echo "Tag $VERSION already exists at $MERGE_SHA — skipping tag creation (rerun scenario)"
           else
-            git tag -a "$VERSION" -m "$VERSION"
+            git tag -a "$VERSION" "$MERGE_SHA" -m "$VERSION"
             git push origin "$VERSION"
           fi
 
@@ -159,7 +151,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "s/tag: ['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
             echo "AGK deployment config already points at $VERSION"
