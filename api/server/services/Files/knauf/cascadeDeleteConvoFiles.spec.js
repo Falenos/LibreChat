@@ -406,7 +406,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC path not taken
     });
 
-    test('when Azure Search enabled, gcCanonicalAsset tries Azure Search before pgvector', async () => {
+    test('when Azure Search enabled, gcCanonicalAsset deletes from Azure Search only', async () => {
       mockUseAzureSearchForAgents.mockReturnValue(true);
       await seedFile('canon-az', dedupExtra({ conversationId: 'chatA' }));
       const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-az'] } });
@@ -418,7 +418,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
       expect(mockDeleteAzureSearchVectors).toHaveBeenCalledTimes(1);
       expect(mockDeleteAzureSearchVectors.mock.calls[0][1]).toBe('canon-az');
-      expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1); // pgvector still called
+      expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // pgvector NOT touched
     });
   });
 

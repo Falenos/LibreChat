@@ -230,15 +230,14 @@ async function collectConvoFilesForCleanup({ req, filter }) {
  * strategy call keeps it blob-only (vectors are handled here explicitly, keyed on
  * the asset id).
  *
- * [knauf] KK20-203 — Azure AI Search routing: when enabled, try Azure Search
- * FIRST (upload routes on entity_id which isn't stored on the file, so we can't
- * know which store holds the embeddings), then always fall through to pgvector.
- * Both are 404-tolerant so the double-delete is harmless.
+ * [knauf] KK20-203 — Azure AI Search routing: when enabled, delete from Azure
+ * Search only (files are stored there, not pgvector). When disabled, normal
+ * pgvector path.
  * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, deleteAzureSearchVectors: Function, getStrategyFunctions: Function }} params
  */
 async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, deleteAzureSearchVectors, getStrategyFunctions }) {
   if (asset.embedded) {
-    // [knauf] Try Azure Search first when enabled — harmless 404 if not there
+    // [knauf] Azure Search enabled → delete from Azure Search only; disabled → pgvector
     if (deleteAzureSearchVectors) {
       try {
         await deleteAzureSearchVectors(req, assetId);
@@ -248,16 +247,17 @@ async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, delet
           error,
         );
       }
+    } else {
+      try {
+        await deleteVectorsByIds(req, [assetId]);
+      } catch (error) {
+        logger.warn(
+          `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
+          error,
+        );
+      }
     }
     // End [knauf]
-    try {
-      await deleteVectorsByIds(req, [assetId]);
-    } catch (error) {
-      logger.warn(
-        `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
-        error,
-      );
-    }
   }
   if (!asset.filepath) {
     logger.warn(`[knauf][cascadeDeleteConvoFiles] no filepath for ${assetId}; skipping blob GC`);

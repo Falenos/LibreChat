@@ -88,7 +88,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
   });
   beforeEach(() => jest.clearAllMocks());
 
-  test('deletes from BOTH Azure Search and pgvector when Azure Search enabled', async () => {
+  test('deletes from Azure Search only when Azure Search enabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -97,7 +97,8 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'agent-file-2', context: 'agents' },
     ]);
 
-    // Azure Search per-file deletes
+    // Azure Search per-file deletes ONLY (no pgvector)
+    expect(axios.delete).toHaveBeenCalledTimes(2);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/agent-file-1',
       expect.any(Object),
@@ -106,34 +107,25 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       'http://rag.test/agent/documents/agent-file-2',
       expect.any(Object),
     );
-    // ALSO pgvector batch (idempotent fallback)
-    expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/documents',
-      expect.objectContaining({ data: ['agent-file-1', 'agent-file-2'] }),
-    );
   });
 
-  test('deletes message_attachment files from BOTH stores when Azure Search enabled', async () => {
+  test('deletes message_attachment files from Azure Search only when enabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
-    // Chat file_search attachments have context: message_attachment but were
-    // uploaded to Azure Search via entity_id — both stores must be tried.
     await deleteVectorsForFiles(req, [
       { file_id: 'chat-file-1', context: 'message_attachment' },
     ]);
 
+    // Azure Search only — pgvector is not touched
+    expect(axios.delete).toHaveBeenCalledTimes(1);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/chat-file-1',
       expect.any(Object),
     );
-    expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/documents',
-      expect.objectContaining({ data: ['chat-file-1'] }),
-    );
   });
 
-  test('handles mixed files — all go to both stores', async () => {
+  test('handles mixed files — all go to Azure Search only when enabled', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
@@ -143,8 +135,8 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: 'chat-2', context: 'message_attachment' },
     ]);
 
-    // 3 Azure Search per-file + 1 pgvector batch = 4
-    expect(axios.delete).toHaveBeenCalledTimes(4);
+    // 3 Azure Search per-file deletes, no pgvector
+    expect(axios.delete).toHaveBeenCalledTimes(3);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/agent-1',
       expect.any(Object),
@@ -156,10 +148,6 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/chat-2',
       expect.any(Object),
-    );
-    expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/documents',
-      expect.objectContaining({ data: ['agent-1', 'chat-1', 'chat-2'] }),
     );
   });
 
@@ -189,7 +177,8 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
       { file_id: null, context: 'message_attachment' },
     ]);
 
-    // Only good-1 should hit Azure Search + pgvector
+    // Only good-1 should hit Azure Search (no pgvector when enabled)
+    expect(axios.delete).toHaveBeenCalledTimes(1);
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/agent/documents/good-1',
       expect.any(Object),
@@ -197,10 +186,6 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(axios.delete).not.toHaveBeenCalledWith(
       expect.stringContaining('/agent/documents/undefined'),
       expect.any(Object),
-    );
-    expect(axios.delete).toHaveBeenCalledWith(
-      'http://rag.test/documents',
-      expect.objectContaining({ data: ['good-1'] }),
     );
   });
 

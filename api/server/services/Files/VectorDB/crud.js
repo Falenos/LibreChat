@@ -105,48 +105,40 @@ const deleteVectorsByIds = async (req, fileIds) => {
   throw new Error(lastError?.message || 'An error occurred during file deletion.');
 };
 
-// [knauf] Batch-delete embeddings with Azure AI Search + pgvector routing.
-// When Azure Search is enabled, EVERY embedded file is deleted from BOTH Azure
-// Search AND pgvector — uploads route on `entity_id` (present for agent-library
-// AND chat file_search attachments), which isn't stored on the file document, so
-// the delete can't know which store actually holds the embeddings. Both endpoints
-// are 404-tolerant, so the double-delete is harmless and guarantees no orphans
-// regardless of when Azure Search was enabled/disabled relative to the upload.
-// Azure Search deletes are chunked (AZURE_SEARCH_CONCURRENCY) to avoid 429
-// amplification.
+// [knauf] Batch-delete embeddings — route to Azure AI Search OR pgvector.
+// When Azure Search is enabled, files are stored in Azure Search (not pgvector),
+// so deletes go to Azure Search only. When disabled, normal pgvector path.
+// Azure Search deletes are chunked (AZURE_SEARCH_CONCURRENCY) to avoid 429.
 const AZURE_SEARCH_CONCURRENCY = 5;
 const deleteVectorsForFiles = async (req, files) => {
   if (!files?.length || !process.env.RAG_API_URL) {
     return;
   }
 
-  const promises = [];
+  const ids = files.map((f) => f.file_id).filter(Boolean);
+  if (!ids.length) {
+    return;
+  }
 
-  // When Azure Search is enabled, delete from Azure Search for ALL files.
+  // Azure Search enabled → delete from Azure Search only
   if (useAzureSearchForAgents()) {
-    const ids = files.map((f) => f.file_id).filter(Boolean);
     for (let i = 0; i < ids.length; i += AZURE_SEARCH_CONCURRENCY) {
       const chunk = ids.slice(i, i + AZURE_SEARCH_CONCURRENCY);
-      promises.push(
-        Promise.allSettled(chunk.map((id) => deleteAzureSearchVectors(req, id))).then((results) => {
-          const failed = results.filter((r) => r.status === 'rejected');
-          if (failed.length) {
-            logger.warn(
-              `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
-            );
-          }
-        }),
+      const results = await Promise.allSettled(
+        chunk.map((id) => deleteAzureSearchVectors(req, id)),
       );
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length) {
+        logger.warn(
+          `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
+        );
+      }
     }
+    return;
   }
 
-  // Always try pgvector batch delete — covers files embedded before Azure Search
-  // was enabled, and is harmless (404-tolerant) for Azure-only files.
-  const pgIds = files.map((f) => f.file_id).filter(Boolean);
-  if (pgIds.length) {
-    promises.push(deleteVectorsByIds(req, pgIds));
-  }
-  return Promise.all(promises);
+  // Azure Search disabled → normal pgvector batch delete
+  return deleteVectorsByIds(req, ids);
 };
 // End [knauf]
 
@@ -154,13 +146,10 @@ const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
-  // [knauf] When Azure Search is enabled, try both endpoints — we can't know
-  // at delete time which store holds the embeddings (routing was on entity_id
-  // at upload, which isn't stored on the file document). Both are 404-tolerant.
+  // [knauf] Azure Search enabled → delete from Azure Search only;
+  // disabled → normal pgvector path.
   if (useAzureSearchForAgents()) {
-    await deleteAzureSearchVectors(req, file.file_id).catch((err) => {
-      logger.warn(`[knauf] Azure Search delete failed for ${file.file_id}, trying pgvector`, err);
-    });
+    return deleteAzureSearchVectors(req, file.file_id);
   }
   // End [knauf]
   return deleteVectorsByIds(req, [file.file_id]);
