@@ -38,6 +38,37 @@ const ragDeleteSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * @param {string[]} fileIds
  * @returns {Promise<void>}
  */
+// [knauf] Delete a single file's embeddings from Azure AI Search, with bounded retry.
+const deleteAzureSearchVectors = async (req, fileId) => {
+  const jwtToken = generateShortLivedToken(req.user.id);
+  let lastError;
+  for (let attempt = 1; attempt <= RAG_DELETE_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await axios.delete(`${process.env.RAG_API_URL}/agent/documents/${fileId}`, {
+        headers: {
+          Authorization: `Bearer ${jwtToken}`,
+          'Content-Type': 'application/json',
+          accept: 'application/json',
+        },
+      });
+    } catch (error) {
+      const status = error.response?.status;
+      if (status === 404) {
+        return;
+      }
+      lastError = error;
+      const isTransient = status == null || status >= 500 || status === 429;
+      if (!isTransient || attempt === RAG_DELETE_MAX_ATTEMPTS) {
+        break;
+      }
+      await ragDeleteSleep(200 * attempt);
+    }
+  }
+  logAxiosError({ error: lastError, message: `Error deleting Azure Search vectors for ${fileId}` });
+  throw new Error(lastError?.message || 'Azure AI Search delete failed.');
+};
+// End [knauf]
+
 const deleteVectorsByIds = async (req, fileIds) => {
   const ids = (fileIds ?? []).filter(Boolean);
   if (!ids.length || !process.env.RAG_API_URL) {
@@ -74,20 +105,41 @@ const deleteVectorsByIds = async (req, fileIds) => {
   throw new Error(lastError?.message || 'An error occurred during file deletion.');
 };
 
+// [knauf] Batch-delete embeddings with Azure AI Search routing: agent-context files
+// go to the /agent/documents endpoint; non-agent files to the pgvector /documents
+// batch endpoint. Accepts full file objects (with `context` and `file_id`) so the
+// caller doesn't need to pre-sort.
+const deleteVectorsForFiles = async (req, files) => {
+  if (!files?.length || !process.env.RAG_API_URL) {
+    return;
+  }
+  const azureSearchEnabled = useAzureSearchForAgents();
+  const agentFiles = azureSearchEnabled
+    ? files.filter((f) => f.context === 'agents')
+    : [];
+  const pgvectorFiles = azureSearchEnabled
+    ? files.filter((f) => f.context !== 'agents')
+    : files;
+
+  const promises = [];
+  for (const f of agentFiles) {
+    promises.push(deleteAzureSearchVectors(req, f.file_id));
+  }
+  const pgIds = pgvectorFiles.map((f) => f.file_id).filter(Boolean);
+  if (pgIds.length) {
+    promises.push(deleteVectorsByIds(req, pgIds));
+  }
+  return Promise.all(promises);
+};
+// End [knauf]
+
 const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
   // [knauf] Route agent file deletes to Azure AI Search endpoint when enabled
   if (useAzureSearchForAgents() && file.context === 'agents') {
-    const jwtToken = generateShortLivedToken(req.user.id);
-    return axios.delete(`${process.env.RAG_API_URL}/agent/documents/${file.file_id}`, {
-      headers: {
-        Authorization: `Bearer ${jwtToken}`,
-        'Content-Type': 'application/json',
-        accept: 'application/json',
-      },
-    });
+    return deleteAzureSearchVectors(req, file.file_id);
   }
   // End [knauf]
   return deleteVectorsByIds(req, [file.file_id]);
@@ -175,6 +227,8 @@ module.exports = {
   deleteVectors,
   // [knauf] KK20-203 — batched, retried vector delete for the chat-delete cascade.
   deleteVectorsByIds,
+  // [knauf] Azure-Search-aware batch delete for file objects with context metadata.
+  deleteVectorsForFiles,
   // End [knauf]
   uploadVectors,
 };

@@ -12,7 +12,7 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 const axios = require('axios');
-const { deleteVectorsByIds } = require('./crud');
+const { deleteVectorsByIds, deleteVectorsForFiles } = require('./crud');
 
 describe('deleteVectorsByIds (KK20-203)', () => {
   const OLD_URL = process.env.RAG_API_URL;
@@ -62,6 +62,107 @@ describe('deleteVectorsByIds (KK20-203)', () => {
     axios.delete.mockRejectedValue({ response: { status: 400 }, message: 'bad request' });
     await expect(deleteVectorsByIds(req, ['x'])).rejects.toThrow();
     expect(axios.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// [knauf] Seam test for Azure-Search-aware batch delete.
+describe('deleteVectorsForFiles (Azure Search routing)', () => {
+  const OLD_URL = process.env.RAG_API_URL;
+  const OLD_SEARCH = process.env.AZURE_SEARCH_ENABLED;
+  const req = { user: { id: 'u1' } };
+
+  beforeAll(() => {
+    process.env.RAG_API_URL = 'http://rag.test';
+  });
+  afterAll(() => {
+    process.env.RAG_API_URL = OLD_URL;
+    process.env.AZURE_SEARCH_ENABLED = OLD_SEARCH;
+  });
+  beforeEach(() => jest.clearAllMocks());
+
+  test('routes agent files to /agent/documents when Azure Search enabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      { file_id: 'agent-file-1', context: 'agents' },
+      { file_id: 'agent-file-2', context: 'agents' },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/agent/documents/agent-file-1',
+      expect.any(Object),
+    );
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/agent/documents/agent-file-2',
+      expect.any(Object),
+    );
+    // No pgvector batch call
+    expect(axios.delete).not.toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.any(Object),
+    );
+  });
+
+  test('routes non-agent files to /documents (pgvector batch)', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      { file_id: 'chat-file-1', context: 'message_attachment' },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['chat-file-1'] }),
+    );
+    expect(axios.delete).not.toHaveBeenCalledWith(
+      expect.stringContaining('/agent/documents'),
+      expect.any(Object),
+    );
+  });
+
+  test('splits mixed files into correct endpoints', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      { file_id: 'agent-1', context: 'agents' },
+      { file_id: 'chat-1', context: 'message_attachment' },
+      { file_id: 'chat-2', context: 'message_attachment' },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledTimes(2); // 1 agent per-file + 1 batch pgvector
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/agent/documents/agent-1',
+      expect.any(Object),
+    );
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['chat-1', 'chat-2'] }),
+    );
+  });
+
+  test('falls back to pgvector for all files when Azure Search disabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'false';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      { file_id: 'agent-1', context: 'agents' },
+      { file_id: 'chat-1', context: 'message_attachment' },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledTimes(1);
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['agent-1', 'chat-1'] }),
+    );
+  });
+
+  test('is a no-op for empty file list', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    await deleteVectorsForFiles(req, []);
+    expect(axios.delete).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

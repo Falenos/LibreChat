@@ -370,20 +370,22 @@ async function deletePlainRows({ req, plainRows }) {
   const { processDeleteRequest } = require('~/server/services/Files/process');
   await processDeleteRequest({ req, files: plainRows });
 
-  const embeddedIds = plainRows.filter((file) => file.embedded).map((file) => file.file_id);
-  if (!embeddedIds.length) {
+  // [knauf] Vector backstop: route agent files to Azure AI Search, rest to pgvector.
+  const embeddedFiles = plainRows.filter((file) => file.embedded);
+  if (!embeddedFiles.length) {
     return;
   }
-  const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
+  const { deleteVectorsForFiles } = require('~/server/services/Files/VectorDB/crud');
   try {
-    await deleteVectorsByIds(req, embeddedIds);
+    await deleteVectorsForFiles(req, embeddedFiles);
   } catch (vectorError) {
     logger.warn(
-      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedIds.length} file(s); ` +
-        'they may remain in pgvector',
+      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedFiles.length} file(s); ` +
+        'embeddings may remain in pgvector or Azure AI Search',
       vectorError,
     );
   }
+  // End [knauf]
 }
 
 /**
