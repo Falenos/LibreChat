@@ -175,6 +175,7 @@ const deleteVectors = async (req, file) => {
  *                                     have a `path` property that points to the location of the uploaded file.
  * @param {string} params.file_id - The file ID.
  * @param {string} [params.entity_id] - The entity ID for shared resources.
+ * @param {boolean} [params.isAgentFile] - Whether this is an agent-library file (routes to Azure Search when enabled).
  * @param {Object} [params.storageMetadata] - Storage metadata for dual storage pattern.
  *
  * @returns {Promise<{ filepath: string, bytes: number }>}
@@ -182,7 +183,7 @@ const deleteVectors = async (req, file) => {
  *            - filepath: The path where the file is saved.
  *            - bytes: The size of the file in bytes.
  */
-async function uploadVectors({ req, file, file_id, entity_id, storageMetadata }) {
+async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, storageMetadata }) {
   if (!process.env.RAG_API_URL) {
     throw new Error('RAG_API_URL not defined');
   }
@@ -203,8 +204,10 @@ async function uploadVectors({ req, file, file_id, entity_id, storageMetadata })
 
     const formHeaders = formData.getHeaders();
 
-    // [knauf] Route agent file uploads to Azure AI Search endpoint when enabled
-    const embedUrl = useAzureSearchForAgents() && entity_id
+    // [knauf] Route agent-library uploads to Azure AI Search when enabled.
+    // Only agent files (isAgentFile=true) go to Azure Search; chat file_search
+    // attachments always go to pgvector even though they carry entity_id.
+    const embedUrl = useAzureSearchForAgents() && isAgentFile
       ? `${process.env.RAG_API_URL}/agent/embed`
       : `${process.env.RAG_API_URL}/embed`;
     // End [knauf]
