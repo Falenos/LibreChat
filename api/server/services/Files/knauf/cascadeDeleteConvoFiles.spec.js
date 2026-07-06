@@ -420,7 +420,11 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
         collected: { conversationIds: ['chatA'], files },
       });
 
-      // Deduped rows are always chat attachments → always pgvector
+      // Deduped rows are always chat attachments → always pgvector. The
+      // mockUseAzureSearchForAgents flip above is a distractor: gcCanonicalAsset
+      // doesn't branch on it (that routing decision lives in crud.js), so this
+      // is a negative pin — GC must never grow an Azure path — not coverage of
+      // an existing branch. The positive assertion above is the real test.
       expect(mockDeleteVectorsByIds).toHaveBeenCalledWith(expect.anything(), ['canon-az']);
       expect(mockDeleteAzureSearchVectors).not.toHaveBeenCalled();
     });
