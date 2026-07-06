@@ -105,27 +105,44 @@ const deleteVectorsByIds = async (req, fileIds) => {
   throw new Error(lastError?.message || 'An error occurred during file deletion.');
 };
 
-// [knauf] Batch-delete embeddings with Azure AI Search routing: agent-context files
-// go to the /agent/documents endpoint; non-agent files to the pgvector /documents
-// batch endpoint. Accepts full file objects (with `context` and `file_id`) so the
-// caller doesn't need to pre-sort.
+// [knauf] Batch-delete embeddings with Azure AI Search + pgvector routing.
+// When Azure Search is enabled, EVERY embedded file is deleted from BOTH Azure
+// Search AND pgvector — uploads route on `entity_id` (present for agent-library
+// AND chat file_search attachments), which isn't stored on the file document, so
+// the delete can't know which store actually holds the embeddings. Both endpoints
+// are 404-tolerant, so the double-delete is harmless and guarantees no orphans
+// regardless of when Azure Search was enabled/disabled relative to the upload.
+// Azure Search deletes are chunked (AZURE_SEARCH_CONCURRENCY) to avoid 429
+// amplification.
+const AZURE_SEARCH_CONCURRENCY = 5;
 const deleteVectorsForFiles = async (req, files) => {
   if (!files?.length || !process.env.RAG_API_URL) {
     return;
   }
-  const azureSearchEnabled = useAzureSearchForAgents();
-  const agentFiles = azureSearchEnabled
-    ? files.filter((f) => f.context === 'agents')
-    : [];
-  const pgvectorFiles = azureSearchEnabled
-    ? files.filter((f) => f.context !== 'agents')
-    : files;
 
   const promises = [];
-  for (const f of agentFiles) {
-    promises.push(deleteAzureSearchVectors(req, f.file_id));
+
+  // When Azure Search is enabled, delete from Azure Search for ALL files.
+  if (useAzureSearchForAgents()) {
+    const ids = files.map((f) => f.file_id).filter(Boolean);
+    for (let i = 0; i < ids.length; i += AZURE_SEARCH_CONCURRENCY) {
+      const chunk = ids.slice(i, i + AZURE_SEARCH_CONCURRENCY);
+      promises.push(
+        Promise.allSettled(chunk.map((id) => deleteAzureSearchVectors(req, id))).then((results) => {
+          const failed = results.filter((r) => r.status === 'rejected');
+          if (failed.length) {
+            logger.warn(
+              `[knauf] Azure Search delete: ${failed.length}/${chunk.length} failed in chunk`,
+            );
+          }
+        }),
+      );
+    }
   }
-  const pgIds = pgvectorFiles.map((f) => f.file_id).filter(Boolean);
+
+  // Always try pgvector batch delete — covers files embedded before Azure Search
+  // was enabled, and is harmless (404-tolerant) for Azure-only files.
+  const pgIds = files.map((f) => f.file_id).filter(Boolean);
   if (pgIds.length) {
     promises.push(deleteVectorsByIds(req, pgIds));
   }
@@ -137,9 +154,13 @@ const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
-  // [knauf] Route agent file deletes to Azure AI Search endpoint when enabled
-  if (useAzureSearchForAgents() && file.context === 'agents') {
-    return deleteAzureSearchVectors(req, file.file_id);
+  // [knauf] When Azure Search is enabled, try both endpoints — we can't know
+  // at delete time which store holds the embeddings (routing was on entity_id
+  // at upload, which isn't stored on the file document). Both are 404-tolerant.
+  if (useAzureSearchForAgents()) {
+    await deleteAzureSearchVectors(req, file.file_id).catch((err) => {
+      logger.warn(`[knauf] Azure Search delete failed for ${file.file_id}, trying pgvector`, err);
+    });
   }
   // End [knauf]
   return deleteVectorsByIds(req, [file.file_id]);
@@ -227,8 +248,13 @@ module.exports = {
   deleteVectors,
   // [knauf] KK20-203 — batched, retried vector delete for the chat-delete cascade.
   deleteVectorsByIds,
-  // [knauf] Azure-Search-aware batch delete for file objects with context metadata.
+  // [knauf] Azure-Search-aware batch delete for file objects — tries both Azure
+  // Search and pgvector when Azure Search is enabled.
   deleteVectorsForFiles,
+  // [knauf] Per-file Azure Search delete with bounded retry; also exported for
+  // gcCanonicalAsset in the dedup GC path.
+  deleteAzureSearchVectors,
+  useAzureSearchForAgents,
   // End [knauf]
   uploadVectors,
 };
