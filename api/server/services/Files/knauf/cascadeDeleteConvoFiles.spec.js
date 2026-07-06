@@ -25,8 +25,10 @@ jest.mock('~/server/services/Files/process', () => ({
 }));
 
 const mockDeleteVectorsByIds = jest.fn().mockResolvedValue(undefined);
+const mockDeleteVectorsForFiles = jest.fn().mockResolvedValue(undefined);
 jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   deleteVectorsByIds: (...args) => mockDeleteVectorsByIds(...args),
+  deleteVectorsForFiles: (...args) => mockDeleteVectorsForFiles(...args),
 }));
 
 // [knauf] KK20-204 — the dedup GC deletes the shared blob via the per-source strategy.
@@ -84,6 +86,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     ]);
     mockProcessDeleteRequest.mockClear();
     mockDeleteVectorsByIds.mockClear();
+    mockDeleteVectorsForFiles.mockClear();
   });
 
   const buildReq = () => ({ user: { id: userId.toString() }, body: {}, config: {} });
@@ -190,8 +193,9 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     });
     await cascadeDeleteCollectedFiles({ req: buildReq(), collected });
 
-    expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1);
-    expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['f-embedded']);
+    expect(mockDeleteVectorsForFiles).toHaveBeenCalledTimes(1);
+    const calledFiles = mockDeleteVectorsForFiles.mock.calls[0][1];
+    expect(calledFiles.map((f) => f.file_id)).toEqual(['f-embedded']);
   });
 
   test('no-op when the conversation has no files', async () => {
