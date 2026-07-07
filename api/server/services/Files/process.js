@@ -702,7 +702,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
         const { uploadVectors } = require('./VectorDB/crud');
-        embeddingResult = await uploadVectors({ req, file, file_id, entity_id: req.user.id });
+        embeddingResult = await uploadVectors({ req, file, file_id, entity_id: req.user.id, isAgentFile: false });
       }
     } else {
       // Agent-library knowledge: embed AGENT-scoped (entity_id is already agent_id here)
@@ -715,7 +715,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
       const { uploadVectors } = require('./VectorDB/crud');
-      embeddingResult = await uploadVectors({ req, file, file_id, entity_id });
+      embeddingResult = await uploadVectors({ req, file, file_id, entity_id, isAgentFile: true });
     }
     // End [knauf]
 

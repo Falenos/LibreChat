@@ -4,9 +4,8 @@ const { logger } = require('@librechat/data-schemas');
 const { generateShortLivedToken } = require('@librechat/api');
 const { Tools, EToolResources } = require('librechat-data-provider');
 
-// [knauf] Azure AI Search routing for agent file queries
-const useAzureSearchForAgents = () =>
-  (process.env.AZURE_SEARCH_ENABLED || '').toLowerCase() === 'true';
+// [knauf] Shared flag — single source of truth for Azure Search routing.
+const { useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
 // End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getFiles } = require('~/models');
@@ -78,6 +77,8 @@ const primeFiles = async (options) => {
       // [knauf] KK20-204 — carry the shared asset id so the /query below resolves a
       // deduped reuse row's vectors (stored under knauf_asset_id), not its own id.
       knauf_asset_id: file.knauf_asset_id,
+      // [knauf] KK20-203 — carry context so query routing can split agent vs chat files.
+      context: file.context,
       // End [knauf]
     });
   }
@@ -126,15 +127,18 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
         return body;
       };
 
-      // [knauf] Route agent file queries to Azure AI Search endpoint when enabled
-      const queryUrl = useAzureSearchForAgents() && entity_id
-        ? `${process.env.RAG_API_URL}/agent/query`
-        : `${process.env.RAG_API_URL}/query`;
-      // End [knauf]
+      // [knauf] KK20-203 — Per-file query routing: agent files query Azure AI Search
+      // when enabled, chat/message attachments always query pgvector.
+      const azureEnabled = useAzureSearchForAgents();
+      const azureQueryUrl = `${process.env.RAG_API_URL}/agent/query`;
+      const pgvectorQueryUrl = `${process.env.RAG_API_URL}/query`;
 
-      const queryPromises = files.map((file) =>
-        axios
-          .post(queryUrl, createQueryBody(file), {
+      const queryPromises = files.map((file) => {
+        const url = azureEnabled && file.context === 'agents'
+          ? azureQueryUrl
+          : pgvectorQueryUrl;
+        return axios
+          .post(url, createQueryBody(file), {
             headers: {
               Authorization: `Bearer ${jwtToken}`,
               'Content-Type': 'application/json',
@@ -143,8 +147,9 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
           .catch((error) => {
             logger.error('Error encountered in `file_search` while querying file:', error);
             return null;
-          }),
-      );
+          });
+      });
+      // End [knauf]
 
       const results = await Promise.all(queryPromises);
       const validResults = results.filter((result) => result !== null);
@@ -153,15 +158,21 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
         return ['No results found or errors occurred while searching the files.', undefined];
       }
 
+      // [knauf] KK20-203 — Azure Search returns objects {page_content, metadata, score},
+      // pgvector returns tuples [docInfo, distance]. Handle both formats.
       const formattedResults = validResults
         .flatMap((result, fileIndex) =>
-          result.data.map(([docInfo, distance]) => ({
-            filename: docInfo.metadata.source.split('/').pop(),
-            content: docInfo.page_content,
-            distance,
-            file_id: files[fileIndex]?.file_id,
-            page: docInfo.metadata.page || null,
-          })),
+          result.data.map((item) => {
+            const docInfo = Array.isArray(item) ? item[0] : item;
+            const distance = Array.isArray(item) ? item[1] : item.score;
+            return {
+              filename: docInfo.metadata.source.split('/').pop(),
+              content: docInfo.page_content,
+              distance,
+              file_id: files[fileIndex]?.file_id,
+              page: docInfo.metadata.page || null,
+            };
+          }),
         )
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 10);

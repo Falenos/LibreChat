@@ -25,8 +25,14 @@ jest.mock('~/server/services/Files/process', () => ({
 }));
 
 const mockDeleteVectorsByIds = jest.fn().mockResolvedValue(undefined);
+const mockDeleteVectorsForFiles = jest.fn().mockResolvedValue(undefined);
+const mockDeleteAzureSearchVectors = jest.fn().mockResolvedValue(undefined);
+const mockUseAzureSearchForAgents = jest.fn().mockReturnValue(false);
 jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   deleteVectorsByIds: (...args) => mockDeleteVectorsByIds(...args),
+  deleteVectorsForFiles: (...args) => mockDeleteVectorsForFiles(...args),
+  deleteAzureSearchVectors: (...args) => mockDeleteAzureSearchVectors(...args),
+  useAzureSearchForAgents: (...args) => mockUseAzureSearchForAgents(...args),
 }));
 
 // [knauf] KK20-204 — the dedup GC deletes the shared blob via the per-source strategy.
@@ -84,6 +90,9 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     ]);
     mockProcessDeleteRequest.mockClear();
     mockDeleteVectorsByIds.mockClear();
+    mockDeleteVectorsForFiles.mockClear();
+    mockDeleteAzureSearchVectors.mockClear();
+    mockUseAzureSearchForAgents.mockClear().mockReturnValue(false);
   });
 
   const buildReq = () => ({ user: { id: userId.toString() }, body: {}, config: {} });
@@ -190,8 +199,9 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     });
     await cascadeDeleteCollectedFiles({ req: buildReq(), collected });
 
-    expect(mockDeleteVectorsByIds).toHaveBeenCalledTimes(1);
-    expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['f-embedded']);
+    expect(mockDeleteVectorsForFiles).toHaveBeenCalledTimes(1);
+    const calledFiles = mockDeleteVectorsForFiles.mock.calls[0][1];
+    expect(calledFiles.map((f) => f.file_id)).toEqual(['f-embedded']);
   });
 
   test('no-op when the conversation has no files', async () => {
@@ -394,6 +404,29 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
         'legacy',
       ]);
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled(); // dedup GC path not taken
+    });
+
+    test('deduped assets always GC from pgvector even when Azure Search enabled', async () => {
+      mockUseAzureSearchForAgents.mockReturnValue(true);
+      await seedFile('canon-az', dedupExtra({
+        conversationId: 'chatA',
+        knauf_content_hash: 'HASH-AZ',
+        knauf_asset_id: 'canon-az',
+      }));
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-az'] } });
+
+      await cascadeDeleteCollectedFiles({
+        req: buildReq(),
+        collected: { conversationIds: ['chatA'], files },
+      });
+
+      // Deduped rows are always chat attachments → always pgvector. The
+      // mockUseAzureSearchForAgents flip above is a distractor: gcCanonicalAsset
+      // doesn't branch on it (that routing decision lives in crud.js), so this
+      // is a negative pin — GC must never grow an Azure path — not coverage of
+      // an existing branch. The positive assertion above is the real test.
+      expect(mockDeleteVectorsByIds).toHaveBeenCalledWith(expect.anything(), ['canon-az']);
+      expect(mockDeleteAzureSearchVectors).not.toHaveBeenCalled();
     });
   });
 

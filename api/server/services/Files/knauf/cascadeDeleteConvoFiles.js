@@ -229,10 +229,15 @@ async function collectConvoFilesForCleanup({ req, filter }) {
  * benign double-GC under concurrent deletes can't corrupt. `embedded:false` on the
  * strategy call keeps it blob-only (vectors are handled here explicitly, keyed on
  * the asset id).
+ *
+ * [knauf] KK20-203 — Deduped rows are always chat file_search attachments
+ * (agent-library files are never deduped), so vectors always live in pgvector
+ * regardless of the Azure Search flag.
  * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
  */
 async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }) {
   if (asset.embedded) {
+    // [knauf] Deduped assets are always chat attachments → always pgvector
     try {
       await deleteVectorsByIds(req, [assetId]);
     } catch (error) {
@@ -241,6 +246,7 @@ async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getSt
         error,
       );
     }
+    // End [knauf]
   }
   if (!asset.filepath) {
     logger.warn(`[knauf][cascadeDeleteConvoFiles] no filepath for ${assetId}; skipping blob GC`);
@@ -305,7 +311,7 @@ async function gcDedupRows({ req, dedupRows }) {
   const groups = new Map();
   for (const f of dedupRows) {
     const ownerId = String(f.user);
-    const groupKey = `${ownerId} ${f.knauf_content_hash}`;
+    const groupKey = `${ownerId}\0${f.knauf_content_hash}`;
     let group = groups.get(groupKey);
     if (!group) {
       group = { user: f.user, hash: f.knauf_content_hash, assets: new Map() };
@@ -333,8 +339,11 @@ async function gcDedupRows({ req, dedupRows }) {
   // Stage 2 — GC each distinct asset that NO surviving row still points at (recount
   // AFTER stage 1, scoped to the asset OWNER so a cross-user delete can't nuke a
   // still-referenced asset).
+  // [knauf] KK20-203 — Deduped rows are always chat attachments, so GC
+  // always deletes from pgvector (never Azure Search).
   const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
   const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+  // End [knauf]
   for (const { user, hash, assets } of groups.values()) {
     for (const [assetId, asset] of assets) {
       // Per-ASSET reference count, not (user, hash)-group emptiness: GC this physical
@@ -370,20 +379,22 @@ async function deletePlainRows({ req, plainRows }) {
   const { processDeleteRequest } = require('~/server/services/Files/process');
   await processDeleteRequest({ req, files: plainRows });
 
-  const embeddedIds = plainRows.filter((file) => file.embedded).map((file) => file.file_id);
-  if (!embeddedIds.length) {
+  // [knauf] Vector backstop: route agent files to Azure AI Search, rest to pgvector.
+  const embeddedFiles = plainRows.filter((file) => file.embedded);
+  if (!embeddedFiles.length) {
     return;
   }
-  const { deleteVectorsByIds } = require('~/server/services/Files/VectorDB/crud');
+  const { deleteVectorsForFiles } = require('~/server/services/Files/VectorDB/crud');
   try {
-    await deleteVectorsByIds(req, embeddedIds);
+    await deleteVectorsForFiles(req, embeddedFiles);
   } catch (vectorError) {
     logger.warn(
-      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedIds.length} file(s); ` +
-        'they may remain in pgvector',
+      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedFiles.length} file(s); ` +
+        'embeddings may remain in pgvector or Azure AI Search',
       vectorError,
     );
   }
+  // End [knauf]
 }
 
 /**
