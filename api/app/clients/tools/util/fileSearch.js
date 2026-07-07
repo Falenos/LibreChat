@@ -158,15 +158,21 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
         return ['No results found or errors occurred while searching the files.', undefined];
       }
 
+      // [knauf] KK20-203 — Azure Search returns objects {page_content, metadata, score},
+      // pgvector returns tuples [docInfo, distance]. Handle both formats.
       const formattedResults = validResults
         .flatMap((result, fileIndex) =>
-          result.data.map(([docInfo, distance]) => ({
-            filename: docInfo.metadata.source.split('/').pop(),
-            content: docInfo.page_content,
-            distance,
-            file_id: files[fileIndex]?.file_id,
-            page: docInfo.metadata.page || null,
-          })),
+          result.data.map((item) => {
+            const docInfo = Array.isArray(item) ? item[0] : item;
+            const distance = Array.isArray(item) ? item[1] : item.score;
+            return {
+              filename: docInfo.metadata.source.split('/').pop(),
+              content: docInfo.page_content,
+              distance,
+              file_id: files[fileIndex]?.file_id,
+              page: docInfo.metadata.page || null,
+            };
+          }),
         )
         .sort((a, b) => a.distance - b.distance)
         .slice(0, 10);
