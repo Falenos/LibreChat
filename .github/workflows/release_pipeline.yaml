@@ -1,6 +1,6 @@
 name: Release Pipeline
 
-run-name: Release PR #${{ github.event.pull_request.number }} to shared dev and AGK dev
+run-name: Release PR #${{ github.event.pull_request.number }} to AGK dev
 
 on:
   pull_request:
@@ -19,31 +19,14 @@ concurrency:
 
 jobs:
   release:
-    uses: 'Knauf-Group/ct-shared-workflows/.github/workflows/release-nextjs.yaml@v2.9.0'
-    with:
-      repo-name-override: agentic-karl
-      checkout-submodules: false
-      project-key-vault-name: kv-ct-shared-tools
-      project-shared-key-vault-name: kv-ct-shared-devops-001
-      acr-password-key-vault-secret-name: ACRCTSHARED001-REGISTRY-PASSWORD
-      acr-registry-name: acrctshared001
-      namespace: tools-non-prod
-      config-repository: Knauf-Group/ct-shared-deployment-configs
-      argocd-password-key-vault-secret-name: shared-dev-ARGOCD
-      argocd-domain: argocd-shared-dev.knauf.digital
-      version-badge-directory: './docs/versions'
-      deployment-config-directory: ./dev/services/agentic-karl/agentic-karl
-      download-coverage-report: true
-      coverage-folder-path: ./coverage
-      test-workflow-file-name: test_pipeline.yaml
-    secrets:
-      azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
-
-  deploy-agk-dev:
-    name: Deploy AGK dev
-    needs: release
-    if: ${{ github.event.pull_request.merged == true && needs.release.result == 'success' }}
+    name: Build, release and deploy to AGK dev
+    # Branch protection enforces green tests on main — that is the release gate.
+    # Skip automation-owned branches to prevent release loops.
+    if: >-
+      github.event.pull_request.merged == true
+      && !startsWith(github.event.pull_request.head.ref, 'release/agk-overlay-')
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_ACR_NAME: acragkhubnonprod001
@@ -54,118 +37,141 @@ jobs:
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
-      CT_ACR_LOGIN_SERVER: acrctshared001.azurecr.io
-      CT_IMAGE_REPOSITORY: tools-non-prod/agentic-karl
     steps:
       - name: Azure login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Get release support secrets
+      - name: Get secrets from Key Vaults
         run: |
+          set -euo pipefail
           GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
           echo "::add-mask::$GITHUB_PAT"
           echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
 
-          CT_ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
-          echo "::add-mask::$CT_ACR_PASSWORD"
-          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
-
-      - name: Check out released app revision
+      - name: Check out repository code
         uses: actions/checkout@v4
         with:
-          ref: main
+          token: ${{ env.GITHUB_PAT }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Configure AGK app repository credentials
-        run: git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
-
-      - name: Determine released version
+      - name: Determine next version
         id: version
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          git pull --ff-only origin main
-          NEW_VERSION="v$(npm pkg get version | tr -d '"')"
-          echo "Released version: $NEW_VERSION"
+          set -euo pipefail
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          # Use strict semver pattern to avoid matching prereleases / vendor tags
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST_TAG="${LATEST_TAG:-v0.0.0}"
+          echo "Latest tag: $LATEST_TAG"
+
+          # Idempotent: if the merge commit already has a version tag, reuse it
+          EXISTING_TAG=$(git tag --points-at "$MERGE_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          if [ -n "$EXISTING_TAG" ]; then
+            echo "Merge commit already tagged as $EXISTING_TAG — reusing (rerun scenario)"
+            NEW_VERSION="$EXISTING_TAG"
+          else
+            MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+            NEW_VERSION="v${MAJOR}.$((MINOR + 1)).0"
+          fi
+
+          echo "New version: $NEW_VERSION"
           echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           {
-            echo "## AGK dev rollout"
+            echo "## Release summary"
             echo
             echo "| Field | Value |"
             echo "| --- | --- |"
             echo "| Source PR | #${{ github.event.pull_request.number }} $PR_TITLE |"
             echo "| Source commit | \`${{ github.event.pull_request.merge_commit_sha }}\` |"
+            echo "| Previous version | \`$LATEST_TAG\` |"
             echo "| Released version | \`$NEW_VERSION\` |"
-            echo "| Expected AGK image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
-            echo "| ArgoCD app | \`$AGK_ARGOCD_APP\` on \`$AGK_ARGOCD_DOMAIN\` |"
+            echo "| Image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Import image into AGK nonprod ACR
+      - name: Build and push Docker image (ACR Tasks)
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
-          az acr import \
+
+          # Idempotent: skip build if the image tag already exists in ACR (rerun scenario)
+          if az acr repository show-tags \
+               --subscription "$AGK_SUBSCRIPTION_ID" \
+               --name "$AGK_ACR_NAME" \
+               --repository "$AGK_IMAGE_REPOSITORY" \
+               --query "[?@=='$VERSION']" \
+               -o tsv 2>/dev/null | grep -Fxq "$VERSION"; then
+            echo "Image $AGK_IMAGE_REPOSITORY:$VERSION already in ACR — skipping build (rerun scenario)"
+            exit 0
+          fi
+
+          az acr build \
             --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --source "$CT_ACR_LOGIN_SERVER/$CT_IMAGE_REPOSITORY:$VERSION" \
-            --username acrctshared001 \
-            --password "$CT_ACR_PASSWORD" \
+            --registry "$AGK_ACR_NAME" \
             --image "$AGK_IMAGE_REPOSITORY:$VERSION" \
-            --force
+            .
 
-      - name: Verify AGK image tag
+      - name: Create git tag and GitHub release (idempotent)
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
-          az acr repository show-tags \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --repository "$AGK_IMAGE_REPOSITORY" \
-            --query "[?@=='$VERSION']" \
-            -o tsv | grep -Fx "$VERSION"
-
-      - name: Update AGK app overlay values
-        run: |
-          VERSION="${{ steps.version.outputs.new-version }}"
-          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: '$VERSION'/" infrastructure/dev/values.yaml
-          sed -i -E "s/SERVICE_VERSION: .*/SERVICE_VERSION: $VERSION/" infrastructure/dev/values.yaml
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
-          git add infrastructure/dev/values.yaml
 
-          if ! git diff --cached --quiet; then
-            git commit -m "Update AGK dev version to $VERSION"
-            git push origin main
+          # Idempotent: skip if tag already exists and points at the merge commit
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            TAG_SHA=$(git rev-list -n1 "refs/tags/$VERSION")
+            if [ "$TAG_SHA" != "$MERGE_SHA" ]; then
+              echo "::error::Tag $VERSION exists but points at $TAG_SHA, not merge commit $MERGE_SHA — aborting to prevent image/tag mismatch"
+              exit 1
+            fi
+            echo "Tag $VERSION already exists at $MERGE_SHA — skipping tag creation (rerun scenario)"
           else
-            echo "AGK app overlay already points at $VERSION"
+            git tag -a "$VERSION" "$MERGE_SHA" -m "$VERSION"
+            git push origin "$VERSION"
           fi
 
-          {
-            echo "| App overlay commit | \`$(git rev-parse --short HEAD)\` |"
-            echo "| App overlay file | \`infrastructure/dev/values.yaml\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Idempotent: skip if release already exists
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists — skipping release creation"
+          else
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              /repos/${{ github.repository }}/releases \
+              -f tag_name="$VERSION" \
+              -f name="$VERSION" \
+              -F generate_release_notes=true
+          fi
 
       - name: Check out AGK deployment config repository
-        run: git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+        run: git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
 
-      # The agk-deployment-configs main branch is protected (PR required, Sonar
-      # "test" check, no direct pushes), so the bump is landed via an
-      # auto-merged PR instead of a direct `git push origin main`.
+      # agk-deployment-configs main is branch-protected (PR required, Sonar
+      # "test" check), so the bump is landed via an auto-merged PR.
       - name: Update AGK deployment config values
         working-directory: agk-deployment-configs
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
           BRANCH="release/agk-dev-$VERSION"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          # Anchor to the image.tag key path to avoid corrupting other tag: lines
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
             echo "AGK deployment config already points at $VERSION"
@@ -176,9 +182,6 @@ jobs:
           git checkout -b "$BRANCH"
           git add "$AGK_CONFIG_DIRECTORY/values.yaml"
           git commit -m "Update agentic-karl dev to $VERSION"
-          # Plain --force: this is an automation-owned throwaway branch and a
-          # fresh clone has no remote-tracking ref, so --force-with-lease would
-          # reject the push on re-runs where the branch already exists.
           git push --force origin "$BRANCH"
 
           PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
@@ -190,12 +193,13 @@ jobs:
           fi
           echo "Deployment config PR: $PR_URL"
 
-          gh pr merge "$PR_URL" --auto --squash --delete-branch
+          # --auto waits for required checks; fallback handles already-mergeable PRs on rerun
+          gh pr merge "$PR_URL" --auto --squash --delete-branch \
+            || gh pr merge "$PR_URL" --squash --delete-branch \
+            || true
 
           STATE=""
           for attempt in {1..90}; do
-            # Tolerate transient API errors so a blip does not fail a release
-            # whose PR is about to merge.
             STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
             echo "Attempt $attempt: PR state=$STATE"
             if [ "$STATE" = "MERGED" ]; then
@@ -221,6 +225,7 @@ jobs:
 
       - name: Refresh AGK ArgoCD application
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
           EXPECTED_IMAGE="$AGK_IMAGE_REPOSITORY:$VERSION"
           echo "Waiting for AGK ArgoCD app $AGK_ARGOCD_APP to report Synced/Healthy on image $EXPECTED_IMAGE"
@@ -239,17 +244,25 @@ jobs:
             | jq -r '.token')
           echo "::add-mask::$ARGOCD_TOKEN"
 
+          # Initial refresh — tolerate transient errors
           curl -fsS \
             "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
             -H "Authorization: Bearer $ARGOCD_TOKEN" \
             -H "Accept: application/json" \
-            > /dev/null
+            > /dev/null 2>&1 || true
 
           for attempt in {1..60}; do
+            # Tolerate transient API blips so set -euo pipefail does not abort the loop
             APP_JSON=$(curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
-              -H "Accept: application/json")
+              -H "Accept: application/json" 2>/dev/null || true)
+
+            if [ -z "$APP_JSON" ]; then
+              echo "Attempt $attempt: API blip — retrying"
+              sleep 10
+              continue
+            fi
 
             SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
             HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
@@ -272,7 +285,7 @@ jobs:
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
               -H "Authorization: Bearer $ARGOCD_TOKEN" \
               -H "Accept: application/json" \
-              > /dev/null
+              > /dev/null 2>&1 || true
             sleep 10
           done
 
