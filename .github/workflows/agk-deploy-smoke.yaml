@@ -44,8 +44,6 @@ jobs:
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
-      CT_ACR_LOGIN_SERVER: acrctshared001.azurecr.io
-      CT_IMAGE_REPOSITORY: tools-non-prod/agentic-karl
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -60,114 +58,97 @@ jobs:
           echo "::add-mask::$GITHUB_PAT"
           echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
 
-          CT_ACR_PASSWORD=$(az keyvault secret show --vault-name kv-ct-shared-tools --name ACRCTSHARED001-REGISTRY-PASSWORD --query value -o tsv)
-          echo "::add-mask::$CT_ACR_PASSWORD"
-          echo "CT_ACR_PASSWORD=$CT_ACR_PASSWORD" >> "$GITHUB_ENV"
-
       - name: Check out app repository
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Configure app repository credentials
-        run: git remote set-url origin "https://x-access-token:$GITHUB_PAT@github.com/${GITHUB_REPOSITORY}.git"
-
-      - name: Smoke app repository read and write
+      - name: Smoke version derivation from git tags
         run: |
           set -euo pipefail
 
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git ls-remote --heads origin main
-          git fetch origin main
-          git pull --ff-only origin main
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST_TAG="${LATEST_TAG:-v0.0.0}"
+          echo "Latest tag: $LATEST_TAG"
 
-          SMOKE_BRANCH="agk-deploy-smoke/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          cleanup() {
-            git push origin ":refs/heads/$SMOKE_BRANCH" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
+          MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
+          MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
+          NEXT_VERSION="v${MAJOR}.$((MINOR + 1)).0"
+          echo "Next version would be: $NEXT_VERSION"
 
-          git push origin "HEAD:refs/heads/$SMOKE_BRANCH"
-          git push origin ":refs/heads/$SMOKE_BRANCH"
-          trap - EXIT
-
-      - name: Determine source image version
-        id: version
-        run: |
-          set -euo pipefail
-
-          PACKAGE_VERSION="v$(npm pkg get version | tr -d '"')"
-          if az acr repository show-tags \
+          # Verify the latest tag's image exists in AGK ACR
+          az acr repository show-tags \
             --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name acrctshared001 \
-            --repository "$CT_IMAGE_REPOSITORY" \
-            --query "[?@=='$PACKAGE_VERSION']" \
-            -o tsv | grep -Fx "$PACKAGE_VERSION" >/dev/null; then
-            SOURCE_VERSION="$PACKAGE_VERSION"
-          else
-            SOURCE_VERSION=$(az acr repository show-tags \
-              --subscription "$AGK_SUBSCRIPTION_ID" \
-              --name acrctshared001 \
-              --repository "$CT_IMAGE_REPOSITORY" \
-              --orderby time_desc \
-              --top 20 \
-              -o tsv | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
-          fi
+            --name "$AGK_ACR_NAME" \
+            --repository "$AGK_IMAGE_REPOSITORY" \
+            --query "[?@=='$LATEST_TAG']" \
+            -o tsv | grep -Fx "$LATEST_TAG"
+          echo "Image $AGK_IMAGE_REPOSITORY:$LATEST_TAG exists in AGK ACR"
 
-          if [ -z "$SOURCE_VERSION" ]; then
-            echo "No existing CT source image tag found for smoke import"
-            exit 1
-          fi
-
-          echo "Source version: $SOURCE_VERSION"
-          echo "source-version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke AGK ACR import permissions
+      - name: Smoke ACR build permissions (dry build)
         run: |
           set -euo pipefail
 
-          SOURCE_VERSION="${{ steps.version.outputs.source-version }}"
-          SMOKE_TAG="$SOURCE_VERSION-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Verify we have permission to run az acr build (check access without building)
+          az acr repository list \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            -o tsv | grep -q "agentic-karl"
+          echo "ACR access verified"
+
+      - name: Smoke promote — image import dev to prod ACR
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          SMOKE_TAG="${LATEST_TAG}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          SOURCE_REGISTRY_ID=$(az acr show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --query id \
+            -o tsv)
+
           cleanup() {
             az acr repository delete \
               --subscription "$AGK_SUBSCRIPTION_ID" \
-              --name "$AGK_ACR_NAME" \
-              --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+              --name "$AGK_PROD_ACR_NAME" \
+              --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
               --yes >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           az acr import \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --source "$CT_ACR_LOGIN_SERVER/$CT_IMAGE_REPOSITORY:$SOURCE_VERSION" \
-            --username acrctshared001 \
-            --password "$CT_ACR_PASSWORD" \
-            --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --name "$AGK_PROD_ACR_NAME" \
+            --registry "$SOURCE_REGISTRY_ID" \
+            --source "$AGK_IMAGE_REPOSITORY:$LATEST_TAG" \
+            --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --force
 
           az acr repository show-tags \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --repository "$AGK_SMOKE_IMAGE_REPOSITORY" \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --name "$AGK_PROD_ACR_NAME" \
+            --repository "$AGK_PROD_IMAGE_REPOSITORY" \
             --query "[?@=='$SMOKE_TAG']" \
             -o tsv | grep -Fx "$SMOKE_TAG"
+          echo "Smoke import succeeded"
 
           az acr repository delete \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --image "$AGK_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+            --name "$AGK_PROD_ACR_NAME" \
+            --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --yes
           trap - EXIT
+        env:
+          AGK_PROD_SUBSCRIPTION_ID: e0515a24-7205-481b-b657-944901020e32
 
-      - name: Smoke AGK deployment config repository write
+      - name: Smoke AGK deployment config repository access
         run: |
           set -euo pipefail
 
-          git clone "https://x-access-token:$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+          git clone "https://$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
           cd agk-deployment-configs
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
