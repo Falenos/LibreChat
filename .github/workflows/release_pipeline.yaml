@@ -1,6 +1,9 @@
 name: Release Pipeline
 
-run-name: Release PR #${{ github.event.pull_request.number }} to AGK dev
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Manual release test (dry-run={0})', inputs.dry-run)
+      || format('Release PR #{0} to AGK dev', github.event.pull_request.number) }}
 
 on:
   pull_request:
@@ -8,6 +11,17 @@ on:
       - main
     types:
       - closed
+  # ── TEMPORARY: remove this block before merging ──
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Dry run — build image but skip tag/release/deploy'
+        type: boolean
+        default: true
+      ref:
+        description: 'Git ref to build (branch, tag, or SHA)'
+        type: string
+        default: 'main'
 
 permissions:
   contents: read
@@ -23,8 +37,9 @@ jobs:
     # Branch protection enforces green tests on main — that is the release gate.
     # Skip automation-owned branches to prevent release loops.
     if: >-
-      github.event.pull_request.merged == true
-      && !startsWith(github.event.pull_request.head.ref, 'release/agk-overlay-')
+      (github.event_name == 'workflow_dispatch')
+      || (github.event.pull_request.merged == true
+          && !startsWith(github.event.pull_request.head.ref, 'release/agk-overlay-'))
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -54,16 +69,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ env.GITHUB_PAT }}
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
       - name: Determine next version
         id: version
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_TITLE: ${{ github.event_name == 'workflow_dispatch' && 'Manual test run' || github.event.pull_request.title }}
         run: |
           set -euo pipefail
-          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          MERGE_SHA="${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.pull_request.merge_commit_sha }}"
           # Use strict semver pattern to avoid matching prereleases / vendor tags
           LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
           LATEST_TAG="${LATEST_TAG:-v0.0.0}"
@@ -87,8 +102,8 @@ jobs:
             echo
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Source PR | #${{ github.event.pull_request.number }} $PR_TITLE |"
-            echo "| Source commit | \`${{ github.event.pull_request.merge_commit_sha }}\` |"
+            echo "| Source PR | #${{ github.event.pull_request.number || 'N/A (manual)' }} $PR_TITLE |"
+            echo "| Source commit | \`$MERGE_SHA\` |"
             echo "| Previous version | \`$LATEST_TAG\` |"
             echo "| Released version | \`$NEW_VERSION\` |"
             echo "| Image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$NEW_VERSION\` |"
@@ -117,12 +132,13 @@ jobs:
             .
 
       - name: Create git tag and GitHub release (idempotent)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry-run == false }}
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
-          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          MERGE_SHA="${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.pull_request.merge_commit_sha }}"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -154,11 +170,13 @@ jobs:
           fi
 
       - name: Check out AGK deployment config repository
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry-run == false }}
         run: git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
 
       # agk-deployment-configs main is branch-protected (PR required, Sonar
       # "test" check), so the bump is landed via an auto-merged PR.
       - name: Update AGK deployment config values
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry-run == false }}
         working-directory: agk-deployment-configs
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
@@ -224,6 +242,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Refresh AGK ArgoCD application
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry-run == false }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
