@@ -381,7 +381,7 @@ export const openUrlSchema: ExtendedJsonSchema = {
   required: ['url'],
 };
 
-export const openUrlDescription =
+export const openUrlDescription: string =
   'Open a specific http(s) URL and return its main readable text. ' +
   'When the user provides or pastes a specific URL, or asks you to read, open, or summarize a page, you MUST call open_url on that exact URL. ' +
   'Do NOT substitute web_search results for the contents of a specifically named page, and never guess or recall page contents from memory — web_search is for open-ended discovery, open_url is the authoritative source for a named page. ' +

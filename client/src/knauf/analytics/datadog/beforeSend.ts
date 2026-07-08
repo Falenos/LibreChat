@@ -32,7 +32,7 @@ const NOISY_LOG_PATTERNS: RegExp[] = [
  * RUM beforeSend — drop events that add noise without diagnostic value.
  * Returns false to discard, the (possibly modified) event to keep.
  */
-export function rumBeforeSend(event: RumEvent): boolean | RumEvent {
+export function rumBeforeSend(event: RumEvent): boolean {
   // Drop aborted/cancelled network requests (status 0 or isAborted flag)
   if (event.type === 'resource') {
     const status = (event.resource as { status_code?: number }).status_code;
@@ -67,7 +67,7 @@ export function rumBeforeSend(event: RumEvent): boolean | RumEvent {
  * Logs beforeSend — filter forwarded console.error entries.
  * Only forward actionable errors; drop known upstream noise.
  */
-export function logsBeforeSend(log: LogsEvent): boolean | LogsEvent {
+export function logsBeforeSend(log: LogsEvent): boolean {
   const message = log.message ?? '';
 
   // Drop known noisy patterns from upstream LibreChat

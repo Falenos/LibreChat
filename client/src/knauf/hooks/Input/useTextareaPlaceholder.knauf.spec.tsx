@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { EModelEndpoint } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
 import useTextarea from '~/hooks/Input/useTextarea';
 
@@ -18,6 +19,8 @@ jest.mock('recoil', () => ({
     return true;
   }),
   useRecoilState: jest.fn(() => [undefined, mockSetActivePrompt]),
+  // v0.8.7: useFocusRegeneratedResponse (pulled in via useTextarea) calls useRecoilCallback.
+  useRecoilCallback: jest.fn(() => jest.fn()),
 }));
 
 jest.mock('~/store', () => ({
@@ -121,7 +124,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('uses Karl for the default Karl model-spec chat', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
       spec: 'karl',
     });
@@ -131,7 +134,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('uses Karl for Karl personality model-spec chats', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
       spec: 'karl-personality-balanced',
     });
@@ -141,7 +144,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('does not infer Karl from runtime model names without a stored spec', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
     });
 
@@ -157,7 +160,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
     });
 
     const textarea = renderUseTextarea({
-      endpoint: 'agents',
+      endpoint: EModelEndpoint.agents,
       agent_id: 'agent-1',
       model: 'gpt-5.4',
       spec: 'karl',

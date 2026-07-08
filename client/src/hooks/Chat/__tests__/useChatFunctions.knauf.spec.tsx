@@ -30,6 +30,8 @@ jest.mock('recoil', () => ({
   useRecoilValue: jest.fn(() => false),
   useResetRecoilState: jest.fn(() => mockResetRecoilState),
   useSetRecoilState: jest.fn(() => mockSetRecoilState),
+  // v0.8.7: useChatFunctions now calls useFocusRegeneratedResponse, which uses useRecoilCallback.
+  useRecoilCallback: jest.fn(() => jest.fn()),
 }));
 
 jest.mock('~/hooks/Files/useSetFilesToDelete', () => ({
@@ -91,7 +93,6 @@ function renderUseChatFunctions(overrides = {}) {
       isSubmitting: false,
       latestMessage: null,
       setFiles: jest.fn(),
-      setLatestMessage: jest.fn(),
       setMessages: jest.fn(),
       setSubmission: jest.fn(),
       ...overrides,

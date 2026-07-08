@@ -5,6 +5,14 @@ import { BirthdayIcon, TooltipAnchor, SplitText } from '@librechat/client';
 // [knauf] Icons for the default-spec landing capability tiles.
 import { EarthIcon, FileText, ImageIcon } from 'lucide-react';
 // End [knauf]
+import {
+  getIconEndpoint,
+  getEntity,
+  getModelSpec,
+  createConfigHtmlSanitizer,
+  CONFIG_HTML_MEDIA_TAGS,
+  CONFIG_HTML_MEDIA_ATTR,
+} from '~/utils';
 import { useChatContext, useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import ConvoIcon from '~/components/Endpoints/ConvoIcon';
@@ -12,7 +20,6 @@ import ConvoIcon from '~/components/Endpoints/ConvoIcon';
 import KnaufLogoAvatar from '~/knauf/components/Brand/KnaufLogoAvatar';
 // End [knauf]
 import { useLocalize, useAuthContext } from '~/hooks';
-import { getIconEndpoint, getEntity } from '~/utils';
 
 const containerClassName =
   'shadow-stroke relative flex h-full items-center justify-center rounded-full bg-white dark:bg-presentation dark:text-white text-black dark:after:shadow-none ';
@@ -67,8 +74,27 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
     assistant_id: conversation?.assistant_id,
   });
 
-  const name = entity?.name ?? '';
-  const description = (entity?.description || conversation?.greeting) ?? '';
+  const modelSpec = useMemo(
+    () => getModelSpec({ specName: conversation?.spec, startupConfig }),
+    [conversation?.spec, startupConfig],
+  );
+
+  const brandedSpecLabel = modelSpec?.showOnLanding ? modelSpec.label : '';
+  const brandedSpecDescription = (modelSpec?.showOnLanding && modelSpec.description) || '';
+  const name = entity?.name ?? brandedSpecLabel;
+  const description =
+    (entity?.description || brandedSpecDescription || conversation?.greeting) ?? '';
+  const descriptionIsHTML = description.trim().startsWith('<');
+
+  const sanitizeDescription = useMemo(
+    () =>
+      createConfigHtmlSanitizer({
+        allowedTags: CONFIG_HTML_MEDIA_TAGS,
+        allowedAttr: CONFIG_HTML_MEDIA_ATTR,
+      }),
+    [],
+  );
+
   // [knauf] KK20-159 — flag whether the conversation is on a default
   // modelSpec (today: `karl`). Used below to render a small "what you
   // can do" tips block under the customWelcome heading on the
@@ -262,11 +288,21 @@ export default function Landing({ centerFormOnLanding }: { centerFormOnLanding: 
           </div>
         )}
         {/* End [knauf] */}
-        {description && !isDefaultSpecLanding && (
-          <div className="animate-fadeIn mt-4 max-w-md text-center text-sm font-normal text-text-primary">
-            {description}
-          </div>
-        )}
+        {/* [knauf] KK20-159 — suppress the plain description on the default-spec landing
+            (the capability tiles below replace it); otherwise adopt upstream's HTML-aware
+            description rendering. */}
+        {description &&
+          !isDefaultSpecLanding &&
+          (descriptionIsHTML ? (
+            <div
+              className="animate-fadeIn mt-4 flex max-w-md items-center justify-center gap-2 text-center text-sm font-normal text-text-primary [&_img]:inline-block [&_img]:h-4 [&_img]:w-4"
+              dangerouslySetInnerHTML={{ __html: sanitizeDescription(description) }}
+            />
+          ) : (
+            <div className="animate-fadeIn mt-4 max-w-md text-center text-sm font-normal text-text-primary">
+              {description}
+            </div>
+          ))}
         {/* [knauf] KK20-159 — concise feature capability tiles below the
             customWelcome title on the default-spec landing. Keeps the
             default landing scan-friendly while making direct web browsing

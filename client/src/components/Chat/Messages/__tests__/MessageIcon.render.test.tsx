@@ -169,7 +169,11 @@ describe('MessageIcon render cycles', () => {
     const { getByTestId, queryByTestId } = render(
       <MessageIcon
         iconData={iconData}
-        agent={makeAgent({ name: 'Legacy Avatar Agent', avatar: '/images/legacy-avatar.png' })}
+        agent={makeAgent({
+          name: 'Legacy Avatar Agent',
+          // Legacy string avatar (pre-AgentAvatar-object) — this test asserts it still renders.
+          avatar: '/images/legacy-avatar.png' as unknown as Agent['avatar'],
+        })}
       />,
     );
 
@@ -220,7 +224,7 @@ describe('MessageIcon render cycles', () => {
     const { rerender } = render(<MessageIcon iconData={baseIconData} agent={agent1} />);
     iconRenderCount.current = 0;
 
-    const agent2 = makeAgent({ avatar: { filepath: '/images/new-avatar.png' } });
+    const agent2 = makeAgent({ avatar: { filepath: '/images/new-avatar.png', source: 'local' } });
     rerender(<MessageIcon iconData={baseIconData} agent={agent2} />);
 
     expect(iconRenderCount.current).toBe(1);

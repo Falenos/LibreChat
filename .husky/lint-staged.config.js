@@ -6,7 +6,12 @@
 const seamsCheck = () => 'node knauf/scripts/seams.js check';
 
 module.exports = {
-  '*.{js,jsx,ts,tsx}': ['prettier --write', 'eslint --fix', 'eslint'],
+  '*.{js,jsx,ts,tsx}': [
+    'node scripts/sort-imports.mts',
+    'prettier --write',
+    'eslint --fix',
+    'eslint',
+  ],
   '*.json': ['prettier --write'],
   // Any change to an upstream-class file or to the seams manifest itself
   // must keep SEAMS.md in sync. Run as a single whole-repo check.

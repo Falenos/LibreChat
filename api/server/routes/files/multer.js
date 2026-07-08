@@ -6,6 +6,7 @@ const multer = require('multer');
 const { sanitizeFilename, resolveUploadErrorMessage } = require('@librechat/api');
 const {
   mergeFileConfig,
+  inferMimeType,
   getEndpointFileConfig,
   fileConfig: defaultFileConfig,
   // [knauf] Actionable allow-list rejection (legacy-Office Save-As help) on the
@@ -42,6 +43,14 @@ const importFileFilter = (req, file, cb) => {
   }
 };
 
+const normalizeUploadMimeType = (file) => {
+  const mimeType = inferMimeType(file.originalname || '', file.mimetype || '');
+  if (mimeType && file.mimetype !== mimeType) {
+    file.mimetype = mimeType;
+  }
+  return mimeType;
+};
+
 /**
  *
  * @param {import('librechat-data-provider').FileConfig | undefined} customFileConfig
@@ -57,7 +66,9 @@ const createFileFilter = (customFileConfig) => {
       return cb(new Error('No file provided'), false);
     }
 
-    if (req.originalUrl.endsWith('/speech/stt') && file.mimetype.startsWith('audio/')) {
+    const mimeType = normalizeUploadMimeType(file);
+
+    if (req.originalUrl.endsWith('/speech/stt') && mimeType.startsWith('audio/')) {
       return cb(null, true);
     }
 
@@ -69,7 +80,7 @@ const createFileFilter = (customFileConfig) => {
       endpointType,
     });
 
-    if (!defaultFileConfig.checkType(file.mimetype, endpointFileConfig.supportedMimeTypes)) {
+    if (!defaultFileConfig.checkType(mimeType, endpointFileConfig.supportedMimeTypes)) {
       // [knauf] On the Knauf allow-list endpoints, reject with an actionable i18n
       // key — legacy Office binaries (.doc/.xls/.ppt) get Save-As-to-OOXML help;
       // anything else gets a friendly supported-formats message — instead of the
@@ -90,7 +101,7 @@ const createFileFilter = (customFileConfig) => {
         return cb(rejection, false);
       }
       // End [knauf]
-      return cb(new Error('Unsupported file type: ' + file.mimetype), false);
+      return cb(new Error('Unsupported file type: ' + (file.mimetype || mimeType)), false);
     }
 
     cb(null, true);
@@ -130,6 +141,7 @@ module.exports = {
   createMulterInstance,
   storage,
   importFileFilter,
+  createFileFilter,
   // [knauf] exported for ./index wiring + multer.spec.js seam test. KK20-190.
   knaufUploadRejectionHandler,
 };
