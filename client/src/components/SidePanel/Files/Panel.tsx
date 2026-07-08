@@ -14,7 +14,7 @@ export default function FilesPanel() {
   // End [knauf]
 
   return (
-    <div className="h-auto w-full px-3 pb-3">
+    <div className="h-auto w-full px-3 pb-3 pt-2">
       <DataTable columns={columns} data={files} />
     </div>
   );

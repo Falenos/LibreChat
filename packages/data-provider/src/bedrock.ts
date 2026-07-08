@@ -3,6 +3,8 @@ import * as s from './schemas';
 
 const DEFAULT_ENABLED_MAX_TOKENS = 8192;
 const DEFAULT_THINKING_BUDGET = 2000;
+export const BEDROCK_OUTPUT_128K_BETA = 'output-128k-2025-02-19';
+export const BEDROCK_FINE_GRAINED_TOOL_STREAMING_BETA = 'fine-grained-tool-streaming-2025-05-14';
 
 const bedrockReasoningConfigValues = new Set<string>(Object.values(s.BedrockReasoningConfig));
 
@@ -66,14 +68,14 @@ type AnthropicInput = BedrockConverseInput & {
 
 /** Extracts opus major/minor version from both naming formats */
 function parseOpusVersion(model: string): { major: number; minor: number } | null {
-  const nameFirst = model.match(/claude-opus[-.]?(\d+)(?:[-.](\d+))?/);
+  const nameFirst = model.match(/claude-opus[-.]?(\d+)(?:[-.](\d{1,2})(?!\d))?/);
   if (nameFirst) {
     return {
       major: parseInt(nameFirst[1], 10),
       minor: nameFirst[2] != null ? parseInt(nameFirst[2], 10) : 0,
     };
   }
-  const numFirst = model.match(/claude-(\d+)(?:[-.](\d+))?-opus/);
+  const numFirst = model.match(/claude-(\d+)(?:[-.](\d{1,2})(?!\d))?-opus/);
   if (numFirst) {
     return {
       major: parseInt(numFirst[1], 10),
@@ -134,10 +136,18 @@ export function omitsThinkingByDefault(model: string): boolean {
   return false;
 }
 
-/** Checks if a model qualifies for the context-1m beta header (Sonnet 4+, Opus 4.6+, Opus 5+) */
+export function omitsSamplingParameters(model: string): boolean {
+  const opus = parseOpusVersion(model);
+  if (opus && (opus.major > 4 || (opus.major === 4 && opus.minor >= 7))) {
+    return true;
+  }
+  return false;
+}
+
+/** Checks if a model has a 1M context window (Sonnet 4.6+, Opus 4.6+, Opus 5+) */
 export function supportsContext1m(model: string): boolean {
   const sonnet = parseSonnetVersion(model);
-  if (sonnet != null && sonnet.major >= 4) {
+  if (sonnet != null && (sonnet.major > 4 || (sonnet.major === 4 && sonnet.minor >= 6))) {
     return true;
   }
   const opus = parseOpusVersion(model);
@@ -151,30 +161,52 @@ export function supportsContext1m(model: string): boolean {
  * Gets the appropriate anthropic_beta headers for Bedrock Anthropic models.
  * Bedrock uses `anthropic_beta` (with underscore) in additionalModelRequestFields.
  *
- * @param model - The Bedrock model identifier (e.g., "anthropic.claude-sonnet-4-20250514-v1:0")
+ * @param model - The Bedrock model identifier (e.g., "anthropic.claude-sonnet-4-6")
  * @returns Array of beta header strings, or empty array if not applicable
  */
 function getBedrockAnthropicBetaHeaders(model: string): string[] {
   const betaHeaders: string[] = [];
 
-  const isClaudeThinkingModel =
-    model.includes('anthropic.claude-3-7-sonnet') ||
+  const isClaude4PlusModel =
     /anthropic\.claude-(?:[4-9](?:\.\d+)?(?:-\d+)?-(?:sonnet|opus|haiku)|(?:sonnet|opus|haiku)-[4-9])/.test(
       model,
     );
-
-  const isSonnet4PlusModel =
-    /anthropic\.claude-(?:sonnet-[4-9]|[4-9](?:\.\d+)?(?:-\d+)?-sonnet)/.test(model);
+  const isClaudeThinkingModel = model.includes('anthropic.claude-3-7-sonnet') || isClaude4PlusModel;
 
   if (isClaudeThinkingModel) {
-    betaHeaders.push('output-128k-2025-02-19');
+    betaHeaders.push(BEDROCK_OUTPUT_128K_BETA);
   }
 
-  if (isSonnet4PlusModel || supportsAdaptiveThinking(model)) {
-    betaHeaders.push('context-1m-2025-08-07');
+  if (isClaude4PlusModel) {
+    betaHeaders.push(BEDROCK_FINE_GRAINED_TOOL_STREAMING_BETA);
   }
 
   return betaHeaders;
+}
+
+function mergeBedrockAnthropicBetaHeaders(existing: unknown, generated: string[]): string[] {
+  let existingValues: unknown[] = [];
+  if (Array.isArray(existing)) {
+    existingValues = existing;
+  } else if (typeof existing === 'string') {
+    existingValues = [existing];
+  }
+
+  const betaHeaders = new Set<string>();
+
+  [...existingValues, ...generated].forEach((value) => {
+    if (typeof value !== 'string') {
+      return;
+    }
+
+    value
+      .split(',')
+      .map((header) => header.trim())
+      .filter(Boolean)
+      .forEach((header) => betaHeaders.add(header));
+  });
+
+  return Array.from(betaHeaders);
 }
 
 export const bedrockInputSchema = s.tConversationSchema
@@ -285,6 +317,8 @@ export const bedrockInputParser = s.tConversationSchema
 
     const additionalFields: Record<string, unknown> = {};
     const typedData = data as Record<string, unknown>;
+    const shouldOmitSamplingParameters =
+      typeof typedData.model === 'string' && omitsSamplingParameters(typedData.model);
 
     Object.entries(typedData).forEach(([key, value]) => {
       if (!knownKeys.includes(key)) {
@@ -366,7 +400,13 @@ export const bedrockInputParser = s.tConversationSchema
       if ((typedData.model as string).includes('anthropic.')) {
         const betaHeaders = getBedrockAnthropicBetaHeaders(typedData.model as string);
         if (betaHeaders.length > 0) {
-          additionalFields.anthropic_beta = betaHeaders;
+          const existingBetaHeaders = (
+            typedData.additionalModelRequestFields as Record<string, unknown> | undefined
+          )?.anthropic_beta;
+          additionalFields.anthropic_beta = mergeBedrockAnthropicBetaHeaders(
+            existingBetaHeaders,
+            betaHeaders,
+          );
         }
       }
     } else {
@@ -407,6 +447,24 @@ export const bedrockInputParser = s.tConversationSchema
         delete amrf.reasoning_config;
         delete amrf.reasoning_effort;
       }
+
+      if (shouldOmitSamplingParameters) {
+        delete amrf.temperature;
+        delete amrf.topP;
+        delete amrf.top_p;
+        delete amrf.topK;
+        delete amrf.top_k;
+      }
+    }
+
+    if (shouldOmitSamplingParameters) {
+      delete typedData.temperature;
+      delete typedData.topP;
+      delete additionalFields.temperature;
+      delete additionalFields.topP;
+      delete additionalFields.top_p;
+      delete additionalFields.topK;
+      delete additionalFields.top_k;
     }
 
     /** Default promptCache for claude and nova models, if not defined */

@@ -2,7 +2,12 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { RecoilRoot } from 'recoil';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { EModelEndpoint, Providers, knaufChatUploadAccept } from 'librechat-data-provider';
+import {
+  EModelEndpoint,
+  EToolResources,
+  Providers,
+  knaufChatUploadAccept,
+} from 'librechat-data-provider';
 import AttachFileMenu from '../AttachFileMenu';
 
 jest.mock('~/hooks', () => ({
@@ -47,7 +52,13 @@ jest.mock('@librechat/client', () => {
         'div',
         { 'data-testid': 'file-upload' },
         props.children,
-        R.createElement('input', { ref, type: 'file', 'data-testid': 'file-input' }),
+        R.createElement('input', {
+          ref,
+          multiple: true,
+          type: 'file',
+          'data-testid': 'file-input',
+          onChange: props.handleFileChange,
+        }),
       ),
     ),
     // End [knauf]
@@ -110,7 +121,8 @@ function setupMocks(overrides: { provider?: string } = {}) {
     com_ui_upload_image_input: 'Upload Image',
     com_ui_upload_ocr_text: 'Upload as Text',
     com_ui_upload_file_search: 'Upload for File Search',
-    com_ui_upload_code_files: 'Upload Code Files',
+    // [knauf] source renders the upstream `com_ui_upload_code_environment` key. End [knauf]
+    com_ui_upload_code_environment: 'Upload to Code Environment',
     com_sidepanel_attach_files: 'Attach Files',
     com_files_upload_sharepoint: 'Upload from SharePoint',
     // [knauf] Label of the standalone "View supported formats" menu item. KK20-190.
@@ -217,6 +229,19 @@ describe('AttachFileMenu', () => {
     it('shows "Upload files" for azureOpenAI with useResponsesApi', () => {
       setupMocks({ provider: EModelEndpoint.azureOpenAI });
       renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      openMenu();
+      expect(screen.getByText('Upload files')).toBeInTheDocument();
+    });
+
+    // KK20-123 — the Tier 5 label swap in AttachFileMenu.tsx renders the generic
+    // "Upload files" instead of upstream's "Upload to Provider" on this path too.
+    it('shows "Upload files" for azureOpenAI endpointType with useResponsesApi', () => {
+      setupMocks();
+      renderMenu({
+        endpoint: EModelEndpoint.agents,
+        endpointType: EModelEndpoint.azureOpenAI,
+        useResponsesApi: true,
+      });
       openMenu();
       expect(screen.getByText('Upload files')).toBeInTheDocument();
     });
@@ -335,7 +360,7 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload Code Files')).toBeInTheDocument();
+      expect(screen.getByText('Upload to Code Environment')).toBeInTheDocument();
     });
 
     it('shows all options when all capabilities are enabled', () => {
@@ -356,8 +381,12 @@ describe('AttachFileMenu', () => {
       // and "Upload for File Search" is hidden unconditionally.
       expect(screen.getByText('Upload files')).toBeInTheDocument();
       expect(screen.getByText('Upload as Text')).toBeInTheDocument();
+      // [knauf] KK20-123 — file-search is hidden in chat (KNAUF_SHOW_FILE_SEARCH_IN_CHAT=false),
+      // so it never appears; the code item uses the upstream `com_ui_upload_code_environment` key.
+      // Upstream's "passes File Search resource on input change" test is dropped here because it
+      // clicks the (now-hidden) File Search item. End [knauf]
       expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
-      expect(screen.getByText('Upload Code Files')).toBeInTheDocument();
+      expect(screen.getByText('Upload to Code Environment')).toBeInTheDocument();
     });
   });
 

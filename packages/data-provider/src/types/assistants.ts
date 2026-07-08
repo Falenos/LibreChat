@@ -24,6 +24,9 @@ export enum Tools {
   function = 'function',
   memory = 'memory',
   ui_resources = 'ui_resources',
+  skill = 'skill',
+  read_file = 'read_file',
+  bash_tool = 'bash_tool',
 }
 
 export enum EToolResources {
@@ -238,6 +241,19 @@ export type ToolOptions = {
  */
 export type AgentToolOptions = Record<string, ToolOptions>;
 
+/**
+ * Configuration for spawning subagents (isolated-context child agents) from an agent.
+ * When `enabled` is true, the agent gets a subagent-spawn tool that can delegate work
+ * to either itself (when `allowSelf` is true) and/or the listed `agent_ids`.
+ */
+export type AgentSubagentsConfig = {
+  enabled?: boolean;
+  /** When true (default), the agent may spawn itself in an isolated context. */
+  allowSelf?: boolean;
+  /** Specific agents that may be spawned as subagents. */
+  agent_ids?: string[];
+};
+
 export type Agent = {
   _id?: string;
   id: string;
@@ -275,6 +291,13 @@ export type Agent = {
   // [knauf] Persist chosen modelSpec name on the agent (mirrors Conversation.spec). UI round-trip only — not consumed by chat completion. BUG-01.
   spec?: string | null;
   // End [knauf]
+  /** Optional allowlist of skill ObjectIds. Only applies when `skills_enabled`. */
+  skills?: string[];
+  /** Master toggle for skill use on this agent. `true` = active (full catalog unless
+   *  `skills` narrows it). `false`/undefined = inactive (no skills available). */
+  skills_enabled?: boolean;
+  /** Subagent spawning configuration — isolated-context child agents. */
+  subagents?: AgentSubagentsConfig;
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;
@@ -303,6 +326,9 @@ export type AgentCreateParams = {
   // [knauf] Carry spec through AgentCreateParams. BUG-01.
   | 'spec'
   // End [knauf]
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentUpdateParams = {
@@ -330,6 +356,9 @@ export type AgentUpdateParams = {
   // [knauf] Carry spec through AgentUpdateParams. BUG-01.
   | 'spec'
   // End [knauf]
+  | 'skills'
+  | 'skills_enabled'
+  | 'subagents'
 >;
 
 export type AgentListParams = {

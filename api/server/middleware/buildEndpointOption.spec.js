@@ -31,6 +31,8 @@ jest.mock('~/server/services/Endpoints/assistants', () => ({
   buildOptions: mockBuildOptions,
 }));
 jest.mock('~/server/services/Endpoints/agents', () => ({
+  // [knauf] Knauf's mockBuildOptions handles both the (endpoint, body) and
+  // (req, endpoint, body) call shapes, so the agents endpoint reuses it.
   buildOptions: mockBuildOptions,
 }));
 
@@ -44,6 +46,7 @@ jest.mock('~/server/services/Config', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  ...jest.requireActual('@librechat/api'),
   handleError: jest.fn(),
 }));
 
@@ -295,5 +298,35 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
     const parsedResult = parseCompactConvo.mock.results[0].value;
     expect(parsedResult.maxOutputTokens).toBeUndefined();
     expect(parsedResult.max_tokens).toBe(4096);
+  });
+
+  it('should not enter the enforce branch when modelSpecs.list is empty', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({});
+
+    const req = createReq(
+      {
+        endpoint: EModelEndpoint.openAI,
+        model: 'gpt-4',
+      },
+      {
+        modelSpecs: {
+          enforce: true,
+          list: [],
+        },
+      },
+    );
+    const res = createRes();
+    const { handleError } = require('@librechat/api');
+
+    await buildEndpointOption(req, res, jest.fn());
+
+    expect(handleError).not.toHaveBeenCalledWith(
+      res,
+      expect.objectContaining({ text: 'No model spec selected' }),
+    );
+    expect(handleError).not.toHaveBeenCalledWith(
+      res,
+      expect.objectContaining({ text: 'Invalid model spec' }),
+    );
   });
 });

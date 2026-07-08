@@ -79,7 +79,7 @@ export default defineConfig(({ command }) => ({
           'assets/maskable-icon.png',
           'manifest.webmanifest',
         ],
-        globIgnores: ['images/**/*', '**/*.map', 'index.html'],
+        globIgnores: ['images/**/*', '**/*.map', 'index.html', 'assets/rum.*.js'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallbackDenylist: [/^\/oauth/, /^\/api/],
       },
@@ -140,7 +140,9 @@ export default defineConfig(({ command }) => ({
         manualChunks(id: string) {
           const normalizedId = id.replace(/\\/g, '/');
           if (normalizedId.includes('node_modules')) {
-            // High-impact chunking for large libraries
+            if (normalizedId.includes('@hyperdx/')) {
+              return 'rum';
+            }
 
             // IMPORTANT: mermaid and ALL its dependencies must be in the same chunk
             // to avoid initialization order issues. This includes chevrotain, langium,
@@ -157,6 +159,9 @@ export default defineConfig(({ command }) => ({
 
             if (normalizedId.includes('@codesandbox/sandpack')) {
               return 'sandpack';
+            }
+            if (normalizedId.includes('react-vtree')) {
+              return 'react-vtree';
             }
             if (normalizedId.includes('react-virtualized')) {
               return 'virtualization';

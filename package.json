@@ -53,11 +53,12 @@
     "frontend": "npm run build:data-provider && npm run build:data-schemas && npm run build:api && npm run build:client-package && cd client && npm run build",
     "frontend:ci": "npm run build:data-provider && npm run build:client-package && cd client && npm run build:ci",
     "frontend:dev": "cd client && npm run dev",
-    "e2e": "playwright test --config=e2e/playwright.config.local.ts",
-    "e2e:headed": "playwright test --config=e2e/playwright.config.local.ts --headed",
-    "e2e:a11y": "playwright test --config=e2e/playwright.config.a11y.ts --headed",
-    "e2e:ci": "playwright test --config=e2e/playwright.config.ts",
-    "e2e:debug": "cross-env PWDEBUG=1 playwright test --config=e2e/playwright.config.local.ts",
+    "e2e:prepare": "npm run frontend",
+    "e2e": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.local.ts",
+    "e2e:headed": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.local.ts --headed",
+    "e2e:a11y": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.a11y.ts --headed",
+    "e2e:ci": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.ts",
+    "e2e:debug": "npm run e2e:prepare && cross-env PWDEBUG=1 playwright test --config=e2e/playwright.config.local.ts",
     "e2e:codegen": "npx playwright codegen --load-storage=e2e/storageState.json http://localhost:3080/c/new",
     "e2e:login": "npx playwright codegen --save-storage=e2e/auth.json http://localhost:3080/login",
     "e2e:github": "act -W .github/workflows/playwright.yml --secret-file my.secrets",
@@ -72,7 +73,7 @@
     "langfuse:traces": "LANGFUSE_HOST=https://langfuse.agk.dev.knauf.digital LANGFUSE_PUBLIC_KEY=pk-lf-agk-dev-agentic-karl-001 LANGFUSE_SECRET_KEY=\"$(az keyvault secret show --vault-name kv-agntkarl-nonprod-001 --name langfuse-dev-LANGFUSE-INIT-PROJECT-SECRET-KEY --query value -o tsv)\" langfuse api traces list --limit 5 --order-by timestamp.desc --json | jq -e 'select(.ok == true and .status < 300)'",
     "test:all": "rc=0; npm run test:client || rc=1; npm run test:api || rc=1; npm run test:packages:api || rc=1; npm run test:packages:data-provider || rc=1; npm run test:packages:data-schemas || rc=1; npm run test:seams || rc=1; exit $rc",
     "test:coverage": "rc=0; npm run test:client:coverage || rc=1; npm run test:api || rc=1; npm run test:packages:api || rc=1; npm run test:packages:data-provider || rc=1; npm run test:packages:data-schemas || rc=1; exit $rc",
-    "e2e:update": "playwright test --config=e2e/playwright.config.js --update-snapshots",
+    "e2e:update": "npm run e2e:prepare && playwright test --config=e2e/playwright.config.local.ts --update-snapshots",
     "e2e:report": "npx playwright show-report e2e/playwright-report",
     "lint:fix": "eslint --fix \"{,!(node_modules|venv)/**/}*.{js,jsx,ts,tsx}\"",
     "lint": "eslint \"{,!(node_modules|venv)/**/}*.{js,jsx,ts,tsx}\"",
@@ -141,23 +142,19 @@
     "lint-staged": "^15.4.3",
     "prettier": "^3.5.0",
     "prettier-plugin-tailwindcss": "^0.6.11",
-    "turbo": "^2.8.12",
+    "turbo": "^2.9.14",
     "typescript-eslint": "^8.24.0"
   },
   "overrides": {
-    "@anthropic-ai/sdk": "0.73.0",
-    "@librechat/agents": {
-      "@langchain/anthropic": {
-        "@anthropic-ai/sdk": "0.73.0",
-        "fast-xml-parser": "5.6.0"
-      },
-      "@anthropic-ai/sdk": "0.73.0",
-      "fast-xml-parser": "5.6.0"
-    },
+    "@xmldom/xmldom": "^0.8.13",
     "elliptic": "^6.6.1",
-    "fast-xml-parser": "5.6.0",
     "form-data": "^4.0.4",
+    "langsmith": "^0.6.0",
+    "postcss": "^8.5.13",
     "tslib": "^2.8.1",
+    "@anthropic-ai/sdk": "^0.92.0",
+    "fast-xml-parser": "5.7.2",
+    "serialize-javascript": "7.0.5",
     "mdast-util-gfm-autolink-literal": "2.0.0",
     "remark-gfm": {
       "mdast-util-gfm-autolink-literal": "2.0.0"
@@ -174,12 +171,11 @@
         "katex": "^0.16.21"
       }
     },
-    "langsmith": "0.4.12",
     "eslint": {
       "ajv": "6.14.0"
     },
     "underscore": "1.13.8",
-    "hono": "^4.12.4",
+    "hono": "^4.12.18",
     "@hono/node-server": "^1.19.10",
     "monaco-editor": {
       "dompurify": "3.4.0"

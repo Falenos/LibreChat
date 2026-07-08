@@ -86,7 +86,9 @@ function areContentRenderPropsEqual(prev: ContentRenderProps, next: ContentRende
     prevMsg.createdAt === nextMsg.createdAt &&
     prevMsg.updatedAt === nextMsg.updatedAt &&
     prevMsg.feedback?.rating === nextMsg.feedback?.rating &&
-    (prevMsg.attachments?.length ?? 0) === (nextMsg.attachments?.length ?? 0)
+    (prevMsg.attachments?.length ?? 0) === (nextMsg.attachments?.length ?? 0) &&
+    (prevMsg.manualSkills?.length ?? 0) === (nextMsg.manualSkills?.length ?? 0) &&
+    (prevMsg.alwaysAppliedSkills?.length ?? 0) === (nextMsg.alwaysAppliedSkills?.length ?? 0)
   );
 }
 
@@ -234,6 +236,7 @@ const ContentRender = memo(function ContentRender({
               messageId={msg.messageId}
               attachments={attachments}
               searchResults={searchResults}
+              manualSkills={msg.manualSkills}
               setSiblingIdx={setSiblingIdx}
               isLatestMessage={isLatestMessage}
               isSubmitting={isSubmitting}
