@@ -69,7 +69,7 @@
     "e2e:github": "act -W .github/workflows/playwright.yml --secret-file my.secrets",
     "test:client": "cd client && npm run test:ci",
     "test:client:coverage": "cd client && npm run test:ci -- --coverage",
-    "test:api": "cd api && npm run test:ci -- --forceExit",
+    "test:api": "cd api && npm run test:ci -- --forceExit --maxWorkers=2 --workerIdleMemoryLimit=1024MB",
     "test:packages:api": "cd packages/api && npm run test:ci",
     "test:packages:data-provider": "cd packages/data-provider && npm run test:ci",
     "test:packages:data-schemas": "cd packages/data-schemas && npm run test:ci",
