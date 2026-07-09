@@ -126,6 +126,7 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 ## Related
 
+- [../upstream-releases/README.md](../upstream-releases/README.md) — per-version notes on what each merged release means for the fork (features, security, seam interactions, config actions); write one when you land a sync
 - [code-change-protocol.md](code-change-protocol.md) — marker format + SEAMS.md authoring
 - [testing-and-rollback.md](testing-and-rollback.md) — verification + revert procedure
 - [SEAMS.md](../../../SEAMS.md) — manifest of `[knauf]` markers; watcher reads `LibreChat tag` and `Base tag` from here
