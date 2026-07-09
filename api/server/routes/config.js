@@ -117,13 +117,10 @@ function buildPreLoginPayload() {
     payload.ldap = ldap;
   }
 
-  // [knauf] Default the chat footer to the Agentic Karl brand so deployments without
-  // CUSTOM_FOOTER do not fall back to the upstream marketing link. (NO-TICKET)
-  payload.customFooter =
-    typeof process.env.CUSTOM_FOOTER === 'string'
-      ? process.env.CUSTOM_FOOTER
-      : 'Agentic Karl | Knauf AI Platform';
-  // End [knauf]
+  // [knauf] customFooter is intentionally NOT set here: upstream v0.8.6 (#12688) treats it as
+  // authenticated/share-only, so it lives in buildPublicSharePayload (with the Knauf brand
+  // default). The unauthenticated login screen brands the footer via the client-side
+  // KNAUF_FOOTER_FALLBACK in Footer.tsx. End [knauf]
 
   // [knauf] Expose post-login OneTrust/Adobe Analytics + Datadog config under a namespaced key. (NO-TICKET, KK20-186)
   if (knaufAnalyticsConfig || knaufDatadogConfig) {
@@ -154,9 +151,14 @@ function buildPublicSharePayload() {
     // End [knauf]
   };
 
-  if (typeof process.env.CUSTOM_FOOTER === 'string') {
-    payload.customFooter = process.env.CUSTOM_FOOTER;
-  }
+  // [knauf] Default the chat footer to the Agentic Karl brand for authenticated/share
+  // views when deployments don't set CUSTOM_FOOTER, instead of the upstream marketing
+  // link. (NO-TICKET; relocated here from the pre-login payload per upstream #12688.)
+  payload.customFooter =
+    typeof process.env.CUSTOM_FOOTER === 'string'
+      ? process.env.CUSTOM_FOOTER
+      : 'Agentic Karl | Knauf AI Platform';
+  // End [knauf]
 
   return payload;
 }

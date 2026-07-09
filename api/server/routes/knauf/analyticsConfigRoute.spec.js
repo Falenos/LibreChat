@@ -26,6 +26,13 @@ const configRoute = require('../config');
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
+  // [knauf] analyticsGtmId is authenticated/share-only after the upstream v0.8.6 #12688
+  // hardening (it lives in buildPublicSharePayload), so exercise the authenticated path.
+  // payload.knauf stays in the pre-login payload, so the knauf.* assertions hold either way.
+  app.use((req, _res, next) => {
+    req.user = { id: 'u1', role: 'USER' };
+    next();
+  });
   app.use('/api/config', configRoute);
   return app;
 }
