@@ -1,7 +1,10 @@
 name: Playwright E2E Tests
 
 on:
-  pull_request:
+  # Knauf: upstream Playwright E2E on every PR. Not wired for the fork's CI yet (the fork
+  # uses `npm run e2e` / `e2e:ci`); disabled on PRs pending deliberate adoption. Manual-run
+  # only; uncomment the pull_request trigger to re-enable.
+  # pull_request:
   workflow_dispatch:
     inputs:
       reason:

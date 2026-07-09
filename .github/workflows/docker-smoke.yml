@@ -1,22 +1,26 @@
 name: Docker Build Smoke Tests
 
 on:
+  # Knauf: upstream Dockerfile.multi build smoke test. The fork ships its image via
+  # `az acr build` (release_pipeline.yaml -> acrctshared001), not Dockerfile.multi, so
+  # this PR gate is redundant here. Disabled on PRs (manual-run only); uncomment the
+  # pull_request block to re-enable.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/docker-smoke.yml'
-      - '.dockerignore'
-      - 'Dockerfile.multi'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'api/**'
-      - 'client/**'
-      - 'config/**'
-      - 'skill/**'
-      - 'packages/api/**'
-      - 'packages/client/**'
-      - 'packages/data-provider/**'
-      - 'packages/data-schemas/**'
+  # pull_request:
+  #   paths:
+  #     - '.github/workflows/docker-smoke.yml'
+  #     - '.dockerignore'
+  #     - 'Dockerfile.multi'
+  #     - 'package.json'
+  #     - 'package-lock.json'
+  #     - 'api/**'
+  #     - 'client/**'
+  #     - 'config/**'
+  #     - 'skill/**'
+  #     - 'packages/api/**'
+  #     - 'packages/client/**'
+  #     - 'packages/data-provider/**'
+  #     - 'packages/data-schemas/**'
 
 permissions:
   contents: read

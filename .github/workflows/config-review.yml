@@ -1,14 +1,18 @@
 name: Config Migration Tests
 on:
-  pull_request:
-    paths:
-      - 'config/**'
-      - 'api/models/**'
-      - 'api/db/**'
-      - 'packages/data-schemas/src/**'
-      - 'packages/data-provider/src/**'
-      - 'packages/api/src/acl/**'
-      - 'packages/api/src/shared-links/**'
+  # Knauf: upstream config-migration CI, arrived with the v0.8.7 sync and not yet adopted
+  # on the fork. Disabled on PRs (manual-run only) pending a decision to adopt it — see
+  # knauf/docs/upstream-releases/v0.8.7.md. Uncomment the pull_request block to re-enable.
+  workflow_dispatch:
+  # pull_request:
+  #   paths:
+  #     - 'config/**'
+  #     - 'api/models/**'
+  #     - 'api/db/**'
+  #     - 'packages/data-schemas/src/**'
+  #     - 'packages/data-provider/src/**'
+  #     - 'packages/api/src/acl/**'
+  #     - 'packages/api/src/shared-links/**'
 
 env:
   NODE_ENV: CI
