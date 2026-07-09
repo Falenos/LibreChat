@@ -451,11 +451,21 @@ export function replaceSpecialVars({
   user,
   now: inputNow,
   timezone,
+  location,
 }: {
   text: string;
   user?: t.TUser | null;
   now?: string | number | Date;
   timezone?: string;
+  /**
+   * [knauf] KK20-201 — pre-resolved, deterministic location context (e.g.
+   * `Locale: de-DE, Timezone: Europe/Berlin`), so the LLM never has to guess
+   * a user's location. Callers resolve this from request headers via
+   * `resolveUserLocationContext` in `@librechat/api`; this function stays
+   * environment-agnostic (also used client-side) and only substitutes the
+   * already-resolved string.
+   */
+  location?: string;
 }) {
   let result = text;
   if (!result) {
@@ -477,6 +487,12 @@ export function replaceSpecialVars({
   if (user && user.name) {
     result = result.replace(/{{\s*current_user\s*}}/gi, user.name);
   }
+
+  // [knauf] KK20-201
+  if (location) {
+    result = result.replace(/{{current_user_location}}/gi, location);
+  }
+  // End [knauf]
 
   return result;
 }

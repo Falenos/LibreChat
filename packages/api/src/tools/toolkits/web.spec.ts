@@ -24,3 +24,22 @@ describe('web search context', () => {
     expect(secondContext).toBe(context);
   });
 });
+
+// [knauf] KK20-201 — regression coverage for the deterministic location
+// context threaded into the web-search tool prompt. See
+// packages/api/src/knauf/context/locationContext.ts for the resolution
+// logic and root-cause writeup.
+describe('buildWebSearchContext location context', () => {
+  it('includes the resolved location context when provided', () => {
+    const result = buildWebSearchContext('Locale: de-DE, Timezone: Europe/Berlin');
+    expect(result).toContain('Current User Location: Locale: de-DE, Timezone: Europe/Berlin');
+  });
+
+  it('never defaults to a specific country when no location is provided', () => {
+    const result = buildWebSearchContext();
+    expect(result).toContain('Current User Location:');
+    expect(result).not.toMatch(/United States|\bUS\b/);
+    expect(result).toContain('do not assume any specific country or region');
+  });
+});
+// End [knauf]

@@ -11,6 +11,10 @@ import {
   replaceSpecialVars,
   providerEndpointMap,
 } from 'librechat-data-provider';
+// [knauf] KK20-201 — deterministic locale/timezone context so agent
+// instructions never lead the model to guess a user's location.
+import { resolveUserLocationContext } from '~/knauf/context/locationContext';
+// End [knauf]
 import type {
   AgentToolResources,
   AgentToolOptions,
@@ -1149,6 +1153,9 @@ export async function initializeAgent(
       user: req.user ? (req.user as unknown as TUser) : null,
       now: req.conversationCreatedAt,
       timezone: req.body?.timezone,
+      // [knauf] KK20-201
+      location: resolveUserLocationContext(req.headers),
+      // End [knauf]
     });
     if (hasTemporalSpecialVars(agent.instructions)) {
       agent.instructions = undefined;

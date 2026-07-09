@@ -145,6 +145,11 @@ describe('replaceSpecialVars', () => {
     const result = replaceSpecialVars({
       text: specialVarsText,
       user: mockUser,
+      // [knauf] KK20-201 — location must be supplied for {{current_user_location}}
+      // to be substituted; without it the token is intentionally left as-is
+      // (see the dedicated describe block below).
+      location: 'Locale: de-DE, Timezone: Europe/Berlin',
+      // End [knauf]
     });
 
     // Verify none of the original variable placeholders remain in the result
@@ -158,7 +163,39 @@ describe('replaceSpecialVars', () => {
     expect(result).toContain('2024-04-29 12:34:56 -04:00 (Monday)'); // current_datetime
     expect(result).toContain('2024-04-29T16:34:56.000Z'); // iso_datetime
     expect(result).toContain('Test User'); // current_user
+    expect(result).toContain('Locale: de-DE, Timezone: Europe/Berlin'); // current_user_location
   });
+
+  // [knauf] KK20-201 — {{current_user_location}} must never resolve to a
+  // hardcoded country/region; it only substitutes an already-resolved,
+  // deterministic string supplied by the caller (see
+  // packages/api/src/knauf/context/locationContext.ts).
+  describe('{{current_user_location}}', () => {
+    test('replaces the token when a location string is provided', () => {
+      const result = replaceSpecialVars({
+        text: 'User location: {{current_user_location}}',
+        location: 'Locale: de-DE, Timezone: Europe/Berlin',
+      });
+      expect(result).toBe('User location: Locale: de-DE, Timezone: Europe/Berlin');
+    });
+
+    test('leaves the token untouched (no US or any other hardcoded default) when location is absent', () => {
+      const result = replaceSpecialVars({
+        text: 'User location: {{current_user_location}}',
+      });
+      expect(result).toBe('User location: {{current_user_location}}');
+      expect(result).not.toMatch(/United States|\bUS\b/);
+    });
+
+    test('is case-insensitive', () => {
+      const result = replaceSpecialVars({
+        text: '{{CURRENT_USER_LOCATION}}',
+        location: 'Locale: fr-FR',
+      });
+      expect(result).toBe('Locale: fr-FR');
+    });
+  });
+  // End [knauf]
 });
 
 describe('parseCompactConvo', () => {

@@ -75,6 +75,12 @@ export * from './stream';
 export { memoryDiagnostics } from './utils/memory';
 /* RUM */
 export * from './rum/proxy';
+// [knauf] KK20-201 — deterministic locale/timezone prompt context, consumed by
+// ToolService.js and handleTools.js (web_search tool context) and by
+// agents/initialize.ts (agent instructions), so the LLM never has to guess a
+// user's location.
+export * from './knauf/context/locationContext';
+// End [knauf]
 /* types */
 export type * from './mcp/types';
 export type * from './flow/types';
