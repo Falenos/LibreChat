@@ -56,6 +56,9 @@ jest.mock('./multer', () => ({
       next();
     }),
   })),
+  // [knauf] index.js wires knaufUploadRejectionHandler as the trailing handler on the
+  // chat upload route (KK20-190); mock it as a passthrough so route registration succeeds.
+  knaufUploadRejectionHandler: (err, _req, _res, next) => next(err),
 }));
 
 jest.mock('./files', () => {

@@ -25,6 +25,10 @@ jest.mock('@librechat/client', () => ({
 jest.mock('recoil', () => ({
   ...jest.requireActual('recoil'),
   useSetRecoilState: jest.fn(() => jest.fn()),
+  // v0.8.7: useFileHandling now reads `store.isTemporary` via useRecoilValue.
+  // This spec renders the hook without a RecoilRoot and only asserts on the
+  // resolved endpointFileConfig, so a fixed non-temporary value is sufficient.
+  useRecoilValue: jest.fn(() => false),
 }));
 
 jest.mock('~/store', () => ({
@@ -59,6 +63,11 @@ jest.mock('~/hooks/useLocalize', () => ({
   __esModule: true,
   default: jest.fn((key: string) => key),
   TranslationKeys: {},
+}));
+// v0.8.7: a dependency hook in the useFileHandling chain imports `{ useLocalize }` from the
+// `~/hooks` barrel (not the specific module above), so mock the barrel export too.
+jest.mock('~/hooks', () => ({
+  useLocalize: () => (key: string) => key,
 }));
 
 jest.mock('~/hooks/Files/useDelayedUploadToast', () => ({

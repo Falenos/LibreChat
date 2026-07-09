@@ -251,7 +251,11 @@ describe('useFileHandling', () => {
       const formData: FormData = mockMutate.mock.calls[0][0];
       expect(formData.get('endpoint')).toBe(EModelEndpoint.agents);
       expect(formData.get('endpointType')).toBe(EModelEndpoint.agents);
-      expect(formData.get('conversationId')).toBeNull();
+      // [knauf] KK20-203 — the fork stamps the originating conversationId onto agent
+      // uploads (see the dedicated "conversationId on chat file uploads" block below),
+      // so this is 'convo-1' here where upstream asserts null.
+      expect(formData.get('conversationId')).toBe('convo-1');
+      // End [knauf]
     });
 
     it('does not enter assistants upload path when override is agents', async () => {
@@ -377,7 +381,10 @@ describe('useFileHandling', () => {
       expect(mockMutate).toHaveBeenCalledTimes(1);
       const formData: FormData = mockMutate.mock.calls[0][0];
       expect(formData.get('assistant_id')).toBe('asst-123');
-      expect(formData.get('conversationId')).toBeNull();
+      // [knauf] KK20-203 — the originating conversationId is stamped onto builder
+      // uploads too; upstream asserts null here.
+      expect(formData.get('conversationId')).toBe('temporary-convo');
+      // End [knauf]
       expect(formData.get('isTemporary')).toBeNull();
     });
 
@@ -406,7 +413,10 @@ describe('useFileHandling', () => {
       expect(mockMutate).toHaveBeenCalledTimes(1);
       const formData: FormData = mockMutate.mock.calls[0][0];
       expect(formData.get('agent_id')).toBe('agent-123');
-      expect(formData.get('conversationId')).toBeNull();
+      // [knauf] KK20-203 — the originating conversationId is stamped onto builder
+      // uploads too; upstream asserts null here.
+      expect(formData.get('conversationId')).toBe('temporary-convo');
+      // End [knauf]
       expect(formData.get('isTemporary')).toBeNull();
     });
 

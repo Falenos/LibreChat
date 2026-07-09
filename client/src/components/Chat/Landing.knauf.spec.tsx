@@ -40,6 +40,11 @@ jest.mock('~/utils', () => ({
   cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
   getIconEndpoint: () => 'azureOpenAI',
   getEntity: (args: unknown) => mockGetEntity(args),
+  // v0.8.7: Landing now imports modelSpec branding + the config HTML sanitizer from ~/utils.
+  getModelSpec: () => undefined,
+  createConfigHtmlSanitizer: () => (html: string) => html,
+  CONFIG_HTML_MEDIA_TAGS: [],
+  CONFIG_HTML_MEDIA_ATTR: [],
 }));
 
 jest.mock('~/components/Endpoints/ConvoIcon', () => ({

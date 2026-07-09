@@ -24,11 +24,7 @@
  * mirrors ToolService.spec.js so the upstream test file stays untouched.
  */
 
-const {
-  Tools,
-  EModelEndpoint,
-  AgentCapabilities,
-} = require('librechat-data-provider');
+const { Tools, EModelEndpoint, AgentCapabilities } = require('librechat-data-provider');
 
 const mockGetEndpointsConfig = jest.fn();
 const mockGetMCPServerTools = jest.fn();
@@ -89,6 +85,8 @@ jest.mock('~/config', () => ({
 }));
 jest.mock('~/server/services/MCP', () => ({
   resolveConfigServers: jest.fn().mockResolvedValue({}),
+  // v0.8.7: ToolService.loadTools now calls createMCPPermissionContext(req).
+  createMCPPermissionContext: jest.fn(() => ({})),
 }));
 jest.mock('~/cache', () => ({
   getLogStores: jest.fn(() => ({})),

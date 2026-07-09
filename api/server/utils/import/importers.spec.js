@@ -1122,7 +1122,9 @@ describe('importLibreChatConvo', () => {
 
     expect(importBatchBuilder.finishConversation).toHaveBeenCalledTimes(1);
 
-    const [_title, createdAt, originalConvo, updatedAt] =
+    // [knauf] finishConversation signature is (title, createdAt, originalConvo, defaultModel,
+    // updatedAt) — updatedAt is the 5th arg (defaultModel 4th, added by the v0.8.7 merge).
+    const [_title, createdAt, originalConvo, _defaultModel, updatedAt] =
       importBatchBuilder.finishConversation.mock.calls[0];
     const convo = importBatchBuilder.conversations[0];
 

@@ -2,8 +2,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { EModelEndpoint, QueryKeys } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
-import useChatFunctions from '../useChatFunctions';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+import useChatFunctions from '../useChatFunctions';
 
 // End [knauf]
 
@@ -30,8 +30,10 @@ jest.mock('recoil', () => ({
   useRecoilValue: jest.fn(() => false),
   useResetRecoilState: jest.fn(() => mockResetRecoilState),
   useSetRecoilState: jest.fn(() => mockSetRecoilState),
-  // v0.8.7: useChatFunctions now calls useFocusRegeneratedResponse, which uses useRecoilCallback.
-  useRecoilCallback: jest.fn(() => jest.fn()),
+  // v0.8.7: useChatFunctions builds drainPendingManualSkills/drainPendingQuotes via
+  // useRecoilCallback (and useFocusRegeneratedResponse uses it too). The returned
+  // callback must yield an array — `manualSkills.length`/`quotes.length` are read on it.
+  useRecoilCallback: jest.fn(() => jest.fn(() => [])),
 }));
 
 jest.mock('~/hooks/Files/useSetFilesToDelete', () => ({

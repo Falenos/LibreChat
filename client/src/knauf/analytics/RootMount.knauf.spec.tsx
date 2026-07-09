@@ -9,6 +9,8 @@ const mockUseUserTermsQuery = jest.fn();
 
 jest.mock('react-router-dom', () => ({
   Outlet: () => <div data-testid="outlet" />,
+  // v0.8.7: Root's dependency graph now calls useNavigate.
+  useNavigate: () => jest.fn(),
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -32,6 +34,10 @@ jest.mock('~/hooks', () => ({
   useAuthContext: () => mockUseAuthContext(),
   useAgentsMap: jest.fn(() => ({})),
   useFileMap: jest.fn(() => ({})),
+  // v0.8.7: Root mounts KeyboardShortcutsProvider → useKeyboardShortcuts, which pulls
+  // useLocalize + useHasAccess from the ~/hooks barrel.
+  useLocalize: () => (key: string) => key,
+  useHasAccess: () => true,
 }));
 
 jest.mock('~/Providers', () => {
@@ -80,6 +86,23 @@ jest.mock('~/knauf/components/Header/KnaufTopBar', () => ({
 
 jest.mock('~/knauf/hooks/Auth/useMigrationAccess', () => ({
   useMigrationAccess: () => ({ allowed: true, isLoading: false, isError: false, hasData: true }),
+}));
+
+// v0.8.7: Root mounts <KeyboardShortcutsProvider/>, whose useKeyboardShortcuts
+// hook now pulls the full new-conversation + react-query stack (useQueryClient,
+// useNewConvo, useMatch). This spec only exercises the analytics consent mount,
+// so neutralize the shortcuts subtree the same way KnaufTopBar is mocked above.
+jest.mock('~/hooks/useKeyboardShortcuts', () => ({
+  __esModule: true,
+  default: () => {},
+}));
+jest.mock('~/components/Nav/KeyboardShortcutsDialog', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('~/components/Nav/KeyboardDeleteDialog', () => ({
+  __esModule: true,
+  default: () => null,
 }));
 
 function renderRoot() {

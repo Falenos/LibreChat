@@ -988,7 +988,12 @@ describe('interfaceSchema', () => {
       const result = interfaceSchema.safeParse({
         knauf: {
           promptTemplates: [
-            { id: 'tpl-1', label: 'General', description: 'Desc', content: '## Role\nYou are helpful.' },
+            {
+              id: 'tpl-1',
+              label: 'General',
+              description: 'Desc',
+              content: '## Role\nYou are helpful.',
+            },
             { id: 'tpl-2', label: 'Writer', description: 'Desc2', content: 'Content here' },
           ],
         },
@@ -1024,13 +1029,13 @@ describe('interfaceSchema', () => {
     it('rejects content exceeding max length (4000 chars)', () => {
       const result = interfaceSchema.safeParse({
         knauf: {
-          promptTemplates: [
-            { id: 'x', label: 'X', description: 'D', content: 'a'.repeat(4001) },
-          ],
+          promptTemplates: [{ id: 'x', label: 'X', description: 'D', content: 'a'.repeat(4001) }],
         },
       });
       expect(result.success).toBe(false);
     });
+  });
+
   it('accepts retainAgentFiles with all-data retention', () => {
     const result = interfaceSchema.parse({
       retentionMode: RetentionMode.ALL,

@@ -70,7 +70,11 @@ describe('EndpointIcon', () => {
     expect(icon).toHaveAttribute('alt', 'Research Agent');
   });
 
-  it('keeps an explicit model spec icon ahead of the agent avatar', () => {
+  // [knauf] Branding seam (EndpointIcon.tsx): a spec/agent conversation whose icon is not a
+  // renderable URL renders the compact Knauf wordmark in history rows instead of the upstream
+  // MinimalIcon, so upstream's "explicit model spec icon precedence" does not hold in the fork.
+  // The wordmark vs. minimal-icon matrix is pinned in KnaufConversationAvatars.knauf.spec.tsx.
+  it('renders the Knauf wordmark for a spec-bearing agent conversation instead of the model spec icon', () => {
     const conversation = {
       endpoint: EModelEndpoint.agents,
       agent_id: agent.id,
@@ -87,9 +91,8 @@ describe('EndpointIcon', () => {
     );
 
     expect(screen.queryByTestId('convo-url-icon')).not.toBeInTheDocument();
-    expect(screen.getByTestId('minimal-icon')).toHaveAttribute(
-      'data-endpoint',
-      EModelEndpoint.google,
-    );
+    expect(screen.queryByTestId('minimal-icon')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Knauf')).toHaveAttribute('src', '/assets/knauf-logo.png');
   });
+  // End [knauf]
 });
