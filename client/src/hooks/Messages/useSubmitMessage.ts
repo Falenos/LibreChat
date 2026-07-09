@@ -5,6 +5,9 @@ import { useChatContext, useChatFormContext, useAddedChatContext } from '~/Provi
 import { useLatestMessage } from '~/hooks/Messages/useLatestMessage';
 import { useAuthContext } from '~/hooks/AuthContext';
 import { mainTextareaId } from '~/common';
+// [knauf] KK20-201 — see useChatFunctions.ts for rationale.
+import { resolveBrowserLocationContext } from '~/knauf/utils/locationContext';
+// End [knauf]
 import store from '~/store';
 
 export default function useSubmitMessage() {
@@ -48,7 +51,13 @@ export default function useSubmitMessage() {
 
   const submitPrompt = useCallback(
     (text: string) => {
-      const parsedText = replaceSpecialVars({ text, user });
+      // [knauf] KK20-201
+      const parsedText = replaceSpecialVars({
+        text,
+        user,
+        location: resolveBrowserLocationContext(),
+      });
+      // End [knauf]
       if (autoSendPrompts) {
         submitMessage({ text: parsedText });
         return;

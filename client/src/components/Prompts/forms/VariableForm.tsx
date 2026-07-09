@@ -14,6 +14,9 @@ import { cn, wrapVariable, defaultTextProps, extractVariableInfo } from '~/utils
 import { useAuthContext, useLocalize, useSubmitMessage } from '~/hooks';
 import { useRecordPromptUsage } from '~/data-provider';
 import { PromptVariableGfm } from '../editor/Markdown';
+// [knauf] KK20-201 — see useChatFunctions.ts for rationale.
+import { resolveBrowserLocationContext } from '~/knauf/utils/locationContext';
+// End [knauf]
 
 type FieldType = 'text' | 'select';
 
@@ -74,7 +77,13 @@ export default function VariableForm({
 
   const mainText = useMemo(() => {
     const initialText = group.productionPrompt?.prompt ?? '';
-    return replaceSpecialVars({ text: initialText, user });
+    // [knauf] KK20-201
+    return replaceSpecialVars({
+      text: initialText,
+      user,
+      location: resolveBrowserLocationContext(),
+    });
+    // End [knauf]
   }, [group.productionPrompt?.prompt, user]);
 
   const { allVariables, uniqueVariables, variableIndexMap } = useMemo(

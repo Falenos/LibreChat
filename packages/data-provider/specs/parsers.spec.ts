@@ -1,4 +1,10 @@
-import { replaceSpecialVars, parseConvo, parseCompactConvo, parseTextParts } from '../src/parsers';
+import {
+  replaceSpecialVars,
+  parseConvo,
+  parseCompactConvo,
+  parseTextParts,
+  UNKNOWN_LOCATION_CONTEXT,
+} from '../src/parsers';
 import { specialVariables } from '../src/config';
 import { EModelEndpoint, Providers } from '../src/schemas';
 import { ContentTypes } from '../src/types/runs';
@@ -179,11 +185,12 @@ describe('replaceSpecialVars', () => {
       expect(result).toBe('User location: Locale: de-DE, Timezone: Europe/Berlin');
     });
 
-    test('leaves the token untouched (no US or any other hardcoded default) when location is absent', () => {
+    test('substitutes an explicit "do not assume" fallback (never a raw token, never a hardcoded country) when location is absent', () => {
       const result = replaceSpecialVars({
         text: 'User location: {{current_user_location}}',
       });
-      expect(result).toBe('User location: {{current_user_location}}');
+      expect(result).toBe(`User location: ${UNKNOWN_LOCATION_CONTEXT}`);
+      expect(result).not.toContain('{{current_user_location}}');
       expect(result).not.toMatch(/United States|\bUS\b/);
     });
 

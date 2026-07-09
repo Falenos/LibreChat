@@ -3,6 +3,11 @@ import { buildWebSearchContext, buildWebSearchDynamicContext } from './web';
 jest.mock('librechat-data-provider', () => ({
   Tools: { web_search: 'web_search' },
   replaceSpecialVars: jest.fn(({ now }: { now?: string }) => now ?? 'NOW'),
+  // [knauf] KK20-201 — real value re-exported by locationContext.ts as the
+  // fallback for an unresolved location; must not be `undefined` here.
+  UNKNOWN_LOCATION_CONTEXT:
+    'unknown (no locale/timezone signal available — do not assume any specific country or region)',
+  // End [knauf]
 }));
 
 describe('web search context', () => {
