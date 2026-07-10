@@ -24,17 +24,32 @@ const mockDataProvider = {
   },
   isAgentsEndpoint: (endpoint) => endpoint === 'agents',
   isAssistantsEndpoint: (endpoint) => endpoint === 'assistants' || endpoint === 'azureAssistants',
+  // [knauf] Complete the data-provider mock with ResourceType so that if the real
+  // @librechat/api -> @librechat/data-schemas chain loads, its capabilities.ts init
+  // (ResourceCapabilityMap, keyed by ResourceType) does not throw "Cannot read
+  // properties of undefined (reading 'AGENT')". This surfaced only in CI, where this
+  // spec shares a jest worker with one that already loaded the real @librechat/api.
+  ResourceType: {
+    AGENT: 'agent',
+    PROMPTGROUP: 'promptGroup',
+    MCPSERVER: 'mcpServer',
+    REMOTE_AGENT: 'remoteAgent',
+    SKILL: 'skill',
+    SHARED_LINK: 'sharedLink',
+  },
+  // End [knauf]
 };
 
-jest.mock(
-  '@librechat/api',
-  () => ({
-    sendEvent: jest.fn(),
-    isEnabled: (value) => value === true || value === 'true' || value === '1',
-    isUserProvided: (value) => value === 'user_provided',
-  }),
-  { virtual: true },
-);
+// [knauf] Drop `virtual: true` — @librechat/api is a real, resolvable workspace package.
+// A virtual mock of a resolvable module is not reliably re-applied after jest.resetModules()
+// once the real module has been loaded by another spec in the same CI worker, which lets the
+// real dist (and its data-schemas capabilities.ts init) load instead of this stub.
+jest.mock('@librechat/api', () => ({
+  sendEvent: jest.fn(),
+  isEnabled: (value) => value === true || value === 'true' || value === '1',
+  isUserProvided: (value) => value === 'user_provided',
+}));
+// End [knauf]
 
 jest.mock('librechat-data-provider', () => mockDataProvider, { virtual: true });
 
