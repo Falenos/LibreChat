@@ -44,7 +44,6 @@ describe('AudioRecorder — Knauf mic visibility', () => {
             setValue: jest.fn(),
           } as never
         }
-        textAreaRef={{ current: null }}
         isSubmitting={false}
       />,
     );

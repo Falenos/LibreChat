@@ -5,6 +5,7 @@ import type { TMessageProps } from '~/common';
 import MessageEndpointIcon from '../Endpoints/MessageEndpointIcon';
 import ConvoIconURL from '~/components/Endpoints/ConvoIconURL';
 import { getIconEndpoint, logger } from '~/utils';
+import { isImageURL } from '~/utils/icons';
 
 // [knauf] Shared-message user avatar fallback uses Knauf dark blue instead of upstream purple.
 const KNAUF_USER_AVATAR_BACKGROUND = 'rgb(33, 58, 117)';
@@ -53,7 +54,7 @@ export default function MessageIcon(
     agentName,
     agentAvatar,
   });
-  if (message?.isCreatedByUser !== true && iconURL && iconURL.includes('http')) {
+  if (message?.isCreatedByUser !== true && isImageURL(iconURL)) {
     return (
       <ConvoIconURL
         iconURL={iconURL}

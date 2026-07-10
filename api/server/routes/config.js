@@ -1,9 +1,18 @@
 const express = require('express');
-const { isEnabled, getBalanceConfig } = require('@librechat/api');
-const { defaultSocialLogins } = require('librechat-data-provider');
+const {
+  isEnabled,
+  getBalanceConfig,
+  getCloudFrontConfig,
+  resolveBuildInfo,
+  resolveTitleTiming,
+  sanitizeModelSpecs,
+  isFileSnapshotEnabled,
+} = require('@librechat/api');
+const { EModelEndpoint, defaultSocialLogins } = require('librechat-data-provider');
 const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-schemas');
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { getLdapConfig } = require('~/server/services/Config/ldap');
+const { getRumConfig } = require('~/server/services/Config/rum');
 const { getAppConfig } = require('~/server/services/Config/app');
 // [knauf] Load consent-gated OneTrust and Adobe Analytics config from a Knauf-only helper. (NO-TICKET)
 const { getKnaufAnalyticsConfig } = require('~/server/routes/knauf/analyticsConfig');
@@ -26,15 +35,29 @@ const publicSharedLinksEnabled =
 const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILEPICKER);
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
 
+/**
+ * Resolve build metadata eagerly at module load so the first `/api/config`
+ * request does not pay the cost of `execFileSync('git', ...)` on the hot path.
+ * The resolver caches its result after the first call.
+ */
+resolveBuildInfo();
+
 function isBirthday() {
   const today = new Date();
   return today.getMonth() === 1 && today.getDate() === 11;
 }
 
-function buildSharedPayload() {
+/**
+ * Pre-login fields rendered by the unauthenticated login, registration, password-reset,
+ * and email-verification pages. Any field added here is readable by anonymous callers
+ * of `GET /api/config`, so keep this set strictly to what those pages need.
+ *
+ * See client consumers under `client/src/components/Auth/` and `client/src/routes/Layouts/Startup.tsx`.
+ */
+function buildPreLoginPayload() {
   const isOpenIdEnabled =
     !!process.env.OPENID_CLIENT_ID &&
-    !!process.env.OPENID_CLIENT_SECRET &&
+    (isEnabled(process.env.OPENID_USE_PKCE) || !!process.env.OPENID_CLIENT_SECRET?.trim()) &&
     !!process.env.OPENID_ISSUER &&
     !!process.env.OPENID_SESSION_SECRET;
 
@@ -83,21 +106,6 @@ function buildSharedPayload() {
       !!process.env.EMAIL_PASSWORD &&
       !!process.env.EMAIL_FROM,
     passwordResetEnabled,
-    showBirthdayIcon:
-      isBirthday() ||
-      isEnabled(process.env.SHOW_BIRTHDAY_ICON) ||
-      process.env.SHOW_BIRTHDAY_ICON === '',
-    // [knauf] Hide Help & FAQ unless deployments provide a Knauf-owned URL. (NO-TICKET)
-    helpAndFaqURL: process.env.HELP_AND_FAQ_URL || '/',
-    // End [knauf]
-    sharedLinksEnabled,
-    publicSharedLinksEnabled,
-    analyticsGtmId: knaufAnalyticsConfig ? undefined : process.env.ANALYTICS_GTM_ID,
-    openidReuseTokens,
-    /** Read inline (not module-level) for per-request evaluation and test isolation */
-    allowAccountDeletion:
-      process.env.ALLOW_ACCOUNT_DELETION === undefined ||
-      isEnabled(process.env.ALLOW_ACCOUNT_DELETION),
   };
 
   const minPasswordLength = parseInt(process.env.MIN_PASSWORD_LENGTH, 10);
@@ -109,13 +117,10 @@ function buildSharedPayload() {
     payload.ldap = ldap;
   }
 
-  // [knauf] Default the chat footer to the Agentic Karl brand so deployments without
-  // CUSTOM_FOOTER do not fall back to the upstream marketing link. (NO-TICKET)
-  payload.customFooter =
-    typeof process.env.CUSTOM_FOOTER === 'string'
-      ? process.env.CUSTOM_FOOTER
-      : 'Agentic Karl | Knauf AI Platform';
-  // End [knauf]
+  // [knauf] customFooter is intentionally NOT set here: upstream v0.8.6 (#12688) treats it as
+  // authenticated/share-only, so it lives in buildPublicSharePayload (with the Knauf brand
+  // default). The unauthenticated login screen brands the footer via the client-side
+  // KNAUF_FOOTER_FALLBACK in Footer.tsx. End [knauf]
 
   // [knauf] Expose post-login OneTrust/Adobe Analytics + Datadog config under a namespaced key. (NO-TICKET, KK20-186)
   if (knaufAnalyticsConfig || knaufDatadogConfig) {
@@ -127,6 +132,79 @@ function buildSharedPayload() {
   // End [knauf]
 
   return payload;
+}
+
+/**
+ * Fields shared by authenticated chat and share-view config. Anonymous share
+ * views receive these through `/api/share/:shareId/config` after share access
+ * checks, not through the generic startup config endpoint.
+ */
+function buildPublicSharePayload() {
+  // [knauf] Resolve Knauf analytics so the legacy GTM id is suppressed when Knauf
+  // analytics is configured — mirrors the pre-login payload behaviour. (NO-TICKET)
+  const knaufAnalyticsConfig = getKnaufAnalyticsConfig();
+  // End [knauf]
+  /** @type {Partial<TStartupConfig>} */
+  const payload = {
+    // [knauf] Suppress the legacy GTM id when Knauf analytics is configured. (NO-TICKET)
+    analyticsGtmId: knaufAnalyticsConfig ? undefined : process.env.ANALYTICS_GTM_ID,
+    // End [knauf]
+  };
+
+  // [knauf] Default the chat footer to the Agentic Karl brand for authenticated/share
+  // views when deployments don't set CUSTOM_FOOTER, instead of the upstream marketing
+  // link. (NO-TICKET; relocated here from the pre-login payload per upstream #12688.)
+  payload.customFooter =
+    typeof process.env.CUSTOM_FOOTER === 'string'
+      ? process.env.CUSTOM_FOOTER
+      : 'Agentic Karl | Knauf AI Platform';
+  // End [knauf]
+
+  return payload;
+}
+
+/**
+ * Post-login fields appended only when `req.user` is present. These describe the
+ * authenticated UX (account-settings links, share-link feature flags, birthday icon,
+ * openid token-reuse marker) and are not needed on the pre-login screens, so they
+ * are not exposed to unauthenticated callers.
+ */
+function buildPostLoginPayload() {
+  /** @type {Partial<TStartupConfig>} */
+  const payload = {
+    showBirthdayIcon:
+      isBirthday() ||
+      isEnabled(process.env.SHOW_BIRTHDAY_ICON) ||
+      process.env.SHOW_BIRTHDAY_ICON === '',
+    // [knauf] Hide Help & FAQ unless deployments provide a Knauf-owned URL. (NO-TICKET)
+    helpAndFaqURL: process.env.HELP_AND_FAQ_URL || '/',
+    // End [knauf]
+    sharedLinksEnabled,
+    publicSharedLinksEnabled,
+    openidReuseTokens,
+    /** Read inline (not module-level) for per-request evaluation and test isolation */
+    allowAccountDeletion:
+      process.env.ALLOW_ACCOUNT_DELETION === undefined ||
+      isEnabled(process.env.ALLOW_ACCOUNT_DELETION),
+  };
+
+  return payload;
+}
+
+function buildBuildInfoPayload(interfaceConfig) {
+  if (interfaceConfig?.buildInfo === false) {
+    return undefined;
+  }
+  const info = resolveBuildInfo();
+  if (!info.commit && !info.branch && !info.buildDate) {
+    return undefined;
+  }
+  return {
+    commit: info.commit,
+    commitShort: info.commitShort,
+    branch: info.branch,
+    buildDate: info.buildDate,
+  };
 }
 
 function buildWebSearchConfig(appConfig) {
@@ -145,9 +223,31 @@ function buildWebSearchConfig(appConfig) {
   };
 }
 
+function buildCloudFrontStartupConfig() {
+  const config = getCloudFrontConfig();
+  if (
+    config?.imageSigning !== 'cookies' ||
+    !config.domain ||
+    !config.cookieDomain ||
+    !config.privateKey ||
+    !config.keyPairId
+  ) {
+    return undefined;
+  }
+
+  return {
+    cookieRefresh: {
+      endpoint: '/api/auth/cloudfront/refresh',
+      domain: config.domain,
+    },
+  };
+}
+
 router.get('/', async function (req, res) {
   try {
-    const sharedPayload = buildSharedPayload();
+    const preLoginPayload = buildPreLoginPayload();
+    const publicSharePayload = buildPublicSharePayload();
+    const rum = getRumConfig();
 
     if (!req.user) {
       const tenantId = getTenantId();
@@ -155,13 +255,15 @@ router.get('/', async function (req, res) {
 
       /** @type {Partial<TStartupConfig>} */
       const payload = {
-        ...sharedPayload,
+        ...preLoginPayload,
         socialLogins: baseConfig?.registration?.socialLogins ?? defaultSocialLogins,
         turnstile: baseConfig?.turnstileConfig,
+        ...(rum ? { rum } : {}),
       };
 
       const interfaceConfig = baseConfig?.interfaceConfig;
-      if (interfaceConfig?.privacyPolicy || interfaceConfig?.termsOfService) {
+      const buildInfoDisabled = interfaceConfig?.buildInfo === false;
+      if (interfaceConfig?.privacyPolicy || interfaceConfig?.termsOfService || buildInfoDisabled) {
         payload.interface = {};
         if (interfaceConfig.privacyPolicy) {
           payload.interface.privacyPolicy = interfaceConfig.privacyPolicy;
@@ -169,6 +271,14 @@ router.get('/', async function (req, res) {
         if (interfaceConfig.termsOfService) {
           payload.interface.termsOfService = interfaceConfig.termsOfService;
         }
+        if (buildInfoDisabled) {
+          payload.interface.buildInfo = false;
+        }
+      }
+
+      const unauthBuildInfo = buildBuildInfoPayload(interfaceConfig);
+      if (unauthBuildInfo) {
+        payload.buildInfo = unauthBuildInfo;
       }
 
       return res.status(200).send(payload);
@@ -181,14 +291,22 @@ router.get('/', async function (req, res) {
     });
 
     const balanceConfig = getBalanceConfig(appConfig);
+    const cloudFront = buildCloudFrontStartupConfig();
 
     /** @type {TStartupConfig} */
     const payload = {
-      ...sharedPayload,
+      ...preLoginPayload,
+      ...publicSharePayload,
+      ...buildPostLoginPayload(),
+      sharedLinksSnapshotFilesEnabled: sharedLinksEnabled && isFileSnapshotEnabled(appConfig),
       socialLogins: appConfig?.registration?.socialLogins ?? defaultSocialLogins,
       interface: appConfig?.interfaceConfig,
+      titleGenerationTiming: resolveTitleTiming({
+        appConfig,
+        endpoint: EModelEndpoint.agents,
+      }),
       turnstile: appConfig?.turnstileConfig,
-      modelSpecs: appConfig?.modelSpecs,
+      modelSpecs: sanitizeModelSpecs(appConfig?.modelSpecs),
       balance: balanceConfig,
       bundlerURL: process.env.SANDPACK_BUNDLER_URL,
       staticBundlerURL: process.env.SANDPACK_STATIC_BUNDLER_URL,
@@ -199,11 +317,18 @@ router.get('/', async function (req, res) {
       conversationImportMaxFileSize: process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES
         ? parseInt(process.env.CONVERSATION_IMPORT_MAX_FILE_SIZE_BYTES, 10)
         : 0,
+      ...(cloudFront ? { cloudFront } : {}),
+      ...(rum ? { rum } : {}),
     };
 
     const webSearch = buildWebSearchConfig(appConfig);
     if (webSearch) {
       payload.webSearch = webSearch;
+    }
+
+    const buildInfo = buildBuildInfoPayload(appConfig?.interfaceConfig);
+    if (buildInfo) {
+      payload.buildInfo = buildInfo;
     }
 
     if (!payload.allowAccountDeletion) {

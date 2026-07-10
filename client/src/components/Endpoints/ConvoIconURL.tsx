@@ -1,5 +1,4 @@
 import { memo, useMemo } from 'react';
-import type { IconMapProps } from '~/common';
 import { URLIcon } from '~/components/Endpoints/URLIcon';
 // [knauf] Render the wide Knauf wordmark as contained logo art, not a cropped photo avatar.
 import KnaufLogoAvatar from '~/knauf/components/Brand/KnaufLogoAvatar';

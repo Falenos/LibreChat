@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { EModelEndpoint } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
 import useTextarea from '~/hooks/Input/useTextarea';
 
@@ -18,6 +19,17 @@ jest.mock('recoil', () => ({
     return true;
   }),
   useRecoilState: jest.fn(() => [undefined, mockSetActivePrompt]),
+  // v0.8.7: useTextarea's dependency graph now calls useRecoilCallback +
+  // selectorFamily (both absent from the pre-v0.8.7 mock).
+  useRecoilCallback: jest.fn(() => jest.fn()),
+  selectorFamily: jest.fn(() => jest.fn()),
+}));
+
+// v0.8.7: useTextarea → useLatestMessage → useMessagesCacheSelect reads the query cache,
+// so the hook now needs a query client at render time.
+jest.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ getQueryData: jest.fn(() => []) }),
+  useQuery: () => ({ data: null }),
 }));
 
 jest.mock('~/store', () => ({
@@ -26,6 +38,10 @@ jest.mock('~/store', () => ({
     enterToSend: { key: 'enterToSend' },
     latestMessageFamily: jest.fn((index) => ({ key: `latestMessageFamily-${index}` })),
     activePromptByIndex: jest.fn((index) => ({ key: `activePromptByIndex-${index}` })),
+    // v0.8.7: useTextarea → useLatestMessage now reads these atoms/families too.
+    conversationIdByIndex: jest.fn((index) => ({ key: `conversationIdByIndex-${index}` })),
+    messagesSiblingIdxFamily: jest.fn((id) => ({ key: `messagesSiblingIdxFamily-${id}` })),
+    customShortcuts: { key: 'customShortcuts' },
   },
 }));
 
@@ -121,7 +137,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('uses Karl for the default Karl model-spec chat', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
       spec: 'karl',
     });
@@ -131,7 +147,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('uses Karl for Karl personality model-spec chats', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
       spec: 'karl-personality-balanced',
     });
@@ -141,7 +157,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
 
   it('does not infer Karl from runtime model names without a stored spec', () => {
     const textarea = renderUseTextarea({
-      endpoint: 'azureOpenAI',
+      endpoint: EModelEndpoint.azureOpenAI,
       model: 'gpt-5.4',
     });
 
@@ -157,7 +173,7 @@ describe('useTextarea — Knauf composer placeholder', () => {
     });
 
     const textarea = renderUseTextarea({
-      endpoint: 'agents',
+      endpoint: EModelEndpoint.agents,
       agent_id: 'agent-1',
       model: 'gpt-5.4',
       spec: 'karl',

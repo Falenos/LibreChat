@@ -1,12 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import { useSetRecoilState } from 'recoil';
 import { Tools, Constants, LocalStorageKeys, AgentCapabilities } from 'librechat-data-provider';
-import type { TAgentsEndpoint } from 'librechat-data-provider';
+import type { TAgentsEndpoint, TEphemeralAgent } from 'librechat-data-provider';
 import {
   useMCPServerManager,
   useSearchApiKeyForm,
   useGetAgentsConfig,
-  useCodeApiKeyForm,
   useToolToggle,
 } from '~/hooks';
 import { getTimestampedValue } from '~/utils/timestamps';
@@ -23,11 +22,11 @@ interface BadgeRowContextType {
   // as a prop; this just adds it to the consumer surface.
   specName?: string | null;
   // End [knauf]
+  skills: ReturnType<typeof useToolToggle>;
   webSearch: ReturnType<typeof useToolToggle>;
   artifacts: ReturnType<typeof useToolToggle>;
   fileSearch: ReturnType<typeof useToolToggle>;
   codeInterpreter: ReturnType<typeof useToolToggle>;
-  codeApiKeyForm: ReturnType<typeof useCodeApiKeyForm>;
   searchApiKeyForm: ReturnType<typeof useSearchApiKeyForm>;
   mcpServerManager: ReturnType<typeof useMCPServerManager>;
 }
@@ -106,13 +105,15 @@ export default function BadgeRowProvider({
       const webSearchToggleKey = `${LocalStorageKeys.LAST_WEB_SEARCH_TOGGLE_}${storageSuffix}`;
       const fileSearchToggleKey = `${LocalStorageKeys.LAST_FILE_SEARCH_TOGGLE_}${storageSuffix}`;
       const artifactsToggleKey = `${LocalStorageKeys.LAST_ARTIFACTS_TOGGLE_}${storageSuffix}`;
+      const skillsToggleKey = `${LocalStorageKeys.LAST_SKILLS_TOGGLE_}${storageSuffix}`;
 
       const codeToggleValue = getTimestampedValue(codeToggleKey);
       const webSearchToggleValue = getTimestampedValue(webSearchToggleKey);
       const fileSearchToggleValue = getTimestampedValue(fileSearchToggleKey);
       const artifactsToggleValue = getTimestampedValue(artifactsToggleKey);
+      const skillsToggleValue = getTimestampedValue(skillsToggleKey);
 
-      const initialValues: Record<string, any> = {};
+      const initialValues: Record<string, boolean | string> = {};
 
       if (codeToggleValue !== null) {
         try {
@@ -146,6 +147,14 @@ export default function BadgeRowProvider({
         }
       }
 
+      if (skillsToggleValue !== null) {
+        try {
+          initialValues[AgentCapabilities.skills] = JSON.parse(skillsToggleValue);
+        } catch (e) {
+          console.error('Failed to parse skills toggle value:', e);
+        }
+      }
+
       const hasOverrides = Object.keys(initialValues).length > 0;
 
       /** Read persisted MCP values from localStorage */
@@ -167,7 +176,7 @@ export default function BadgeRowProvider({
         if (prev == null) {
           /** ephemeralAgent is null — use localStorage defaults */
           if (hasOverrides || mcpOverrides) {
-            const result = { ...initialValues };
+            const result: TEphemeralAgent = { ...initialValues };
             if (mcpOverrides) {
               result.mcp = mcpOverrides;
             }
@@ -194,20 +203,14 @@ export default function BadgeRowProvider({
     }
   }, [storageSuffix, specName, isSubmitting, setEphemeralAgent]);
 
-  /** CodeInterpreter hooks */
-  const codeApiKeyForm = useCodeApiKeyForm({});
-  const { setIsDialogOpen: setCodeDialogOpen } = codeApiKeyForm;
-
+  /** CodeInterpreter hook — sandbox auth is handled server-side by the
+   *  agents library, so the toggle no longer has an auth dialog gate. */
   const codeInterpreter = useToolToggle({
     conversationId,
     storageContextKey,
-    setIsDialogOpen: setCodeDialogOpen,
     toolKey: Tools.execute_code,
     localStorageKey: LocalStorageKeys.LAST_CODE_TOGGLE_,
-    authConfig: {
-      toolId: Tools.execute_code,
-      queryOptions: { retry: 1 },
-    },
+    isAuthenticated: true,
   });
 
   /** WebSearch hooks */
@@ -244,16 +247,25 @@ export default function BadgeRowProvider({
     isAuthenticated: true,
   });
 
+  /** Skills hook - using a custom key since it's not a Tool but a capability */
+  const skills = useToolToggle({
+    conversationId,
+    storageContextKey,
+    toolKey: AgentCapabilities.skills,
+    localStorageKey: LocalStorageKeys.LAST_SKILLS_TOGGLE_,
+    isAuthenticated: true,
+  });
+
   const mcpServerManager = useMCPServerManager({ conversationId, storageContextKey });
 
   const value: BadgeRowContextType = {
+    skills,
     webSearch,
     artifacts,
     fileSearch,
     agentsConfig,
     conversationId,
     storageContextKey,
-    codeApiKeyForm,
     codeInterpreter,
     searchApiKeyForm,
     mcpServerManager,

@@ -7,6 +7,9 @@ const express = require('express');
 const request = require('supertest');
 
 jest.mock('@librechat/api', () => ({
+  // v0.8.7: strategies.js (loaded via the share route) now instantiates ImageService and
+  // other @librechat/api exports, so spread the real module instead of a minimal stub.
+  ...jest.requireActual('@librechat/api'),
   isEnabled: (v) => v === undefined || v === true || v === 'true',
 }));
 
@@ -34,6 +37,16 @@ jest.mock('~/server/middleware/requireJwtAuth', () => (req, res, next) => {
   next();
 });
 
+// v0.8.7 added these middleware to the shared-conversation GET routes. Mock them as
+// passthroughs; canAccessSharedLink populates req.shareResourceId (read by getSharedMessages).
+jest.mock('~/server/middleware/optionalJwtAuth', () => (req, res, next) => next());
+jest.mock('~/server/middleware/optionalShareFileAuth', () => (req, res, next) => next());
+jest.mock('~/server/middleware/canAccessSharedLink', () => (req, res, next) => {
+  req.shareResourceId = 'share-resource-id';
+  next();
+});
+jest.mock('~/server/middleware/config/app', () => (req, res, next) => next());
+
 jest.mock('~/server/services/Files/Azure/crud', () => ({
   needsRefreshAzure: jest.fn(),
   getNewAzureURL: jest.fn(),
@@ -60,8 +73,10 @@ function buildApp() {
 }
 
 describe('GET /api/share/:shareId — KK20-182 SAS refresh', () => {
-  const STALE = 'https://acct.blob.core.windows.net/files/images/u/x?sig=OLD&se=2026-01-01T00:00:00Z';
-  const FRESH = 'https://acct.blob.core.windows.net/files/images/u/x?sig=NEW&se=2099-01-01T00:00:00Z';
+  const STALE =
+    'https://acct.blob.core.windows.net/files/images/u/x?sig=OLD&se=2026-01-01T00:00:00Z';
+  const FRESH =
+    'https://acct.blob.core.windows.net/files/images/u/x?sig=NEW&se=2099-01-01T00:00:00Z';
 
   beforeEach(() => {
     jest.clearAllMocks();

@@ -33,6 +33,8 @@ jest.mock('@librechat/api', () => ({
   getBalanceConfig: jest.fn(() => ({ enabled: false })),
   getTransactionsConfig: jest.fn(() => ({ enabled: true })),
   // End [knauf]
+  getProxyDispatcher: jest.fn(() => undefined),
+  applyAxiosProxyConfig: jest.fn(),
 }));
 
 jest.mock('~/server/services/Files/strategies', () => ({

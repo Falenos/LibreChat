@@ -5,6 +5,9 @@ import type { MemoryArtifact } from 'librechat-data-provider';
 import { createMemoryTool, processMemory } from '../memory';
 
 // Mock the logger
+// `winston.format` must be a callable factory (real winston returns a Format
+// constructor) so that `@librechat/data-schemas` dist code can complete its
+// module-load — see api/test/__mocks__/logger.js for the canonical shape.
 jest.mock('winston', () => ({
   createLogger: jest.fn(() => ({
     debug: jest.fn(),
@@ -411,6 +414,7 @@ describe('processMemory - GPT-5+ handling', () => {
           llmConfig: expect.objectContaining({
             model: 'gpt-4.1-mini',
             temperature: 0.4, // Default temperature should remain
+            maxRetries: 0,
           }),
         }),
       }),

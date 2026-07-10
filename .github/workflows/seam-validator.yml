@@ -44,6 +44,11 @@ jobs:
 
       - name: Untagged upstream modifications check
         id: diffcheck
+        # Skip on the upstream-sync integration PR (chore/upstream-* -> main): its base
+        # (main) predates the upstream merge, so diff-check would flag the entire upstream
+        # delta as "unmarked". The marker rule only makes sense for normal PRs, where the
+        # base already contains the upstream merge. Manifest `check` above still runs.
+        if: ${{ !startsWith(github.head_ref, 'chore/upstream-') }}
         run: |
           set -euo pipefail
           BASE_SHA="${{ github.event.pull_request.base.sha }}"

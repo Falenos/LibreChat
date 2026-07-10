@@ -4,15 +4,22 @@ import { useForm } from 'react-hook-form';
 import { Spinner } from '@librechat/client';
 import { useParams } from 'react-router-dom';
 import { Constants, buildTree } from 'librechat-data-provider';
-import type { TMessage } from 'librechat-data-provider';
+import type { TChatProject, TMessage } from 'librechat-data-provider';
 import type { ChatFormValues } from '~/common';
+import {
+  useAddedResponse,
+  useResumeOnLoad,
+  useAdaptiveSSE,
+  useChatHelpers,
+  useLocalize,
+} from '~/hooks';
 import { ChatContext, AddedChatContext, ChatFormProvider, useFileMapContext } from '~/Providers';
-import { useAddedResponse, useResumeOnLoad, useAdaptiveSSE, useChatHelpers } from '~/hooks';
 import ConversationStarters from './Input/ConversationStarters';
 import { useGetMessagesByConvoId } from '~/data-provider';
 // [knauf] Conversation-scoped transaction cost state for message chrome and composer totals.
 import { KnaufChatCostProvider } from '~/knauf/components/Chat/KnaufCostContext';
 // End [knauf]
+import ProjectLandingChip from './ProjectLandingChip';
 import MessagesView from './Messages/MessagesView';
 import Presentation from './Presentation';
 import ChatForm from './Input/ChatForm';
@@ -32,9 +39,11 @@ function LoadingSpinner() {
   );
 }
 
-function ChatView({ index = 0 }: { index?: number }) {
+function ChatView({ index = 0, project }: { index?: number; project?: TChatProject }) {
   const { conversationId } = useParams();
+  const localize = useLocalize();
   const rootSubmission = useRecoilValue(store.submissionByIndex(index));
+  const isSubmitting = useRecoilValue(store.isSubmittingFamily(index));
   const centerFormOnLanding = useRecoilValue(store.centerFormOnLanding);
 
   const methods = useForm<ChatFormValues>({
@@ -43,16 +52,20 @@ function ChatView({ index = 0 }: { index?: number }) {
 
   const fileMap = useFileMapContext();
 
-  const { data: messagesTree = null, isLoading } = useGetMessagesByConvoId(conversationId ?? '', {
-    select: useCallback(
-      (data: TMessage[]) => {
-        const dataTree = buildTree({ messages: data, fileMap });
-        return dataTree?.length === 0 ? null : (dataTree ?? null);
-      },
-      [fileMap],
-    ),
-    enabled: !!fileMap,
-  });
+  const { data: messagesTree = null, isLoading } = useGetMessagesByConvoId(
+    conversationId ?? '',
+    {
+      select: useCallback(
+        (data: TMessage[]) => {
+          const dataTree = buildTree({ messages: data, fileMap });
+          return dataTree?.length === 0 ? null : (dataTree ?? null);
+        },
+        [fileMap],
+      ),
+      enabled: !!fileMap,
+    },
+    { isStreaming: isSubmitting },
+  );
 
   const chatHelpers = useChatHelpers(index, conversationId);
   const addedChatHelpers = useAddedResponse();
@@ -68,6 +81,7 @@ function ChatView({ index = 0 }: { index?: number }) {
     (!messagesTree || messagesTree.length === 0) &&
     (conversationId === Constants.NEW_CONVO || !conversationId);
   const isNavigating = (!messagesTree || messagesTree.length === 0) && conversationId != null;
+  const isProjectLandingPage = isLandingPage && project != null;
 
   if (isLoading && conversationId !== Constants.NEW_CONVO) {
     content = <LoadingSpinner />;
@@ -78,6 +92,11 @@ function ChatView({ index = 0 }: { index?: number }) {
   } else {
     content = <Landing centerFormOnLanding={centerFormOnLanding} />;
   }
+
+  const chatFormPlaceholder =
+    isProjectLandingPage && project
+      ? localize('com_ui_new_chat_in_project', { name: project.name })
+      : undefined;
 
   return (
     <ChatFormProvider {...methods}>
@@ -98,15 +117,19 @@ function ChatView({ index = 0 }: { index?: number }) {
                     )}
                   >
                     {content}
+                    {/* [knauf] Keep the composer wrapped for landing-page centering; fold in
+                        upstream's project-landing chip + ChatForm placeholder. */}
+                    {isProjectLandingPage && project && <ProjectLandingChip project={project} />}
                     <div
                       className={cn(
                         'w-full',
                         isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
                       )}
                     >
-                      <ChatForm index={index} />
+                      <ChatForm index={index} placeholder={chatFormPlaceholder} />
                       {isLandingPage ? <ConversationStarters /> : <Footer />}
                     </div>
+                    {/* End [knauf] */}
                   </div>
                   {isLandingPage && <Footer />}
                 </>

@@ -1,8 +1,4 @@
-import {
-  WebSearchToolDefinition,
-  CalculatorToolDefinition,
-  CodeExecutionToolDefinition,
-} from '@librechat/agents';
+import { WebSearchToolDefinition, CalculatorToolDefinition } from '@librechat/agents';
 import { geminiToolkit } from '~/tools/toolkits/gemini';
 import { oaiToolkit } from '~/tools/toolkits/oai';
 
@@ -385,7 +381,7 @@ export const openUrlSchema: ExtendedJsonSchema = {
   required: ['url'],
 };
 
-export const openUrlDescription =
+export const openUrlDescription: string =
   'Open a specific http(s) URL and return its main readable text. ' +
   'When the user provides or pastes a specific URL, or asks you to read, open, or summarize a page, you MUST call open_url on that exact URL. ' +
   'Do NOT substitute web_search results for the contents of a specifically named page, and never guess or recall page contents from memory — web_search is for open-ended discovery, open_url is the authoritative source for a named page. ' +
@@ -500,18 +496,22 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   // End [knauf]
 };
 
-/** Tool definitions from @librechat/agents */
+/**
+ * Tool definitions from @librechat/agents.
+ *
+ * `CodeExecutionToolDefinition` (the legacy `execute_code` tool) is
+ * intentionally absent — the `execute_code` capability now expands into
+ * the skill-flavored `bash_tool` + `read_file` pair, registered at
+ * initialize-time by `registerCodeExecutionTools`. Agents whose `tools`
+ * array contains the literal string `execute_code` continue to work:
+ * the capability gate still filters on that string, and the runtime
+ * registers the tool pair on match.
+ */
 const agentToolDefinitions: Record<string, ToolRegistryDefinition> = {
   [CalculatorToolDefinition.name]: {
     name: CalculatorToolDefinition.name,
     description: CalculatorToolDefinition.description,
     schema: CalculatorToolDefinition.schema as unknown as ExtendedJsonSchema,
-    toolType: 'builtin',
-  },
-  [CodeExecutionToolDefinition.name]: {
-    name: CodeExecutionToolDefinition.name,
-    description: CodeExecutionToolDefinition.description,
-    schema: CodeExecutionToolDefinition.schema as unknown as ExtendedJsonSchema,
     toolType: 'builtin',
   },
   [WebSearchToolDefinition.name]: {

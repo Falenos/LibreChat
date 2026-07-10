@@ -25,6 +25,12 @@ const configRoute = require('../config');
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
+  // [knauf] Brand fields (customFooter, helpAndFaqURL) are authenticated-only after the
+  // upstream v0.8.6 #12688 hardening, so exercise the authenticated /api/config path.
+  app.use((req, _res, next) => {
+    req.user = { id: 'u1', role: 'USER' };
+    next();
+  });
   app.use('/api/config', configRoute);
   return app;
 }

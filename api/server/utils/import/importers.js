@@ -4,6 +4,7 @@ const { EModelEndpoint, Constants, openAISettings } = require('librechat-data-pr
 const { getAppConfig, getEndpointsConfig } = require('~/server/services/Config');
 const { normalizeImportedSpecOptions } = require('~/server/knauf/modelSpec');
 const { createImportBatchBuilder } = require('./importBatchBuilder');
+const { resolveImportDefaultModel } = require('./defaults');
 const { cloneMessagesWithTimestamps } = require('./fork');
 
 /**
@@ -22,8 +23,11 @@ function getImporter(jsonData) {
       return importClaudeConvo;
     }
     // ChatGPT format has mapping object in each conversation
-    logger.info('Importing ChatGPT conversation');
-    return importChatGptConvo;
+    if (jsonData.length === 0 || jsonData[0]?.mapping) {
+      logger.info('Importing ChatGPT conversation');
+      return importChatGptConvo;
+    }
+    throw new Error('Unsupported import type');
   }
 
   // For ChatbotUI
@@ -54,11 +58,17 @@ async function importChatBotUiConvo(
   jsonData,
   requestUserId,
   builderFactory = createImportBatchBuilder,
+  userRole,
 ) {
   // this have been tested with chatbot-ui V1 export https://github.com/mckaywrigley/chatbot-ui/tree/b865b0555f53957e96727bc0bbb369c9eaecd83b#legacy-code
   try {
     /** @type {ImportBatchBuilder} */
     const importBatchBuilder = builderFactory(requestUserId);
+    const defaultModel = await resolveImportDefaultModel({
+      endpoint: EModelEndpoint.openAI,
+      requestUserId,
+      userRole,
+    });
 
     for (const historyItem of jsonData.history) {
       importBatchBuilder.startConversation(EModelEndpoint.openAI);
@@ -69,12 +79,13 @@ async function importChatBotUiConvo(
           importBatchBuilder.addUserMessage(message.content);
         }
       }
-      importBatchBuilder.finishConversation(historyItem.name, new Date());
+      importBatchBuilder.finishConversation(historyItem.name, new Date(), {}, defaultModel);
     }
     await importBatchBuilder.saveBatch();
     logger.info(`user: ${requestUserId} | ChatbotUI conversation imported`);
   } catch (error) {
     logger.error(`user: ${requestUserId} | Error creating conversation from ChatbotUI file`, error);
+    throw error;
   }
 }
 
@@ -116,9 +127,15 @@ async function importClaudeConvo(
   jsonData,
   requestUserId,
   builderFactory = createImportBatchBuilder,
+  userRole,
 ) {
   try {
     const importBatchBuilder = builderFactory(requestUserId);
+    const defaultModel = await resolveImportDefaultModel({
+      endpoint: EModelEndpoint.anthropic,
+      requestUserId,
+      userRole,
+    });
 
     for (const conv of jsonData) {
       importBatchBuilder.startConversation(EModelEndpoint.anthropic);
@@ -173,13 +190,19 @@ async function importClaudeConvo(
       }
 
       const createdAt = conv.created_at ? new Date(conv.created_at) : new Date();
-      importBatchBuilder.finishConversation(conv.name || 'Imported Claude Chat', createdAt);
+      importBatchBuilder.finishConversation(
+        conv.name || 'Imported Claude Chat',
+        createdAt,
+        {},
+        defaultModel,
+      );
     }
 
     await importBatchBuilder.saveBatch();
     logger.info(`user: ${requestUserId} | Claude conversation imported`);
   } catch (error) {
     logger.error(`user: ${requestUserId} | Error creating conversation from Claude file`, error);
+    throw error;
   }
 }
 
@@ -233,6 +256,12 @@ async function importLibreChatConvo(
     }
 
     importBatchBuilder.startConversation(endpoint);
+
+    const defaultModel = await resolveImportDefaultModel({
+      endpoint,
+      requestUserId,
+      userRole,
+    });
 
     let firstMessageDate = null;
 
@@ -295,6 +324,7 @@ async function importLibreChatConvo(
       jsonData.title,
       firstMessageDate ?? new Date(),
       options,
+      defaultModel,
       new Date(),
     );
     // End [knauf]
@@ -302,6 +332,7 @@ async function importLibreChatConvo(
     logger.debug(`user: ${requestUserId} | Conversation "${jsonData.title}" imported`);
   } catch (error) {
     logger.error(`user: ${requestUserId} | Error creating conversation from LibreChat file`, error);
+    throw error;
   }
 }
 
@@ -318,15 +349,22 @@ async function importChatGptConvo(
   jsonData,
   requestUserId,
   builderFactory = createImportBatchBuilder,
+  userRole,
 ) {
   try {
     const importBatchBuilder = builderFactory(requestUserId);
+    const defaultModel = await resolveImportDefaultModel({
+      endpoint: EModelEndpoint.openAI,
+      requestUserId,
+      userRole,
+    });
     for (const conv of jsonData) {
-      processConversation(conv, importBatchBuilder, requestUserId);
+      processConversation(conv, importBatchBuilder, requestUserId, defaultModel);
     }
     await importBatchBuilder.saveBatch();
   } catch (error) {
     logger.error(`user: ${requestUserId} | Error creating conversation from imported file`, error);
+    throw error;
   }
 }
 
@@ -337,15 +375,16 @@ async function importChatGptConvo(
  * @param {ChatGPTConvo} conv - A single conversation object that contains multiple messages and other details.
  * @param {ImportBatchBuilder} importBatchBuilder - The batch builder instance used to manage and batch conversation data.
  * @param {string} requestUserId - The ID of the user who initiated the import process.
+ * @param {string} [defaultModel] - Resolved default model for the openAI endpoint.
  * @returns {void}
  */
-function processConversation(conv, importBatchBuilder, requestUserId) {
+function processConversation(conv, importBatchBuilder, requestUserId, defaultModel) {
   importBatchBuilder.startConversation(EModelEndpoint.openAI);
 
   // Map all message IDs to new UUIDs
   const messageMap = new Map();
   for (const [id, mapping] of Object.entries(conv.mapping)) {
-    if (mapping.message && mapping.message.content.content_type) {
+    if (mapping.message?.content?.content_type) {
       const newMessageId = uuidv4();
       messageMap.set(id, newMessageId);
     }
@@ -457,13 +496,17 @@ function processConversation(conv, importBatchBuilder, requestUserId) {
     }
 
     const newMessageId = messageMap.get(id);
+    if (!newMessageId) {
+      continue;
+    }
     const parentMessageId = findValidParent(mapping.parent);
 
     const messageText = formatMessageText(mapping.message);
 
     const isCreatedByUser = role === 'user';
     let sender = isCreatedByUser ? 'user' : 'assistant';
-    const model = mapping.message.metadata.model_slug || openAISettings.model.default;
+    const model =
+      mapping.message.metadata?.model_slug || defaultModel || openAISettings.model.default;
 
     if (!isCreatedByUser) {
       /** Extracted model name from model slug */
@@ -513,7 +556,12 @@ function processConversation(conv, importBatchBuilder, requestUserId) {
     importBatchBuilder.saveMessage(message);
   }
 
-  importBatchBuilder.finishConversation(conv.title, new Date(conv.create_time * 1000));
+  importBatchBuilder.finishConversation(
+    conv.title,
+    new Date(conv.create_time * 1000),
+    {},
+    defaultModel,
+  );
 }
 
 /**
@@ -582,7 +630,7 @@ function formatMessageText(messageData) {
     messageText = `\`\`\`json\n${JSON.stringify(messageData.content, null, 2)}\n\`\`\``;
   }
 
-  if (isText && messageData.author.role !== 'user') {
+  if (isText && messageData.author?.role !== 'user') {
     messageText = processAssistantMessage(messageData, messageText);
   }
 

@@ -138,7 +138,7 @@ export default function useDragHelpers() {
         currentEndpoint,
         agent?.provider,
       );
-      const cfg = queryClient.getQueryData<t.FileConfig>([QueryKeys.fileConfig]);
+      const cfg = queryClient.getQueryData<t.TFileConfig>([QueryKeys.fileConfig]);
       if (cfg) {
         const mergedCfg = mergeFileConfig(cfg);
         const endpointCfg = getEndpointFileConfig({
@@ -184,7 +184,7 @@ export default function useDragHelpers() {
       // of the upstream capability-picker modal — see routeKnaufFileSearchDrop. KK20-190.
       const conv = conversationRef.current;
       const handledByKnauf = routeKnaufFileSearchDrop({
-        endpoint: conv?.endpoint,
+        endpoint: conv?.endpoint ?? undefined,
         useResponsesApi: conv?.useResponsesApi === true,
         fileSearchEnabled,
         fileSearchAllowedByAgent,

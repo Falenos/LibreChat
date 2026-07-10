@@ -1,8 +1,13 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { logger } = require('@librechat/data-schemas');
-const { ContentTypes } = require('librechat-data-provider');
-const { unescapeLaTeX, countTokens } = require('@librechat/api');
+const { ContentTypes, isAssistantsEndpoint } = require('librechat-data-provider');
+const {
+  unescapeLaTeX,
+  countTokens,
+  sendFeedbackScore,
+  traceIdForMessage,
+} = require('@librechat/api');
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const { requireJwtAuth, validateMessageReq } = require('~/server/middleware');
 // [knauf] KK20-182 — Re-sign Azure SAS URLs embedded in
@@ -281,7 +286,7 @@ router.post('/artifact/:messageId', async (req, res) => {
 router.get('/:conversationId', validateMessageReq, async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const messages = await db.getMessages({ conversationId }, '-_id -__v -user');
+    const messages = await db.getMessages({ conversationId, user: req.user.id }, '-_id -__v -user');
     // [knauf] KK20-182 — refresh Azure SAS URLs on the response payload.
     await refreshMessageAttachmentUrls(messages);
     // End [knauf]
@@ -294,7 +299,7 @@ router.get('/:conversationId', validateMessageReq, async (req, res) => {
 
 router.post('/:conversationId', validateMessageReq, async (req, res) => {
   try {
-    const message = req.body;
+    const message = { ...req.body, conversationId: req.params.conversationId };
     const reqCtx = {
       userId: req?.user?.id,
       isTemporary: req?.body?.isTemporary,
@@ -319,7 +324,10 @@ router.post('/:conversationId', validateMessageReq, async (req, res) => {
 router.get('/:conversationId/:messageId', validateMessageReq, async (req, res) => {
   try {
     const { conversationId, messageId } = req.params;
-    const message = await db.getMessages({ conversationId, messageId }, '-_id -__v -user');
+    const message = await db.getMessages(
+      { conversationId, messageId, user: req.user.id },
+      '-_id -__v -user',
+    );
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
@@ -349,7 +357,7 @@ router.put('/:conversationId/:messageId', validateMessageReq, async (req, res) =
     }
 
     const message = (
-      await db.getMessages({ conversationId, messageId }, 'content tokenCount')
+      await db.getMessages({ conversationId, messageId, user: req.user.id }, 'content tokenCount')
     )?.[0];
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
@@ -405,6 +413,25 @@ router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (re
       },
       { context: 'updateFeedback' },
     );
+
+    // Best-effort: Assistants messages do not have deterministic AgentRun traces.
+    if (!isAssistantsEndpoint(updatedMessage.endpoint)) {
+      sendFeedbackScore({
+        traceId: traceIdForMessage(messageId),
+        feedback: updatedMessage.feedback,
+        metadata: {
+          messageId: updatedMessage.messageId ?? messageId,
+          parentMessageId: updatedMessage.parentMessageId,
+          conversationId: updatedMessage.conversationId ?? conversationId,
+          sessionId: updatedMessage.conversationId ?? conversationId,
+          userId: req?.user?.id,
+          endpoint: updatedMessage.endpoint,
+          sender: updatedMessage.sender,
+          isCreatedByUser: updatedMessage.isCreatedByUser,
+          tokenCount: updatedMessage.tokenCount,
+        },
+      }).catch((err) => logger.error('[langfuse] feedback score failed:', err));
+    }
 
     res.json({
       messageId,

@@ -9,7 +9,7 @@ const avatarCache: Record<string, string> = {};
 const KNAUF_USER_AVATAR_BACKGROUND_COLORS = ['213A75'];
 // End [knauf]
 
-const useAvatar = (user: TUser | undefined) => {
+const useAvatar = (user: TUser | undefined): string => {
   return useMemo(() => {
     const { username, name } = user ?? {};
     const seed = name || username;

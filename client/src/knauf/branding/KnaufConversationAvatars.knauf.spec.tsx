@@ -7,6 +7,8 @@ import EndpointIcon from '~/components/Endpoints/EndpointIcon';
 jest.mock('librechat-data-provider', () => ({
   getEndpointField: jest.fn(() => undefined),
   isAssistantsEndpoint: jest.fn(() => false),
+  // v0.8.7: EndpointIcon (used by the conversation avatar) now calls isAgentsEndpoint.
+  isAgentsEndpoint: jest.fn(() => false),
 }));
 
 jest.mock('~/components/Endpoints/MinimalIcon', () => ({
@@ -23,6 +25,8 @@ jest.mock('~/hooks/Endpoint/Icons', () => ({
 jest.mock('~/utils', () => ({
   cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
   getIconEndpoint: jest.fn(({ endpoint }) => endpoint ?? 'azureOpenAI'),
+  // v0.8.7: EndpointIcon now resolves the agent avatar via getAgentAvatarUrl.
+  getAgentAvatarUrl: jest.fn(() => ''),
 }));
 
 describe('[knauf] conversation avatars', () => {

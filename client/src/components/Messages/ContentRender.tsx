@@ -75,6 +75,7 @@ function areContentRenderPropsEqual(prev: ContentRenderProps, next: ContentRende
     prevMsg.text === nextMsg.text &&
     prevMsg.error === nextMsg.error &&
     prevMsg.unfinished === nextMsg.unfinished &&
+    prevMsg.createdAt === nextMsg.createdAt &&
     prevMsg.depth === nextMsg.depth &&
     prevMsg.isCreatedByUser === nextMsg.isCreatedByUser &&
     (prevMsg.children?.length ?? 0) === (nextMsg.children?.length ?? 0) &&
@@ -86,7 +87,10 @@ function areContentRenderPropsEqual(prev: ContentRenderProps, next: ContentRende
     prevMsg.createdAt === nextMsg.createdAt &&
     prevMsg.updatedAt === nextMsg.updatedAt &&
     prevMsg.feedback?.rating === nextMsg.feedback?.rating &&
-    (prevMsg.attachments?.length ?? 0) === (nextMsg.attachments?.length ?? 0)
+    (prevMsg.attachments?.length ?? 0) === (nextMsg.attachments?.length ?? 0) &&
+    (prevMsg.manualSkills?.length ?? 0) === (nextMsg.manualSkills?.length ?? 0) &&
+    (prevMsg.alwaysAppliedSkills?.length ?? 0) === (nextMsg.alwaysAppliedSkills?.length ?? 0) &&
+    (prevMsg.quotes?.length ?? 0) === (nextMsg.quotes?.length ?? 0)
   );
 }
 
@@ -178,7 +182,7 @@ const ContentRender = memo(function ContentRender({
   };
 
   const conditionalClasses = {
-    focus: 'focus:outline-none focus:ring-2 focus:ring-border-xheavy',
+    focus: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy',
   };
 
   return (
@@ -234,10 +238,12 @@ const ContentRender = memo(function ContentRender({
               messageId={msg.messageId}
               attachments={attachments}
               searchResults={searchResults}
+              manualSkills={msg.manualSkills}
               setSiblingIdx={setSiblingIdx}
               isLatestMessage={isLatestMessage}
               isSubmitting={isSubmitting}
               isCreatedByUser={msg.isCreatedByUser}
+              createdAt={msg.createdAt ?? msg.clientTimestamp}
               conversationId={conversation?.conversationId}
               content={msg.content as Array<TMessageContentParts | undefined>}
             />

@@ -32,6 +32,7 @@ import WebSearch from './WebSearch';
 // the matching `[knauf]` block below.
 import KnaufImageGenTools from '~/knauf/components/Chat/KnaufImageGenTools';
 // End [knauf]
+import Skills from './Skills';
 import store from '~/store';
 
 interface BadgeRowProps {
@@ -393,6 +394,7 @@ function BadgeRow({
             <KnaufImageGenTools agentId={null} conversationId={conversationId} spec={specName} />
             {/* End [knauf] */}
             <CodeInterpreter />
+            <Skills />
             <Artifacts />
             <MCPSelect />
           </>

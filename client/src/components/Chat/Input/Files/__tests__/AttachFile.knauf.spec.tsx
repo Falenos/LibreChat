@@ -1,6 +1,7 @@
 // [knauf] Seam test for the Adobe data-layer app_interaction event emitted
 // by the simple chat attachment fallback.
 import React from 'react';
+import { RecoilRoot } from 'recoil';
 import { fireEvent, render, screen } from '@testing-library/react';
 import AttachFile from '../AttachFile';
 // End [knauf]
@@ -46,12 +47,16 @@ describe('[knauf] AttachFile analytics', () => {
 
   it('dispatches an app_interaction when a local chat file is selected', () => {
     render(
-      <AttachFile
-        files={new Map()}
-        setFiles={() => {}}
-        setFilesLoading={() => {}}
-        conversation={null}
-      />,
+      // v0.8.7: AttachFile now resolves a keyboard-shortcut hint via
+      // useShortcutDisplay, which reads a real store atom — needs a RecoilRoot.
+      <RecoilRoot>
+        <AttachFile
+          files={new Map()}
+          setFiles={() => {}}
+          setFilesLoading={() => {}}
+          conversation={null}
+        />
+      </RecoilRoot>,
     );
 
     fireEvent.change(screen.getByTestId('file-input'), {

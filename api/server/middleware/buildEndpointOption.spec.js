@@ -31,12 +31,15 @@ jest.mock('~/server/services/Endpoints/assistants', () => ({
   buildOptions: mockBuildOptions,
 }));
 jest.mock('~/server/services/Endpoints/agents', () => ({
+  // [knauf] Knauf's mockBuildOptions handles both the (endpoint, body) and
+  // (req, endpoint, body) call shapes, so the agents endpoint reuses it.
   buildOptions: mockBuildOptions,
 }));
 
 jest.mock('~/models', () => ({
   updateFilesUsage: jest.fn(),
 }));
+const { updateFilesUsage } = require('~/models');
 
 const mockGetEndpointsConfig = jest.fn();
 jest.mock('~/server/services/Config', () => ({
@@ -44,6 +47,7 @@ jest.mock('~/server/services/Config', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  ...jest.requireActual('@librechat/api'),
   handleError: jest.fn(),
 }));
 
@@ -189,6 +193,9 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
         endpointType: EModelEndpoint.custom,
         spec: 'claude-opus-4.5',
         model: 'anthropic/claude-opus-4.5',
+        temperature: 0.1,
+        topP: 0.2,
+        chatProjectId: 'project-1',
       },
       {
         modelSpecs: {
@@ -197,6 +204,7 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
         },
       },
     );
+    req.baseUrl = '/api/agents/chat';
 
     await buildEndpointOption(req, createRes(), jest.fn());
 
@@ -210,7 +218,50 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
     const enforcedResult = parseCompactConvo.mock.results[1].value;
     expect(enforcedResult.maxOutputTokens).toBe(8192);
     expect(enforcedResult.temperature).toBe(0.7);
+    expect(enforcedResult.topP).toBeUndefined();
     expect(enforcedResult.maxContextTokens).toBe(50000);
+    expect(enforcedResult.chatProjectId).toBe('project-1');
+    expect(req.body.endpointOption.chatProjectId).toBe('project-1');
+  });
+
+  it('should rebuild enforced custom specs from the backend preset when compact parsing drops raw fields', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({});
+
+    const modelSpec = {
+      name: 'approved-custom',
+      preset: {
+        endpoint: 'Mock Provider A',
+        endpointType: EModelEndpoint.custom,
+        model: 'mock-model-a',
+        promptPrefix: 'Use the approved custom model spec.',
+      },
+    };
+
+    const req = createReq(
+      {
+        endpoint: 'Mock Provider A',
+        endpointType: EModelEndpoint.custom,
+        spec: 'approved-custom',
+        model: { stale: 'cached-client-value' },
+        agent_id: 'agent_from_cached_client_state',
+        chatProjectId: 'project-1',
+      },
+      {
+        modelSpecs: {
+          enforce: true,
+          list: [modelSpec],
+        },
+      },
+    );
+    req.baseUrl = '/api/agents/chat';
+
+    await buildEndpointOption(req, createRes(), jest.fn());
+
+    expect(parseCompactConvo.mock.results[0].value).toEqual({});
+    expect(req.body.endpointOption.spec).toBe('approved-custom');
+    expect(req.body.endpointOption.model).toBe('mock-model-a');
+    expect(req.body.endpointOption.promptPrefix).toBe('Use the approved custom model spec.');
+    expect(req.body.endpointOption.chatProjectId).toBe('project-1');
   });
 
   // [knauf] existing spec conversations are rehydrated from current modelSpecs before agent validation
@@ -295,5 +346,59 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
     const parsedResult = parseCompactConvo.mock.results[0].value;
     expect(parsedResult.maxOutputTokens).toBeUndefined();
     expect(parsedResult.max_tokens).toBe(4096);
+  });
+
+  it('should scope non-agent chat attachment usage updates to the authenticated user', async () => {
+    const attachments = Promise.resolve([]);
+    updateFilesUsage.mockReturnValueOnce(attachments);
+    mockGetEndpointsConfig.mockResolvedValue({});
+
+    const req = createReq(
+      {
+        endpoint: EModelEndpoint.assistants,
+        assistant_id: 'asst_123',
+        files: [{ file_id: 'forged-file-id' }],
+      },
+      { modelSpecs: null },
+    );
+    req.user = { id: 'user-1' };
+
+    await buildEndpointOption(req, createRes(), jest.fn());
+
+    expect(updateFilesUsage).toHaveBeenCalledWith(req.body.files, undefined, {
+      user: 'user-1',
+      tenantId: undefined,
+    });
+    expect(req.body.endpointOption.attachments).toBe(attachments);
+  });
+
+  it('should not enter the enforce branch when modelSpecs.list is empty', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({});
+
+    const req = createReq(
+      {
+        endpoint: EModelEndpoint.openAI,
+        model: 'gpt-4',
+      },
+      {
+        modelSpecs: {
+          enforce: true,
+          list: [],
+        },
+      },
+    );
+    const res = createRes();
+    const { handleError } = require('@librechat/api');
+
+    await buildEndpointOption(req, res, jest.fn());
+
+    expect(handleError).not.toHaveBeenCalledWith(
+      res,
+      expect.objectContaining({ text: 'No model spec selected' }),
+    );
+    expect(handleError).not.toHaveBeenCalledWith(
+      res,
+      expect.objectContaining({ text: 'Invalid model spec' }),
+    );
   });
 });

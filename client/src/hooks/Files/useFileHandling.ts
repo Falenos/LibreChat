@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useMemo, useState } from 'react';
 import { v4 } from 'uuid';
-import { useSetRecoilState } from 'recoil';
+import debounce from 'lodash/debounce';
 import { useToastContext } from '@librechat/client';
 import { useQueryClient } from '@tanstack/react-query';
+import { useRecoilValue, useSetRecoilState } from 'recoil';
 import {
   QueryKeys,
   Constants,
@@ -12,17 +13,15 @@ import {
   getEndpointFileConfig,
   defaultAssistantsVersion,
 } from 'librechat-data-provider';
-import debounce from 'lodash/debounce';
 import type { EModelEndpoint, TEndpointsConfig, TError } from 'librechat-data-provider';
-import type { ExtendedFile, FileSetter } from '~/common';
 import type { TConversation } from 'librechat-data-provider';
+import type { ExtendedFile, FileSetter } from '~/common';
 import { logger, validateFiles, cachePreview, getCachedPreview, removePreviewEntry } from '~/utils';
 import { useGetFileConfig, useUploadFileMutation } from '~/data-provider';
 import useLocalize, { TranslationKeys } from '~/hooks/useLocalize';
 import { useDelayedUploadToast } from './useDelayedUploadToast';
-import { processFileForUpload } from '~/utils/heicConverter';
 import { useChatContext } from '~/Providers/ChatContext';
-import { ephemeralAgentByConvoId } from '~/store';
+import store, { ephemeralAgentByConvoId } from '~/store';
 import useClientResize from './useClientResize';
 import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
@@ -93,6 +92,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   const setEphemeralAgent = useSetRecoilState(
     ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
   );
+  const isTemporary = useRecoilValue(store.isTemporary);
   const setError = (error: string) => setErrors((prevErrors) => [...prevErrors, error]);
   const { addFile, replaceFile, updateFileById, deleteFileById } = useUpdateFiles(
     params?.fileSetter ?? setFiles,
@@ -101,6 +101,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
 
   const agent_id = params?.additionalMetadata?.agent_id ?? '';
   const assistant_id = params?.additionalMetadata?.assistant_id ?? '';
+  const isConversationUpload = !agent_id && !assistant_id;
   const endpointOverride = params?.endpointOverride;
   const endpointTypeOverride = params?.endpointTypeOverride;
   const endpointType = useMemo(
@@ -241,6 +242,16 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     formData.append('endpointType', endpointType ?? '');
     formData.append('file', extendedFile.file as File, encodeURIComponent(filename));
     formData.append('file_id', extendedFile.file_id);
+    if (
+      isConversationUpload &&
+      conversation?.conversationId &&
+      conversation.conversationId !== Constants.NEW_CONVO
+    ) {
+      formData.append('conversationId', conversation.conversationId);
+    }
+    if (isTemporary && isConversationUpload) {
+      formData.append('isTemporary', 'true');
+    }
 
     const width = extendedFile.width ?? 0;
     const height = extendedFile.height ?? 0;
@@ -399,11 +410,13 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // Add file immediately to show in UI
         addFile(initialExtendedFile);
 
+        const originalFileName = originalFile.name.toLowerCase();
+
         // Check if HEIC conversion is needed and show toast
         const isHEIC =
           originalFile.type === 'image/heic' ||
           originalFile.type === 'image/heif' ||
-          originalFile.name.toLowerCase().match(/\.(heic|heif)$/);
+          /\.(heic|heif)$/.test(originalFileName);
 
         if (isHEIC) {
           showToast({
@@ -413,19 +426,17 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           });
         }
 
-        // Process file for HEIC conversion if needed
-        const heicProcessedFile = await processFileForUpload(
-          originalFile,
-          0.9,
-          (conversionProgress) => {
-            // Update progress during HEIC conversion (0.1 to 0.5 range for conversion)
-            const adjustedProgress = 0.1 + conversionProgress * 0.4;
-            replaceFile({
-              ...initialExtendedFile,
-              progress: adjustedProgress,
-            });
-          },
-        );
+        const heicProcessedFile = isHEIC
+          ? await import('~/utils/heicConverter').then(({ processFileForUpload }) =>
+              processFileForUpload(originalFile, 0.9, (conversionProgress) => {
+                const adjustedProgress = 0.1 + conversionProgress * 0.4;
+                replaceFile({
+                  ...initialExtendedFile,
+                  progress: adjustedProgress,
+                });
+              }),
+            )
+          : originalFile;
 
         let finalProcessedFile = heicProcessedFile;
 

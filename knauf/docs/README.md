@@ -7,6 +7,7 @@ Documentation for the Knauf "Agentic Karl" fork of LibreChat. Docs are organized
 | [architecture/](architecture/) | **How the product works** — feature & subsystem reference (the running system, not the rollout) |
 | [contributing/](contributing/) | **How we work on this fork** — change protocol, git/merge workflow, seam testing, upstream sync, fork history |
 | [implementation-plans/](implementation-plans/) | **Work in flight** — time-bound, multi-PR workstreams (see the folder's own [README](implementation-plans/README.md) for the lifecycle) |
+| [upstream-releases/](upstream-releases/) | **Per-version upstream sync notes** — what each merged LibreChat release means for the fork (features, security, seam interactions) |
 | [proposals/](proposals/) | **Designs being decided** — not yet approved or implemented |
 | [future-work/](future-work/) | **Backlog & roadmaps** — work we've decided we want but haven't scheduled (ready-to-file ticket drafts) |
 
@@ -47,6 +48,15 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/agent-publishing-governance.md](implementation-plans/agent-publishing-governance.md) | AI Champions controlled agent-publishing pilot |
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
+
+## Upstream releases
+
+Per-version notes on each upstream LibreChat release merged into the fork — features, security hardening, `[knauf]` seam interactions, and the config/env actions each release requires. See [upstream-releases/README.md](upstream-releases/README.md) for the index; the [upstream-sync ritual](contributing/upstream-sync.md) is how these merges are performed.
+
+| Doc | What it covers |
+|---|---|
+| [upstream-releases/v0.8.6.md](upstream-releases/v0.8.6.md) | Observability + hardening release — Prometheus `/metrics`, OpenTelemetry, readiness endpoints, MCP SSRF hardening, unauth `/api/config` field stripping (the config.js payload split) |
+| [upstream-releases/v0.8.7.md](upstream-releases/v0.8.7.md) | Agent-capability + usage-visibility release — Skills/Subagents, keyboard shortcuts, token/context tracking, pinned & archived chats; admin-session-secret + shared-file authz hardening; three operator config actions |
 
 ## Proposals
 

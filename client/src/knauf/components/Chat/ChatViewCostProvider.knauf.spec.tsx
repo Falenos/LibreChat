@@ -26,6 +26,7 @@ jest.mock('librechat-data-provider', () => ({
 }));
 
 jest.mock('~/Providers', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories can't reference out-of-scope imports; require() is the standard dodge
   const React = require('react');
   return {
     ChatContext: React.createContext(null),
@@ -40,6 +41,8 @@ jest.mock('~/hooks', () => ({
   useAdaptiveSSE: jest.fn(),
   useChatHelpers: () => ({ getMessages: jest.fn(), isSubmitting: false }),
   useResumeOnLoad: jest.fn(),
+  // v0.8.7: ChatView now calls useLocalize.
+  useLocalize: () => (key: string) => key,
 }));
 
 jest.mock('~/data-provider', () => ({
@@ -81,6 +84,8 @@ jest.mock('~/store', () => ({
   default: {
     centerFormOnLanding: 'centerFormOnLanding',
     submissionByIndex: () => 'submissionByIndex',
+    // v0.8.7: ChatView reads store.isSubmittingFamily(index) via useRecoilValue.
+    isSubmittingFamily: () => 'isSubmittingFamily',
   },
 }));
 
