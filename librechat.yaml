@@ -589,7 +589,8 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'model-router'
-        useResponsesApi: true
+        # The account-level Responses API currently returns HTTP 400 for this
+        # deployment. Azure Chat Completions 2024-10-21 is validated live.
         promptPrefix: *karl_prompt
 
     # Knauf personalities for the agent builder. Filtered client-side by the
