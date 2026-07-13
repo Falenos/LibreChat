@@ -6,23 +6,33 @@
  * the prompt — there was no hardcoded default anywhere, just an absence of
  * grounded context that let the model's own training bias fill the gap.
  *
- * This module derives a coarse, standard-headers-only signal:
+ * This module derives a coarse signal from, in priority order:
+ * - `req.body.timezone` — the browser's real `Intl`-resolved IANA timezone,
+ *   sent on every chat request by upstream's time-variable resolution (see
+ *   `resolveTimezone` below). This is the strongest signal available and is
+ *   what actually reaches production, since no client currently sends the
+ *   `X-User-Timezone` header.
+ * - `X-User-Timezone` header — kept as a fallback for callers that have
+ *   wired a client to send it.
  * - `Accept-Language` — sent automatically by every browser on every
- *   request, requires no client change.
- * - An optional client-sent IANA timezone header (`X-User-Timezone`), for
- *   callers that have wired it up.
+ *   request, requires no client change, but is a *language* preference, not
+ *   a location signal (an `en-US` browser is common outside the US).
  *
- * Both header values are fully client-controlled (any HTTP client, not just
+ * Header/body values are fully client-controlled (any HTTP client, not just
  * a real browser, can set them to arbitrary text), and this string is
  * spliced directly into a prompt sent to the LLM. To avoid a prompt-
- * injection surface, values are validated against BCP-47 / IANA-timezone-
- * shaped patterns and length-capped; anything that doesn't look like a
- * real locale/timezone is dropped rather than passed through.
+ * injection surface, timezone candidates must both match an IANA-timezone-
+ * shaped pattern *and* be a zone the runtime actually recognizes, and locale
+ * candidates must match a BCP-47-shaped pattern; both are length-capped.
+ * Anything that doesn't look like (and resolve as) a real locale/timezone is
+ * dropped rather than passed through.
  *
  * It never falls back to a specific country/region — absence of signal (or
  * rejection of a malformed/suspicious value) is represented by
- * `UNKNOWN_LOCATION_CONTEXT`, which explicitly instructs the model not to
- * assume a location.
+ * `UNKNOWN_LOCATION_CONTEXT`. When a signal *is* present, the composed
+ * string is still framed as a hint ("Location hint only, not a confirmed
+ * physical location or country") rather than proof, since locale reflects
+ * language preference and even a real timezone only narrows a region.
  */
 import { UNKNOWN_LOCATION_CONTEXT } from 'librechat-data-provider';
 
@@ -37,6 +47,20 @@ const MAX_TOKEN_LENGTH = 40;
 const LOCALE_PATTERN = /^[A-Za-z]{2,8}(-[A-Za-z0-9]{2,8}){0,3}$/;
 /** IANA zone shape: `UTC`, `Europe/Berlin`, `America/Argentina/Buenos_Aires`, `Etc/GMT+5`. */
 const TIMEZONE_PATTERN = /^[A-Za-z]+([_+-][A-Za-z0-9]+)*(\/[A-Za-z]+([_+-][A-Za-z0-9]+)*){0,2}$/;
+
+/**
+ * Confirms a shape-valid candidate is an IANA zone the runtime actually
+ * recognizes (rejects plausible-looking fakes like `Europe/Faketown`).
+ * `Intl.DateTimeFormat` throws `RangeError` for unknown zone identifiers.
+ */
+function isRecognizedIanaTimeZone(candidate: string): boolean {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: candidate });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 type HeaderValue = string | string[] | undefined;
 type HeaderBag = Record<string, HeaderValue> | undefined | null;
@@ -72,14 +96,38 @@ export function parsePrimaryLocale(acceptLanguage?: string): string | undefined 
 }
 
 /**
- * Resolves a deterministic, human-readable location context string from
- * request headers, suitable for direct inclusion in a system/tool prompt.
- * Always returns a string (never a raw, unsubstituted value) so callers
- * never leak an empty/ambiguous signal into the prompt.
+ * Resolves the timezone to trust, preferring `req.body.timezone` — the
+ * browser's own `Intl.DateTimeFormat().resolvedOptions().timeZone`, sent on
+ * every chat request since upstream's "Resolve Agent Prompt Time Variables
+ * in User's Timezone" change and already used to localize `{{current_date}}`
+ * — over the optional `X-User-Timezone` header, which no client currently
+ * sends. Both are client-controlled, so either candidate must still pass
+ * shape validation and be a timezone the runtime actually recognizes.
  */
-export function resolveUserLocationContext(headers: HeaderBag): string {
+function resolveTimezone(headerTimezone?: string, bodyTimezone?: string): string | undefined {
+  const candidate =
+    sanitizeToken(bodyTimezone, TIMEZONE_PATTERN) ??
+    sanitizeToken(headerTimezone, TIMEZONE_PATTERN);
+  return candidate && isRecognizedIanaTimeZone(candidate) ? candidate : undefined;
+}
+
+/**
+ * Resolves a deterministic, human-readable location context string from
+ * request headers plus (when available) the request body's browser-supplied
+ * timezone, suitable for direct inclusion in a system/tool prompt. Always
+ * returns a string (never a raw, unsubstituted value) so callers never leak
+ * an empty/ambiguous signal into the prompt.
+ *
+ * Deliberately phrased as a hint, never as proof of physical country:
+ * `Accept-Language` reflects a browser/OS *language* preference (a German
+ * employee using an `en-US` browser is common and does not mean they are in
+ * the US), and even a real IANA timezone only narrows a region, not a
+ * country with certainty (VPNs, travel, shared devices). Callers must not
+ * strip this framing when splicing the result into a prompt.
+ */
+export function resolveUserLocationContext(headers: HeaderBag, bodyTimezone?: string): string {
   const locale = parsePrimaryLocale(getHeader(headers, 'accept-language'));
-  const timezone = sanitizeToken(getHeader(headers, USER_TIMEZONE_HEADER), TIMEZONE_PATTERN);
+  const timezone = resolveTimezone(getHeader(headers, USER_TIMEZONE_HEADER), bodyTimezone);
 
   const parts: string[] = [];
   if (locale) {
@@ -89,5 +137,9 @@ export function resolveUserLocationContext(headers: HeaderBag): string {
     parts.push(`Timezone: ${timezone}`);
   }
 
-  return parts.length > 0 ? parts.join(', ') : UNKNOWN_LOCATION_CONTEXT;
+  if (parts.length === 0) {
+    return UNKNOWN_LOCATION_CONTEXT;
+  }
+
+  return `Location hint only, not a confirmed physical location or country (${parts.join(', ')})`;
 }

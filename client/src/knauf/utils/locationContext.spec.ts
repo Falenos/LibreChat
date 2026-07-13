@@ -6,7 +6,9 @@ describe('resolveBrowserLocationContext', () => {
     // jsdom's default Intl resolves to en-US/UTC — assert shape, not the
     // specific (test-environment) values, since asserting a fixed locale
     // here would defeat the point of the test (never assume a country).
-    expect(result).toMatch(/^Locale: .+/);
+    expect(result).toMatch(
+      /^Location hint only, not a confirmed physical location or country \(Locale: .+\)$/,
+    );
   });
 
   it('falls back to the neutral, non-country-specific string if Intl throws', () => {

@@ -375,10 +375,11 @@ const loadTools = async ({
       const { onSearchResults, onGetHighlights } = options?.[Tools.web_search] ?? {};
       requestedTools[tool] = async () => {
         // [knauf] KK20-201 — deterministic locale/timezone context (Accept-Language
-        // header, no hardcoded default) so the model never has to guess the
-        // user's location. See packages/api/src/knauf/context/locationContext.ts.
+        // header plus the browser-supplied req.body.timezone, no hardcoded
+        // default) so the model never has to guess the user's location. See
+        // packages/api/src/knauf/context/locationContext.ts.
         toolContextMap[tool] = buildWebSearchContext(
-          resolveUserLocationContext(options.req?.headers),
+          resolveUserLocationContext(options.req?.headers, options.req?.body?.timezone),
         );
         // End [knauf]
         dynamicToolContextMap[tool] = buildWebSearchDynamicContext(

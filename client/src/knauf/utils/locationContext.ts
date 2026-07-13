@@ -20,7 +20,13 @@ import { UNKNOWN_LOCATION_CONTEXT } from 'librechat-data-provider';
 
 export { UNKNOWN_LOCATION_CONTEXT };
 
-/** Resolves a deterministic, human-readable location context string from the browser's own `Intl` APIs. */
+/**
+ * Resolves a deterministic, human-readable location context string from the
+ * browser's own `Intl` APIs. Phrased as a hint, never as proof of physical
+ * country — `resolvedOptions().locale` reflects a browser/OS *language*
+ * preference (kept in sync with the server resolver's wording; see
+ * `packages/api/src/knauf/context/locationContext.ts`).
+ */
 export function resolveBrowserLocationContext(): string {
   try {
     const options = Intl.DateTimeFormat().resolvedOptions();
@@ -31,7 +37,9 @@ export function resolveBrowserLocationContext(): string {
     if (options.timeZone) {
       parts.push(`Timezone: ${options.timeZone}`);
     }
-    return parts.length > 0 ? parts.join(', ') : UNKNOWN_LOCATION_CONTEXT;
+    return parts.length > 0
+      ? `Location hint only, not a confirmed physical location or country (${parts.join(', ')})`
+      : UNKNOWN_LOCATION_CONTEXT;
   } catch {
     return UNKNOWN_LOCATION_CONTEXT;
   }
