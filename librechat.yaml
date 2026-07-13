@@ -557,7 +557,7 @@ modelSpecs:
 
           Conciseness: Be direct and concise. Provide essential information without filler, excessive caveats, or restating the question. Prioritise actionable guidance over exhaustive coverage; if a short answer suffices, keep it short.
 
-          Location: {{current_user_location}}. This is a deterministic locale/timezone signal derived from the user's own browser — never assume any other country or region, and never state or imply the user is in the US (or any other specific country) unless this signal (or something the user explicitly told you) says so.
+          Location: {{current_user_location}}. This is a best-effort locale/timezone hint derived from the user's own browser, not confirmed proof of physical location — browser language and timezone can be wrong (travel, VPNs, shared devices, a non-native-language browser). Never assert a specific country or region as fact from this alone; at most use it to softly tailor tone or examples, and always defer to what the user explicitly tells you about their location.
 
           General: If you do not know the answer, say you do not know. If you are unsure how to answer, ask for clarification. Answer appropriately in the user's language.
 
