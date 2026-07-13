@@ -395,6 +395,68 @@ Langfuse runtime in AGK dev:
 
 ## Azure AI And Model Map
 
+### AGK Foundry model router
+
+Foundry infrastructure was deployed on 2026-07-13. The app configuration exposes it as the separate, non-default `KARL Router Test` model spec. Keep the existing `cst-karl-dev` configuration as the active path until runtime secrets are wired and nonprod load tests pass.
+
+Live verification on 2026-07-13 confirmed both accounts, projects, deployments, private endpoints, and DNS zone groups are `Succeeded`/`Approved`. An authenticated nonprod Chat Completions request from the private ACI runner returned HTTP `200` and `ROUTER_OK`; the router selected `gpt-5-mini-2025-08-07`. Account-level `/openai/v1/responses` returned `400 The requested operation is unsupported`, so the AGK router configuration uses Chat Completions API version `2024-10-21`.
+
+| Env | Subscription | Hub resource group | Foundry account | Project | Private endpoint |
+|---|---|---|---|---|---|
+| Nonprod | `CT-SHARED-RESOURCES` | `rg-agk-hub-nonprod-westeurope` | `foundry-agk-hub-nonprod-swedencentral-001` | `proj-agk-hub-nonprod-swedencentral-001` | `pe-foundry-agk-hub-nonprod-westeurope-001` |
+| Prod | `CT-SHARED-RESOURCES-PROD` | `rg-agk-hub-prod-westeurope` | `foundry-agk-hub-prod-swedencentral-001` | `proj-agk-hub-prod-swedencentral-001` | `pe-foundry-agk-hub-prod-westeurope-001` |
+
+Both accounts are `AIServices` resources in Sweden Central. Their private endpoints are in West Europe and public network access is disabled. Each endpoint registers three private addresses: `.164` for `cognitiveservices.azure.com`, `.165` for `openai.azure.com`, and `.166` for `services.ai.azure.com` in the environment's `10.160.192.0/24` or `10.161.192.0/24` hub subnet. The associated private DNS zones are:
+
+- `privatelink.cognitiveservices.azure.com`
+- `privatelink.openai.azure.com`
+- `privatelink.services.ai.azure.com`
+
+Deployed models in each environment:
+
+| Deployment | Model/version | SKU | Capacity | Purpose |
+|---|---|---|---:|---|
+| `model-router` | `model-router` / `2025-11-18` | `GlobalStandard` | 10000 | Balanced router, 10M TPM quota allocation |
+| `gpt-5.5` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 | Direct deterministic baseline/fallback |
+| `gpt-5.5-1` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 | Second direct deployment for explicit client-side distribution/testing |
+
+`GlobalStandard` is consumption/pay-per-token capacity, not provisioned throughput. Capacity reserves rate-limit quota but does not create a fixed PTU charge. The router deployment's live limit is 10M TPM / 10k RPM; this limit does not include either direct GPT-5.5 deployment. Each direct GPT-5.5 deployment has its own 5M TPM / 5k RPM allocation from the GPT-5.5 regional quota pool.
+
+The two direct GPT-5.5 deployments are not backends or replicas used by `model-router`; the router independently selects from its Azure-supported model set and requires no matching direct deployments. The current `routing: null` is the default Balanced/full-model-set configuration. GPT-5.5 is in that eligible set, but the router does not guarantee its selection. Use the router when automatic model choice is acceptable. Call `gpt-5.5` or `gpt-5.5-1` directly when GPT-5.5 is required. The verified router path is `https://<account>.openai.azure.com/openai/deployments/model-router/chat/completions?api-version=2024-10-21`.
+
+Infrastructure ownership and release order:
+
+1. Shared module: `Customer-Tech-Shared/infrastructure/terraform/modules/foundry`, currently released as `foundry1.0.1`.
+2. AGK instances: `agk-infrastructure/terraform/subscription/<nonprod|prod>/base/hub/computational/foundry.tf`.
+3. Merge and release the shared module first, then pin the immutable module tag in AGK infrastructure. Never merge an infrastructure root that references shared-module `main` or a temporary PR commit.
+4. The module explicitly defaults deployment `rai_policy_name` to `Microsoft.DefaultV2` and makes private endpoint creation depend on project/model deployment completion. Azure temporarily returns the parent account to `Accepted` while child resources change; concurrent private endpoint creation fails with `AccountProvisioningStateInvalid`.
+
+Access and validation rules:
+
+- `az login` grants control-plane access only. It does not provide a laptop route or private DNS forwarding into the AGK VNets.
+- The Foundry private DNS zones are currently linked to the AGK hub and spoke VNets only, not the shared VPN DNS-forwarder VNet.
+- From a laptop without the AGK VPN route/DNS path, the public hostname resolves publicly and returns `403 Public access is disabled`; forcing the private IP times out.
+- Test from AKS/ACI or another AGK VNet workload, or first provision approved VPN routes and conditional DNS forwarding. An unauthenticated VNet probe should resolve the OpenAI hostname to `.165` and return `401`, proving DNS/routing/TLS before a key is introduced.
+- Keep the existing `AGK-OPENAI-API-KEY` because chat, image generation, embeddings, and Document Intelligence share it. Add a separate `AGK-FOUNDRY-API-KEY`, expose it as `AZURE_FOUNDRY_API_KEY`, and use a separate `AZURE_FOUNDRY_RESOURCE_NAME` value.
+- Add the router as a separate LibreChat Azure group first. Keep the existing group for rollback, smoke-test nonprod, then switch default model specs and load-test before prod rollout.
+
+Safe live checks:
+
+```bash
+az cognitiveservices account deployment list \
+  --subscription <subscription-id> \
+  --resource-group <hub-resource-group> \
+  --name <foundry-account> \
+  --query "[].{deployment:name,state:properties.provisioningState,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity,raiPolicy:properties.raiPolicyName}" \
+  -o table
+
+az network private-endpoint list \
+  --subscription <subscription-id> \
+  --resource-group <hub-resource-group> \
+  --query "[?contains(name, 'pe-foundry')].{name:name,state:provisioningState,approval:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" \
+  -o table
+```
+
 The main Agentic Karl and CST KARL model backend is the shared Azure AI Services account `cst-karl-dev` in the prod shared subscription:
 
 - Subscription: `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`)
