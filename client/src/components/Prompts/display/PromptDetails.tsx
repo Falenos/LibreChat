@@ -3,6 +3,9 @@ import { SquareSlash } from 'lucide-react';
 import { replaceSpecialVars } from 'librechat-data-provider';
 import type { TPromptGroup } from 'librechat-data-provider';
 import { useLocalize, useAuthContext } from '~/hooks';
+// [knauf] KK20-201 — see useChatFunctions.ts for rationale.
+import { resolveBrowserLocationContext } from '~/knauf/utils/locationContext';
+// End [knauf]
 import PromptDetailHeader from './PromptDetailHeader';
 import PromptVariables from './PromptVariables';
 import PromptTextCard from './PromptTextCard';
@@ -20,7 +23,13 @@ const PromptDetails = ({ group, showActions = true, onUsePrompt }: PromptDetails
 
   const mainText = useMemo(() => {
     const initialText = group?.productionPrompt?.prompt ?? '';
-    return replaceSpecialVars({ text: initialText, user });
+    // [knauf] KK20-201
+    return replaceSpecialVars({
+      text: initialText,
+      user,
+      location: resolveBrowserLocationContext(),
+    });
+    // End [knauf]
   }, [group?.productionPrompt?.prompt, user]);
 
   if (!group) {

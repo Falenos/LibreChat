@@ -2747,6 +2747,11 @@ export const specialVariables = {
   current_user: true,
   iso_datetime: true,
   current_datetime: true,
+  // [knauf] KK20-201 — deterministic locale/timezone context; see
+  // packages/api/src/knauf/context/locationContext.ts for resolution and
+  // packages/data-provider/src/parsers.ts replaceSpecialVars for substitution.
+  current_user_location: true,
+  // End [knauf]
 };
 
 export type TSpecialVarLabel = `com_ui_special_var_${keyof typeof specialVariables}`;

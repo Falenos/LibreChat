@@ -28,6 +28,10 @@ const {
   buildMCPAuthRunStepDeltaEvent,
   buildMCPAuthRunStepCompletedEvent,
   isFileAuthoringToolDefinition,
+  buildOAuthToolCallName,
+  // [knauf] KK20-201
+  resolveUserLocationContext,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   Time,
@@ -1006,7 +1010,14 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   const hasExecuteCode = filteredTools.includes(Tools.execute_code);
 
   if (hasWebSearch) {
-    toolContextMap[Tools.web_search] = buildWebSearchContext();
+    // [knauf] KK20-201 — deterministic locale/timezone context (Accept-Language
+    // header plus the browser-supplied req.body.timezone, no hardcoded
+    // default) so the model never has to guess the user's location. See
+    // packages/api/src/knauf/context/locationContext.ts.
+    toolContextMap[Tools.web_search] = buildWebSearchContext(
+      resolveUserLocationContext(req.headers, req.body?.timezone),
+    );
+    // End [knauf]
     dynamicToolContextMap[Tools.web_search] = buildWebSearchDynamicContext(
       req.conversationCreatedAt,
     );
