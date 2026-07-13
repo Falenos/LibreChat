@@ -118,6 +118,8 @@ Link the merge PR and tag. The watcher dedupes by issue title, so closing is cor
 
 **A `[knauf]` marker file was deleted upstream.** Decide: if the Knauf customization is still needed, find its new home and move the marker + SEAMS.md entry there; if not, delete the entry. The seam validator blocks the PR until SEAMS.md and source agree.
 
+**A file we deliberately deleted (no `[knauf]` markers — a whole upstream file we removed, e.g. an unused workflow) reappears as a modify/delete conflict.** This means upstream still carries or modified that path. Check the Configuration section of SEAMS.md — a deliberate deletion is documented there with the reason. If the file is still listed as "removed — do not restore," resolve the conflict by keeping it deleted (`git rm <path>`), not by accepting upstream's version. If the original reason no longer holds (e.g. AGK's deployment model changed), that's a judgement call — update the SEAMS.md row either way.
+
 **An opaque non-seam conflict.** Run `git log --oneline upstream/<base>..upstream/<tag> -- <file>` to see what upstream changed, and `git log --oneline upstream/<base>..origin/main -- <file>` to see what Knauf changed.
 
 **You need to abort.** `git merge --abort` returns to pre-merge state. Safe to re-attempt.
