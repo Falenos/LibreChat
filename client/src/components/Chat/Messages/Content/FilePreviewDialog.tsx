@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import copy from 'copy-to-clipboard';
 import { useRecoilValue } from 'recoil';
+// [knauf] KK20-221 — query client + key to cancel in-flight downloads on close
+import { useQueryClient } from '@tanstack/react-query';
+import { QueryKeys } from 'librechat-data-provider';
+// End [knauf]
 import { Download } from 'lucide-react';
 import { OGDialog, OGDialogContent, OGDialogTitle, OGDialogDescription } from '@librechat/client';
 import { useFileDownload, useSharedFileDownload } from '~/data-provider';
@@ -9,6 +13,15 @@ import CopyButton from '~/components/Messages/Content/CopyButton';
 import { useShareContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
+
+// [knauf] KK20-221 — files larger than this are not previewed inline. Fetching,
+// buffering and decoding a very large blob (then rendering it into a <pre> or a
+// PDF <iframe>) blocks the main thread long enough that the dialog's X / ESC
+// stop responding — the "can't escape the file load" report. Above this size we
+// skip the inline preview and offer a download instead. Files with an unknown
+// size are still allowed through (Fix B keeps them cancelable).
+const MAX_INLINE_PREVIEW_BYTES = 10 * 1024 * 1024; // 10 MB
+// End [knauf]
 
 interface FilePreviewDialogProps {
   open: boolean;
@@ -138,6 +151,9 @@ export default function FilePreviewDialog({
   fileSize,
 }: FilePreviewDialogProps) {
   const localize = useLocalize();
+  // [knauf] KK20-221 — cancel the download query when the dialog closes
+  const queryClient = useQueryClient();
+  // End [knauf]
   const user = useRecoilValue(store.user);
   const { shareId } = useShareContext();
   const { refetch: downloadOwned } = useFileDownload(user?.id ?? '', fileId, { direct: false });
@@ -156,14 +172,32 @@ export default function FilePreviewDialog({
 
   const previewKind = canPreviewByMime(fileType) || canPreviewByExt(fileName);
 
+  // [knauf] KK20-221 — gate the inline preview on file size so oversized files
+  // never buffer/render inline (the freeze that makes X / ESC unresponsive).
+  const isTooLargeToPreview = fileSize != null && fileSize > MAX_INLINE_PREVIEW_BYTES;
+  const canPreview = !!previewKind && !isTooLargeToPreview;
+  // End [knauf]
+
   const cancelledRef = useRef(false);
+  // [knauf] KK20-221 — controller for the in-flight fetch/blob read, aborted on
+  // close. `previewFileIdRef` remembers which file's download is active because
+  // the `fileId` prop is cleared before the close effect runs.
+  const abortRef = useRef<AbortController | null>(null);
+  const previewFileIdRef = useRef<string | undefined>(undefined);
+  // End [knauf]
 
   const loadPreview = useCallback(async () => {
-    if (!fileId || !previewKind || loadingRef.current) {
+    // [knauf] KK20-221 — also bail when the file is too large to preview inline
+    if (!fileId || !canPreview || loadingRef.current) {
       return;
     }
+    // End [knauf]
     loadingRef.current = true;
     cancelledRef.current = false;
+    // [knauf] KK20-221 — fresh controller per load; aborted by the close effect.
+    abortRef.current = new AbortController();
+    previewFileIdRef.current = fileId;
+    // End [knauf]
     setLoading(true);
     setPreviewError(false);
 
@@ -176,7 +210,9 @@ export default function FilePreviewDialog({
         return;
       }
 
-      const resp = await fetch(result.data);
+      // [knauf] KK20-221 — pass the abort signal so closing cancels the blob read
+      const resp = await fetch(result.data, { signal: abortRef.current?.signal });
+      // End [knauf]
       const blob = await resp.blob();
 
       if (cancelledRef.current) {
@@ -199,7 +235,7 @@ export default function FilePreviewDialog({
         setLoading(false);
       }
     }
-  }, [fileId, previewKind, downloadFile]);
+  }, [fileId, canPreview, previewKind, downloadFile]);
 
   const handleDownload = useCallback(async () => {
     if (!fileId) {
@@ -217,10 +253,10 @@ export default function FilePreviewDialog({
   }, [downloadFile, fileId, fileName]);
 
   useEffect(() => {
-    if (open && previewKind && !fileContent && !fileBlobUrl) {
+    if (open && canPreview && !fileContent && !fileBlobUrl) {
       loadPreview();
     }
-  }, [open, previewKind, fileContent, fileBlobUrl, loadPreview]);
+  }, [open, canPreview, fileContent, fileBlobUrl, loadPreview]);
 
   useEffect(() => {
     return () => {
@@ -233,12 +269,27 @@ export default function FilePreviewDialog({
   useEffect(() => {
     if (!open) {
       cancelledRef.current = true;
+      // [knauf] KK20-221 — actually cancel the in-flight load so X / ESC stop a
+      // large download instead of only suppressing state updates. Abort the
+      // fetch/blob read and cancel the React Query blob download (whose signal
+      // is forwarded to axios) for both the owned and shared download paths.
+      abortRef.current?.abort();
+      const activeFileId = previewFileIdRef.current;
+      if (activeFileId) {
+        queryClient.cancelQueries([QueryKeys.fileDownload, activeFileId]);
+        if (shareId) {
+          queryClient.cancelQueries([QueryKeys.fileDownload, 'share', shareId, activeFileId]);
+        }
+      }
+      previewFileIdRef.current = undefined;
+      // End [knauf]
       setFileContent(null);
       setFileBlobUrl(null);
       setPreviewError(false);
       setLoading(false);
       setIsCopied(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const handleCopy = useCallback(() => {
@@ -333,13 +384,34 @@ export default function FilePreviewDialog({
               </div>
             </>
           )}
-          {!previewKind && !loading && (
+          {/* [knauf] KK20-221 — oversized files are not previewed inline; offer a
+              download instead so the dialog stays responsive and closable. The
+              size gate also suppresses the generic "unavailable" message below. */}
+          {isTooLargeToPreview && (
+            <div className="flex h-40 flex-col items-center justify-center gap-3 rounded-lg bg-surface-secondary px-6 text-center">
+              <span className="text-sm text-text-secondary">
+                {localize('com_knauf_file_preview_too_large')}
+              </span>
+              {fileId && (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border-medium px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  {localize('com_ui_download')}
+                </button>
+              )}
+            </div>
+          )}
+          {!previewKind && !loading && !isTooLargeToPreview && (
             <div className="flex h-32 items-center justify-center rounded-lg bg-surface-secondary">
               <span className="text-sm text-text-secondary">
                 {localize('com_ui_preview_unavailable')}
               </span>
             </div>
           )}
+          {/* End [knauf] */}
         </div>
       </OGDialogContent>
     </OGDialog>

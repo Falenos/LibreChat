@@ -431,6 +431,7 @@
   "com_knauf_error_unsupported_type": "This file type isn't supported. You can upload PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), CSV, text, or images.",
   "com_knauf_fast_mode_description": "Skip the reasoning step for quicker, cheaper answers. Best when you don't need deep analysis.",
   "com_knauf_fast_mode_label": "Fast Mode",
+  "com_knauf_file_preview_too_large": "This file is too large to preview here. Download it to view.",
   "com_knauf_knowledge_delete_failed": "Couldn't delete “{{0}}”. Please try again.",
   "com_knauf_knowledge_match_count": "{{0}} of {{1}} files",
   "com_knauf_knowledge_no_results": "No files match “{{0}}”",

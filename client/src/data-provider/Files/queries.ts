@@ -76,7 +76,7 @@ export const useFileDownload = (
   const queryClient = useQueryClient();
   return useQuery(
     [QueryKeys.fileDownload, file_id, options.source ?? '', options.direct ?? true],
-    async () => {
+    async ({ signal }) => {
       if (!userId || !file_id) {
         console.warn('No user ID provided for file download');
         return;
@@ -92,7 +92,12 @@ export const useFileDownload = (
         }
       }
 
-      const response = await dataService.getFileDownload(userId, file_id);
+      // [knauf] KK20-221 — forward React Query's AbortSignal to the blob download
+      // so `queryClient.cancelQueries` (fired when the preview dialog closes)
+      // aborts the in-flight request instead of letting a large file finish
+      // downloading in the background.
+      const response = await dataService.getFileDownload(userId, file_id, signal);
+      // End [knauf]
       const blob = response.data;
       const downloadURL = window.URL.createObjectURL(blob);
       try {
@@ -129,11 +134,14 @@ export const useSharedFileDownload = (
 ): QueryObserverResult<string> => {
   return useQuery(
     [QueryKeys.fileDownload, 'share', shareId ?? '', file_id ?? ''],
-    async () => {
+    async ({ signal }) => {
       if (!shareId || !file_id) {
         return;
       }
-      const response = await dataService.getSharedFileDownload(shareId, file_id);
+      // [knauf] KK20-221 — forward the AbortSignal so closing the shared-link
+      // preview cancels the in-flight download (see useFileDownload).
+      const response = await dataService.getSharedFileDownload(shareId, file_id, signal);
+      // End [knauf]
       return window.URL.createObjectURL(response.data);
     },
     {
