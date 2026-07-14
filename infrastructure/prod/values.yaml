@@ -3,8 +3,6 @@ agentic-karl:
     KNAUF_RESTRICT_USER_PERMISSIONS: 'true'
     KNAUF_RESTRICT_PROD_USER_PERMISSIONS: 'true'
     KNAUF_DISABLE_FIRST_USER_ADMIN: 'true'
-    AZURE_FOUNDRY_PROJECT_ENDPOINT: 'https://foundry-agk-hub-prod-swedencentral-001.services.ai.azure.com/api/projects/proj-agk-hub-prod-swedencentral-001'
-    AZURE_FOUNDRY_AGENT_DEPLOYMENT: 'gpt-5.5'
 
   externalSecret:
     secrets: {}
