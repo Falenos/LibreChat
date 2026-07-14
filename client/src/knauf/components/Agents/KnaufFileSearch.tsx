@@ -35,8 +35,8 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Folder } from 'lucide-react';
-import * as Ariakit from '@ariakit/react';
 import { useRecoilState } from 'recoil';
+import * as Ariakit from '@ariakit/react';
 import { SharePointIcon, AttachmentIcon, DropdownPopup, useToastContext } from '@librechat/client';
 import {
   EModelEndpoint,
@@ -45,15 +45,15 @@ import {
   mergeFileConfig,
 } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
-import { isEphemeralAgent } from '~/common';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useFileHandlingNoChatContext } from '~/hooks/Files/useFileHandling';
-import { useLocalize, useLazyEffect } from '~/hooks';
-import { SharePointPickerDialog } from '~/components/SharePoint';
+import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
 import { useGetFileConfig, useGetStartupConfig } from '~/data-provider';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
-import { knaufPendingAgentFilesAtom } from '~/knauf/store/pendingAgentFiles';
+import { SharePointPickerDialog } from '~/components/SharePoint';
 import KnaufKnowledgeFileList from './KnaufKnowledgeFileList';
+import { useLocalize, useLazyEffect } from '~/hooks';
+import { isEphemeralAgent } from '~/common';
 
 type UploadedFileLike = { filename?: string; bytes?: number; size?: number };
 
@@ -71,6 +71,12 @@ function uploadedFileMatchesPending(uploaded: UploadedFileLike, pending: File): 
   );
 }
 
+// [knauf] KK20-227 — key for the session blob cache that backs in-session
+// re-index (name:size is stable across the upload round-trip and matches the
+// saved file's filename + bytes).
+const sessionBlobKey = (name: string, size: number): string => `${name}:${size}`;
+// End [knauf]
+
 function KnaufFileSearch({
   agent_id,
   files: _files,
@@ -85,6 +91,14 @@ function KnaufFileSearch({
   // Recoil independently — no prop threading needed.
   const [pendingFiles, setPendingFiles] = useRecoilState(knaufPendingAgentFilesAtom);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // [knauf] KK20-227 — retain locally-picked File blobs for this builder session
+  // (keyed by name:size) so a saved knowledge file can be re-indexed (delete +
+  // re-upload, forcing a fresh RAG/OCR pass) without the user re-picking it.
+  // Only local picks are retained; after a page reload the map is empty and the
+  // re-index action is hidden, which matches the in-session scope. Bounded by
+  // the agents 20-file / 100 MB upload cap.
+  const sessionBlobsRef = useRef<Map<string, File>>(new Map());
+  // End [knauf]
   const [files, setFiles] = useState<Map<string, ExtendedFile>>(new Map());
   /**
    * KK20-123 — mirror of `files` for off-render reconciliation. The drain
@@ -283,6 +297,12 @@ function KnaufFileSearch({
    */
   const onLocalFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files ?? []);
+    // [knauf] KK20-227 — remember each picked blob so its saved row can offer an
+    // in-session re-index (delete + re-upload) without a re-pick.
+    for (const file of picked) {
+      sessionBlobsRef.current.set(sessionBlobKey(file.name, file.size), file);
+    }
+    // End [knauf]
     if (!ephemeral) {
       if (picked.length > 0) {
         dispatchAgentKnowledgeUploadInteraction();
@@ -379,6 +399,24 @@ function KnaufFileSearch({
     });
   };
 
+  /**
+   * [knauf] KK20-227 — in-session re-index support. `getReindexFile` returns the
+   * retained blob for a saved file (or undefined → the row hides its re-index
+   * action); `reuploadBlob` pushes a blob back through the normal upload pipeline
+   * (fresh file_id → fresh RAG/OCR embed). The delete half runs in
+   * KnaufKnowledgeFileList (server-confirmed) before this re-upload. Plain
+   * functions (post early-return; KnaufKnowledgeFileList stabilizes them via
+   * refs) matching removePending/retryPending above.
+   */
+  const getReindexFile = (file: ExtendedFile): File | undefined => {
+    if (file.size == null) return undefined;
+    return sessionBlobsRef.current.get(sessionBlobKey(file.filename ?? '', file.size));
+  };
+
+  const reuploadBlob = (blob: File) => {
+    void handleFiles([blob]);
+  };
+
   return (
     <div className="w-full">
       <div className="flex flex-col gap-3">
@@ -392,6 +430,8 @@ function KnaufFileSearch({
           pendingFiles={pendingFiles}
           onRemovePending={removePending}
           onRetryPending={retryPending}
+          getReindexFile={getReindexFile}
+          onReupload={reuploadBlob}
         />
         <div>
           {sharePointEnabled ? (

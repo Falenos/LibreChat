@@ -25,7 +25,11 @@ beforeAll(() => {
 
 const mockShowToast = jest.fn();
 const mockSetFilesLoading = jest.fn();
-const mockMutate = jest.fn();
+// [knauf] KK20-227 — the document/image upload path now awaits `mutateAsync`
+// (serialized multi-file uploads); point both mutation methods at one recording
+// spy that resolves, so the existing formData assertions keep working.
+const mockMutate = jest.fn((_formData: FormData) => Promise.resolve());
+// End [knauf]
 const mockAddFile = jest.fn();
 const mockProcessFileForUpload = jest.fn(
   async (_file: File, _quality?: number, _onProgress?: (progress: number) => void) => _file,
@@ -73,6 +77,10 @@ jest.mock('~/data-provider', () => ({
   useGetFileConfig: jest.fn(() => ({ data: null })),
   useUploadFileMutation: jest.fn((_opts: Record<string, unknown>) => ({
     mutate: mockMutate,
+    // [knauf] KK20-227 — same spy so document/image uploads (mutateAsync) and
+    // the assistant path (mutate) are both recorded by existing assertions.
+    mutateAsync: mockMutate,
+    // End [knauf]
   })),
 }));
 
@@ -531,6 +539,53 @@ describe('useFileHandling', () => {
       expect(mockMutate).toHaveBeenCalledTimes(1);
       const formData = mockMutate.mock.calls[0][0] as FormData;
       expect(formData.get('conversationId')).toBeNull();
+    });
+  });
+  // End [knauf]
+
+  // [knauf] KK20-227 — multi-file document uploads run one at a time so we don't
+  // fire N concurrent RAG /embed (Azure DI OCR) calls, a primary trigger for the
+  // silent OCR-less fallback. Removing the `await mutateAsync` reverts to
+  // fire-and-forget and this test fails (both files dispatch immediately).
+  describe('KK20-227 sequential multi-file upload', () => {
+    it('dispatches the next document upload only after the previous resolves', async () => {
+      const resolvers: Array<() => void> = [];
+      mockMutate.mockImplementation(() => new Promise<void>((resolve) => resolvers.push(resolve)));
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const f1 = new File([new ArrayBuffer(8)], 'a.pdf', { type: 'application/pdf' });
+      const f2 = new File([new ArrayBuffer(8)], 'b.pdf', { type: 'application/pdf' });
+
+      let finished = false;
+      await act(async () => {
+        void result.current.handleFiles([f1, f2]).then(() => {
+          finished = true;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The loop is blocked awaiting the first upload — only one dispatched.
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(finished).toBe(false);
+
+      await act(async () => {
+        resolvers[0]?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // First resolved → the second now dispatches.
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolvers[1]?.();
+        await Promise.resolve();
+      });
+      expect(finished).toBe(true);
+
+      mockMutate.mockImplementation(() => Promise.resolve());
     });
   });
   // End [knauf]

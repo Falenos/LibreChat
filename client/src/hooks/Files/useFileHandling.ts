@@ -27,6 +27,9 @@ import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
 import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
 // End [knauf]
+// [knauf] KK20-227 — warn before an accidental refresh strands an in-flight upload.
+import { useUploadBeforeUnloadGuard } from '~/knauf/hooks/Files/useUploadBeforeUnloadGuard';
+// End [knauf]
 
 type UseFileHandling = {
   fileSetter?: FileSetter;
@@ -98,6 +101,16 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     params?.fileSetter ?? setFiles,
   );
   const { resizeImageIfNeeded } = useClientResize();
+
+  // [knauf] KK20-227 — block an accidental refresh while any upload is mid-flight
+  // (progress < 1), matching the send-button gate in FileRow. Prevents the
+  // "refresh stranded my upload → file looks done but OCR missing" path.
+  const hasPendingUploads = useMemo(
+    () => Array.from(files.values()).some((file) => file.progress < 1),
+    [files],
+  );
+  useUploadBeforeUnloadGuard(hasPendingUploads);
+  // End [knauf]
 
   const agent_id = params?.additionalMetadata?.agent_id ?? '';
   const assistant_id = params?.additionalMetadata?.assistant_id ?? '';
@@ -294,8 +307,18 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       }
       // End [knauf]
 
-      uploadFile.mutate(formData);
+      // [knauf] KK20-227 — await this upload so a multi-file selection uploads
+      // one document at a time instead of firing N concurrent POSTs. The server
+      // runs RAG /embed (Azure Document Intelligence OCR) synchronously inside
+      // the upload request, so N concurrent uploads become N concurrent DI calls
+      // — a primary trigger for DI throttling (429s) and the silent OCR-less
+      // fallback reported in KK20-227. onError already clears the file and shows
+      // a message, so swallow the rejection here to keep the handleFiles loop
+      // advancing to the next file. (Images use the loadImage/onload path and
+      // are unaffected — they don't hit OCR.)
+      await uploadFile.mutateAsync(formData).catch(() => {});
       return;
+      // End [knauf]
     }
 
     const convoModel = conversation?.model ?? '';
