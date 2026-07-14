@@ -30,6 +30,8 @@ describe('knauf costs', () => {
     ['azure/gpt-5.4-mini-2026-03-17', 'gpt-5.4-mini'],
     ['gpt-54', 'gpt-5.4'],
     ['gpt-55-2026-04-24', 'gpt-5.5'],
+    ['azure/gpt-5.6-sol-2026-07-09', 'gpt-5.6-sol'],
+    ['gpt-image-2-2026-04-21', 'gpt-image-2'],
   ])('normalizes %s to %s', (input, expected) => {
     expect(normalizeModel(input)).toBe(expected);
   });
@@ -39,6 +41,7 @@ describe('knauf costs', () => {
     ['gpt-5.4-mini', 0.6582, 3.9491],
     ['gpt-5.4', 2.1939, 13.1637],
     ['gpt-5.5', 4.3879, 26.3273],
+    ['gpt-5.6-sol', 4.3879, 26.3273],
   ])('calculates %s input and output prices', (model, inputPrice, outputPrice) => {
     const input = calculateTransactionCost({
       model,
@@ -56,10 +59,15 @@ describe('knauf costs', () => {
   });
 
   it('stores effective model versions with the static retail rates', () => {
-    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-2026-07-14');
+    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-openai-parity-2026-07-14');
     expect(EUR_RATES['gpt-5.5']).toMatchObject({
       modelVersion: '2026-04-24',
       effectiveFrom: '2026-05-01',
+    });
+    expect(EUR_RATES['gpt-5.6-sol']).toMatchObject({
+      modelVersion: '2026-07-09',
+      inputPerMillion: EUR_RATES['gpt-5.5'].inputPerMillion,
+      outputPerMillion: EUR_RATES['gpt-5.5'].outputPerMillion,
     });
   });
 
@@ -97,17 +105,33 @@ describe('knauf costs', () => {
     expect(result.messages.m1.cost).toBeCloseTo(15.3576);
   });
 
-  it('tracks unsupported image tokens without assigning an unverified EUR cost', () => {
-    const result = calculateTransactionCost({
-      model: 'gpt-image-1',
-      tokenType: 'completion',
-      rawAmount: -4000,
-    });
+  it.each([
+    ['gpt-image-1', 4.4, 8.8, 35.1],
+    ['gpt-image-2', 4.3879, 7.0206, 26.3273],
+  ])(
+    'calculates %s text input, image input, and image output prices',
+    (model, textInputPrice, imageInputPrice, outputPrice) => {
+      const input = calculateTransactionCost({
+        model,
+        tokenType: 'prompt',
+        inputTokens: -1_000_000,
+        writeTokens: -1_000_000,
+      });
+      const output = calculateTransactionCost({
+        model,
+        tokenType: 'completion',
+        rawAmount: -1_000_000,
+      });
 
-    expect(result.cost).toBe(0);
-    expect(result.imageOutputTokens).toBe(4000);
-    expect(result.hasUnsupported).toBe(true);
-  });
+      expect(input.cost).toBeCloseTo(textInputPrice + imageInputPrice);
+      expect(input.inputTokens).toBe(1_000_000);
+      expect(input.imageInputTokens).toBe(1_000_000);
+      expect(output.cost).toBeCloseTo(outputPrice);
+      expect(output.outputTokens).toBe(0);
+      expect(output.imageOutputTokens).toBe(1_000_000);
+      expect(output.hasUnsupported).toBe(false);
+    },
+  );
 
   it('returns cached aggregate when the transaction fingerprint is unchanged', async () => {
     const summary = aggregateConversationCosts([]);

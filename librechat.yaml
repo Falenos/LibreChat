@@ -521,6 +521,9 @@ endpoints:
           gpt-5.5:
             deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
             version: '2024-10-21'
+          gpt-5.6-sol:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
       # Experimental router Responses path. Keep it available for later
       # comparison, but do not select it in production agent presets yet.
       - group: 'agk-foundry-project'
@@ -597,7 +600,7 @@ modelSpecs:
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
     # Agent personalities use the environment-selected model through Responses
-    # API. Production currently selects `agent-default` (direct GPT-5.5).
+    # API. GitOps selects `agent-default` (direct GPT-5.6 Sol).
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
