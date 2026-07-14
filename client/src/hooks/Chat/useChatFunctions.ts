@@ -33,6 +33,11 @@ import {
   getRouteChatProjectId,
 } from '~/utils';
 import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedResponse';
+// [knauf] KK20-201 — deterministic client-side location context so
+// {{current_user_location}} in a promptPrefix resolves to a real value
+// instead of leaking the raw token (see locationContext.ts).
+import { resolveBrowserLocationContext } from '~/knauf/utils/locationContext';
+// End [knauf]
 import useSetFilesToDelete from '~/hooks/Files/useSetFilesToDelete';
 import useGetSender from '~/hooks/Conversations/useGetSender';
 import store, { useGetEphemeralAgent } from '~/store';
@@ -366,6 +371,9 @@ export default function useChatFunctions({
       conversation.promptPrefix = replaceSpecialVars({
         text: conversation.promptPrefix,
         user,
+        // [knauf] KK20-201
+        location: resolveBrowserLocationContext(),
+        // End [knauf]
       });
     }
 

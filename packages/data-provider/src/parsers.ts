@@ -446,16 +446,36 @@ function applyTimezone(value: dayjs.Dayjs, timezone?: string): dayjs.Dayjs {
   }
 }
 
+// [knauf] KK20-201 — single canonical "no location signal" string, shared by
+// the server (`packages/api/src/knauf/context/locationContext.ts`) and
+// client (`client/src/knauf/utils/locationContext.ts`) resolvers, and used
+// here as the fallback substitution for {{current_user_location}}. Never a
+// hardcoded country/region — root cause of KK20-201 was the LLM inventing
+// one when this signal was simply absent.
+export const UNKNOWN_LOCATION_CONTEXT =
+  'unknown (no locale/timezone signal available — do not assume any specific country or region)';
+// End [knauf]
+
 export function replaceSpecialVars({
   text,
   user,
   now: inputNow,
   timezone,
+  location,
 }: {
   text: string;
   user?: t.TUser | null;
   now?: string | number | Date;
   timezone?: string;
+  /**
+   * [knauf] KK20-201 — pre-resolved, deterministic location context (e.g.
+   * `Locale: de-DE, Timezone: Europe/Berlin`), so the LLM never has to guess
+   * a user's location. Callers resolve this from request headers via
+   * `resolveUserLocationContext` in `@librechat/api`; this function stays
+   * environment-agnostic (also used client-side) and only substitutes the
+   * already-resolved string.
+   */
+  location?: string;
 }) {
   let result = text;
   if (!result) {
@@ -477,6 +497,17 @@ export function replaceSpecialVars({
   if (user && user.name) {
     result = result.replace(/{{\s*current_user\s*}}/gi, user.name);
   }
+
+  // [knauf] KK20-201 — unlike {{current_user}} (safe to leave literal when
+  // absent — it never reaches a place a raw token could leak), a raw
+  // {{current_user_location}} token must never be sent to an LLM or land in
+  // a user's own message, so this always substitutes: the resolved string
+  // when the caller supplied one, or an explicit "don't assume" fallback
+  // otherwise. Defense-in-depth for any call site that forgets to resolve
+  // `location` (see also the client/server resolvers, which are the
+  // preferred way to obtain a real value).
+  result = result.replace(/{{current_user_location}}/gi, location || UNKNOWN_LOCATION_CONTEXT);
+  // End [knauf]
 
   return result;
 }
