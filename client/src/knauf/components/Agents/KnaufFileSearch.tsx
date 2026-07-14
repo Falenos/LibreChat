@@ -402,11 +402,17 @@ function KnaufFileSearch({
   /**
    * [knauf] KK20-227 — in-session re-index support. `getReindexFile` returns the
    * retained blob for a saved file (or undefined → the row hides its re-index
-   * action); `reuploadBlob` pushes a blob back through the normal upload pipeline
-   * (fresh file_id → fresh RAG/OCR embed). The delete half runs in
-   * KnaufKnowledgeFileList (server-confirmed) before this re-upload. Plain
-   * functions (post early-return; KnaufKnowledgeFileList stabilizes them via
-   * refs) matching removePending/retryPending above.
+   * action); `reuploadBlob` re-queues that blob for upload after the delete.
+   *
+   * We enqueue into the pending-files queue rather than calling `handleFiles`
+   * directly: the delete (KnaufKnowledgeFileList.handleReindexSaved) removes the
+   * old file from `files` via setFiles, but a direct `handleFiles` call would
+   * still validate against the pre-delete `files` closure and reject the
+   * identical blob as a duplicate (`com_error_files_dupe`) — losing the file,
+   * since the server delete already succeeded. The drain effect below runs after
+   * the delete commits (so validation sees `files` with the old file removed) and
+   * gives an error row + Retry for free if the re-upload fails. Plain functions
+   * (post early-return; KnaufKnowledgeFileList stabilizes them via refs).
    */
   const getReindexFile = (file: ExtendedFile): File | undefined => {
     if (file.size == null) return undefined;
@@ -414,7 +420,12 @@ function KnaufFileSearch({
   };
 
   const reuploadBlob = (blob: File) => {
-    void handleFiles([blob]);
+    const tempId = `pending:${blob.name}:${blob.size}:${blob.lastModified}`;
+    setPendingFiles((prev) => {
+      const next = new Map(prev);
+      next.set(tempId, { file: blob, status: 'queued' });
+      return next;
+    });
   };
 
   return (

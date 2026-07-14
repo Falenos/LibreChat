@@ -5,6 +5,9 @@ import {
   EToolResources,
   getEndpointFileConfig,
 } from 'librechat-data-provider';
+// [knauf] KK20-227 — reset the module-level document-upload queue between tests.
+import { _resetDocumentUploadQueue } from '../useFileHandling';
+// End [knauf]
 
 beforeAll(() => {
   global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
@@ -135,6 +138,10 @@ describe('useFileHandling', () => {
     mockProcessFileForUpload.mockImplementation(async (file: File) => file);
     mockConversation = {};
     mockIsTemporary = false;
+    // [knauf] KK20-227 — clear the module-level upload queue so a deferred
+    // upload from one test can't stall the next.
+    _resetDocumentUploadQueue();
+    // End [knauf]
   });
 
   const loadHook = async () => (await import('../useFileHandling')).default;
@@ -584,6 +591,46 @@ describe('useFileHandling', () => {
         await Promise.resolve();
       });
       expect(finished).toBe(true);
+
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('serializes uploads across two overlapping handleFiles invocations', async () => {
+      const resolvers: Array<() => void> = [];
+      mockMutate.mockImplementation(() => new Promise<void>((resolve) => resolvers.push(resolve)));
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const f1 = new File([new ArrayBuffer(8)], 'a.pdf', { type: 'application/pdf' });
+      const f2 = new File([new ArrayBuffer(8)], 'b.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        // Two SEPARATE handleFiles calls — as a second file selection or another
+        // uploader instance (drag/paste) would trigger. The module-level queue
+        // must serialize them too, not just files within one call.
+        void result.current.handleFiles([f1]);
+        void result.current.handleFiles([f2]);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Only the first upload dispatched; the second is queued behind it.
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolvers[0]?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // First settled → the second now dispatches.
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolvers[1]?.();
+        await Promise.resolve();
+      });
 
       mockMutate.mockImplementation(() => Promise.resolve());
     });
