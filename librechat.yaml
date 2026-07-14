@@ -495,28 +495,31 @@ endpoints:
           model-router-chat:
             deploymentName: 'model-router'
             version: '2024-10-21'
-      # Direct GPT-5.5 Responses path for created agents. Previous model names
-      # are compatibility aliases so existing saved agents migrate in config.
-      - group: 'agk-foundry-agent-gpt55'
+      # Environment-selected direct deployment for prompt drafting and created
+      # agents. Previous model names remain compatibility aliases.
+      - group: 'agk-foundry-agent-default'
         apiKey: '${AZURE_FOUNDRY_API_KEY}'
         instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
         version: '2024-10-21'
         addParams:
-          model: 'gpt-5.5'
+          model: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
         dropParams:
           - temperature
           - top_p
           - presence_penalty
           - frequency_penalty
         models:
+          agent-default:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
           gpt-4o:
-            deploymentName: 'gpt-5.5'
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
             version: '2024-10-21'
           gpt-5.4:
-            deploymentName: 'gpt-5.5'
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
             version: '2024-10-21'
           gpt-5.5:
-            deploymentName: 'gpt-5.5'
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
             version: '2024-10-21'
       # Experimental router Responses path. Keep it available for later
       # comparison, but do not select it in production agent presets yet.
@@ -593,8 +596,8 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
-    # Agent personalities use the direct GPT-5.5 deployment through Responses
-    # API. The experimental router Responses model remains configured separately.
+    # Agent personalities use the environment-selected model through Responses
+    # API. Production currently selects `agent-default` (direct GPT-5.5).
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -603,7 +606,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.5'
+        model: 'agent-default'
         reasoning_effort: high
         useResponsesApi: true
         promptPrefix: *karl_prompt
@@ -615,7 +618,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.5'
+        model: 'agent-default'
         reasoning_effort: medium
         useResponsesApi: true
         promptPrefix: *karl_prompt
@@ -627,7 +630,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.5'
+        model: 'agent-default'
         reasoning_effort: low
         useResponsesApi: true
         additional_instructions: |
@@ -646,7 +649,7 @@ modelSpecs:
       description: 'Used by the agent builder to draft system instructions.'
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router-chat'
+        model: 'agent-default'
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions
