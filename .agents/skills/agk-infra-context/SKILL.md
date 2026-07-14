@@ -434,9 +434,9 @@ Infrastructure ownership and release order:
 Access and validation rules:
 
 - `az login` grants control-plane access only. It does not provide a laptop route or private DNS forwarding into the AGK VNets.
-- The Foundry private DNS zones are currently linked to the AGK hub and spoke VNets only, not the shared VPN DNS-forwarder VNet.
-- From a laptop without the AGK VPN route/DNS path, the public hostname resolves publicly and returns `403 Public access is disabled`; forcing the private IP times out.
-- Test from AKS/ACI or another AGK VNet workload, or first provision approved VPN routes and conditional DNS forwarding. An unauthenticated VNet probe should resolve the OpenAI hostname to `.165` and return `401`, proving DNS/routing/TLS before a key is introduced.
+- The corporate VPN routes the nonprod Foundry subnet `10.160.192.0/24`. An authenticated laptop request forced to the OpenAI private endpoint `10.160.192.165` returned HTTP `200`, proving the VPN data path and TLS.
+- Normal laptop DNS still resolves the Foundry hostname publicly and returns `403 Public access is disabled` until the nonprod Foundry zones are linked to `vnet-ct-shared-dns-forwarder`. The computational Terraform owns that link; keep public access disabled. Prod remains hub/spoke-only unless a separate approved access requirement is added.
+- Test from AKS/ACI while the DNS link is pending. After it is applied, reconnect the corporate VPN or flush local DNS and confirm the OpenAI hostname resolves to `10.160.192.165` before running the app locally.
 - Keep the existing `AGK-OPENAI-API-KEY` because chat, image generation, embeddings, and Document Intelligence share it. Add a separate `AGK-FOUNDRY-API-KEY`, expose it as `AZURE_FOUNDRY_API_KEY`, and use a separate `AZURE_FOUNDRY_RESOURCE_NAME` value.
 - Add the router as a separate LibreChat Azure group first. Keep the existing group for rollback, smoke-test nonprod, then switch default model specs and load-test before prod rollout.
 
