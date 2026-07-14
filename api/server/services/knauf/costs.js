@@ -8,11 +8,11 @@ const TRANSACTION_COST_FIELDS =
 
 const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-07-14';
 const EUR_RATES = {
-  'gpt-5-mini': {
-    modelVersion: '2025-08-07',
-    effectiveFrom: '2025-08-01',
-    inputPerMillion: 0.2194,
-    outputPerMillion: 1.7552,
+  'gpt-5.4-nano': {
+    modelVersion: '2026-03-17',
+    effectiveFrom: '2026-03-01',
+    inputPerMillion: 0.1755,
+    outputPerMillion: 1.097,
   },
   'gpt-5.4-mini': {
     modelVersion: '2026-03-17',
@@ -41,6 +41,9 @@ function absNumber(value) {
 
 function normalizeModel(model) {
   const value = String(model || '').toLowerCase();
+  if (value.includes('gpt-5.4-nano') || value.includes('gpt-54-nano')) {
+    return 'gpt-5.4-nano';
+  }
   if (value.includes('gpt-5.4-mini') || value.includes('gpt-54-mini')) {
     return 'gpt-5.4-mini';
   }
@@ -49,9 +52,6 @@ function normalizeModel(model) {
   }
   if (value.includes('gpt-5.4') || value.includes('gpt-54')) {
     return 'gpt-5.4';
-  }
-  if (value.includes('gpt-5-mini')) {
-    return 'gpt-5-mini';
   }
   if (value.includes('gpt-image-1')) {
     return 'gpt-image-1';

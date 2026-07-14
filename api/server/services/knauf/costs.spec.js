@@ -26,7 +26,7 @@ function createCache(initialValue) {
 
 describe('knauf costs', () => {
   it.each([
-    ['gpt-5-mini-2025-08-07', 'gpt-5-mini'],
+    ['gpt-54-nano-2026-03-17', 'gpt-5.4-nano'],
     ['azure/gpt-5.4-mini-2026-03-17', 'gpt-5.4-mini'],
     ['gpt-54', 'gpt-5.4'],
     ['gpt-55-2026-04-24', 'gpt-5.5'],
@@ -35,7 +35,7 @@ describe('knauf costs', () => {
   });
 
   it.each([
-    ['gpt-5-mini', 0.2194, 1.7552],
+    ['gpt-5.4-nano', 0.1755, 1.097],
     ['gpt-5.4-mini', 0.6582, 3.9491],
     ['gpt-5.4', 2.1939, 13.1637],
     ['gpt-5.5', 4.3879, 26.3273],
