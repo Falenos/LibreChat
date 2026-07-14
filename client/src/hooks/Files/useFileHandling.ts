@@ -27,6 +27,9 @@ import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
 import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
 // End [knauf]
+// [knauf] KK20-227 — warn before an accidental refresh strands an in-flight upload.
+import { useUploadBeforeUnloadGuard } from '~/knauf/hooks/Files/useUploadBeforeUnloadGuard';
+// End [knauf]
 
 type UseFileHandling = {
   fileSetter?: FileSetter;
@@ -46,6 +49,30 @@ export type FileHandlingState = {
 };
 
 const noop = () => {};
+
+// [knauf] KK20-227 — module-level mutex serializing EVERY document upload from
+// this client, not just files within one handleFiles loop. Awaiting mutateAsync
+// alone only serializes one loop; a second file selection — or a different
+// uploader instance (picker / drag / paste) — starts a parallel handleFiles loop
+// and both mutateAsync calls run concurrently, restoring the concurrent RAG
+// /embed (Azure Document Intelligence OCR) load that causes the silent OCR-less
+// fallback (KK20-227). Chaining through one module-scoped promise makes every
+// document upload wait for the previous to settle (success OR failure) before
+// starting, regardless of how many loops / hook instances are active. Applies to
+// the document (file_search) path only; images take the vision path (no OCR).
+let documentUploadQueue: Promise<unknown> = Promise.resolve();
+function enqueueDocumentUpload<T>(task: () => Promise<T>): Promise<T> {
+  const run = documentUploadQueue.then(task, task);
+  // Keep the chain alive whatever this upload's outcome (never stays rejected).
+  documentUploadQueue = run.then(noop, noop);
+  return run;
+}
+
+/** Test-only: reset the module-level document-upload queue between tests. */
+export function _resetDocumentUploadQueue(): void {
+  documentUploadQueue = Promise.resolve();
+}
+// End [knauf]
 
 // [knauf] KK20-204 — collapse a file Map so each content-hash dedup asset
 // appears once. The server mints a distinct file_id per upload but points
@@ -98,6 +125,16 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     params?.fileSetter ?? setFiles,
   );
   const { resizeImageIfNeeded } = useClientResize();
+
+  // [knauf] KK20-227 — block an accidental refresh while any upload is mid-flight
+  // (progress < 1), matching the send-button gate in FileRow. Prevents the
+  // "refresh stranded my upload → file looks done but OCR missing" path.
+  const hasPendingUploads = useMemo(
+    () => Array.from(files.values()).some((file) => file.progress < 1),
+    [files],
+  );
+  useUploadBeforeUnloadGuard(hasPendingUploads);
+  // End [knauf]
 
   const agent_id = params?.additionalMetadata?.agent_id ?? '';
   const assistant_id = params?.additionalMetadata?.assistant_id ?? '';
@@ -294,8 +331,19 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       }
       // End [knauf]
 
-      uploadFile.mutate(formData);
+      // [knauf] KK20-227 — run the document upload through the module-level
+      // queue so it is serialized against every other document upload from this
+      // client (this loop, a later selection, and other uploader instances), not
+      // just the files in this one handleFiles call. The server runs RAG /embed
+      // (Azure Document Intelligence OCR) synchronously inside the request, so
+      // concurrent uploads mean concurrent DI calls — the primary trigger for DI
+      // throttling (429s) and the silent OCR-less fallback (KK20-227). onError
+      // already clears the file and shows a message, so swallow the rejection
+      // here to keep the handleFiles loop advancing to the next file. (Images use
+      // the loadImage/onload path and are unaffected — they don't hit OCR.)
+      await enqueueDocumentUpload(() => uploadFile.mutateAsync(formData)).catch(() => {});
       return;
+      // End [knauf]
     }
 
     const convoModel = conversation?.model ?? '';

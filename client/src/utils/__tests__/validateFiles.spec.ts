@@ -373,3 +373,58 @@ describe('Knauf per-category cap ↔ locale copy lockstep', () => {
   }
 });
 // End [knauf]
+
+// [knauf] KK20-227 — re-index (delete + re-upload) must validate against the
+// files map with the just-deleted file already removed. If it is still present
+// when the identical blob is re-uploaded, validateFiles flags a dupe and the
+// re-upload is lost (the server delete already succeeded). The fix defers the
+// re-upload through the pending queue until the delete has been applied to
+// `files`; these cases pin the real validation behaviour that fix depends on.
+describe('validateFiles — KK20-227 re-index de-dupe (real validation path)', () => {
+  const fileConfig: FileConfig | null = null;
+
+  it('rejects the identical re-upload while the deleted file is still in files', () => {
+    const setError = jest.fn();
+    const files = new Map<string, ExtendedFile>([
+      [
+        'f1',
+        makeExtendedFile({
+          file_id: 'f1',
+          filename: 'doc.pdf',
+          size: 1024,
+          type: 'application/pdf',
+        }),
+      ],
+    ]);
+    const fileList = [makeFile('doc.pdf', 'application/pdf', 1024)];
+
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig: makeEndpointConfig(),
+      fileConfig,
+    });
+
+    expect(result).toBe(false);
+    expect(setError).toHaveBeenCalledWith('com_error_files_dupe');
+  });
+
+  it('accepts the identical re-upload once the deleted file is removed from files', () => {
+    const setError = jest.fn();
+    const files = new Map<string, ExtendedFile>(); // delete already applied
+    const fileList = [makeFile('doc.pdf', 'application/pdf', 1024)];
+
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig: makeEndpointConfig(),
+      fileConfig,
+    });
+
+    expect(result).toBe(true);
+    expect(setError).not.toHaveBeenCalled();
+  });
+});
+// End [knauf]
