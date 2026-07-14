@@ -397,9 +397,9 @@ Langfuse runtime in AGK dev:
 
 ### AGK Foundry model router
 
-Foundry infrastructure was deployed on 2026-07-13. Default KARL, memory, title generation, and prompt autogeneration use `model-router`. Created agents use direct Foundry `gpt-5.5` because their native web search and provider-upload features require the Responses API, which the account-level model-router deployment rejects with HTTP 400. This is an explicit workload split, not a fallback. Image generation, embeddings, and Document Intelligence remain on their specialised deployments because model router does not provide those model types.
+Foundry infrastructure was deployed on 2026-07-13. Default KARL, memory, title generation, and prompt autogeneration use the `model-router-chat` application alias, which maps to the account-level `model-router` deployment through Chat Completions. Created agents use the direct `gpt-5.5` deployment through Responses API so native web search and agent tool turns remain deterministic. The project-endpoint router Responses path stays configured for later comparison but is not selected by production agent presets. Image generation, embeddings, and Document Intelligence remain on their specialised deployments because model router does not provide those model types.
 
-Live verification on 2026-07-13 confirmed both accounts, projects, deployments, private endpoints, and DNS zone groups are `Succeeded`/`Approved`. An authenticated nonprod Chat Completions request from the private ACI runner returned HTTP `200` and `ROUTER_OK`; the router selected `gpt-5-mini-2025-08-07`. Account-level `/openai/v1/responses` returned `400 The requested operation is unsupported`, so the AGK router configuration uses Chat Completions API version `2024-10-21`.
+Live verification on 2026-07-14 confirmed the nonprod project endpoint accepted a raw `model-router` plus `web_search` request with HTTP `200`; the response contained a `web_search_call` and routed to `gpt-5.4-mini-2026-03-17`. Integrated LibreChat agent runs could still end with an Azure server error after producing an answer when hosted search and local function-tool turns were combined. Ordinary KARL therefore uses account-level router Chat Completions, while created agents remain on direct `gpt-5.5` Responses until the router agent path passes repeatable application-level tests.
 
 | Env | Subscription | Hub resource group | Foundry account | Project | Private endpoint |
 |---|---|---|---|---|---|
@@ -417,12 +417,12 @@ Deployed models in each environment:
 | Deployment | Model/version | SKU | Capacity | Purpose |
 |---|---|---|---:|---|
 | `model-router` | `model-router` / `2025-11-18` | `GlobalStandard` | 10000 | Balanced router, 10M TPM quota allocation |
-| `gpt-5.5` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 | Agent base model for Responses API, native web search, and provider uploads |
+| `gpt-5.5` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 | Direct deployment for created agents and agent web-search/tool workloads |
 | `gpt-5.5-1` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 | Second direct benchmark deployment; not wired into Agentic Karl |
 
 `GlobalStandard` is consumption/pay-per-token capacity, not provisioned throughput. Capacity reserves rate-limit quota but does not create a fixed PTU charge. The router deployment's live limit is 10M TPM / 10k RPM; this limit does not include either direct GPT-5.5 deployment. Each direct GPT-5.5 deployment has its own 5M TPM / 5k RPM allocation from the GPT-5.5 regional quota pool.
 
-The two direct GPT-5.5 deployments are not backends or replicas used by `model-router`; the router independently selects from its Azure-supported model set and requires no matching direct deployments. The current `routing: null` is the default Balanced/full-model-set configuration. GPT-5.5 is in that eligible set, but the router does not guarantee its selection. Agentic Karl calls `gpt-5.5` explicitly for created agents and does not call `gpt-5.5-1`. The verified router path is `https://<account>.openai.azure.com/openai/deployments/model-router/chat/completions?api-version=2024-10-21`.
+The two direct GPT-5.5 deployments are not backends or replicas used by `model-router`; the router independently selects from its Azure-supported model set and requires no matching direct deployments. The current `routing: null` is the default Balanced/full-model-set configuration. GPT-5.5 is in that eligible set, but the router does not guarantee its selection. Agentic Karl calls `gpt-5.5` explicitly for created agents and does not call `gpt-5.5-1`. The project router path remains available at `https://<account>.services.ai.azure.com/api/projects/<project>/openai/v1/responses` for later application-level comparison.
 
 Infrastructure ownership and release order:
 
@@ -437,8 +437,8 @@ Access and validation rules:
 - The corporate VPN routes the nonprod Foundry subnet `10.160.192.0/24`. An authenticated laptop request forced to the OpenAI private endpoint `10.160.192.165` returned HTTP `200`, proving the VPN data path and TLS.
 - Normal laptop DNS still resolves the Foundry hostname publicly and returns `403 Public access is disabled` until the nonprod Foundry zones are linked to `vnet-ct-shared-dns-forwarder`. The computational Terraform owns that link; keep public access disabled. Prod remains hub/spoke-only unless a separate approved access requirement is added.
 - Test from AKS/ACI while the DNS link is pending. After it is applied, reconnect the corporate VPN or flush local DNS and confirm the OpenAI hostname resolves to `10.160.192.165` before running the app locally.
-- Keep the existing `AGK-OPENAI-API-KEY` for image generation, embeddings, and Document Intelligence. Text generation uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`.
-- `librechat.yaml` intentionally has no legacy text-model fallback. The Foundry group exposes router-backed KARL and direct GPT-5.5 agents as separate workload paths. Validate both before production rollout.
+- Keep the existing `AGK-OPENAI-API-KEY` for image generation, embeddings, and Document Intelligence. Text generation uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`. `AZURE_FOUNDRY_PROJECT_ENDPOINT` is non-secret per-environment config supplied by the Helm overlays.
+- `librechat.yaml` intentionally has no silent runtime fallback. Ordinary KARL uses the router; created agents use direct GPT-5.5. Legacy saved-agent names are explicit compatibility aliases to GPT-5.5. Validate both paths before production rollout.
 
 Safe live checks:
 
@@ -504,9 +504,9 @@ Rate-limit interpretation:
 
 Agentic Karl model wiring:
 
-- App repo `$KNAUF_ROOT/agentic-karl/librechat.yaml` defines one `agk-foundry` Azure group, backed by `AZURE_FOUNDRY_RESOURCE_NAME` and `AZURE_FOUNDRY_API_KEY`, exposing `model-router` and `gpt-5.5`.
-- Default model spec `karl`, memory, title generation, and internal prompt autogeneration use `model-router` through Chat Completions API version `2024-10-21`.
-- Personality presets use direct `gpt-5.5` with `useResponsesApi: true`. A live Responses API request with native `web_search` returned HTTP 200 from that deployment.
+- App repo `$KNAUF_ROOT/agentic-karl/librechat.yaml` defines account groups for router Chat Completions and direct GPT-5.5 agents, plus an experimental project-endpoint router Responses group. All use `AZURE_FOUNDRY_API_KEY`; the project group also uses the non-secret `AZURE_FOUNDRY_PROJECT_ENDPOINT` supplied by each Helm overlay.
+- Default model spec `karl`, memory, title generation, and internal prompt autogeneration use the `model-router-chat` alias through account-level Chat Completions API version `2024-10-21`; the alias maps to deployment `model-router`.
+- Personality presets use direct `gpt-5.5` with `useResponsesApi: true`. Legacy saved-agent names (`gpt-4o` and `gpt-5.4`) resolve through the same account group and are rewritten to `gpt-5.5`, so no database migration is required. To compare new agents against the router later, change the three personality `model` values to canonical `model-router`; the project group is already configured.
 - AGK GitOps still keeps the legacy Azure resource configuration for non-text services, including image generation at `https://cst-karl-dev.openai.azure.com/openai/deployments/gpt-image-1`.
 - AGK RAG API dev/prod values set `RAG_OPENAI_BASEURL: https://cst-karl-dev.openai.azure.com/openai/v1`, `EMBEDDINGS_PROVIDER: openAI`, and `EMBEDDINGS_MODEL: text-embedding-3-large`.
 - AGK dev RAG also sets `RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/`; prod RAG did not include this value in GitOps at the last check.

@@ -34,7 +34,7 @@ memory:
   agent:
     enabled: true
     provider: "azureOpenAI"
-    model: "model-router"
+    model: "model-router-chat"
 
 interface:
   customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
@@ -474,12 +474,12 @@ endpoints:
       - tools
 
   azureOpenAI:
-    titleModel: 'model-router'
+    titleModel: 'model-router-chat'
     titleMethod: 'completion'
     plugins: true
     assistants: false
     groups:
-      - group: 'agk-foundry'
+      - group: 'agk-foundry-router-chat'
         apiKey: '${AZURE_FOUNDRY_API_KEY}'
         instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
         version: '2024-10-21'
@@ -489,12 +489,50 @@ endpoints:
           - presence_penalty
           - frequency_penalty
         models:
-          model-router:
+          # Account-scoped Chat Completions alias. The deployment remains
+          # `model-router`; the alias keeps it separate from the project-scoped
+          # Responses API model below.
+          model-router-chat:
             deploymentName: 'model-router'
+            version: '2024-10-21'
+      # Direct GPT-5.5 Responses path for created agents. Previous model names
+      # are compatibility aliases so existing saved agents migrate in config.
+      - group: 'agk-foundry-agent-gpt55'
+        apiKey: '${AZURE_FOUNDRY_API_KEY}'
+        instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
+        version: '2024-10-21'
+        addParams:
+          model: 'gpt-5.5'
+        dropParams:
+          - temperature
+          - top_p
+          - presence_penalty
+          - frequency_penalty
+        models:
+          gpt-4o:
+            deploymentName: 'gpt-5.5'
+            version: '2024-10-21'
+          gpt-5.4:
+            deploymentName: 'gpt-5.5'
             version: '2024-10-21'
           gpt-5.5:
             deploymentName: 'gpt-5.5'
             version: '2024-10-21'
+      # Experimental router Responses path. Keep it available for later
+      # comparison, but do not select it in production agent presets yet.
+      - group: 'agk-foundry-project'
+        apiKey: '${AZURE_FOUNDRY_API_KEY}'
+        serverless: true
+        baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
+        additionalHeaders:
+          api-key: '${AZURE_FOUNDRY_API_KEY}'
+        dropParams:
+          - temperature
+          - top_p
+          - presence_penalty
+          - frequency_penalty
+        models:
+          model-router: true
 
 modelSpecs:
   enforce: false
@@ -523,7 +561,7 @@ modelSpecs:
       description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router'
+        model: 'model-router-chat'
         # The account-level router deployment currently supports Chat
         # Completions; setting useResponsesApi here returns HTTP 400.
         greeting: |
@@ -555,10 +593,8 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
-    # Agent personalities use the direct Foundry GPT-5.5 deployment because
-    # agents require Responses API features such as native web_search and
-    # provider file uploads. The model router account endpoint rejects those
-    # requests with HTTP 400, so it remains the default KARL chat path only.
+    # Agent personalities use the direct GPT-5.5 deployment through Responses
+    # API. The experimental router Responses model remains configured separately.
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -610,7 +646,7 @@ modelSpecs:
       description: 'Used by the agent builder to draft system instructions.'
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router'
+        model: 'model-router-chat'
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions
