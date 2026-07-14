@@ -16,10 +16,12 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
-// [knauf] KK20-195 WP0 — keep retry backoff ~instant in tests. Must be set
-// before require('./crud'): the knobs are read at module load.
+// [knauf] KK20-195 WP0 — keep retry backoff ~instant (jitter ∈ [0,1] ms) and
+// pin a small end-to-end embed budget so deadline behavior is testable. Must
+// be set before require('./crud'): the knobs are read at module load.
 process.env.RAG_EMBED_BACKOFF_BASE_MS = '1';
 process.env.RAG_EMBED_BACKOFF_MAX_MS = '1';
+process.env.RAG_EMBED_SYNC_TIMEOUT_MS = '5000';
 // End [knauf]
 
 const axios = require('axios');
@@ -30,6 +32,7 @@ const {
   uploadVectors,
   parseRetryAfterMs,
   isRetryableEmbedError,
+  embedRetryDelayMs,
   // End [knauf]
 } = require('./crud');
 
@@ -325,10 +328,15 @@ describe('parseRetryAfterMs (KK20-195 WP0)', () => {
 });
 
 describe('isRetryableEmbedError (KK20-195 WP0)', () => {
-  test('retries provider throttles and server errors', () => {
+  test('retries ONLY a provider throttle (429) until WP1 lands', () => {
     expect(isRetryableEmbedError({ response: { status: 429 } })).toBe(true);
-    expect(isRetryableEmbedError({ response: { status: 503 } })).toBe(true);
-    expect(isRetryableEmbedError({ response: { status: 408 } })).toBe(true);
+  });
+
+  test('ambiguous failures fail fast pre-WP1 — RAG may already have written vectors', () => {
+    expect(isRetryableEmbedError({ response: { status: 503 } })).toBe(false);
+    expect(isRetryableEmbedError({ response: { status: 408 } })).toBe(false);
+    expect(isRetryableEmbedError({ code: 'ECONNRESET' })).toBe(false);
+    expect(isRetryableEmbedError({ code: 'ECONNABORTED' })).toBe(false);
   });
 
   test('fails fast on other 4xx (bad input)', () => {
@@ -336,13 +344,54 @@ describe('isRetryableEmbedError (KK20-195 WP0)', () => {
     expect(isRetryableEmbedError({ response: { status: 401 } })).toBe(false);
   });
 
-  test('retries a connection reset (no response) but NOT a timeout', () => {
-    expect(isRetryableEmbedError({ code: 'ECONNRESET' })).toBe(true);
-    expect(isRetryableEmbedError({ code: 'ECONNABORTED' })).toBe(false);
-  });
-
   test('never retries body-level failures (knaufNoRetry)', () => {
     expect(isRetryableEmbedError({ knaufNoRetry: true })).toBe(false);
+  });
+});
+
+describe('embedRetryDelayMs (KK20-195 WP0)', () => {
+  const { recordFileIndexProviderError } = require('@librechat/api');
+  const BIG_BUDGET_MS = 60_000;
+
+  beforeEach(() => jest.clearAllMocks());
+
+  test('Retry-After is a FLOOR with jitter added on top, never max()', () => {
+    const delay = embedRetryDelayMs(
+      { response: { status: 429, headers: { 'retry-after': '2' } } },
+      1,
+      'embed',
+      BIG_BUDGET_MS,
+    );
+    // Backoff base/max pinned to 1 ms in this spec: jitter ∈ [0, 1].
+    expect(delay).toBeGreaterThanOrEqual(2000);
+    expect(delay).toBeLessThanOrEqual(2001);
+  });
+
+  test('returns null when the end-to-end budget cannot fit the delay', () => {
+    const delay = embedRetryDelayMs(
+      { response: { status: 429, headers: { 'retry-after': '2' } } },
+      1,
+      'embed',
+      1500,
+    );
+    expect(delay).toBeNull();
+  });
+
+  test('returns null for non-retryable classes and once attempts are spent', () => {
+    expect(embedRetryDelayMs({ response: { status: 503 } }, 1, 'embed', BIG_BUDGET_MS)).toBeNull();
+    expect(
+      embedRetryDelayMs(
+        { response: { status: 429, headers: { 'retry-after': '0' } } },
+        3,
+        'embed',
+        BIG_BUDGET_MS,
+      ),
+    ).toBeNull();
+  });
+
+  test('records provider errors by status class even when not retrying', () => {
+    embedRetryDelayMs({ response: { status: 503 } }, 1, 'embed', BIG_BUDGET_MS);
+    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '5xx');
   });
 });
 
@@ -354,6 +403,7 @@ describe('uploadVectors (KK20-195 WP0 containment)', () => {
     recordFileIndexEmbed,
     recordFileIndexProviderError,
     recordFileIndexEmbedRetry,
+    generateShortLivedToken,
   } = require('@librechat/api');
 
   const OLD_URL = process.env.RAG_API_URL;
@@ -392,7 +442,7 @@ describe('uploadVectors (KK20-195 WP0 containment)', () => {
     expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'success', expect.any(Number));
   });
 
-  test('retries a 429 honoring Retry-After, then succeeds', async () => {
+  test('retries a 429 honoring Retry-After, minting a FRESH token per attempt', async () => {
     axios.post
       .mockRejectedValueOnce({
         response: { status: 429, headers: { 'retry-after': '0' } },
@@ -403,33 +453,83 @@ describe('uploadVectors (KK20-195 WP0 containment)', () => {
     const result = await uploadVectors({ req, file, file_id: 'f1' });
 
     expect(axios.post).toHaveBeenCalledTimes(2);
+    expect(generateShortLivedToken).toHaveBeenCalledTimes(2);
     expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '429');
     expect(recordFileIndexEmbedRetry).toHaveBeenCalledWith('embed');
     expect(result.embedded).toBe(true);
+    // Success never triggers the compensating vector delete.
+    expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  test('retries a transient 5xx and throws after the attempt budget (3)', async () => {
+  test('ambiguous 5xx fails FAST pre-WP1 and compensates (best-effort vector delete)', async () => {
     axios.post.mockRejectedValue({ response: { status: 503 }, message: 'unavailable' });
-
-    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
-    expect(axios.post).toHaveBeenCalledTimes(3);
-    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '5xx');
-    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'failure', expect.any(Number));
-  });
-
-  test('fails fast on a non-transient 4xx (no retry)', async () => {
-    axios.post.mockRejectedValue({ response: { status: 400 }, message: 'bad request' });
+    axios.delete.mockResolvedValue({ status: 200 });
 
     await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
     expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '5xx');
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'failure', expect.any(Number));
+    // Vectors may have landed before the failure — reconcile by file_id.
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['f1'] }),
+    );
   });
 
-  test('does NOT retry after a timeout — the sync budget is spent', async () => {
+  test('fails fast on a non-transient 4xx (no retry) and still compensates', async () => {
+    axios.post.mockRejectedValue({ response: { status: 400 }, message: 'bad request' });
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(axios.delete).toHaveBeenCalledTimes(1);
+  });
+
+  test('does NOT retry after a timeout — the end-to-end budget is spent', async () => {
     axios.post.mockRejectedValue({ code: 'ECONNABORTED', message: 'timeout exceeded' });
+    axios.delete.mockResolvedValue({ status: 200 });
 
     await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
     expect(axios.post).toHaveBeenCalledTimes(1);
     expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'timeout', expect.any(Number));
+  });
+
+  test('a compensating-delete failure never masks the original embed error', async () => {
+    axios.post.mockRejectedValue({ response: { status: 400 }, message: 'bad request' });
+    axios.delete.mockRejectedValue({ response: { status: 400 }, message: 'delete refused' });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow('bad request');
+  });
+
+  test('per-attempt timeout shrinks toward the single end-to-end deadline', async () => {
+    axios.post
+      .mockRejectedValueOnce({
+        response: { status: 429, headers: { 'retry-after': '1' } },
+        message: 'throttled',
+      })
+      .mockResolvedValueOnce({ data: { status: true, known_type: true } });
+
+    await uploadVectors({ req, file, file_id: 'f1' });
+
+    const firstTimeout = axios.post.mock.calls[0][2].timeout;
+    const secondTimeout = axios.post.mock.calls[1][2].timeout;
+    // Budget pinned to 5000 ms in this spec; the ~1 s Retry-After sleep must
+    // come out of the SAME budget, not reset it.
+    expect(firstTimeout).toBeLessThanOrEqual(5000);
+    expect(secondTimeout).toBeLessThan(firstTimeout - 900);
+  });
+
+  test('no retry when Retry-After exceeds the remaining end-to-end budget', async () => {
+    axios.post.mockRejectedValue({
+      response: { status: 429, headers: { 'retry-after': '10' } },
+      message: 'throttled',
+    });
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
+    // 10 s Retry-After ≥ 5 s budget → budget cannot fit the delay → single attempt.
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(recordFileIndexEmbedRetry).not.toHaveBeenCalled();
   });
 
   test('fails fast on unsupported type (known_type=false) with no retry', async () => {
@@ -455,7 +555,10 @@ describe('uploadVectors (KK20-195 WP0 containment)', () => {
 
   test('rebuilds the multipart body per attempt (fresh read stream each retry)', async () => {
     axios.post
-      .mockRejectedValueOnce({ response: { status: 503 }, message: 'unavailable' })
+      .mockRejectedValueOnce({
+        response: { status: 429, headers: { 'retry-after': '0' } },
+        message: 'throttled',
+      })
       .mockResolvedValueOnce({ data: { status: true, known_type: true } });
 
     await uploadVectors({ req, file, file_id: 'f1' });

@@ -95,10 +95,13 @@ const parseRetryAfterMs = (headerValue) => {
 };
 
 /**
- * Retryable = transient transport/provider failures that come back fast
- * (connection reset, 408/429/5xx). A timed-out attempt (ECONNABORTED) is NOT
- * retried on the synchronous path — the request budget is already spent.
- * Body-level failures (unsupported type, status=false) never retry.
+ * Retryable = ONLY a provider throttle (429) until WP1 lands. The current RAG
+ * pipeline appends vectors by file_id, can skip rollback after a partial batch
+ * failure, and cannot cancel in-flight work — so an ambiguous failure
+ * (408/5xx/connection reset/timeout) may arrive AFTER some vectors were
+ * written; replaying the same file_id would duplicate them. The fuller retry
+ * classes (accepted plan §5.3) activate with WP1's generation-safe writes, on
+ * the async worker path — not here. Body-level failures never retry.
  * @param {unknown} error
  * @returns {boolean}
  */
@@ -106,23 +109,24 @@ const isRetryableEmbedError = (error) => {
   if (error?.knaufNoRetry) {
     return false;
   }
-  const status = error?.response?.status;
-  if (status == null) {
-    return error?.code !== 'ECONNABORTED';
-  }
-  return status === 408 || status === 429 || status >= 500;
+  return error?.response?.status === 429;
 };
 
 /**
  * Handle a failed embed attempt: record provider metrics and, when the attempt
- * may be retried, return the pre-retry delay (Retry-After on 429 wins over the
- * full-jitter exponential backoff). Returns null when no retry is allowed.
+ * may be retried, return the pre-retry delay. Retry-After is treated as a
+ * FLOOR with the full-jitter backoff added on top — taking max() instead would
+ * synchronize every concurrent retry on the provider's exact value and
+ * recreate the burst this work contains. Returns null when no retry is
+ * allowed (non-retryable class, attempt budget spent, or the end-to-end
+ * deadline cannot fit the delay plus a meaningful attempt).
  * @param {unknown} error
  * @param {number} attempt
  * @param {'embed' | 'agent_embed'} metricRoute
+ * @param {number} remainingMs - time left in the end-to-end embed budget
  * @returns {number | null}
  */
-const embedRetryDelayMs = (error, attempt, metricRoute) => {
+const embedRetryDelayMs = (error, attempt, metricRoute, remainingMs) => {
   const status = error?.response?.status;
   if (status === 429) {
     recordFileIndexProviderError?.(metricRoute, '429');
@@ -132,11 +136,56 @@ const embedRetryDelayMs = (error, attempt, metricRoute) => {
   if (!isRetryableEmbedError(error) || attempt >= RAG_EMBED_MAX_ATTEMPTS) {
     return null;
   }
-  const retryAfterMs =
-    status === 429 ? parseRetryAfterMs(error?.response?.headers?.['retry-after']) : null;
+  const retryAfterMs = parseRetryAfterMs(error?.response?.headers?.['retry-after']);
   const capMs = Math.min(RAG_EMBED_BACKOFF_BASE_MS * 2 ** (attempt - 1), RAG_EMBED_BACKOFF_MAX_MS);
-  const backoffMs = crypto.randomInt(0, Math.max(1, Math.floor(capMs)) + 1);
-  return Math.max(retryAfterMs ?? 0, backoffMs);
+  const jitterMs = crypto.randomInt(0, Math.max(1, Math.floor(capMs)) + 1);
+  const delayMs = (retryAfterMs ?? 0) + jitterMs;
+  if (delayMs >= remainingMs) {
+    return null;
+  }
+  return delayMs;
+};
+
+/**
+ * Record a failed embed attempt on the shared attempt state and decide the
+ * retry delay (null = no retry). Extracted so uploadVectors stays readable.
+ * @param {unknown} error
+ * @param {number} attempt
+ * @param {'embed' | 'agent_embed'} metricRoute
+ * @param {number} deadlineAtMs
+ * @param {{ outcome: string, lastError?: unknown }} attemptState
+ * @returns {number | null}
+ */
+const handleEmbedAttemptError = (error, attempt, metricRoute, deadlineAtMs, attemptState) => {
+  if (error?.code === 'ECONNABORTED') {
+    attemptState.outcome = 'timeout';
+  }
+  attemptState.lastError = error;
+  return embedRetryDelayMs(error, attempt, metricRoute, deadlineAtMs - Date.now());
+};
+
+/**
+ * Best-effort vector reconciliation after a failed embed: some batches may
+ * have landed before the failure, and an axios abort does NOT cancel
+ * rag_api's in-flight work — so this delete is compensation, not a guarantee.
+ * A write landing after it can still leave vectors; the WP4 reconciler sweeps
+ * those and WP1's generation-safe writes remove the race entirely.
+ * @param {ServerRequest} req
+ * @param {string} file_id
+ * @param {boolean} attempted - whether any embed POST was actually fired
+ * @returns {Promise<void>}
+ */
+const compensateEmbedFailure = async (req, file_id, attempted) => {
+  if (!attempted) {
+    return;
+  }
+  try {
+    await deleteVectorsByIds(req, [file_id]);
+  } catch (cleanupError) {
+    logger.warn(
+      `[uploadVectors] compensating vector delete failed for ${file_id}: ${cleanupError?.message}`,
+    );
+  }
 };
 
 /**
@@ -360,17 +409,25 @@ async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, stora
       : `${process.env.RAG_API_URL}/embed`;
   // End [knauf]
 
-  // [knauf] KK20-195 WP0 — bounded, Retry-After-aware embed with a sync-path
-  // timeout and baseline metrics.
+  // [knauf] KK20-195 WP0 — bounded, Retry-After-aware embed with ONE end-to-end
+  // deadline (RAG_EMBED_SYNC_TIMEOUT_MS is the total budget across attempts,
+  // not per attempt) and baseline metrics.
   const metricRoute = embedUrl.endsWith('/agent/embed') ? 'agent_embed' : 'embed';
   const startedAtMs = Date.now();
-  let outcome = 'failure';
+  const deadlineAtMs = startedAtMs + RAG_EMBED_SYNC_TIMEOUT_MS;
+  const attemptState = { outcome: 'failure', lastError: undefined };
+  let attempted = false;
   try {
-    const jwtToken = generateShortLivedToken(req.user.id);
-    let lastError;
-
     for (let attempt = 1; attempt <= RAG_EMBED_MAX_ATTEMPTS; attempt++) {
+      const remainingMs = deadlineAtMs - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
       const formData = buildEmbedFormData({ file, file_id, entity_id, storageMetadata });
+      // Fresh token per attempt: a slow attempt plus a Retry-After sleep can
+      // outlive the token's 5-minute default and 401 the next attempt.
+      const jwtToken = generateShortLivedToken(req.user.id);
+      attempted = true;
 
       let response;
       try {
@@ -380,14 +437,16 @@ async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, stora
             accept: 'application/json',
             ...formData.getHeaders(),
           },
-          timeout: RAG_EMBED_SYNC_TIMEOUT_MS,
+          timeout: remainingMs,
         });
       } catch (error) {
-        if (error?.code === 'ECONNABORTED') {
-          outcome = 'timeout';
-        }
-        lastError = error;
-        const delayMs = embedRetryDelayMs(error, attempt, metricRoute);
+        const delayMs = handleEmbedAttemptError(
+          error,
+          attempt,
+          metricRoute,
+          deadlineAtMs,
+          attemptState,
+        );
         if (delayMs == null) {
           break;
         }
@@ -400,7 +459,7 @@ async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, stora
       logger.debug('Response from embedding file', responseData);
       assertEmbedBodyOk(responseData, file);
 
-      outcome = 'success';
+      attemptState.outcome = 'success';
       return {
         bytes: file.size,
         filename: file.originalname,
@@ -409,16 +468,17 @@ async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, stora
       };
     }
 
-    throw lastError;
+    throw attemptState.lastError ?? new Error('Embed aborted: end-to-end budget exhausted.');
   } catch (error) {
-    outcome = error?.knaufOutcome ?? outcome;
+    attemptState.outcome = error?.knaufOutcome ?? attemptState.outcome;
+    await compensateEmbedFailure(req, file_id, attempted);
     logAxiosError({
       error,
       message: 'Error uploading vectors',
     });
     throw new Error(error.message || 'An error occurred during file upload.');
   } finally {
-    recordFileIndexEmbed?.(metricRoute, outcome, (Date.now() - startedAtMs) / 1000);
+    recordFileIndexEmbed?.(metricRoute, attemptState.outcome, (Date.now() - startedAtMs) / 1000);
   }
   // End [knauf]
 }
@@ -438,6 +498,7 @@ module.exports = {
   // KK20-195 WP0 — exported for unit tests of the containment guardrails.
   parseRetryAfterMs,
   isRetryableEmbedError,
+  embedRetryDelayMs,
   // End [knauf]
   uploadVectors,
 };

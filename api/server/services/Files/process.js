@@ -928,7 +928,18 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
         const { uploadVectors } = require('./VectorDB/crud');
-        embeddingResult = await uploadVectors({ req, file, file_id, entity_id: req.user.id, isAgentFile: false });
+        // KK20-195 WP0 — the blob above has no File row yet; if the embed
+        // fails, delete it so it can't orphan (compensation, best-effort).
+        const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
+        embeddingResult = await embedWithBlobCompensation({
+          embed: () =>
+            uploadVectors({ req, file, file_id, entity_id: req.user.id, isAgentFile: false }),
+          req,
+          file_id,
+          source,
+          storageResult,
+          getStrategyFunctions,
+        });
       }
     } else {
       // Agent-library knowledge: embed AGENT-scoped (entity_id is already agent_id here)
@@ -941,7 +952,16 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
 
       const { uploadVectors } = require('./VectorDB/crud');
-      embeddingResult = await uploadVectors({ req, file, file_id, entity_id, isAgentFile: true });
+      // KK20-195 WP0 — same compensation as the chat dedup-MISS path above.
+      const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
+      embeddingResult = await embedWithBlobCompensation({
+        embed: () => uploadVectors({ req, file, file_id, entity_id, isAgentFile: true }),
+        req,
+        file_id,
+        source,
+        storageResult,
+        getStrategyFunctions,
+      });
     }
     // End [knauf]
 
