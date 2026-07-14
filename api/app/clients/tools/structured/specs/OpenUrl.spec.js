@@ -263,6 +263,19 @@ describe('[knauf] R3 — oversized HTML is not DOM-parsed', () => {
 });
 
 describe('[knauf] structured-data fallback (boost for thin/marketing pages)', () => {
+  test('does not forward invalid page CSS to the process console', () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      __internal__.extractHtml(
+        '<html><head><style>}</style></head><body>Readable page text.</body></html>',
+        'https://example.com/',
+      );
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   test('recovers og:description when Readability yields nothing', () => {
     const html =
       '<html><head><title>Diamant</title>' +

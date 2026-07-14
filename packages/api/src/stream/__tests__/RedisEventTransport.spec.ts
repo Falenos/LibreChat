@@ -53,4 +53,32 @@ describe('RedisEventTransport', () => {
 
     transport.destroy();
   });
+
+  // [knauf] Abort-only replicas ignore data events but still receive cross-replica aborts.
+  it('ignores stream data when only an abort listener is registered', () => {
+    const mockPublisher = createMockPublisher();
+    const mockSubscriber = createMockSubscriber();
+    const transport = new RedisEventTransport(
+      mockPublisher as unknown as Redis,
+      mockSubscriber as unknown as Redis,
+    );
+    const abortCallback = jest.fn();
+    const warnSpy = jest.spyOn(logger, 'warn');
+    const streamId = 'abort-only-listener-test';
+    const channel = `stream:{${streamId}}:events`;
+
+    transport.onAbort(streamId, abortCallback);
+    const messageHandler = getMessageHandler(mockSubscriber);
+    for (let seq = 1; seq <= 100; seq++) {
+      messageHandler(channel, JSON.stringify({ type: 'chunk', seq, data: { seq } }));
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    messageHandler(channel, JSON.stringify({ type: 'abort' }));
+    expect(abortCallback).toHaveBeenCalledTimes(1);
+
+    warnSpy.mockRestore();
+    transport.destroy();
+  });
+  // End [knauf]
 });

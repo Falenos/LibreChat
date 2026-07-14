@@ -11,8 +11,11 @@
 'use strict';
 
 const { Readability } = require('@mozilla/readability');
-const { JSDOM } = require('jsdom');
+const { JSDOM, VirtualConsole } = require('jsdom');
 const { convert: htmlToText } = require('html-to-text');
+
+// Fetched pages are untrusted input; do not forward their console or CSS parser noise.
+const quietVirtualConsole = new VirtualConsole();
 
 // R3 (KK20-194 review): jsdom + Readability build a full DOM synchronously and
 // cannot be interrupted by the fetch AbortController — a multi-megabyte body
@@ -64,7 +67,7 @@ function wrapAsUntrusted(content, finalUrl) {
 function parseReadable(html, finalUrl) {
   let dom;
   try {
-    dom = new JSDOM(html, { url: finalUrl });
+    dom = new JSDOM(html, { url: finalUrl, virtualConsole: quietVirtualConsole });
   } catch {
     return { title: null, content: htmlToText(html, { wordwrap: false }) };
   }

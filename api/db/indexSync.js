@@ -333,9 +333,9 @@ async function indexSync() {
 
   try {
     // This will only execute the handler if no other instance is running the sync
-    const result = await flowManager.createFlowWithHandler(flowId, flowType, () =>
-      performSync(flowManager, flowId, flowType),
-    );
+    // [knauf] FlowStateManager owns completion and TTL cleanup; handler-side deletion races it.
+    const result = await flowManager.createFlowWithHandler(flowId, flowType, () => performSync());
+    // End [knauf]
 
     if (result.messagesSync || result.convosSync) {
       logger.info('[indexSync] Sync completed successfully');

@@ -233,6 +233,12 @@ export class RedisEventTransport implements IEventTransport {
     try {
       const parsed = JSON.parse(message) as PubSubMessage;
 
+      // [knauf] Abort-only listeners must not accumulate another pod's stream ordering state.
+      if (streamState.handlers.size === 0 && parsed.type !== EventTypes.ABORT) {
+        return;
+      }
+      // End [knauf]
+
       if (parsed.type === EventTypes.CHUNK && parsed.seq != null) {
         this.handleOrderedChunk(streamId, streamState, parsed);
       } else if (
