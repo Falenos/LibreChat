@@ -48,8 +48,6 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/agent-publishing-governance.md](implementation-plans/agent-publishing-governance.md) | AI Champions controlled agent-publishing pilot |
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
-| [implementation-plans/async-file-indexing-production.md](implementation-plans/async-file-indexing-production.md) | KK20-195 accepted production plan: logical `File` + physical `FileAsset` + Mongo atomic claim + dedicated AKS worker + generation-safe RAG |
-| [implementation-plans/async-file-indexing-production-code-map.md](implementation-plans/async-file-indexing-production-code-map.md) | KK20-195 code map — companion to the accepted plan: WP0–WP6 mapped to concrete agentic-karl files/functions/schemas/endpoints, reuse anchors, PR sequence, test-matrix mapping, cross-repo interfaces |
 
 ## Upstream releases
 
