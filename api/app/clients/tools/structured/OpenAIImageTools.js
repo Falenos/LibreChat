@@ -15,7 +15,7 @@ const {
   applyAxiosProxyConfig,
 } = require('@librechat/api');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { spendTokens, getFiles } = require('~/models');
+const { spendTokens, spendStructuredTokens, getFiles } = require('~/models');
 
 const displayMessage =
   "The tool displayed an image. All generated images are already plainly visible, so don't repeat the descriptions in detail. Do not list download links as they are available in the UI already. The user may download the images by clicking on them, but do not mention anything about downloading to the user.";
@@ -68,21 +68,29 @@ async function recordOpenAIImageUsage({ usage, req, model, conversationId, messa
     return;
   }
 
-  await spendTokens(
-    {
-      user: req.user.id,
-      model,
-      messageId,
-      conversationId,
-      context: 'image_generation',
-      balance,
-      transactions,
-    },
-    {
-      promptTokens,
+  const transaction = {
+    user: req.user.id,
+    model,
+    messageId,
+    conversationId,
+    context: 'image_generation',
+    balance,
+    transactions,
+  };
+  const details = usage.input_tokens_details;
+  const hasInputDetails = details && ('text_tokens' in details || 'image_tokens' in details);
+
+  if (hasInputDetails) {
+    const imageTokens = Number(details.image_tokens) || 0;
+    const textTokens = Number(details.text_tokens) || Math.max(promptTokens - imageTokens, 0);
+    await spendStructuredTokens(transaction, {
+      promptTokens: { input: textTokens, write: imageTokens },
       completionTokens,
-    },
-  );
+    });
+    return;
+  }
+
+  await spendTokens(transaction, { promptTokens, completionTokens });
 }
 // End [knauf]
 

@@ -3,8 +3,10 @@ const {
   calculateTransactionCost,
   COST_LOOKUP_INDEX,
   COST_LOOKUP_INDEX_NAME,
+  EUR_RATES,
   getConversationCosts,
   normalizeModel,
+  RATE_SOURCE,
 } = require('./costs');
 
 function chain(result) {
@@ -23,28 +25,53 @@ function createCache(initialValue) {
 }
 
 describe('knauf costs', () => {
-  it('normalizes AGK gpt-54 deployment names to gpt-5.4', () => {
-    expect(normalizeModel('gpt-54')).toBe('gpt-5.4');
-    expect(normalizeModel('azure/gpt-5.4')).toBe('gpt-5.4');
+  it.each([
+    ['gpt-54-nano-2026-03-17', 'gpt-5.4-nano'],
+    ['azure/gpt-5.4-mini-2026-03-17', 'gpt-5.4-mini'],
+    ['gpt-54', 'gpt-5.4'],
+    ['gpt-55-2026-04-24', 'gpt-5.5'],
+    ['azure/gpt-5.6-sol-2026-07-09', 'gpt-5.6-sol'],
+    ['gpt-image-2-2026-04-21', 'gpt-image-2'],
+  ])('normalizes %s to %s', (input, expected) => {
+    expect(normalizeModel(input)).toBe(expected);
   });
 
-  it('calculates gpt-5.4 input and output cost from negative transaction tokens', () => {
+  it.each([
+    ['gpt-5.4-nano', 0.1755, 1.097],
+    ['gpt-5.4-mini', 0.6582, 3.9491],
+    ['gpt-5.4', 2.1939, 13.1637],
+    ['gpt-5.5', 4.3879, 26.3273],
+    ['gpt-5.6-sol', 4.3879, 26.3273],
+  ])('calculates %s input and output prices', (model, inputPrice, outputPrice) => {
     const input = calculateTransactionCost({
-      model: 'gpt-54',
+      model,
       tokenType: 'prompt',
       rawAmount: -1_000_000,
     });
     const output = calculateTransactionCost({
-      model: 'gpt-54',
+      model,
       tokenType: 'completion',
       rawAmount: -1_000_000,
     });
 
-    expect(input.cost).toBeCloseTo(1.9567367651485807);
-    expect(output.cost).toBeCloseTo(11.740420590891492);
+    expect(input.cost).toBeCloseTo(inputPrice);
+    expect(output.cost).toBeCloseTo(outputPrice);
   });
 
-  it('uses discounted cached input rate for read tokens', () => {
+  it('stores effective model versions with the static retail rates', () => {
+    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-openai-parity-2026-07-14');
+    expect(EUR_RATES['gpt-5.5']).toMatchObject({
+      modelVersion: '2026-04-24',
+      effectiveFrom: '2026-05-01',
+    });
+    expect(EUR_RATES['gpt-5.6-sol']).toMatchObject({
+      modelVersion: '2026-07-09',
+      inputPerMillion: EUR_RATES['gpt-5.5'].inputPerMillion,
+      outputPerMillion: EUR_RATES['gpt-5.5'].outputPerMillion,
+    });
+  });
+
+  it('counts cache reads at the standard input rate', () => {
     const result = calculateTransactionCost({
       model: 'gpt-54',
       tokenType: 'prompt',
@@ -54,7 +81,7 @@ describe('knauf costs', () => {
 
     expect(result.inputTokens).toBe(1_000_000);
     expect(result.cachedInputTokens).toBe(1_000_000);
-    expect(result.cost).toBeCloseTo(2.152410441663439);
+    expect(result.cost).toBeCloseTo(4.3878);
   });
 
   it('aggregates per conversation and per message', () => {
@@ -74,21 +101,37 @@ describe('knauf costs', () => {
     ]);
 
     expect(result.currency).toBe('EUR');
-    expect(result.conversation.cost).toBeCloseTo(13.697157356040073);
-    expect(result.messages.m1.cost).toBeCloseTo(13.697157356040073);
+    expect(result.conversation.cost).toBeCloseTo(15.3576);
+    expect(result.messages.m1.cost).toBeCloseTo(15.3576);
   });
 
-  it('tracks unsupported image tokens without assigning an unverified EUR cost', () => {
-    const result = calculateTransactionCost({
-      model: 'gpt-image-1',
-      tokenType: 'completion',
-      rawAmount: -4000,
-    });
+  it.each([
+    ['gpt-image-1', 4.4, 8.8, 35.1],
+    ['gpt-image-2', 4.3879, 7.0206, 26.3273],
+  ])(
+    'calculates %s text input, image input, and image output prices',
+    (model, textInputPrice, imageInputPrice, outputPrice) => {
+      const input = calculateTransactionCost({
+        model,
+        tokenType: 'prompt',
+        inputTokens: -1_000_000,
+        writeTokens: -1_000_000,
+      });
+      const output = calculateTransactionCost({
+        model,
+        tokenType: 'completion',
+        rawAmount: -1_000_000,
+      });
 
-    expect(result.cost).toBe(0);
-    expect(result.imageOutputTokens).toBe(4000);
-    expect(result.hasUnsupported).toBe(true);
-  });
+      expect(input.cost).toBeCloseTo(textInputPrice + imageInputPrice);
+      expect(input.inputTokens).toBe(1_000_000);
+      expect(input.imageInputTokens).toBe(1_000_000);
+      expect(output.cost).toBeCloseTo(outputPrice);
+      expect(output.outputTokens).toBe(0);
+      expect(output.imageOutputTokens).toBe(1_000_000);
+      expect(output.hasUnsupported).toBe(false);
+    },
+  );
 
   it('returns cached aggregate when the transaction fingerprint is unchanged', async () => {
     const summary = aggregateConversationCosts([]);
@@ -158,7 +201,7 @@ describe('knauf costs', () => {
       user: 'user-1',
       conversationId: 'conversation-1',
     });
-    expect(result.conversation.cost).toBeCloseTo(1.9567367651485807);
+    expect(result.conversation.cost).toBeCloseTo(2.1939);
     expect(cache.set).toHaveBeenCalledWith(
       expect.stringContaining('conversation-1'),
       expect.objectContaining({

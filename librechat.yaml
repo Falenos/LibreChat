@@ -34,7 +34,7 @@ memory:
   agent:
     enabled: true
     provider: "azureOpenAI"
-    model: "gpt-5.4"
+    model: "model-router-chat"
 
 interface:
   customWelcome: 'Welcome to Agentic Karl! Enjoy your experience.'
@@ -454,18 +454,12 @@ endpoints:
   # - file_search uses the platform RAG service (RAG_API_URL); no user keys.
   # - tools allows curated built-in tools to be added later.
   # Excluded on purpose:
-  #   web_search  -> [knauf] KK20-194: deliberately NOT a builder capability. The
-  #                  one "Browse the internet" switch drives two complementary
-  #                  engines, neither of which is the provider-less LangChain
-  #                  web_search tool (it stays unsurfaced — no GDPR-sensitive
-  #                  third-party search provider): (1) Azure's model-level
-  #                  web_search, injected from model_parameters.web_search by
-  #                  packages/api/src/endpoints/openai/llm.ts and always-on for
-  #                  KARL via the azureOpenAI group addParams.web_search below;
-  #                  (2) our `open_url` tool, prioritised for named/pasted pages,
-  #                  gated on the RAW browse intent in ToolService.js. Adding
-  #                  web_search here would surface the dead LangChain tool and
-  #                  break that gate — see SEAMS.md / ToolService.js.
+  #   web_search  -> [knauf] KK20-194: deliberately NOT a builder capability.
+  #                  The "Browse the internet" switch exposes our `open_url`
+  #                  tool, prioritised for named/pasted pages and gated on the
+  #                  RAW browse intent in ToolService.js. Adding web_search here
+  #                  would surface the provider-less LangChain tool — see
+  #                  SEAMS.md / ToolService.js.
   #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
   #                  -> hidden from end users to reduce configuration burden.
   agents:
@@ -480,30 +474,71 @@ endpoints:
       - tools
 
   azureOpenAI:
-    titleModel: 'gpt-4o'
+    titleModel: 'model-router-chat'
     titleMethod: 'completion'
     plugins: true
     assistants: false
     groups:
-      - group: 'cst-karl-dev'
-        apiKey: '${AZURE_OPENAI_API_KEY}'
-        plugins: true
-        instanceName: 'cst-karl-dev'
-        version: '2025-01-01-preview'
-        addParams:
-          web_search: true
+      - group: 'agk-foundry-router-chat'
+        apiKey: '${AZURE_FOUNDRY_API_KEY}'
+        instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
+        version: '2024-10-21'
         dropParams:
           - temperature
           - top_p
           - presence_penalty
           - frequency_penalty
         models:
-          gpt-5.4:
-            deploymentName: 'gpt-54'
-            version: '2025-01-01-preview'
+          # Account-scoped Chat Completions alias. The deployment remains
+          # `model-router`; the alias keeps it separate from the project-scoped
+          # Responses API model below.
+          model-router-chat:
+            deploymentName: 'model-router'
+            version: '2024-10-21'
+      # Environment-selected direct deployment for prompt drafting and created
+      # agents. Previous model names remain compatibility aliases.
+      - group: 'agk-foundry-agent-default'
+        apiKey: '${AZURE_FOUNDRY_API_KEY}'
+        instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
+        version: '2024-10-21'
+        addParams:
+          model: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+        dropParams:
+          - temperature
+          - top_p
+          - presence_penalty
+          - frequency_penalty
+        models:
+          agent-default:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
           gpt-4o:
-            deploymentName: 'gpt-4o'
-            version: '2025-01-01-preview'
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
+          gpt-5.4:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
+          gpt-5.5:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
+          gpt-5.6-sol:
+            deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
+            version: '2024-10-21'
+      # Experimental router Responses path. Keep it available for later
+      # comparison, but do not select it in production agent presets yet.
+      - group: 'agk-foundry-project'
+        apiKey: '${AZURE_FOUNDRY_API_KEY}'
+        serverless: true
+        baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
+        additionalHeaders:
+          api-key: '${AZURE_FOUNDRY_API_KEY}'
+        dropParams:
+          - temperature
+          - top_p
+          - presence_penalty
+          - frequency_penalty
+        models:
+          model-router: true
 
 modelSpecs:
   enforce: false
@@ -517,10 +552,7 @@ modelSpecs:
       # "Browse the internet" is config-default-on. This top-level flag pushes
       # `web_search` into the chat's tool list (packages/api/src/agents/load.ts),
       # which is the RAW browse intent our ToolService gate keys on to surface
-      # `open_url` (authoritative for named/pasted pages). The complementary
-      # Azure-native model-level web_search is always-on via the azureOpenAI group
-      # `addParams.web_search: true` below. open_url is prioritised; web_search is
-      # open-ended discovery and the fallback when open_url errors.
+      # the router-compatible `open_url` tool for named or pasted pages.
       webSearch: true
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
@@ -535,15 +567,9 @@ modelSpecs:
       description: 'Knauf AI Platform'
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.4'
-        # Use the Azure Responses API so the chat composer's paperclip
-        # menu surfaces "Upload files" (image + PDF) instead of the
-        # image-only fallback. Azure is excluded from the
-        # `documentSupportedProviders` allow-list (see
-        # packages/data-provider/src/schemas.ts), so document upload on
-        # an azureOpenAI chat is gated specifically on this flag — same
-        # mechanism the karl-personality-* specs already use.
-        useResponsesApi: true
+        model: 'model-router-chat'
+        # The account-level router deployment currently supports Chat
+        # Completions; setting useResponsesApi here returns HTTP 400.
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
@@ -573,15 +599,8 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
-    # Each personality preset enables `useResponsesApi` so new agents get the
-    # "Upload to Provider" item in the chat paperclip menu by default (so
-    # users can attach PDFs / text files directly to the model). Azure
-    # OpenAI is excluded from the document-supported providers allow-list
-    # except when Responses API is on — see
-    # packages/data-provider/src/schemas.ts (documentSupportedProviders)
-    # and the menu gate at AttachFileMenu.tsx:158. Once set on an agent the
-    # flag is preserved across toggling `web_search` on/off
-    # (capabilities.ts → browseInternet).
+    # Agent personalities use the environment-selected model through Responses
+    # API. GitOps selects `agent-default` (direct GPT-5.6 Sol).
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -590,7 +609,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.4'
+        model: 'agent-default'
         reasoning_effort: high
         useResponsesApi: true
         promptPrefix: *karl_prompt
@@ -602,7 +621,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.4'
+        model: 'agent-default'
         reasoning_effort: medium
         useResponsesApi: true
         promptPrefix: *karl_prompt
@@ -614,7 +633,7 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-5.4'
+        model: 'agent-default'
         reasoning_effort: low
         useResponsesApi: true
         additional_instructions: |
@@ -624,10 +643,8 @@ modelSpecs:
 
     # Internal modelSpec used by the agent builder's ✦ Autogenerate Prompt
     # button. The route at api/server/routes/knauf/autogeneratePrompt.js
-    # picks this up by name. `preset.model` selects the deployment (kept on
-    # gpt-4o because instruction drafting doesn't benefit from heavy reasoning
-    # and gpt-4o is cheap+fast). `preset.promptPrefix` is the system message
-    # — admins can tune the drafter's style without a code deploy. The user
+    # picks this up by name. `preset.promptPrefix` is the system message —
+    # admins can tune the drafter's style without a code deploy. The user
     # message is built dynamically from the agent-builder state.
     - name: 'karl-autogenerate-prompt'
       label: 'KARL · Autogenerate Prompt (internal)'
@@ -635,7 +652,7 @@ modelSpecs:
       description: 'Used by the agent builder to draft system instructions.'
       preset:
         endpoint: 'azureOpenAI'
-        model: 'gpt-4o'
+        model: 'agent-default'
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions

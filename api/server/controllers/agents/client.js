@@ -1832,6 +1832,10 @@ class AgentClient extends BaseClient {
         return {
           input_tokens: input_tokens,
           output_tokens: output_tokens,
+          // [knauf] Preserve the underlying model selected by Model Router.
+          model: item.model_name || item.model || item.modelName,
+          provider: item.model_provider || provider,
+          // End [knauf]
         };
       });
 

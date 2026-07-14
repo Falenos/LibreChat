@@ -3,6 +3,7 @@ const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIIma
 
 // [knauf] Mock image usage transaction ledger used by the FinOps cost visibility seam.
 const mockSpendTokens = jest.fn();
+const mockSpendStructuredTokens = jest.fn();
 // End [knauf]
 
 jest.mock('openai');
@@ -45,6 +46,7 @@ jest.mock('~/models', () => ({
   getFiles: jest.fn().mockResolvedValue([]),
   // [knauf] Assert image usage flows through the same transaction path as chat tokens.
   spendTokens: (...args) => mockSpendTokens(...args),
+  spendStructuredTokens: (...args) => mockSpendStructuredTokens(...args),
   // End [knauf]
 }));
 
@@ -55,6 +57,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
     jest.clearAllMocks();
     // [knauf] Reset image usage transaction mock between cost visibility cases.
     mockSpendTokens.mockResolvedValue(undefined);
+    mockSpendStructuredTokens.mockResolvedValue(undefined);
     // End [knauf]
     originalEnv = { ...process.env };
 
@@ -189,6 +192,10 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
       usage: {
         input_tokens: 123,
         output_tokens: 456,
+        input_tokens_details: {
+          text_tokens: 23,
+          image_tokens: 100,
+        },
       },
     });
 
@@ -208,7 +215,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
       configurable: { thread_id: 'conversation-1', run_id: 'message-1' },
     });
 
-    expect(mockSpendTokens).toHaveBeenCalledWith(
+    expect(mockSpendStructuredTokens).toHaveBeenCalledWith(
       {
         user: 'test-user',
         model: 'gpt-image-1',
@@ -219,7 +226,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
         transactions: { enabled: true },
       },
       {
-        promptTokens: 123,
+        promptTokens: { input: 23, write: 100 },
         completionTokens: 456,
       },
     );
