@@ -6,12 +6,31 @@ const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
 const TRANSACTION_COST_FIELDS =
   'model context tokenType rawAmount inputTokens writeTokens readTokens messageId updatedAt';
 
-const RATE_SOURCE = 'azure-cost-management-actual-mtd-2026-06-26';
+const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-07-14';
 const EUR_RATES = {
+  'gpt-5-mini': {
+    modelVersion: '2025-08-07',
+    effectiveFrom: '2025-08-01',
+    inputPerMillion: 0.2194,
+    outputPerMillion: 1.7552,
+  },
+  'gpt-5.4-mini': {
+    modelVersion: '2026-03-17',
+    effectiveFrom: '2026-03-01',
+    inputPerMillion: 0.6582,
+    outputPerMillion: 3.9491,
+  },
   'gpt-5.4': {
-    inputPerMillion: 1.9567367651485807,
-    outputPerMillion: 11.740420590891492,
-    cachedInputPerMillion: 0.19567367651485823,
+    modelVersion: '2026-03-05',
+    effectiveFrom: '2026-03-01',
+    inputPerMillion: 2.1939,
+    outputPerMillion: 13.1637,
+  },
+  'gpt-5.5': {
+    modelVersion: '2026-04-24',
+    effectiveFrom: '2026-05-01',
+    inputPerMillion: 4.3879,
+    outputPerMillion: 26.3273,
   },
 };
 
@@ -22,8 +41,17 @@ function absNumber(value) {
 
 function normalizeModel(model) {
   const value = String(model || '').toLowerCase();
+  if (value.includes('gpt-5.4-mini') || value.includes('gpt-54-mini')) {
+    return 'gpt-5.4-mini';
+  }
+  if (value.includes('gpt-5.5') || value.includes('gpt-55')) {
+    return 'gpt-5.5';
+  }
   if (value.includes('gpt-5.4') || value.includes('gpt-54')) {
     return 'gpt-5.4';
+  }
+  if (value.includes('gpt-5-mini')) {
+    return 'gpt-5-mini';
   }
   if (value.includes('gpt-image-1')) {
     return 'gpt-image-1';
@@ -76,12 +104,12 @@ function calculateTransactionCost(transaction) {
     hasUnsupported: false,
   };
 
-  if (model === 'gpt-5.4') {
-    const rate = EUR_RATES['gpt-5.4'];
+  const rate = EUR_RATES[model];
+  if (rate) {
     base.cost =
-      (base.inputTokens / EUR_PER_MILLION_TOKENS) * rate.inputPerMillion +
-      (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion +
-      (base.cachedInputTokens / EUR_PER_MILLION_TOKENS) * rate.cachedInputPerMillion;
+      ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
+        rate.inputPerMillion +
+      (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion;
     return base;
   }
 

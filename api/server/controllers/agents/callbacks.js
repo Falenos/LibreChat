@@ -102,7 +102,14 @@ class ModelEndHandler {
       if (!usage) {
         return this.finalize(errorMessage);
       }
-      const modelName = metadata?.ls_model_name || agentContext.clientOptions?.model;
+      // [knauf] Model Router returns the selected underlying model in response metadata.
+      const responseModel =
+        data?.output?.response_metadata?.model_name ??
+        data?.output?.response_metadata?.model ??
+        data?.output?.response_metadata?.modelName;
+      const modelName =
+        responseModel || metadata?.ls_model_name || agentContext.clientOptions?.model;
+      // End [knauf]
       if (modelName) {
         usage.model = modelName;
       }
