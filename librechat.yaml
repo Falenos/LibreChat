@@ -505,8 +505,7 @@ modelSpecs:
       # "Browse the internet" is config-default-on. This top-level flag pushes
       # `web_search` into the chat's tool list (packages/api/src/agents/load.ts),
       # which is the RAW browse intent our ToolService gate keys on to surface
-      # `open_url` (authoritative for named/pasted pages). The complementary
-      # open_url is the router-compatible browsing path.
+      # the router-compatible `open_url` tool for named or pasted pages.
       webSearch: true
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
