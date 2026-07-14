@@ -24,7 +24,7 @@ Last verified: 2026-07-14.
 
 ## Architecture Reference
 
-For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agk-infrastructure`, and `agk-deployment-configs`.
+For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agentic-karl-rag-api`, `agk-infrastructure`, and `agk-deployment-configs`.
 
 Treat that README as a shareable architecture snapshot, not a substitute for live state. Verify mutable facts such as image tags, domains, secrets mappings, Azure resources, ArgoCD health, and model deployments in the owning repo or cloud service before answering "current" or "latest" questions.
 
@@ -39,6 +39,7 @@ export KNAUF_ROOT="${KNAUF_ROOT:-$HOME/knauf}"
 ```
 
 - App repo: `Knauf-Group/agentic-karl` (`$KNAUF_ROOT/agentic-karl`)
+- RAG API repo: `Knauf-Group/agentic-karl-rag-api` (`$KNAUF_ROOT/agentic-karl-rag-api`)
 - AGK Terraform repo: `Knauf-Group/agk-infrastructure` (`$KNAUF_ROOT/agk-infrastructure`)
 - AGK GitOps repo: `Knauf-Group/agk-deployment-configs` (`$KNAUF_ROOT/agk-deployment-configs`)
 - Legacy CT shared GitOps repo: `Knauf-Group/ct-shared-deployment-configs` (`$KNAUF_ROOT/ct-shared-deployment-configs`)
@@ -49,6 +50,7 @@ Before relying on repo facts, fetch the latest main branches:
 git -C $KNAUF_ROOT/agk-infrastructure fetch origin main
 git -C $KNAUF_ROOT/agk-deployment-configs fetch origin main
 git -C $KNAUF_ROOT/agentic-karl fetch origin main
+git -C $KNAUF_ROOT/agentic-karl-rag-api fetch origin main
 ```
 
 ## Azure CLI Access
@@ -424,6 +426,8 @@ Deployed models in each environment:
 
 The two direct GPT-5.5 deployments are not backends or replicas used by `model-router`; the router independently selects from its Azure-supported model set and requires no matching direct deployments. The current `routing: null` is the default Balanced/full-model-set configuration. GPT-5.5 is in that eligible set, but the router does not guarantee its selection. Agentic Karl calls `gpt-5.5` explicitly for created agents and does not call `gpt-5.5-1`. The project router path remains available at `https://<account>.services.ai.azure.com/api/projects/<project>/openai/v1/responses` for later application-level comparison.
 
+After the pending Foundry rollout, the router remains `balanced` but is restricted to the pinned OpenAI-only pool `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. GPT-5.6 Sol is not in that router pool; Agentic Karl selects the separately deployed `gpt-5.6-sol` directly for created agents and prompt drafting.
+
 Infrastructure ownership and release order:
 
 1. Shared module: `Customer-Tech-Shared/infrastructure/terraform/modules/foundry`, currently released as `foundry1.0.1`.
@@ -436,9 +440,12 @@ Pending Foundry rollout dependency tree, last checked 2026-07-14:
 1. `Customer-Tech-Shared#579` adds dynamic throttling support. Merge it, release immutable tag `foundry1.1.0`, and do not deploy from its branch reference.
 2. `agk-infrastructure#57` must replace its temporary module branch reference with `foundry1.1.0`, then merge/apply. It creates per-environment `text-embedding-3-large`, `gpt-image-1`, `gpt-image-2`, and `gpt-5.6-sol` deployments. This is the Azure control-plane prerequisite.
 3. `agentic-karl#124` merged on 2026-07-14. It keeps ordinary KARL on Model Router, supports direct GPT-5.6 Sol for agents/prompt drafting, and prices Sol plus GPT Image 1/2 usage.
-4. `agk-deployment-configs#113` is the last-mile runtime switch. Merge it only after step 2 is applied and verified; it moves embeddings and GPT Image 1 to the environment Foundry accounts and sets `AZURE_FOUNDRY_AGENT_DEPLOYMENT=gpt-5.6-sol`.
+4. `agentic-karl-rag-api#11` is independent retry hardening. It defaults OpenAI-compatible and Azure embedding clients to six SDK retries through `RAG_OPENAI_MAX_RETRIES`; it can merge and release before the endpoint switch.
+5. `agk-deployment-configs#113` is the last-mile runtime switch. Merge it only after step 2 is applied and verified; it moves embeddings and GPT Image 1 to the environment Foundry accounts, sets `AZURE_FOUNDRY_AGENT_DEPLOYMENT=gpt-5.6-sol`, and sets `RAG_OPENAI_MAX_RETRIES=6` in dev and prod.
 
 Target state after this rollout: ordinary KARL, memory, and titles use Model Router; created agents and prompt drafting use direct GPT-5.6 Sol; RAG uses the environment `text-embedding-3-large`; image generation uses GPT Image 1. GPT Image 2 remains deployed and priced but disabled. Until #57 and #113 are merged/applied, the live runtime remains on direct GPT-5.5 plus the legacy shared embedding/image endpoints.
+
+The RAG endpoint migration needs no additional provider rewrite. `agentic-karl-rag-api` already passes `RAG_OPENAI_BASEURL` and `RAG_OPENAI_API_KEY` to LangChain `OpenAIEmbeddings`. Both the legacy and target deployments use `text-embedding-3-large` version `1` with 3072 dimensions, so existing pgvector rows remain compatible and no re-embedding migration is required. Model Router, GPT-5.6 Sol, and GPT Image deployments are not consumed by the RAG service.
 
 Access and validation rules:
 
@@ -447,6 +454,7 @@ Access and validation rules:
 - Normal laptop DNS still resolves the Foundry hostname publicly and returns `403 Public access is disabled` until the nonprod Foundry zones are linked to `vnet-ct-shared-dns-forwarder`. The computational Terraform owns that link; keep public access disabled. Prod remains hub/spoke-only unless a separate approved access requirement is added.
 - Test from AKS/ACI while the DNS link is pending. After it is applied, reconnect the corporate VPN or flush local DNS and confirm the OpenAI hostname resolves to `10.160.192.165` before running the app locally.
 - The current live runtime keeps `AGK-OPENAI-API-KEY` for image generation, embeddings, and Document Intelligence. After #113, image generation and embeddings use `AGK-FOUNDRY-API-KEY`; Document Intelligence remains on its existing endpoint/key. Text generation already uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`.
+- The shared Helm chart `2.7.0` hashes ConfigMap and ExternalSecret manifests into the pod template. Merging #113 therefore makes ArgoCD roll `agentic-karl` and `agentic-karl-rag-api` automatically; no new app image build or manual restart is needed for those manifest changes. A Key Vault value-only rotation still requires ExternalSecret refresh and pod restart because the manifest hash does not see secret data changes.
 - `librechat.yaml` intentionally has no silent runtime fallback. Ordinary KARL uses the router; `AZURE_FOUNDRY_AGENT_DEPLOYMENT` selects the direct agent deployment. Validate router, direct Sol, embedding, and image paths in dev before production promotion.
 
 Safe live checks:
@@ -520,6 +528,7 @@ Agentic Karl model wiring:
 - AGK GitOps still keeps the legacy Azure resource configuration for non-text services, including image generation at `https://cst-karl-dev.openai.azure.com/openai/deployments/gpt-image-1`.
 - AGK RAG API dev/prod values set `RAG_OPENAI_BASEURL: https://cst-karl-dev.openai.azure.com/openai/v1`, `EMBEDDINGS_PROVIDER: openAI`, and `EMBEDDINGS_MODEL: text-embedding-3-large`.
 - AGK dev RAG also sets `RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/`; prod RAG did not include this value in GitOps at the last check.
+- After #113, dev/prod RAG values point to their own Foundry `/openai/v1` endpoints, map `RAG_OPENAI_API_KEY` from `AGK-FOUNDRY-API-KEY`, retain `EMBEDDINGS_MODEL=text-embedding-3-large` and `EMBEDDINGS_DIMENSIONS=3072`, and set `RAG_OPENAI_MAX_RETRIES=6`. Document Intelligence intentionally stays on the legacy AI Services endpoint/key.
 
 CST KARL model wiring, for shared-resource awareness:
 
@@ -632,6 +641,15 @@ The reusable CT workflow does not expose `new-version` as a `workflow_call` outp
 ```bash
 VERSION="v$(npm pkg get version | tr -d '"')"
 ```
+
+RAG API releases are owned by `Knauf-Group/agentic-karl-rag-api`:
+
+1. Merging a PR to RAG `main` builds `Dockerfile.lite` into `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-rag-api:v0.8.0.N`.
+2. The release workflow opens and auto-merges the dev image-tag bump in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-rag-api/values.yaml`.
+3. It refreshes `agentic-karl-dev-agentic-karl-rag-api` and waits for the expected image to become Synced/Healthy.
+4. Prod is not updated by the dev release. Use the reviewed RAG promotion workflow to import the exact nonprod image into `acragkhubprod001`, update the prod GitOps tag, and verify prod ArgoCD.
+
+Do not hand-edit RAG image tags while those workflows own the release. Configuration such as `RAG_OPENAI_MAX_RETRIES` belongs in GitOps and is harmless on an older image until the supporting RAG release is promoted.
 
 ## ArgoCD Checks And Actions
 
