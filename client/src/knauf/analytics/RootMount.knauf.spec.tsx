@@ -144,6 +144,7 @@ describe('Root — Knauf analytics mount', () => {
     renderRoot();
 
     expect(screen.queryByTestId('knauf-consent-analytics')).not.toBeInTheDocument();
+    expect(document.getElementById('knauf-eula-onetrust-guard')).toBeInTheDocument();
     expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: false });
   });
 
@@ -153,11 +154,17 @@ describe('Root — Knauf analytics mount', () => {
       data: { interface: { termsOfService: { modalAcceptance: true } } },
     });
     mockUseUserTermsQuery.mockReturnValue({ data: { termsAccepted: false } });
+    const staleOneTrustBanner = document.createElement('div');
+    staleOneTrustBanner.id = 'onetrust-banner-sdk';
+    document.body.append(staleOneTrustBanner);
 
     renderRoot();
 
     expect(screen.queryByTestId('knauf-consent-analytics')).not.toBeInTheDocument();
+    expect(document.getElementById('knauf-eula-onetrust-guard')).toBeInTheDocument();
+    expect(globalThis.getComputedStyle(staleOneTrustBanner).display).toBe('none');
     expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: true });
+    staleOneTrustBanner.remove();
   });
 
   it('mounts the consent analytics controller after required EULA acceptance', () => {
@@ -170,6 +177,7 @@ describe('Root — Knauf analytics mount', () => {
     renderRoot();
 
     expect(screen.getByTestId('knauf-consent-analytics')).toBeInTheDocument();
+    expect(document.getElementById('knauf-eula-onetrust-guard')).not.toBeInTheDocument();
     expect(mockUseUserTermsQuery).toHaveBeenCalledWith({ enabled: true });
   });
 });
