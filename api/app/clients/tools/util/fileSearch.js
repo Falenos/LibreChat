@@ -5,7 +5,7 @@ const { generateShortLivedToken } = require('@librechat/api');
 const { Tools, EToolResources } = require('librechat-data-provider');
 
 // [knauf] Shared flag — single source of truth for Azure Search routing.
-const { useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
+const { isAzureSearchEnabledForAgents } = require('~/server/services/Files/VectorDB/crud');
 // End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getFiles } = require('~/models');
@@ -137,14 +137,12 @@ const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = 
 
       // [knauf] KK20-203 — Per-file query routing: agent files query Azure AI Search
       // when enabled, chat/message attachments always query pgvector.
-      const azureEnabled = useAzureSearchForAgents();
+      const azureEnabled = isAzureSearchEnabledForAgents();
       const azureQueryUrl = `${process.env.RAG_API_URL}/agent/query`;
       const pgvectorQueryUrl = `${process.env.RAG_API_URL}/query`;
 
       const queryPromises = files.map((file) => {
-        const url = azureEnabled && file.context === 'agents'
-          ? azureQueryUrl
-          : pgvectorQueryUrl;
+        const url = azureEnabled && file.context === 'agents' ? azureQueryUrl : pgvectorQueryUrl;
         return axios
           .post(url, createQueryBody(file), {
             headers: {

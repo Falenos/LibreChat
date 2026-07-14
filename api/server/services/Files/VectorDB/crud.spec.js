@@ -6,13 +6,32 @@ jest.mock('axios');
 jest.mock('@librechat/api', () => ({
   logAxiosError: jest.fn(),
   generateShortLivedToken: jest.fn(() => 'jwt-token'),
+  // [knauf] KK20-195 WP0 — metric recorders used by crud.js.
+  recordFileIndexEmbed: jest.fn(),
+  recordFileIndexProviderError: jest.fn(),
+  recordFileIndexEmbedRetry: jest.fn(),
+  // End [knauf]
 }));
 jest.mock('@librechat/data-schemas', () => ({
   logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
+// [knauf] KK20-195 WP0 — keep retry backoff ~instant in tests. Must be set
+// before require('./crud'): the knobs are read at module load.
+process.env.RAG_EMBED_BACKOFF_BASE_MS = '1';
+process.env.RAG_EMBED_BACKOFF_MAX_MS = '1';
+// End [knauf]
+
 const axios = require('axios');
-const { deleteVectorsByIds, deleteVectorsForFiles } = require('./crud');
+const {
+  deleteVectorsByIds,
+  deleteVectorsForFiles,
+  // [knauf] KK20-195 WP0 exports under test.
+  uploadVectors,
+  parseRetryAfterMs,
+  isRetryableEmbedError,
+  // End [knauf]
+} = require('./crud');
 
 describe('deleteVectorsByIds (KK20-203)', () => {
   const OLD_URL = process.env.RAG_API_URL;
@@ -117,9 +136,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
 
-    await deleteVectorsForFiles(req, [
-      { file_id: 'chat-file-1', context: 'message_attachment' },
-    ]);
+    await deleteVectorsForFiles(req, [{ file_id: 'chat-file-1', context: 'message_attachment' }]);
 
     // Chat files always go to pgvector, never Azure Search
     expect(axios.delete).toHaveBeenCalledTimes(1);
@@ -274,5 +291,205 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(maxInFlight).toBeLessThanOrEqual(5);
   });
   // End [knauf]
+});
+// End [knauf]
+
+// [knauf] KK20-195 WP0 — seam tests for the RAG containment guardrails:
+// sync-path embed timeout, bounded Retry-After-aware retry, fail-fast
+// classification, and baseline metric recording.
+describe('parseRetryAfterMs (KK20-195 WP0)', () => {
+  test('parses delta-seconds to milliseconds', () => {
+    expect(parseRetryAfterMs('30')).toBe(30_000);
+  });
+
+  test('caps at RAG_EMBED_RETRY_AFTER_MAX_MS (default 60s)', () => {
+    expect(parseRetryAfterMs('120')).toBe(60_000);
+  });
+
+  test('parses a future HTTP-date (capped)', () => {
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const parsed = parseRetryAfterMs(future);
+    expect(parsed).toBeGreaterThan(0);
+    expect(parsed).toBeLessThanOrEqual(60_000);
+  });
+
+  test('returns null for a past HTTP-date', () => {
+    expect(parseRetryAfterMs(new Date(Date.now() - 5_000).toUTCString())).toBeNull();
+  });
+
+  test('returns null for absent/invalid values', () => {
+    expect(parseRetryAfterMs(undefined)).toBeNull();
+    expect(parseRetryAfterMs('')).toBeNull();
+    expect(parseRetryAfterMs('not-a-date')).toBeNull();
+  });
+});
+
+describe('isRetryableEmbedError (KK20-195 WP0)', () => {
+  test('retries provider throttles and server errors', () => {
+    expect(isRetryableEmbedError({ response: { status: 429 } })).toBe(true);
+    expect(isRetryableEmbedError({ response: { status: 503 } })).toBe(true);
+    expect(isRetryableEmbedError({ response: { status: 408 } })).toBe(true);
+  });
+
+  test('fails fast on other 4xx (bad input)', () => {
+    expect(isRetryableEmbedError({ response: { status: 400 } })).toBe(false);
+    expect(isRetryableEmbedError({ response: { status: 401 } })).toBe(false);
+  });
+
+  test('retries a connection reset (no response) but NOT a timeout', () => {
+    expect(isRetryableEmbedError({ code: 'ECONNRESET' })).toBe(true);
+    expect(isRetryableEmbedError({ code: 'ECONNABORTED' })).toBe(false);
+  });
+
+  test('never retries body-level failures (knaufNoRetry)', () => {
+    expect(isRetryableEmbedError({ knaufNoRetry: true })).toBe(false);
+  });
+});
+
+describe('uploadVectors (KK20-195 WP0 containment)', () => {
+  const os = require('os');
+  const path = require('path');
+  const realFs = require('fs');
+  const {
+    recordFileIndexEmbed,
+    recordFileIndexProviderError,
+    recordFileIndexEmbedRetry,
+  } = require('@librechat/api');
+
+  const OLD_URL = process.env.RAG_API_URL;
+  const req = { user: { id: 'u1' } };
+  let tmpFile;
+  let file;
+
+  beforeAll(() => {
+    process.env.RAG_API_URL = 'http://rag.test';
+    tmpFile = path.join(os.tmpdir(), `kk20-195-wp0-${process.pid}.txt`);
+    realFs.writeFileSync(tmpFile, 'test-bytes');
+    file = { path: tmpFile, size: 10, originalname: 'doc.pdf', mimetype: 'application/pdf' };
+  });
+  afterAll(() => {
+    realFs.rmSync(tmpFile, { force: true });
+    if (OLD_URL === undefined) {
+      delete process.env.RAG_API_URL;
+    } else {
+      process.env.RAG_API_URL = OLD_URL;
+    }
+  });
+  beforeEach(() => jest.clearAllMocks());
+
+  test('passes a finite timeout to the embed POST and returns the file record', async () => {
+    axios.post.mockResolvedValue({ data: { status: true, known_type: true } });
+
+    const result = await uploadVectors({ req, file, file_id: 'f1' });
+
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    const [, , config] = axios.post.mock.calls[0];
+    expect(config.timeout).toEqual(expect.any(Number));
+    expect(config.timeout).toBeGreaterThan(0);
+    expect(result).toEqual(
+      expect.objectContaining({ embedded: true, bytes: 10, filename: 'doc.pdf' }),
+    );
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'success', expect.any(Number));
+  });
+
+  test('retries a 429 honoring Retry-After, then succeeds', async () => {
+    axios.post
+      .mockRejectedValueOnce({
+        response: { status: 429, headers: { 'retry-after': '0' } },
+        message: 'throttled',
+      })
+      .mockResolvedValueOnce({ data: { status: true, known_type: true } });
+
+    const result = await uploadVectors({ req, file, file_id: 'f1' });
+
+    expect(axios.post).toHaveBeenCalledTimes(2);
+    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '429');
+    expect(recordFileIndexEmbedRetry).toHaveBeenCalledWith('embed');
+    expect(result.embedded).toBe(true);
+  });
+
+  test('retries a transient 5xx and throws after the attempt budget (3)', async () => {
+    axios.post.mockRejectedValue({ response: { status: 503 }, message: 'unavailable' });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledTimes(3);
+    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '5xx');
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'failure', expect.any(Number));
+  });
+
+  test('fails fast on a non-transient 4xx (no retry)', async () => {
+    axios.post.mockRejectedValue({ response: { status: 400 }, message: 'bad request' });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('does NOT retry after a timeout — the sync budget is spent', async () => {
+    axios.post.mockRejectedValue({ code: 'ECONNABORTED', message: 'timeout exceeded' });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'timeout', expect.any(Number));
+  });
+
+  test('fails fast on unsupported type (known_type=false) with no retry', async () => {
+    axios.post.mockResolvedValue({ data: { status: true, known_type: false } });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow(/not supported/);
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith(
+      'embed',
+      'unsupported_type',
+      expect.any(Number),
+    );
+  });
+
+  test('fails fast on a body-level failure inside an HTTP 200 (status=false)', async () => {
+    axios.post.mockResolvedValue({ data: { status: false } });
+
+    await expect(uploadVectors({ req, file, file_id: 'f1' })).rejects.toThrow(
+      'File embedding failed.',
+    );
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  test('rebuilds the multipart body per attempt (fresh read stream each retry)', async () => {
+    axios.post
+      .mockRejectedValueOnce({ response: { status: 503 }, message: 'unavailable' })
+      .mockResolvedValueOnce({ data: { status: true, known_type: true } });
+
+    await uploadVectors({ req, file, file_id: 'f1' });
+
+    const [firstBody] = axios.post.mock.calls[0].slice(1);
+    const [secondBody] = axios.post.mock.calls[1].slice(1);
+    expect(firstBody).not.toBe(secondBody);
+  });
+
+  test('routes agent files to /agent/embed and tags metrics accordingly', async () => {
+    const OLD_SEARCH = process.env.AZURE_SEARCH_ENABLED;
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    try {
+      axios.post.mockResolvedValue({ data: { status: true, known_type: true } });
+
+      await uploadVectors({ req, file, file_id: 'f1', entity_id: 'agent1', isAgentFile: true });
+
+      expect(axios.post).toHaveBeenCalledWith(
+        'http://rag.test/agent/embed',
+        expect.anything(),
+        expect.any(Object),
+      );
+      expect(recordFileIndexEmbed).toHaveBeenCalledWith(
+        'agent_embed',
+        'success',
+        expect.any(Number),
+      );
+    } finally {
+      if (OLD_SEARCH === undefined) {
+        delete process.env.AZURE_SEARCH_ENABLED;
+      } else {
+        process.env.AZURE_SEARCH_ENABLED = OLD_SEARCH;
+      }
+    }
+  });
 });
 // End [knauf]

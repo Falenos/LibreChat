@@ -32,7 +32,7 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   deleteVectorsByIds: (...args) => mockDeleteVectorsByIds(...args),
   deleteVectorsForFiles: (...args) => mockDeleteVectorsForFiles(...args),
   deleteAzureSearchVectors: (...args) => mockDeleteAzureSearchVectors(...args),
-  useAzureSearchForAgents: (...args) => mockUseAzureSearchForAgents(...args),
+  isAzureSearchEnabledForAgents: (...args) => mockUseAzureSearchForAgents(...args),
 }));
 
 // [knauf] KK20-204 — the dedup GC deletes the shared blob via the per-source strategy.
@@ -408,11 +408,14 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     test('deduped assets always GC from pgvector even when Azure Search enabled', async () => {
       mockUseAzureSearchForAgents.mockReturnValue(true);
-      await seedFile('canon-az', dedupExtra({
-        conversationId: 'chatA',
-        knauf_content_hash: 'HASH-AZ',
-        knauf_asset_id: 'canon-az',
-      }));
+      await seedFile(
+        'canon-az',
+        dedupExtra({
+          conversationId: 'chatA',
+          knauf_content_hash: 'HASH-AZ',
+          knauf_asset_id: 'canon-az',
+        }),
+      );
       const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-az'] } });
 
       await cascadeDeleteCollectedFiles({
