@@ -721,12 +721,21 @@ export const uploadAgentAvatar = (data: m.AgentAvatarVariables): Promise<a.Agent
   );
 };
 
-export const getFileDownload = async (userId: string, file_id: string): Promise<AxiosResponse> => {
+export const getFileDownload = async (
+  userId: string,
+  file_id: string,
+  // [knauf] KK20-221 — optional AbortSignal so an in-flight blob download can be
+  // cancelled when the preview dialog closes. request.getResponse spreads these
+  // options straight onto axios.get, so the signal reaches the underlying request.
+  signal?: AbortSignal,
+  // End [knauf]
+): Promise<AxiosResponse> => {
   return request.getResponse(`${endpoints.files()}/download/${userId}/${file_id}`, {
     responseType: 'blob',
     headers: {
       Accept: 'application/octet-stream',
     },
+    signal,
   });
 };
 
@@ -741,12 +750,17 @@ export const getFileDownloadURL = async (
 export const getSharedFileDownload = async (
   shareId: string,
   file_id: string,
+  // [knauf] KK20-221 — see getFileDownload; same cancellation support for the
+  // shared-link preview path.
+  signal?: AbortSignal,
+  // End [knauf]
 ): Promise<AxiosResponse> => {
   return request.getResponse(endpoints.sharedFileDownload(shareId, file_id), {
     responseType: 'blob',
     headers: {
       Accept: 'application/octet-stream',
     },
+    signal,
   });
 };
 

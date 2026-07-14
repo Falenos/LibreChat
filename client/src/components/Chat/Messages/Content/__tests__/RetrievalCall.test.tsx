@@ -80,15 +80,28 @@ jest.mock('~/data-provider', () => ({
   useGetFiles: jest.fn(() => ({ data: [] })),
 }));
 
+// [knauf] KK20-221 — mock captures fileSize so the retrieval-preview size-gate
+// wiring (fileSize passed from previewData.fileBytes) can be asserted below.
 jest.mock('../FilePreviewDialog', () => ({
   __esModule: true,
-  default: ({ open, fileId, fileName }: { open: boolean; fileId?: string; fileName: string }) =>
+  default: ({
+    open,
+    fileId,
+    fileName,
+    fileSize,
+  }: {
+    open: boolean;
+    fileId?: string;
+    fileName: string;
+    fileSize?: number;
+  }) =>
     open ? (
-      <div data-testid="file-preview-dialog" data-file-id={fileId}>
+      <div data-testid="file-preview-dialog" data-file-id={fileId} data-file-size={fileSize ?? ''}>
         {fileName}
       </div>
     ) : null,
 }));
+// End [knauf]
 
 const defaultProps = {
   initialProgress: 1,
@@ -235,6 +248,10 @@ describe('RetrievalCall - file preview resolution', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview: Tutorial Imazing.pdf' }));
 
     expect(screen.getByTestId('file-preview-dialog')).toHaveAttribute('data-file-id', 'file-123');
+    // [knauf] KK20-221 — byte size flows to the dialog so its oversized-file
+    // guard applies to File Search retrieval previews (not just chat attachments).
+    expect(screen.getByTestId('file-preview-dialog')).toHaveAttribute('data-file-size', '2048');
+    // End [knauf]
   });
 
   it('keeps multiple parsed results clickable when only one attachment source is available', () => {
