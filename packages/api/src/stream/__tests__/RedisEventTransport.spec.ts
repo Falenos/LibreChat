@@ -55,7 +55,7 @@ describe('RedisEventTransport', () => {
   });
 
   // [knauf] Abort-only replicas ignore data events but still receive cross-replica aborts.
-  it('ignores stream data when only an abort listener is registered', () => {
+  it('keeps abort delivery active after the last data listener disconnects', () => {
     const mockPublisher = createMockPublisher();
     const mockSubscriber = createMockSubscriber();
     const transport = new RedisEventTransport(
@@ -68,6 +68,10 @@ describe('RedisEventTransport', () => {
     const channel = `stream:{${streamId}}:events`;
 
     transport.onAbort(streamId, abortCallback);
+    const dataSubscription = transport.subscribe(streamId, { onChunk: () => {} });
+    dataSubscription.unsubscribe();
+    expect(mockSubscriber.unsubscribe).not.toHaveBeenCalled();
+
     const messageHandler = getMessageHandler(mockSubscriber);
     for (let seq = 1; seq <= 100; seq++) {
       messageHandler(channel, JSON.stringify({ type: 'chunk', seq, data: { seq } }));

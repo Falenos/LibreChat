@@ -303,6 +303,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/db/indexSync.js` | `createFlowWithHandler` Meili sync callback | 336–340 | Stop deleting the Meili sync flow inside its handler; FlowStateManager can now complete it and retain the result for its 10-minute coordination TTL | `api/db/indexSync.spec.js` | NO-TICKET |
 | `api/db/indexSync.spec.js` | FlowStateManager-owned cleanup regression | 531–555 | Proves Meili index sync does not delete its flow before createFlowWithHandler completes it | Self | NO-TICKET |
 | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | invalid-page CSS console regression | 266–277 | Proves malformed CSS from an untrusted fetched page stays inside jsdom's quiet VirtualConsole instead of becoming a multiline production error in Datadog | Self | NO-TICKET |
+| `packages/api/src/stream/implementations/RedisEventTransport.ts` | last-subscriber cleanup | 483–499 | Retain the Redis channel while abort callbacks remain so cross-replica cancellation still reaches a generator after its last SSE subscriber disconnects | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
+| `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | abort-only listener disconnect regression | 57–87 | Proves an abort-only Redis subscription survives a real data-subscriber connect/disconnect cycle, still ignores stream data, and still delivers abort | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
