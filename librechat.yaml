@@ -479,7 +479,7 @@ endpoints:
     plugins: true
     assistants: false
     groups:
-      - group: 'agk-foundry-router'
+      - group: 'agk-foundry'
         apiKey: '${AZURE_FOUNDRY_API_KEY}'
         instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
         version: '2024-10-21'
@@ -491,6 +491,9 @@ endpoints:
         models:
           model-router:
             deploymentName: 'model-router'
+            version: '2024-10-21'
+          gpt-5.5:
+            deploymentName: 'gpt-5.5'
             version: '2024-10-21'
 
 modelSpecs:
@@ -552,8 +555,10 @@ modelSpecs:
     # `karl-personality-` name prefix in
     # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
     # into the new agent's `model_parameters` at create time.
-    # Router-backed personalities use Chat Completions like the default KARL
-    # spec. Knowledge files continue through the platform RAG/file_search path.
+    # Agent personalities use the direct Foundry GPT-5.5 deployment because
+    # agents require Responses API features such as native web_search and
+    # provider file uploads. The model router account endpoint rejects those
+    # requests with HTTP 400, so it remains the default KARL chat path only.
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
@@ -562,8 +567,9 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router'
+        model: 'gpt-5.5'
         reasoning_effort: high
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-balanced'
       label: 'Balanced'
@@ -573,8 +579,9 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router'
+        model: 'gpt-5.5'
         reasoning_effort: medium
+        useResponsesApi: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'
@@ -584,8 +591,9 @@ modelSpecs:
       webSearch: true
       preset:
         endpoint: 'azureOpenAI'
-        model: 'model-router'
+        model: 'gpt-5.5'
         reasoning_effort: low
+        useResponsesApi: true
         additional_instructions: |
           When the answer would benefit from breadth, surface multiple options
           or angles before settling on one.

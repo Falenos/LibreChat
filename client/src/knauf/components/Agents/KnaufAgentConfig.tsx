@@ -295,7 +295,7 @@ export default function KnaufAgentConfig() {
   // composeAgentUpdatePayload).
   //
   // We do NOT derive personality from `model` — all three Karl personalities
-  // share the same Azure deployment (gpt-5.4 in librechat.yaml), so a
+  // share the same Azure deployment (gpt-5.5 in librechat.yaml), so a
   // model-based lookup always returns the first match (Precise). For any
   // agent without an explicit stored spec, fall back to Balanced visually
   // and only commit when the user actually clicks a pill.
