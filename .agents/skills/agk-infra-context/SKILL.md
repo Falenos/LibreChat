@@ -7,7 +7,7 @@ description: Use when working on Agentic Karl / AGK infrastructure, architecture
 
 This skill is the operational map for Agentic Karl infrastructure. Use it before changing deployment workflows, Azure resources, Key Vault secrets, ArgoCD apps, Helm values, or environment config.
 
-Last verified: 2026-06-15.
+Last verified: 2026-07-14.
 
 ## Operating Rules
 
@@ -431,14 +431,23 @@ Infrastructure ownership and release order:
 3. Merge and release the shared module first, then pin the immutable module tag in AGK infrastructure. Never merge an infrastructure root that references shared-module `main` or a temporary PR commit.
 4. The module explicitly defaults deployment `rai_policy_name` to `Microsoft.DefaultV2` and makes private endpoint creation depend on project/model deployment completion. Azure temporarily returns the parent account to `Accepted` while child resources change; concurrent private endpoint creation fails with `AccountProvisioningStateInvalid`.
 
+Pending Foundry rollout dependency tree, last checked 2026-07-14:
+
+1. `Customer-Tech-Shared#579` adds dynamic throttling support. Merge it, release immutable tag `foundry1.1.0`, and do not deploy from its branch reference.
+2. `agk-infrastructure#57` must replace its temporary module branch reference with `foundry1.1.0`, then merge/apply. It creates per-environment `text-embedding-3-large`, `gpt-image-1`, `gpt-image-2`, and `gpt-5.6-sol` deployments. This is the Azure control-plane prerequisite.
+3. `agentic-karl#124` merged on 2026-07-14. It keeps ordinary KARL on Model Router, supports direct GPT-5.6 Sol for agents/prompt drafting, and prices Sol plus GPT Image 1/2 usage.
+4. `agk-deployment-configs#113` is the last-mile runtime switch. Merge it only after step 2 is applied and verified; it moves embeddings and GPT Image 1 to the environment Foundry accounts and sets `AZURE_FOUNDRY_AGENT_DEPLOYMENT=gpt-5.6-sol`.
+
+Target state after this rollout: ordinary KARL, memory, and titles use Model Router; created agents and prompt drafting use direct GPT-5.6 Sol; RAG uses the environment `text-embedding-3-large`; image generation uses GPT Image 1. GPT Image 2 remains deployed and priced but disabled. Until #57 and #113 are merged/applied, the live runtime remains on direct GPT-5.5 plus the legacy shared embedding/image endpoints.
+
 Access and validation rules:
 
 - `az login` grants control-plane access only. It does not provide a laptop route or private DNS forwarding into the AGK VNets.
 - The corporate VPN routes the nonprod Foundry subnet `10.160.192.0/24`. An authenticated laptop request forced to the OpenAI private endpoint `10.160.192.165` returned HTTP `200`, proving the VPN data path and TLS.
 - Normal laptop DNS still resolves the Foundry hostname publicly and returns `403 Public access is disabled` until the nonprod Foundry zones are linked to `vnet-ct-shared-dns-forwarder`. The computational Terraform owns that link; keep public access disabled. Prod remains hub/spoke-only unless a separate approved access requirement is added.
 - Test from AKS/ACI while the DNS link is pending. After it is applied, reconnect the corporate VPN or flush local DNS and confirm the OpenAI hostname resolves to `10.160.192.165` before running the app locally.
-- Keep the existing `AGK-OPENAI-API-KEY` for image generation, embeddings, and Document Intelligence. Text generation uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`. Helm supplies the non-secret `AZURE_FOUNDRY_PROJECT_ENDPOINT` and `AZURE_FOUNDRY_AGENT_DEPLOYMENT` values independently for each environment.
-- `librechat.yaml` intentionally has no silent runtime fallback. Ordinary KARL uses the router; created agents use direct GPT-5.5. Legacy saved-agent names are explicit compatibility aliases to GPT-5.5. Validate both paths before production rollout.
+- The current live runtime keeps `AGK-OPENAI-API-KEY` for image generation, embeddings, and Document Intelligence. After #113, image generation and embeddings use `AGK-FOUNDRY-API-KEY`; Document Intelligence remains on its existing endpoint/key. Text generation already uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`.
+- `librechat.yaml` intentionally has no silent runtime fallback. Ordinary KARL uses the router; `AZURE_FOUNDRY_AGENT_DEPLOYMENT` selects the direct agent deployment. Validate router, direct Sol, embedding, and image paths in dev before production promotion.
 
 Safe live checks:
 
