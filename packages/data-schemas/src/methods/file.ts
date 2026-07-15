@@ -54,7 +54,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     user: string;
     tenantId?: string | null;
   }) => Promise<IMongoFile>;
-  createFile: (data: Partial<IMongoFile>, disableTTL?: boolean) => Promise<IMongoFile | null>;
+  createFile: (
+    data: Partial<IMongoFile>,
+    disableTTL?: boolean,
+    // [knauf] KK20-195 WP3a — optional owner scope for the upsert filter.
+    ownerScope?: FileOwnerScope,
+    // End [knauf]
+  ) => Promise<IMongoFile | null>;
   updateFile: (
     data: Partial<IMongoFile> & { file_id: string },
     extraFilter?: FilterQuery<IMongoFile>,
@@ -339,6 +345,13 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
   async function createFile(
     data: Partial<IMongoFile>,
     disableTTL?: boolean,
+    // [knauf] KK20-195 WP3a — when provided, the upsert filter becomes
+    // (file_id + owner), so a write can never overwrite a row owned by a
+    // different user (the upload route pre-checks the cross-user case and
+    // 409s; this is write-time defense in depth). Additive — existing
+    // callers without a scope keep today's by-id behavior.
+    ownerScope?: FileOwnerScope,
+    // End [knauf]
   ): Promise<IMongoFile | null> {
     const File = mongoose.models.File as Model<IMongoFile>;
     const fileData: Partial<IMongoFile> = {
@@ -350,7 +363,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       delete fileData.expiresAt;
     }
 
-    return File.findOneAndUpdate({ file_id: data.file_id }, fileData, {
+    return File.findOneAndUpdate(withOwnerScope({ file_id: data.file_id }, ownerScope), fileData, {
       new: true,
       upsert: true,
     }).lean<IMongoFile>();

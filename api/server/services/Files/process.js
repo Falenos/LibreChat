@@ -1080,14 +1080,22 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   // transient duplicate the delete-time group GC reclaims) and log so the race
   // frequency is observable. Retrieval/GC key on knauf_asset_id, so the row works.
   let result;
+  // KK20-195 WP3a — owner-scoped upsert: with the client-supplied file_id now
+  // adopted as the logical id, the write filter carries the owner so a replay
+  // can never overwrite a row that belongs to a different user.
+  const knaufOwnerScope = { userId: req.user.id, tenantId: req.user.tenantId ?? null };
   try {
-    result = await db.createFile(fileInfo, true);
+    result = await db.createFile(fileInfo, true, knaufOwnerScope);
   } catch (error) {
     if (error?.code === 11000 && fileInfo.knauf_dedup_owner) {
       logger.info(
         '[knauf][dedup] concurrent owner claim for content-hash; recording this upload as a non-owner duplicate (group GC will reclaim it)',
       );
-      result = await db.createFile({ ...fileInfo, knauf_dedup_owner: undefined }, true);
+      result = await db.createFile(
+        { ...fileInfo, knauf_dedup_owner: undefined },
+        true,
+        knaufOwnerScope,
+      );
     } else {
       throw error;
     }

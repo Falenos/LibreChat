@@ -44,6 +44,12 @@ const {
   deleteFilesWithDedupAwareness,
 } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
 // End [knauf]
+// [knauf] KK20-195 WP3a — client-file_id adoption + replay/conflict decisions.
+const {
+  isValidClientFileId,
+  classifyUploadReplay,
+} = require('~/server/services/Files/knauf/uploadIdempotency');
+// End [knauf]
 const { cleanFileName, getContentDisposition } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
@@ -696,8 +702,41 @@ router.post('/', async (req, res) => {
     }
     // End [knauf]
 
-    metadata.temp_file_id = metadata.file_id;
-    metadata.file_id = req.file_id;
+    // [knauf] KK20-195 WP3a — upload idempotency (plan §6.1 steps 3+5).
+    // Adopt the CLIENT-generated file_id as THE logical id when it is a valid
+    // UUID; multer's server-minted req.file_id stays as the fallback (body
+    // fields aren't reliably parsed inside multer's filename callback, so
+    // adoption happens here, not there). temp_file_id keeps carrying the
+    // client id either way — the client reconciles its row by temp_file_id.
+    const knaufClientFileId = metadata.file_id;
+    const knaufAdopted = isValidClientFileId(knaufClientFileId);
+    metadata.temp_file_id = knaufClientFileId ?? req.file_id;
+    metadata.file_id = knaufAdopted ? knaufClientFileId : req.file_id;
+
+    if (knaufAdopted && !isAssistantsEndpoint(metadata.endpoint)) {
+      // §6.1 step 5 — an exact retry with the same (owner, file_id) returns
+      // the original row; the same id with different content or a different
+      // owner is a hard 409. Unscoped lookup on purpose: the cross-user case
+      // must be detected, not silently duplicated.
+      const [existing] = await db.getFiles({ file_id: metadata.file_id }, null, { text: 0 });
+      const verdict = classifyUploadReplay({
+        existing,
+        userId: req.user.id,
+        incomingBytes: req.file?.size,
+      });
+      if (verdict.outcome === 'replay') {
+        logger.info(`[/files] idempotent replay for file_id ${metadata.file_id}`);
+        return res.status(200).json({ message: 'File already processed', ...existing });
+      }
+      if (verdict.outcome === 'conflict') {
+        return res.status(409).json({
+          error: 'upload_idempotency_conflict',
+          reason: verdict.reason,
+          file_id: metadata.file_id,
+        });
+      }
+    }
+    // End [knauf]
 
     if (isAssistantsEndpoint(metadata.endpoint)) {
       return await processFileUpload({ req, res, metadata });
