@@ -170,6 +170,8 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           git pull --ff-only origin main
           sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
 
           BRANCH="release/agk-prod-$VERSION"
 
