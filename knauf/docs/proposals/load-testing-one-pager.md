@@ -1,10 +1,12 @@
 # Agentic Karl Load Testing - One Page Briefing
 
-Generated: 2026-05-21
+Updated: 2026-07-15
 
 ## Objective
 
 Find the production capacity, bottlenecks, and failure modes before rollout to 15,000+ daily users. The key risk is not raw DAU. It is peak concurrent chat sessions, long-lived SSE streams, Azure OpenAI TPM/RPM, RAG fan-out, and write pressure across Mongo/Cosmos, Redis, pgvector, MeiliSearch, and storage.
+
+The first gate is dev-only. Ordinary KARL, memory, and titles use account-level Model Router; created agents and prompt drafting use direct GPT-5.6 Sol; RAG uses `text-embedding-3-large`; images use GPT Image 1. Do not promote prod configuration during this test cycle.
 
 ## System View
 
@@ -16,7 +18,9 @@ Ingress / Edge / OIDC
   |
   v
 API pods
-  |-- POST /api/agents/chat -----------> Azure OpenAI chat/image models
+  |-- ordinary KARL -------------------> Model Router (Chat Completions)
+  |-- agents/prompt drafting ----------> GPT-5.6 Sol (Responses)
+  |-- image generation ----------------> GPT Image 1
   |-- GET  /api/agents/chat/stream/:id  SSE stream to browser
   |-- reads/writes --------------------> Cosmos Mongo API
   |-- streams/rate limits/sessions ----> Redis
@@ -43,19 +47,21 @@ Keep reconnect, abort storms, pod restarts, malformed documents, MCP/tool failur
 Use `k6` for deterministic HTTP pressure and thresholds. Use a Node/TS or Locust runner for the full SSE chat lifecycle because chat is not complete when the POST returns. Artillery is a reasonable alternative if the team wants one JS-based scenario framework.
 
 Phase 0: readiness audit
-- 2+ API pods, Redis enabled, explicit CPU/memory requests, HPA enabled, pinned RAG image tag, shared storage, production-like ingress/SSE timeouts, Azure OpenAI quota confirmed.
+- Confirm Azure persisted the exact OpenAI-only router pool: GPT-5.4 nano, GPT-5.4 mini, GPT-5.4, and GPT-5.5. Confirm 2+ API pods, Redis, resource limits, HPA, pinned images, shared storage, ingress/SSE timeouts, and separate router/Sol/embedding/image quotas.
 
 Phase 1: smoke and baseline
 - 1 to 10 virtual users, prove chat, stream final event, upload, RAG query, image/tool path, and cleanup.
 
 Phase 2: expected load
-- Run realistic traffic mix for 30 to 60 minutes. Start with 70% normal chat, 20% RAG chat, 5% uploads, 3% history/search, 2% image/tool-heavy flows until analytics replace assumptions.
+- Run a realistic traffic mix for 30 to 60 minutes. Ramp active users through 5, 25, 50, 100, and 200 before going higher. Start with 70% normal chat, 20% RAG chat, 5% uploads, 3% history/search, and 2% image/tool-heavy flows until analytics replace assumptions.
 
 Phase 3: stress and short soak
 - Increase beyond expected peak until the first bottleneck appears, spike to 2x expected peak, and run a short 1 to 2 hour soak at expected peak.
 
 Phase 4: optional resilience follow-up
 - Restart pods, slow RAG, interrupt Redis, and simulate Azure OpenAI 429s only after the actual peak-load profile is understood.
+
+Stop immediately if the router selects a model outside the approved pool. Also stop when final-stream success drops below 99%, 429s exceed 1%, 5xx exceeds 0.5%, p95 latency exceeds twice the baseline, or the agreed token budget is reached.
 
 ## What We Must Monitor
 

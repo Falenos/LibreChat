@@ -1,10 +1,12 @@
 # Agentic Karl Load And Stress Testing Plan
 
-Generated: 2026-05-21
+Updated: 2026-07-15
 
 ## Goal
 
 Prepare Agentic Karl for production rollout by finding capacity limits, failure modes, and scaling requirements before real user traffic exposes them. Daily active users alone is not enough for sizing. The test needs peak concurrent users, messages per minute, average prompt/response tokens, RAG usage rate, upload rate, and image generation rate.
+
+This cycle validates dev only. Do not change or promote prod configuration until the dev gates in this plan pass.
 
 ## System Under Test
 
@@ -19,7 +21,9 @@ LibreChat SPA
   |
   v
 LibreChat API (Node / Express)
-  |-- POST /api/agents/chat ---------------> Azure OpenAI chat/image models
+  |-- ordinary KARL/memory/titles ----------> Model Router (Chat Completions)
+  |-- created agents/prompt drafting -------> GPT-5.6 Sol (Responses)
+  |-- image generation ---------------------> GPT Image 1
   |-- GET  /api/agents/chat/stream/:id ----> SSE back to browser
   |-- writes/reads ------------------------> Cosmos DB Mongo API
   |-- stream jobs/rate limits/sessions ----> Redis, required for multi-pod scale
@@ -34,7 +38,7 @@ LibreChat API (Node / Express)
   +-- file upload with file_search --------> rag_api /embed
                                                 |
                                                 v
-                                         Azure OpenAI embeddings
+                                         text-embedding-3-large
 ```
 
 Pod/scaling clarification: the API routes are not split across different API pods. Each `LibreChat API` pod is an identical replica of the full Node/Express API and can receive any API route through the Kubernetes Service/Ingress. When the plan says "API pods", it means multiple copies of the same backend app behind the load balancer. RAG API, Redis, MeiliSearch, databases, and storage are separate components/services, not route-specific pieces of the LibreChat API pod.
@@ -99,6 +103,7 @@ This lines up with current tool best practice:
 - Confirm ingress/SSE settings: no proxy buffering on stream routes, long read/send timeouts, enough connection limits.
 - Confirm shared storage or blob storage for uploads before scaling API pods.
 - Confirm Azure OpenAI quotas for chat, embeddings, and image generation.
+- Read the live Model Router deployment and require `balanced` mode with exactly the pinned OpenAI-only pool: GPT-5.4 nano, GPT-5.4 mini, GPT-5.4, and GPT-5.5. A missing/null routing property or any other selected model blocks load testing.
 
 ### 1. Smoke And Baseline
 
@@ -115,13 +120,14 @@ This lines up with current tool best practice:
   - 5% file uploads/RAG ingestion
   - 3% conversation/history/search reads
   - 2% image generation or other tool-heavy flows
-- Run 30 to 60 minutes. Increase in steps such as 50, 100, 250, 500 concurrent active users.
+- Run 30 to 60 minutes. Increase active users through 5, 25, 50, 100, and 200 before considering 400 or higher.
 
 ### 3. Stress And Breakpoint
 
 - Increase load until one hard limit appears.
 - Record which component fails first: API CPU/memory, SSE connection count, Redis ops/memory, Mongo latency/pool wait, RAG CPU, pgvector query/insert latency, Azure OpenAI 429, ingress timeout, or storage I/O.
 - Stop before damaging shared lower environments.
+- Stop on any model outside the approved router pool, final-stream success below 99%, 429 rate above 1%, 5xx rate above 0.5%, p95 latency above twice baseline, or the agreed token budget.
 
 ### 4. Spike
 

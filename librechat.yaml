@@ -490,8 +490,7 @@ endpoints:
           - frequency_penalty
         models:
           # Account-scoped Chat Completions alias. The deployment remains
-          # `model-router`; the alias keeps it separate from the project-scoped
-          # Responses API model below.
+          # `model-router`; the alias avoids colliding with saved model names.
           model-router-chat:
             deploymentName: 'model-router'
             version: '2024-10-21'
@@ -524,22 +523,6 @@ endpoints:
           gpt-5.6-sol:
             deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
             version: '2024-10-21'
-      # Experimental router Responses path. Keep it available for later
-      # comparison, but do not select it in production agent presets yet.
-      - group: 'agk-foundry-project'
-        apiKey: '${AZURE_FOUNDRY_API_KEY}'
-        serverless: true
-        baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
-        additionalHeaders:
-          api-key: '${AZURE_FOUNDRY_API_KEY}'
-        dropParams:
-          - temperature
-          - top_p
-          - presence_penalty
-          - frequency_penalty
-        models:
-          model-router: true
-
 modelSpecs:
   enforce: false
   prioritize: false
