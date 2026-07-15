@@ -268,7 +268,9 @@ const shouldRefreshBeforeRequest = (url?: string) => {
   }
 
   const timeUntilExpiry = expiresAt - Date.now();
-  return timeUntilExpiry > 0 && timeUntilExpiry <= TOKEN_REFRESH_BUFFER_MS;
+  // [knauf] Refresh expired tokens before resumed tabs fan out protected requests
+  return timeUntilExpiry <= TOKEN_REFRESH_BUFFER_MS;
+  // End [knauf]
 };
 
 if (typeof window !== 'undefined') {

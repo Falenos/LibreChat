@@ -304,6 +304,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/app/clients/tools/structured/specs/OpenUrl.spec.js` | invalid-page CSS console regression | 266–277 | Proves malformed CSS from an untrusted fetched page stays inside jsdom's quiet VirtualConsole instead of becoming a multiline production error in Datadog | Self | NO-TICKET |
 | `packages/api/src/stream/implementations/RedisEventTransport.ts` | last-subscriber cleanup | 483–499 | Retain the Redis channel while abort callbacks remain so cross-replica cancellation still reaches a generator after its last SSE subscriber disconnects | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
 | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | abort-only listener disconnect regression | 57–87 | Proves an abort-only Redis subscription survives a real data-subscriber connect/disconnect cycle, still ignores stream data, and still delivers abort | Self | NO-TICKET |
+| `packages/data-provider/src/request.ts` | `shouldRefreshBeforeRequest` expired-token branch | 271–273 | Include already-expired JWTs in preflight refresh so a resumed browser tab refreshes once before its parallel protected requests leave the client | `packages/data-provider/specs/request-interceptor.spec.ts` | NO-TICKET |
+| `packages/data-provider/specs/request-interceptor.spec.ts` | expired bearer-token preflight regression | 592–611 | Proves an expired bearer token refreshes before the first protected request instead of producing a recoverable burst of backend 401 responses | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
