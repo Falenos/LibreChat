@@ -48,7 +48,7 @@
     "@keyv/redis": "^4.3.3",
     "@knauf/knauf": "*",
     "@langchain/core": "^0.3.80",
-    "@librechat/agents": "^3.2.46",
+    "@librechat/agents": "^3.2.65",
     "@librechat/api": "*",
     "@librechat/data-schemas": "*",
     "@microsoft/microsoft-graph-client": "^3.0.7",

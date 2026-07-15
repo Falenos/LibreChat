@@ -461,8 +461,17 @@ ${memory ?? 'No existing memories'}`;
       graphAdditionalInstructions = undefined;
     }
 
+    // [knauf] Keep detached memory work filterable with its originating turn.
+    const tenantId = typeof user?.tenantId === 'string' ? user.tenantId.trim() : '';
     const run = await Run.create({
       runId: messageId,
+      langfuse: {
+        metadata: {
+          'librechat.source.message.id': messageId,
+          ...(tenantId !== '' && { 'librechat.tenant.id': tenantId }),
+        },
+        tags: ['memory', ...(tenantId !== '' ? [`tenant:${tenantId}`] : [])],
+      },
       graphConfig: {
         type: 'standard',
         llmConfig: finalLLMConfig,
@@ -474,6 +483,7 @@ ${memory ?? 'No existing memories'}`;
       customHandlers,
       returnContent: true,
     });
+    // End [knauf]
 
     const config = {
       runName: 'MemoryRun',

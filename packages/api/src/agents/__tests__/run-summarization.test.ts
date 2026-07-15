@@ -1113,10 +1113,16 @@ describe('subagentConfigs', () => {
  */
 async function callAndCaptureRunConfig({
   overrides,
+  // [knauf] Let correlation tests pass the source message id through to createRun.
+  runId,
+  // End [knauf]
   user,
   tenantId,
 }: {
   overrides?: Record<string, unknown>;
+  // [knauf] Companion type for the correlation-test input above.
+  runId?: string;
+  // End [knauf]
   user?: Record<string, unknown>;
   tenantId?: string;
 } = {}): Promise<Record<string, unknown>> {
@@ -1126,6 +1132,9 @@ async function callAndCaptureRunConfig({
   await createRun({
     agents: agents as never,
     signal,
+    // [knauf] Exercise the production runId-to-Langfuse metadata seam.
+    runId,
+    // End [knauf]
     streaming: true,
     streamUsage: true,
     user: user as never,
@@ -1172,6 +1181,16 @@ describe('Langfuse run config', () => {
       tags: ['tenant:tenant-2'],
     });
   });
+
+  // [knauf] Title traces must retain a stable link to the originating agent turn.
+  it('adds source-message correlation metadata when a run id is supplied', async () => {
+    const callArgs = await callAndCaptureRunConfig({ runId: 'message-1' });
+    expect(callArgs.langfuse).toEqual({
+      deterministicTraceId: true,
+      metadata: { 'librechat.source.message.id': 'message-1' },
+    });
+  });
+  // End [knauf]
 });
 
 // ---------------------------------------------------------------------------
