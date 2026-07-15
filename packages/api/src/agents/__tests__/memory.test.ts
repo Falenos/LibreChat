@@ -264,6 +264,37 @@ describe('processMemory - GPT-5+ handling', () => {
     expect(callArgs.graphConfig.llmConfig.maxTokens).toBeUndefined();
   });
 
+  // [knauf] Detached memory traces stay correlated with their originating turn.
+  it('adds source-message, memory, and tenant Langfuse attributes', async () => {
+    await processMemory({
+      res: mockRes as Response,
+      userId: 'test-user',
+      setMemory: mockSetMemory,
+      deleteMemory: mockDeleteMemory,
+      messages: [],
+      memory: 'Test memory',
+      messageId: 'msg-123',
+      conversationId: 'conv-123',
+      instructions: 'Test instructions',
+      llmConfig: { provider: Providers.OPENAI, model: 'gpt-4' },
+      user: { tenantId: 'tenant-1' } as never,
+    });
+
+    const { Run } = jest.requireMock('@librechat/agents');
+    expect(Run.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        langfuse: {
+          metadata: {
+            'librechat.source.message.id': 'msg-123',
+            'librechat.tenant.id': 'tenant-1',
+          },
+          tags: ['memory', 'tenant:tenant-1'],
+        },
+      }),
+    );
+  });
+  // End [knauf]
+
   it('should handle GPT-5+ models with existing modelKwargs', async () => {
     await processMemory({
       res: mockRes as Response,
