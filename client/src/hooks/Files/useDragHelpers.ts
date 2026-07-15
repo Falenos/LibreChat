@@ -30,8 +30,8 @@ import useLocalize from '../useLocalize';
 // whether a drop should auto-route into File Search instead of the upstream
 // capability-picker modal, applies the routing through injected callbacks, and returns
 // true when it handled the drop (the caller then returns early):
-//   • Default Knauf chat (azureOpenAI + Responses API): enable file_search on the
-//     ephemeral agent, then route. Gated on the platform capability, NOT
+//   • Default Knauf chat (azureOpenAI, including Model Router Chat Completions):
+//     enable file_search on the ephemeral agent, then route. Gated on the platform capability, NOT
 //     fileSearchAllowedByAgent — this drop is what enables file_search (chicken-and-egg).
 //   • Custom agent chat (endpoint `agents`) where File Search is the SOLE destination:
 //     route into the agent's own file_search tool (no ephemeral toggle). If the agent
@@ -40,7 +40,6 @@ import useLocalize from '../useLocalize';
 // KK20-190.
 function routeKnaufFileSearchDrop({
   endpoint,
-  useResponsesApi,
   fileSearchEnabled,
   fileSearchAllowedByAgent,
   codeEnabled,
@@ -50,7 +49,6 @@ function routeKnaufFileSearchDrop({
   routeToFileSearch,
 }: {
   endpoint?: string;
-  useResponsesApi: boolean;
   fileSearchEnabled: boolean;
   fileSearchAllowedByAgent: boolean;
   codeEnabled: boolean;
@@ -62,7 +60,7 @@ function routeKnaufFileSearchDrop({
   if (!fileSearchEnabled) {
     return false;
   }
-  if (endpoint === EModelEndpoint.azureOpenAI && useResponsesApi) {
+  if (endpoint === EModelEndpoint.azureOpenAI) {
     enableEphemeralFileSearch();
     routeToFileSearch();
     return true;
@@ -185,7 +183,6 @@ export default function useDragHelpers() {
       const conv = conversationRef.current;
       const handledByKnauf = routeKnaufFileSearchDrop({
         endpoint: conv?.endpoint ?? undefined,
-        useResponsesApi: conv?.useResponsesApi === true,
         fileSearchEnabled,
         fileSearchAllowedByAgent,
         codeEnabled,

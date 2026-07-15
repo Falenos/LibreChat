@@ -390,7 +390,7 @@ describe('AttachFileMenu', () => {
     });
   });
 
-  // [knauf] KK20-190 — on the Azure Responses-API chat, "Upload files" routes
+  // [knauf] KK20-190 — on a Knauf Azure chat, "Upload files" routes
   // documents into chat-scoped File Search (RAG) via an ephemeral agent and
   // restricts the picker to the Knauf allow-list. This pins both the routing
   // decision (gated on capabilities.fileSearchEnabled) and the picker `accept`
@@ -417,14 +417,14 @@ describe('AttachFileMenu', () => {
       return capturedAccept;
     }
 
-    it('routes "Upload files" to the Knauf allow-list when File Search is enabled', () => {
+    it('routes Model Router Chat Completions to the Knauf allow-list', () => {
       setupMocks({ provider: EModelEndpoint.azureOpenAI });
       mockUseAgentCapabilities.mockReturnValue({
         contextEnabled: false,
         fileSearchEnabled: true,
         codeEnabled: false,
       });
-      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: false });
       expect(clickUploadFilesCapturingAccept()).toBe(KNAUF_ALLOWED_ACCEPT);
     });
 
@@ -453,7 +453,7 @@ describe('AttachFileMenu', () => {
         fileSearchEnabled: true,
         codeEnabled: false,
       });
-      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: false });
       openMenu();
       // Dialog starts closed, then the menu item click flips `open` to true.
       expect(formatsDialog.mock.calls.at(-1)[0].open).toBe(false);
