@@ -869,7 +869,20 @@ export async function initializeAgent(
     }
   }
 
-  const baseToolNames = agent.tools ?? [];
+  const persistedToolNames = agent.tools ?? [];
+  // [knauf] KK20-190 — a chat-attached embedded file is usable for this turn
+  // even when the persistent custom agent was created without file_search.
+  const hasEmbeddedRequestAttachment =
+    primedRequestAttachments?.some(
+      (file) =>
+        file?.embedded === true &&
+        requestFiles.some((requestFile) => requestFile.file_id === file.file_id),
+    ) === true;
+  const baseToolNames =
+    hasEmbeddedRequestAttachment && !persistedToolNames.includes(Tools.file_search)
+      ? [...persistedToolNames, Tools.file_search]
+      : persistedToolNames;
+  // End [knauf]
   const requestedToolNames =
     extraAllowedToolNames.length > 0 ? [...baseToolNames, ...extraAllowedToolNames] : baseToolNames;
 
