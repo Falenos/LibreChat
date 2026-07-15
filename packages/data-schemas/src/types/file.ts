@@ -81,4 +81,7 @@ export interface IMongoFile extends Omit<Document, 'model'> {
   knauf_asset_id?: string;
   knauf_dedup_owner?: boolean;
   // End [knauf]
+  // [knauf] KK20-195 WP2 — client batch id for multi-file selections (see schema/file.ts)
+  knauf_upload_batch_id?: string;
+  // End [knauf]
 }
