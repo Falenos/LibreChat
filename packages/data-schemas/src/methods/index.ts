@@ -2,6 +2,9 @@ import type { RoleMethods, RoleDeps } from './role';
 import { createSessionMethods, DEFAULT_REFRESH_TOKEN_EXPIRY, type SessionMethods } from './session';
 import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
 import { createFileMethods, type FileMethods, type FileOwnerScope } from './file';
+// [knauf] KK20-195 WP2 — FileAsset state-machine methods.
+import { createFileAssetMethods, type FileAssetMethods } from './fileAsset';
+// End [knauf]
 import { createTokenMethods, type TokenMethods } from './token';
 import { createRoleMethods, RoleConflictError } from './role';
 import { createKeyMethods, type KeyMethods } from './key';
@@ -117,6 +120,9 @@ export type AllMethods = UserMethods &
   RoleMethods &
   KeyMethods &
   FileMethods &
+  // [knauf] KK20-195 WP2 — FileAsset state machine.
+  FileAssetMethods &
+  // End [knauf]
   MemoryMethods &
   AgentCategoryMethods &
   AgentApiKeyMethods &
@@ -244,6 +250,9 @@ export function createMethods(
     ...roleMethods,
     ...createKeyMethods(mongoose),
     ...createFileMethods(mongoose),
+    // [knauf] KK20-195 WP2 — FileAsset state machine.
+    ...createFileAssetMethods(mongoose),
+    // End [knauf]
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
     ...createAgentApiKeyMethods(mongoose),
@@ -289,6 +298,9 @@ export type {
   KeyMethods,
   FileMethods,
   FileOwnerScope,
+  // [knauf] KK20-195 WP2 — FileAsset state machine.
+  FileAssetMethods,
+  // End [knauf]
   MemoryMethods,
   AgentCategoryMethods,
   AgentApiKeyMethods,
