@@ -314,6 +314,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/agents/memory.ts` | `processMemory` `Run.create` Langfuse config | 464–486 | Marks detached memory work and correlates it to the source message and tenant without merging independent root spans into the agent trace | `packages/api/src/agents/__tests__/memory.test.ts` | NO-TICKET |
 | `packages/api/src/agents/__tests__/run-summarization.test.ts` | source-message Langfuse correlation case | 1116–1118, 1123–1125, 1135–1137, 1185–1193 | Seam test — proves `createRun` propagates its run/message id as stable correlation metadata inherited by title generation | Self | NO-TICKET |
 | `packages/api/src/agents/__tests__/memory.test.ts` | detached memory Langfuse attributes case | 267–296 | Seam test — proves memory traces carry source-message, memory, and tenant attributes | Self | NO-TICKET |
+| `packages/api/src/agents/initialize.ts` | `hasEmbeddedRequestAttachment` / `baseToolNames` | 872–885 | Add `file_search` to a custom agent's effective tools for the current turn when the user attached an embedded document, without mutating the persisted agent configuration | `packages/api/src/agents/__tests__/initialize.test.ts` (`loads file_search for an embedded request attachment without persisting it`) | KK20-190 |
+| `packages/api/src/agents/__tests__/initialize.test.ts` | custom-agent transient File Search regression | 847–893 | Seam test — an embedded current-request PDF augments `loadTools` with `file_search` while `agent.tools` remains unchanged | Self | KK20-190 |
 <!-- seams:auto:end -->
 
 ## Configuration

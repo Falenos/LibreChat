@@ -844,6 +844,54 @@ describe('initializeAgent — attachment scoping', () => {
     expect(result.agentContextAttachments).toEqual([agentContextFile]);
   });
 
+  // [knauf] KK20-190 — custom-agent chat attachments enable transient File Search.
+  it('loads file_search for an embedded request attachment without persisting it', async () => {
+    const { primeResources } = jest.requireMock('../resources') as {
+      primeResources: jest.Mock;
+    };
+    const requestFile = {
+      file_id: 'request-file',
+      filename: 'request.pdf',
+      embedded: true,
+    } as IMongoFile;
+    const fileSearchResources = {
+      [EToolResources.file_search]: { files: [requestFile] },
+    };
+    primeResources.mockResolvedValueOnce({
+      attachments: [requestFile],
+      requestAttachments: [requestFile],
+      agentContextAttachments: undefined,
+      tool_resources: fileSearchResources,
+    });
+
+    const { agent, req, res, loadTools, db } = createMocks();
+    agent.tools = [Tools.web_search];
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        requestFiles: [requestFile],
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(loadTools).toHaveBeenCalledTimes(1);
+    expect(loadTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [Tools.web_search, Tools.file_search],
+        tool_resources: fileSearchResources,
+      }),
+    );
+    expect(agent.tools).toEqual([Tools.web_search]);
+  });
+  // End [knauf]
+
   it('owner-scopes request file usage updates while preserving trusted tool files', async () => {
     const requestFile = { file_id: 'request-file', filename: 'request.txt' } as IMongoFile;
     const toolFile = { file_id: 'tool-file', filename: 'tool.txt' } as IMongoFile;
