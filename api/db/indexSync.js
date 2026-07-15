@@ -333,7 +333,7 @@ async function indexSync() {
 
   try {
     // This will only execute the handler if no other instance is running the sync
-    // [knauf] FlowStateManager owns completion and TTL cleanup; handler-side deletion races it.
+    // [knauf] FlowStateManager owns completion; omit its context so upstream handler cleanup stays unreachable.
     const result = await flowManager.createFlowWithHandler(flowId, flowType, () => performSync());
     // End [knauf]
 
