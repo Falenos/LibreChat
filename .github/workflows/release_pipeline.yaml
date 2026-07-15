@@ -172,6 +172,8 @@ jobs:
 
           # Anchor to the image.tag key path to avoid corrupting other tag: lines
           sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
             echo "AGK deployment config already points at $VERSION"
@@ -189,7 +191,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl dev to $VERSION" \
-              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps \`$AGK_CONFIG_DIRECTORY/values.yaml\` image tag to \`$VERSION\`.")
+              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps \`$AGK_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
           fi
           echo "Deployment config PR: $PR_URL"
 

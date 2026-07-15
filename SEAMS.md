@@ -346,6 +346,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/knauf/package.json` | KK20-194 — adds server-side deps for the open_url tool (`@mozilla/readability`, `jsdom`, `html-to-text`) and an `exports` map (`./server/htmlExtract`) so `api/` can require the Knauf HTML extraction helper without bundling jsdom into the upstream lockfile. All three deps are permissive (MIT / Apache-2.0). SSRF protection itself is delegated to upstream's `createSSRFSafeUndiciConnect` (see `[knauf]` seam in `packages/api/src/auth/domain.ts`), so no IP-parser dep is needed here. |
 | `api/package.json`, `packages/api/package.json` | Raises `@librechat/agents` to `^3.2.65`, adopting upstream Langfuse-team trace shaping: stable agent/tool names, scoped tool args, clean root question/answer, and dropped LangGraph plumbing spans |
 | `.env.example` | Documents `LANGFUSE_TRACING_ENVIRONMENT` and `LANGFUSE_RELEASE` so deployments can filter production traffic and attribute traces to an application release |
+| `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | Keeps `LANGFUSE_RELEASE` synchronized with the exact AGK dev/prod image tag and fails the deployment-config update if release attribution is absent |
 
 ## Net-New Files
 
