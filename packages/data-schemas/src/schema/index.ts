@@ -33,3 +33,6 @@ export { default as configSchema } from './config';
 // [knauf] Migration allowlist schema — one doc per allowed user (keyed by email).
 export { default as migrationAllowlistSchema } from './migrationAllowlist';
 // End [knauf]
+// [knauf] KK20-195 WP2 — physical FileAsset aggregate schema.
+export { default as fileAssetSchema } from './fileAsset';
+// End [knauf]
