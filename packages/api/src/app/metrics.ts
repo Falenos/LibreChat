@@ -57,6 +57,13 @@ const UPLOAD_PATHS = new Set([
 
 const UPLOAD_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
+// [knauf] Keep probes and scrapes out of user-traffic metrics.
+const OBSERVABILITY_PATHS = new Set(['/health', '/livez', '/readyz', '/metrics']);
+
+export const isObservabilityPath = (rawPath: string): boolean =>
+  OBSERVABILITY_PATHS.has(rawPath.split('?')[0]);
+// End [knauf]
+
 const LOW_CARDINALITY_PATHS: RegExp[] = [
   /^\/api\/agents\/chat\/stream\/#id$/,
   /^\/api\/agents\/chat\/status\/#id$/,
@@ -540,6 +547,13 @@ export function createMetrics(): PrometheusMetrics {
   };
 
   const metricsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    // [knauf] Probe/scrape volume is platform overhead, not application load.
+    if (isObservabilityPath(req.path)) {
+      next();
+      return;
+    }
+    // End [knauf]
+
     const end = httpDuration.startTimer();
     const labels = { method: req.method, path: normalizePath(req.path) };
     const uploadTracked = isUploadRequest(req, labels.path);
