@@ -591,6 +591,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/proposals/load-testing-one-pager.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 | `knauf/docs/proposals/load-testing-strategy-plan.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 | `packages/api/src/knauf/observability/trafficNoise.knauf.spec.ts` | `packages/api/src/app/metrics.ts` (`isObservabilityPath`); `packages/api/src/telemetry/sdk.ts` (`shouldIgnoreIncomingRequest`) | Low — test-only; imports two bounded pure request-path predicates | Self | NO-TICKET |
+| `knauf/docs/architecture/files/async-indexing.md` | None (markdown doc; advisory relative links to `packages/data-schemas/src/{schema,methods}/fileAsset.ts`, `api/server/services/Files/knauf/*`, `api/server/worker.js`, `api/server/middleware/knaufFileIndexReadiness.js`, client knauf hooks/components, and the sibling files docs) | Low — before/after architecture doc for KK20-195; no runtime coupling. Links are advisory and break loudly on file moves, surfacing in PR review rather than at runtime | Docs only | KK20-195 |
 <!-- seams:new:end -->
 
 ## Static Assets

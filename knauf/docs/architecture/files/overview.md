@@ -24,6 +24,7 @@ The **map** of file handling in KARL: every way a file can enter, what each path
 > This doc owns the cross-cutting picture (the diagrams, the binding model, lifecycle, delete, config). It deliberately does **not** repeat storage or retrieval mechanics:
 > - **[`storage.md`](./storage.md)** — where the bytes live: the `fileStrategy` adapters and the Azure SAS / serving / refresh machinery.
 > - **[`rag-search.md`](./rag-search.md)** — how file search works: `rag_api` + pgvector, embed/query, the `file_search` tool, citations.
+> - **[`async-indexing.md`](./async-indexing.md)** — how File Search ingestion is tracked and executed since KK20-195: the `KnaufFileAsset` state machine, worker + reconciler, status/retry endpoints, and the before/after of the sync-embed era this doc's §2e/§2f used to imply.
 
 ---
 
