@@ -62,7 +62,12 @@ export default function Root() {
   const { isAuthenticated, logout } = useAuthContext();
 
   // [knauf] Block non-allowlisted users immediately after login.
-  const { allowed: migrationAllowed, isLoading: migrationLoading, isError: migrationError, hasData: migrationHasData } = useMigrationAccess();
+  const {
+    allowed: migrationAllowed,
+    isLoading: migrationLoading,
+    isError: migrationError,
+    hasData: migrationHasData,
+  } = useMigrationAccess();
   // End [knauf]
 
   useHealthCheck(isAuthenticated);
@@ -78,8 +83,9 @@ export default function Root() {
   const { data: termsData } = useUserTermsQuery({
     enabled: isAuthenticated && termsAcceptanceRequired,
   });
-  const shouldMountKnaufConsentAnalytics =
-    config != null && (!termsAcceptanceRequired || termsData?.termsAccepted === true);
+  const shouldDeferOneTrust =
+    config == null || (termsAcceptanceRequired && termsData?.termsAccepted !== true);
+  const shouldMountKnaufConsentAnalytics = !shouldDeferOneTrust;
   // End [knauf]
 
   useSearchEnabled(isAuthenticated);
@@ -118,6 +124,13 @@ export default function Root() {
 
   return (
     <SetConvoProvider>
+      {/* [knauf] Suppress stale OneTrust UI until the EULA state resolves and required terms are accepted. (NO-TICKET) */}
+      {shouldDeferOneTrust && (
+        <style id="knauf-eula-onetrust-guard">
+          {`#onetrust-consent-sdk, #onetrust-banner-sdk, #onetrust-pc-sdk, #ot-sdk-btn-floating { display: none !important; }`}
+        </style>
+      )}
+      {/* End [knauf] */}
       {/* [knauf] OneTrust prompts after login and any required EULA acceptance; Adobe loads only after analytics cookie consent. (NO-TICKET) */}
       {shouldMountKnaufConsentAnalytics && <KnaufConsentAnalytics />}
       {/* End [knauf] */}

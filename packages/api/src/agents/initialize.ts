@@ -13,7 +13,7 @@ import {
 } from 'librechat-data-provider';
 // [knauf] KK20-201 — deterministic locale/timezone context so agent
 // instructions never lead the model to guess a user's location.
-import { resolveUserLocationContext } from '~/knauf/context/locationContext';
+import { resolveUserLocationContext, resolveUserTimezone } from '~/knauf/context/locationContext';
 // End [knauf]
 import type {
   AgentToolResources,
@@ -580,6 +580,12 @@ export async function initializeAgent(
   const requestFileOwnerScope: FileOwnerScope | undefined = requestFileOwnerId
     ? { userId: requestFileOwnerId, tenantId: req.user?.tenantId }
     : undefined;
+  // [knauf] KK20-201 — one request-scoped clock/location source for prompts
+  // and native web tools. Never reuse the conversation creation timestamp.
+  const requestNow = new Date();
+  const requestTimezone = resolveUserTimezone(req.headers, req.body?.timezone);
+  const requestLocation = resolveUserLocationContext(req.headers, req.body?.timezone);
+  // End [knauf]
 
   if (!db) {
     throw new Error('initializeAgent requires db methods to be passed');
@@ -869,7 +875,20 @@ export async function initializeAgent(
     }
   }
 
-  const baseToolNames = agent.tools ?? [];
+  const persistedToolNames = agent.tools ?? [];
+  // [knauf] KK20-190 — a chat-attached embedded file is usable for this turn
+  // even when the persistent custom agent was created without file_search.
+  const hasEmbeddedRequestAttachment =
+    primedRequestAttachments?.some(
+      (file) =>
+        file?.embedded === true &&
+        requestFiles.some((requestFile) => requestFile.file_id === file.file_id),
+    ) === true;
+  const baseToolNames =
+    hasEmbeddedRequestAttachment && !persistedToolNames.includes(Tools.file_search)
+      ? [...persistedToolNames, Tools.file_search]
+      : persistedToolNames;
+  // End [knauf]
   const requestedToolNames =
     extraAllowedToolNames.length > 0 ? [...baseToolNames, ...extraAllowedToolNames] : baseToolNames;
 
@@ -991,10 +1010,19 @@ export async function initializeAgent(
     agent.provider = overrideProvider;
   }
 
+  // [knauf] KK20-194 — the builder/model-spec browse flag is stored as the
+  // web_search tool. Translate that existing intent into Azure's native
+  // Responses tool instead of loading LibreChat's provider-backed search.
+  const isAzureSearchProvider =
+    provider === EModelEndpoint.azureOpenAI || agent.provider === Providers.AZURE;
+  const useAzureNativeWebSearch =
+    isAzureSearchProvider && persistedToolNames.includes(Tools.web_search);
   const finalModelOptions = {
     ...modelOptions,
+    ...(isAzureSearchProvider ? { web_search: useAzureNativeWebSearch } : {}),
     model: agent.model,
   };
+  // End [knauf]
 
   const options: InitializeResultBase = await getOptions({
     req,
@@ -1107,9 +1135,26 @@ export async function initializeAgent(
 
   /** Check for tool presence from either full instances or definitions (event-driven mode) */
   const hasAgentTools = (structuredTools?.length ?? 0) > 0 || (toolDefinitions?.length ?? 0) > 0;
+  // [knauf] KK20-201 — Azure web search accepts an approximate IANA timezone.
+  // Add only validated browser data; never infer a city or country.
+  const requestScopedProviderTools = requestTimezone
+    ? options.tools?.map((tool) => {
+        if (tool == null || typeof tool !== 'object') {
+          return tool;
+        }
+        const type = (tool as { type?: unknown }).type;
+        return typeof type === 'string' && type.startsWith('web_search')
+          ? {
+              ...tool,
+              user_location: { type: 'approximate' as const, timezone: requestTimezone },
+            }
+          : tool;
+      })
+    : options.tools;
+  // End [knauf]
   const providerTools = resolveProviderToolConflicts({
     provider: agent.provider,
-    tools: options.tools,
+    tools: requestScopedProviderTools,
     toolDefinitions,
   });
   const hasProviderTools = (providerTools?.length ?? 0) > 0;
@@ -1151,12 +1196,11 @@ export async function initializeAgent(
     const resolvedInstructions = replaceSpecialVars({
       text: agent.instructions,
       user: req.user ? (req.user as unknown as TUser) : null,
-      now: req.conversationCreatedAt,
-      timezone: req.body?.timezone,
-      // [knauf] KK20-201 — pass the same browser-supplied `req.body.timezone`
-      // used above so location resolution isn't limited to the weaker
-      // Accept-Language-only signal (no client sends X-User-Timezone).
-      location: resolveUserLocationContext(req.headers, req.body?.timezone),
+      // [knauf] KK20-201 — resolve temporal variables for this request, not
+      // when the conversation was created. Use only validated timezone data.
+      now: requestNow,
+      timezone: requestTimezone,
+      location: requestLocation,
       // End [knauf]
     });
     if (hasTemporalSpecialVars(agent.instructions)) {
@@ -1166,6 +1210,32 @@ export async function initializeAgent(
       agent.instructions = resolvedInstructions;
     }
   }
+
+  // [knauf] KK20-201 — every agent receives fresh timezone context even when
+  // its saved instructions do not contain {{current_user_location}}.
+  if (requestTimezone) {
+    appendAdditionalInstructions(
+      agent,
+      replaceSpecialVars({
+        text: "Current request context (supersedes older saved date/time or location hints): {{current_datetime}}. {{current_user_location}}. The user's explicit location always takes precedence.",
+        user: req.user ? (req.user as unknown as TUser) : null,
+        now: requestNow,
+        timezone: requestTimezone,
+        location: requestLocation,
+      }),
+    );
+  }
+  // End [knauf]
+
+  // [knauf] KK20-194 — request-time policy covers persisted agents whose saved
+  // instructions predate native Azure search and exact-link support.
+  if (useAzureNativeWebSearch) {
+    appendAdditionalInstructions(
+      agent,
+      'Web access is enabled for this request. For a user-supplied URL, call open_url with that exact URL before answering; never change its hostname, path, query, or protocol. Use web_search for current, recent, live, or changing information such as weather, news, schedules, prices, laws, product releases, and public office holders. Do not search for stable general knowledge you know confidently. Never claim to have opened a page or searched unless the corresponding tool succeeded.',
+    );
+  }
+  // End [knauf]
 
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {
     const artifactsPromptResult = generateArtifactsPrompt({

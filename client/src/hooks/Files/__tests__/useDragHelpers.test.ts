@@ -1,6 +1,6 @@
 /**
  * [knauf] Seam test for the drag-drop File Search routing in useDragHelpers
- * (KK20-190). On the Knauf Azure Responses-API chat, a drop routes documents into
+ * (KK20-190). On a Knauf Azure chat, a drop routes documents into
  * File Search (sets the ephemeral agent's file_search + calls handleFiles with the
  * file_search tool_resource) instead of popping the capability-picker modal. This
  * was previously SEAMS Tests=Manual; this pins it. react-dnd's useDrop is mocked to
@@ -75,11 +75,11 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
 
   const pdf = () => new File([new ArrayBuffer(1024)], 'doc.pdf', { type: 'application/pdf' });
 
-  it('routes a drop into File Search on the Azure Responses-API chat', () => {
+  it('routes a drop into File Search on Model Router Chat Completions', () => {
     mockConversation = {
       conversationId: 'c1',
       endpoint: EModelEndpoint.azureOpenAI,
-      useResponsesApi: true,
+      useResponsesApi: false,
     };
     renderHook(() => useDragHelpers());
 
@@ -92,10 +92,10 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
     expect(mockHandleFiles).toHaveBeenCalledWith([file], EToolResources.file_search);
   });
 
-  it('does NOT route to File Search when the chat is not Azure Responses-API (falls through to the modal)', () => {
+  it('does NOT route to File Search when the chat is not Azure (falls through to the modal)', () => {
     mockConversation = {
       conversationId: 'c1',
-      endpoint: EModelEndpoint.azureOpenAI,
+      endpoint: EModelEndpoint.openAI,
       useResponsesApi: false,
     };
     renderHook(() => useDragHelpers());

@@ -393,6 +393,10 @@ export default function RetrievalCall({
       pages: result.pages,
       pageRelevance: result.pageRelevance,
       fileType: result.fileType,
+      // [knauf] KK20-221 — carry byte size so the FilePreviewDialog mount below
+      // can size-gate File Search retrieval previews (>10 MB PDFs).
+      fileBytes: result.fileBytes,
+      // End [knauf]
     };
   }, [displayResults, previewIndex]);
 
@@ -473,6 +477,10 @@ export default function RetrievalCall({
         </div>
       </div>
 
+      {/* [knauf] KK20-221 — pass the byte size so the oversized-file preview
+          guard applies to File Search retrieval previews too; without it a
+          >10 MB PDF opened from a retrieval result still downloads + renders
+          inline and re-freezes the tab (the original KK20-221 symptom). */}
       <FilePreviewDialog
         open={previewData !== null}
         onOpenChange={closePreview}
@@ -482,7 +490,9 @@ export default function RetrievalCall({
         pages={previewData?.pages}
         pageRelevance={previewData?.pageRelevance}
         fileType={previewData?.fileType}
+        fileSize={previewData?.fileBytes}
       />
+      {/* End [knauf] */}
     </div>
   );
 }

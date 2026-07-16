@@ -589,6 +589,27 @@ describe('axios 401 interceptor — Authorization header guard', () => {
     expect(mockAdapter.mock.calls[1][0].headers?.Authorization).toBe('Bearer fresh-token');
   });
 
+  // [knauf] Pin preflight recovery for already-expired bearer tokens
+  it('refreshes an expired bearer token before sending a request', async () => {
+    expect.assertions(4);
+    setTokenHeader(createJwt(Date.now() - 60_000));
+
+    mockAdapter.mockImplementation((config: InternalAxiosRequestConfig) => {
+      if (config.url?.includes('/api/auth/refresh') === true) {
+        return createAdapterResponse(config, { token: 'fresh-token' });
+      }
+      return createAdapterResponse(config, { ok: true });
+    });
+
+    const response = await axios.get('/api/messages');
+
+    expect(response.data).toEqual({ ok: true });
+    expect(mockAdapter.mock.calls[0][0].url).toContain('/api/auth/refresh');
+    expect(mockAdapter.mock.calls[1][0].url).toBe('/api/messages');
+    expect(mockAdapter.mock.calls[1][0].headers?.Authorization).toBe('Bearer fresh-token');
+  });
+  // End [knauf]
+
   it('does not wait on the in-flight recovery when the refresh request itself fails', async () => {
     expect.assertions(3);
     setTokenHeader(createJwt(Date.now() + 60_000));

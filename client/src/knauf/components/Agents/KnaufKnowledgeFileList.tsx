@@ -135,21 +135,29 @@ const SavedFileRow = memo(function SavedFileRow({
   file,
   localize,
   deleting,
+  reindexable,
   onDelete,
+  // KK20-195 WP5b — failed-indexing retry; KK20-227 — in-session re-index.
   retryingIndex = false,
   onRetryIndexing,
+  onReindex,
 }: Readonly<{
   file: ExtendedFile;
   localize: Localize;
   deleting: boolean;
+  // [knauf] KK20-227 — true when an in-session blob is retained for this file,
+  // so it can be re-indexed (delete + re-upload) without a re-pick.
+  reindexable: boolean;
   onDelete: (file: ExtendedFile) => void;
   // KK20-195 WP5b — failed-indexing retry (server CAS failed → queued).
   retryingIndex?: boolean;
   onRetryIndexing?: (file: ExtendedFile) => void;
+  onReindex: (file: ExtendedFile) => void;
 }>) {
   const handleDelete = useCallback(() => onDelete(file), [file, onDelete]);
   // KK20-195 WP5b — stable callback for the indexing retry action.
   const handleRetryIndexing = useCallback(() => onRetryIndexing?.(file), [file, onRetryIndexing]);
+  const handleReindex = useCallback(() => onReindex(file), [file, onReindex]);
   // During an agent upload the in-progress entry carries the native File but no
   // `filename` yet — useFileHandling sets `filename` only after the server
   // round-trip, and for agent uploads it refetches rather than updating the
@@ -183,17 +191,37 @@ const SavedFileRow = memo(function SavedFileRow({
               <Spinner className="size-4 text-text-secondary" />
             </span>
           ) : (
-            <button
-              type="button"
-              onClick={handleDelete}
-              aria-label={localize('com_ui_attach_remove')}
-              className={cn(
-                ACTION_CLASS,
-                'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+            <>
+              {/* [knauf] KK20-227 — re-index (delete + re-upload) a saved file
+                  when its session blob is retained, forcing a fresh RAG/OCR pass
+                  so a silently OCR-less file can be fixed without re-picking. */}
+              {reindexable && (
+                <button
+                  type="button"
+                  onClick={handleReindex}
+                  aria-label={localize('com_knauf_knowledge_reindex')}
+                  title={localize('com_knauf_knowledge_reindex')}
+                  className={cn(
+                    ACTION_CLASS,
+                    'opacity-0 hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100',
+                  )}
+                >
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                </button>
               )}
-            >
-              <Trash2 className="size-4" aria-hidden="true" />
-            </button>
+              {/* End [knauf] */}
+              <button
+                type="button"
+                onClick={handleDelete}
+                aria-label={localize('com_ui_attach_remove')}
+                className={cn(
+                  ACTION_CLASS,
+                  'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+                )}
+              >
+                <Trash2 className="size-4" aria-hidden="true" />
+              </button>
+            </>
           )}
         </>
       )}
@@ -276,6 +304,8 @@ function KnaufKnowledgeFileList({
   pendingFiles,
   onRemovePending,
   onRetryPending,
+  getReindexFile,
+  onReupload,
 }: Readonly<{
   files: Map<string, ExtendedFile>;
   setFiles: Dispatch<SetStateAction<Map<string, ExtendedFile>>>;
@@ -284,6 +314,9 @@ function KnaufKnowledgeFileList({
   pendingFiles: Map<string, PendingEntry>;
   onRemovePending: (tempId: string) => void;
   onRetryPending: (tempId: string) => void;
+  // [knauf] KK20-227 — in-session re-index: retained-blob lookup + re-upload.
+  getReindexFile?: (file: ExtendedFile) => File | undefined;
+  onReupload?: (blob: File) => void;
 }>) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
@@ -305,9 +338,14 @@ function KnaufKnowledgeFileList({
   // upstream every render) so the memo'd rows don't re-render on every keystroke.
   const removePendingRef = useRef(onRemovePending);
   const retryPendingRef = useRef(onRetryPending);
+  // [knauf] KK20-227 — same stabilization for the re-index callbacks.
+  const getReindexFileRef = useRef(getReindexFile);
+  const onReuploadRef = useRef(onReupload);
   useEffect(() => {
     removePendingRef.current = onRemovePending;
     retryPendingRef.current = onRetryPending;
+    getReindexFileRef.current = getReindexFile;
+    onReuploadRef.current = onReupload;
   });
 
   // Server-confirmed delete (KK20-188): mark the row deleting (spinner), await
@@ -315,10 +353,13 @@ function KnaufKnowledgeFileList({
   // and toast. Not optimistic — a file no longer silently reappears on reload
   // when the server delete fails.
   const handleDeleteSaved = useCallback(
-    async (file: ExtendedFile) => {
+    // [knauf] KK20-227 — returns whether the delete succeeded so re-index only
+    // re-uploads after a confirmed delete; a failed delete leaves the old asset,
+    // and re-uploading identical content would dedup-hit it without re-OCRing.
+    async (file: ExtendedFile): Promise<boolean> => {
       const id = file.file_id;
       if (inFlightDeletesRef.current.has(id)) {
-        return;
+        return false;
       }
       inFlightDeletesRef.current.add(id);
       setDeletingIds((prev) => new Set(prev).add(id));
@@ -344,6 +385,7 @@ function KnaufKnowledgeFileList({
           }
           return next;
         });
+        return true;
       } catch {
         showToast({
           message: localize('com_knauf_knowledge_delete_failed', {
@@ -351,6 +393,7 @@ function KnaufKnowledgeFileList({
           }),
           status: 'error',
         });
+        return false;
       } finally {
         inFlightDeletesRef.current.delete(id);
         setDeletingIds((prev) => {
@@ -397,6 +440,27 @@ function KnaufKnowledgeFileList({
     [agent_id, queryClient, showToast, localize],
   );
 
+  // [knauf] KK20-227 — re-index a saved file: capture its retained session blob,
+  // run the server-confirmed delete (clears vectors + the dedup asset so the
+  // re-embed is a fresh MISS), then re-upload the blob for a fresh RAG/OCR pass.
+  // No-op when no blob is retained (post-reload / SharePoint rows show no
+  // re-index action), so it only ever automates the in-session workaround.
+  const handleReindexSaved = useCallback(
+    async (file: ExtendedFile) => {
+      const blob = getReindexFileRef.current?.(file);
+      if (!blob) {
+        return;
+      }
+      // Only re-upload once the delete is server-confirmed — otherwise the old
+      // (bad) asset survives and the re-upload dedup-hits it without re-OCRing.
+      const deleted = await handleDeleteSaved(file);
+      if (!deleted) {
+        return;
+      }
+      onReuploadRef.current?.(blob);
+    },
+    [handleDeleteSaved],
+  );
   const handleRemovePending = useCallback((tempId: string) => removePendingRef.current(tempId), []);
   const handleRetryPending = useCallback(
     (tempId: string) => {
@@ -528,9 +592,11 @@ function KnaufKnowledgeFileList({
               file={file}
               localize={localize}
               deleting={deletingIds.has(file.file_id)}
+              reindexable={getReindexFile?.(file) != null}
               onDelete={handleDeleteSaved}
               retryingIndex={retryingIndexIds.has(file.file_id)}
               onRetryIndexing={handleRetryIndexing}
+              onReindex={handleReindexSaved}
             />
           ))}
         </div>

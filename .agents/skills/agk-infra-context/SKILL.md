@@ -7,7 +7,7 @@ description: Use when working on Agentic Karl / AGK infrastructure, architecture
 
 This skill is the operational map for Agentic Karl infrastructure. Use it before changing deployment workflows, Azure resources, Key Vault secrets, ArgoCD apps, Helm values, or environment config.
 
-Last verified: 2026-06-15.
+Last verified: 2026-07-14.
 
 ## Operating Rules
 
@@ -24,7 +24,7 @@ Last verified: 2026-06-15.
 
 ## Architecture Reference
 
-For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agk-infrastructure`, and `agk-deployment-configs`.
+For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agentic-karl-rag-api`, `agk-infrastructure`, and `agk-deployment-configs`.
 
 Treat that README as a shareable architecture snapshot, not a substitute for live state. Verify mutable facts such as image tags, domains, secrets mappings, Azure resources, ArgoCD health, and model deployments in the owning repo or cloud service before answering "current" or "latest" questions.
 
@@ -39,6 +39,7 @@ export KNAUF_ROOT="${KNAUF_ROOT:-$HOME/knauf}"
 ```
 
 - App repo: `Knauf-Group/agentic-karl` (`$KNAUF_ROOT/agentic-karl`)
+- RAG API repo: `Knauf-Group/agentic-karl-rag-api` (`$KNAUF_ROOT/agentic-karl-rag-api`)
 - AGK Terraform repo: `Knauf-Group/agk-infrastructure` (`$KNAUF_ROOT/agk-infrastructure`)
 - AGK GitOps repo: `Knauf-Group/agk-deployment-configs` (`$KNAUF_ROOT/agk-deployment-configs`)
 - Legacy CT shared GitOps repo: `Knauf-Group/ct-shared-deployment-configs` (`$KNAUF_ROOT/ct-shared-deployment-configs`)
@@ -49,6 +50,7 @@ Before relying on repo facts, fetch the latest main branches:
 git -C $KNAUF_ROOT/agk-infrastructure fetch origin main
 git -C $KNAUF_ROOT/agk-deployment-configs fetch origin main
 git -C $KNAUF_ROOT/agentic-karl fetch origin main
+git -C $KNAUF_ROOT/agentic-karl-rag-api fetch origin main
 ```
 
 ## Azure CLI Access
@@ -395,6 +397,84 @@ Langfuse runtime in AGK dev:
 
 ## Azure AI And Model Map
 
+### AGK Foundry model router
+
+Foundry infrastructure was deployed on 2026-07-13 and expanded on 2026-07-15. Default KARL, memory, and title generation use the `model-router-chat` application alias, which maps to the account-level `model-router` deployment through Chat Completions. In dev, prompt autogeneration and created-agent personalities use the stable `agent-default` alias, which resolves to the environment-selected direct `gpt-5.6-sol` deployment. Dev image generation and embeddings use their specialised deployments in the same nonprod Foundry account. Document Intelligence remains on the legacy AI Services account.
+
+The project-endpoint router Responses path was tested directly with hosted `web_search`, but integrated LibreChat agent runs were not reliable when hosted search and local function-tool turns were combined. It is therefore not exposed in `librechat.yaml`. Ordinary KARL uses account-level router Chat Completions; created agents use direct GPT-5.6 Sol Responses. Reintroduce a project-router path only behind a separate, explicit experiment after repeatable application-level tests.
+
+| Env | Subscription | Hub resource group | Foundry account | Project | Private endpoint |
+|---|---|---|---|---|---|
+| Nonprod | `CT-SHARED-RESOURCES` | `rg-agk-hub-nonprod-westeurope` | `foundry-agk-hub-nonprod-swedencentral-001` | `proj-agk-hub-nonprod-swedencentral-001` | `pe-foundry-agk-hub-nonprod-westeurope-001` |
+| Prod | `CT-SHARED-RESOURCES-PROD` | `rg-agk-hub-prod-westeurope` | `foundry-agk-hub-prod-swedencentral-001` | `proj-agk-hub-prod-swedencentral-001` | `pe-foundry-agk-hub-prod-westeurope-001` |
+
+Both accounts are `AIServices` resources in Sweden Central. Their private endpoints are in West Europe and public network access is disabled. Each endpoint registers three private addresses: `.164` for `cognitiveservices.azure.com`, `.165` for `openai.azure.com`, and `.166` for `services.ai.azure.com` in the environment's `10.160.192.0/24` or `10.161.192.0/24` hub subnet. The associated private DNS zones are:
+
+- `privatelink.cognitiveservices.azure.com`
+- `privatelink.openai.azure.com`
+- `privatelink.services.ai.azure.com`
+
+Terraform declares the following deployments in both environments. Capacity is shown as nonprod/prod:
+
+| Deployment | Model/version | SKU | Capacity | Purpose |
+|---|---|---|---:|---|
+| `model-router` | `model-router` / `2025-11-18` | `GlobalStandard` | 10000 / 10000 | Default KARL, memory, and titles |
+| `gpt-5.6-sol` | `gpt-5.6-sol` / `2026-07-09` | `GlobalStandard` | 10000 / 15000 | Direct agents and prompt drafting |
+| `gpt-5.5`, `gpt-5.5-1` | `gpt-5.5` / `2026-04-24` | `GlobalStandard` | 5000 each | Direct benchmark/fallback deployments; not selected by dev runtime |
+| `text-embedding-3-large` | `text-embedding-3-large` / `1` | `GlobalStandard` | 1000 / 1000 | RAG embeddings |
+| `gpt-image-1` | `gpt-image-1` / `2025-04-15` | `GlobalStandard` | 20 / 10 | Active image generation target |
+| `gpt-image-2` | `gpt-image-2` / `2026-04-21` | `GlobalStandard` | 10 / 12 | Deployed and priced, not selected by the app |
+
+`GlobalStandard` is consumption/pay-per-token capacity, not provisioned throughput. Capacity reserves rate-limit quota but does not create a fixed PTU charge. Router capacity is independent from every direct deployment; direct GPT deployments are not replicas or backends of Model Router.
+
+The intended router mode is `balanced` with the pinned OpenAI-only pool `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. Live GET checks on 2026-07-15 still returned `properties.routing: null`, and probes selected unapproved models. Do not run representative router load tests until the module persists and verifies that exact subset. GPT-5.6 Sol is deliberately outside the router pool and is selected directly for created agents and prompt drafting.
+
+Infrastructure ownership and release order:
+
+1. Shared module: `Customer-Tech-Shared/infrastructure/terraform/modules/foundry`, currently released as `foundry1.1.0`.
+2. AGK instances: `agk-infrastructure/terraform/subscription/<nonprod|prod>/base/hub/computational/foundry.tf`.
+3. Merge and release the shared module first, then pin the immutable module tag in AGK infrastructure. Never merge an infrastructure root that references shared-module `main` or a temporary PR commit.
+4. The module explicitly defaults deployment `rai_policy_name` to `Microsoft.DefaultV2`. Azure temporarily returns the parent account to `Accepted` while child resources change; private endpoint creation must wait for project, deployments, and the follow-up router routing update.
+
+Current pre-production dependency tree, last checked 2026-07-15:
+
+1. Merged: `Customer-Tech-Shared#579`, immutable tag `foundry1.1.0`, `agk-infrastructure#57/#58`, `agentic-karl#124`, `agentic-karl-rag-api#11/#12`, and `agk-deployment-configs#113/#118`.
+2. Dev GitOps is active on app `v0.108.0` and RAG `v0.8.0.3`. Dev uses Model Router for ordinary KARL, direct GPT-5.6 Sol for agents/prompt drafting, nonprod Foundry embeddings, and nonprod Foundry GPT Image 1.
+3. Prod remains on app `v0.107.0`, RAG `v0.8.0.2`, direct GPT-5.5, and legacy shared embedding/image endpoints. Do not promote or alter prod while validating dev.
+4. Pending: merge `Customer-Tech-Shared#580`, release immutable tag `foundry1.1.1`, then open one nonprod-only `agk-infrastructure` PR that bumps only the module ref from `foundry1.1.0` to `foundry1.1.1`.
+5. Apply the nonprod computational layer. The module must fail if Azure does not persist the exact router subset. If it succeeds, verify the live routing property before any app load test.
+
+Dev target state: ordinary KARL, memory, and titles use Model Router; created agents and prompt drafting use direct GPT-5.6 Sol; RAG uses nonprod `text-embedding-3-large`; image generation uses nonprod GPT Image 1. GPT Image 2 remains deployed and priced but disabled.
+
+The RAG endpoint migration needs no additional provider rewrite. `agentic-karl-rag-api` already passes `RAG_OPENAI_BASEURL` and `RAG_OPENAI_API_KEY` to LangChain `OpenAIEmbeddings`. Both the legacy and target deployments use `text-embedding-3-large` version `1` with 3072 dimensions, so existing pgvector rows remain compatible and no re-embedding migration is required. Model Router, GPT-5.6 Sol, and GPT Image deployments are not consumed by the RAG service.
+
+Access and validation rules:
+
+- `az login` grants control-plane access only. It does not provide a laptop route or private DNS forwarding into the AGK VNets.
+- The corporate VPN routes the nonprod Foundry subnet `10.160.192.0/24`. An authenticated laptop request forced to the OpenAI private endpoint `10.160.192.165` returned HTTP `200`, proving the VPN data path and TLS.
+- Nonprod Terraform links the Foundry private DNS zones to `vnet-ct-shared-dns-forwarder`. Keep public access disabled. Prod remains hub/spoke-only unless a separate approved access requirement is added.
+- Reconnect the corporate VPN or flush local DNS and confirm the nonprod OpenAI hostname resolves to `10.160.192.165` before running the app locally. AKS is the authoritative test path.
+- Dev image generation and embeddings use `AGK-FOUNDRY-API-KEY`; Document Intelligence remains on `AGK-OPENAI-API-KEY`. Text generation uses `AGK-FOUNDRY-API-KEY`, exposed as `AZURE_FOUNDRY_API_KEY`, plus `AZURE_FOUNDRY_RESOURCE_NAME`.
+- The shared Helm chart hashes ConfigMap and ExternalSecret manifests into the pod template. GitOps manifest changes roll the workloads automatically. A Key Vault value-only rotation still requires ExternalSecret refresh and pod restart because the manifest hash does not see secret data changes.
+- `librechat.yaml` intentionally has no silent runtime fallback. Ordinary KARL uses the router; `AZURE_FOUNDRY_AGENT_DEPLOYMENT` selects the direct agent deployment. Validate router, direct Sol, embedding, and image paths in dev before production promotion.
+
+Safe live checks:
+
+```bash
+az cognitiveservices account deployment list \
+  --subscription <subscription-id> \
+  --resource-group <hub-resource-group> \
+  --name <foundry-account> \
+  --query "[].{deployment:name,state:properties.provisioningState,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity,raiPolicy:properties.raiPolicyName}" \
+  -o table
+
+az network private-endpoint list \
+  --subscription <subscription-id> \
+  --resource-group <hub-resource-group> \
+  --query "[?contains(name, 'pe-foundry')].{name:name,state:provisioningState,approval:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" \
+  -o table
+```
+
 The main Agentic Karl and CST KARL model backend is the shared Azure AI Services account `cst-karl-dev` in the prod shared subscription:
 
 - Subscription: `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`)
@@ -442,15 +522,13 @@ Rate-limit interpretation:
 
 Agentic Karl model wiring:
 
-- App repo `$KNAUF_ROOT/agentic-karl/librechat.yaml` defines the Azure group `cst-karl-dev` with `instanceName: cst-karl-dev`.
-- UI model `gpt-5.4` maps to Azure deployment `gpt-54`.
-- UI model `gpt-4o` maps to Azure deployment `gpt-4o`.
-- Default model spec `karl` uses endpoint `azureOpenAI`, model `gpt-5.4`, and `useResponsesApi: true`.
-- Personality presets `karl-personality-precise`, `karl-personality-balanced`, and `karl-personality-creative` all use `gpt-5.4`.
-- Internal prompt autogeneration uses `gpt-4o` for cheaper/faster instruction drafting.
-- AGK GitOps dev/prod main app values set `AZURE_RESOURCE_NAME: cst-karl-dev`, `ENDPOINTS: azureOpenAI,agents`, and image generation endpoint `https://cst-karl-dev.openai.azure.com/openai/deployments/gpt-image-1`.
-- AGK RAG API dev/prod values set `RAG_OPENAI_BASEURL: https://cst-karl-dev.openai.azure.com/openai/v1`, `EMBEDDINGS_PROVIDER: openAI`, and `EMBEDDINGS_MODEL: text-embedding-3-large`.
-- AGK dev RAG also sets `RAG_AZURE_DI_ENDPOINT: https://cst-karl-dev.services.ai.azure.com/`; prod RAG did not include this value in GitOps at the last check.
+- App repo `$KNAUF_ROOT/agentic-karl/librechat.yaml` defines an account-level router Chat Completions group and an environment-selected direct agent deployment group. Both use `AZURE_FOUNDRY_API_KEY`. The experimental project-endpoint router Responses group is intentionally absent.
+- Default model spec `karl`, memory, and title generation use the `model-router-chat` alias through account-level Chat Completions API version `2024-10-21`; the alias maps to deployment `model-router`.
+- Prompt autogeneration uses `agent-default` through Chat Completions. Personality presets use the same alias with `useResponsesApi: true`. Dev sets `AZURE_FOUNDRY_AGENT_DEPLOYMENT=gpt-5.6-sol`; prod remains on `gpt-5.5` until promotion. Legacy saved-agent names (`gpt-4o` and `gpt-5.4`) resolve through the same direct group and are rewritten to the configured deployment, so no database migration is required.
+- Change `AZURE_FOUNDRY_AGENT_DEPLOYMENT` when promoting a newer approved direct deployment, without editing `librechat.yaml`. A future router Responses comparison requires a separate config change and review; do not point agent presets at the account-level Chat Completions alias.
+- Dev image generation uses nonprod Foundry GPT Image 1 and `AGK-FOUNDRY-API-KEY`. Prod image generation remains on the legacy shared account until promotion.
+- Dev RAG points to the nonprod Foundry `/openai/v1` endpoint, maps `RAG_OPENAI_API_KEY` from `AGK-FOUNDRY-API-KEY`, retains `EMBEDDINGS_MODEL=text-embedding-3-large` and `EMBEDDINGS_DIMENSIONS=3072`, and sets `RAG_OPENAI_MAX_RETRIES=6`.
+- Prod RAG remains on the legacy shared embedding endpoint. Document Intelligence intentionally stays on the legacy AI Services endpoint/key in both environments.
 
 CST KARL model wiring, for shared-resource awareness:
 
@@ -563,6 +641,15 @@ The reusable CT workflow does not expose `new-version` as a `workflow_call` outp
 ```bash
 VERSION="v$(npm pkg get version | tr -d '"')"
 ```
+
+RAG API releases are owned by `Knauf-Group/agentic-karl-rag-api`:
+
+1. Merging a PR to RAG `main` builds `Dockerfile.lite` into `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-rag-api:v0.8.0.N`.
+2. The release workflow opens and auto-merges the dev image-tag bump in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-rag-api/values.yaml`.
+3. It refreshes `agentic-karl-dev-agentic-karl-rag-api` and waits for the expected image to become Synced/Healthy.
+4. Prod is not updated by the dev release. Use the reviewed RAG promotion workflow to import the exact nonprod image into `acragkhubprod001`, update the prod GitOps tag, and verify prod ArgoCD.
+
+Do not hand-edit RAG image tags while those workflows own the release. Configuration such as `RAG_OPENAI_MAX_RETRIES` belongs in GitOps and is harmless on an older image until the supporting RAG release is promoted.
 
 ## ArgoCD Checks And Actions
 

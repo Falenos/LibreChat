@@ -1,3 +1,7 @@
+// [knauf] Mutable routed response metadata for title-usage tests.
+const mockCollectedMetadata = [];
+// End [knauf]
+
 const { Providers } = require('@librechat/agents');
 const { Constants, ContentTypes, EModelEndpoint } = require('librechat-data-provider');
 const AgentClient = require('./client');
@@ -6,7 +10,9 @@ jest.mock('@librechat/agents', () => ({
   ...jest.requireActual('@librechat/agents'),
   createMetadataAggregator: () => ({
     handleLLMEnd: jest.fn(),
-    collected: [],
+    // [knauf] Let tests inject the provider-returned routed model.
+    collected: mockCollectedMetadata,
+    // End [knauf]
   }),
 }));
 
@@ -59,6 +65,9 @@ describe('AgentClient - titleConvo', () => {
   beforeEach(() => {
     // Reset all mocks
     jest.clearAllMocks();
+    // [knauf] Reset routed title metadata between tests.
+    mockCollectedMetadata.length = 0;
+    // End [knauf]
 
     // Mock run object
     mockRun = {
@@ -372,6 +381,34 @@ describe('AgentClient - titleConvo', () => {
         messageId: 'response-123',
       });
     });
+
+    // [knauf] Pin routed title usage to the provider-returned underlying model.
+    it('records the routed model returned by the title request', async () => {
+      mockCollectedMetadata.push({
+        usage: { prompt_tokens: 10, completion_tokens: 4 },
+        model_name: 'gpt-5.4-mini-2026-03-17',
+        model_provider: 'openai',
+      });
+
+      await client.titleConvo({
+        text: 'Test conversation text',
+        abortController: new AbortController(),
+      });
+
+      expect(client.recordCollectedUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          collectedUsage: [
+            {
+              input_tokens: 10,
+              output_tokens: 4,
+              model: 'gpt-5.4-mini-2026-03-17',
+              provider: 'openai',
+            },
+          ],
+        }),
+      );
+    });
+    // End [knauf]
 
     it('should return the generated title', async () => {
       const text = 'Test conversation text';

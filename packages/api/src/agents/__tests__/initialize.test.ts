@@ -215,7 +215,10 @@ function createMocks(overrides?: {
     getToolFilesByIds: jest.fn().mockResolvedValue([]),
   };
 
-  return { agent, req, res, loadTools, db };
+  // [knauf] KK20-194 — expose the provider initializer so native Azure web
+  // search wiring can be asserted without mocking implementation internals.
+  return { agent, req, res, loadTools, db, mockGetOptions };
+  // End [knauf]
 }
 
 function countNamedWebSearchTools(tools: unknown[] | undefined): number {
@@ -372,6 +375,79 @@ describe('initializeAgent — provider web_search precedence', () => {
       db,
     );
   }
+
+  // [knauf] KK20-194 / KK20-201 — browse intent must become Azure native
+  // search, while only a validated timezone reaches its user_location.
+  it('enables Azure native web search and adds the request timezone', async () => {
+    const nativeAzureWebSearch = { type: 'web_search' };
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+      providerTools: [nativeAzureWebSearch],
+    });
+    agent.tools = [Tools.web_search];
+    req.body = { timezone: 'Europe/Berlin' };
+
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: EModelEndpoint.azureOpenAI,
+        model_parameters: expect.objectContaining({ web_search: true }),
+      }),
+    );
+    expect(result.tools).toContainEqual({
+      type: 'web_search',
+      user_location: { type: 'approximate', timezone: 'Europe/Berlin' },
+    });
+    expect(result.additional_instructions).toContain(
+      'For a user-supplied URL, call open_url with that exact URL',
+    );
+  });
+
+  it('overrides a stale Azure web_search model parameter when Browse is off', async () => {
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+    });
+    agent.tools = [];
+    mockExtractLibreChatParams.mockReturnValueOnce({
+      resendFiles: false,
+      modelOptions: { model: agent.model, web_search: true },
+    });
+
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_parameters: expect.objectContaining({ web_search: false }),
+      }),
+    );
+    expect(result.additional_instructions).toBeUndefined();
+  });
+  // End [knauf]
 
   it('keeps Anthropic native web_search when LibreChat search is not selected', async () => {
     const { agent, req, res, loadTools, db } = createMocks({
@@ -707,9 +783,18 @@ describe('initializeAgent — provider web_search precedence', () => {
 describe('initializeAgent — stable and dynamic instruction fields', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // [knauf] KK20-201 — pin request time independently of conversation time.
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2024-01-15T18:30:00.000Z'));
+    // End [knauf]
   });
 
-  it('moves instructions with temporal special vars into the dynamic tail using the conversation anchor', async () => {
+  // [knauf] KK20-201 — restore the shared Jest clock after each request-time test.
+  afterEach(() => jest.useRealTimers());
+  // End [knauf]
+
+  // [knauf] KK20-201 — current temporal variables must use request time.
+  it('moves temporal instructions into the dynamic tail using request time', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.instructions = 'Conversation opened at {{iso_datetime}}';
     req.conversationCreatedAt = '2023-12-31T23:59:58.000Z';
@@ -728,9 +813,11 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
     );
 
     expect(result.instructions).toBeUndefined();
-    expect(result.additional_instructions).toBe('Conversation opened at 2023-12-31T23:59:58.000Z');
+    expect(result.additional_instructions).toBe('Conversation opened at 2024-01-15T18:30:00.000Z');
   });
+  // End [knauf]
 
+  // [knauf] KK20-201 — timezone context is refreshed on every request.
   it('resolves temporal special vars in the request timezone', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.instructions = 'It is currently {{current_datetime}}.';
@@ -752,9 +839,11 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
 
     expect(result.instructions).toBeUndefined();
     expect(result.additional_instructions).toBe(
-      'It is currently 2024-01-15 13:30:00 -05:00 (Monday).',
+      'It is currently 2024-01-15 13:30:00 -05:00 (Monday).\n\n' +
+        "Current request context (supersedes older saved date/time or location hints): 2024-01-15 13:30:00 -05:00 (Monday). Location hint only, not a confirmed physical location or country (Timezone: America/New_York). The user's explicit location always takes precedence.",
     );
   });
+  // End [knauf]
 
   it('keeps non-temporal special vars in stable instructions', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
@@ -843,6 +932,54 @@ describe('initializeAgent — attachment scoping', () => {
     expect(result.requestAttachments).toEqual([requestFile]);
     expect(result.agentContextAttachments).toEqual([agentContextFile]);
   });
+
+  // [knauf] KK20-190 — custom-agent chat attachments enable transient File Search.
+  it('loads file_search for an embedded request attachment without persisting it', async () => {
+    const { primeResources } = jest.requireMock('../resources') as {
+      primeResources: jest.Mock;
+    };
+    const requestFile = {
+      file_id: 'request-file',
+      filename: 'request.pdf',
+      embedded: true,
+    } as IMongoFile;
+    const fileSearchResources = {
+      [EToolResources.file_search]: { files: [requestFile] },
+    };
+    primeResources.mockResolvedValueOnce({
+      attachments: [requestFile],
+      requestAttachments: [requestFile],
+      agentContextAttachments: undefined,
+      tool_resources: fileSearchResources,
+    });
+
+    const { agent, req, res, loadTools, db } = createMocks();
+    agent.tools = [Tools.web_search];
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        requestFiles: [requestFile],
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(loadTools).toHaveBeenCalledTimes(1);
+    expect(loadTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [Tools.web_search, Tools.file_search],
+        tool_resources: fileSearchResources,
+      }),
+    );
+    expect(agent.tools).toEqual([Tools.web_search]);
+  });
+  // End [knauf]
 
   it('owner-scopes request file usage updates while preserving trusted tool files', async () => {
     const requestFile = { file_id: 'request-file', filename: 'request.txt' } as IMongoFile;
@@ -1278,6 +1415,46 @@ describe('initializeAgent — skill `allowed-tools` union (Phase 6)', () => {
       author: { toString: () => userId } as unknown as import('mongoose').Types.ObjectId,
       ...(allowedTools !== undefined ? { allowedTools } : {}),
     });
+
+  // [knauf] KK20-194 — skill tool permissions must not bypass the persisted
+  // agent's Browse switch and enable provider-level Azure search.
+  it('does not let skill allowed-tools enable Azure native web search', async () => {
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+    });
+    const { Types } = await import('mongoose');
+    const skillId = new Types.ObjectId();
+    const getSkillByName = buildGetSkillByName(
+      'search-skill',
+      [Tools.web_search],
+      skillId,
+      req.user!.id,
+    );
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+        accessibleSkillIds: [skillId],
+        manualSkills: ['search-skill'],
+      },
+      { ...db, listSkillsByAccess: emptyListSkillsByAccess, getSkillByName },
+    );
+
+    expect(loadTools.mock.calls[0][0].tools).toEqual([Tools.web_search]);
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_parameters: expect.objectContaining({ web_search: false }),
+      }),
+    );
+  });
+  // End [knauf]
 
   it('passes the union of agent.tools + allowed-tools to loadTools and merges resulting toolDefinitions', async () => {
     const { agent, req, res, loadTools, db } = createMocks();

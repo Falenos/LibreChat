@@ -11,8 +11,11 @@
 'use strict';
 
 const { Readability } = require('@mozilla/readability');
-const { JSDOM } = require('jsdom');
+const { JSDOM, VirtualConsole } = require('jsdom');
 const { convert: htmlToText } = require('html-to-text');
+
+// Fetched pages are untrusted input; do not forward their console or CSS parser noise.
+const quietVirtualConsole = new VirtualConsole();
 
 // R3 (KK20-194 review): jsdom + Readability build a full DOM synchronously and
 // cannot be interrupted by the fetch AbortController — a multi-megabyte body
@@ -46,9 +49,8 @@ const TOO_LARGE_NOTICE =
 function wrapAsUntrusted(content, finalUrl) {
   // Defensive scrub: mangle any inner occurrence of the delimiter so the
   // envelope cannot be terminated early.
-  const sanitised = content.replace(
-    /<\/?UNTRUSTED_WEB_CONTENT[^>]*>/gi,
-    (m) => m.replace(/[<>]/g, ''),
+  const sanitised = content.replace(/<\/?UNTRUSTED_WEB_CONTENT[^>]*>/gi, (m) =>
+    m.replace(/[<>]/g, ''),
   );
   return (
     `<UNTRUSTED_WEB_CONTENT url=${JSON.stringify(finalUrl)}>\n` +
@@ -64,7 +66,7 @@ function wrapAsUntrusted(content, finalUrl) {
 function parseReadable(html, finalUrl) {
   let dom;
   try {
-    dom = new JSDOM(html, { url: finalUrl });
+    dom = new JSDOM(html, { url: finalUrl, virtualConsole: quietVirtualConsole });
   } catch {
     return { title: null, content: htmlToText(html, { wordwrap: false }) };
   }
@@ -139,11 +141,12 @@ function extractJsonLd(html) {
     } catch {
       continue;
     }
-    const nodes = Array.isArray(data)
-      ? data
-      : Array.isArray(data && data['@graph'])
-        ? data['@graph']
-        : [data];
+    let nodes = [data];
+    if (Array.isArray(data)) {
+      nodes = data;
+    } else if (Array.isArray(data && data['@graph'])) {
+      nodes = data['@graph'];
+    }
     for (const node of nodes) {
       if (!node || typeof node !== 'object') {
         continue;
@@ -229,7 +232,11 @@ function extractHtml(html, finalUrl) {
   if (tooLargeToParse) {
     return { title: null, content: TOO_LARGE_NOTICE, outcome: 'too_large' };
   }
-  return { title: (best && best.title) || null, content: (best && best.content) || '', outcome: 'low' };
+  return {
+    title: (best && best.title) || null,
+    content: (best && best.content) || '',
+    outcome: 'low',
+  };
 }
 
 /**

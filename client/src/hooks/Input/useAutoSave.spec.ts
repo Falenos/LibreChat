@@ -107,4 +107,36 @@ describe('useAutoSave — conversation switching', () => {
 
     expect(mockSetDraft).toHaveBeenCalledWith({ id: 'convo-1', value: 'draft in progress' });
   });
+
+  // [knauf] KK20-227 — reproduce the response-completion race for a next-turn upload.
+  it('preserves files uploaded while the current response is still streaming', () => {
+    localStorage.clear();
+    const setFiles = jest.fn();
+    const pendingFiles = new Map([
+      ['pending-file', { file_id: 'pending-file', size: 1024, progress: 0.2 }],
+    ]);
+    const { rerender } = renderHook(
+      ({ isSubmitting, files }) =>
+        useAutoSave({
+          isSubmitting,
+          conversationId: 'convo-1',
+          textAreaRef: makeTextAreaRef(),
+          files,
+          setFiles,
+        }),
+      { initialProps: { isSubmitting: true, files: new Map() } },
+    );
+
+    act(() => {
+      rerender({ isSubmitting: true, files: pendingFiles });
+    });
+    setFiles.mockClear();
+
+    act(() => {
+      rerender({ isSubmitting: false, files: pendingFiles });
+    });
+
+    expect(setFiles).not.toHaveBeenCalled();
+  });
+  // End [knauf]
 });

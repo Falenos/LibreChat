@@ -256,7 +256,9 @@ Two paths exist in upstream LibreChat:
 1. **Model-level web search.** Set `model_parameters.web_search: true` + `model_parameters.useResponsesApi: true`. At chat time, [packages/api/src/endpoints/openai/llm.ts](../../../../packages/api/src/endpoints/openai/llm.ts) (lines 148–275) injects `{ type: 'web_search' }` into the request tools. This is what the existing `karl-web` modelSpec already uses. **No external search-provider key needed** — Azure handles it.
 2. **Agent-tool web search.** Add `Tools.web_search` to the agent's `tools[]` array. This requires `endpoints.agents.capabilities` to include `web_search`, AND a Serper / Searxng / etc. API key in `.env`. BYOK badge surfaces in the upstream UI.
 
-The Knauf V6 uses path **1** because it's friction-free for end users and Knauf admins (no extra keys, no badge to explain). KnaufAgentConfig writes the flags onto `form.model_parameters` whenever the toggle flips. The selected personality's `preset` can also override or pre-set them — see librechat.yaml `karl-personality-*` entries.
+The Knauf V6 uses path **1** because it is friction-free for end users and Knauf admins (no extra keys, no badge to explain). KnaufAgentConfig writes the flags onto `form.model_parameters` whenever the toggle flips. The selected personality's `preset` can also override or pre-set them — see librechat.yaml `karl-personality-*` entries. ToolService keeps `open_url` hidden except for a browse-enabled request whose current user message contains a link; the tool then enforces exact-link provenance and SSRF protection. All other browsing uses hosted `web_search`.
+
+Operational note: Azure web search uses Grounding with Bing under separate terms, can process data outside the normal Microsoft DPA/geographic boundary, and incurs separate search charges. Privacy and FinOps approval therefore apply even though no extra application API key is required.
 
 ### Adding a new capability (template)
 

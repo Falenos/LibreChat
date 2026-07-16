@@ -12,14 +12,14 @@
  * isEnabled, then renders one CapabilitySwitch per entry, wiring the
  * applyToForm/readFromForm helpers into the form.
  */
-import type { ComponentType } from 'react';
-import type { LucideProps } from 'lucide-react';
 import { Globe } from 'lucide-react';
 import {
   AgentCapabilities,
   type AgentCapabilities as AgentCapabilitiesEnum,
 } from 'librechat-data-provider';
 import type { UseFormGetValues, UseFormSetValue } from 'react-hook-form';
+import type { LucideProps } from 'lucide-react';
+import type { ComponentType } from 'react';
 import type { AgentForm } from '~/common';
 
 interface FormHelpers {
@@ -50,20 +50,14 @@ export interface KnaufCapability {
 }
 
 /**
- * "Browse the internet" — KK20-194. One switch, two complementary engines,
- * no third-party search provider (GDPR):
- *   1. Azure-native, model-level web_search — activated at chat time via the
- *      Responses API by setting `model_parameters.web_search` (open-ended
- *      discovery + the fallback when open_url fails).
- *   2. `open_url` — our authoritative reader for a user-named/pasted page,
- *      surfaced server-side (ToolService.js) whenever this switch puts
- *      `Tools.web_search` into the agent's tools (the "raw browse intent").
+ * "Browse the internet" — KK20-194. Native model-level web_search handles
+ * discovery; open_url is request-scoped to exact links supplied by the user.
  * NOT gated by `endpoints.agents.capabilities`: we deliberately keep
  * `web_search` out of that list so the provider-less LangChain web_search
- * tool stays stripped/unsurfaced. The switch therefore writes BOTH the
- * `web_search` form flag (→ raw browse intent → open_url) AND
- * `model_parameters.web_search` (→ Azure-native search). Default-ON for KARL
- * (librechat.yaml modelSpecs) and new agents (getDefaultAgentFormValues).
+ * tool stays stripped/unsurfaced. The switch writes the persisted browse intent
+ * and `model_parameters.web_search`; the server translates them into the hosted
+ * tool. ToolService uses the same persisted intent to expose open_url only when
+ * the current message contains a link. Default-ON for KARL and new agents.
  */
 const browseInternet: KnaufCapability = {
   id: 'web',

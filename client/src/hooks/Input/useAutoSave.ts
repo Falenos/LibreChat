@@ -1,6 +1,6 @@
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import debounce from 'lodash/debounce';
 import { SetterOrUpdater, useRecoilValue } from 'recoil';
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { LocalStorageKeys, Constants } from 'librechat-data-provider';
 import type { TFile } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
@@ -159,8 +159,18 @@ export const useAutoSave = ({
       return;
     }
 
-    // clear attachment files when switching conversation
-    setFiles(new Map());
+    // [knauf] KK20-227 — files added while a response streams belong to the next
+    // turn. Preserve them when PENDING returns to the same conversation; upload
+    // success may arrive after this transition and still needs its temp map entry.
+    const isPendingConversationTransition =
+      prevConversationIdRef.current === Constants.PENDING_CONVO &&
+      conversationId !== Constants.PENDING_CONVO &&
+      conversationId.length > 3;
+    if (!isPendingConversationTransition) {
+      // clear attachment files when switching conversation
+      setFiles(new Map());
+    }
+    // End [knauf]
 
     try {
       // Check for transition from PENDING_CONVO to a valid conversationId
@@ -201,7 +211,12 @@ export const useAutoSave = ({
       }
 
       restoreText(conversationId);
-      restoreFiles(conversationId);
+      // [knauf] KK20-227 — the in-memory map is authoritative during the
+      // PENDING-to-current transition because useGetFiles can still be stale.
+      if (!isPendingConversationTransition || fileIds.length === 0) {
+        restoreFiles(conversationId);
+      }
+      // End [knauf]
     } catch (e) {
       console.error(e);
     }
@@ -211,6 +226,9 @@ export const useAutoSave = ({
   }, [
     currentConversationId,
     conversationId,
+    // [knauf] KK20-227 — re-evaluate pending-transition restoration when queued files change.
+    fileIds.length,
+    // End [knauf]
     restoreFiles,
     textAreaRef,
     restoreText,

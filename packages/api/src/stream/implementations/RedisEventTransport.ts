@@ -1,5 +1,5 @@
-import type { Redis, Cluster } from 'ioredis';
 import { logger } from '@librechat/data-schemas';
+import type { Redis, Cluster } from 'ioredis';
 import type { IEventTransport } from '~/stream/interfaces/IJobStore';
 
 /**
@@ -232,6 +232,12 @@ export class RedisEventTransport implements IEventTransport {
 
     try {
       const parsed = JSON.parse(message) as PubSubMessage;
+
+      // [knauf] Abort-only listeners must not accumulate another pod's stream ordering state.
+      if (streamState.handlers.size === 0 && parsed.type !== EventTypes.ABORT) {
+        return;
+      }
+      // End [knauf]
 
       if (parsed.type === EventTypes.CHUNK && parsed.seq != null) {
         this.handleOrderedChunk(streamId, streamState, parsed);
@@ -474,7 +480,7 @@ export class RedisEventTransport implements IEventTransport {
         state.handlers.delete(subscriberId);
         state.count--;
 
-        // If last subscriber left, unsubscribe from Redis and notify
+        // [knauf] Keep abort-only Redis subscriptions active across SSE disconnects.
         if (state.count === 0) {
           /**
            * Preserve callbacks for reconnect, but drop ordering state from the
@@ -484,10 +490,13 @@ export class RedisEventTransport implements IEventTransport {
            */
           this.resetReorderBuffer(streamId);
 
-          this.subscriber.unsubscribe(channel).catch((err) => {
-            logger.error(`[RedisEventTransport] Failed to unsubscribe from ${channel}:`, err);
-          });
-          this.channelSubscriptions.delete(channel);
+          if (state.abortCallbacks.length === 0) {
+            this.subscriber.unsubscribe(channel).catch((err) => {
+              logger.error(`[RedisEventTransport] Failed to unsubscribe from ${channel}:`, err);
+            });
+            this.channelSubscriptions.delete(channel);
+          }
+          // End [knauf]
 
           // Call all-subscribers-left callbacks
           for (const callback of state.allSubscribersLeftCallbacks) {

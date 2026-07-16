@@ -52,9 +52,14 @@ function isBunRuntime(): boolean {
   return Reflect.get(globalThis, 'Bun') != null;
 }
 
-function shouldIgnoreIncomingRequest(request: IncomingMessage, healthPath: string): boolean {
-  return request.url === healthPath || request.url?.startsWith(`${healthPath}?`) === true;
+// [knauf] Keep probes and metric scrapes out of sampled application traces.
+const OBSERVABILITY_PATHS = new Set(['/health', '/livez', '/readyz', '/metrics']);
+
+export function shouldIgnoreIncomingRequest(request: IncomingMessage, healthPath: string): boolean {
+  const path = request.url?.split('?')[0];
+  return path === healthPath || (path != null && OBSERVABILITY_PATHS.has(path));
 }
+// End [knauf]
 
 function getIncomingUrlInfo(request: IncomingMessage): { hasQuery: boolean; pathname: string } {
   const rawUrl = request.url ?? '/';

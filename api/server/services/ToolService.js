@@ -513,31 +513,24 @@ async function processRequiredActions(client, requiredActions) {
 /** Native LibreChat tools that are not in the manifest */
 const nativeTools = new Set([Tools.execute_code, Tools.file_search, Tools.web_search]);
 
-// [knauf] KK20-194 — open_url presence is bound *exactly* to the "Browse the
-// internet" switch, i.e. the presence of `web_search` in the agent's own tools
-// (builder toggle / modelSpec.webSearch / ephemeralAgent.web_search). open_url is
-// hidden as a user-selectable tool (absent from `includedTools`), so its
-// availability must be decided solely by that browse intent — never by a stale,
-// baked-in open_url entry. We therefore strip any pre-existing open_url and re-add
-// it only when browse is enabled. The strip half is load-bearing: agents created
-// during an earlier default-on iteration (or hand-edited) can have open_url baked
-// into their stored tools; without stripping, the switch would not fully control it
-// and open_url could run with browse OFF. Note: the caller passes the RAW browse
-// intent, not the capability-filtered result — `web_search` is intentionally kept
-// out of endpoints.agents.capabilities so the provider-less LangChain web_search
-// tool is never surfaced; the working search engine is Azure's model-level
-// web_search, and open_url is its prioritised companion for named/pasted pages.
+// [knauf] KK20-194 — use open_url only for links in the current user message.
+// Open-ended discovery stays on Azure Responses `web_search`; OpenUrl performs
+// the authoritative exact-URL provenance and SSRF checks before fetching.
 const OPEN_URL_TOOL = 'open_url';
-function gateOpenUrlOnWebSearch(tools, webSearchEnabled) {
-  if (!Array.isArray(tools)) {
-    return tools;
+const USER_PROVIDED_URL = /https?:\/\/[^\s<>"'`]+/i;
+const stripOpenUrlTool = (tools) =>
+  Array.isArray(tools) ? tools.filter((tool) => tool !== OPEN_URL_TOOL) : tools;
+const hasUserProvidedUrl = (req) =>
+  typeof req?.body?.text === 'string' && USER_PROVIDED_URL.test(req.body.text);
+const shouldExposeOpenUrl = ({ agent, areToolsEnabled, req }) =>
+  areToolsEnabled && agent?.tools?.includes(Tools.web_search) === true && hasUserProvidedUrl(req);
+const exposeOpenUrlForUserLink = ({ tools, agent, areToolsEnabled, req }) => {
+  const gatedTools = stripOpenUrlTool(tools);
+  if (Array.isArray(gatedTools) && shouldExposeOpenUrl({ agent, areToolsEnabled, req })) {
+    gatedTools.push(OPEN_URL_TOOL);
   }
-  const gated = tools.filter((tool) => tool !== OPEN_URL_TOOL);
-  if (webSearchEnabled) {
-    gated.push(OPEN_URL_TOOL);
-  }
-  return gated;
-}
+  return gatedTools;
+};
 // End [knauf]
 
 /** Checks if a tool name is a known built-in tool */
@@ -614,20 +607,13 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
     return true;
   });
 
-  // [knauf] KK20-194 — open_url rides the "Browse the internet" switch. It is
-  // hidden as a user-selectable tool (not in includedTools); its presence is bound
-  // to the RAW browse intent — `web_search` in the agent's own tools (set by the
-  // builder toggle / modelSpec.webSearch / ephemeralAgent.web_search) — NOT to the
-  // post-filter list. We deliberately keep `web_search` OUT of
-  // endpoints.agents.capabilities, so the provider-less LangChain web_search tool
-  // is stripped above and never surfaced to the model; the working search engine is
-  // Azure's model-level web_search (injected by llm.ts from model_parameters.
-  // web_search). The model therefore sees exactly: open_url (authoritative for a
-  // named/pasted page) + Azure-native web_search (open-ended discovery and the
-  // fallback when open_url errors). This is the authoritative model-facing gate;
-  // loadAgentTools/loadToolsForExecution mirror it for execution.
-  const knaufBrowseEnabled = Array.isArray(agent.tools) && agent.tools.includes(Tools.web_search);
-  filteredTools = gateOpenUrlOnWebSearch(filteredTools, knaufBrowseEnabled);
+  // [knauf] KK20-194 — expose exact-link fetching only for this user message.
+  filteredTools = exposeOpenUrlForUserLink({
+    tools: filteredTools,
+    agent,
+    areToolsEnabled,
+    req,
+  });
   // End [knauf]
 
   if (!filteredTools || filteredTools.length === 0) {
@@ -1018,9 +1004,9 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
       resolveUserLocationContext(req.headers, req.body?.timezone),
     );
     // End [knauf]
-    dynamicToolContextMap[Tools.web_search] = buildWebSearchDynamicContext(
-      req.conversationCreatedAt,
-    );
+    // [knauf] KK20-201 — use the current request time, not conversation creation.
+    dynamicToolContextMap[Tools.web_search] = buildWebSearchDynamicContext();
+    // End [knauf]
   }
 
   /**
@@ -1187,14 +1173,13 @@ async function loadAgentTools({
     return true;
   });
 
-  // [knauf] KK20-194 — execution half of the open_url/browse pairing (see
-  // loadToolDefinitionsWrapper). Bind open_url to the RAW browse intent
-  // (`web_search` in the agent's own tools), not the capability-filtered result:
-  // the LangChain web_search tool stays stripped/unsurfaced (no provider), while
-  // open_url is constructed whenever the browse switch is on. Strips any baked-in
-  // open_url first so the switch stays authoritative.
-  const knaufBrowseEnabled = Array.isArray(agent.tools) && agent.tools.includes(Tools.web_search);
-  _agentTools = gateOpenUrlOnWebSearch(_agentTools, knaufBrowseEnabled);
+  // [knauf] KK20-194 — mirror request-scoped link gating on eager construction.
+  _agentTools = exposeOpenUrlForUserLink({
+    tools: _agentTools,
+    agent,
+    areToolsEnabled,
+    req,
+  });
   // End [knauf]
 
   if (!_agentTools || _agentTools.length === 0) {
@@ -1509,16 +1494,20 @@ async function loadToolsForExecution({
   const mcpRequestScopedConnections = requestScopedConnections ?? getMCPRequestContext(req, res);
   const configurable = { userMCPAuthMap, requestScopedConnections: mcpRequestScopedConnections };
 
-  // [knauf] KK20-194 — fail-closed execution guard. This path loads whatever tool
-  // the model requested to call; never honour an open_url call unless web_search is
-  // part of this agent's tools. Defense-in-depth behind the definitions gate so the
-  // web-search toggle stays authoritative even if open_url leaks into a call list.
-  if (
-    Array.isArray(toolNames) &&
-    toolNames.includes(OPEN_URL_TOOL) &&
-    !(Array.isArray(agent?.tools) && agent.tools.includes(Tools.web_search))
-  ) {
-    toolNames = toolNames.filter((name) => name !== OPEN_URL_TOOL);
+  let enabledCapabilities;
+  // [knauf] KK20-194 — execute open_url only when this request still satisfies
+  // the same browse-intent, tools-capability, and current-message link gate.
+  if (toolNames.includes(OPEN_URL_TOOL)) {
+    enabledCapabilities = await resolveAgentCapabilities(req, appConfig, agent?.id);
+    if (
+      !shouldExposeOpenUrl({
+        agent,
+        areToolsEnabled: enabledCapabilities.has(AgentCapabilities.tools),
+        req,
+      })
+    ) {
+      toolNames = stripOpenUrlTool(toolNames);
+    }
   }
   // End [knauf]
 
@@ -1532,9 +1521,8 @@ async function loadToolsForExecution({
   const isLegacyExecuteCodeRequested = toolNames.includes(Tools.execute_code);
   const isCodeExecutionToolRequested = isBashToolRequested || isLegacyExecuteCodeRequested;
 
-  let enabledCapabilities;
   if (actionsEnabled === undefined || isPTCRequested || isCodeExecutionToolRequested) {
-    enabledCapabilities = await resolveAgentCapabilities(req, appConfig, agent?.id);
+    enabledCapabilities ??= await resolveAgentCapabilities(req, appConfig, agent?.id);
   }
   if (actionsEnabled === undefined) {
     actionsEnabled = enabledCapabilities.has(AgentCapabilities.actions);

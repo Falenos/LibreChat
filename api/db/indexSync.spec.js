@@ -527,4 +527,30 @@ describe('performSync() - syncThreshold logic', () => {
       '[indexSync] 6 convos unindexed (below threshold: 1000, skipping)',
     );
   });
+
+  // [knauf] The flow must still exist when createFlowWithHandler completes it.
+  test('leaves flow completion and cleanup to FlowStateManager', async () => {
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 1,
+      totalDocuments: 1,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 1,
+      totalDocuments: 1,
+      isComplete: true,
+    });
+    const deleteFlow = jest.fn();
+    const createFlowWithHandler = jest.fn((_flowId, _flowType, handler) => handler());
+    const { FlowStateManager } = require('@librechat/api');
+    FlowStateManager.mockImplementationOnce(() => ({ createFlowWithHandler, deleteFlow }));
+    mockGetLogStores.mockReturnValueOnce({});
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(createFlowWithHandler).toHaveBeenCalledTimes(1);
+    expect(deleteFlow).not.toHaveBeenCalled();
+  });
+  // End [knauf]
 });

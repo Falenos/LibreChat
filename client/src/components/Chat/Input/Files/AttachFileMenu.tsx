@@ -2,6 +2,13 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
+  FileUpload,
+  TooltipAnchor,
+  DropdownPopup,
+  AttachmentIcon,
+  SharePointIcon,
+} from '@librechat/client';
+import {
   Info,
   FileSearch,
   ImageUpIcon,
@@ -9,13 +16,6 @@ import {
   FileImageIcon,
   TerminalSquareIcon,
 } from 'lucide-react';
-import {
-  FileUpload,
-  TooltipAnchor,
-  DropdownPopup,
-  AttachmentIcon,
-  SharePointIcon,
-} from '@librechat/client';
 import {
   Providers,
   EToolResources,
@@ -193,15 +193,17 @@ const AttachFileMenu = ({
         currentProvider = Providers.OPENROUTER;
       }
 
-      const isAzureWithResponsesApi =
-        (currentProvider === EModelEndpoint.azureOpenAI ||
-          endpointType === EModelEndpoint.azureOpenAI) &&
-        useResponsesApi === true;
+      const isKnaufAzureChat =
+        currentProvider === EModelEndpoint.azureOpenAI ||
+        endpointType === EModelEndpoint.azureOpenAI;
+      const isAzureWithResponsesApi = isKnaufAzureChat && useResponsesApi === true;
+      const useKnaufFileSearch = isKnaufAzureChat && capabilities.fileSearchEnabled;
 
       if (
         isDocumentSupportedProvider(endpointType) ||
         isDocumentSupportedProvider(currentProvider) ||
-        isAzureWithResponsesApi
+        isAzureWithResponsesApi ||
+        useKnaufFileSearch
       ) {
         items.push({
           // [knauf] Generic "Upload files" label instead of upstream's "Upload
@@ -228,11 +230,10 @@ const AttachFileMenu = ({
             // picker would only offer images + PDF. `capabilities.fileSearchEnabled`
             // (from endpoints.agents.capabilities) is the correct platform gate.
             //
-            // NORMAL CHAT vs AGENT CHAT — `isAzureWithResponsesApi` follows the
-            // conversation/agent provider, so this ephemeral routing fires for the
-            // default Karl chat (endpoint `azureOpenAI` + Responses API) and, of
-            // custom agents, ONLY one explicitly built as Azure + Responses. The
-            // drag-drop handler (useDragHelpers.handleDrop) instead gates on
+            // NORMAL CHAT vs AGENT CHAT — `useKnaufFileSearch` follows the
+            // conversation/agent provider, so this app-level RAG path works for
+            // Azure Chat Completions (including Model Router) as well as Responses.
+            // The drag-drop handler (useDragHelpers.handleDrop) instead gates on
             // `conv.endpoint === azureOpenAI`, which a custom agent (endpoint
             // `agents`) never satisfies — so on an agent chat a DROP shows the
             // capability-picker modal while this MENU may still route to ephemeral
@@ -240,7 +241,6 @@ const AttachFileMenu = ({
             // get file search from their OWN pre-configured `file_search` tool, not
             // the ephemeral mechanism, so the modal is the correct path for them. On
             // the default chat the two are symmetric (both route here). KK20-190.
-            const useKnaufFileSearch = isAzureWithResponsesApi && capabilities.fileSearchEnabled;
             if (useKnaufFileSearch) {
               setToolResource(EToolResources.file_search);
               setEphemeralAgent(enableEphemeralFileSearch);
@@ -269,7 +269,7 @@ const AttachFileMenu = ({
         // item's render — so it's reachable by keyboard and screen readers (arrow
         // keys move between menu items, never into a nested control). Same gate as
         // the routing above. KK20-190 (upload-guidance follow-up).
-        if (isAzureWithResponsesApi && capabilities.fileSearchEnabled) {
+        if (useKnaufFileSearch) {
           items.push({
             label: localize('com_knauf_upload_formats_title'),
             onClick: () => {

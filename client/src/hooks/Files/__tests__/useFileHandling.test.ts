@@ -5,6 +5,9 @@ import {
   EToolResources,
   getEndpointFileConfig,
 } from 'librechat-data-provider';
+// [knauf] KK20-227 — reset the module-level document-upload queue between tests.
+import { _resetDocumentUploadQueue } from '../useFileHandling';
+// End [knauf]
 
 beforeAll(() => {
   global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
@@ -25,8 +28,17 @@ beforeAll(() => {
 
 const mockShowToast = jest.fn();
 const mockSetFilesLoading = jest.fn();
-const mockMutate = jest.fn();
+// [knauf] KK20-227 — the document/image upload path now awaits `mutateAsync`
+// (serialized multi-file uploads); point both mutation methods at one recording
+// spy that resolves, so the existing formData assertions keep working.
+const mockMutate = jest.fn((_formData: FormData) => Promise.resolve());
+// End [knauf]
 const mockAddFile = jest.fn();
+const mockUpdateFileById = jest.fn();
+const mockDeleteFileById = jest.fn();
+let mockUploadOptions: {
+  onError?: (error: unknown, body: FormData) => void;
+} = {};
 const mockProcessFileForUpload = jest.fn(
   async (_file: File, _quality?: number, _onProgress?: (progress: number) => void) => _file,
 );
@@ -71,9 +83,16 @@ jest.mock('@tanstack/react-query', () => ({
 
 jest.mock('~/data-provider', () => ({
   useGetFileConfig: jest.fn(() => ({ data: null })),
-  useUploadFileMutation: jest.fn((_opts: Record<string, unknown>) => ({
-    mutate: mockMutate,
-  })),
+  useUploadFileMutation: jest.fn((opts: typeof mockUploadOptions) => {
+    mockUploadOptions = opts;
+    return {
+      mutate: mockMutate,
+      // [knauf] KK20-227 — same spy so document/image uploads (mutateAsync) and
+      // the assistant path (mutate) are both recorded by existing assertions.
+      mutateAsync: mockMutate,
+      // End [knauf]
+    };
+  }),
 }));
 
 jest.mock('~/hooks/useLocalize', () => {
@@ -107,8 +126,8 @@ jest.mock('../useUpdateFiles', () => ({
   default: jest.fn(() => ({
     addFile: mockAddFile,
     replaceFile: jest.fn(),
-    updateFileById: jest.fn(),
-    deleteFileById: jest.fn(),
+    updateFileById: mockUpdateFileById,
+    deleteFileById: mockDeleteFileById,
   })),
 }));
 
@@ -127,6 +146,10 @@ describe('useFileHandling', () => {
     mockProcessFileForUpload.mockImplementation(async (file: File) => file);
     mockConversation = {};
     mockIsTemporary = false;
+    // [knauf] KK20-227 — clear the module-level upload queue so a deferred
+    // upload from one test can't stall the next.
+    _resetDocumentUploadQueue();
+    // End [knauf]
   });
 
   const loadHook = async () => (await import('../useFileHandling')).default;
@@ -531,6 +554,168 @@ describe('useFileHandling', () => {
       expect(mockMutate).toHaveBeenCalledTimes(1);
       const formData = mockMutate.mock.calls[0][0] as FormData;
       expect(formData.get('conversationId')).toBeNull();
+    });
+  });
+  // End [knauf]
+
+  // [knauf] KK20-227 — multi-file document uploads run one at a time so we don't
+  // fire N concurrent RAG /embed (Azure DI OCR) calls, a primary trigger for the
+  // silent OCR-less fallback. Removing the `await mutateAsync` reverts to
+  // fire-and-forget and this test fails (both files dispatch immediately).
+  describe('KK20-227 sequential multi-file upload', () => {
+    // KK20-227: transient transport failures retry once; final failures
+    // remain visible instead of silently disappearing from the attachment list.
+    it('retries one transient document upload failure', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 502 } };
+      mockMutate.mockRejectedValueOnce(transientError).mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'retry.pdf', { type: 'application/pdf' });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await upload;
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('does not retry a non-transient document upload failure', async () => {
+      mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'invalid.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([file]);
+      });
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('retains the document chip after the retry also fails', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 502 } };
+      mockMutate.mockImplementation(async (body: FormData) => {
+        mockUploadOptions.onError?.(transientError, body);
+        throw transientError;
+      });
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'failed.pdf', { type: 'application/pdf' });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockDeleteFileById).not.toHaveBeenCalled();
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await upload;
+      });
+
+      expect(mockUpdateFileById).toHaveBeenCalledWith(expect.any(String), { progress: -1 });
+      expect(mockDeleteFileById).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+    it('dispatches the next document upload only after the previous resolves', async () => {
+      const resolvers: Array<() => void> = [];
+      mockMutate.mockImplementation(() => new Promise<void>((resolve) => resolvers.push(resolve)));
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const f1 = new File([new ArrayBuffer(8)], 'a.pdf', { type: 'application/pdf' });
+      const f2 = new File([new ArrayBuffer(8)], 'b.pdf', { type: 'application/pdf' });
+
+      let finished = false;
+      await act(async () => {
+        void result.current.handleFiles([f1, f2]).then(() => {
+          finished = true;
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The loop is blocked awaiting the first upload — only one dispatched.
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(finished).toBe(false);
+
+      await act(async () => {
+        resolvers[0]?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // First resolved → the second now dispatches.
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolvers[1]?.();
+        await Promise.resolve();
+      });
+      expect(finished).toBe(true);
+
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('serializes uploads across two overlapping handleFiles invocations', async () => {
+      const resolvers: Array<() => void> = [];
+      mockMutate.mockImplementation(() => new Promise<void>((resolve) => resolvers.push(resolve)));
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const f1 = new File([new ArrayBuffer(8)], 'a.pdf', { type: 'application/pdf' });
+      const f2 = new File([new ArrayBuffer(8)], 'b.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        // Two SEPARATE handleFiles calls — as a second file selection or another
+        // uploader instance (drag/paste) would trigger. The module-level queue
+        // must serialize them too, not just files within one call.
+        void result.current.handleFiles([f1]);
+        void result.current.handleFiles([f2]);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Only the first upload dispatched; the second is queued behind it.
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolvers[0]?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // First settled → the second now dispatches.
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolvers[1]?.();
+        await Promise.resolve();
+      });
+
+      mockMutate.mockImplementation(() => Promise.resolve());
     });
   });
   // End [knauf]

@@ -19,15 +19,17 @@ describe('web search context', () => {
     expect(context).not.toContain('{{iso_datetime}}');
   });
 
-  it('builds dynamic context from the supplied conversation anchor', () => {
+  // [knauf] KK20-201 — live searches must receive request time, not conversation time.
+  it('builds dynamic context from the supplied request time', () => {
     const context = buildWebSearchDynamicContext('2024-01-02T03:04:05.000Z');
     const secondContext = buildWebSearchDynamicContext('2024-01-02T03:04:05.000Z');
 
     expect(context).toBe(
-      '# `web_search` Runtime Context\nConversation Date & Time: 2024-01-02T03:04:05.000Z',
+      '# `web_search` Runtime Context\nRequest Date & Time: 2024-01-02T03:04:05.000Z',
     );
     expect(secondContext).toBe(context);
   });
+  // End [knauf]
 });
 
 // [knauf] KK20-201 — regression coverage for the deterministic location
