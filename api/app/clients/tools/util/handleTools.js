@@ -382,9 +382,9 @@ const loadTools = async ({
           resolveUserLocationContext(options.req?.headers, options.req?.body?.timezone),
         );
         // End [knauf]
-        dynamicToolContextMap[tool] = buildWebSearchDynamicContext(
-          options.req?.conversationCreatedAt,
-        );
+        // [knauf] KK20-201 — use the current request time, not conversation creation.
+        dynamicToolContextMap[tool] = buildWebSearchDynamicContext();
+        // End [knauf]
         return createSearchTool({
           ...result.authResult,
           onSearchResults,

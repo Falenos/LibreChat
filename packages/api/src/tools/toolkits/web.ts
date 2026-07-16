@@ -33,8 +33,10 @@ Anchor pattern: \\ue202turn{N}{type}{index} where N=turn number, type=search|new
 **CRITICAL:** Output escape sequences EXACTLY as shown. Do NOT substitute with † or other symbols. Place anchors AFTER punctuation. Cite every non-obvious fact/quote. NEVER use markdown links, [1], footnotes, or HTML tags.`.trim();
 }
 
-/** Builds dynamic web search context scoped to the conversation anchor time. */
+// [knauf] KK20-201 — current request time prevents stale live-search context.
+/** Builds dynamic web search context scoped to the current request time. */
 export function buildWebSearchDynamicContext(now?: string | number | Date): string {
   return `# \`${Tools.web_search}\` Runtime Context
-Conversation Date & Time: ${replaceSpecialVars({ text: '{{iso_datetime}}', now })}`.trim();
+Request Date & Time: ${replaceSpecialVars({ text: '{{iso_datetime}}', now })}`.trim();
 }
+// End [knauf]

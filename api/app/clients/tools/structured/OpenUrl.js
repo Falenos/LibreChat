@@ -23,41 +23,20 @@ function safeHost(url) {
 }
 
 /**
- * R1 + Residual A (KK20-194 review) — Phase-1 observability only, no blocking.
+ * Normalises a URL for exact comparison. Fragments are client-side only and
+ * therefore do not affect the fetched resource.
  *
- * The model fully controls the `url` argument, so a prompt-injected page could
- * coax it into fetching an attacker host (exfil via path) or appending a secret
- * to a legitimate, user-pasted host's query string. We can't safely *block*
- * yet (false positives would break normal "open this link" usage), but we can
- * make both anomalies visible: compare the fetched URL against the set of URLs
- * the user actually pasted in THIS message.
- *
- * Limitation (deferred to the Phase-2 follow-up ticket): only the current
- * message's text is in scope, so a URL pasted several turns earlier reads as
- * "not user-provided". That is acceptable for a log-only signal.
- *
- * @param {string[]} userProvidedUrls  URLs extracted from the current user message
- * @returns {{ hosts: Set<string>, queryKeysByHost: Map<string, Set<string>> }}
+ * @param {string} raw
+ * @returns {string | null}
  */
-function indexUserProvidedUrls(userProvidedUrls) {
-  const hosts = new Set();
-  const queryKeysByHost = new Map();
-  for (const raw of userProvidedUrls || []) {
-    let parsed;
-    try {
-      parsed = new URL(raw);
-    } catch {
-      continue;
-    }
-    hosts.add(parsed.host);
-    if (!queryKeysByHost.has(parsed.host)) {
-      queryKeysByHost.set(parsed.host, new Set());
-    }
-    for (const key of parsed.searchParams.keys()) {
-      queryKeysByHost.get(parsed.host).add(key);
-    }
+function normalizeUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return null;
   }
-  return { hosts, queryKeysByHost };
 }
 
 // Single source of truth for the schema + description lives in the registry
@@ -86,39 +65,26 @@ class OpenUrl extends Tool {
     this.userProvidedUrls = Array.isArray(fields.userProvidedUrls) ? fields.userProvidedUrls : [];
   }
 
-  /**
-   * Log-only host-provenance + query-anomaly checks (R1 + Residual A). Never
-   * throws and never blocks — purely emits structured warnings for APM.
-   */
-  logProvenance(requestedUrl, host) {
+  /** Reject model-mutated URLs whenever this message contained pasted URLs. */
+  getProvenanceError(requestedUrl, host) {
     if (this.userProvidedUrls.length === 0) {
-      return;
+      return null;
     }
-    let parsed;
-    try {
-      parsed = new URL(requestedUrl);
-    } catch {
-      return;
+    const requested = normalizeUrl(requestedUrl);
+    const allowed = new Set(this.userProvidedUrls.map(normalizeUrl).filter(Boolean));
+    if (requested && allowed.has(requested)) {
+      return null;
     }
-    const { hosts, queryKeysByHost } = indexUserProvidedUrls(this.userProvidedUrls);
-    if (!hosts.has(parsed.host)) {
-      logger.warn(
-        `[open_url] url_not_user_provided host=${host} — fetched host was not in the user's pasted URLs`,
-      );
-      return;
-    }
-    const allowedKeys = queryKeysByHost.get(parsed.host) || new Set();
-    const novelKeys = [...parsed.searchParams.keys()].filter((k) => !allowedKeys.has(k));
-    if (novelKeys.length > 0) {
-      logger.warn(
-        `[open_url] query_param_not_user_provided host=${host} keys=${novelKeys.join(',')} ` +
-          '— fetched URL carried query params absent from the pasted URL(s)',
-      );
-    }
+    logger.warn(`[open_url] blocked url_not_user_provided host=${host}`);
+    return {
+      error: 'open_url: URL must exactly match a URL supplied in the current message',
+      code: 'url_not_user_provided',
+      url: requestedUrl,
+    };
   }
 
   async _call(input) {
-    const args = typeof input === 'string' ? { url: input } : (input || {});
+    const args = typeof input === 'string' ? { url: input } : input || {};
     const { url, max_length, start_index } = args;
     if (!url || typeof url !== 'string') {
       logger.warn('[open_url] invoked with missing/invalid url argument');
@@ -130,8 +96,11 @@ class OpenUrl extends Tool {
     // of these lines — grep `[open_url]` in server logs / APM to audit usage.
     const startedAt = Date.now();
     const host = safeHost(url);
+    const provenanceError = this.getProvenanceError(url, host);
+    if (provenanceError) {
+      return JSON.stringify(provenanceError);
+    }
     logger.info(`[open_url] fetch start host=${host}`);
-    this.logProvenance(url, host);
 
     try {
       const result = await fetchAndExtract(url, {
@@ -167,7 +136,9 @@ class OpenUrl extends Tool {
     } catch (err) {
       const durationMs = Date.now() - startedAt;
       const payload = serialiseError(err, url);
-      logger.warn(`[open_url] fetch failed host=${host} code=${payload.code} durationMs=${durationMs}`);
+      logger.warn(
+        `[open_url] fetch failed host=${host} code=${payload.code} durationMs=${durationMs}`,
+      );
       return JSON.stringify(payload);
     }
   }

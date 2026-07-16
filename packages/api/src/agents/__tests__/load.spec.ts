@@ -298,6 +298,47 @@ describe('loadAgent', () => {
     expect(result?.model_parameters).not.toHaveProperty('promptPrefix');
   });
 
+  // [knauf] KK20-201 — never trust a client-rendered model-spec prompt over
+  // the raw server template; the rendered timezone may be stale.
+  test('should reload the raw model-spec prompt template on every request', async () => {
+    const { EPHEMERAL_AGENT_ID } = Constants;
+
+    const result = await loadAgent(
+      {
+        req: {
+          user: { id: 'user123' },
+          body: {},
+          config: {
+            modelSpecs: {
+              list: [
+                {
+                  name: 'karl',
+                  label: 'KARL',
+                  preset: {
+                    endpoint: 'azureOpenAI',
+                    model: 'model-router-chat',
+                    promptPrefix: 'Timezone: {{current_user_location}}',
+                  },
+                },
+              ],
+            },
+          } as AppConfig,
+        },
+        spec: 'karl',
+        agent_id: EPHEMERAL_AGENT_ID as string,
+        endpoint: 'azureOpenAI',
+        model_parameters: {
+          model: 'model-router-chat',
+          promptPrefix: 'Timezone: Europe/Berlin rendered yesterday',
+        } as unknown as AgentModelParameters,
+      },
+      deps,
+    );
+
+    expect(result?.instructions).toBe('Timezone: {{current_user_location}}');
+  });
+  // End [knauf]
+
   test('should enable full skill scope for ephemeral model spec with skills true', async () => {
     const { EPHEMERAL_AGENT_ID } = Constants;
 

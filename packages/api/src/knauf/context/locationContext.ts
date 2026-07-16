@@ -95,20 +95,15 @@ export function parsePrimaryLocale(acceptLanguage?: string): string | undefined 
   return sanitizeToken(primary, LOCALE_PATTERN);
 }
 
-/**
- * Resolves the timezone to trust, preferring `req.body.timezone` — the
- * browser's own `Intl.DateTimeFormat().resolvedOptions().timeZone`, sent on
- * every chat request since upstream's "Resolve Agent Prompt Time Variables
- * in User's Timezone" change and already used to localize `{{current_date}}`
- * — over the optional `X-User-Timezone` header, which no client currently
- * sends. Both are client-controlled, so either candidate must still pass
- * shape validation and be a timezone the runtime actually recognizes.
- */
-function resolveTimezone(headerTimezone?: string, bodyTimezone?: string): string | undefined {
-  const candidate =
-    sanitizeToken(bodyTimezone, TIMEZONE_PATTERN) ??
-    sanitizeToken(headerTimezone, TIMEZONE_PATTERN);
-  return candidate && isRecognizedIanaTimeZone(candidate) ? candidate : undefined;
+/** Resolves the first valid timezone, preferring the browser request body. */
+export function resolveUserTimezone(headers: HeaderBag, bodyTimezone?: string): string | undefined {
+  for (const value of [bodyTimezone, getHeader(headers, USER_TIMEZONE_HEADER)]) {
+    const candidate = sanitizeToken(value, TIMEZONE_PATTERN);
+    if (candidate && isRecognizedIanaTimeZone(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -127,7 +122,7 @@ function resolveTimezone(headerTimezone?: string, bodyTimezone?: string): string
  */
 export function resolveUserLocationContext(headers: HeaderBag, bodyTimezone?: string): string {
   const locale = parsePrimaryLocale(getHeader(headers, 'accept-language'));
-  const timezone = resolveTimezone(getHeader(headers, USER_TIMEZONE_HEADER), bodyTimezone);
+  const timezone = resolveUserTimezone(headers, bodyTimezone);
 
   const parts: string[] = [];
   if (locale) {

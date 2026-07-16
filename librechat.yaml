@@ -479,21 +479,22 @@ endpoints:
     plugins: true
     assistants: false
     groups:
-      - group: 'agk-foundry-router-chat'
+      - group: 'agk-foundry-router'
         apiKey: '${AZURE_FOUNDRY_API_KEY}'
-        instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
-        version: '2024-10-21'
+        # Model Router Responses API is supported through the Foundry project
+        # endpoint. The account-level endpoint returns HTTP 400 for this path.
+        serverless: true
+        baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
+        addParams:
+          model: 'model-router'
         dropParams:
           - temperature
           - top_p
           - presence_penalty
           - frequency_penalty
         models:
-          # Account-scoped Chat Completions alias. The deployment remains
-          # `model-router`; the alias avoids colliding with saved model names.
-          model-router-chat:
-            deploymentName: 'model-router'
-            version: '2024-10-21'
+          # Keep the saved alias stable while requests target `model-router`.
+          model-router-chat: true
       # Environment-selected direct deployment for prompt drafting and created
       # agents. Previous model names remain compatibility aliases.
       - group: 'agk-foundry-agent-default'
@@ -527,7 +528,7 @@ modelSpecs:
   enforce: false
   prioritize: false
   list:
-    # General-purpose Karl. Default option, no extra capabilities enabled.
+    # General-purpose Karl. Default option with managed web access.
     - name: 'karl'
       label: 'KARL'
       default: true
@@ -551,8 +552,7 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'model-router-chat'
-        # The account-level router deployment currently supports Chat
-        # Completions; setting useResponsesApi here returns HTTP 400.
+        useResponsesApi: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
@@ -567,6 +567,8 @@ modelSpecs:
           Conciseness: Be direct and concise. Provide essential information without filler, excessive caveats, or restating the question. Prioritise actionable guidance over exhaustive coverage; if a short answer suffices, keep it short.
 
           Location: {{current_user_location}}. This is a best-effort locale/timezone hint derived from the user's own browser, not confirmed proof of physical location — browser language and timezone can be wrong (travel, VPNs, shared devices, a non-native-language browser). Never assert a specific country or region as fact from this alone; at most use it to softly tailor tone or examples, and always defer to what the user explicitly tells you about their location.
+
+          Web access: When the user supplies a URL, call open_url with that exact URL before answering; never change its hostname, path, query or protocol. Use web_search for current, recent, live or changing information such as weather, news, schedules, prices, laws, product releases and public office holders. Do not use web_search for stable general knowledge you know confidently. Never claim to have opened a page or searched the web unless the corresponding tool succeeded.
 
           General: If you do not know the answer, say you do not know. If you are unsure how to answer, ask for clarification. Answer appropriately in the user's language.
 

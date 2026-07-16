@@ -215,7 +215,10 @@ function createMocks(overrides?: {
     getToolFilesByIds: jest.fn().mockResolvedValue([]),
   };
 
-  return { agent, req, res, loadTools, db };
+  // [knauf] KK20-194 — expose the provider initializer so native Azure web
+  // search wiring can be asserted without mocking implementation internals.
+  return { agent, req, res, loadTools, db, mockGetOptions };
+  // End [knauf]
 }
 
 function countNamedWebSearchTools(tools: unknown[] | undefined): number {
@@ -372,6 +375,44 @@ describe('initializeAgent — provider web_search precedence', () => {
       db,
     );
   }
+
+  // [knauf] KK20-194 / KK20-201 — browse intent must become Azure native
+  // search, while only a validated timezone reaches its user_location.
+  it('enables Azure native web search and adds the request timezone', async () => {
+    const nativeAzureWebSearch = { type: 'web_search' };
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+      providerTools: [nativeAzureWebSearch],
+    });
+    agent.tools = [Tools.web_search];
+    req.body = { timezone: 'Europe/Berlin' };
+
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: EModelEndpoint.azureOpenAI,
+        model_parameters: expect.objectContaining({ web_search: true }),
+      }),
+    );
+    expect(result.tools).toContainEqual({
+      type: 'web_search',
+      user_location: { type: 'approximate', timezone: 'Europe/Berlin' },
+    });
+  });
+  // End [knauf]
 
   it('keeps Anthropic native web_search when LibreChat search is not selected', async () => {
     const { agent, req, res, loadTools, db } = createMocks({
@@ -707,9 +748,18 @@ describe('initializeAgent — provider web_search precedence', () => {
 describe('initializeAgent — stable and dynamic instruction fields', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // [knauf] KK20-201 — pin request time independently of conversation time.
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2024-01-15T18:30:00.000Z'));
+    // End [knauf]
   });
 
-  it('moves instructions with temporal special vars into the dynamic tail using the conversation anchor', async () => {
+  // [knauf] KK20-201 — restore the shared Jest clock after each request-time test.
+  afterEach(() => jest.useRealTimers());
+  // End [knauf]
+
+  // [knauf] KK20-201 — current temporal variables must use request time.
+  it('moves temporal instructions into the dynamic tail using request time', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.instructions = 'Conversation opened at {{iso_datetime}}';
     req.conversationCreatedAt = '2023-12-31T23:59:58.000Z';
@@ -728,9 +778,11 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
     );
 
     expect(result.instructions).toBeUndefined();
-    expect(result.additional_instructions).toBe('Conversation opened at 2023-12-31T23:59:58.000Z');
+    expect(result.additional_instructions).toBe('Conversation opened at 2024-01-15T18:30:00.000Z');
   });
+  // End [knauf]
 
+  // [knauf] KK20-201 — timezone context is refreshed on every request.
   it('resolves temporal special vars in the request timezone', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
     agent.instructions = 'It is currently {{current_datetime}}.';
@@ -752,9 +804,11 @@ describe('initializeAgent — stable and dynamic instruction fields', () => {
 
     expect(result.instructions).toBeUndefined();
     expect(result.additional_instructions).toBe(
-      'It is currently 2024-01-15 13:30:00 -05:00 (Monday).',
+      'It is currently 2024-01-15 13:30:00 -05:00 (Monday).\n\n' +
+        "Current request context (supersedes older saved date/time or location hints): 2024-01-15 13:30:00 -05:00 (Monday). Location hint only, not a confirmed physical location or country (Timezone: America/New_York). The user's explicit location always takes precedence.",
     );
   });
+  // End [knauf]
 
   it('keeps non-temporal special vars in stable instructions', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
