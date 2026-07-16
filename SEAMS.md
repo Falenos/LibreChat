@@ -346,6 +346,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | transient upload retry regressions | 566–639 | Proves transient failures retry once, non-transient failures do not retry, and a second transient failure retains the file chip | Self | KK20-227 |
 | `client/src/components/Chat/Input/Files/FileRow.tsx` | failed document-upload chip | 114–135, 156–166 | Shows retained upload failures, keeps them out of the completed state, and removes their local placeholder without issuing a server delete | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` (`renders and removes a failed document upload`) | KK20-227 |
 | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` | failed document-upload chip regression | 174–193 | Proves failed document uploads remain visible and can be removed as local-only placeholders | Self | KK20-227 |
+| `client/src/hooks/Input/useAutoSave.ts` | `isPendingConversationTransition` | 162–173, 214–219, 229–231 | Preserves next-turn files uploaded during streaming when draft state returns from `PENDING_CONVO` to the current conversation, without changing real conversation-switch cleanup | `client/src/hooks/Input/useAutoSave.spec.ts` (`preserves files uploaded while the current response is still streaming`) | KK20-227 |
+| `client/src/hooks/Input/useAutoSave.spec.ts` | streaming upload draft regression | 111–141 | Reproduces the stale file-list race and proves response completion cannot clear an in-memory pending upload | Self | KK20-227 |
 <!-- seams:auto:end -->
 
 ## Configuration
