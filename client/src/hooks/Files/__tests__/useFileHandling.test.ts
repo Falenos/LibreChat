@@ -34,6 +34,11 @@ const mockSetFilesLoading = jest.fn();
 const mockMutate = jest.fn((_formData: FormData) => Promise.resolve());
 // End [knauf]
 const mockAddFile = jest.fn();
+const mockUpdateFileById = jest.fn();
+const mockDeleteFileById = jest.fn();
+let mockUploadOptions: {
+  onError?: (error: unknown, body: FormData) => void;
+} = {};
 const mockProcessFileForUpload = jest.fn(
   async (_file: File, _quality?: number, _onProgress?: (progress: number) => void) => _file,
 );
@@ -78,13 +83,16 @@ jest.mock('@tanstack/react-query', () => ({
 
 jest.mock('~/data-provider', () => ({
   useGetFileConfig: jest.fn(() => ({ data: null })),
-  useUploadFileMutation: jest.fn((_opts: Record<string, unknown>) => ({
-    mutate: mockMutate,
-    // [knauf] KK20-227 — same spy so document/image uploads (mutateAsync) and
-    // the assistant path (mutate) are both recorded by existing assertions.
-    mutateAsync: mockMutate,
-    // End [knauf]
-  })),
+  useUploadFileMutation: jest.fn((opts: typeof mockUploadOptions) => {
+    mockUploadOptions = opts;
+    return {
+      mutate: mockMutate,
+      // [knauf] KK20-227 — same spy so document/image uploads (mutateAsync) and
+      // the assistant path (mutate) are both recorded by existing assertions.
+      mutateAsync: mockMutate,
+      // End [knauf]
+    };
+  }),
 }));
 
 jest.mock('~/hooks/useLocalize', () => {
@@ -118,8 +126,8 @@ jest.mock('../useUpdateFiles', () => ({
   default: jest.fn(() => ({
     addFile: mockAddFile,
     replaceFile: jest.fn(),
-    updateFileById: jest.fn(),
-    deleteFileById: jest.fn(),
+    updateFileById: mockUpdateFileById,
+    deleteFileById: mockDeleteFileById,
   })),
 }));
 
@@ -555,6 +563,81 @@ describe('useFileHandling', () => {
   // silent OCR-less fallback. Removing the `await mutateAsync` reverts to
   // fire-and-forget and this test fails (both files dispatch immediately).
   describe('KK20-227 sequential multi-file upload', () => {
+    // KK20-227: transient transport failures retry once; final failures
+    // remain visible instead of silently disappearing from the attachment list.
+    it('retries one transient document upload failure', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 502 } };
+      mockMutate.mockRejectedValueOnce(transientError).mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'retry.pdf', { type: 'application/pdf' });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await upload;
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('does not retry a non-transient document upload failure', async () => {
+      mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'invalid.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([file]);
+      });
+
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('retains the document chip after the retry also fails', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 502 } };
+      mockMutate.mockImplementation(async (body: FormData) => {
+        mockUploadOptions.onError?.(transientError, body);
+        throw transientError;
+      });
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'failed.pdf', { type: 'application/pdf' });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockDeleteFileById).not.toHaveBeenCalled();
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await upload;
+      });
+
+      expect(mockUpdateFileById).toHaveBeenCalledWith(expect.any(String), { progress: -1 });
+      expect(mockDeleteFileById).not.toHaveBeenCalled();
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
     it('dispatches the next document upload only after the previous resolves', async () => {
       const resolvers: Array<() => void> = [];
       mockMutate.mockImplementation(() => new Promise<void>((resolve) => resolvers.push(resolve)));
