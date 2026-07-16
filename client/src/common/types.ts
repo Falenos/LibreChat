@@ -594,6 +594,10 @@ export interface ExtendedFile {
   // useFileHandling onSuccess.
   knauf_asset_id?: string;
   // End [knauf]
+  // [knauf] KK20-195 WP5a — async-indexing projection from the upload
+  // response / status endpoints. Absent on legacy + sync uploads (= ready).
+  indexing?: import('~/knauf/common/fileIndexing').KnaufFileIndexing;
+  // End [knauf]
 }
 
 export interface ModelItemProps {

@@ -43,6 +43,10 @@ import Mention from './Mention';
 // [knauf] Conversation total belongs with the composer controls, not inside the tool-chip cluster.
 import { KnaufConversationCostTotal } from '~/knauf/components/Chat/KnaufCostDisplay';
 // End [knauf]
+// [knauf] KK20-195 WP5a — async-indexing poll loop + send gate (plan §6.5).
+import useKnaufIndexStatus from '~/knauf/hooks/Files/useKnaufIndexStatus';
+import { hasPendingIndexing } from '~/knauf/common/fileIndexing';
+// End [knauf]
 import store from '~/store';
 
 interface ChatFormProps {
@@ -98,6 +102,12 @@ const ChatForm = memo(function ChatForm({
 
   const { requiresKey } = useRequiresKey();
   const methods = useChatFormContext();
+  // [knauf] KK20-195 WP5a — poll pending files every 5s until terminal, and
+  // hold the send while any attachment is still indexing (the server also
+  // 409s non-ready selections; this keeps the UX ahead of that).
+  useKnaufIndexStatus({ files, setFiles });
+  const knaufIndexingPending = hasPendingIndexing(files);
+  // End [knauf]
   const {
     generateConversation,
     conversation: addedConvo,
@@ -424,7 +434,15 @@ const ChatForm = memo(function ChatForm({
                     <SendButton
                       ref={submitButtonRef}
                       control={methods.control}
-                      disabled={filesLoading || isSubmitting || disableInputs || isNotAppendable}
+                      disabled={
+                        filesLoading ||
+                        // [knauf] KK20-195 WP5a — attachments still indexing
+                        knaufIndexingPending ||
+                        // End [knauf]
+                        isSubmitting ||
+                        disableInputs ||
+                        isNotAppendable
+                      }
                     />
                   )
                 )}

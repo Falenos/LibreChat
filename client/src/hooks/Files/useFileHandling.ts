@@ -26,6 +26,9 @@ import useClientResize from './useClientResize';
 import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
 import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
+// [knauf] KK20-195 WP5a — indexing projection type for the upload response.
+import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
+// End [knauf]
 // End [knauf]
 
 type UseFileHandling = {
@@ -191,6 +194,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               // [knauf] KK20-204 — carry the dedup asset id (undefined for
               // non-deduped uploads) so identical re-attachments collapse below.
               knauf_asset_id: (data as { knauf_asset_id?: string }).knauf_asset_id,
+              // End [knauf]
+              // [knauf] KK20-195 WP5a — capture the async-indexing projection
+              // from the superset upload body (202 = accepted, still indexing);
+              // useKnaufIndexStatus polls it to terminal from here.
+              indexing: (data as { indexing?: KnaufFileIndexing }).indexing,
               // End [knauf]
             },
             assistant_id ? true : false,

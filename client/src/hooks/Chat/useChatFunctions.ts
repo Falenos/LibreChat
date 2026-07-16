@@ -46,6 +46,9 @@ import useUserKey from '~/hooks/Input/useUserKey';
 import { useAuthContext } from '~/hooks';
 // [knauf] emit privacy-safe Adobe app interaction events from the shared chat submission path
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// [knauf] KK20-195 WP5a — submit-map filter for non-ready indexing (plan §6.5).
+import { filterIndexReadyFiles } from '~/knauf/common/fileIndexing';
+// End [knauf]
 // End [knauf]
 
 const logChatRequest = (request: Record<string, unknown>) => {
@@ -503,7 +506,12 @@ export default function useChatFunctions({
       setFiles(new Map());
       setFilesToDelete({});
     } else if (setFiles && files && files.size > 0) {
-      currentMsg.files = Array.from(files.values()).map((file) => ({
+      // [knauf] KK20-195 WP5a — never reference a non-ready initial asset in a
+      // send (the server answers 409 file_indexing_not_ready). Pending files
+      // are held back by the ChatForm send gate; failed ones are dropped here
+      // so a stuck upload can never brick the conversation (plan §6.5).
+      currentMsg.files = filterIndexReadyFiles(Array.from(files.values())).map((file) => ({
+        // End [knauf]
         file_id: file.file_id,
         filepath: file.filepath,
         type: file.type ?? '', // Ensure type is not undefined
