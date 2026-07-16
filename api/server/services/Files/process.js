@@ -908,8 +908,27 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     const { isAsyncAcceptedForUser } = require('./knauf/asyncIndexingConfig');
     const { uploadVectors, isAzureSearchEnabledForAgents } = require('./VectorDB/crud');
     const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
+    const { checkIndexAdmission } = require('./knauf/indexAdmission');
 
     knaufAsyncAccepted = isAsyncAcceptedForUser(req.user);
+
+    if (knaufAsyncAccepted) {
+      // WP3c admission (plan §9.3): the durable backlog one scope may hold is
+      // bounded BEFORE any durable state is reserved. Sync uploads skip this —
+      // they embed in-request and leave no backlog behind.
+      const admission = await checkIndexAdmission({
+        db,
+        scope_type: messageAttachment ? 'user' : 'agent',
+        scope_id: messageAttachment ? req.user.id : String(entity_id ?? req.user.id),
+        incomingBytes: file.size ?? 0,
+      });
+      if (!admission.admitted) {
+        return res
+          .status(429)
+          .json({ error: 'file_indexing_backlog_full', reason: admission.reason, file_id });
+      }
+    }
+
     knaufContentHash = messageAttachment ? await computeContentHash(file.path) : undefined;
 
     const reservation = await reserveForUpload({

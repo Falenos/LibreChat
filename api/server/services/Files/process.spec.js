@@ -113,6 +113,9 @@ jest.mock('~/models', () => ({
   tombstoneForDelete: jest.fn().mockResolvedValue({}),
   removeAsset: jest.fn().mockResolvedValue(undefined),
   getAssetByAssetId: jest.fn().mockResolvedValue(null),
+  // WP3c admission counters (async-accept path only); default = empty backlog.
+  countActiveByScope: jest.fn().mockResolvedValue(0),
+  sumActiveBytesByScope: jest.fn().mockResolvedValue(0),
   // End [knauf]
 }));
 
@@ -1762,6 +1765,29 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect(fileInfo.embedded).toBe(false); // flips on generation activation (WP4)
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+    }
+  });
+
+  test('async acceptance over the backlog cap — 429 before any durable state (WP3c)', async () => {
+    process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '2';
+    try {
+      db.countActiveByScope.mockResolvedValueOnce(2); // scope already at cap
+
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+      expect(mockRes.status).toHaveBeenCalledWith(429);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        error: 'file_indexing_backlog_full',
+        reason: 'queued_files',
+        file_id: 'up-1',
+      });
+      expect(db.reserveAsset).not.toHaveBeenCalled(); // nothing durable reserved
+      expect(handleFileUpload).not.toHaveBeenCalled();
+      expect(db.createFile).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+      delete process.env.KNAUF_INDEX_MAX_QUEUED_FILES;
     }
   });
 });

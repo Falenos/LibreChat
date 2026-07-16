@@ -8,7 +8,9 @@ const { Tools, EToolResources } = require('librechat-data-provider');
 const { isAzureSearchEnabledForAgents } = require('~/server/services/Files/VectorDB/crud');
 // End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
-const { getFiles } = require('~/models');
+// [knauf] KK20-195 WP3c — asset readiness filter for File Search hydration.
+const { getFiles, getAssetsByAssetIds } = require('~/models');
+// End [knauf]
 
 const fileSearchJsonSchema = {
   type: 'object',
@@ -56,6 +58,38 @@ const primeFiles = async (options) => {
   }
 
   dbFiles = dbFiles.concat(resourceFiles);
+
+  // [knauf] KK20-195 WP3c — defense-in-depth readiness filter (plan §6.5):
+  // drop files whose physical asset is not queryable (no active generation,
+  // or delete-tombstoned). The request layer already 409s explicit selections
+  // of non-ready files; this guards agent-library files that went non-ready
+  // between attach and run. Files without an asset row (legacy / pre-
+  // migration) pass through — their vectors predate the FileAsset ledger.
+  const knaufAssetIds = [...new Set(dbFiles.map((f) => f?.knauf_asset_id).filter(Boolean))];
+  if (knaufAssetIds.length > 0) {
+    try {
+      const knaufAssets = await getAssetsByAssetIds(knaufAssetIds);
+      const knaufNotReady = new Set(
+        knaufAssets
+          .filter((a) => a.active_generation == null || a.delete_requested_at != null)
+          .map((a) => a.asset_id),
+      );
+      if (knaufNotReady.size > 0) {
+        const dropped = dbFiles.filter((f) => f && knaufNotReady.has(f.knauf_asset_id));
+        dbFiles = dbFiles.filter((f) => !f || !knaufNotReady.has(f.knauf_asset_id));
+        logger.info(
+          `[fileSearch] primeFiles dropped ${dropped.length} non-ready file(s): ${dropped
+            .map((f) => f.file_id)
+            .join(', ')}`,
+        );
+      }
+    } catch (error) {
+      // Hydration must not take chat down: on a status-read failure keep the
+      // upstream behavior (all files) — the RAG query simply finds no vectors.
+      logger.warn('[fileSearch] primeFiles readiness filter failed:', error);
+    }
+  }
+  // End [knauf]
 
   let toolContext = `- Note: Semantic search is available through the ${Tools.file_search} tool but no files are currently loaded. Request the user to upload documents to search through.`;
 

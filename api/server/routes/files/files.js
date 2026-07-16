@@ -50,6 +50,15 @@ const {
   classifyUploadReplay,
 } = require('~/server/services/Files/knauf/uploadIdempotency');
 // End [knauf]
+// [knauf] KK20-195 WP3c — async-indexing status projections (per-file, batch,
+// list attachment) and the failed→queued retry decision.
+const {
+  projectFileIndexing,
+  attachIndexingToFiles,
+  buildBatchIndexStatus,
+  retryFileIndexing,
+} = require('~/server/services/Files/knauf/indexStatus');
+// End [knauf]
 const { cleanFileName, getContentDisposition } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
@@ -94,7 +103,10 @@ router.get('/', async (req, res) => {
         );
       }
     }
-    res.status(200).send(files);
+    // [knauf] KK20-195 WP3c — one batched asset load projects `indexing` onto
+    // every row that carries an asset pointer (plan §6.3: no per-row polling).
+    res.status(200).send(await attachIndexingToFiles({ db, files }));
+    // End [knauf]
   } catch (error) {
     logger.error('[/files] Error getting files:', error);
     res.status(400).json({ message: 'Error in request', error: error.message });
@@ -152,12 +164,77 @@ router.get('/agent/:agent_id', async (req, res) => {
       text: 0,
     });
 
-    res.status(200).json(files);
+    // [knauf] KK20-195 WP3c — same batched `indexing` projection as GET /files
+    // so agent knowledge lists render pending/failed states without polling
+    // per row (plan §6.3/§6.5: failed knowledge stays visible after reload).
+    res.status(200).json(await attachIndexingToFiles({ db, files }));
+    // End [knauf]
   } catch (error) {
     logger.error('[/files/agent/:agent_id] Error fetching agent files:', error);
     res.status(500).json({ error: 'Failed to fetch agent files' });
   }
 });
+
+// [knauf] KK20-195 WP3c — async-indexing read/retry surface (plan §6.3/§6.4).
+/**
+ * Aggregate indexing status for one client upload batch (multi-file UX).
+ * The batch id is a client-generated grouping key, NEVER authorization —
+ * the query is hard-scoped to the authenticated owner, so foreign batch ids
+ * simply return an empty batch.
+ *
+ * @route GET /files/index-status?batch_id=<id>
+ */
+router.get('/index-status', async (req, res) => {
+  try {
+    const batchId = req.query.batch_id;
+    if (typeof batchId !== 'string' || batchId.length === 0 || batchId.length > 64) {
+      return res.status(400).json({ error: 'batch_id_required' });
+    }
+    const summary = await buildBatchIndexStatus({ db, userId: req.user.id, batchId });
+    return res.status(200).json(summary);
+  } catch (error) {
+    logger.error('[/files/index-status] Error building batch status:', error);
+    return res.status(500).json({ error: 'Failed to fetch batch indexing status' });
+  }
+});
+
+/**
+ * Indexing status for one logical file. `fileAccess` gives the same ACL as
+ * download/preview; the projection is derived from the physical asset when
+ * one exists, else from the legacy `embedded` flag.
+ *
+ * @route GET /files/:file_id/index-status
+ */
+router.get('/:file_id/index-status', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    const asset = file.knauf_asset_id ? await db.getAssetByAssetId(file.knauf_asset_id) : null;
+    return res
+      .status(200)
+      .json({ file_id: file.file_id, indexing: projectFileIndexing(file, asset) });
+  } catch (error) {
+    logger.error('[/files/:file_id/index-status] Error fetching indexing status:', error);
+    return res.status(500).json({ error: 'Failed to fetch indexing status' });
+  }
+});
+
+/**
+ * Authorized retry of a failed indexing run: CASes only failed → queued on
+ * the physical asset (idempotent when another reference already retried);
+ * assets without durable blob metadata answer `file_reupload_required`.
+ *
+ * @route POST /files/:file_id/index/retry
+ */
+router.post('/:file_id/index/retry', fileAccess, async (req, res) => {
+  try {
+    const { httpStatus, body } = await retryFileIndexing({ db, file: req.fileAccess.file });
+    return res.status(httpStatus).json(body);
+  } catch (error) {
+    logger.error('[/files/:file_id/index/retry] Error retrying indexing:', error);
+    return res.status(500).json({ error: 'Failed to retry indexing' });
+  }
+});
+// End [knauf]
 
 router.get('/config', async (req, res) => {
   try {
