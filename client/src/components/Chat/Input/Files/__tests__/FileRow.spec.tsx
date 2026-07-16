@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { FileSources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
@@ -37,10 +37,12 @@ jest.mock('../Image', () => {
 });
 
 jest.mock('../FileContainer', () => {
-  return function MockFileContainer({ file }: any) {
+  return function MockFileContainer({ file, subtitle, onDelete }: any) {
     return (
       <div data-testid="mock-file-container">
         <span data-testid="file-name">{file.filename}</span>
+        {subtitle}
+        <button type="button" aria-label="remove" onClick={onDelete} />
       </div>
     );
   };
@@ -61,6 +63,7 @@ describe('FileRow', () => {
     mockUseLocalize.mockReturnValue((key: string) => {
       const translations: Record<string, string> = {
         com_ui_deleting_file: 'Deleting file...',
+        com_error_files_upload: 'An error occurred while uploading the file.',
       };
       return translations[key] || key;
     });
@@ -166,6 +169,27 @@ describe('FileRow', () => {
   });
 
   describe('Progress States', () => {
+    // [knauf] KK20-227 — a failed document remains visible and can be removed
+    // locally without deleting a server file that was never created.
+    it('renders and removes a failed document upload', () => {
+      const file = createMockFile({
+        type: 'application/pdf',
+        filename: 'failed.pdf',
+        progress: -1,
+      });
+      const filesMap = new Map([[file.file_id, file]]);
+
+      renderFileRow(filesMap);
+
+      expect(screen.getByText('An error occurred while uploading the file.')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'remove' }));
+      expect(mockDeleteFile).toHaveBeenCalledWith({
+        file: { ...file, progress: 1, attached: true },
+        setFiles: mockSetFiles,
+      });
+    });
+    // End [knauf]
+
     it('should pass correct progress value during upload', () => {
       const file = createMockFile({
         progress: 0.65,

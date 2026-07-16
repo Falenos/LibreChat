@@ -50,6 +50,19 @@ export type FileHandlingState = {
 
 const noop = () => {};
 
+// [knauf] KK20-227 — retry one transient document-upload transport failure.
+const FAILED_UPLOAD_PROGRESS = -1;
+const UPLOAD_RETRY_DELAY_MS = 1000;
+const isTransientUploadError = (error: unknown) => {
+  const { code, response } = (error ?? {}) as TError;
+  return (
+    code === 'ERR_NETWORK' ||
+    code === 'ECONNABORTED' ||
+    [502, 503, 504].includes(response?.status ?? 0)
+  );
+};
+// End [knauf]
+
 // [knauf] KK20-227 — module-level mutex serializing EVERY document upload from
 // this client, not just files within one handleFiles loop. Awaiting mutateAsync
 // alone only serializes one loop; a second file selection — or a different
@@ -113,6 +126,9 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   const { showToast } = useToastContext();
   const [errors, setErrors] = useState<string[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // [knauf] KK20-227 — lets onError suppress cleanup only for the first retryable attempt.
+  const documentUploadAttemptsRef = useRef(new Map<string, number>());
+  // End [knauf]
   const { startUploadTimer, clearUploadTimer } = useDelayedUploadToast();
   const { files, setFiles, conversation } = fileState;
   const setFilesLoading = fileState.setFilesLoading ?? noop;
@@ -192,6 +208,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     {
       onSuccess: (data) => {
         clearUploadTimer(data.temp_file_id);
+        documentUploadAttemptsRef.current.delete(data.temp_file_id);
         console.log('upload success', data);
         if (agent_id) {
           queryClient.refetchQueries([QueryKeys.agent, agent_id]);
@@ -248,6 +265,15 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         console.log('upload error', error);
         const file_id = body.get('file_id');
         const tool_resource = body.get('tool_resource');
+        // [knauf] KK20-227 — mutateAsync invokes onError before rejecting. Keep the
+        // pending chip intact while startUpload performs its one transient retry.
+        const uploadAttempt = documentUploadAttemptsRef.current.get(file_id as string);
+        if (uploadAttempt === 1 && isTransientUploadError(error)) {
+          return;
+        }
+        const isDocumentUpload = uploadAttempt != null;
+        documentUploadAttemptsRef.current.delete(file_id as string);
+        // End [knauf]
         if (tool_resource === EToolResources.execute_code) {
           setEphemeralAgent((prev) => ({
             ...prev,
@@ -255,7 +281,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           }));
         }
         clearUploadTimer(file_id as string);
-        deleteFileById(file_id as string);
+        // [knauf] KK20-227 — retain a failed document chip so the failure is visible
+        // and removable; non-document uploads keep their upstream cleanup behaviour.
+        if (isDocumentUpload) {
+          updateFileById(file_id as string, { progress: FAILED_UPLOAD_PROGRESS });
+        } else {
+          deleteFileById(file_id as string);
+        }
+        // End [knauf]
 
         let errorMessage = 'com_error_files_upload';
 
@@ -341,7 +374,22 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       // already clears the file and shows a message, so swallow the rejection
       // here to keep the handleFiles loop advancing to the next file. (Images use
       // the loadImage/onload path and are unaffected — they don't hit OCR.)
-      await enqueueDocumentUpload(() => uploadFile.mutateAsync(formData)).catch(() => {});
+      await enqueueDocumentUpload(async () => {
+        const retryDocument = !extendedFile.type?.startsWith('image/');
+        if (retryDocument) {
+          documentUploadAttemptsRef.current.set(extendedFile.file_id, 1);
+        }
+        try {
+          await uploadFile.mutateAsync(formData);
+        } catch (error) {
+          if (!retryDocument || !isTransientUploadError(error)) {
+            throw error;
+          }
+          documentUploadAttemptsRef.current.set(extendedFile.file_id, 2);
+          await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
+          await uploadFile.mutateAsync(formData);
+        }
+      }).catch(() => {});
       return;
       // End [knauf]
     }
@@ -414,6 +462,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // to the allow-list endpoints (azureOpenAI/agents), matching filterFile
         // server-side. KK20-190.
         endpoint,
+        // End [knauf]
       });
     } catch (error) {
       console.error('file validation error', error);

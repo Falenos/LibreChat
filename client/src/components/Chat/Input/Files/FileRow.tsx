@@ -111,7 +111,15 @@ export default function FileRow({
             { map: new Map(), uniqueFiles: [] as ExtendedFile[] },
           )
           .uniqueFiles.map((file: ExtendedFile, index: number) => {
+            // [knauf] KK20-227 — progress < 0 marks a document whose upload retry failed.
+            const isFailedUpload = file.progress < 0;
             const handleDelete = () => {
+              if (isFailedUpload) {
+                // Local-only placeholder: clean preview/state without issuing a DELETE
+                // for a file that never completed server-side.
+                deleteFile({ file: { ...file, progress: 1, attached: true }, setFiles });
+                return;
+              }
               if (abortUpload && file.progress < 1) {
                 abortUpload();
               }
@@ -123,6 +131,8 @@ export default function FileRow({
               }
               deleteFile({ file, setFiles });
             };
+            const displayFile = isFailedUpload ? { ...file, progress: undefined } : file;
+            // End [knauf]
             const isImage = file.type?.startsWith('image') ?? false;
 
             return (
@@ -142,7 +152,21 @@ export default function FileRow({
                     source={file.source}
                   />
                 ) : (
-                  <FileContainer file={file} onDelete={handleDelete} />
+                  <>
+                    {/* [knauf] KK20-227 — show the retained upload failure on its file chip. */}
+                    <FileContainer
+                      file={displayFile}
+                      onDelete={handleDelete}
+                      subtitle={
+                        isFailedUpload ? (
+                          <span className="text-red-600 dark:text-red-400">
+                            {localize('com_error_files_upload')}
+                          </span>
+                        ) : undefined
+                      }
+                    />
+                    {/* End [knauf] */}
+                  </>
                 )}
               </div>
             );
