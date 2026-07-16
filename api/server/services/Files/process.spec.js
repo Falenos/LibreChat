@@ -1130,6 +1130,53 @@ describe('processDeleteRequest', () => {
     expect(result).toEqual({ deletedFileIds: ['expired-file'], failedFileIds: [] });
   });
 
+  // [knauf] KK20-195 WP3d — deleted rows settle their FileAsset ledger entry.
+  it('tombstones and removes the asset when the deleted row was its last reference (WP3d)', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.deleteFiles.mockResolvedValue({ deletedCount: 1 });
+    db.getFiles.mockResolvedValue([]); // recount after row delete: no survivors
+
+    await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'kb-file',
+          knauf_asset_id: 'kb-file',
+          filepath: '/blob/kb',
+          source: FileSources.local,
+        },
+      ],
+    });
+
+    expect(db.getFiles).toHaveBeenCalledWith({ knauf_asset_id: 'kb-file' }, null, { file_id: 1 });
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'kb-file' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'kb-file' });
+  });
+
+  it('leaves the asset untouched while other rows still reference it (WP3d)', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.deleteFiles.mockResolvedValue({ deletedCount: 1 });
+    db.getFiles.mockResolvedValue([{ file_id: 'survivor' }]); // reference remains
+
+    await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'shared-ref',
+          knauf_asset_id: 'shared-asset',
+          filepath: '/blob/shared',
+          source: FileSources.local,
+        },
+      ],
+    });
+
+    expect(db.tombstoneForDelete).not.toHaveBeenCalled();
+    expect(db.removeAsset).not.toHaveBeenCalled();
+  });
+  // End [knauf]
+
   it('does not treat unrelated not found messages as missing storage', async () => {
     const deleteFile = jest.fn().mockRejectedValue(new Error('Configuration not found'));
     getStrategyFunctions.mockReturnValue({ deleteFile });

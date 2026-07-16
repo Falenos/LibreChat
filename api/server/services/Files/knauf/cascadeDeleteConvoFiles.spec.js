@@ -87,6 +87,8 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       Conversation.deleteMany({}),
       Message.deleteMany({}),
       Agent.deleteMany({}),
+      // KK20-195 WP3d — ledger rows seeded by the FileAsset-lifecycle tests.
+      mongoose.models.KnaufFileAsset.deleteMany({}),
     ]);
     mockProcessDeleteRequest.mockClear();
     mockDeleteVectorsByIds.mockClear();
@@ -487,6 +489,46 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(mockDeleteVectorsByIds.mock.calls[0][1]).toEqual(['canon-1']);
       expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1);
       expect(mockStrategyDeleteFile.mock.calls[0][1].file_id).toBe('canon-1');
+    });
+
+    // KK20-195 WP3d — the GC is recorded on the FileAsset ledger (plan §8).
+    const seedLedgerAsset = (asset_id, extra = {}) =>
+      mongoose.models.KnaufFileAsset.create({
+        asset_id,
+        scope_type: 'user',
+        scope_id: userId.toString(),
+        target_index_profile: 'legacy-v0',
+        vector_backend: 'pgvector',
+        embed_route: '/embed',
+        status: 'ready',
+        active_generation: 1,
+        blob: { source: FileSources.local, path: '/blob/canon', bytes: 1 },
+        ...extra,
+      });
+
+    test('last-reference GC removes the FileAsset ledger row after confirmed cleanup (WP3d)', async () => {
+      await seedLedgerAsset('canon-1');
+      await seedFile('canon-1', dedupExtra({}));
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1'] } });
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      expect(await db.getAssetByAssetId('canon-1')).toBeNull(); // tombstoned + removed
+      expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1); // physical GC still ran
+    });
+
+    test('failed physical cleanup leaves the asset as delete_failed (retryable) (WP3d)', async () => {
+      await seedLedgerAsset('canon-1');
+      await seedFile('canon-1', dedupExtra({}));
+      const files = await db.getFiles({ user: userId, file_id: { $in: ['canon-1'] } });
+      mockStrategyDeleteFile.mockRejectedValueOnce(new Error('blob store down'));
+
+      await deleteFilesWithDedupAwareness({ req: buildReq(), files });
+
+      const asset = await db.getAssetByAssetId('canon-1');
+      expect(asset.status).toBe('delete_failed');
+      expect(asset.last_error_code).toBe('physical_cleanup_failed');
+      expect(asset.delete_requested_at).not.toBeNull(); // tombstone stays — never searchable again
     });
 
     test('a legacy/no-hash file goes through the upstream processDeleteRequest path', async () => {

@@ -233,14 +233,20 @@ async function collectConvoFilesForCleanup({ req, filter }) {
  * [knauf] KK20-203 — Deduped rows are always chat file_search attachments
  * (agent-library files are never deduped), so vectors always live in pgvector
  * regardless of the Azure Search flag.
+ * KK20-195 WP3d — reports success: `true` only when every attempted cleanup
+ * step succeeded, so the FileAsset lifecycle wrapper can decide between
+ * `removeAsset` and `delete_failed` (plan §8.3).
  * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
+ * @returns {Promise<boolean>}
  */
 async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }) {
+  let cleaned = true;
   if (asset.embedded) {
     // [knauf] Deduped assets are always chat attachments → always pgvector
     try {
       await deleteVectorsByIds(req, [assetId]);
     } catch (error) {
+      cleaned = false;
       logger.warn(
         `[knauf][cascadeDeleteConvoFiles] vector GC failed for ${assetId}; may remain in pgvector`,
         error,
@@ -250,7 +256,7 @@ async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getSt
   }
   if (!asset.filepath) {
     logger.warn(`[knauf][cascadeDeleteConvoFiles] no filepath for ${assetId}; skipping blob GC`);
-    return;
+    return false;
   }
   try {
     const { deleteFile } = getStrategyFunctions(asset.source ?? 'local');
@@ -261,11 +267,13 @@ async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getSt
       embedded: false,
     });
   } catch (error) {
+    cleaned = false;
     logger.warn(
       `[knauf][cascadeDeleteConvoFiles] blob GC failed for ${assetId} (asset may leak)`,
       error,
     );
   }
+  return cleaned;
 }
 
 /**
@@ -360,7 +368,19 @@ async function gcDedupRows({ req, dedupRows }) {
       if (survivors.length) {
         continue; // this asset still referenced elsewhere → keep it
       }
-      await gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions });
+      // KK20-195 WP3d — record the physical GC on the FileAsset ledger (plan
+      // §8.2/§8.3): tombstone BEFORE cleanup (blocks worker claims/activation
+      // mid-delete), removeAsset only on confirmed cleanup, delete_failed
+      // otherwise (retryable, reconciler-visible). Legacy assets without a
+      // ledger row just run the cleanup as before.
+      const { gcAssetThroughLifecycle } = require('./fileAssetDelete');
+      await gcAssetThroughLifecycle({
+        db,
+        asset_id: assetId,
+        logger,
+        cleanup: () =>
+          gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }),
+      });
     }
   }
 }

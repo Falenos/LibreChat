@@ -321,6 +321,22 @@ const processDeleteRequest = async ({ req, files }) => {
         logger.error('Error cleaning up orphaned agent file references', error);
       }
     }
+    // [knauf] KK20-195 WP3d — record the deletion on the FileAsset ledger
+    // (plan §8.1): recount each deleted row's asset and tombstone + remove
+    // the ones that lost their last logical reference. Physical cleanup was
+    // already confirmed above (files whose storage delete failed never reach
+    // the row delete). Covers the direct-delete route, agent detach, and the
+    // retention sweep — all of which land here. Best-effort: never throws.
+    if (metadataDeletedFileIds.length > 0) {
+      const { finalizeAssetsAfterRowDelete } = require('./knauf/fileAssetDelete');
+      const deletedSet = new Set(metadataDeletedFileIds);
+      await finalizeAssetsAfterRowDelete({
+        db,
+        deletedFiles: files.filter((f) => deletedSet.has(f.file_id)),
+        logger,
+      });
+    }
+    // End [knauf]
   }
 
   return {
