@@ -16,10 +16,8 @@ fileStrategy: "azure_blob"
 
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
-# KK20-194 — open_url (native server-side fetch + Readability, no external SaaS,
-# AGK SSRF-hardened) is intentionally NOT listed here: it is hidden from the
-# tool pickers and instead rides the web-search switch (injected by ToolService
-# whenever web_search is enabled). See docs/kk20-194-open-url-tool-proposal.md.
+# KK20-194 — browsing uses Azure-hosted web_search through the Responses API.
+# The legacy open_url fetcher is intentionally absent and stripped server-side.
 includedTools:
   - "image_gen_oai"
   - "calculator"
@@ -455,11 +453,9 @@ endpoints:
   # - tools allows curated built-in tools to be added later.
   # Excluded on purpose:
   #   web_search  -> [knauf] KK20-194: deliberately NOT a builder capability.
-  #                  The "Browse the internet" switch exposes our `open_url`
-  #                  tool, prioritised for named/pasted pages and gated on the
-  #                  RAW browse intent in ToolService.js. Adding web_search here
-  #                  would surface the provider-less LangChain tool — see
-  #                  SEAMS.md / ToolService.js.
+  #                  The "Browse the internet" switch enables Azure-hosted
+  #                  web_search through model parameters. Adding it here would
+  #                  surface the provider-less LangChain/BYOK tool instead.
   #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
   #                  -> hidden from end users to reduce configuration burden.
   agents:
@@ -535,8 +531,8 @@ modelSpecs:
       # [knauf] KK20-194 — KARL has no UI capability toggle (simplified view), so
       # "Browse the internet" is config-default-on. This top-level flag pushes
       # `web_search` into the chat's tool list (packages/api/src/agents/load.ts),
-      # which is the RAW browse intent our ToolService gate keys on to surface
-      # the router-compatible `open_url` tool for named or pasted pages.
+      # which packages/api/src/agents/initialize.ts translates into Azure's
+      # hosted Responses API web_search tool.
       webSearch: true
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
@@ -553,6 +549,7 @@ modelSpecs:
         endpoint: 'azureOpenAI'
         model: 'model-router-chat'
         useResponsesApi: true
+        web_search: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 
@@ -595,6 +592,7 @@ modelSpecs:
         model: 'agent-default'
         reasoning_effort: high
         useResponsesApi: true
+        web_search: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-balanced'
       label: 'Balanced'
@@ -607,6 +605,7 @@ modelSpecs:
         model: 'agent-default'
         reasoning_effort: medium
         useResponsesApi: true
+        web_search: true
         promptPrefix: *karl_prompt
     - name: 'karl-personality-creative'
       label: 'Creative'
@@ -619,6 +618,7 @@ modelSpecs:
         model: 'agent-default'
         reasoning_effort: low
         useResponsesApi: true
+        web_search: true
         additional_instructions: |
           When the answer would benefit from breadth, surface multiple options
           or angles before settling on one.
