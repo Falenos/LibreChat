@@ -334,6 +334,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/app/clients/tools/structured/OpenUrl.js` | request-scoped provenance enforcement | 62–88 | Fails closed when production construction has no current-message URL while retaining standalone tool-test construction | `api/app/clients/tools/structured/specs/OpenUrl.review.knauf.spec.js` (`no pasted URL in request context is blocked before fetch`) | KK20-194 |
 | `packages/api/src/agents/initialize.ts` | Azure Browse-off override | 1013–1025 | Derives native search only from the persisted agent Browse flag and explicitly clears stale model parameters when disabled | `packages/api/src/agents/__tests__/initialize.test.ts` (`overrides a stale Azure web_search model parameter when Browse is off`, `does not let skill allowed-tools enable Azure native web search`) | KK20-194 |
 | `packages/api/src/agents/__tests__/initialize.test.ts` | Azure Browse-off and skill-bypass regressions | 379–445, 1398–1442 | Proves stale database flags and skill-declared tool permissions cannot enable provider-level web search when Browse is off | Self | KK20-194 |
+| `packages/api/src/app/metrics.ts` | `isObservabilityPath` / `metricsMiddleware` early return | 60–65, 550–555 | Excludes Kubernetes health probes and Prometheus scrapes from user-facing request/load metrics while preserving real API traffic | `packages/api/src/knauf/observability/trafficNoise.knauf.spec.ts` | NO-TICKET |
+| `packages/api/src/telemetry/sdk.ts` | `shouldIgnoreIncomingRequest` observability paths | 55–62 | Excludes `/health`, `/livez`, `/readyz`, and `/metrics` from sampled application traces so platform traffic does not distort request volume | `packages/api/src/knauf/observability/trafficNoise.knauf.spec.ts` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -495,6 +497,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/hooks/Files/useUploadBeforeUnloadGuard.knauf.spec.ts` | `@testing-library/react` + the hook under test | Low — unit test, extends no upstream contract | Self | KK20-227 |
 | `knauf/docs/proposals/load-testing-one-pager.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 | `knauf/docs/proposals/load-testing-strategy-plan.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
+| `packages/api/src/knauf/observability/trafficNoise.knauf.spec.ts` | `packages/api/src/app/metrics.ts` (`isObservabilityPath`); `packages/api/src/telemetry/sdk.ts` (`shouldIgnoreIncomingRequest`) | Low — test-only; imports two bounded pure request-path predicates | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
