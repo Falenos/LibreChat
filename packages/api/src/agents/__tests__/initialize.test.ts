@@ -411,7 +411,9 @@ describe('initializeAgent — provider web_search precedence', () => {
       type: 'web_search',
       user_location: { type: 'approximate', timezone: 'Europe/Berlin' },
     });
-    expect(result.additional_instructions).toContain('Use web_search for a user-supplied URL');
+    expect(result.additional_instructions).toContain(
+      'For a user-supplied URL, call open_url with that exact URL',
+    );
   });
 
   it('overrides a stale Azure web_search model parameter when Browse is off', async () => {
