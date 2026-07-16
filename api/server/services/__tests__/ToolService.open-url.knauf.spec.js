@@ -1,27 +1,20 @@
 /**
- * [knauf] KK20-194 — open_url rides the "Browse the internet" switch.
+ * [knauf] KK20-194 — browsing uses Azure-hosted web_search only.
  *
  * These tests are the behavioural anchor for the three ToolService seams that
- * bind `open_url` presence to the RAW browse intent — `web_search` present in the
- * agent's OWN tools — independent of `endpoints.agents.capabilities` (add when on,
- * strip when off):
+ * remove the legacy `open_url` fetcher independently of browse intent:
  *   - loadToolDefinitionsWrapper  → model-facing definitions path (authoritative)
  *   - loadAgentTools (execution)  → runtime tool construction path
  *   - loadToolsForExecution       → fail-closed guard on lazy tool execution
  *
- * Raw-intent gating is load-bearing: we deliberately keep `web_search` OUT of the
- * agents capability list so the provider-less LangChain web_search tool is never
- * surfaced (no GDPR-sensitive third-party search provider); the working search
- * engine is Azure's model-level web_search, and open_url is its prioritised
- * companion. So `open_url` must be injected whenever the agent carries web_search
- * in its tools EVEN IF the capability is absent, while the LangChain web_search
- * tool itself stays stripped.
+ * We deliberately keep `web_search` OUT of the agents capability list so the
+ * provider-less LangChain tool is never surfaced. Azure's provider layer injects
+ * the hosted Responses API tool instead. ToolService must therefore strip old
+ * `open_url` entries without removing the persisted browse intent.
  *
- * They fail if any seam is removed, if open_url stops being gated on the raw browse
- * intent, if the LangChain web_search tool starts leaking into the definitions, if
- * a baked-in open_url is no longer stripped when browse is off (the switch must stay
- * authoritative), or if open_url gets double-added. Self-contained mock setup
- * mirrors ToolService.spec.js so the upstream test file stays untouched.
+ * They fail if `open_url` reaches definitions, eager construction, or lazy
+ * execution. Self-contained mock setup mirrors ToolService.spec.js so the upstream
+ * test file stays untouched.
  */
 
 const { Tools, EModelEndpoint, AgentCapabilities } = require('librechat-data-provider');
@@ -109,7 +102,7 @@ function createEndpointsConfig(capabilities) {
   return { [EModelEndpoint.agents]: { capabilities } };
 }
 
-describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
+describe('[knauf] Azure-native web search excludes open_url (ToolService)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockLoadToolDefinitions.mockResolvedValue({
@@ -121,7 +114,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
   });
 
   describe('definitions path (definitionsOnly=true)', () => {
-    it('injects open_url when web_search is enabled and present', async () => {
+    it('strips open_url while preserving an enabled provider-backed web_search', async () => {
       const capabilities = [AgentCapabilities.tools, AgentCapabilities.web_search];
       const req = createMockReq(capabilities);
       mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
@@ -134,15 +127,11 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
       });
 
       const [callArgs] = mockLoadToolDefinitions.mock.calls[0];
-      expect(callArgs.tools).toContain('open_url');
+      expect(callArgs.tools).not.toContain('open_url');
       expect(callArgs.tools).toContain(Tools.web_search);
     });
 
-    it('injects open_url on RAW browse intent even when web_search is NOT a capability, while the LangChain web_search tool stays stripped', async () => {
-      // Option A (KK20-194): web_search is intentionally absent from
-      // endpoints.agents.capabilities, so the capability filter strips the
-      // provider-less LangChain web_search tool. open_url must still be injected
-      // because the agent carries the raw browse intent (web_search in its tools).
+    it('strips both provider-less web_search and open_url from model definitions', async () => {
       const capabilities = [AgentCapabilities.tools];
       const req = createMockReq(capabilities);
       mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
@@ -155,7 +144,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
       });
 
       const [callArgs] = mockLoadToolDefinitions.mock.calls[0];
-      expect(callArgs.tools).toContain('open_url');
+      expect(callArgs.tools).not.toContain('open_url');
       // The LangChain web_search tool must NOT leak into the model-facing tools.
       expect(callArgs.tools).not.toContain(Tools.web_search);
     });
@@ -176,7 +165,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
       expect(callArgs.tools).not.toContain('open_url');
     });
 
-    it('does not double-add open_url if already present', async () => {
+    it('strips a stale open_url even when browse intent is present', async () => {
       const capabilities = [AgentCapabilities.tools, AgentCapabilities.web_search];
       const req = createMockReq(capabilities);
       mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
@@ -190,7 +179,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
 
       const [callArgs] = mockLoadToolDefinitions.mock.calls[0];
       const occurrences = callArgs.tools.filter((t) => t === 'open_url').length;
-      expect(occurrences).toBe(1);
+      expect(occurrences).toBe(0);
     });
 
     it('STRIPS a baked-in open_url when web_search is absent (toggle stays authoritative)', async () => {
@@ -214,7 +203,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
   });
 
   describe('execution path (definitionsOnly=false)', () => {
-    it('injects open_url into the tools passed to loadTools when web_search is enabled', async () => {
+    it('does not construct open_url when web_search is enabled', async () => {
       const capabilities = [AgentCapabilities.tools, AgentCapabilities.web_search];
       const req = createMockReq(capabilities);
       mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
@@ -228,7 +217,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
 
       expect(mockLoadToolsUtil).toHaveBeenCalledTimes(1);
       const [callArgs] = mockLoadToolsUtil.mock.calls[0];
-      expect(callArgs.tools).toContain('open_url');
+      expect(callArgs.tools).not.toContain('open_url');
     });
 
     it('does NOT inject open_url on the execution path when there is no browse intent', async () => {
@@ -248,7 +237,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
       expect(callArgs.tools).not.toContain('open_url');
     });
 
-    it('injects open_url on RAW browse intent even when web_search is NOT a capability', async () => {
+    it('strips open_url on raw browse intent when web_search is not a capability', async () => {
       const capabilities = [AgentCapabilities.tools];
       const req = createMockReq(capabilities);
       mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
@@ -260,10 +249,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
         definitionsOnly: false,
       });
 
-      expect(mockLoadToolsUtil).toHaveBeenCalledTimes(1);
-      const [callArgs] = mockLoadToolsUtil.mock.calls[0];
-      expect(callArgs.tools).toContain('open_url');
-      expect(callArgs.tools).not.toContain(Tools.web_search);
+      expect(mockLoadToolsUtil).not.toHaveBeenCalled();
     });
 
     it('STRIPS a baked-in open_url on the execution path when web_search is absent', async () => {
@@ -307,7 +293,7 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
       }
     });
 
-    it('executes an open_url call when the agent has web_search enabled', async () => {
+    it('drops an open_url call even when the agent has web_search enabled', async () => {
       const req = createMockReq([AgentCapabilities.tools, AgentCapabilities.web_search]);
 
       await loadToolsForExecution({
@@ -318,9 +304,12 @@ describe('[knauf] open_url rides the web-search switch (ToolService)', () => {
         actionsEnabled: false,
       });
 
-      expect(mockLoadToolsUtil).toHaveBeenCalledTimes(1);
-      const [callArgs] = mockLoadToolsUtil.mock.calls[0];
-      expect(callArgs.tools).toContain('open_url');
+      if (mockLoadToolsUtil.mock.calls.length > 0) {
+        const [callArgs] = mockLoadToolsUtil.mock.calls[0];
+        expect(callArgs.tools).not.toContain('open_url');
+      } else {
+        expect(mockLoadToolsUtil).not.toHaveBeenCalled();
+      }
     });
   });
 });
