@@ -1018,9 +1018,9 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
       resolveUserLocationContext(req.headers, req.body?.timezone),
     );
     // End [knauf]
-    dynamicToolContextMap[Tools.web_search] = buildWebSearchDynamicContext(
-      req.conversationCreatedAt,
-    );
+    // [knauf] KK20-201 — use the current request time, not conversation creation.
+    dynamicToolContextMap[Tools.web_search] = buildWebSearchDynamicContext();
+    // End [knauf]
   }
 
   /**

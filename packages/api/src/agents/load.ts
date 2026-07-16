@@ -110,8 +110,18 @@ export async function loadEphemeralAgent(
   const requestPromptPrefix = req.body?.promptPrefix;
   const { promptPrefix: modelPromptPrefix, ...safeModelParameters } =
     model_parameters as ModelParametersWithPromptPrefix;
-  const instructions =
-    typeof modelPromptPrefix === 'string' ? modelPromptPrefix : requestPromptPrefix;
+  // [knauf] KK20-201 — model-spec prompts are configuration templates. Reload
+  // the raw template every request so a client-rendered timezone cannot be
+  // persisted and replayed after travel, midnight or a DST transition.
+  const modelSpecPromptPrefix = modelSpec?.preset?.promptPrefix;
+  let instructions = requestPromptPrefix;
+  if (typeof modelPromptPrefix === 'string') {
+    instructions = modelPromptPrefix;
+  }
+  if (typeof modelSpecPromptPrefix === 'string') {
+    instructions = modelSpecPromptPrefix;
+  }
+  // End [knauf]
 
   // Get endpoint config for modelDisplayLabel fallback
   const appConfig = req.config;

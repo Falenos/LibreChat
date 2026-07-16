@@ -160,5 +160,13 @@ describe('resolveUserLocationContext', () => {
     it('rejects a shape-valid but non-existent body timezone', () => {
       expect(resolveUserLocationContext({}, 'Europe/Faketown')).toBe(UNKNOWN_LOCATION_CONTEXT);
     });
+
+    it('falls back to a valid header when the body timezone is not recognized', () => {
+      expect(
+        resolveUserLocationContext({ [USER_TIMEZONE_HEADER]: 'Europe/Berlin' }, 'Europe/Faketown'),
+      ).toBe(
+        'Location hint only, not a confirmed physical location or country (Timezone: Europe/Berlin)',
+      );
+    });
   });
 });

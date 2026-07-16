@@ -479,21 +479,22 @@ endpoints:
     plugins: true
     assistants: false
     groups:
-      - group: 'agk-foundry-router-chat'
+      - group: 'agk-foundry-router'
         apiKey: '${AZURE_FOUNDRY_API_KEY}'
-        instanceName: '${AZURE_FOUNDRY_RESOURCE_NAME}'
-        version: '2024-10-21'
+        # Model Router Responses API is supported through the Foundry project
+        # endpoint. The account-level endpoint returns HTTP 400 for this path.
+        serverless: true
+        baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
+        addParams:
+          model: 'model-router'
         dropParams:
           - temperature
           - top_p
-          - presence_penalty
-          - frequency_penalty
+          - presencePenalty
+          - frequencyPenalty
         models:
-          # Account-scoped Chat Completions alias. The deployment remains
-          # `model-router`; the alias avoids colliding with saved model names.
-          model-router-chat:
-            deploymentName: 'model-router'
-            version: '2024-10-21'
+          # Keep the saved alias stable while requests target `model-router`.
+          model-router-chat: true
       # Environment-selected direct deployment for prompt drafting and created
       # agents. Previous model names remain compatibility aliases.
       - group: 'agk-foundry-agent-default'
@@ -505,8 +506,8 @@ endpoints:
         dropParams:
           - temperature
           - top_p
-          - presence_penalty
-          - frequency_penalty
+          - presencePenalty
+          - frequencyPenalty
         models:
           agent-default:
             deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
@@ -527,7 +528,7 @@ modelSpecs:
   enforce: false
   prioritize: false
   list:
-    # General-purpose Karl. Default option, no extra capabilities enabled.
+    # General-purpose Karl. Default option with managed web access.
     - name: 'karl'
       label: 'KARL'
       default: true
@@ -551,8 +552,7 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'model-router-chat'
-        # The account-level router deployment currently supports Chat
-        # Completions; setting useResponsesApi here returns HTTP 400.
+        useResponsesApi: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
 

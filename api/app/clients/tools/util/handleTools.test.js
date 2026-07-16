@@ -230,6 +230,32 @@ describe('Tool Handlers', () => {
       expect(tool).toBeInstanceOf(ToolClass2);
     });
 
+    // [knauf] KK20-194 — exact-link provenance must preserve URL parentheses
+    // while excluding surrounding Markdown and sentence punctuation.
+    it('extracts exact pasted URLs for open_url enforcement', async () => {
+      const result = await loadTools({
+        user: fakeUser._id,
+        tools: ['open_url'],
+        options: {
+          req: {
+            body: {
+              text: 'Read [this](https://en.wikipedia.org/wiki/Function_(mathematics)), `https://example.com/docs`, https://en.wikipedia.org/wiki/Yahoo! and https://[2606:4700:4700::1111]/.',
+            },
+          },
+        },
+      });
+
+      expect(result.loadedTools[0].userProvidedUrls).toEqual(
+        expect.arrayContaining([
+          'https://en.wikipedia.org/wiki/Function_(mathematics)',
+          'https://example.com/docs',
+          'https://en.wikipedia.org/wiki/Yahoo!',
+          'https://[2606:4700:4700::1111]/',
+        ]),
+      );
+    });
+    // End [knauf]
+
     it('should initialize an authenticated tool with primary auth field', async () => {
       process.env.DALLE3_API_KEY = 'mocked_api_key';
       const initToolFunction = loadToolWithAuth(

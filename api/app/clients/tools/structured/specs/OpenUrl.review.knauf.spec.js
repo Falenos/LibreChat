@@ -7,8 +7,7 @@
 //          { code: 'blocked_or_js_required' }, never an empty envelope.
 //   - R3 :  an oversized page is surfaced with its informative notice, NOT as
 //          blocked_or_js_required.
-//   - R1 + Residual A: host-provenance + query-anomaly are LOGGED (never block)
-//          when the fetched URL diverges from what the user pasted.
+//   - R1 + Residual A: a model-mutated pasted URL is rejected before fetch.
 
 const mockFetchAndExtract = jest.fn();
 class MockFetchError extends Error {
@@ -32,7 +31,8 @@ function okResult(overrides = {}) {
     status: 200,
     contentType: 'text/html',
     title: 'Page',
-    content: '<UNTRUSTED_WEB_CONTENT url="https://knauf.com/page">real readable content</UNTRUSTED_WEB_CONTENT>',
+    content:
+      '<UNTRUSTED_WEB_CONTENT url="https://knauf.com/page">real readable content</UNTRUSTED_WEB_CONTENT>',
     truncated: false,
     outcome: 'ok',
     ...overrides,
@@ -43,7 +43,9 @@ describe('[knauf] OpenUrl outcome mapping (R2a / R3)', () => {
   beforeEach(() => jest.clearAllMocks());
 
   test('outcome="low" → blocked_or_js_required (no empty envelope to the model)', async () => {
-    mockFetchAndExtract.mockResolvedValue(okResult({ outcome: 'low', content: 'wrapped-but-empty' }));
+    mockFetchAndExtract.mockResolvedValue(
+      okResult({ outcome: 'low', content: 'wrapped-but-empty' }),
+    );
     const parsed = JSON.parse(await new OpenUrl()._call({ url: 'https://knauf.com/spa' }));
     expect(parsed.code).toBe('blocked_or_js_required');
     expect(parsed.url).toBe('https://knauf.com/spa');
@@ -70,7 +72,7 @@ describe('[knauf] OpenUrl outcome mapping (R2a / R3)', () => {
   });
 });
 
-describe('[knauf] R1 + Residual A — host/query provenance logging (log-only)', () => {
+describe('[knauf] R1 + Residual A — exact pasted-URL enforcement', () => {
   let warnSpy;
   beforeEach(() => {
     jest.clearAllMocks();
@@ -80,36 +82,50 @@ describe('[knauf] R1 + Residual A — host/query provenance logging (log-only)',
   afterEach(() => warnSpy.mockRestore());
 
   function provenanceWarnings() {
-    return warnSpy.mock.calls
-      .map(([msg]) => msg)
-      .filter((m) => /url_not_user_provided|query_param_not_user_provided/.test(m));
+    return warnSpy.mock.calls.map(([msg]) => msg).filter((m) => /url_not_user_provided/.test(m));
   }
 
-  test('host the user never pasted → url_not_user_provided warning, but still fetches', async () => {
+  test('host the user never pasted is blocked before fetch', async () => {
     const tool = new OpenUrl({ userProvidedUrls: ['https://knauf.com/legit'] });
     const parsed = JSON.parse(await tool._call({ url: 'https://evil.example/exfil' }));
     expect(provenanceWarnings().some((m) => m.includes('url_not_user_provided'))).toBe(true);
-    expect(mockFetchAndExtract).toHaveBeenCalled(); // log-only, never blocks
-    expect(parsed.content).toBeDefined();
+    expect(mockFetchAndExtract).not.toHaveBeenCalled();
+    expect(parsed.code).toBe('url_not_user_provided');
   });
 
-  test('query param absent from pasted URLs → query_param_not_user_provided warning', async () => {
+  test('query parameters added by the model are blocked before fetch', async () => {
     const tool = new OpenUrl({ userProvidedUrls: ['https://knauf.com/page'] });
-    await tool._call({ url: 'https://knauf.com/page?secret=leaked' });
-    const w = provenanceWarnings();
-    expect(w.some((m) => m.includes('query_param_not_user_provided') && m.includes('secret'))).toBe(true);
+    const parsed = JSON.parse(await tool._call({ url: 'https://knauf.com/page?secret=leaked' }));
+    expect(mockFetchAndExtract).not.toHaveBeenCalled();
+    expect(parsed.code).toBe('url_not_user_provided');
   });
 
   test('exact pasted URL → no provenance warning', async () => {
     const tool = new OpenUrl({ userProvidedUrls: ['https://knauf.com/page?q=1'] });
     await tool._call({ url: 'https://knauf.com/page?q=1' });
     expect(provenanceWarnings()).toHaveLength(0);
+    expect(mockFetchAndExtract).toHaveBeenCalled();
   });
 
-  test('no request context (no pasted URLs) → provenance check skipped', async () => {
+  test('fragment-only differences still address the exact fetched resource', async () => {
+    const tool = new OpenUrl({ userProvidedUrls: ['https://knauf.com/page#section'] });
+    await tool._call({ url: 'https://knauf.com/page' });
+    expect(provenanceWarnings()).toHaveLength(0);
+    expect(mockFetchAndExtract).toHaveBeenCalled();
+  });
+
+  test('no pasted URL in request context is blocked before fetch', async () => {
+    const tool = new OpenUrl({ userProvidedUrls: [] });
+    const parsed = JSON.parse(await tool._call({ url: 'https://anything.example/x' }));
+    expect(mockFetchAndExtract).not.toHaveBeenCalled();
+    expect(parsed.code).toBe('url_not_user_provided');
+  });
+
+  test('standalone construction without request context skips provenance enforcement', async () => {
     const tool = new OpenUrl();
     await tool._call({ url: 'https://anything.example/x' });
     expect(provenanceWarnings()).toHaveLength(0);
+    expect(mockFetchAndExtract).toHaveBeenCalled();
   });
 });
 // End [knauf]

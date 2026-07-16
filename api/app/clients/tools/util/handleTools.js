@@ -56,16 +56,39 @@ const { getMCPServerTools } = require('~/server/services/Config');
 const { getMCPServersRegistry } = require('~/config');
 const { getRoleByName } = require('~/models');
 
-// [knauf] KK20-194 — extract http(s) URLs from the current user message so the
-// request-scoped open_url instance can flag fetches of hosts/query params the
-// user never actually pasted (R1 + Residual A, log-only). Kept deliberately
-// permissive: a missed URL just means a benign provenance warning, never a block.
-const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]}]+/gi;
+// [knauf] KK20-194 — extract exact http(s) URLs from the current user message
+// for open_url's fail-closed provenance check. Preserve balanced parentheses in
+// real URLs while removing surrounding Markdown/sentence punctuation.
+const URL_IN_TEXT = /https?:\/\/[^\s<>"'`]+/gi;
+function trimUrlBoundary(value) {
+  let result = value;
+  let previous;
+  do {
+    previous = result;
+    result = result.replace(/[.,;:!?]+$/, '');
+    for (const [open, close] of [
+      ['(', ')'],
+      ['[', ']'],
+      ['{', '}'],
+    ]) {
+      const openCount = result.split(open).length - 1;
+      const closeCount = result.split(close).length - 1;
+      if (result.endsWith(close) && closeCount > openCount) {
+        result = result.slice(0, -1);
+      }
+    }
+  } while (result !== previous);
+  return result;
+}
 function extractUserProvidedUrls(text) {
   if (!text || typeof text !== 'string') {
     return [];
   }
-  return text.match(URL_IN_TEXT) || [];
+  return [
+    ...new Set(
+      (text.match(URL_IN_TEXT) || []).flatMap((url) => [url, trimUrlBoundary(url)]).filter(Boolean),
+    ),
+  ];
 }
 // End [knauf]
 
@@ -207,8 +230,8 @@ const loadTools = async ({
   };
 
   const customConstructors = {
-    // [knauf] KK20-194 — request-scoped so the instance can read the current
-    // user message (options.req.body.text) for host-provenance logging (R1).
+    // [knauf] KK20-194 — request-scoped so the instance can read exact URLs
+    // from the current user message for fail-closed provenance enforcement.
     // Mirrors image_gen_oai below, which already threads options.req through.
     open_url: async () => {
       return new OpenUrl({
@@ -382,9 +405,9 @@ const loadTools = async ({
           resolveUserLocationContext(options.req?.headers, options.req?.body?.timezone),
         );
         // End [knauf]
-        dynamicToolContextMap[tool] = buildWebSearchDynamicContext(
-          options.req?.conversationCreatedAt,
-        );
+        // [knauf] KK20-201 — use the current request time, not conversation creation.
+        dynamicToolContextMap[tool] = buildWebSearchDynamicContext();
+        // End [knauf]
         return createSearchTool({
           ...result.authResult,
           onSearchResults,
