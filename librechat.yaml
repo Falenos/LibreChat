@@ -490,8 +490,8 @@ endpoints:
         dropParams:
           - temperature
           - top_p
-          - presence_penalty
-          - frequency_penalty
+          - presencePenalty
+          - frequencyPenalty
         models:
           # Keep the saved alias stable while requests target `model-router`.
           model-router-chat: true
@@ -506,8 +506,8 @@ endpoints:
         dropParams:
           - temperature
           - top_p
-          - presence_penalty
-          - frequency_penalty
+          - presencePenalty
+          - frequencyPenalty
         models:
           agent-default:
             deploymentName: '${AZURE_FOUNDRY_AGENT_DEPLOYMENT}'
@@ -567,8 +567,6 @@ modelSpecs:
           Conciseness: Be direct and concise. Provide essential information without filler, excessive caveats, or restating the question. Prioritise actionable guidance over exhaustive coverage; if a short answer suffices, keep it short.
 
           Location: {{current_user_location}}. This is a best-effort locale/timezone hint derived from the user's own browser, not confirmed proof of physical location — browser language and timezone can be wrong (travel, VPNs, shared devices, a non-native-language browser). Never assert a specific country or region as fact from this alone; at most use it to softly tailor tone or examples, and always defer to what the user explicitly tells you about their location.
-
-          Web access: When the user supplies a URL, call open_url with that exact URL before answering; never change its hostname, path, query or protocol. Use web_search for current, recent, live or changing information such as weather, news, schedules, prices, laws, product releases and public office holders. Do not use web_search for stable general knowledge you know confidently. Never claim to have opened a page or searched the web unless the corresponding tool succeeded.
 
           General: If you do not know the answer, say you do not know. If you are unsure how to answer, ask for clarification. Answer appropriately in the user's language.
 

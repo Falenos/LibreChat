@@ -60,14 +60,15 @@ class OpenUrl extends Tool {
     this.description = openUrlDescription;
     this.schema = openUrlJsonSchema;
     // R1 (KK20-194): request-scoped provenance inputs, injected by the
-    // customConstructor in handleTools.js. Absent in unit/standalone use, in
-    // which case provenance logging is simply skipped.
+    // customConstructor in handleTools.js. Standalone construction remains
+    // available for isolated tool tests.
+    this.enforceUserProvidedUrls = Array.isArray(fields.userProvidedUrls);
     this.userProvidedUrls = Array.isArray(fields.userProvidedUrls) ? fields.userProvidedUrls : [];
   }
 
-  /** Reject model-mutated URLs whenever this message contained pasted URLs. */
+  /** Reject URLs absent from the request-scoped user-provided allowlist. */
   getProvenanceError(requestedUrl, host) {
-    if (this.userProvidedUrls.length === 0) {
+    if (!this.enforceUserProvidedUrls) {
       return null;
     }
     const requested = normalizeUrl(requestedUrl);

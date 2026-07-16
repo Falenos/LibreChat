@@ -1013,12 +1013,13 @@ export async function initializeAgent(
   // [knauf] KK20-194 — the builder/model-spec browse flag is stored as the
   // web_search tool. Translate that existing intent into Azure's native
   // Responses tool instead of loading LibreChat's provider-backed search.
+  const isAzureSearchProvider =
+    provider === EModelEndpoint.azureOpenAI || agent.provider === Providers.AZURE;
   const useAzureNativeWebSearch =
-    requestedToolNames.includes(Tools.web_search) &&
-    (provider === EModelEndpoint.azureOpenAI || agent.provider === Providers.AZURE);
+    isAzureSearchProvider && persistedToolNames.includes(Tools.web_search);
   const finalModelOptions = {
     ...modelOptions,
-    ...(useAzureNativeWebSearch ? { web_search: true } : {}),
+    ...(isAzureSearchProvider ? { web_search: useAzureNativeWebSearch } : {}),
     model: agent.model,
   };
   // End [knauf]
@@ -1222,6 +1223,16 @@ export async function initializeAgent(
         timezone: requestTimezone,
         location: requestLocation,
       }),
+    );
+  }
+  // End [knauf]
+
+  // [knauf] KK20-194 — request-time policy covers persisted agents whose saved
+  // instructions predate native Azure search and exact-link support.
+  if (useAzureNativeWebSearch) {
+    appendAdditionalInstructions(
+      agent,
+      'Web access is enabled for this request. For a user-supplied URL, call open_url with that exact URL before answering; never change its hostname, path, query, or protocol. Use web_search for current, recent, live, or changing information such as weather, news, schedules, prices, laws, product releases, and public office holders. Do not search for stable general knowledge you know confidently. Never claim to have opened a page or searched unless the corresponding tool succeeded.',
     );
   }
   // End [knauf]

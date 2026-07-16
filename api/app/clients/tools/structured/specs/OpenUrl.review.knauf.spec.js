@@ -114,10 +114,18 @@ describe('[knauf] R1 + Residual A — exact pasted-URL enforcement', () => {
     expect(mockFetchAndExtract).toHaveBeenCalled();
   });
 
-  test('no request context (no pasted URLs) → provenance check skipped', async () => {
+  test('no pasted URL in request context is blocked before fetch', async () => {
+    const tool = new OpenUrl({ userProvidedUrls: [] });
+    const parsed = JSON.parse(await tool._call({ url: 'https://anything.example/x' }));
+    expect(mockFetchAndExtract).not.toHaveBeenCalled();
+    expect(parsed.code).toBe('url_not_user_provided');
+  });
+
+  test('standalone construction without request context skips provenance enforcement', async () => {
     const tool = new OpenUrl();
     await tool._call({ url: 'https://anything.example/x' });
     expect(provenanceWarnings()).toHaveLength(0);
+    expect(mockFetchAndExtract).toHaveBeenCalled();
   });
 });
 // End [knauf]

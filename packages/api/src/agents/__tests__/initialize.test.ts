@@ -411,6 +411,41 @@ describe('initializeAgent — provider web_search precedence', () => {
       type: 'web_search',
       user_location: { type: 'approximate', timezone: 'Europe/Berlin' },
     });
+    expect(result.additional_instructions).toContain(
+      'For a user-supplied URL, call open_url with that exact URL',
+    );
+  });
+
+  it('overrides a stale Azure web_search model parameter when Browse is off', async () => {
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+    });
+    agent.tools = [];
+    mockExtractLibreChatParams.mockReturnValueOnce({
+      resendFiles: false,
+      modelOptions: { model: agent.model, web_search: true },
+    });
+
+    const result = await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_parameters: expect.objectContaining({ web_search: false }),
+      }),
+    );
+    expect(result.additional_instructions).toBeUndefined();
   });
   // End [knauf]
 
@@ -1380,6 +1415,46 @@ describe('initializeAgent — skill `allowed-tools` union (Phase 6)', () => {
       author: { toString: () => userId } as unknown as import('mongoose').Types.ObjectId,
       ...(allowedTools !== undefined ? { allowedTools } : {}),
     });
+
+  // [knauf] KK20-194 — skill tool permissions must not bypass the persisted
+  // agent's Browse switch and enable provider-level Azure search.
+  it('does not let skill allowed-tools enable Azure native web search', async () => {
+    const { agent, req, res, loadTools, db, mockGetOptions } = createMocks({
+      provider: EModelEndpoint.azureOpenAI,
+      overrideProvider: Providers.AZURE,
+    });
+    const { Types } = await import('mongoose');
+    const skillId = new Types.ObjectId();
+    const getSkillByName = buildGetSkillByName(
+      'search-skill',
+      [Tools.web_search],
+      skillId,
+      req.user!.id,
+    );
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+        isInitialAgent: true,
+        accessibleSkillIds: [skillId],
+        manualSkills: ['search-skill'],
+      },
+      { ...db, listSkillsByAccess: emptyListSkillsByAccess, getSkillByName },
+    );
+
+    expect(loadTools.mock.calls[0][0].tools).toEqual([Tools.web_search]);
+    expect(mockGetOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model_parameters: expect.objectContaining({ web_search: false }),
+      }),
+    );
+  });
+  // End [knauf]
 
   it('passes the union of agent.tools + allowed-tools to loadTools and merges resulting toolDefinitions', async () => {
     const { agent, req, res, loadTools, db } = createMocks();
