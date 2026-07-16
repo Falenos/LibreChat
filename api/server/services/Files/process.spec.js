@@ -93,6 +93,27 @@ jest.mock('~/models', () => ({
   getFiles: jest.fn(),
   // End [knauf]
   removeAgentResourceFilesFromAllAgents: jest.fn(),
+  // [knauf] KK20-195 WP3b — reservation-first FileAsset lifecycle on the
+  // file_search path. Defaults model the common MISS: reservation created,
+  // sync claim → embed → activate. Implementations survive clearAllMocks;
+  // HIT/conflict cases override per-test with mockResolvedValueOnce.
+  reserveAsset: jest.fn(async (params) => ({
+    asset: { ...params, status: 'uploading' },
+    created: true,
+  })),
+  markQueued: jest.fn().mockResolvedValue({}),
+  claimAsset: jest.fn(async ({ asset_id }) => ({
+    asset_id,
+    execution_token: 'test-token',
+    target_generation: 1,
+    target_index_profile: 'legacy-v0',
+  })),
+  activateGeneration: jest.fn().mockResolvedValue({}),
+  failClaim: jest.fn().mockResolvedValue({}),
+  tombstoneForDelete: jest.fn().mockResolvedValue({}),
+  removeAsset: jest.fn().mockResolvedValue(undefined),
+  getAssetByAssetId: jest.fn().mockResolvedValue(null),
+  // End [knauf]
 }));
 
 jest.mock('~/server/utils/getFileStrategy', () => ({
@@ -123,13 +144,15 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   }),
   deleteVectors: jest.fn(),
   deleteVectorsByIds: jest.fn(),
+  // [knauf] KK20-195 WP3b — reservation routing reads the agent-search backend flag.
+  isAzureSearchEnabledForAgents: jest.fn().mockReturnValue(false),
+  // End [knauf]
 }));
 
-// [knauf] KK20-204 — the file_search path now hashes the bytes + looks up the shared
-// asset for per-user dedup; stub both so tests don't touch the disk or the DB. Default = MISS.
+// [knauf] KK20-204/KK20-195 — the file_search path hashes the bytes before the
+// FileAsset reservation; stub so tests don't touch the disk.
 jest.mock('~/server/services/Files/knauf/contentDedup', () => ({
   computeContentHash: jest.fn().mockResolvedValue('deadbeefhash'),
-  findAssetForHash: jest.fn().mockResolvedValue(null),
 }));
 // End [knauf]
 
@@ -594,7 +617,10 @@ describe('processAgentFileUpload', () => {
 
       expect(uploadVectors).toHaveBeenCalled();
       expect(getRetentionExpiry).not.toHaveBeenCalled();
-      expect(db.createFile).toHaveBeenCalledWith(expect.not.objectContaining({ expiredAt }), true);
+      expect(db.createFile).toHaveBeenCalledWith(expect.not.objectContaining({ expiredAt }), true, {
+        userId: 'user-123',
+        tenantId: 'tenant-a',
+      });
       expect(db.addAgentResourceFile).toHaveBeenCalledWith(
         expect.objectContaining({
           agent_id: 'agent-abc',
@@ -628,6 +654,7 @@ describe('processAgentFileUpload', () => {
           context: FileContext.agents,
         }),
         true,
+        { userId: 'user-123', tenantId: 'tenant-a' },
       );
       expect(db.addAgentResourceFile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -710,6 +737,7 @@ describe('processAgentFileUpload', () => {
           },
         }),
         true,
+        { userId: 'user-123', tenantId: 'tenant-a' },
       );
     });
 
@@ -738,6 +766,7 @@ describe('processAgentFileUpload', () => {
           },
         }),
         true,
+        { userId: 'user-123', tenantId: 'tenant-a' },
       );
     });
 
@@ -757,7 +786,10 @@ describe('processAgentFileUpload', () => {
       });
 
       expect(getRetentionExpiry).not.toHaveBeenCalled();
-      expect(db.createFile).toHaveBeenCalledWith(expect.not.objectContaining({ expiredAt }), true);
+      expect(db.createFile).toHaveBeenCalledWith(expect.not.objectContaining({ expiredAt }), true, {
+        userId: 'user-123',
+        tenantId: 'tenant-a',
+      });
       expect(db.addAgentResourceFile).toHaveBeenCalledWith(
         expect.objectContaining({
           agent_id: 'agent-abc',
@@ -798,6 +830,7 @@ describe('processAgentFileUpload', () => {
           },
         }),
         true,
+        { userId: 'user-123', tenantId: 'tenant-a' },
       );
       expect(db.addAgentResourceFile).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1549,6 +1582,7 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
     expect(db.createFile).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'convo-xyz' }),
       true,
+      { userId: 'user-123', tenantId: null },
     );
   });
 
@@ -1564,12 +1598,12 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
 });
 // End [knauf]
 
-// [knauf] KK20-204 — per-user content-hash dedup on the file_search upload path.
-describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
-  const {
-    findAssetForHash,
-    computeContentHash,
-  } = require('~/server/services/Files/knauf/contentDedup');
+// [knauf] KK20-204 → KK20-195 WP3b — per-user content-hash dedup on the
+// file_search upload path, now expressed as the reservation-first FileAsset
+// lifecycle: reserve (dedup_key = scope + hash) BEFORE any physical work;
+// created → blob + markQueued + sync claim→embed→activate; found → branch table.
+describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => {
+  const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
   const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
@@ -1598,13 +1632,28 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     computeContentHash.mockResolvedValue('hashABC');
   });
 
-  test('MISS — uploads + embeds USER-owned and becomes the asset owner', async () => {
-    findAssetForHash.mockResolvedValue(null);
+  test('MISS — reserves the asset by scope+hash, uploads + embeds USER-owned, records the lifecycle', async () => {
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
+    // Reservation happens BEFORE physical work, keyed by user scope + hash.
+    expect(db.reserveAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'up-1',
+        scope_type: 'user',
+        scope_id: 'user-123',
+        dedup_key: 'u:user-123:h:hashABC',
+        embed_route: '/embed',
+      }),
+    );
     expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
+    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
     expect(uploadVectors).toHaveBeenCalledTimes(1);
     expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
+    // Sync (flag-off) execution is recorded through the asset: claim → activate.
+    expect(db.claimAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.activateGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({ asset_id: 'up-1', execution_token: 'test-token' }),
+    );
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
     expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
@@ -1612,7 +1661,6 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
   });
 
   test('concurrent owner race — duplicate-key on insert → falls back to a non-owner row', async () => {
-    findAssetForHash.mockResolvedValue(null); // MISS → tries to claim owner
     // First createFile rejects with the unique-owner index collision; retry succeeds.
     const dupErr = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
     db.createFile.mockRejectedValueOnce(dupErr).mockResolvedValueOnce({ file_id: 'up-1' });
@@ -1630,16 +1678,16 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     );
   });
 
+  const readyAsset = () => ({
+    asset_id: 'canon-1',
+    status: 'ready',
+    active_generation: 0,
+    active_index_profile: 'legacy-v0',
+    blob: { source: 'local', path: '/blob/canon', bytes: 5, mime: PDF_MIME },
+  });
+
   test('HIT — reuses the shared asset blob + embeddings; skips upload + embed', async () => {
-    findAssetForHash.mockResolvedValue({
-      file_id: 'canon-1',
-      knauf_asset_id: 'canon-1',
-      filepath: '/blob/canon',
-      bytes: 5,
-      filename: 'doc.pdf',
-      embedded: true,
-      source: 'local',
-    });
+    db.reserveAsset.mockResolvedValueOnce({ created: false, asset: readyAsset() });
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
     expect(handleFileUpload).not.toHaveBeenCalled(); // no storage upload
@@ -1653,15 +1701,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
 
   test('cross-chat — same content uploaded in another of the user’s chats reuses the asset', async () => {
     // Different chat (message attachment), same user + content → HIT, no re-embed.
-    findAssetForHash.mockResolvedValue({
-      file_id: 'canon-1',
-      knauf_asset_id: 'canon-1',
-      filepath: '/blob/canon',
-      bytes: 5,
-      filename: 'doc.pdf',
-      embedded: true,
-      source: 'local',
-    });
+    db.reserveAsset.mockResolvedValueOnce({ created: false, asset: readyAsset() });
 
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
@@ -1670,6 +1710,60 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
     expect(handleFileUpload).not.toHaveBeenCalled(); // no re-upload/embed
     expect(uploadVectors).not.toHaveBeenCalled();
   });
+
+  test('in-progress asset — stable 409 conflict, no duplicate physical work (WP3b)', async () => {
+    db.reserveAsset.mockResolvedValueOnce({
+      created: false,
+      asset: { asset_id: 'canon-1', status: 'processing' },
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(mockRes.status).toHaveBeenCalledWith(409);
+    expect(mockRes.json).toHaveBeenCalledWith({
+      error: 'file_indexing_in_progress',
+      file_id: 'up-1',
+    });
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(uploadVectors).not.toHaveBeenCalled();
+    expect(db.createFile).not.toHaveBeenCalled();
+  });
+
+  test('async acceptance flag ON — 202 + indexing projection, no in-request embed (WP3b)', async () => {
+    process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    try {
+      const queuedAt = new Date('2026-07-16T00:00:00.000Z');
+      db.getAssetByAssetId.mockResolvedValueOnce({
+        asset_id: 'up-1',
+        status: 'queued',
+        active_generation: null,
+        queued_at: queuedAt,
+      });
+
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+      expect(handleFileUpload).toHaveBeenCalledTimes(1); // blob IS uploaded
+      expect(db.markQueued).toHaveBeenCalled(); // durable state exists
+      expect(uploadVectors).not.toHaveBeenCalled(); // the worker embeds, not this request
+      expect(db.claimAsset).not.toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(202);
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          indexing: {
+            status: 'queued',
+            ready: false,
+            retryable: false,
+            error_code: null,
+            queued_at: queuedAt,
+          },
+        }),
+      );
+      const fileInfo = db.createFile.mock.calls.at(-1)[0];
+      expect(fileInfo.embedded).toBe(false); // flips on generation activation (WP4)
+    } finally {
+      delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+    }
+  });
 });
 // End [knauf]
 
@@ -1677,10 +1771,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204)', () => {
 // knowledge in the builder; EDIT-permission gated upstream) embed AGENT-scoped so every
 // user with access to the agent can retrieve them, and are NOT per-user deduped.
 describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', () => {
-  const {
-    findAssetForHash,
-    computeContentHash,
-  } = require('~/server/services/Files/knauf/contentDedup');
+  const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
   const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
@@ -1710,16 +1801,27 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
   test('embeds AGENT-scoped, skips per-user dedup, and adds to the agent library', async () => {
     await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
 
-    // No dedup work on the library path.
+    // No dedup work on the library path — but the physical asset IS reserved
+    // (KK20-195 WP3b: every file_search upload records its lifecycle),
+    // agent-scoped and WITHOUT a dedup key (same content ⇒ separate assets).
     expect(computeContentHash).not.toHaveBeenCalled();
-    expect(findAssetForHash).not.toHaveBeenCalled();
+    expect(db.reserveAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'lib-1',
+        scope_type: 'agent',
+        scope_id: 'agent-abc',
+        embed_route: '/agent/embed',
+        dedup_key: undefined,
+      }),
+    );
     // Embedded AGENT-scoped → readable by everyone with access to the agent.
     expect(uploadVectors).toHaveBeenCalledTimes(1);
     expect(uploadVectors.mock.calls[0][0].entity_id).toBe('agent-abc');
-    // Row carries no dedup bookkeeping (dropped by removeNullishValues).
+    // Row carries no dedup bookkeeping (dropped by removeNullishValues), but
+    // points at its own asset for the WP3c status projection + delete refcount.
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBeUndefined();
-    expect(fileInfo.knauf_asset_id).toBeUndefined();
+    expect(fileInfo.knauf_asset_id).toBe('lib-1');
     expect(fileInfo.knauf_dedup_owner).toBeUndefined();
     // Added to the agent's persistent file_search library.
     expect(db.addAgentResourceFile).toHaveBeenCalled();

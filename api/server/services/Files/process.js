@@ -880,88 +880,129 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   let knaufContentHash;
   let knaufAssetId;
   let knaufDedupOwner;
+  // KK20-195 WP3b — the physical asset reserved for this upload + whether the
+  // async-acceptance flag applies to this request (202 instead of sync embed).
+  let knaufUploadAsset;
+  let knaufAsyncAccepted = false;
   // End [knauf]
 
   if (tool_resource === EToolResources.file_search) {
-    // [knauf] KK20-204 — per-user content-hash dedup is scoped to CHAT/message
-    // attachments ONLY. Agent-library knowledge (added to a persistent agent's
-    // file_search via the builder; EDIT-permission gated upstream) must stay
-    // agent-scoped so EVERY user with access to the agent can retrieve it — so it
-    // takes the pre-dedup path. messageAttachment is the discriminator: chat uploads
-    // always carry message_file='true' and never mutate the agent's tool_resources;
-    // builder uploads carry neither. See knauf/docs/proposals/file-dedup-content-hash.md.
-    if (messageAttachment) {
-      // Personal chat attachment: dedup + USER-owned embed (private to the uploader,
-      // reusable across the user's own chats via the RAG JWT-user fallback).
-      const { computeContentHash, findAssetForHash } = require('./knauf/contentDedup');
-      knaufContentHash = await computeContentHash(file.path);
+    // [knauf] KK20-195 WP3b (subsumes KK20-204's lookup) — reservation-first
+    // lifecycle: the physical FileAsset is reserved BEFORE any physical work,
+    // so concurrent identical chat uploads coalesce on ONE asset instead of
+    // both embedding, and the asset records the whole lifecycle either way.
+    // Chat/message attachments dedup per user (dedup_key = scope + hash);
+    // agent-library knowledge stays un-deduplicated and agent-scoped
+    // (messageAttachment is the discriminator, as under KK20-204).
+    // Flag OFF (rollout step 4): claim THIS asset, embed in-request, activate
+    //   — user-visible behavior unchanged; failure removes what this request
+    //   created (old clients expect "failure leaves nothing").
+    // Flag ON: no embed in-request; 202 + indexing projection; the WP4 worker
+    //   drains the queue. The flag stays off until WP5 ships the client UX.
+    const { computeContentHash } = require('./knauf/contentDedup');
+    const {
+      reserveForUpload,
+      classifyExistingAsset,
+      recordSyncEmbed,
+    } = require('./knauf/fileSearchAssetLifecycle');
+    const { isAsyncAcceptedForUser } = require('./knauf/asyncIndexingConfig');
+    const { uploadVectors, isAzureSearchEnabledForAgents } = require('./VectorDB/crud');
+    const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
 
-      const knaufAsset = await findAssetForHash({
-        user: req.user.id,
-        knauf_content_hash: knaufContentHash,
-      });
-      if (knaufAsset) {
-        // HIT — reuse the shared asset's blob + embeddings; skip storage upload + embed.
-        // This row points at the SAME asset id (knauf_asset_id), so it keeps working even
-        // if the row that first embedded the content is later deleted.
-        knaufAssetId = knaufAsset.knauf_asset_id;
-        source = knaufAsset.source ?? source;
+    knaufAsyncAccepted = isAsyncAcceptedForUser(req.user);
+    knaufContentHash = messageAttachment ? await computeContentHash(file.path) : undefined;
+
+    const reservation = await reserveForUpload({
+      db,
+      userId: req.user.id,
+      file_id,
+      entityId: entity_id,
+      messageAttachment,
+      contentHash: knaufContentHash,
+      azureSearchForAgents: isAzureSearchEnabledForAgents(),
+    });
+    knaufUploadAsset = reservation.asset;
+    knaufAssetId = reservation.asset.asset_id;
+    knaufDedupOwner = messageAttachment && reservation.created ? true : undefined;
+
+    if (!reservation.created) {
+      const verdict = classifyExistingAsset(reservation.asset);
+      if (verdict === 'reuse' || verdict === 'reuse_stale_profile') {
+        // Same semantics as the KK20-204 dedup HIT: reuse the shared asset's
+        // blob + embeddings; no storage upload, no embed. The route's finally
+        // cleans the unconsumed temp file.
+        source = reservation.asset.blob?.source ?? source;
         storageResult = {
-          bytes: knaufAsset.bytes,
-          filename: knaufAsset.filename,
-          filepath: knaufAsset.filepath,
-          embedded: knaufAsset.embedded,
+          bytes: reservation.asset.blob?.bytes,
+          filename: file.originalname,
+          filepath: reservation.asset.blob?.path,
+          embedded: true,
         };
-        embeddingResult = { embedded: knaufAsset.embedded, filename: knaufAsset.filename };
-        // No storage upload on a hit, so the temp file isn't consumed here — the
-        // files.js route's `finally` cleans it up (don't unlink it twice).
+        embeddingResult = { embedded: true, filename: file.originalname };
       } else {
-        // MISS — this upload becomes the asset owner. Embed USER-owned (entity_id = user
-        // id) so the single embedding is reusable across all of this user's chats via the
-        // RAG JWT-user fallback (spike-confirmed). Claim ownership via knauf_dedup_owner —
-        // a concurrent first-upload that loses the unique-owner index race at createFile
-        // falls back to a non-owner row.
-        knaufAssetId = file_id;
-        knaufDedupOwner = true;
+        // in_progress / retry_failed / deleting — stable conflicts for now:
+        // the WP3c status/retry endpoints upgrade in_progress to a 202 "join"
+        // and failed to an authorized retry. Never duplicate physical work.
+        const codes = {
+          in_progress: 'file_indexing_in_progress',
+          retry_failed: 'file_asset_failed',
+          deleting: 'file_asset_deleting',
+        };
+        return res.status(409).json({ error: codes[verdict] ?? 'file_asset_conflict', file_id });
+      }
+    } else {
+      try {
         const { handleFileUpload } = getStrategyFunctions(source);
         const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
         storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
+        await db.markQueued({
+          asset_id: knaufAssetId,
+          blob: {
+            source,
+            path: storageResult.filepath,
+            bytes: storageResult.bytes,
+            mime: file.mimetype,
+          },
+        });
+      } catch (error) {
+        // Blob upload / queue transition failed — release the reservation this
+        // request made so it can't linger as an unreachable 'uploading' asset.
+        await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
+        await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        throw error;
+      }
 
-        const { uploadVectors } = require('./VectorDB/crud');
-        // KK20-195 WP0 — the blob above has no File row yet; if the embed
-        // fails, delete it so it can't orphan (compensation, best-effort).
-        const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
-        embeddingResult = await embedWithBlobCompensation({
+      if (knaufAsyncAccepted) {
+        // Async acceptance: the worker embeds; this request only records
+        // durable state. embedded=false until generation activation (WP4).
+        embeddingResult = { embedded: false, filename: file.originalname };
+      } else {
+        // Synchronous execution recorded through the asset lifecycle
+        // (claim → embed → activate). Embed keys stay as today: chat embeds
+        // USER-owned, agent-library embeds AGENT-scoped.
+        embeddingResult = await recordSyncEmbed({
+          db,
+          asset_id: knaufAssetId,
+          createdThisRequest: true,
+          logger,
           embed: () =>
-            uploadVectors({ req, file, file_id, entity_id: req.user.id, isAgentFile: false }),
-          req,
-          file_id,
-          source,
-          storageResult,
-          getStrategyFunctions,
+            embedWithBlobCompensation({
+              embed: () =>
+                uploadVectors({
+                  req,
+                  file,
+                  file_id,
+                  entity_id: messageAttachment ? req.user.id : entity_id,
+                  isAgentFile: !messageAttachment,
+                }),
+              req,
+              file_id,
+              source,
+              storageResult,
+              getStrategyFunctions,
+            }),
         });
       }
-    } else {
-      // Agent-library knowledge: embed AGENT-scoped (entity_id is already agent_id here)
-      // so everyone with access to the agent can read it. NOT per-user deduped — the
-      // knauf_content_hash / knauf_asset_id / knauf_dedup_owner fields stay undefined
-      // (dropped by removeNullishValues), so these rows never enter the per-user dedup
-      // lookup, the unique-owner index, or the dedup-aware GC.
-      const { handleFileUpload } = getStrategyFunctions(source);
-      const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
-      storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
-
-      const { uploadVectors } = require('./VectorDB/crud');
-      // KK20-195 WP0 — same compensation as the chat dedup-MISS path above.
-      const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
-      embeddingResult = await embedWithBlobCompensation({
-        embed: () => uploadVectors({ req, file, file_id, entity_id, isAgentFile: true }),
-        req,
-        file_id,
-        source,
-        storageResult,
-        getStrategyFunctions,
-      });
     }
     // End [knauf]
 
@@ -1070,6 +1111,13 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       knauf_asset_id: knaufAssetId,
       knauf_dedup_owner: knaufDedupOwner,
       // End [knauf]
+      // [knauf] KK20-195 WP3b — client batch id for multi-file selections
+      // (drives the owner-scoped batch-status projection; never authorization).
+      knauf_upload_batch_id:
+        typeof metadata.batch_id === 'string' && metadata.batch_id.length <= 64
+          ? metadata.batch_id
+          : undefined,
+      // End [knauf]
     }),
     ...retentionExpiry,
   };
@@ -1102,6 +1150,25 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
   }
   // End [knauf]
 
+  // [knauf] KK20-195 WP3b — superset response (plan §6.2 fields as SIBLINGS of
+  // the flat TFile spread, never a nested body: current clients parse the flat
+  // shape). 202 = async acceptance (durable state exists, indexing pending).
+  if (knaufUploadAsset) {
+    const { buildIndexingProjection } = require('./knauf/fileSearchAssetLifecycle');
+    const liveAsset = await db.getAssetByAssetId(knaufAssetId).catch(() => null);
+    const indexing = buildIndexingProjection(liveAsset ?? knaufUploadAsset);
+    const statusCode = knaufAsyncAccepted && !indexing.ready ? 202 : 200;
+    return res.status(statusCode).json({
+      message:
+        statusCode === 202
+          ? 'File accepted; indexing in progress'
+          : 'Agent file uploaded and processed successfully',
+      ...result,
+      indexing,
+      ...(fileInfo.knauf_upload_batch_id ? { batch_id: fileInfo.knauf_upload_batch_id } : {}),
+    });
+  }
+  // End [knauf]
   res.status(200).json({ message: 'Agent file uploaded and processed successfully', ...result });
 };
 
