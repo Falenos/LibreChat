@@ -61,7 +61,8 @@ export const getDefaultAgentFormValues = () => ({
   // what browseInternet.applyToForm(true) writes (client/src/knauf/components/
   // Agents/capabilities.ts): the `web_search` form flag persists browse intent,
   // while model_parameters.web_search + useResponsesApi enable Azure's hosted
-  // model-level web_search. Users can still toggle it off in the builder.
+  // model-level web_search. ToolService also uses the persisted flag to expose
+  // open_url only for links in the current message. Users can still toggle it off.
   [Tools.web_search]: true,
   model_parameters: {
     ...defaultAgentFormValues.model_parameters,

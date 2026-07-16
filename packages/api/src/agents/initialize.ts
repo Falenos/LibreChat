@@ -1232,7 +1232,7 @@ export async function initializeAgent(
   if (useAzureNativeWebSearch) {
     appendAdditionalInstructions(
       agent,
-      'Web access is enabled for this request. Use web_search for a user-supplied URL and for current, recent, live, or changing information such as weather, news, schedules, prices, laws, product releases, and public office holders. Do not search for stable general knowledge you know confidently. Never claim to have searched unless the tool succeeded.',
+      'Web access is enabled for this request. For a user-supplied URL, call open_url with that exact URL before answering; never change its hostname, path, query, or protocol. Use web_search for current, recent, live, or changing information such as weather, news, schedules, prices, laws, product releases, and public office holders. Do not search for stable general knowledge you know confidently. Never claim to have opened a page or searched unless the corresponding tool succeeded.',
     );
   }
   // End [knauf]

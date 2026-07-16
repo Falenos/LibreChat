@@ -50,13 +50,14 @@ export interface KnaufCapability {
 }
 
 /**
- * "Browse the internet" — KK20-194. One Azure-hosted engine: native model-level
- * web_search through the Responses API.
+ * "Browse the internet" — KK20-194. Native model-level web_search handles
+ * discovery; open_url is request-scoped to exact links supplied by the user.
  * NOT gated by `endpoints.agents.capabilities`: we deliberately keep
  * `web_search` out of that list so the provider-less LangChain web_search
  * tool stays stripped/unsurfaced. The switch writes the persisted browse intent
  * and `model_parameters.web_search`; the server translates them into the hosted
- * tool. Default-ON for KARL and new agents.
+ * tool. ToolService uses the same persisted intent to expose open_url only when
+ * the current message contains a link. Default-ON for KARL and new agents.
  */
 const browseInternet: KnaufCapability = {
   id: 'web',

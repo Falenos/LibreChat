@@ -16,8 +16,9 @@ fileStrategy: "azure_blob"
 
 # Only expose tools we have server-side API keys for.
 # All others (Gemini, DALL-E 3, Stable Diffusion, Flux, etc.) are hidden.
-# KK20-194 — browsing uses Azure-hosted web_search through the Responses API.
-# The legacy open_url fetcher is intentionally absent and stripped server-side.
+# KK20-194 — open-ended browsing uses Azure-hosted web_search through Responses.
+# open_url stays hidden from pickers and is exposed server-side only when a
+# browse-enabled current user message contains an HTTP(S) link.
 includedTools:
   - "image_gen_oai"
   - "calculator"
