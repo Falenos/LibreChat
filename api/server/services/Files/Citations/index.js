@@ -16,7 +16,7 @@ const { getRoleByName, getFiles } = require('~/models');
  * @param {IUser} options.user - The user object
  * @param {AppConfig} options.appConfig - The app configuration object
  * @param {GraphRunnableConfig['configurable']} options.metadata - The metadata
- * @param {{ [Tools.file_search]: { sources: Object[]; fileCitations: boolean } }} options.toolArtifact - The tool artifact containing structured data
+ * @param {{ [Tools.file_search]: { sources: Object[]; fileCitations: boolean; preselected?: boolean; turn?: number } }} options.toolArtifact - The tool artifact containing structured data
  * @param {string} options.toolCallId - The tool call ID
  * @returns {Promise<Object|null>} The file search attachment or null
  */
@@ -61,7 +61,14 @@ async function processFileCitations({ user, appConfig, toolArtifact, toolCallId,
       appConfig.endpoints?.[EModelEndpoint.agents]?.minRelevanceScore ?? 0.45;
 
     const sources = toolArtifact[Tools.file_search].sources || [];
-    const filteredSources = sources.filter((source) => source.relevance >= minRelevanceScore);
+    // [knauf] NO-TICKET — file_search anchors are assigned before this callback.
+    // Preserve a bounded, preselected list exactly so persisted source indexes
+    // cannot drift from the anchors shown to the model.
+    const preselected = toolArtifact[Tools.file_search].preselected === true;
+    const filteredSources = preselected
+      ? sources
+      : sources.filter((source) => source.relevance >= minRelevanceScore);
+    // End [knauf]
     if (filteredSources.length === 0) {
       logger.debug(
         `[processFileCitations] No sources above relevance threshold of ${minRelevanceScore}`,
@@ -69,13 +76,23 @@ async function processFileCitations({ user, appConfig, toolArtifact, toolCallId,
       return null;
     }
 
-    const selectedSources = applyCitationLimits(filteredSources, maxCitations, maxCitationsPerFile);
+    // [knauf] NO-TICKET — see the anchor/cardinality contract above.
+    const selectedSources = preselected
+      ? filteredSources
+      : applyCitationLimits(filteredSources, maxCitations, maxCitationsPerFile);
+    // End [knauf]
     const enhancedSources = await enhanceSourcesWithMetadata(selectedSources, appConfig);
 
     if (enhancedSources.length > 0) {
+      // [knauf] NO-TICKET — preserve the tool's anchor turn through persistence.
+      const turn = toolArtifact[Tools.file_search].turn;
       const fileSearchAttachment = {
         type: Tools.file_search,
-        [Tools.file_search]: { sources: enhancedSources },
+        [Tools.file_search]: {
+          sources: enhancedSources,
+          ...(typeof turn === 'number' ? { turn } : {}),
+        },
+        // End [knauf]
         toolCallId: toolCallId,
         messageId: metadata.run_id,
         conversationId: metadata.thread_id,

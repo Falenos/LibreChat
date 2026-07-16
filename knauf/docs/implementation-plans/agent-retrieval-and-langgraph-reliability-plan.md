@@ -17,7 +17,7 @@ The target behavior is:
 4. Logical file aliases that share one physical `knauf_asset_id` are queried once. Citations still use an authorized logical `file_id` visible to the user.
 5. Results keep their backend-native order and are fused by reciprocal rank. Raw Azure scores and pgvector distances are never compared.
 6. The latest user turn, including every image/content block, survives context compaction or the request fails before model invocation with a specific context-size error.
-7. Repeated searches are cached and bounded. Near the limit, the graph performs a tools-disabled final answer instead of ending in `GraphRecursionError`.
+7. Repeated searches are cached and bounded. This application returns typed `search_budget_exhausted` evidence plus a narrow `file_search` suppression artifact; the agents SDK consumes it before the next model call.
 8. Langfuse shows one main trace for the user turn with nested retrieval/model work. Detached title and memory work may remain separate traces, correlated by source message and conversation session.
 
 No custom reranker model in the initial fix. Azure semantic ranking applies only to the Azure AI Search Agent Knowledge path. PostgreSQL/pgvector uses vector similarity only. The application must preserve each backend's native order, then combine the two ordered lists with deterministic rank fusion; that cross-backend fusion is not semantic ranking.
@@ -27,7 +27,7 @@ No custom reranker model in the initial fix. Azure semantic ranking applies only
 | Stage                                              | Where it runs            | What it does                                                                                                                  | Score/order contract                                                                                  |
 | -------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | pgvector similarity                                | PostgreSQL/pgvector      | Finds user conversation-document chunks by embedding distance                                                                 | Lower distance is better; there is no Azure semantic ranker or other semantic reranker in this path   |
-| Azure hybrid retrieval plus optional semantic rank | Azure AI Search only     | Combines Azure keyword/vector candidates, then optionally applies Azure's second-stage semantic ranker to Agent Knowledge     | Preserve Azure's returned order; `@search.score` and optional `@search.rerankerScore` are diagnostics |
+| Azure hybrid retrieval plus optional semantic rank | Azure AI Search only     | Combines Azure keyword/vector candidates, then optionally applies Azure's second-stage semantic ranker to Agent Knowledge     | Preserve Azure's returned order; application fusion ignores raw backend scores                        |
 | Cross-backend reciprocal-rank fusion               | Agentic Karl application | Combines the final pgvector and Azure lists using their ordinal positions after per-backend retrieval and chunk deduplication | Deterministic rank arithmetic, not a model, semantic ranker, or raw-score comparison                  |
 
 The application-level RRF must not be described as giving pgvector “Azure semantic ranking.” It only lets results from independently ranked stores compete without comparing incompatible raw numbers.
@@ -123,7 +123,7 @@ This diagnosis matches the provider boundary: [Microsoft Prompt Shields](https:/
 | Current images disappear               | Compaction/pruning can remove the latest structured HumanMessage                                               | Pin the entire current turn as an indivisible required message                                        |
 | Prompt Shield `jailbreak` response     | Derived checkpoint/history is transported as a command-shaped user message                                     | Use neutral historical state with durable coverage; never a synthetic user message                    |
 | Legacy double retrieval                | Non-Agents client path can run `createContextHandlers()` while `file_search` is also available                 | Disable only legacy vector augmentation when `file_search` owns retrieval                             |
-| Search loop reaches recursion limit    | No exact-query cache, distinct-query budget, or tools-disabled finalizer                                       | Cache, budget, then finalize without tools; keep recursion limit as an emergency fuse                 |
+| Search loop reaches recursion limit    | No exact-query cache or distinct-query budget                                                                   | Cache, budget, then suppress `file_search` for the current turn; keep recursion limit as an emergency fuse |
 | Duplicate pgvector calls               | `fileSearch.js` maps one HTTP request per logical file; multiple rows can resolve to the same `knauf_asset_id` | Deduplicate canonical physical targets before any request                                             |
 | N requests for N files                 | Retrieval uses `/query` and `/agent/query` per file despite batch routes existing                              | One `/query_multiple` request and one `/agent/query-multiple` request at most                         |
 | Duplicate chunks                       | Results are flattened, sorted, and sliced without a chunk identity check                                       | Deduplicate by physical asset plus digest/chunk identity before final cutoff                          |
@@ -208,7 +208,7 @@ Sprint numbering reflects repository/deployment dependencies, not causal severit
 ### Task 0.3: Record a trace baseline
 
 - **Location:** Langfuse dev project; trace IDs listed at the top of this plan.
-- **Description:** Record main-run trace count, file-search call count, backend/file/query tuple, context snapshots, summary events, content-filter response, latency, and token cost.
+- **Description:** Record main-run trace count, file-search call count, backend/file/query tuple, context snapshots, summary events, content-filter response, and latency.
 - **Dependencies:** Tasks 0.1–0.2.
 - **Acceptance criteria:** Every later replay can be compared with the same fields.
 - **Validation:** Saved Langfuse view or exported trace JSON referenced from the implementing PR, not committed if it contains large payloads.
@@ -242,14 +242,13 @@ Sprint numbering reflects repository/deployment dependencies, not causal severit
   - `app/routes/agent_routes.py`
   - `app/services/vector_store/azure_search.py`
   - new focused route/store tests next to existing RAG tests
-- **Description:** Require the agent `entity_id` for Agent Knowledge queries and include it in the Azure filter alongside requested `file_ids`. Escape/filter values through the Azure SDK-supported path instead of concatenating unchecked values. Preserve Azure's returned order and expose `@search.score` plus `@search.rerankerScore` as separate optional diagnostic fields when present; neither value is converted into a pgvector-style distance.
+- **Description:** Require the agent `entity_id` for Agent Knowledge queries and include it in the Azure filter alongside requested `file_ids`. Escape/filter values through the Azure SDK-supported path instead of concatenating unchecked values. Preserve Azure's returned order; the application does not add or normalize score fields.
 - **Dependencies:** Sprint 0 fixture.
 - **Acceptance criteria:**
   - A file ID from another agent does not match.
   - Batch and single-file routes enforce the same entity rule.
   - Azure result order is returned unchanged.
   - Semantic search remains enabled through `AZURE_SEARCH_SEMANTIC_ENABLED`.
-  - Tests distinguish Azure base/hybrid score from optional semantic reranker score.
 - **Validation:** Mocked Azure client filter assertions and route tests.
 
 ### Task 1.3: Release and deploy the RAG prerequisite
@@ -291,14 +290,14 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - agents SDK `src/summarization/node.ts`
   - `src/messages/budget.ts`, `src/messages/prune.ts`, or the smallest existing current-turn selection seam
   - related message/content tests
-- **Description:** Detect the latest real user turn before pruning and preserve its full structured content: text, images, provider-native document blocks, and inline extracted text. Never retain only the text portion of a multimodal turn. Treat “current turn present” as a precondition for every main-model and finalizer call.
+- **Description:** Detect the latest real user turn before pruning and preserve its full structured content: text, images, provider-native document blocks, and inline extracted text. Never retain only the text portion of a multimodal turn. Treat “current turn present” as a precondition for every main-model call.
 - **Dependencies:** Task 0.2.
 - **Acceptance criteria:**
   - Text plus five images remains one complete HumanMessage after compaction with the same block IDs/URLs, order, MIME types, and text.
   - Image-only current turns remain valid.
   - Historical images may be summarized/pruned.
   - If the latest turn alone exceeds the model budget, return `current_turn_exceeds_context` before invoking the model.
-  - Every main-model/finalizer call contains the verified current turn; otherwise no provider call occurs.
+  - Every main-model call contains the verified current turn; otherwise no provider call occurs.
 - **Validation:** Multimodal, image-only, provider-file, and oversized-current-turn tests.
 
 ### Task 2.3: Transport summaries as historical state
@@ -313,18 +312,19 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - The failing Prompt Shield trace is replayed; any remaining filter response is classified with its actual intervention point.
 - **Validation:** Message-role snapshot tests and Azure dev replay.
 
-### Task 2.4: Add graceful near-limit finalization
+### Task 2.4: Add checkpoint-safe tool suppression
 
 - **Location:** agents SDK `src/run.ts`, graph routing files under `src/graphs/`, and graph tests.
-- **Description:** Use the graph's actual step metadata to route proactively, before the hard recursion ceiling, to one final model call with tools disabled and the retained current turn plus best successful tool results. Keep `recursionLimit: 25` as the emergency fuse. Convert unavoidable exhaustion into a typed run outcome instead of leaking a raw `GraphRecursionError`.
+- **Description:** When a tool result artifact contains validated `toolControl.disableTools`, omit only those named tools from subsequent model bindings for the same user turn. Do not infer remaining budget from absolute graph-step values because resumed checkpoints may already contain steps. `file_search` budget exhaustion uses this primitive so the next model call answers from retained evidence. Keep `recursionLimit` as the emergency fuse.
 - **Reference:** LangGraph documents [`GRAPH_RECURSION_LIMIT`](https://docs.langchain.com/oss/javascript/langgraph/errors/GRAPH_RECURSION_LIMIT) as an error when the graph reaches its step limit, not as a mechanism that forces a final answer.
 - **Dependencies:** Tasks 2.1–2.3.
 - **Acceptance criteria:**
-  - A repeated-search loop ends with either a useful final answer or a clear bounded-run response.
-  - Finalization cannot call another tool.
-  - The finalizer executes at most once and leaves headroom below step 25.
+  - A `search_budget_exhausted` result suppresses only `file_search` for the rest of the current turn.
+  - Other tools remain available and malformed control artifacts are ignored.
+  - The next model call sees the typed result and answers from existing evidence.
+  - Generic non-file tool recursion finalization is deferred until the SDK has a checkpoint-safe primitive.
   - Cancellation/timeout behavior remains unchanged.
-- **Validation:** Loop, finalizer, cancellation, and hard-error tests.
+- **Validation:** Tool-control parsing, selective binding, resumed-checkpoint, cancellation, and hard-error tests.
 
 ### Task 2.5: Publish an exact SDK version
 
@@ -345,12 +345,13 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 - **Location:**
   - [`../../../api/app/clients/tools/util/fileSearch.js`](../../../api/app/clients/tools/util/fileSearch.js)
   - [`../../../api/app/clients/tools/util/fileSearch.spec.js`](../../../api/app/clients/tools/util/fileSearch.spec.js)
-- **Description:** After existing access filtering, create a target map keyed by `backend + physicalAssetId` where `physicalAssetId = knauf_asset_id ?? file_id`. Retain an authorized logical alias `{file_id, filename}` for citations.
+- **Description:** After existing access filtering, create a target map keyed by `backend + physicalAssetId` where `physicalAssetId = knauf_asset_id ?? file_id`. Retain the lexically first authorized logical alias `{file_id, filename}` for citations so input ordering cannot change citation identity or the cache fingerprint.
 - **Dependencies:** RAG Sprint 1 deployed.
 - **Acceptance criteria:**
   - Duplicate logical IDs are removed.
   - Different logical rows sharing one physical asset generate one pg target.
   - Agent Knowledge routes to Azure only when `fromAgent === true` and `context === 'agents'`.
+  - Runtime suffixes on added-agent IDs are stripped for resource ACL and RAG scope, while cache/budget partitioning remains explicit per runtime agent instance.
   - Chat uploads route to pgvector even when the current run has an agent ID.
   - A target with contradictory/unknown provenance fails closed to pgvector or is rejected; it is never promoted to Azure.
 - **Validation:** Pure target-building tests.
@@ -358,11 +359,12 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 ### Task 3.2: Query each backend once
 
 - **Location:** `createFileSearchTool()` in `fileSearch.js` and its spec.
-- **Description:** Partition canonical targets and call `/query_multiple` once for pgvector and `/agent/query-multiple` once for Azure. Carry `{backend, targets}` beside each promise so failures cannot shift result ownership. Update the tool description to state that `file_search` searches extracted document text; it cannot inspect historical image pixels. Current image blocks continue through the direct multimodal path.
+- **Description:** Partition canonical targets and call `/query_multiple` once for pgvector and `/agent/query-multiple` once for Azure. Include `entity_id` in the pgvector batch when available so its user-or-entity authorization contract also supports Azure-disabled Agent Knowledge fallback. Carry `{backend, targets}` beside each promise so failures cannot shift result ownership. Update the tool description to state that `file_search` searches extracted document text; it cannot inspect historical image pixels. Current image blocks continue through the direct multimodal path.
 - **Dependencies:** Task 3.1 and RAG Sprint 1.
 - **Acceptance criteria:**
   - Zero or one request per backend per distinct search.
   - One backend may fail without corrupting the other backend’s citations.
+  - If the surviving backend has no matches, the no-content result still states that retrieval was partial.
   - Empty arrays are successful no-result responses.
   - No per-file fallback request is issued after a successful batch response.
   - A mixed image/document turn may still use both direct image input and document `file_search`; an image-only request is not redirected to document search merely because historical PDFs exist.
@@ -371,16 +373,19 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 ### Task 3.3: Deduplicate chunks and fuse backend ranks
 
 - **Location:** `fileSearch.js`; extract only a small pure helper under an existing Knauf path if inline logic becomes unreadable.
-- **Description:** Preserve each backend's returned order. The pgvector list is ordered by vector distance only; the Azure list may already include Azure-internal hybrid RRF and Azure semantic reranking. Deduplicate within the same physical asset using `metadata.digest` when available, otherwise physical asset + page + normalized content. Merge the two final ordinal lists with application RRF `1 / (60 + rank)`. Keep raw score and `scoreKind` only as diagnostics.
+- **Description:** Preserve each backend's returned order. The pgvector list is ordered by vector distance only; the Azure list may already include Azure-internal hybrid RRF and Azure semantic reranking. Deduplicate within the same physical asset using `metadata.digest` when available, otherwise physical asset + page + normalized content. Merge the two final ordinal lists with application RRF `1 / (60 + rank)`. Do not add a shared raw-score contract.
 - **Dependencies:** Task 3.2.
 - **Acceptance criteria:**
   - Azure results are not sorted as ascending distances.
   - pgvector results retain lower-distance order.
-  - `@search.score`, `@search.rerankerScore`, and pgvector distance are never normalized into a shared numeric score.
+  - Raw Azure scores and pgvector distance are never normalized into a shared numeric score.
   - Application RRF is labelled `cross_backend_rrf`, never `semantic_ranking`.
   - Identical chunks from one shared asset appear once.
   - The same text from two genuinely different source assets may remain twice for provenance.
   - Final citations use authorized logical IDs and filenames.
+  - Citation threshold and limits are applied before anchors; only that exact selected chunk array is shown to the model and persisted in the same order/cardinality.
+  - Each distinct search gets a request-wide turn number used by both `turnNfileM` anchors and its attachment, even when several agents contribute tools to one response; cached repeats reuse the original content without creating another attachment.
+  - Client rendering keeps `fileN` and web `refN` in separate index arrays, while the source-card list may deduplicate both views by file.
 - **Validation:** Deterministic pure-function tests for order, ties, duplicate digests, fallback content keys, and citation aliases.
 
 ### Task 3.4: Remove legacy vector double retrieval
@@ -404,27 +409,17 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - [`../../../packages/data-provider/src/config.ts`](../../../packages/data-provider/src/config.ts)
   - [`../../../librechat.yaml`](../../../librechat.yaml)
   - config and tool tests
-- **Description:** Cache the in-flight/completed promise by normalized query plus sorted canonical target set for the run. Add one application config value, proposed as `endpoints.agents.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable.
+- **Description:** Cache the in-flight/completed promise and distinct-query budget by normalized query plus sorted canonical target set in a request-keyed `WeakMap`, nested by agent/entity, while keeping one request-wide next-turn counter at the WeakMap root. This lets ON_TOOL_EXECUTE reloads and multi-agent responses share collision-free citation turns without one agent consuming another agent's cache/budget; a new request starts cleanly. Add one application config value, `endpoints.agents.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable. A repeated exact query returns cached content with a control-only artifact (no duplicate citation attachment); repetition or budget exhaustion emits `toolControl.disableTools: ['file_search']` for the SDK to omit only that tool on the next model call.
 - **Dependencies:** Tasks 3.1–3.3.
 - **Acceptance criteria:**
-  - Identical queries reuse the same result and emit no second backend request.
+  - Identical queries reuse cached content, emit no second backend request, and suppress further `file_search` calls without duplicating sources.
   - Concurrent identical calls share one promise.
   - Paraphrased queries count as distinct; no semantic-query deduper is introduced.
-  - At the configured limit, the tool returns a typed `search_budget_exhausted` result consumed by the SDK finalizer.
+  - At the configured limit, the tool returns typed `search_budget_exhausted` evidence with an answer-from-existing-evidence instruction and narrow suppression artifact.
+  - Guaranteed finalization depends on the agents SDK consuming the artifact; the application does not infer completion from graph-step arithmetic.
 - **Validation:** Exact, whitespace/case-normalized, concurrent, distinct, and budget tests.
 
-### Task 3.6: Remove silent Agent Knowledge fallback
-
-- **Location:**
-  - [`../../../api/server/services/Files/VectorDB/crud.js`](../../../api/server/services/Files/VectorDB/crud.js)
-  - upload/delete tests and deployment config
-- **Description:** In AGK environments, missing/disabled Azure Search must fail Agent Knowledge ingestion clearly instead of silently embedding it into pgvector. Conversation uploads continue to work through pgvector. Inventory and re-embed any legacy Agent Knowledge created during fallback before enabling strict behavior.
-- **Dependencies:** RAG dev deployment.
-- **Acceptance criteria:**
-  - Agent builder upload without Azure configuration returns a specific unavailable error.
-  - Chat uploads still use pgvector.
-  - Query and delete routing match the backend used at ingestion.
-- **Validation:** Flag/config matrix tests plus one dev upload/delete smoke test.
+Strict removal of the existing Agent Knowledge pgvector fallback is deferred. It requires a separate inventory/migration decision and is not part of this retrieval PR.
 
 ## Sprint 4: Integrate the corrected SDK and failure behavior
 
@@ -455,9 +450,9 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 - **Location:**
   - [`../../../api/server/controllers/agents/openai.js`](../../../api/server/controllers/agents/openai.js)
   - callbacks/error handling beside existing graph handlers
-- **Description:** Convert `current_turn_exceeds_context`, `search_budget_exhausted`, content-filter responses, and unavoidable recursion exhaustion into distinct logged/streamed outcomes. Never retry the identical Azure content-filter payload. For a `jailbreak` classification only, when app-generated summary state was present, permit one changed-prompt recovery attempt that removes that derived summary while preserving the verified real current turn and any raw retained tail that still fits. Otherwise return the typed content-filter outcome.
+- **Description:** Convert `current_turn_exceeds_context`, `search_budget_exhausted`, content-filter responses, and unavoidable recursion exhaustion into distinct logged/streamed outcomes. Do not add a special Prompt Shield retry in this application PR; fix summary transport in the SDK and return the provider's typed failure.
 - **Dependencies:** Tasks 3.5 and 4.1.
-- **Acceptance criteria:** Users receive a short actionable message; logs and Langfuse retain the typed cause and provider status. The changed-prompt recovery executes at most once, never drops current user content, and records `summary_dropped_after_prompt_shield=true`.
+- **Acceptance criteria:** Users receive a short actionable message; logs and Langfuse retain the typed cause and provider status.
 - **Validation:** Controller/callback tests for every typed outcome.
 
 ## Sprint 5: Make Langfuse prove the fix
@@ -467,50 +462,28 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 
 Langfuse models a trace as one request with nested observations and recommends sessions for multi-turn chats. See [Langfuse tracing concepts](https://langfuse.com/docs/observability/data-model) and [LangChain/LangGraph integration](https://langfuse.com/integrations/frameworks/langchain).
 
-### Expected main trace
-
-```text
-agent-run  (trace; one user turn)
-├── context-build  (span)
-│   └── summarization  (generation, only when triggered)
-├── file_search  (tool)
-│   ├── pgvector.query_multiple  (retriever, zero or one)
-│   ├── azure.query-multiple  (retriever, zero or one)
-│   └── dedup-and-rrf  (span)
-├── model-call(s)  (generation)
-└── finalizer  (generation, only when budget/recursion requires it)
-```
-
-Title generation and memory work may remain separate root traces because they are independent jobs. They must share:
+Use the existing LangGraph/Langfuse observation tree; this work adds no custom trace hierarchy or tracing dependency. Title generation and memory work may remain separate root traces because they are independent jobs. They must share:
 
 - `librechat.source.message.id`;
 - conversation ID as Langfuse session ID;
 - tenant/environment/release tags;
 - `operation=title|memory`.
 
-### Task 5.1: Add retrieval observations
+### Task 5.1: Verify existing retrieval observations
 
-- **Location:** Agentic Karl Langfuse integration in [`../../../packages/api/src/agents/run.ts`](../../../packages/api/src/agents/run.ts), tool construction/callback context, and `fileSearch.js`.
-- **Description:** Nest one `file_search` tool observation and backend retriever children under the main trace. Reuse the installed Langfuse/OpenTelemetry integration; add no new tracing dependency. Name ranking stages precisely: `pgvector_similarity`, `azure_hybrid_semantic` when semantic ranking is enabled, and `cross_backend_rrf` for application fusion.
+- **Location:** Existing Agentic Karl Langfuse callback integration and `fileSearch.js` logs/tests.
+- **Description:** Verify the existing observation tree contains one tool call per logical search and no detached duplicate retrieval roots. Do not add custom spans or a new tracing dependency in this PR.
 - **Dependencies:** Sprint 3.
-- **Acceptance criteria:** Record backend, authorized logical count, canonical physical count, duplicates removed, query-cache hit, request count, result count, duration, partial failure, ranking stage, score kind, semantic-enabled flag, and final rank count. Do not record secrets or imply that pgvector received Azure semantic ranking.
-- **Validation:** Trace-shape test plus dev trace inspection.
+- **Acceptance criteria:** Existing traces and request logs are sufficient to correlate the run, tool call, backend request count, partial failure, and final outcome. Do not invent score fields or imply that pgvector received Azure semantic ranking.
+- **Validation:** Deterministic request-count tests plus one dev trace inspection.
 
 ### Task 5.2: Add context and termination attributes
 
 - **Location:** `run.ts`, callbacks, and SDK event metadata.
-- **Description:** Record summary version/coverage boundary, summary transport role, retained turn count, current-turn block types/count, retained media IDs/count, distinct search count/budget, finalizer reason, graph step, and typed provider error classification.
+- **Description:** Reuse existing callback metadata for summary transport, current-turn preservation, typed provider failure, and search-budget outcome where already available. Defer new metadata taxonomy until a trace shows a concrete diagnostic gap.
 - **Dependencies:** Sprint 2 and Sprint 4.
 - **Acceptance criteria:** The `fbc...` replay identifies whether Prompt Shield fired on user input, summary/history composition, tool output, or generated response when Azure provides that detail.
 - **Validation:** Langfuse dev trace and callback unit tests.
-
-### Task 5.3: Verify model usage and costs
-
-- **Location:** existing model-router/Langfuse usage mapping in Agentic Karl.
-- **Description:** Confirm summarizer, main model, title, memory, and finalizer generations report actual model/deployment identity, token usage, and USD cost. Keep detached operations separately attributable.
-- **Dependencies:** Tasks 5.1–5.2.
-- **Acceptance criteria:** No generation is charged twice; retrieval spans have no model cost; router-selected models map to their configured prices.
-- **Validation:** One controlled dev run with transaction ledger versus Langfuse comparison.
 
 ## Sprint 6: Dev replay, rollout, and production verification
 
@@ -536,16 +509,18 @@ Title generation and memory work may remain separate root traces because they ar
 | One backend fails                                   | Other backend results remain correctly attributed                                                                                                   |
 | No matches                                          | Empty tool result, no 404/error loop                                                                                                                |
 | Repeated identical tool query                       | Cache hit; no second backend request                                                                                                                |
+| Two distinct file-search calls                      | Attachments use separate turns; each `turnNfileM` anchor resolves to the exact persisted chunk                                                     |
+| Web `ref0` and file `file0` on the same turn        | Both resolve independently; source cards may still deduplicate files                                                                                |
 | Repeated paraphrased queries                        | Stops at configured budget and finalizes without tools                                                                                              |
 | Five-image latest turn after compaction             | Main-model call contains text plus all five images, or explicit pre-call context error                                                              |
 | Image-only latest turn                              | Remains a valid current user turn                                                                                                                   |
 | Historical images plus new text                     | Historical images may prune; newest text remains                                                                                                    |
 | Chat upload while using an agent                    | pgvector, user-scoped                                                                                                                               |
 | Builder Agent Knowledge upload                      | Azure AI Search, agent-scoped                                                                                                                       |
-| Azure Prompt Shield with derived summary            | 20 unchanged Microsoft.DefaultV2 replays produce zero benign blocks; any recovery retry changes the prompt once and preserves the real current turn |
+| Azure Prompt Shield with derived summary            | Deterministic role/content tests pass, then five equivalent Microsoft.DefaultV2 dev replays preserve the real current turn                         |
 | Summary transport                                   | No summary uses role `user`; durable summary contains no summarizer control instructions                                                            |
 | Cross-run `retainRecent: 2`                         | Retained raw turns survive the next request and are not deleted outside the summary coverage                                                        |
-| Recursion exhaustion                                | Zero raw `GraphRecursionError` responses; one tools-disabled finalizer at most                                                                      |
+| Generic non-file recursion                          | `recursionLimit` remains the emergency fuse; checkpoint-safe generic finalization is deferred                                                        |
 | Langfuse trace                                      | One main run trace with nested retrieval; title/memory correlated by source and session                                                             |
 
 ### Task 6.3: Production promotion
@@ -593,9 +568,10 @@ No new reranker model, key, deployment, package, or environment variable.
 
 ### Agentic Karl
 
-- Focused Jest tests for canonical target construction, batch request counts, physical deduplication, partial failures, RRF, chunk deduplication, citation aliasing, cache, and search budget.
+- Focused Jest tests for canonical target construction, batch request counts, physical deduplication, partial failures, RRF, chunk deduplication, citation aliasing, search turns, cache, and search budget.
+- Client hook tests for ordered same-file chunks, explicit/legacy turn mapping, same-turn web/file resolution, and copied citations.
 - Agent client tests proving only legacy vector augmentation is disabled.
-- Package tests for SDK integration, summarization config, typed failures, and Langfuse attributes.
+- Package tests for SDK integration, summarization config, typed failures, and selective tool suppression.
 - Existing upload, image, inline-text, code-file, citation, and vector delete suites remain green.
 
 ### RAG API
@@ -603,21 +579,21 @@ No new reranker model, key, deployment, package, or environment variable.
 - Route tests for authorized, unauthorized, mixed, empty, and partial file sets.
 - Real PostgreSQL filter/index integration test for `file_id IN (...) AND user_id = ...`.
 - pgvector tests proving distance order and no semantic-ranker field/label.
-- Azure mock tests for `entity_id + file_ids` filters, preserved order, and distinct base/reranker score metadata.
+- Azure mock tests for `entity_id + file_ids` filters and preserved order.
 
 ### Agents SDK
 
 - Repeated compaction with coverage metadata.
 - Cross-run resume with retained tail.
 - Text plus five images with exact IDs/order/MIME/text, image-only, and oversized current turn.
-- Tool-loop finalization and hard recursion fallback.
+- Selective same-turn tool suppression and hard recursion fallback.
 - Provider message-role snapshots.
-- Twenty equivalent dev replays under unchanged Microsoft.DefaultV2 after the message-role fix.
+- Five equivalent dev replays under unchanged Microsoft.DefaultV2 after deterministic message-role coverage passes.
 
 ### Live dev
 
 - Replay the two identified Langfuse runs using equivalent inputs.
-- Compare trace shape, request count, latency, cost, content block count, and final outcome.
+- Compare trace shape, request count, latency, content block count, and final outcome.
 
 ## Risks and mitigations
 
@@ -631,7 +607,7 @@ No new reranker model, key, deployment, package, or environment variable.
 | RRF over-deduplicates identical legal text from separate documents | Include physical asset ID in the chunk dedup key                                                              |
 | Current turn alone exceeds context                                 | Fail before provider invocation with `current_turn_exceeds_context`; never silently drop blocks               |
 | Prompt Shield still rejects retrieved document text                | Classify the tool-response intervention separately; do not assume every filter error is image/summary-related |
-| Old Agent Knowledge exists in pgvector fallback                    | Inventory and re-embed before strict no-fallback routing                                                      |
+| Old Agent Knowledge exists in pgvector fallback                    | Leave compatibility behavior unchanged; handle inventory/migration in a separate workstream                  |
 | Version skew from caret dependency                                 | Pin the corrected SDK exactly in both package manifests                                                       |
 | Search budget ends too early                                       | Keep it configurable, trace exhaustion, tune from dev/production evidence                                     |
 | New reranker adds cost and hides retrieval bugs                    | Do not add it until the candidate-present/rank-wrong condition is demonstrated                                |
@@ -642,8 +618,7 @@ No new reranker model, key, deployment, package, or environment variable.
 2. Revert Agentic Karl to the prior image and exact prior SDK lock if graph behavior regresses.
 3. Do not roll back by setting `AZURE_SEARCH_ENABLED=false`; that changes Agent Knowledge storage semantics. Roll back the application image instead.
 4. Preserve new RAG images and indexes; no destructive data migration is required for the query contract.
-5. If strict no-fallback behavior blocks builder uploads, restore the prior app image while correcting Azure configuration. Do not silently move new agent files to pgvector.
-6. Keep Langfuse trace correlation enabled during rollback so before/after behavior remains comparable.
+5. Keep Langfuse trace correlation enabled during rollback so before/after behavior remains comparable.
 
 ## Definition of done
 
@@ -654,12 +629,12 @@ No new reranker model, key, deployment, package, or environment variable.
 - Azure and pgvector scores are never numerically compared.
 - pgvector retrieval is never labelled as Azure semantic ranking; cross-backend RRF is explicitly non-semantic.
 - Citations always resolve to an authorized logical file record.
-- Every main model/finalizer call contains the complete verified current turn, or no provider call occurs.
-- The five-image replay preserves exact image IDs/order/MIME types/text and the Prompt Shield replay passes 20 unchanged-policy attempts without a benign block.
+- Every main model call contains the complete verified current turn, or no provider call occurs.
+- The five-image replay preserves exact image IDs/order/MIME types/text and deterministic Prompt Shield regression tests are followed by five unchanged-policy dev replays.
 - Summary coverage survives the next request; unresolved coverage preserves raw history and ignores the summary.
 - No synthetic summary is sent with role `user` or contains summarizer control instructions.
-- Repeated search loops terminate through a tools-disabled finalizer.
-- No raw `GraphRecursionError` reaches a user.
+- Repeated file-search loops terminate by suppressing only `file_search` for the rest of the current turn, then answering from retained evidence.
+- `recursionLimit` remains the emergency fuse for unrelated loops; generic checkpoint-safe finalization is deferred.
 - The two original failing runs have documented successful replays.
 - PR #142 upload retry/failed-chip behavior remains green and is reported as a separate transport fix.
 - No custom reranker was added without evaluation evidence.

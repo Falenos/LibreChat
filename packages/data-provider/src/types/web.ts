@@ -54,6 +54,9 @@ export interface SearchResultData {
   peopleAlsoAsk?: PeopleAlsoAskResult[];
   relatedSearches?: Array<{ query: string }>;
   references?: ResultReference[];
+  // [knauf] File anchors have their own index space so they cannot collide with web refs.
+  fileReferences?: ResultReference[];
+  // End [knauf]
   error?: string;
 }
 

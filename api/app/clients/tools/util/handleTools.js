@@ -20,6 +20,9 @@ const {
   Permissions,
   EToolResources,
   PermissionTypes,
+  // [knauf] Added agents use runtime-suffixed IDs; stored resources use the base ID.
+  stripAgentIdSuffix,
+  // End [knauf]
 } = require('librechat-data-provider');
 const {
   availableTools,
@@ -357,10 +360,13 @@ const loadTools = async ({
       continue;
     } else if (tool === Tools.file_search) {
       requestedTools[tool] = async () => {
+        // [knauf] NO-TICKET — authorize and query stored resources with the persistent ID.
+        const resourceAgentId = agent?.id ? stripAgentIdSuffix(agent.id) : undefined;
         const { files, toolContext } = await primeSearchFiles({
           ...options,
-          agentId: agent?.id,
+          agentId: resourceAgentId,
         });
+        // End [knauf]
         if (toolContext) {
           dynamicToolContextMap[tool] = toolContext;
         }
@@ -381,11 +387,20 @@ const loadTools = async ({
           }
         }
 
+        // [knauf] NO-TICKET — RAG scope uses the persistent ID, while cache/budget
+        // stay partitioned by the runtime agent instance. Retrieval settings are validated.
         return createFileSearchTool({
           userId: user,
           files,
-          entity_id: agent?.id,
+          entity_id: resourceAgentId,
+          cachePartition: agent?.id,
           fileCitations,
+          maxDistinctQueries: options.req.config?.endpoints?.agents?.fileSearch?.maxDistinctQueries,
+          maxCitations: options.req.config?.endpoints?.agents?.maxCitations,
+          maxCitationsPerFile: options.req.config?.endpoints?.agents?.maxCitationsPerFile,
+          minRelevanceScore: options.req.config?.endpoints?.agents?.minRelevanceScore,
+          runContext: options.req,
+          // End [knauf]
         });
       };
       continue;

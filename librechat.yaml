@@ -460,12 +460,16 @@ endpoints:
   #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
   #                  -> hidden from end users to reduce configuration burden.
   agents:
-    # Default steps budget for a single agent run (LangGraph recursion limit).
-    # Each LLM call + tool call pair costs ~2 steps. 25 allows ~12 tool calls
-    # before the agent is forced to produce a final answer.
+    # [knauf] NO-TICKET — recursionLimit is an emergency graph-step fuse, not a
+    # finalizer. Repeated file_search loops are contained by the query budget below.
     # maxRecursionLimit is the hard cap — it clamps even per-agent DB overrides.
     recursionLimit: 25
     maxRecursionLimit: 50
+    # Unique file_search queries per run; exact repeats reuse
+    # the same in-flight/completed promise and do not spend another query.
+    fileSearch:
+      maxDistinctQueries: 3
+    # End [knauf]
     capabilities:
       - file_search
       - tools
