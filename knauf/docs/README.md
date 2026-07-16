@@ -21,7 +21,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 |---|---|
 | [architecture/files/overview.md](architecture/files/overview.md) | **Start here for files** — the six upload paths, what the model receives, message-vs-agent binding, visibility matrix, lifecycle, delete behaviour, config knobs |
 | [architecture/files/storage.md](architecture/files/storage.md) | Where the bytes live — `fileStrategy` adapters + the Azure Blob / SAS-signed-URL machinery (anatomy, refresh chain, TTL math, signing modes, before/after diagrams) |
-| [architecture/files/rag-search.md](architecture/files/rag-search.md) | How file search works — `rag_api` + pgvector, embed/query/delete contract, `entity_id` scoping, the `file_search` tool, citations |
+| [architecture/files/rag-search.md](architecture/files/rag-search.md) | How file search works — conversation uploads in pgvector, Agent Knowledge in Azure AI Search, mixed retrieval, deletion, and citations |
 | [architecture/files/processing.md](architecture/files/processing.md) | Which formats each upload mode accepts (MIME allow-lists) and how each is processed — image transforms, document parser, OCR, speech-to-text, RAG embedding; plus what's active vs dormant today |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md) | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
 
@@ -48,6 +48,7 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/agent-publishing-governance.md](implementation-plans/agent-publishing-governance.md) | AI Champions controlled agent-publishing pilot |
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
+| [implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md](implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md) | Correct dual-backend retrieval, deduplication, LangGraph compaction/finalization, and Langfuse verification |
 
 ## Upstream releases
 

@@ -504,6 +504,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/proposals/load-testing-one-pager.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 | `knauf/docs/proposals/load-testing-strategy-plan.md` | None | Low — documentation-only planning artifact | Manual review (docs-only) | NO-TICKET |
 | `packages/api/src/knauf/observability/trafficNoise.knauf.spec.ts` | `packages/api/src/app/metrics.ts` (`isObservabilityPath`); `packages/api/src/telemetry/sdk.ts` (`shouldIgnoreIncomingRequest`) | Low — test-only; imports two bounded pure request-path predicates | Self | NO-TICKET |
+| `knauf/docs/implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md` | None (markdown plan; links to Agentic Karl/RAG/agents SDK source and official LangGraph, Langfuse, and Azure AI Search documentation) | Low — documentation-only multi-repository implementation plan; no runtime coupling | Docs only | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

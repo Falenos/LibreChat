@@ -2,33 +2,48 @@
 title: Files — RAG File Search
 spec-id: AGK-ARCH-files-rag-search
 status: implemented
-owners: ["@jorgecostak"]
-last-reviewed: 2026-06-17
+owners: ['@jorgecostak']
+last-reviewed: 2026-07-16
 code-refs:
   - api/server/services/Files/process.js
-tests: []
+  - api/server/services/Files/VectorDB/crud.js
+  - api/app/clients/tools/util/fileSearch.js
+tests:
+  - api/server/services/Files/process.spec.js
+  - api/server/services/Files/VectorDB/crud.spec.js
+  - api/app/clients/tools/util/fileSearch.spec.js
 acceptance:
-  - "RAG grounding = top-k retrieval (k=4 augmentation + on-demand file_search tool)"
-  - "RAG_USE_FULL_CONTEXT=false respected"
-  - "entity_id scoping per chat-scope"
+  - 'Conversation uploads use user-scoped PostgreSQL/pgvector, including inside agent chats'
+  - 'Persistent agent-builder knowledge uses agent-scoped Azure AI Search when enabled'
+  - 'One agent run can retrieve from both backends'
+  - 'Images never enter file_search'
 ---
 
 # Files — RAG & file search
 
-How file search works: the `rag_api` + pgvector pipeline, the embed/query/delete HTTP contract, `entity_id` scoping (ephemeral vs persistent agent), the `file_search` tool, and citation rendering. This is the machinery behind the two file_search upload paths in [`overview.md`](./overview.md) §2e / §2f.
-
-> Part of the files docs: [`overview.md`](./overview.md) (taxonomy, binding, lifecycle) · [`storage.md`](./storage.md) (`fileStrategy` / Azure Blob) · **rag-search.md** (this doc).
-> Storage of the original bytes is a separate concern — file_search **also** writes the binary to the blob backend (so the original is downloadable). This doc covers only the vector side; see [`storage.md`](./storage.md) for the blob copy.
+This document owns the vector side of uploaded files: ingestion, backend selection, retrieval, deletion, and citations. Original bytes are a separate concern and remain in Azure Blob Storage; see [`storage.md`](./storage.md).
 
 ---
 
-## 1. The 30-second version
+## 1. The invariant
 
-- `rag_api` + `vectordb` (pgvector) are **external upstream images** — not in this repo. `rag_api` (`registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest`) owns chunking + embedding; the embedding model is configured *inside* that image via env (an Azure OpenAI text-embedding deployment).
-- LibreChat only talks **HTTP** to `rag_api`, JWT-signed via `generateShortLivedToken(userId)`: `POST /embed` to ingest, `POST /query` to retrieve, `DELETE /documents` to clean up.
-- Every call carries an **`entity_id`** that scopes the vectors. For Agent Knowledge it's the real `agent_id` (persistent); for chat-time File Search it's an **ephemeral** agent_id that dies with the conversation.
-- At chat time the model never sees the document directly — the agent calls the `file_search` **tool**, which queries pgvector and feeds the top chunks back as a tool result. Optional **citations** are filtered by relevance and capped.
-- **Now reachable from chat (KK20-190):** the chat "Upload files" item routes documents into this pipeline via an ephemeral agent ([overview.md](./overview.md) §2b). **Lifecycle caveat:** deleting the chat does *not* delete the embedded file — bytes + Mongo doc + pgvector vectors orphan (§5; cascade cleanup is a deferred follow-up).
+| Upload origin                              | Persisted context    | Owner/scope  | Vector backend      | Available in                                  |
+| ------------------------------------------ | -------------------- | ------------ | ------------------- | --------------------------------------------- |
+| A conversation turn in normal KARL         | `message_attachment` | user         | PostgreSQL/pgvector | that user's conversation file context         |
+| A conversation turn while using an agent   | `message_attachment` | user         | PostgreSQL/pgvector | that user's conversation file context         |
+| Persistent agent builder — Agent Knowledge | `agents`             | agent        | Azure AI Search     | every authorized conversation with that agent |
+| Image in any chat                          | `message_attachment` | user/message | none                | direct multimodal message only                |
+
+The active chat endpoint does not select the vector backend. Upload origin and persisted ownership do. An agent run may search both its persistent Azure AI Search knowledge and the current user's pgvector conversation uploads.
+
+Do not conflate these services:
+
+- **Azure Blob Storage** stores original bytes.
+- **Azure AI Document Intelligence** may parse supported documents.
+- **Azure OpenAI embeddings** create vectors.
+- **PostgreSQL/pgvector** stores user conversation-upload vectors.
+- **Azure AI Search** stores persistent Agent Knowledge vectors.
+- **Azure OpenAI/Foundry** runs the model and its content filters. A Prompt Shield error is unrelated to which vector backend stored a file.
 
 ---
 
@@ -36,206 +51,169 @@ How file search works: the `rag_api` + pgvector pipeline, the embed/query/delete
 
 ```mermaid
 flowchart LR
-    API[api container]
+    Chat["Conversation upload\nnormal or agent chat"]
+    Builder["Persistent agent-builder\nAgent Knowledge"]
+    Image["Chat image"]
+    API["agentic-karl API"]
+    Blob["Azure Blob Storage\noriginal bytes"]
+    Mongo["Mongo files\ncontext + ownership"]
+    RAG["agentic-karl-rag-api\nparse + embed + query"]
+    PG[("PostgreSQL + pgvector\nuser conversation vectors")]
+    Search[("Azure AI Search\nagent knowledge vectors")]
+    Tool["single file_search tool"]
+    Model["Azure OpenAI / Foundry model"]
 
-    subgraph RAGStack["rag_api + pgvector (external upstream images)"]
-        R[rag_api<br/>chunk + embed]
-        P[(pgvector)]
-        R <--> P
-    end
-
-    Blob[Blob storage<br/>see storage.md]
-
-    API -->|"POST /embed (multipart + JWT)"| R
-    API -->|"POST /query (JSON + JWT)"| R
-    API -->|"DELETE /documents (JSON + JWT)"| R
-    API -->|"original binary"| Blob
+    Chat --> API
+    Builder --> API
+    Image --> API
+    API --> Blob
+    API --> Mongo
+    Chat -->|"/embed"| RAG
+    Builder -->|"/agent/embed"| RAG
+    RAG --> PG
+    RAG --> Search
+    PG --> Tool
+    Search --> Tool
+    Tool --> Model
+    Image -->|"image_url content block"| Model
 ```
 
-- **Dual write at ingest.** A file_search upload lands in *two* places: the binary in blob storage (downloadable original) and the embeddings in pgvector. `uploadVectors()` returns `filepath: FileSources.vectordb` for the embedding side; the blob copy is handled by the storage strategy.
-- **Tenant isolation depends on `entity_id`.** pgvector documents are addressed by `file_id`; isolation between agents/conversations is enforced by passing `entity_id` on every call and filtering on it inside `rag_api`. Application-side, [`filterFilesByAgentAccess()`](../../../../api/server/services/Files/permissions.js) gates which file_ids a user+agent may search.
-
-Only the two file_search paths touch this component. Every other upload path (provider, image, text, code) bypasses it entirely.
+The Knauf-owned RAG service lives in [`Knauf-Group/agentic-karl-rag-api`](https://github.com/Knauf-Group/agentic-karl-rag-api). It exposes both pgvector and Azure AI Search routes behind the same internal service and JWT middleware.
 
 ---
 
-## 3. Ingest — `POST /embed`
+## 3. Ingestion
 
-`uploadVectors()` in [VectorDB/crud.js#L67-L120](../../../../api/server/services/Files/VectorDB/crud.js#L67), called from `processAgentFileUpload()` ([process.js#L666](../../../../api/server/services/Files/process.js#L666)).
+`processAgentFileUpload()` in [`process.js`](../../../../api/server/services/Files/process.js) decides whether the upload is a chat attachment or persistent Agent Knowledge. `uploadVectors()` in [`VectorDB/crud.js`](../../../../api/server/services/Files/VectorDB/crud.js) selects the RAG route.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as Browser
-    participant P as process.js
-    participant V as VectorDB/crud.js
-    participant R as rag_api
-    participant PG as pgvector
+### Conversation document
 
-    U->>P: POST /api/files (tool_resource=file_search)
-    P->>P: store binary via fileStrategy (blob copy)
-    P->>V: uploadVectors({ req, file, file_id, entity_id })
-    V->>V: generateShortLivedToken(req.user.id)
-    V->>R: POST /embed  (multipart: file_id, file stream, entity_id, storage_metadata?)
-    R->>R: chunk + embed
-    R->>PG: upsert vectors keyed by file_id (+ entity_id)
-    R-->>V: { status, known_type }
-    V-->>P: { embedded: Boolean(known_type), filepath: "vectordb", bytes }
-```
+`message_file=true` means the file belongs to a chat turn, even when `agent_id` is also present:
 
-Request (multipart form-data, `Authorization: Bearer <jwt>`):
+1. Store original bytes in Azure Blob Storage.
+2. Persist `context=message_attachment` and the user/conversation metadata in Mongo.
+3. Deduplicate by content hash within that user. The physical vector key is `knauf_asset_id ?? file_id`.
+4. Call `uploadVectors(..., entity_id=req.user.id, isAgentFile=false)`.
+5. RAG API `POST /embed` parses and stores vectors in PostgreSQL/pgvector.
 
-| Field | Notes |
-|---|---|
-| `file_id` | LibreChat-internal UUID — the pgvector key |
-| `file` | the raw file stream (`fs.createReadStream(file.path)`) |
-| `entity_id` | the agent_id (real or ephemeral) — only sent when present |
-| `storage_metadata` | optional JSON, stored alongside the embeddings for the dual-storage pattern |
+The user remains the scope. Merely chatting with an agent never promotes this file into the agent's shared knowledge base.
 
-Response handling: `known_type === false` → throws "filetype not supported"; missing `status` → throws "File embedding failed". On success the file doc's `embedded` flag is set to `Boolean(known_type)` — which is what later gates `deleteVectors` (§6). **Which formats embed is rag_api's call, not the client allow-lists** — see [`processing.md`](./processing.md) §4e.
+### Persistent Agent Knowledge
+
+An agent-builder upload has `tool_resource=file_search`, no `message_file`, an `agent_id`, and agent-edit authorization:
+
+1. Store original bytes in Azure Blob Storage.
+2. Persist `context=agents` in Mongo.
+3. Add the logical `file_id` to `agent.tool_resources.file_search.file_ids`.
+4. Do not apply per-user content-hash deduplication.
+5. Call `uploadVectors(..., entity_id=agent_id, isAgentFile=true)`.
+6. With `AZURE_SEARCH_ENABLED=true`, RAG API `POST /agent/embed` stores vectors in Azure AI Search.
+
+Current compatibility behavior: when `AZURE_SEARCH_ENABLED` is false, `uploadVectors()` falls Agent Knowledge back to `/embed` and pgvector. AGK environments are expected to enable Azure AI Search; this fallback is not the target storage architecture.
+
+### Images
+
+The server rejects images as `file_search` resources. Images use the message attachment/vision path and reach the model as multimodal `image_url` content. They are never embedded into pgvector or Azure AI Search.
 
 ---
 
-## 4. Parser routing & the rag_api overlay (Azure DI + spreadsheets)
+## 4. Retrieval
 
-What `rag_api` does with a file *before* embedding is extended by a thin Knauf Docker overlay (`knauf/rag-api-overlay/`, built `FROM` the upstream rag_api image). Its `get_loader()` ([document_loader.py](../../../rag-api-overlay/document_loader.py)) routes by extension:
+`primeFiles()` in [`fileSearch.js`](../../../../api/app/clients/tools/util/fileSearch.js) combines:
 
-| Input | Parser | Notes |
-|---|---|---|
-| pdf, docx, pptx, html | `_AzureDIWithFallback` | Azure AI Document Intelligence (OCR + layout → markdown); on any DI error → upstream loader, so an upload never hard-fails |
-| `.xlsx` | `_LeanExcelLoader` | one self-describing record per row + a summary guard for huge workbooks (below) |
-| csv, txt, md, json, legacy `.xls` | upstream langchain loaders | DI adds nothing here |
+- persistent agent resource IDs from `agent.tool_resources.file_search.file_ids`; and
+- request/conversation files attached by the current user.
 
-After parsing, the **single** `RecursiveCharacterTextSplitter` (`CHUNK_SIZE=1500`, `CHUNK_OVERLAP=100` — character-based, not table-aware) chunks the text; each chunk is embedded with Azure OpenAI `text-embedding-3-large` into pgvector. Routing choices are evidence-based — see the benchmark harness in [knauf/parser-eval/](../../../parser-eval/).
+It marks persistent resources with `fromAgent=true` and carries each file's persisted `context`.
 
-### Spreadsheets (`.xlsx`) — why they're special
-A spreadsheet rendered as one markdown table is a single giant block; the character splitter cuts it mid-table and the header survives only in the first chunk. `_LeanExcelLoader` instead emits **one self-contained line per row** — `(<sheet>) Header: value; Header: value; …` — after dropping empty rows/cols and picking the header row (the most-populated of the first 8, so a title row doesn't poison labels). Each record is `< CHUNK_SIZE`, so every chunk keeps whole rows *with* their headers. **Large-workbook guard:** if the assembled text exceeds `RAG_XLSX_MAX_CHARS` (default 1.5M), it emits a per-sheet summary (first `RAG_XLSX_SUMMARY_ROWS`=50 rows/sheet) so a ~20k-row workbook ingests in seconds instead of becoming ~13k chunks. Such a workbook can be described/sampled but **not counted/aggregated** — that's the text-to-SQL gap below.
+Current per-file routing:
 
-### Large tabular data → text-to-SQL (future, out of scope)
-Semantic RAG retrieves *similar chunks*; it can't answer "how many users at site C0202?" — counting/filtering across all rows needs structured retrieval. The documented next step: load structured files into relational tables (DuckDB/Postgres), have the LLM generate SQL from the registered schema, run it read-only (statement timeout + row caps), and route on file type (documents → RAG, spreadsheets/structured → text-to-SQL). Not in the current rollout.
+| Candidate                                        | Query route         | Request scope                                            |
+| ------------------------------------------------ | ------------------- | -------------------------------------------------------- |
+| `context=agents` and `AZURE_SEARCH_ENABLED=true` | `POST /agent/query` | `entity_id=agent_id` when `fromAgent=true`               |
+| Everything else                                  | `POST /query`       | authenticated user; no agent entity for chat attachments |
 
-**Overlay config + code map:** the authoritative env reference (the DI endpoint gotcha, fallback behaviour, `RAG_AZURE_DI_*`, `RAG_XLSX_*`) lives in [knauf/rag-api-overlay/README.md](../../../rag-api-overlay/README.md); the parser routing / DI fallback / xlsx loader live in [document_loader.py](../../../rag-api-overlay/document_loader.py) (`get_loader`, `_AzureDIWithFallback`, `_LeanExcelLoader`); rollout status is in [rag-azure-di-rollout.md](../../implementation-plans/rag-azure-di-rollout.md).
+Therefore one `file_search` invocation can already query both backends when an agent run contains both file classes. Results return to one tool call and one model run; users do not select a backend.
 
----
+### Ranking boundary
 
-## 5. Retrieve — the `file_search` tool + `POST /query`
+Three different ranking mechanisms exist and must not be conflated:
 
-The model never receives the document. Instead the agent is given a `file_search` tool ([fileSearch.js#L88](../../../../api/app/clients/tools/util/fileSearch.js#L88)); when it calls the tool with a `query`, the backend fans out one `/query` per file and merges the results.
+| Pipeline                                      | Ranking behavior                                                                                             | Contract                                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Conversation documents in PostgreSQL/pgvector | Embedding vector similarity only                                                                             | Lower distance is better. Azure semantic ranking does not run on this path.                                         |
+| Agent Knowledge in Azure AI Search            | Azure hybrid keyword/vector retrieval, with Azure semantic ranking when `AZURE_SEARCH_SEMANTIC_ENABLED=true` | Preserve Azure's returned order. Keep `@search.score` and optional `@search.rerankerScore` as distinct diagnostics. |
+| Mixed results in Agentic Karl                 | Application-level reciprocal-rank fusion of the two final ordinal lists                                      | This is deterministic rank fusion, not semantic ranking. Never compare Azure scores with pgvector distances.        |
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant M as Model (agent)
-    participant T as file_search tool
-    participant R as rag_api
-    participant PG as pgvector
+Azure AI Search may internally use RRF to combine its keyword and vector subqueries before its optional semantic second stage. That is separate from Agentic Karl's cross-backend RRF. The application does not make pgvector results semantically ranked by merging them with Azure results.
 
-    M->>T: file_search({ query })
-    loop per file
-        T->>R: POST /query  { file_id, query, k: 5, entity_id? }
-        R->>PG: vector similarity search
-        PG-->>R: top-k chunks + distances
-        R-->>T: [ [docInfo, distance], ... ]
-    end
-    T->>T: flatten, sort by distance asc, slice top 10
-    T-->>M: formatted chunks (filename, page, content) + sources
-```
+### Logical and physical IDs
 
-- **Per-file query, `k: 5`.** Each file is queried independently with `k=5`; results across all files are flattened, sorted by ascending `distance` (closer = more relevant), and the **top 10** overall are kept.
-- **`entity_id` is the scope.** Passed through from how the agent was loaded — real agent_id for persistent knowledge, ephemeral for chat-time. Without it, the body omits `entity_id` and relies on `file_id` alone.
-- **Access filtering** happens *before* the query: `getFiles` + `filterFilesByAgentAccess()` build the candidate `files` list, so a user can only search file_ids they're entitled to via the agent.
-- **Tool context string.** The tool description lists the loaded filenames; files just attached in chat are tagged `(just attached by user)` vs. files that are part of the agent's curated knowledge.
+Chat dedup separates the visible attachment from its stored vector asset:
 
-### Automatic context augmentation (separate from the tool)
+- query target: `knauf_asset_id ?? file_id`;
+- citation/download identity: the authorized logical `file_id` and its filename.
 
-Beyond the on-demand tool, an attached embedded file **also** gets context injected into the prompt automatically by `createContextHandlers` ([api/app/clients/prompts/createContextHandlers.js](../../../../api/app/clients/prompts/createContextHandlers.js)), invoked only on the **chat / non-agents path** ([agents/client.js#L239](../../../../api/server/controllers/agents/client.js#L239): `!isAgentsEndpoint(endpoint)`). The `RAG_USE_FULL_CONTEXT` env var controls *how much*:
+Do not expose a shared physical asset ID as the user-visible citation ID. The original owner row may have been deleted while another authorized reuse row still exists.
 
-| `RAG_USE_FULL_CONTEXT` | What's injected each turn | Endpoint behaviour |
-|---|---|---|
-| **`false`** (our setting) | top-k (**k=4**) chunks relevant to the user's message, as bounded `<contextItem><![CDATA[…]]>` blocks (`POST /query`) | chat (`azureOpenAI` ephemeral) only |
-| `true` | the **entire** parsed document (`GET /documents/{id}/context`) — heavy for large files | chat only |
+### Current implementation caveats
 
-> **Asymmetry:** custom **agents** (endpoint `agents`) skip `createContextHandlers` entirely — they're **tool-only** (no auto-injection). The chat path augments context (top-k) *and* exposes the `file_search` tool (k=5). We keep `RAG_USE_FULL_CONTEXT=false` so chat uploads don't dump the whole document into the prompt.
-
-### Upload routing — how a file reaches File Search (normal chat vs agent chat)
-
-A file enters the chat-scoped File Search corpus through one of two UI affordances, and they
-deliberately behave differently per chat type:
-
-| Chat type | `conversation.endpoint` | "Upload files" menu | Drag-drop |
-|---|---|---|---|
-| **Normal Karl chat** (default spec) | `azureOpenAI` + Responses API | routes to ephemeral File Search | routes to ephemeral File Search |
-| **Custom agent chat** — File Search only | `agents` | routes to the agent's File Search | **auto-routes** to File Search (no modal) |
-| **Custom agent chat** — also Code/Context | `agents` | per-item menu | capability-picker **modal** (a real choice) |
-
-Both affordances now **prefer auto-routing over the picker** on the Knauf surfaces, so a drop behaves
-like the normal chat: documents → File Search, images → vision. The drag-drop handler
-([useDragHelpers.ts](../../../../client/src/hooks/Files/useDragHelpers.ts)) auto-routes both the
-default chat (endpoint `azureOpenAI` + Responses) **and** custom agent chats (endpoint `agents`) when
-File Search is the **sole** upload destination (`agentFileSearchOnly`). The capability-picker modal is
-kept only when an agent genuinely offers a second destination (code execution / context) — and even
-then, a single-option picker auto-selects (`DragDropModal`). Images always divert to the vision path
-regardless of route (the server rejects images for the `file_search` resource — split per-file in
-`useFileHandling`).
+- The tool currently sends one HTTP query per file. The RAG API also exposes `/query_multiple` and `/agent/query-multiple`, but the app does not use them yet.
+- Backend choice currently keys on persisted `context`; `fromAgent` controls agent `entity_id`. The hardened invariant should require both agent-resource membership and agent context before using Azure AI Search.
+- Azure semantic ranking exists only on the Azure Agent Knowledge path. pgvector remains vector similarity only. Mixed results must be merged by backend ordinal rank, not by comparing raw Azure scores with pgvector distances.
+- Non-`agents` chat clients can also run legacy `createContextHandlers` augmentation for embedded files. When the same run has `file_search`, this duplicates retrieval and inflates the model context. It is current behavior, not the desired architecture.
 
 ---
 
-## 6. Delete — `DELETE /documents`
+## 5. Delete
 
-`deleteVectors()` in [VectorDB/crud.js#L20](../../../../api/server/services/Files/VectorDB/crud.js#L20). **Guarded by `file.embedded`** — only files that actually embedded are deleted from pgvector:
+Vector deletion follows the persisted file context:
 
-```js
-DELETE {RAG_API_URL}/documents
-Authorization: Bearer <jwt>
-body: [ file.file_id ]
-```
+| File class                                   | Delete route                                |
+| -------------------------------------------- | ------------------------------------------- |
+| Chat/message attachment                      | `DELETE /documents` with pgvector asset IDs |
+| Agent Knowledge with Azure AI Search enabled | `DELETE /agent/documents/{file_id}`         |
 
-A 404 is tolerated (already gone); other non-2xx statuses throw so the file isn't marked deleted while its vectors linger.
-
-> **Caveat — orphaned vectors.** This only fires on explicit *file* delete. Deleting a **conversation** does not call it (see [`overview.md`](./overview.md) §5), so chat-time file_search vectors (ephemeral agent) orphan in pgvector when the conversation is removed.
+`deleteVectorsForFiles()` processes pgvector first, then Azure AI Search in bounded waves. A mixed deletion therefore cleans both stores without treating the active chat endpoint as ownership evidence.
 
 ---
 
-## 7. Citations
+## 6. Citations
 
-When `interface.fileCitations: true` ([librechat.yaml#L87](../../../../librechat.yaml#L87)), `file_search` results are turned into inline citations by `processFileCitations()` ([Citations/index.js](../../../../api/server/services/Files/Citations/index.js)).
+The file-search tool returns content plus source artifacts. Citation rendering is handled by [`Files/Citations`](../../../../api/server/services/Files/Citations/index.js).
 
-| Knob | Default | Source |
-|---|---|---|
-| `minRelevanceScore` | `0.45` | `endpoints.agents.minRelevanceScore` ([Citations/index.js#L60](../../../../api/server/services/Files/Citations/index.js#L60)) |
-| `maxCitations` | `30` | `endpoints.agents.maxCitations` ([#L57](../../../../api/server/services/Files/Citations/index.js#L57)) |
-| `maxCitationsPerFile` | `5` | `endpoints.agents.maxCitationsPerFile` ([#L58](../../../../api/server/services/Files/Citations/index.js#L58)) |
+Rules:
 
-Flow: filter sources by `relevance >= minRelevanceScore` → `applyCitationLimits(sources, maxCitations, maxCitationsPerFile)` → enhance with file metadata (filename, page) → inject into the response. Note the `karl` system prompt also instructs the model to list at most 3 sources ([librechat.yaml#L214](../../../../librechat.yaml#L214)) — that's a *prompt-level* nudge, separate from this *server-level* citation pipeline.
-
----
-
-## 8. Config & scoping summary
-
-- **`interface.fileSearch`** — `false` (KK20-190): hides the BYOK file-search **chip** only. Routing of the chat **"Upload files"** item to File Search is gated on **`endpoints.agents.capabilities`** carrying `file_search` (`capabilities.fileSearchEnabled`), not on this flag ([overview.md](./overview.md) §2b). The standalone "Upload for File Search" menu item stays hidden (`KNAUF_SHOW_FILE_SEARCH_IN_CHAT = false` in [AttachFileMenu.tsx](../../../../client/src/components/Chat/Input/Files/AttachFileMenu.tsx)) because "Upload files" now serves it.
-- **`endpoints.agents.capabilities`** — must include `file_search` for the agent RAG path to exist ([librechat.yaml#L141-L143](../../../../librechat.yaml#L141): `tools` + `file_search`).
-- **`endpoints.agents.{minRelevanceScore,maxCitations,maxCitationsPerFile}`** — citation tuning (§6).
-- **`RAG_API_URL`** — env var; if unset, `uploadVectors` throws and `file_search` returns an auth/error string. Embedding model + chunking are configured inside the `rag_api` image, not here.
-
-`entity_id` lifecycle, restated:
-
-| Path | `entity_id` | Vectors survive… |
-|---|---|---|
-| Agent Knowledge (§2f) | real `agent_id` | as long as the agent exists |
-| Chat-time File Search (§2e) | ephemeral agent_id | only the conversation (then orphan — §5) |
+- cite the logical authorized file record, not the physical dedup asset;
+- keep the backend and raw score kind for diagnostics;
+- rank within each backend before merging mixed results;
+- retain filename and page metadata from the selected logical file.
 
 ---
 
-## 9. Where the code lives
+## 7. Configuration
 
-| Concern | File |
-|---|---|
-| Ingest / delete vectors (HTTP to rag_api) | [`api/server/services/Files/VectorDB/crud.js`](../../../../api/server/services/Files/VectorDB/crud.js) |
-| Agent file upload dispatcher (calls uploadVectors) | [`api/server/services/Files/process.js`](../../../../api/server/services/Files/process.js) (`processAgentFileUpload` L477, embed call L662) |
-| `file_search` tool + `/query` | [`api/app/clients/tools/util/fileSearch.js`](../../../../api/app/clients/tools/util/fileSearch.js) |
-| Citation filtering / limits / metadata | [`api/server/services/Files/Citations/index.js`](../../../../api/server/services/Files/Citations/index.js) |
-| Agent file access control | [`api/server/services/Files/permissions.js`](../../../../api/server/services/Files/permissions.js) |
-| Agent builder File Search panel (UI) | [`client/src/knauf/components/Agents/KnaufFileSearch.tsx`](../../../../client/src/knauf/components/Agents/KnaufFileSearch.tsx) |
-| Parser routing / Azure DI / xlsx loader (overlay) | [`knauf/rag-api-overlay/document_loader.py`](../../../rag-api-overlay/document_loader.py) |
-| rag_api overlay image + env reference | [`knauf/rag-api-overlay/`](../../../rag-api-overlay/) (`Dockerfile.knauf-rag`, `README.md`) |
-| RAG + vectordb container topology | [`docker-compose.yml`](../../../../docker-compose.yml) |
+| Setting                                         | Owner                     | Purpose                                                                   |
+| ----------------------------------------------- | ------------------------- | ------------------------------------------------------------------------- |
+| `RAG_API_URL`                                   | app GitOps                | Internal RAG service URL                                                  |
+| `AZURE_SEARCH_ENABLED`                          | app GitOps                | Enables Agent Knowledge routing to `/agent/*`                             |
+| `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_API_KEY` | RAG GitOps/secret mapping | Azure AI Search connection used by the RAG service                        |
+| `RAG_OPENAI_BASEURL`, `RAG_OPENAI_API_KEY`      | RAG GitOps/secret mapping | Embedding endpoint and credential                                         |
+| `EMBEDDINGS_MODEL`, `EMBEDDINGS_DIMENSIONS`     | RAG GitOps                | Embedding model contract                                                  |
+| `RAG_USE_FULL_CONTEXT`                          | app GitOps                | Controls legacy automatic augmentation, not `file_search` backend routing |
+
+Do not add a backend-selection environment variable per chat type. File provenance selects the backend; environment configuration only declares whether the backend is available.
+
+---
+
+## 8. Source map
+
+| Concern                                               | Source                                                                                                             |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Upload origin, context, dedup, agent-resource binding | [`api/server/services/Files/process.js`](../../../../api/server/services/Files/process.js)                         |
+| Embed/delete backend selection                        | [`api/server/services/Files/VectorDB/crud.js`](../../../../api/server/services/Files/VectorDB/crud.js)             |
+| Candidate priming, query routing, result formatting   | [`api/app/clients/tools/util/fileSearch.js`](../../../../api/app/clients/tools/util/fileSearch.js)                 |
+| Legacy automatic augmentation                         | [`api/app/clients/prompts/createContextHandlers.js`](../../../../api/app/clients/prompts/createContextHandlers.js) |
+| File access filtering                                 | [`api/server/services/Files/permissions.js`](../../../../api/server/services/Files/permissions.js)                 |
+| RAG pgvector routes                                   | `agentic-karl-rag-api/app/routes/document_routes.py`                                                               |
+| RAG Azure AI Search routes                            | `agentic-karl-rag-api/app/routes/agent_routes.py`                                                                  |
