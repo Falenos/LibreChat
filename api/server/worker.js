@@ -21,6 +21,10 @@ const { getAppConfig } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { isIndexingWorkerEnabled } = require('~/server/services/Files/knauf/asyncIndexingConfig');
 const { createIndexingWorker } = require('~/server/services/Files/knauf/indexingWorker');
+const {
+  createIndexingReconciler,
+  getReconcilerConfig,
+} = require('~/server/services/Files/knauf/indexingReconciler');
 const { createGenerationRagClient } = require('~/server/services/Files/knauf/generationRagClient');
 const db = require('~/models');
 
@@ -49,6 +53,60 @@ const resolveScope = async (claim) => {
 const markFilesEmbedded = (asset_id) =>
   mongoose.models.File.updateMany({ knauf_asset_id: asset_id }, { $set: { embedded: true } });
 
+// WP4b — bounded raw queries the createMethods surface doesn't expose; the
+// reconciler injects limits so every pass stays indexed and finite (§8.4).
+const listAssets = (filter, limit) =>
+  mongoose.models.KnaufFileAsset.find(filter).sort({ updatedAt: 1 }).limit(limit).lean();
+const listFileAssetRefs = (limit) =>
+  mongoose.models.File.find({ knauf_asset_id: { $exists: true, $ne: null } })
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .select({ file_id: 1, knauf_asset_id: 1 })
+    .lean();
+
+/**
+ * WP4b physical cleanup for reconciler-owned deletions (§8.2: the deletion
+ * owner removes the vectors, then the blob). Vector deletion goes through
+ * the generation client; the "every generation" endpoint lands with WP1 —
+ * until then the known generations cover assets this system created.
+ */
+const buildCleanupAsset = (ragClient) => async (asset) => {
+  let cleaned = true;
+  const generations = [
+    ...new Set(
+      [asset.active_generation, asset.target_generation].filter((g) => g != null && g > 0),
+    ),
+  ];
+  for (const generation of generations) {
+    try {
+      await ragClient.deleteGeneration({ asset_id: asset.asset_id, generation });
+    } catch (error) {
+      cleaned = false;
+      logger.warn(
+        `[worker] vector cleanup failed for ${asset.asset_id}:${generation}: ${error?.message}`,
+      );
+    }
+  }
+  if (asset.blob?.path) {
+    try {
+      const { deleteFile } = getStrategyFunctions(asset.blob.source ?? 'local');
+      await deleteFile(
+        { user: { id: asset.scope_id } },
+        {
+          file_id: asset.asset_id,
+          filepath: asset.blob.path,
+          source: asset.blob.source,
+          embedded: false,
+        },
+      );
+    } catch (error) {
+      cleaned = false;
+      logger.warn(`[worker] blob cleanup failed for ${asset.asset_id}: ${error?.message}`);
+    }
+  }
+  return cleaned;
+};
+
 const main = async () => {
   if (!isIndexingWorkerEnabled()) {
     logger.warn('[worker] KNAUF_INDEXING_WORKER_ENABLED is not true — exiting cleanly');
@@ -60,11 +118,19 @@ const main = async () => {
   const appConfig = await getAppConfig({ baseOnly: true });
   initializeFileStorage(appConfig);
 
+  const ragClient = createGenerationRagClient({ getStrategyFunctions });
   const worker = createIndexingWorker({
     db,
-    ragClient: createGenerationRagClient({ getStrategyFunctions }),
+    ragClient,
     resolveScope,
     markFilesEmbedded,
+    logger,
+  });
+  const reconciler = createIndexingReconciler({
+    db,
+    listAssets,
+    listFileAssetRefs,
+    cleanupAsset: buildCleanupAsset(ragClient),
     logger,
   });
 
@@ -76,10 +142,21 @@ const main = async () => {
     .listen(WORKER_PORT, () => logger.info(`[worker] health listener on :${WORKER_PORT}`));
 
   const loop = runAsSystem(() => worker.start());
+  // Reconciler scheduling lives HERE (not reconciler.start()): interval
+  // callbacks escape the AsyncLocalStorage context, so every pass must be
+  // re-wrapped in runAsSystem for the tenant-isolated models.
+  const reconcilePass = () =>
+    runAsSystem(() => reconciler.runOnce()).catch((error) =>
+      logger.error('[worker] reconciliation pass failed:', error),
+    );
+  reconcilePass(); // one pass at boot: recover from crashes fast
+  const reconcileTimer = setInterval(reconcilePass, getReconcilerConfig().intervalMs);
+  reconcileTimer.unref?.();
 
   const shutdown = (signal) => {
     logger.info(`[worker] ${signal} received — stop claiming, draining in-flight work`);
     worker.stop();
+    clearInterval(reconcileTimer);
     health.close();
     const hardExit = setTimeout(() => {
       logger.error('[worker] grace period elapsed with work still in flight — exiting');
