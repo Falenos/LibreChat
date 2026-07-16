@@ -279,6 +279,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       }
     }
 
+    // [knauf] KK20-195 WP5b — one client-generated batch id shared by every
+    // file of a multi-file selection (plan §6.1 step 3); the server stores it
+    // as knauf_upload_batch_id and the batch-status endpoint aggregates on it.
+    if (extendedFile.knauf_upload_batch_id) {
+      formData.append('batch_id', extendedFile.knauf_upload_batch_id);
+    }
+    // End [knauf]
+
     if (!isAssistantsEndpoint(endpointType ?? endpoint)) {
       if (!agent_id) {
         formData.append('message_file', 'true');
@@ -385,6 +393,12 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       return;
     }
 
+    // [knauf] KK20-195 WP5b — a multi-file selection shares ONE client batch
+    // id (plan §6.1 step 3); single files stay batch-less. Drives the §6.3
+    // aggregate summary; the server scopes it to the owner, never authorization.
+    const knaufBatchId = fileList.length > 1 ? v4() : undefined;
+    // End [knauf]
+
     /* Process files */
     for (const originalFile of fileList) {
       const file_id = v4();
@@ -401,6 +415,9 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           preview: initialPreview,
           progress: 0.1, // Show as processing
           size: originalFile.size,
+          // [knauf] KK20-195 WP5b — see knaufBatchId above.
+          knauf_upload_batch_id: knaufBatchId,
+          // End [knauf]
         };
 
         // [knauf] Chat "Upload files" routes documents to File Search (RAG),

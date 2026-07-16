@@ -37,13 +37,18 @@ import {
   type SetStateAction,
 } from 'react';
 import * as Ariakit from '@ariakit/react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Search, X, Trash2, RefreshCw, ChevronDown, Check } from 'lucide-react';
 import { DropdownPopup, Input, Spinner, useToastContext } from '@librechat/client';
-import { FileSources, type EToolResources } from 'librechat-data-provider';
+import { FileSources, DynamicQueryKeys, type EToolResources } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import { getFileType, cn, deletePreview } from '~/utils';
 import { useDeleteFilesMutation } from '~/data-provider';
 import { useDebounce, useLocalize } from '~/hooks';
+// KK20-195 WP5b — server indexing state per saved row + the batch summary.
+import KnaufFileIndexingStatus from '~/knauf/components/Files/KnaufFileIndexingStatus';
+import KnaufBatchIndexSummary from '~/knauf/components/Files/KnaufBatchIndexSummary';
+import { postRetryFileIndex } from '~/knauf/data-provider/data-service';
 
 type Localize = ReturnType<typeof useLocalize>;
 type PendingStatus = 'queued' | 'uploading' | 'error';
@@ -131,13 +136,20 @@ const SavedFileRow = memo(function SavedFileRow({
   localize,
   deleting,
   onDelete,
+  retryingIndex = false,
+  onRetryIndexing,
 }: Readonly<{
   file: ExtendedFile;
   localize: Localize;
   deleting: boolean;
   onDelete: (file: ExtendedFile) => void;
+  // KK20-195 WP5b — failed-indexing retry (server CAS failed → queued).
+  retryingIndex?: boolean;
+  onRetryIndexing?: (file: ExtendedFile) => void;
 }>) {
   const handleDelete = useCallback(() => onDelete(file), [file, onDelete]);
+  // KK20-195 WP5b — stable callback for the indexing retry action.
+  const handleRetryIndexing = useCallback(() => onRetryIndexing?.(file), [file, onRetryIndexing]);
   // During an agent upload the in-progress entry carries the native File but no
   // `filename` yet — useFileHandling sets `filename` only after the server
   // round-trip, and for agent uploads it refetches rather than updating the
@@ -151,6 +163,13 @@ const SavedFileRow = memo(function SavedFileRow({
     <FileRowShell filename={displayName} type={file.type} uploading={uploading} dimmed={deleting}>
       {!uploading && (
         <>
+          {/* KK20-195 WP5b — real server indexing state (pending spinner /
+              failed + retry); renders nothing for ready + legacy rows. */}
+          <KnaufFileIndexingStatus
+            indexing={file.indexing}
+            retrying={retryingIndex}
+            onRetry={onRetryIndexing != null ? handleRetryIndexing : undefined}
+          />
           {typeof file.size === 'number' && (
             <span className="shrink-0 text-xs tabular-nums text-text-secondary">
               {formatFileSize(file.size)}
@@ -343,6 +362,41 @@ function KnaufKnowledgeFileList({
     },
     [mutateAsync, agent_id, tool_resource, setFiles, showToast, localize],
   );
+  // KK20-195 WP5b — failed-indexing retry: server CAS failed → queued, then
+  // refetch the agent files so the row flips to its live pending state. Same
+  // ref-guarded shape as the server-confirmed delete above.
+  const queryClient = useQueryClient();
+  const [retryingIndexIds, setRetryingIndexIds] = useState<Set<string>>(new Set());
+  const inFlightIndexRetriesRef = useRef<Set<string>>(new Set());
+  const handleRetryIndexing = useCallback(
+    async (file: ExtendedFile) => {
+      const id = file.file_id;
+      if (inFlightIndexRetriesRef.current.has(id)) {
+        return;
+      }
+      inFlightIndexRetriesRef.current.add(id);
+      setRetryingIndexIds((prev) => new Set(prev).add(id));
+      try {
+        await postRetryFileIndex(id);
+        showToast({ message: localize('com_knauf_file_indexing_retry_started'), status: 'info' });
+        await queryClient.refetchQueries(DynamicQueryKeys.agentFiles(agent_id));
+      } catch {
+        showToast({
+          message: localize('com_knauf_file_indexing_retry_failed'),
+          status: 'error',
+        });
+      } finally {
+        inFlightIndexRetriesRef.current.delete(id);
+        setRetryingIndexIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [agent_id, queryClient, showToast, localize],
+  );
+
   const handleRemovePending = useCallback((tempId: string) => removePendingRef.current(tempId), []);
   const handleRetryPending = useCallback(
     (tempId: string) => {
@@ -475,10 +529,16 @@ function KnaufKnowledgeFileList({
               localize={localize}
               deleting={deletingIds.has(file.file_id)}
               onDelete={handleDeleteSaved}
+              retryingIndex={retryingIndexIds.has(file.file_id)}
+              onRetryIndexing={handleRetryIndexing}
             />
           ))}
         </div>
       )}
+
+      {/* KK20-195 WP5b — §6.3 aggregate summary for a still-indexing
+          multi-file selection; renders nothing once the batch is terminal. */}
+      <KnaufBatchIndexSummary files={files} />
 
       {q !== '' && visibleCount > 0 && (
         <div className="px-1 text-xs text-text-secondary">

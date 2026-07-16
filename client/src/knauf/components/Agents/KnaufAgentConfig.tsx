@@ -3,46 +3,54 @@
  * `[knauf]` import swap in AgentPanel.tsx. Renders inside upstream's
  * FormProvider/form shell alongside AgentSelect, AgentFooter, and VersionPanel.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
-import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
-import type { LucideProps } from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
+import { Brain, Zap } from 'lucide-react';
+import * as HoverCard from '@radix-ui/react-hover-card';
+import { EModelEndpoint } from 'librechat-data-provider';
 import { Switch, useToastContext } from '@librechat/client';
 import { Controller, useFormContext, useWatch } from 'react-hook-form';
-import { EModelEndpoint } from 'librechat-data-provider';
-import { isEphemeralAgent, type AgentForm } from '~/common';
-import { useAgentPanelContext, useFileMapContext } from '~/Providers';
-import { cn, defaultTextProps, processAgentOption, removeFocusOutlines } from '~/utils';
-import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
-import AgentCategorySelector from '~/components/SidePanel/Agents/AgentCategorySelector';
-import AgentTool from '~/components/SidePanel/Agents/AgentTool';
-import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
-import KnaufMCPTools from './KnaufMCPTools';
-import { useGetAgentFiles } from '~/data-provider';
-import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
-import * as HoverCard from '@radix-ui/react-hover-card';
-import { Brain, Zap } from 'lucide-react';
-import CapabilitySwitch from './CapabilitySwitch';
-import InstructionsEditorOverlay from './InstructionsEditorOverlay';
-import InstructionsField from './InstructionsField';
-import KnaufFileSearch from './KnaufFileSearch';
-import KnaufInfoBadge from './KnaufInfoBadge';
-import KnaufSection from './KnaufSection';
-import PersonalityPills from './PersonalityPills';
-import TemplatePicker from './TemplatePicker';
-import TemplateSelect from './TemplateSelect';
-import { usePromptTemplates } from '~/knauf/data-provider/Agents/usePromptTemplates';
+import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
+import type { LucideProps } from 'lucide-react';
 import type { PromptTemplate } from '~/knauf/data-provider/data-service';
-import { KNAUF_CAPABILITIES } from './capabilities';
-import { KARL_DEFAULT_PERSONALITY_NAME } from '~/knauf/common/constants';
-import { useAutogeneratePrompt } from '~/knauf/data-provider/Agents/useAutogeneratePrompt';
-import {
-  usePersonalities,
-  type KnaufPersonality,
-} from '~/knauf/data-provider/Agents/usePersonalities';
 import {
   knaufPendingAgentFilesAtom,
   knaufPendingForAgentIdAtom,
 } from '~/knauf/store/pendingAgentFiles';
+import {
+  usePersonalities,
+  type KnaufPersonality,
+} from '~/knauf/data-provider/Agents/usePersonalities';
+import { useAutogeneratePrompt } from '~/knauf/data-provider/Agents/useAutogeneratePrompt';
+import { cn, defaultTextProps, processAgentOption, removeFocusOutlines } from '~/utils';
+import AgentCategorySelector from '~/components/SidePanel/Agents/AgentCategorySelector';
+import { usePromptTemplates } from '~/knauf/data-provider/Agents/usePromptTemplates';
+import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
+import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
+import { KARL_DEFAULT_PERSONALITY_NAME } from '~/knauf/common/constants';
+import { useAgentPanelContext, useFileMapContext } from '~/Providers';
+import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
+import InstructionsEditorOverlay from './InstructionsEditorOverlay';
+import AgentTool from '~/components/SidePanel/Agents/AgentTool';
+import { isEphemeralAgent, type AgentForm } from '~/common';
+import InstructionsField from './InstructionsField';
+import { KNAUF_CAPABILITIES } from './capabilities';
+import { useGetAgentFiles } from '~/data-provider';
+import CapabilitySwitch from './CapabilitySwitch';
+import PersonalityPills from './PersonalityPills';
+import KnaufFileSearch from './KnaufFileSearch';
+import KnaufInfoBadge from './KnaufInfoBadge';
+import TemplatePicker from './TemplatePicker';
+import TemplateSelect from './TemplateSelect';
+import KnaufMCPTools from './KnaufMCPTools';
+import KnaufSection from './KnaufSection';
 
 const labelClass = 'mb-2 text-token-text-primary block text-sm font-medium';
 const inputClass = cn(
@@ -249,7 +257,29 @@ export default function KnaufAgentConfig() {
     if (typeof agent === 'string' || agent?.id !== agent_id) return [];
     if (agent?.knowledge_files) return agent.knowledge_files;
     const processed = agent ? processAgentOption({ agent, fileMap: mergedFileMap }) : null;
-    return processed?.knowledge_files ?? [];
+    const entries = processed?.knowledge_files ?? [];
+    // KK20-195 WP5b — overlay the async-indexing projection from the WP3c
+    // agent-files list (upstream processAgentOption picks explicit fields and
+    // drops it). Pending/failed knowledge stays visible with its real server
+    // state after reload; `embedded` follows the ledger.
+    return entries.map(([id, ext]) => {
+      const server = mergedFileMap[id] as (typeof mergedFileMap)[string] & {
+        indexing?: import('~/knauf/common/fileIndexing').KnaufFileIndexing;
+        knauf_upload_batch_id?: string;
+      };
+      if (server?.indexing == null) {
+        return [id, ext] as [string, typeof ext];
+      }
+      return [
+        id,
+        {
+          ...ext,
+          indexing: server.indexing,
+          embedded: server.embedded ?? ext.embedded,
+          knauf_upload_batch_id: server.knauf_upload_batch_id,
+        },
+      ] as [string, typeof ext];
+    });
   }, [agent, agent_id, mergedFileMap]);
 
   // Continuously mirror `file_search` to whether the agent has any
@@ -385,7 +415,8 @@ export default function KnaufAgentConfig() {
         if (ext.filename) knowledgeFiles.push({ name: ext.filename, type: ext.type ?? '' });
       }
       for (const [, entry] of pendingFiles) {
-        if (entry.file?.name) knowledgeFiles.push({ name: entry.file.name, type: entry.file.type ?? '' });
+        if (entry.file?.name)
+          knowledgeFiles.push({ name: entry.file.name, type: entry.file.type ?? '' });
       }
       if (knowledgeFiles.length > 0) {
         capabilityLabels.push(
@@ -453,9 +484,7 @@ export default function KnaufAgentConfig() {
    *  Always uses the current editor text so manual edits are never lost. */
   const generatePreview = useCallback(
     async (templateContent: string): Promise<string> => {
-      const { text } = await previewMutation.mutateAsync(
-        buildAutogeneratePayload(templateContent),
-      );
+      const { text } = await previewMutation.mutateAsync(buildAutogeneratePayload(templateContent));
       return text;
     },
     [previewMutation, buildAutogeneratePayload],
@@ -490,7 +519,8 @@ export default function KnaufAgentConfig() {
       }
       // Existing draft — merge via the preview mutation
       setSidebarTemplateMerging(true);
-      previewMutation.mutateAsync(buildAutogeneratePayload(template.content))
+      previewMutation
+        .mutateAsync(buildAutogeneratePayload(template.content))
         .then(({ text }) => {
           pushUndo(currentDraft);
           setValue('instructions', text, { shouldDirty: true });
@@ -531,7 +561,11 @@ export default function KnaufAgentConfig() {
   );
 
   const templatePickerCompactNode: ReactNode = (
-    <TemplatePicker onSelect={handleTemplateSelectOverlay} compact activeTemplateId={activeTemplateId} />
+    <TemplatePicker
+      onSelect={handleTemplateSelectOverlay}
+      compact
+      activeTemplateId={activeTemplateId}
+    />
   );
 
   // Default category to 'general' on first mount when unset. The
