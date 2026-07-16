@@ -41,6 +41,12 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     leaseMs: number;
     now?: Date;
   }) => Promise<IKnaufFileAsset | null>;
+  claimAsset: (params: {
+    asset_id: string;
+    workerId: string;
+    leaseMs: number;
+    now?: Date;
+  }) => Promise<IKnaufFileAsset | null>;
   heartbeatClaim: (params: {
     asset_id: string;
     execution_token: string;
@@ -179,6 +185,43 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
           $inc: { attempt_count: 1, target_generation: 1 },
         },
         { sort: { queued_at: 1 }, new: true },
+      )
+      .lean<IKnaufFileAsset>();
+  }
+
+  /**
+   * Claim ONE SPECIFIC asset (same CAS semantics as claimNextDue, keyed by
+   * asset_id). Used by the synchronous flag-off upload path, which must
+   * execute the asset it just queued — never someone else's oldest-due work.
+   */
+  async function claimAsset(params: {
+    asset_id: string;
+    workerId: string;
+    leaseMs: number;
+    now?: Date;
+  }): Promise<IKnaufFileAsset | null> {
+    const now = params.now ?? new Date();
+    return getModel()
+      .findOneAndUpdate(
+        {
+          asset_id: params.asset_id,
+          delete_requested_at: null,
+          $or: [
+            { status: 'queued', next_attempt_at: { $lte: now } },
+            { status: 'processing', lease_expires_at: { $lte: now } },
+          ],
+        },
+        {
+          $set: {
+            status: 'processing',
+            lease_owner: params.workerId,
+            lease_expires_at: new Date(now.getTime() + params.leaseMs),
+            execution_token: crypto.randomUUID(),
+            started_at: now,
+          },
+          $inc: { attempt_count: 1, target_generation: 1 },
+        },
+        { new: true },
       )
       .lean<IKnaufFileAsset>();
   }
@@ -396,6 +439,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     reserveAsset,
     markQueued,
     claimNextDue,
+    claimAsset,
     heartbeatClaim,
     requeueClaim,
     failClaim,

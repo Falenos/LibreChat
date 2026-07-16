@@ -303,6 +303,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/file.ts` | `createFile` optional `ownerScope` (interface + impl via `withOwnerScope`) | 57–63, 339–365 | KK20-195 WP3a — when a scope is provided the upsert filter becomes (file_id + owner), so a write can never overwrite a foreign row; additive, existing callers unchanged | `packages/data-schemas/src/methods/file.knauf.spec.ts` | KK20-195 |
 | `packages/data-schemas/src/methods/file.knauf.spec.ts` | `createFile with ownerScope (KK20-195 WP3a)` describe | 1–80 | Seam test on real Mongo — same-owner replay updates the same row (no duplicate); a differently-owned scope never modifies the foreign row; scopeless behavior unchanged | Self | KK20-195 |
 | `api/server/services/Files/process.js` | `processAgentFileUpload` file_search `createFile` calls → owner-scoped | 1082–1100 | KK20-195 WP3a — both createFile calls (main + 11000 dedup fallback) pass the request owner as `ownerScope`, completing the write-time guarantee behind the route's 409 pre-check | `packages/data-schemas/src/methods/file.knauf.spec.ts` | KK20-195 |
+| `packages/data-schemas/src/methods/fileAsset.ts` | `claimAsset` (claim one specific asset) | 44–49, 190–225 | KK20-195 WP3b — same CAS/token semantics as `claimNextDue` but keyed by asset_id: the synchronous flag-off upload must execute the asset it just queued, never someone else's oldest-due work | `packages/data-schemas/src/methods/fileAsset.methods.spec.ts` (`claimAsset` describe) | KK20-195 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -465,6 +466,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/fileAssetMigration.js` | `~/server/middleware/requireKnaufApiKey`; `runAsSystem` from `@librechat/data-schemas`; `mongoose` | Low — thin trigger route; one bounded batch per call with a resume cursor | `api/server/services/Files/knauf/fileAssetMigration.spec.js` (service logic) | KK20-195 |
 | `api/server/services/Files/knauf/uploadIdempotency.js` | None | Low — pure decision functions (UUID adoption rule + replay/conflict classification) | `api/server/services/Files/knauf/uploadIdempotency.spec.js` | KK20-195 |
 | `api/server/services/Files/knauf/uploadIdempotency.spec.js` | Subject under test | Low — test-only | Self | KK20-195 |
+| `api/server/services/Files/knauf/asyncIndexingConfig.js` | None | Low — env-flag readers (accept / worker / tenant allow-list / index profile); read at call time for canary changes without redeploys of code | `api/server/services/Files/knauf/asyncIndexingConfig.spec.js` | KK20-195 |
+| `api/server/services/Files/knauf/asyncIndexingConfig.spec.js` | Subject under test | Low — test-only | Self | KK20-195 |
 <!-- seams:new:end -->
 
 ## Static Assets

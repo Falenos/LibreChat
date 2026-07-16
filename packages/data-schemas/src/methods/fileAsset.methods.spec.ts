@@ -301,4 +301,41 @@ describe('admission-control counters', () => {
     expect(await methods.sumActiveBytesByScope({ scope_type: 'user', scope_id: 'u1' })).toBe(30);
   });
 });
+
+describe('claimAsset — claim one specific asset (KK20-195 WP3b)', () => {
+  test('claims exactly the requested asset with lease + token + increments', async () => {
+    await seedQueued({ asset_id: 'other-older', queued_at: new Date(Date.now() - 60_000) });
+    await seedQueued({ asset_id: 'mine' });
+
+    const claimed = await methods.claimAsset({
+      asset_id: 'mine',
+      workerId: 'req-1',
+      leaseMs: 60_000,
+    });
+
+    expect(claimed?.asset_id).toBe('mine');
+    expect(claimed?.status).toBe('processing');
+    expect(claimed?.execution_token).toBeDefined();
+    expect(claimed?.attempt_count).toBe(1);
+    expect(claimed?.target_generation).toBe(1);
+    // The older asset was NOT touched — this is not oldest-due claiming.
+    const other = await KnaufFileAsset.findOne({ asset_id: 'other-older' }).lean();
+    expect(other?.status).toBe('queued');
+  });
+
+  test('one winner under concurrency; tombstoned/processing assets refuse the claim', async () => {
+    await seedQueued({ asset_id: 'race-me' });
+    const [a, b] = await Promise.all([
+      methods.claimAsset({ asset_id: 'race-me', workerId: 'w1', leaseMs: 60_000 }),
+      methods.claimAsset({ asset_id: 'race-me', workerId: 'w2', leaseMs: 60_000 }),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+
+    await seedQueued({ asset_id: 'tomb-claim' });
+    await methods.tombstoneForDelete({ asset_id: 'tomb-claim' });
+    expect(
+      await methods.claimAsset({ asset_id: 'tomb-claim', workerId: 'w', leaseMs: 60_000 }),
+    ).toBeNull();
+  });
+});
 // End [knauf]
