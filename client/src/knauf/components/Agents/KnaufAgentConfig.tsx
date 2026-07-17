@@ -35,6 +35,9 @@ import { usePromptTemplates } from '~/knauf/data-provider/Agents/usePromptTempla
 import { ToolSelectDialog, MCPToolSelectDialog } from '~/components/Tools';
 import { useAgentCategories, useLocalize, useVisibleTools } from '~/hooks';
 import { KARL_DEFAULT_PERSONALITY_NAME } from '~/knauf/common/constants';
+// KK20-195 review R10 — indexing overlay (both branches) + live polling.
+import { overlayKnowledgeIndexing, agentFilesRefetchInterval } from '~/knauf/common/fileIndexing';
+import { KNAUF_INDEX_POLL_MS } from '~/knauf/hooks/Files/useKnaufIndexStatus';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
 import InstructionsEditorOverlay from './InstructionsEditorOverlay';
@@ -243,7 +246,12 @@ export default function KnaufAgentConfig() {
   }, [agent_id, pendingForAgentId, setPendingFiles, setPendingForAgentId]);
   const { toolIds, mcpServerNames } = useVisibleTools(tools, regularTools, mcpServersMap);
 
-  const { data: agentFiles = [] } = useGetAgentFiles(agent_id);
+  // KK20-195 review R10 — poll the agent-files list at the standard cadence
+  // while any row's server projection is pending, stop at rest. This is what
+  // flips "Indexing…" → ready/failed without a reload or user action.
+  const { data: agentFiles = [] } = useGetAgentFiles(agent_id, {
+    refetchInterval: (data) => agentFilesRefetchInterval(data, KNAUF_INDEX_POLL_MS),
+  });
 
   const mergedFileMap = useMemo(() => {
     const next = { ...fileMap };
@@ -255,31 +263,18 @@ export default function KnaufAgentConfig() {
 
   const knowledge_files = useMemo(() => {
     if (typeof agent === 'string' || agent?.id !== agent_id) return [];
-    if (agent?.knowledge_files) return agent.knowledge_files;
-    const processed = agent ? processAgentOption({ agent, fileMap: mergedFileMap }) : null;
-    const entries = processed?.knowledge_files ?? [];
-    // KK20-195 WP5b — overlay the async-indexing projection from the WP3c
-    // agent-files list (upstream processAgentOption picks explicit fields and
-    // drops it). Pending/failed knowledge stays visible with its real server
-    // state after reload; `embedded` follows the ledger.
-    return entries.map(([id, ext]) => {
-      const server = mergedFileMap[id] as (typeof mergedFileMap)[string] & {
-        indexing?: import('~/knauf/common/fileIndexing').KnaufFileIndexing;
-        knauf_upload_batch_id?: string;
-      };
-      if (server?.indexing == null) {
-        return [id, ext] as [string, typeof ext];
-      }
-      return [
-        id,
-        {
-          ...ext,
-          indexing: server.indexing,
-          embedded: server.embedded ?? ext.embedded,
-          knauf_upload_batch_id: server.knauf_upload_batch_id,
-        },
-      ] as [string, typeof ext];
-    });
+    // KK20-195 WP5b / review R10 — the overlay runs on BOTH branches:
+    // existing agents usually already carry agent.knowledge_files, and the
+    // early return used to bypass the indexing overlay entirely, freezing
+    // rows at "Indexing…" until reload. Base entries come from either
+    // source; the server projection (WP3c agent-files list) is then always
+    // applied on top — pending/failed knowledge stays live-accurate and
+    // `embedded` follows the ledger.
+    const base =
+      agent?.knowledge_files ??
+      (agent ? processAgentOption({ agent, fileMap: mergedFileMap })?.knowledge_files : null) ??
+      [];
+    return overlayKnowledgeIndexing(base, mergedFileMap);
   }, [agent, agent_id, mergedFileMap]);
 
   // Continuously mirror `file_search` to whether the agent has any

@@ -47,4 +47,55 @@ export function hasPendingIndexing(files: Map<string, ExtendedFile>): boolean {
 export function filterIndexReadyFiles<T extends Pick<ExtendedFile, 'indexing'>>(files: T[]): T[] {
   return files.filter((file) => file.indexing == null || file.indexing.ready);
 }
+
+/** A server file-list row that may carry the WP3c `indexing` projection. */
+export interface KnaufIndexedFileLike {
+  embedded?: boolean;
+  indexing?: KnaufFileIndexing;
+  knauf_upload_batch_id?: string;
+}
+
+/**
+ * KK20-195 review R10 — overlay the server's `indexing` projection (from the
+ * WP3c agent-files list) onto knowledge-file entries. Upstream
+ * `processAgentOption` picks explicit fields and drops it, and the
+ * `agent.knowledge_files` fast path bypasses processAgentOption entirely —
+ * this overlay must therefore run on BOTH branches, or a row can show
+ * "Indexing…" forever with no failure/retry until reload. Pure + exported
+ * for unit tests.
+ */
+export function overlayKnowledgeIndexing(
+  entries: Array<[string, ExtendedFile]>,
+  fileMap: Record<string, KnaufIndexedFileLike | undefined>,
+): Array<[string, ExtendedFile]> {
+  return entries.map(([id, ext]) => {
+    const server = fileMap[id];
+    if (server?.indexing == null) {
+      return [id, ext];
+    }
+    return [
+      id,
+      {
+        ...ext,
+        indexing: server.indexing,
+        embedded: server.embedded ?? ext.embedded,
+        knauf_upload_batch_id: server.knauf_upload_batch_id,
+      },
+    ];
+  });
+}
+
+/**
+ * R10 — TanStack `refetchInterval` for the agent-files query: poll at the
+ * standard cadence while any row's projection is pending, stop at rest.
+ * Accepts the raw TFile[] (the `indexing` sibling is untyped upstream).
+ */
+export function agentFilesRefetchInterval(
+  data: readonly unknown[] | undefined,
+  pollMs: number,
+): number | false {
+  return (data ?? []).some((row) => isIndexingPending((row as KnaufIndexedFileLike).indexing))
+    ? pollMs
+    : false;
+}
 // End [knauf]
