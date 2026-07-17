@@ -9,6 +9,12 @@ import { useChatFormContext } from '~/Providers';
 import { useGetFiles } from '~/data-provider';
 import store from '~/store';
 
+// [knauf] Temporary conversation keys are tab-scoped; real conversation drafts remain persistent. KK20-227.
+const isTemporaryConversation = (id?: string | null) =>
+  id === Constants.NEW_CONVO || id === Constants.PENDING_CONVO;
+const draftStorage = (id: string) => (isTemporaryConversation(id) ? sessionStorage : localStorage);
+// End [knauf]
+
 export const useAutoSave = ({
   isSubmitting,
   conversationId: _conversationId,
@@ -34,7 +40,7 @@ export const useAutoSave = ({
   const restoreFiles = useCallback(
     (id: string) => {
       const filesDraft = JSON.parse(
-        (localStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${id}`) ?? '') || '[]',
+        (draftStorage(id).getItem(`${LocalStorageKeys.FILES_DRAFT}${id}`) ?? '') || '[]',
       ) as string[];
 
       if (filesDraft.length === 0) {
@@ -159,40 +165,37 @@ export const useAutoSave = ({
       return;
     }
 
-    // [knauf] KK20-227 — files added while a response streams belong to the next
-    // turn. Preserve them when PENDING returns to the same conversation; upload
-    // success may arrive after this transition and still needs its temp map entry.
-    const isPendingConversationTransition =
-      prevConversationIdRef.current === Constants.PENDING_CONVO &&
-      conversationId !== Constants.PENDING_CONVO &&
+    // [knauf] KK20-227 — preserve in-memory uploads while a temporary draft
+    // migrates to its real conversation; useGetFiles can still be stale.
+    const temporaryConversationId = prevConversationIdRef.current;
+    const isTemporaryConversationTransition =
+      isTemporaryConversation(temporaryConversationId) &&
+      !isTemporaryConversation(conversationId) &&
       conversationId.length > 3;
-    if (!isPendingConversationTransition) {
+    if (!isTemporaryConversationTransition) {
       // clear attachment files when switching conversation
       setFiles(new Map());
     }
     // End [knauf]
 
     try {
-      // Check for transition from PENDING_CONVO to a valid conversationId
-      if (
-        prevConversationIdRef.current === Constants.PENDING_CONVO &&
-        conversationId !== Constants.PENDING_CONVO &&
-        conversationId.length > 3
-      ) {
-        const pendingDraft = localStorage.getItem(
-          `${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`,
+      // Check for transition from a temporary conversation to a valid conversationId
+      if (isTemporaryConversationTransition && temporaryConversationId != null) {
+        // [knauf] KK20-227 — migrate this tab's temporary text/files into the real conversation.
+        const pendingDraft = sessionStorage.getItem(
+          `${LocalStorageKeys.TEXT_DRAFT}${temporaryConversationId}`,
         );
 
         // Clear the pending text draft, if it exists, and save the current draft to the new conversationId;
         // otherwise, save the current text area value to the new conversationId
-        localStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`);
+        sessionStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${temporaryConversationId}`);
         if (pendingDraft) {
           localStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${conversationId}`, pendingDraft);
         } else if (textAreaRef?.current?.value) {
           setDraft({ id: conversationId, value: textAreaRef.current.value });
         }
-        const pendingFileDraft = localStorage.getItem(
-          `${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`,
+        const pendingFileDraft = sessionStorage.getItem(
+          `${LocalStorageKeys.FILES_DRAFT}${temporaryConversationId}`,
         );
 
         if (pendingFileDraft) {
@@ -200,20 +203,21 @@ export const useAutoSave = ({
             `${LocalStorageKeys.FILES_DRAFT}${conversationId}`,
             pendingFileDraft,
           );
-          localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
+          sessionStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${temporaryConversationId}`);
           const filesDraft = JSON.parse(pendingFileDraft || '[]') as string[];
           if (filesDraft.length > 0) {
             restoreFiles(conversationId);
           }
         }
+        // End [knauf]
       } else if (currentConversationId != null && currentConversationId) {
         saveText(currentConversationId);
       }
 
       restoreText(conversationId);
       // [knauf] KK20-227 — the in-memory map is authoritative during the
-      // PENDING-to-current transition because useGetFiles can still be stale.
-      if (!isPendingConversationTransition || fileIds.length === 0) {
+      // temporary-to-current transition because useGetFiles can still be stale.
+      if (!isTemporaryConversationTransition || fileIds.length === 0) {
         restoreFiles(conversationId);
       }
       // End [knauf]
@@ -252,13 +256,15 @@ export const useAutoSave = ({
       return;
     }
 
+    // [knauf] KK20-227 — temporary file drafts are tab-scoped; real conversation files stay local.
     if (fileIds.length === 0) {
-      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${conversationId}`);
+      draftStorage(conversationId).removeItem(`${LocalStorageKeys.FILES_DRAFT}${conversationId}`);
     } else {
-      localStorage.setItem(
+      draftStorage(conversationId).setItem(
         `${LocalStorageKeys.FILES_DRAFT}${conversationId}`,
         JSON.stringify(fileIds),
       );
     }
+    // End [knauf]
   }, [files, conversationId, saveDrafts, currentConversationId, fileIds]);
 };

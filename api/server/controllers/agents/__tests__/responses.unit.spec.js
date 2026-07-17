@@ -193,6 +193,12 @@ jest.mock('~/server/controllers/agents/callbacks', () => {
   return {
     createToolEndCallback: jest.fn().mockReturnValue(jest.fn()),
     createResponsesToolEndCallback: jest.fn().mockReturnValue(jest.fn()),
+    // [knauf] Mirror the real backing-model extractor used by Responses controllers. KK20-227.
+    getResponseModel: jest.fn(
+      (data) =>
+        data?.output?.response_metadata?.model_name ?? data?.output?.response_metadata?.model,
+    ),
+    // End [knauf]
     markSummarizationUsage: jest.fn().mockImplementation((usage) => usage),
     agentLogHandlerObj: noop,
     buildSummarizationHandlers: jest.fn().mockReturnValue({
@@ -592,7 +598,8 @@ describe('createResponse controller', () => {
   });
 
   describe('collectedUsage population', () => {
-    it('should collect usage from on_chat_model_end events', async () => {
+    // [knauf] Compatibility Responses usage must preserve Azure's selected backing model. KK20-227.
+    it('should collect routed-model usage from on_chat_model_end events', async () => {
       const api = require('@librechat/api');
 
       api.createRun.mockImplementation(async ({ customHandlers }) => {
@@ -603,8 +610,8 @@ describe('createResponse controller', () => {
                 usage_metadata: {
                   input_tokens: 150,
                   output_tokens: 75,
-                  model: 'claude-3',
                 },
+                response_metadata: { model_name: 'gpt-5.4-mini-2026-03-17' },
               },
             });
           }),
@@ -619,11 +626,13 @@ describe('createResponse controller', () => {
             expect.objectContaining({
               input_tokens: 150,
               output_tokens: 75,
+              model: 'gpt-5.4-mini-2026-03-17',
             }),
           ]),
         }),
       );
     });
+    // End [knauf]
   });
 
   describe('sub-agent skill priming', () => {

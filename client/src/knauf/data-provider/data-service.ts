@@ -40,6 +40,8 @@ export interface ConversationCostSummary {
   imageOutputTokens: number;
   unsupportedTokens: number;
   hasUnsupported: boolean;
+  isEstimated?: boolean;
+  estimateReason?: string | null;
 }
 
 export type MessageCostSummary = ConversationCostSummary;

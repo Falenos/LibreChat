@@ -10,6 +10,12 @@ import {
 } from 'librechat-data-provider';
 import AttachFileMenu from '../AttachFileMenu';
 
+const mockSetEphemeralAgent = jest.fn();
+jest.mock('recoil', () => ({
+  ...jest.requireActual('recoil'),
+  useRecoilState: jest.fn(() => [null, mockSetEphemeralAgent]),
+}));
+
 jest.mock('~/hooks', () => ({
   useAgentToolPermissions: jest.fn(),
   useAgentCapabilities: jest.fn(),
@@ -107,6 +113,7 @@ const mockUseSharePointFileHandlingNoChatContext = jest.requireMock(
   '~/hooks/Files/useSharePointFileHandling',
 ).useSharePointFileHandlingNoChatContext;
 const mockUseGetStartupConfig = jest.requireMock('~/data-provider').useGetStartupConfig;
+const mockHandleFileChange = jest.fn();
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -135,7 +142,7 @@ function setupMocks(overrides: { provider?: string } = {}) {
     codeEnabled: false,
   });
   mockUseGetAgentsConfig.mockReturnValue({ agentsConfig: {} });
-  mockUseFileHandlingNoChatContext.mockReturnValue({ handleFileChange: jest.fn() });
+  mockUseFileHandlingNoChatContext.mockReturnValue({ handleFileChange: mockHandleFileChange });
   const sharePointReturnValue = {
     handleSharePointFiles: jest.fn(),
     isProcessing: false,
@@ -426,6 +433,50 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: false });
       expect(clickUploadFilesCapturingAccept()).toBe(KNAUF_ALLOWED_ACCEPT);
+    });
+
+    it('enables ephemeral File Search only after a document is selected', () => {
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: true,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: false });
+
+      openMenu();
+      fireEvent.click(screen.getByText('Upload files'));
+      expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+
+      const pdf = new File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+      fireEvent.change(screen.getByTestId('file-input'), { target: { files: [pdf] } });
+
+      expect(mockSetEphemeralAgent).toHaveBeenCalledTimes(1);
+      expect(mockHandleFileChange).toHaveBeenCalledWith(
+        expect.anything(),
+        EToolResources.file_search,
+      );
+    });
+
+    it('keeps an image-only selection on vision without enabling File Search', () => {
+      setupMocks({ provider: EModelEndpoint.azureOpenAI });
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: true,
+        codeEnabled: false,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: false });
+
+      openMenu();
+      fireEvent.click(screen.getByText('Upload files'));
+      const image = new File(['image'], 'image.png', { type: 'image/png' });
+      fireEvent.change(screen.getByTestId('file-input'), { target: { files: [image] } });
+
+      expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+      expect(mockHandleFileChange).toHaveBeenCalledWith(
+        expect.anything(),
+        EToolResources.file_search,
+      );
     });
 
     it('keeps the upstream provider-upload path when File Search is disabled', () => {

@@ -281,6 +281,25 @@ async function getSignedAzureURL({ blobPath, containerName = AZURE_CONTAINER_NAM
 }
 // End [knauf]
 
+// [knauf] KK20-227 — coalesce concurrent container readiness checks to avoid repeated Azure 409s.
+const containerReadiness = new Map();
+async function ensureAzureContainer(containerClient, containerName) {
+  const access = isPublicAccess() ? 'blob' : undefined;
+  const key = `${containerClient.url || containerName || AZURE_CONTAINER_NAME}:${access || 'private'}`;
+  let readiness = containerReadiness.get(key);
+  if (!readiness) {
+    readiness = Promise.resolve()
+      .then(() => containerClient.createIfNotExists({ access }))
+      .catch((error) => {
+        containerReadiness.delete(key);
+        throw error;
+      });
+    containerReadiness.set(key, readiness);
+  }
+  await readiness;
+}
+// End [knauf]
+
 /**
  * Uploads a buffer to Azure Blob Storage.
  *
@@ -303,8 +322,9 @@ async function saveBufferToAzure({
 }) {
   try {
     const containerClient = await getAzureContainerClient(containerName);
-    const access = isPublicAccess() ? 'blob' : undefined;
-    await containerClient.createIfNotExists({ access });
+    // [knauf] KK20-227 — reuse the shared readiness promise for concurrent uploads.
+    await ensureAzureContainer(containerClient, containerName);
+    // End [knauf]
     const blobPath = `${basePath}/${userId}/${fileName}`;
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     await blockBlobClient.uploadData(buffer);
@@ -439,8 +459,9 @@ async function streamFileToAzure({
 }) {
   try {
     const containerClient = await getAzureContainerClient(containerName);
-    const access = isPublicAccess() ? 'blob' : undefined;
-    await containerClient.createIfNotExists({ access });
+    // [knauf] KK20-227 — reuse the shared readiness promise for concurrent uploads.
+    await ensureAzureContainer(containerClient, containerName);
+    // End [knauf]
 
     const blobPath = `${basePath}/${userId}/${fileName}`;
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);

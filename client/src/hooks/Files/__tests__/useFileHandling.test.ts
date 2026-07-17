@@ -46,6 +46,7 @@ const mockLocalize = jest.fn((key: string) => key);
 
 let mockConversation: Record<string, string | null | undefined> = {};
 let mockIsTemporary = false;
+let mockFileConfig: Record<string, unknown> | null = null;
 
 jest.mock('~/Providers/ChatContext', () => ({
   useChatContext: jest.fn(() => ({
@@ -82,7 +83,7 @@ jest.mock('@tanstack/react-query', () => ({
 }));
 
 jest.mock('~/data-provider', () => ({
-  useGetFileConfig: jest.fn(() => ({ data: null })),
+  useGetFileConfig: jest.fn(() => ({ data: mockFileConfig })),
   useUploadFileMutation: jest.fn((opts: typeof mockUploadOptions) => {
     mockUploadOptions = opts;
     return {
@@ -143,9 +144,11 @@ const mockValidateFiles = jest.requireMock('~/utils').validateFiles;
 describe('useFileHandling', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockMutate.mockImplementation((_formData: FormData) => Promise.resolve());
     mockProcessFileForUpload.mockImplementation(async (file: File) => file);
     mockConversation = {};
     mockIsTemporary = false;
+    mockFileConfig = null;
     // [knauf] KK20-227 — clear the module-level upload queue so a deferred
     // upload from one test can't stall the next.
     _resetDocumentUploadQueue();
@@ -153,6 +156,64 @@ describe('useFileHandling', () => {
   });
 
   const loadHook = async () => (await import('../useFileHandling')).default;
+
+  // [knauf] KK20-227 — reserve all slots before asynchronous upload work so
+  // overlapping picker/paste/drop actions cannot collectively exceed the cap.
+  describe('overlapping file-limit enforcement', () => {
+    beforeEach(() => {
+      mockFileConfig = { endpoints: { default: { fileLimit: 5 } } };
+    });
+
+    it('accepts at most five files across overlapping handleFiles calls', async () => {
+      let releaseUpload!: () => void;
+      const uploadPending = new Promise<void>((resolve) => {
+        releaseUpload = resolve;
+      });
+      mockMutate.mockReturnValue(uploadPending);
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const firstFiles = Array.from(
+        { length: 4 },
+        (_, index) => new File(['pdf'], `first-${index}.pdf`, { type: 'application/pdf' }),
+      );
+      const secondFiles = Array.from(
+        { length: 4 },
+        (_, index) => new File(['pdf'], `second-${index}.pdf`, { type: 'application/pdf' }),
+      );
+
+      await act(async () => {
+        const first = result.current.handleFiles(firstFiles);
+        const second = result.current.handleFiles(secondFiles);
+        releaseUpload();
+        await Promise.all([first, second]);
+      });
+
+      expect(mockAddFile).toHaveBeenCalledTimes(5);
+      expect(mockLocalize).toHaveBeenCalledWith('com_knauf_file_limit_partial', {
+        0: '1',
+        1: '3',
+        2: '5',
+      });
+    });
+
+    it('does not claim overflow files were added when validation rejects the selection', async () => {
+      mockValidateFiles.mockReturnValueOnce(false);
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const files = Array.from(
+        { length: 6 },
+        (_, index) => new File(['pdf'], `file-${index}.pdf`, { type: 'application/pdf' }),
+      );
+
+      await act(async () => {
+        await result.current.handleFiles(files);
+      });
+
+      expect(mockAddFile).not.toHaveBeenCalled();
+      expect(mockShowToast).not.toHaveBeenCalled();
+    });
+  });
+  // End [knauf]
 
   describe('endpointOverride', () => {
     it('uploads non-HEIC images without running HEIC conversion', async () => {
