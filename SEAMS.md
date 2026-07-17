@@ -413,6 +413,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/types/fileAsset.ts` | `IKnaufFileAsset.tenantId` | 35–36 | KK20-195 review R1 — type for the tenant field | tsc (`npm run build:data-schemas`) | KK20-195 |
 | `packages/data-schemas/src/schema/fileAsset.spec.ts` | dedup-index assertion → `{tenantId, dedup_key}` | 85–90 | KK20-195 review R1 — tracks the tenant-scoped uniqueness swap | Self | KK20-195 |
 | `packages/data-schemas/src/methods/fileAsset.tenant.spec.ts` | tenant-isolation seam tests (whole file) | 1–117 | KK20-195 review R1 — drives the REAL factory (`createModels` + `applyTenantIsolation`) with `tenantStorage`/`runAsSystem` on mongodb-memory-server: the PR #143 StrictModeError reproduction path kept green; tenant persistence, per-tenant dedup, isolation, worker visibility, strict fail-closed | Self | KK20-195 |
+| `packages/data-schemas/src/methods/fileAsset.ts` | `claimAsset` `legacyGeneration` option | 44–50, 192–246 | KK20-195 review R2 — the pre-WP1 sync embed writes UNVERSIONED legacy vectors, so the sync claim keeps target_generation at 0 (migration parity) and activation records active_generation=0 — never a generation RAG did not create. Worker claims (claimNextDue) keep incrementing toward the WP1 contract | `packages/data-schemas/src/methods/fileAsset.methods.spec.ts` (`legacyGeneration` test), `api/server/services/Files/knauf/fileSearchAssetLifecycle.spec.js` | KK20-195 |
 <!-- seams:auto:end -->
 
 ## Configuration

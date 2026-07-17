@@ -147,7 +147,17 @@ async function recordSyncEmbed({
   leaseMs = 10 * 60 * 1000,
   logger,
 }) {
-  const claim = await db.claimAsset({ asset_id, workerId: 'sync-request', leaseMs });
+  // KK20-195 review R2 — the pre-WP1 sync embed writes UNVERSIONED legacy
+  // vectors (no generation field in the multipart request), exactly what the
+  // WP2d migration labels generation 0. Claim WITHOUT incrementing the
+  // generation so activation records active_generation=0 — never a
+  // generation RAG did not create.
+  const claim = await db.claimAsset({
+    asset_id,
+    workerId: 'sync-request',
+    leaseMs,
+    legacyGeneration: true,
+  });
   if (!claim) {
     // Someone else holds the claim (rare concurrent race) — surface as a
     // stable conflict rather than double-embedding.

@@ -303,6 +303,33 @@ describe('admission-control counters', () => {
 });
 
 describe('claimAsset — claim one specific asset (KK20-195 WP3b)', () => {
+  // KK20-195 review R2 — the sync path claims without a generation bump so
+  // activation records generation 0 (unversioned legacy vectors), matching
+  // the WP2d migration's labeling. The worker path keeps incrementing.
+  test('legacyGeneration keeps target_generation at 0 (sync legacy writes)', async () => {
+    await seedQueued({ asset_id: 'legacy-claim' });
+
+    const claimed = await methods.claimAsset({
+      asset_id: 'legacy-claim',
+      workerId: 'sync-request',
+      leaseMs: 60_000,
+      legacyGeneration: true,
+    });
+
+    expect(claimed?.target_generation).toBe(0);
+    expect(claimed?.attempt_count).toBe(1); // attempts still count
+    expect(claimed?.execution_token).toBeDefined(); // fencing unchanged
+
+    const activated = await methods.activateGeneration({
+      asset_id: 'legacy-claim',
+      execution_token: claimed!.execution_token!,
+      target_generation: 0,
+      target_index_profile: claimed!.target_index_profile,
+    });
+    expect(activated?.active_generation).toBe(0);
+    expect(activated?.status).toBe('ready');
+  });
+
   test('claims exactly the requested asset with lease + token + increments', async () => {
     await seedQueued({ asset_id: 'other-older', queued_at: new Date(Date.now() - 60_000) });
     await seedQueued({ asset_id: 'mine' });

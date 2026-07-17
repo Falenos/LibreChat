@@ -172,7 +172,11 @@ describe('recordSyncEmbed — sync execution through the asset (rollout step 4)'
     expect(result.embedded).toBe(true);
     const asset = await db.getAssetByAssetId(id);
     expect(asset.status).toBe('ready');
-    expect(asset.active_generation).toBe(1);
+    // KK20-195 review R2 — the sync embed writes UNVERSIONED legacy vectors;
+    // the ledger must record the generation RAG actually has: 0 (migration
+    // parity), never a phantom generation 1.
+    expect(asset.active_generation).toBe(0);
+    expect(asset.target_generation).toBe(0);
     expect(asset.active_index_profile).toBe('legacy-v0');
     expect(asset.execution_token).toBeUndefined();
   });
