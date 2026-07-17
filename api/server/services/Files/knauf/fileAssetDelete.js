@@ -31,11 +31,32 @@
  * @returns {Promise<boolean>} whether physical cleanup reported success
  */
 async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
+  // KK20-195 review R4 — null and an exception are DIFFERENT outcomes:
+  //   doc  → tombstoned, safe to clean.
+  //   null → verify absence; a confirmed missing row is the authoritative
+  //          legacy/no-ledger case → clean without recording.
+  //   throw (store error, state unknown) → ABORT: cleaning here could delete
+  //          blob/vectors underneath an active worker whose claim the failed
+  //          tombstone never revoked. The reconciler owns the retry.
   let hasAssetRow = false;
   try {
     hasAssetRow = (await db.tombstoneForDelete({ asset_id })) != null;
+    if (!hasAssetRow) {
+      const stillThere = await db.getAssetByAssetId(asset_id);
+      if (stillThere != null) {
+        // Tombstone CAS returned null but the row exists — unexpected state
+        // (tombstoneForDelete is idempotent); do not clean blind.
+        logger?.warn(
+          `[fileAssetDelete] tombstone missed but asset ${asset_id} exists (status ${stillThere.status}); aborting cleanup`,
+        );
+        return false;
+      }
+    }
   } catch (error) {
-    logger?.warn(`[fileAssetDelete] tombstone failed for ${asset_id}: ${error?.message}`);
+    logger?.warn(
+      `[fileAssetDelete] tombstone failed for ${asset_id}; aborting cleanup (state unknown): ${error?.message}`,
+    );
+    return false;
   }
   const cleaned = await cleanup();
   if (!hasAssetRow) {
@@ -51,6 +72,41 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
     logger?.warn(`[fileAssetDelete] lifecycle record failed for ${asset_id}: ${error?.message}`);
   }
   return cleaned;
+}
+
+/**
+ * §8.2 tombstone-before-physical for the plain-row path (KK20-195 review R4):
+ * BEFORE `processDeleteRequest` runs its physical deletes, tombstone every
+ * asset whose references all sit inside the in-flight delete set — a
+ * queued/processing asset can then never be claimed or activated while its
+ * blob/vectors are being destroyed underneath it. Assets with surviving
+ * outside references are untouched (§8.1). Best-effort: a store error here
+ * must not block the user's delete — the asset simply stays un-tombstoned
+ * and the post-delete finalize/reconciler picks it up.
+ *
+ * @param {Object} params
+ * @param {Object} params.db - createMethods surface
+ * @param {Array<{ file_id: string, knauf_asset_id?: string }>} params.files - the delete set
+ * @param {{ warn: Function }} params.logger
+ * @returns {Promise<void>} never throws
+ */
+async function preTombstoneLastReferences({ db, files, logger }) {
+  const deleteIds = (files ?? []).map((f) => f?.file_id).filter(Boolean);
+  const assetIds = [...new Set((files ?? []).map((f) => f?.knauf_asset_id).filter(Boolean))];
+  for (const asset_id of assetIds) {
+    try {
+      const survivors =
+        (await db.getFiles({ knauf_asset_id: asset_id, file_id: { $nin: deleteIds } }, null, {
+          file_id: 1,
+        })) ?? [];
+      if (survivors.length > 0) {
+        continue; // referenced outside the delete set → asset stays live
+      }
+      await db.tombstoneForDelete({ asset_id });
+    } catch (error) {
+      logger?.warn(`[fileAssetDelete] pre-tombstone failed for ${asset_id}: ${error?.message}`);
+    }
+  }
 }
 
 /**
@@ -91,6 +147,7 @@ async function finalizeAssetsAfterRowDelete({ db, deletedFiles, logger }) {
 
 module.exports = {
   gcAssetThroughLifecycle,
+  preTombstoneLastReferences,
   finalizeAssetsAfterRowDelete,
 };
 // End [knauf]

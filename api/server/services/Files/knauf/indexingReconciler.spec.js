@@ -197,6 +197,27 @@ describe('case 4 — asset with no logical references', () => {
 });
 
 describe('case 5 — delete_failed due for retry', () => {
+  // KK20-195 review R4 — the deletion owner is a request that can die
+  // mid-delete; stale 'deleting' is swept too, and a tombstoned asset that
+  // still has references (partial physical failure) alerts, never destroys.
+  test('a stale deleting asset (crashed owner) with no references is finished', async () => {
+    await seedAsset({ asset_id: 'dl-1', status: 'deleting', delete_requested_at: LONG_AGO });
+    const counts = await buildReconciler().runOnce();
+    expect(counts.delete_failed).toMatchObject({ repaired: 1, alerted: 0 });
+    expect(await db.getAssetByAssetId('dl-1')).toBeNull();
+  });
+
+  test('a tombstoned asset that still has references alerts — never auto-destroyed (R4)', async () => {
+    await seedAsset({ asset_id: 'dl-2', status: 'deleting', delete_requested_at: LONG_AGO });
+    await seedFile({ file_id: 'still-here', knauf_asset_id: 'dl-2' });
+
+    const counts = await buildReconciler().runOnce();
+
+    expect(counts.delete_failed).toMatchObject({ repaired: 0, alerted: 1 });
+    expect(await db.getAssetByAssetId('dl-2')).not.toBeNull(); // intact
+    expect(alerts().some((m) => m.includes('tombstoned_with_references'))).toBe(true);
+  });
+
   test('successful retry finishes the deletion', async () => {
     await seedAsset({
       asset_id: 'df-1',

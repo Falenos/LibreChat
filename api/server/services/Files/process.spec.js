@@ -1154,6 +1154,37 @@ describe('processDeleteRequest', () => {
     expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'kb-file' });
   });
 
+  // KK20-195 review R4 — §8.2: a last-reference asset is tombstoned BEFORE
+  // its blob/vectors are destroyed, so nothing can claim/activate mid-delete.
+  it('pre-tombstones a last-reference asset BEFORE physical deletion (R4)', async () => {
+    const sequence = [];
+    const deleteFile = jest.fn(async () => {
+      sequence.push('physical');
+    });
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.deleteFiles.mockResolvedValue({ deletedCount: 1 });
+    db.getFiles.mockResolvedValue([]); // no references outside the delete set
+    db.tombstoneForDelete.mockImplementationOnce(async () => {
+      sequence.push('tombstone');
+      return {};
+    });
+
+    await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'kb-file',
+          knauf_asset_id: 'kb-file',
+          filepath: '/blob/kb',
+          source: FileSources.local,
+        },
+      ],
+    });
+
+    expect(sequence[0]).toBe('tombstone'); // §8.2 ordering
+    expect(sequence).toContain('physical');
+  });
+
   it('leaves the asset untouched while other rows still reference it (WP3d)', async () => {
     const deleteFile = jest.fn().mockResolvedValue(undefined);
     getStrategyFunctions.mockReturnValue({ deleteFile });

@@ -182,16 +182,32 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
   /** Case 5 — `delete_failed` due for another attempt. */
   const reconcileDeleteFailed = async (config, now) => {
     const cutoff = new Date(now.getTime() - config.deleteRetryMs);
+    // KK20-195 review R4 — stale 'deleting' is swept too: the deletion owner
+    // is a request that can die mid-delete (and R4's pre-tombstone can leave
+    // a tombstoned asset behind when part of the physical delete failed and
+    // rows survived). A tombstoned asset that still HAS references is the
+    // partial-failure signature → alert, never auto-destroy.
     const assets = await listAssets(
-      { status: 'delete_failed', updatedAt: { $lte: cutoff } },
+      { status: { $in: ['delete_failed', 'deleting'] }, updatedAt: { $lte: cutoff } },
       config.batchLimit,
     );
+    const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
     for (const asset of assets) {
-      const resumed = await db.retryDelete({ asset_id: asset.asset_id });
-      if (!resumed) {
-        continue; // someone else transitioned it — fine
+      if (referenced.has(asset.asset_id)) {
+        alert(
+          'tombstoned_with_references',
+          `asset ${asset.asset_id} is ${asset.status} but File rows still reference it (partial delete failure)`,
+        );
+        alerted += 1;
+        continue;
+      }
+      if (asset.status === 'delete_failed') {
+        const resumed = await db.retryDelete({ asset_id: asset.asset_id });
+        if (!resumed) {
+          continue; // someone else transitioned it — fine
+        }
       }
       const cleaned = await cleanupAsset(asset);
       if (cleaned) {

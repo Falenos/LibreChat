@@ -7,7 +7,11 @@
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { fileSchema, fileAssetSchema, createFileAssetMethods } = require('@librechat/data-schemas');
-const { gcAssetThroughLifecycle, finalizeAssetsAfterRowDelete } = require('./fileAssetDelete');
+const {
+  gcAssetThroughLifecycle,
+  preTombstoneLastReferences,
+  finalizeAssetsAfterRowDelete,
+} = require('./fileAssetDelete');
 
 let mongoServer;
 let KnaufFileAsset;
@@ -107,6 +111,89 @@ describe('gcAssetThroughLifecycle (§8.2/§8.3)', () => {
     expect(ok).toBe(true);
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(await db.getAssetByAssetId('ghost')).toBeNull();
+  });
+
+  // KK20-195 review R4 — null and an exception are DIFFERENT outcomes.
+  test('a tombstone STORE ERROR aborts cleanup (state unknown — never delete blind)', async () => {
+    await seedAsset({ asset_id: 'g4' });
+    const cleanup = jest.fn().mockResolvedValue(true);
+    const brokenDb = {
+      ...db,
+      tombstoneForDelete: async () => {
+        throw new Error('mongo down');
+      },
+    };
+
+    const ok = await gcAssetThroughLifecycle({ db: brokenDb, asset_id: 'g4', logger, cleanup });
+
+    expect(ok).toBe(false);
+    expect(cleanup).not.toHaveBeenCalled(); // blob/vectors untouched
+    expect((await db.getAssetByAssetId('g4')).status).toBe('queued'); // asset intact
+  });
+
+  test('tombstone null while the asset still EXISTS aborts (unexpected state)', async () => {
+    await seedAsset({ asset_id: 'g5' });
+    const cleanup = jest.fn().mockResolvedValue(true);
+    const weirdDb = { ...db, tombstoneForDelete: async () => null };
+
+    const ok = await gcAssetThroughLifecycle({ db: weirdDb, asset_id: 'g5', logger, cleanup });
+
+    expect(ok).toBe(false);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+});
+
+// KK20-195 review R4 — §8.2 for the plain-row path: tombstone BEFORE the
+// physical deletes when the delete set holds an asset's last references.
+describe('preTombstoneLastReferences (§8.2, review R4)', () => {
+  test('an asset fully covered by the delete set is tombstoned before physical work', async () => {
+    await seedAsset({ asset_id: 'pre-1', status: 'queued' });
+    await seedFile({ file_id: 'only-ref', knauf_asset_id: 'pre-1' });
+
+    await preTombstoneLastReferences({
+      db,
+      files: [{ file_id: 'only-ref', knauf_asset_id: 'pre-1' }],
+      logger,
+    });
+
+    const asset = await db.getAssetByAssetId('pre-1');
+    expect(asset.status).toBe('deleting');
+    expect(asset.delete_requested_at).not.toBeNull();
+    // Tombstone blocks the claim path mid-delete.
+    expect(await db.claimNextDue({ workerId: 'w1', leaseMs: 60_000 })).toBeNull();
+  });
+
+  test('an asset with a reference OUTSIDE the delete set stays live', async () => {
+    await seedAsset({ asset_id: 'pre-2', status: 'ready', active_generation: 1 });
+    await seedFile({ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' });
+    await seedFile({ file_id: 'outside-ref', knauf_asset_id: 'pre-2' });
+
+    await preTombstoneLastReferences({
+      db,
+      files: [{ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' }],
+      logger,
+    });
+
+    const asset = await db.getAssetByAssetId('pre-2');
+    expect(asset.status).toBe('ready');
+    expect(asset.delete_requested_at ?? null).toBeNull();
+  });
+
+  test('a store failure is contained (the user delete must not block)', async () => {
+    const brokenDb = {
+      ...db,
+      getFiles: async () => {
+        throw new Error('mongo down');
+      },
+    };
+    await expect(
+      preTombstoneLastReferences({
+        db: brokenDb,
+        files: [{ file_id: 'x', knauf_asset_id: 'any' }],
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
   });
 });
 

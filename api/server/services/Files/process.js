@@ -247,6 +247,17 @@ const processDeleteRequest = async ({ req, files }) => {
 
   const agentFiles = [];
 
+  // [knauf] KK20-195 review R4 — §8.2 tombstone-before-physical: assets whose
+  // every reference sits inside this delete set are tombstoned BEFORE their
+  // blob/vectors are destroyed, so a queued/processing asset can't be claimed
+  // or activated mid-delete. Best-effort; the post-delete finalize below
+  // remains the remove step.
+  {
+    const { preTombstoneLastReferences } = require('./knauf/fileAssetDelete');
+    await preTombstoneLastReferences({ db, files, logger });
+  }
+  // End [knauf]
+
   for (const file of files) {
     const source = file.source ?? FileSources.local;
     if (req.body.agent_id && req.body.tool_resource) {
