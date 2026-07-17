@@ -28,7 +28,9 @@ const refTypeMap: Record<string | SearchRefType, string> = {
   search: 'organic',
   ref: 'references',
   news: 'topStories',
-  file: 'references',
+  // [knauf] Keep file anchor indexes independent from web reference indexes.
+  file: 'fileReferences',
+  // End [knauf]
 };
 
 export function useCitation({

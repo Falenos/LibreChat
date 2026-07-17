@@ -25,6 +25,9 @@ const refTypeMap: Record<string, string> = {
   news: 'topStories',
   image: 'images',
   video: 'videos',
+  // [knauf] Keep copied file citations independent from web reference indexes.
+  file: 'fileReferences',
+  // End [knauf]
 };
 
 export default function useCopyToClipboard({

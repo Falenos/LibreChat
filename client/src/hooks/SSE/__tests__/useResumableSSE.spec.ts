@@ -316,15 +316,13 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
-  it('clears both TEXT and FILES drafts for new-convo when conversationId is absent', async () => {
-    // [knauf] KK20-227 — NEW_CONVO drafts are tab-scoped (sessionStorage) since
-    // the drafts.ts change; seed/assert the store clearAllDrafts actually uses.
+  // [knauf] KK20-227 — temporary drafts are tab-scoped in sessionStorage.
+  it('clears both session drafts for new-convo when conversationId is absent', async () => {
     sessionStorage.setItem(
       `${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`,
       'unsent message',
     );
     sessionStorage.setItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`, '[]');
-    // End [knauf]
 
     const submission = buildSubmission({ conversation: {} });
     const chatHelpers = buildChatHelpers();
@@ -340,16 +338,15 @@ describe('useResumableSSE - 404 error path', () => {
       sse._emit('error', { responseCode: 404 });
     });
 
-    // [knauf] KK20-227 — see seeding note above.
     expect(
       sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`),
     ).toBeNull();
     expect(
       sessionStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`),
     ).toBeNull();
-    // End [knauf]
     unmount();
   });
+  // End [knauf]
 
   it('invalidates the stream conversation id on 404 for a new conversation', async () => {
     mockFindAll.mockReturnValue([{ queryKey: [QueryKeys.allConversations] }]);

@@ -10,6 +10,13 @@ const mockGetMCPServerTools = jest.fn();
 const mockCreateMCPTool = jest.fn();
 const mockCreateMCPTools = jest.fn();
 const mockGetServerConfig = jest.fn();
+const mockPrimeSearchFiles = jest.fn();
+const mockCreateFileSearchTool = jest.fn();
+
+jest.mock('./fileSearch', () => ({
+  primeFiles: (...args) => mockPrimeSearchFiles(...args),
+  createFileSearchTool: (...args) => mockCreateFileSearchTool(...args),
+}));
 
 jest.mock('~/server/services/PluginService', () => mockPluginService);
 
@@ -51,7 +58,7 @@ jest.mock('~/config', () => ({
 }));
 
 const { Calculator } = require('@librechat/agents');
-const { Constants } = require('librechat-data-provider');
+const { Constants, Tools } = require('librechat-data-provider');
 
 const { User } = require('~/db/models');
 const PluginService = require('~/server/services/PluginService');
@@ -229,6 +236,33 @@ describe('Tool Handlers', () => {
       expect(authTool).toBeInstanceOf(ToolClass);
       expect(tool).toBeInstanceOf(ToolClass2);
     });
+
+    // [knauf] NO-TICKET — added-agent runtime suffixes are not part of stored ACL/RAG scope.
+    it('uses the persistent agent id for resources and the runtime id for cache partitioning', async () => {
+      mockPrimeSearchFiles.mockResolvedValue({ files: [], toolContext: '' });
+      mockCreateFileSearchTool.mockResolvedValue({ name: Tools.file_search });
+      const req = {};
+
+      const result = await loadTools({
+        user: fakeUser._id.toString(),
+        agent: { id: 'agent_abc____1' },
+        tools: [Tools.file_search],
+        options: { req },
+      });
+
+      expect(result.loadedTools).toEqual([{ name: Tools.file_search }]);
+      expect(mockPrimeSearchFiles).toHaveBeenCalledWith(
+        expect.objectContaining({ req, agentId: 'agent_abc' }),
+      );
+      expect(mockCreateFileSearchTool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity_id: 'agent_abc',
+          cachePartition: 'agent_abc____1',
+          runContext: req,
+        }),
+      );
+    });
+    // End [knauf]
 
     // [knauf] KK20-194 — exact-link provenance must preserve URL parentheses
     // while excluding surrounding Markdown and sentence punctuation.

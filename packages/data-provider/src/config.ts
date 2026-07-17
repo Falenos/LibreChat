@@ -775,6 +775,18 @@ export const agentsEndpointSchema = baseEndpointSchema
           maxCatalogSkills: z.number().int().min(1).max(100).optional(),
         })
         .optional(),
+      // [knauf] NO-TICKET — namespace the configurable per-run guard so it cannot
+      // collide with a future upstream agents setting.
+      knauf: z
+        .object({
+          fileSearch: z
+            .object({
+              maxDistinctQueries: z.number().int().min(1).max(10).optional().default(3),
+            })
+            .optional(),
+        })
+        .optional(),
+      // End [knauf]
       remoteApi: remoteApiSchema.optional(),
     }),
   )

@@ -30,6 +30,32 @@ Treat that README as a shareable architecture snapshot, not a substitute for liv
 
 Do not duplicate the full README into this skill. Keep this skill as the workflow and safety guide; use the README as reference material loaded only when architecture context is needed.
 
+### File Search Storage Invariant
+
+Verified against `agentic-karl` and `agentic-karl-rag-api` on 2026-07-16:
+
+- Azure Blob Storage holds the original bytes for chat files, Agent Knowledge, and images. Blob storage is not a vector-search backend.
+- A document uploaded from a conversation is a user-owned `message_attachment` and is embedded in PostgreSQL/pgvector, even while the user is chatting with a persistent agent.
+- A document uploaded through the persistent agent builder is agent-owned Agent Knowledge and is embedded in Azure AI Search when `AZURE_SEARCH_ENABLED=true`.
+- An agent run may need both sources. The single `file_search` tool can query the agent's Azure AI Search knowledge and the user's pgvector conversation uploads in the same run.
+- Images never enter `file_search`; they remain message-scoped multimodal attachments.
+- Do not infer vector ownership from the active chat endpoint or from the mere presence of an `agent_id`. Use the file's persisted context and membership in `agent.tool_resources.file_search.file_ids`.
+
+Current compatibility caveat: with `AZURE_SEARCH_ENABLED=false`, the application falls Agent Knowledge back to pgvector. AGK environments are expected to enable Azure AI Search; treat the fallback as implementation compatibility, not the target architecture.
+
+Azure AI Search infrastructure ownership:
+
+| Env | Search service | Terraform owner | Runtime wiring |
+|---|---|---|---|
+| Dev/nonprod | `agentic-karl-search-dev` | `agk-infrastructure/terraform/subscription/nonprod/tenant/agentic-karl/search-dev.tf` | app `AZURE_SEARCH_ENABLED=true`; RAG `AZURE_SEARCH_ENDPOINT=https://agentic-karl-search-dev.search.windows.net` |
+| Prod | `agentic-karl-search-prod` | `agk-infrastructure/terraform/subscription/prod/tenant/agentic-karl/search.tf` | app `AZURE_SEARCH_ENABLED=true`; RAG `AZURE_SEARCH_ENDPOINT=https://agentic-karl-search-prod.search.windows.net` |
+
+Both services are private, Basic SKU, and exposed to the RAG workload through private endpoints/DNS. Terraform writes `agentic-karl-AZURE-SEARCH-API-KEY` to the tenant Key Vault; the RAG service ExternalSecret maps it to `AZURE_SEARCH_API_KEY`. The endpoint and mapping live in `agk-deployment-configs/agentic-karl/<env>/services/agentic-karl-rag-api/values.yaml`; the app-side enable flag lives in the adjacent `agentic-karl/values.yaml`.
+
+Do not conflate Azure AI Search with Azure OpenAI/Foundry model inference, Azure OpenAI content filters, Azure Blob Storage, or Azure AI Document Intelligence. A Prompt Shield error is a model-inference failure, not evidence that a chat file was indexed in Azure AI Search.
+
+Detailed ingestion, retrieval, mixed-backend, deletion, and citation behavior lives in `$KNAUF_ROOT/agentic-karl/knauf/docs/architecture/files/rag-search.md` and the top-down snapshot linked above.
+
 ## Repos
 
 Use the same repo names regardless of local checkout path. In examples, set `KNAUF_ROOT` to the directory that contains the Knauf repos:

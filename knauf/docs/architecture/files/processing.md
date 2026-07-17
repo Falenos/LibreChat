@@ -3,7 +3,7 @@ title: Files — Format processing & allow-list
 spec-id: AGK-ARCH-files-processing
 status: implemented
 owners: ["@jorgecostak"]
-last-reviewed: 2026-06-17
+last-reviewed: 2026-07-16
 code-refs:
   - api/server/services/Files/process.js
   - api/server/routes/files/files.js
@@ -148,9 +148,9 @@ Three strategies in [packages/api/src/files/mistral/crud.ts](../../../../package
 
 ### 4e. RAG embedding — **active**
 
-For Agent Knowledge / file_search, the raw binary is POSTed to rag_api `/embed`; rag_api does its own parsing + chunking. Whether a format is embeddable is decided by the `known_type` field in the response ([VectorDB/crud.js#L88-L101](../../../../api/server/services/Files/VectorDB/crud.js#L88)); an unsupported type surfaces as `File embedding failed. The filetype <mime> is not supported`. The embed/query contract and `entity_id` scoping are owned by [`rag-search.md`](./rag-search.md) — this doc only notes that **format acceptance for RAG is rag_api's call, not the allow-lists in §2**.
+For conversation File Search, the raw binary is POSTed to RAG API `/embed` and stored in pgvector. For persistent Agent Knowledge, it is POSTed to `/agent/embed` and stored in Azure AI Search when enabled. Both routes use the RAG service's parsing/chunking pipeline. Whether a format is embeddable is decided by the `known_type` field in the response; an unsupported type surfaces as `File embedding failed. The filetype <mime> is not supported`. Backend selection and scoping are owned by [`rag-search.md`](./rag-search.md) — this doc only notes that **format acceptance is the RAG service's decision, not the allow-lists in §2**.
 
-**What rag_api actually accepts** (from the external image `librechat-rag-api-dev-lite`; source: `app/utils/document_loader.py` + `known_source_ext` in `app/config.py` of [danny-avila/rag_api](https://github.com/danny-avila/rag_api) — verify against the pinned image tag, not this repo):
+**What the Knauf RAG service accepts** (source: `app/utils/document_loader.py` + `known_source_ext` in `app/config.py` of [`Knauf-Group/agentic-karl-rag-api`](https://github.com/Knauf-Group/agentic-karl-rag-api); verify against the deployed image tag):
 - **Dedicated loaders**: PDF (PyPDFLoader), DOCX (Docx2txtLoader), XLSX (UnstructuredExcelLoader), PPTX/PPT (UnstructuredPowerPointLoader), CSV (CSVLoader), Markdown, EPUB, XML, RST, JSON.
 - **Text/code via `known_source_ext`**: `txt`-like + ~50 code/config extensions (py, js, ts, tsx, jsx, java, go, c, cpp, cs, rb, php, rs, swift, scala, sql, sh, bash, yaml/yml, ini, conf, env, eml, vue, svelte, …).
 - **Not handled**: legacy `.doc` (only `.docx`), and any binary type without a loader → `known_type: false` → the "filetype not supported" error above. KARL therefore **excludes `.doc` from the upload allow-list** (§6) so it's rejected at upload with a clear "unsupported file type" rather than failing later at embed time (users save as `.docx`).
@@ -161,7 +161,7 @@ For Agent Knowledge / file_search, the raw binary is POSTed to rag_api `/embed`;
 
 ### 4g. Provider-side (Upload to Provider) — **active**
 
-No local processing. The file is sent to Azure OpenAI via `openai.files.create` and **Azure** parses it on its side every turn. The client allow-list is `supportedMimeTypes` (so image + PDF + the document families pass validation); the practical format support is whatever the Azure Responses API ingests. This is the default chat-attach path today (→ [`overview.md`](./overview.md) §2b).
+No local processing. The file is sent to the provider via `openai.files.create`, and the provider parses it. The practical format support is whatever that provider accepts. This path still exists for compatible endpoints but is not the Knauf chat default; Knauf chat documents use conversation File Search and images use inline vision (→ [`overview.md`](./overview.md) §2b).
 
 ---
 

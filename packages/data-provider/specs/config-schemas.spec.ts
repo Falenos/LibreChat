@@ -404,6 +404,25 @@ describe('endpointSchema addParams validation', () => {
 });
 
 describe('agentsEndpointSchema', () => {
+  // [knauf] NO-TICKET — validate the configurable file-search loop budget.
+  it('defaults and validates the file search distinct-query budget', () => {
+    const defaultResult = agentsEndpointSchema.safeParse({ knauf: { fileSearch: {} } });
+    const configuredResult = agentsEndpointSchema.safeParse({
+      knauf: { fileSearch: { maxDistinctQueries: 5 } },
+    });
+    const invalidResult = agentsEndpointSchema.safeParse({
+      knauf: { fileSearch: { maxDistinctQueries: 0 } },
+    });
+
+    expect(defaultResult.success).toBe(true);
+    if (defaultResult.success) {
+      expect(defaultResult.data.knauf?.fileSearch?.maxDistinctQueries).toBe(3);
+    }
+    expect(configuredResult.success).toBe(true);
+    expect(invalidResult.success).toBe(false);
+  });
+  // End [knauf]
+
   it('does not accept baseURL', () => {
     const result = agentsEndpointSchema.safeParse({
       baseURL: 'https://example.com',

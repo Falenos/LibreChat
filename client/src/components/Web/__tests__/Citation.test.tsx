@@ -67,7 +67,8 @@ describe('Citation', () => {
   it('renders composite file citations as buttons and opens the preview dialog', () => {
     const searchResults = {
       '0': {
-        references: [
+        // [knauf] File citation anchors use a dedicated index space from web references.
+        fileReferences: [
           {
             attribution: 'Tutorial Imazing.pdf',
             fileId: 'file-123',
@@ -84,6 +85,7 @@ describe('Citation', () => {
             type: 'file',
           },
         ],
+        // End [knauf]
       },
     };
 

@@ -371,12 +371,19 @@ class AgentClient extends BaseClient {
     }
 
     /** Note: Bedrock uses legacy RAG API handling */
-    if (this.message_file_map && !isAgentsEndpoint(this.options.endpoint)) {
+    // [knauf] NO-TICKET — file_search already retrieves embedded document text.
+    // Disable only the duplicate legacy augmentation path for effective runs that
+    // have that tool; attachment/image/code/provider handling remains unchanged.
+    const hasFileSearchTool = [this.options.agent, ...(this.agentConfigs?.values() ?? [])].some(
+      (agent) => buildToolSet(agent).has(AgentCapabilities.file_search),
+    );
+    if (this.message_file_map && !isAgentsEndpoint(this.options.endpoint) && !hasFileSearchTool) {
       this.contextHandlers = createContextHandlers(
         this.options.req,
         orderedMessages[orderedMessages.length - 1].text,
       );
     }
+    // End [knauf]
 
     /** @type {Record<number, number>} */
     const indexTokenCountMap = {};
