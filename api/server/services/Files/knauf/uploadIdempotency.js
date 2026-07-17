@@ -7,9 +7,10 @@
 // an exact retry resolves to the original row, and the same id with different
 // content or a different owner is a hard 409, never an overwrite.
 //
-// Content equality is byte-size based for WP3a (the content hash is computed
-// deeper in the pipeline today); WP3b moves hashing ahead of the reservation
-// and upgrades this check to the hash.
+// Content equality (KK20-195 review R3): the SHA-256 content hash is
+// authoritative whenever both sides have one — same-length different-content
+// retries must conflict, not replay. Byte length remains the fallback for
+// rows that predate hashing (agent-library rows carry no hash).
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,18 +25,24 @@ const isValidClientFileId = (id) => typeof id === 'string' && UUID_RE.test(id);
 /**
  * Classify a repeated (owner, file_id) upload.
  * @param {Object} params
- * @param {{ user?: unknown, bytes?: number } | undefined} params.existing - row found by unscoped file_id lookup
+ * @param {{ user?: unknown, bytes?: number, knauf_content_hash?: string } | undefined} params.existing - row found by unscoped file_id lookup
  * @param {string} params.userId
  * @param {number | undefined} params.incomingBytes
+ * @param {string | undefined} [params.incomingHash] - SHA-256 of the incoming bytes (R3: authoritative when both sides have one)
  * @returns {{ outcome: 'proceed' } | { outcome: 'replay' } | { outcome: 'conflict', reason: 'file_id_taken' | 'different_content' }}
  */
-const classifyUploadReplay = ({ existing, userId, incomingBytes }) => {
+const classifyUploadReplay = ({ existing, userId, incomingBytes, incomingHash }) => {
   if (!existing) {
     return { outcome: 'proceed' };
   }
   if (String(existing.user) !== String(userId)) {
     // The id belongs to someone else — never overwrite, never reveal whose.
     return { outcome: 'conflict', reason: 'file_id_taken' };
+  }
+  if (existing.knauf_content_hash != null && incomingHash != null) {
+    return existing.knauf_content_hash === incomingHash
+      ? { outcome: 'replay' }
+      : { outcome: 'conflict', reason: 'different_content' };
   }
   if (existing.bytes != null && incomingBytes != null && existing.bytes !== incomingBytes) {
     return { outcome: 'conflict', reason: 'different_content' };

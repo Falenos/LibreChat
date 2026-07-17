@@ -1033,7 +1033,10 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         const { handleFileUpload } = getStrategyFunctions(source);
         const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
         storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
-        await db.markQueued({
+        // KK20-195 review R3 — the CAS can MISS (null), not just throw: a
+        // concurrent tombstone leaves the asset 'uploading' and nothing would
+        // ever drain it. A miss is the same failure as a throw.
+        const queued = await db.markQueued({
           asset_id: knaufAssetId,
           blob: {
             source,
@@ -1042,9 +1045,32 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
             mime: file.mimetype,
           },
         });
+        if (!queued) {
+          const missed = new Error('file_asset_queue_transition_lost');
+          missed.knaufCode = 'file_asset_queue_transition_lost';
+          throw missed;
+        }
       } catch (error) {
         // Blob upload / queue transition failed — release the reservation this
         // request made so it can't linger as an unreachable 'uploading' asset.
+        // KK20-195 review R3 — if the blob DID land before the transition
+        // failed, delete it too: removing only the ledger row orphaned the
+        // uploaded bytes with nothing left to ever reclaim them.
+        if (storageResult?.filepath) {
+          try {
+            const { deleteFile } = getStrategyFunctions(source);
+            await deleteFile(req, {
+              file_id,
+              filepath: storageResult.filepath,
+              source,
+              embedded: false,
+            });
+          } catch (blobError) {
+            logger.warn(
+              `[processAgentFileUpload] blob compensation failed for ${knaufAssetId}: ${blobError?.message}`,
+            );
+          }
+        }
         await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
         await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
         throw error;

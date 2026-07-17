@@ -1837,6 +1837,44 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       delete process.env.KNAUF_INDEX_MAX_QUEUED_FILES;
     }
   });
+
+  // KK20-195 review R3 — kill-point tests around blob upload → queue
+  // transition. (The die-AFTER-markQueued boundary is covered by the reclaim
+  // test in fileSearchAssetLifecycle.spec and the worker scope-retry test —
+  // the asset is queued and recoverable there; here nothing durable may
+  // survive.)
+  test('kill-point: markQueued THROWS after the blob landed → blob compensated, reservation released (R3)', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.markQueued.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down');
+
+    // The uploaded blob is deleted — not orphaned with only the ledger row gone.
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ filepath: '/blob/doc.pdf', embedded: false }),
+    );
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.createFile).not.toHaveBeenCalled(); // failure leaves nothing
+  });
+
+  test('kill-point: markQueued CAS MISS (null) is the same failure as a throw (R3)', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.markQueued.mockResolvedValueOnce(null); // concurrent tombstone won the CAS
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('file_asset_queue_transition_lost');
+
+    expect(deleteFile).toHaveBeenCalledTimes(1);
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.createFile).not.toHaveBeenCalled();
+  });
 });
 // End [knauf]
 

@@ -796,10 +796,20 @@ router.post('/', async (req, res) => {
       // owner is a hard 409. Unscoped lookup on purpose: the cross-user case
       // must be detected, not silently duplicated.
       const [existing] = await db.getFiles({ file_id: metadata.file_id }, null, { text: 0 });
+      // KK20-195 review R3 — when the stored row carries a content hash,
+      // compare hashes, not just byte length (same-size different content
+      // must conflict, never replay). Hashing only happens on the rare
+      // same-id path, and only when the row has a hash to compare against.
+      let knaufIncomingHash;
+      if (existing?.knauf_content_hash != null && req.file?.path != null) {
+        const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
+        knaufIncomingHash = await computeContentHash(req.file.path).catch(() => undefined);
+      }
       const verdict = classifyUploadReplay({
         existing,
         userId: req.user.id,
         incomingBytes: req.file?.size,
+        incomingHash: knaufIncomingHash,
       });
       if (verdict.outcome === 'replay') {
         logger.info(`[/files] idempotent replay for file_id ${metadata.file_id}`);
@@ -808,8 +818,13 @@ router.post('/', async (req, res) => {
         // which would open the send gate and then 409 on send. attachIndexingToFiles
         // is resilient (falls back to the plain row if the asset load fails).
         const [projected] = await attachIndexingToFiles({ db, files: [existing] });
-        return res.status(200).json({
-          message: 'File already processed',
+        // R3 — same status semantics as the fresh path: pending work replays
+        // as 202, never a 200 the client could read as "ready".
+        const knaufReplayPending = projected?.indexing != null && !projected.indexing.ready;
+        return res.status(knaufReplayPending ? 202 : 200).json({
+          message: knaufReplayPending
+            ? 'File accepted; indexing in progress'
+            : 'File already processed',
           ...(projected ?? existing),
           ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
         });

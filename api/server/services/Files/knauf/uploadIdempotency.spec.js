@@ -62,5 +62,48 @@ describe('classifyUploadReplay (KK20-195 WP3a)', () => {
       }),
     ).toEqual({ outcome: 'replay' });
   });
+
+  // KK20-195 review R3 — the content hash is authoritative when both sides
+  // have one: same byte length must not disguise different content.
+  test('same bytes but a DIFFERENT hash → conflict: different_content', () => {
+    expect(
+      classifyUploadReplay({
+        existing: { user: userId, bytes: 10, knauf_content_hash: 'aaa' },
+        userId,
+        incomingBytes: 10,
+        incomingHash: 'bbb',
+      }),
+    ).toEqual({ outcome: 'conflict', reason: 'different_content' });
+  });
+
+  test('matching hashes replay — the hash outranks a byte-length mismatch', () => {
+    expect(
+      classifyUploadReplay({
+        existing: { user: userId, bytes: 10, knauf_content_hash: 'aaa' },
+        userId,
+        incomingBytes: 99,
+        incomingHash: 'aaa',
+      }),
+    ).toEqual({ outcome: 'replay' });
+  });
+
+  test('hash on one side only falls back to the byte-length check', () => {
+    expect(
+      classifyUploadReplay({
+        existing: { user: userId, bytes: 10, knauf_content_hash: 'aaa' },
+        userId,
+        incomingBytes: 10,
+        incomingHash: undefined,
+      }),
+    ).toEqual({ outcome: 'replay' });
+    expect(
+      classifyUploadReplay({
+        existing: { user: userId, bytes: 10 },
+        userId,
+        incomingBytes: 99,
+        incomingHash: 'aaa',
+      }),
+    ).toEqual({ outcome: 'conflict', reason: 'different_content' });
+  });
 });
 // End [knauf]
