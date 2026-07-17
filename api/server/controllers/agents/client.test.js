@@ -1,6 +1,12 @@
 // [knauf] Mutable routed response metadata for title-usage tests.
 const mockCollectedMetadata = [];
 // End [knauf]
+// [knauf] NO-TICKET — observe whether legacy vector augmentation is constructed.
+const mockCreateContextHandlers = jest.fn();
+jest.mock('~/app/clients/prompts', () => ({
+  createContextHandlers: mockCreateContextHandlers,
+}));
+// End [knauf]
 
 const { Providers } = require('@librechat/agents');
 const { Constants, ContentTypes, EModelEndpoint } = require('librechat-data-provider');
@@ -1681,6 +1687,58 @@ describe('AgentClient - titleConvo', () => {
         expect(files).toEqual([currentFile]);
       },
     );
+
+    // [knauf] NO-TICKET — only file_search suppresses duplicate legacy vector
+    // augmentation; runs without the effective tool keep the provider fallback.
+    it.each([
+      ['skips for the primary tool', [{ name: 'file_search' }], [], 0],
+      ['skips for a reachable child tool', [], [{ name: 'file_search' }], 0],
+      ['keeps when no reachable agent has the tool', [], [], 1],
+    ])(
+      '%s legacy augmentation',
+      async (_label, primaryToolDefinitions, childToolDefinitions, calls) => {
+        const handler = {
+          processFile: jest.fn(),
+          createContext: jest.fn().mockResolvedValue('Legacy vector context'),
+        };
+        mockCreateContextHandlers.mockReturnValue(handler);
+        mockAgent.toolDefinitions = primaryToolDefinitions;
+        client.agentConfigs = new Map([
+          [
+            'child-agent',
+            {
+              ...mockAgent,
+              id: 'child-agent',
+              instructions: 'Child instructions',
+              toolDefinitions: childToolDefinitions,
+            },
+          ],
+        ]);
+        client.options.endpoint = EModelEndpoint.openAI;
+        client.message_file_map = {
+          'msg-1': [{ file_id: 'embedded-1', filename: 'embedded.pdf', embedded: true }],
+        };
+
+        await client.buildMessages(
+          [
+            {
+              messageId: 'msg-1',
+              parentMessageId: null,
+              sender: 'User',
+              text: 'Search the document.',
+              isCreatedByUser: true,
+            },
+          ],
+          'msg-1',
+          {},
+        );
+
+        expect(mockCreateContextHandlers).toHaveBeenCalledTimes(calls);
+        expect(handler.processFile).toHaveBeenCalledTimes(calls);
+        expect(handler.createContext).toHaveBeenCalledTimes(calls);
+      },
+    );
+    // End [knauf]
 
     it('places request context inline and applies each agent context doc only once', async () => {
       const requestFile = makeTextFile('request-file', 'request.txt', 'Shared request context');

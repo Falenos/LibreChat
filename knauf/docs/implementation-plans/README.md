@@ -36,6 +36,7 @@ If you can't decide between promote and archive: archive.
 | [`agent-publishing-governance.md`](./agent-publishing-governance.md) | Zahar / KARL admins | 2026-06-02 | Working direction for AI Champions controlled agent publishing pilot |
 | [`admin-panel-dev-deployment-plan.md`](./admin-panel-dev-deployment-plan.md) | Zahar / KARL admins | 2026-06-05 | Deploy LibreChat Admin Panel as a pinned AGK dev service |
 | [`file-lifecycle-dedup-cleanup.md`](./file-lifecycle-dedup-cleanup.md) | jorgecostak | 2026-06-26 | KK20-203 cascade cleanup on chat delete, then KK20-204 per-user content-hash dedup |
+| [`agent-retrieval-and-langgraph-reliability-plan.md`](./agent-retrieval-and-langgraph-reliability-plan.md) | Agentic Karl / RAG / agents SDK maintainers | 2026-07-16 | Correct dual-backend retrieval, compaction, termination, and tracing |
 | [`file-upload-model-router-remediation.md`](./file-upload-model-router-remediation.md) | Agentic Karl maintainers | 2026-07-17 | Bound router failures, correct document routing/dedup, repair cost attribution, and validate dev retrieval paths |
 
 When that table empties, this folder can be reconsidered — maybe it stays as a known home for the next workstream, maybe it gets dropped. For now it has a clear purpose.

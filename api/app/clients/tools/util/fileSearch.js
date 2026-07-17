@@ -1,14 +1,10 @@
-const axios = require('axios');
-const { logger } = require('@librechat/data-schemas');
-const { tool } = require('@librechat/agents/langchain/tools');
-const { generateShortLivedToken } = require('@librechat/api');
 const { Tools, EToolResources } = require('librechat-data-provider');
 
-// [knauf] Shared flag — single source of truth for Azure Search routing.
-const { useAzureSearchForAgents } = require('~/server/services/Files/VectorDB/crud');
-// End [knauf]
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getFiles } = require('~/models');
+// [knauf] Delegate fork-specific retrieval to a Knauf-owned module.
+const { createKnaufFileSearchTool } = require('~/server/services/Files/knauf/fileSearchRetrieval');
+// End [knauf]
 
 const fileSearchJsonSchema = {
   type: 'object',
@@ -77,6 +73,7 @@ const primeFiles = async (options) => {
       // [knauf] KK20-204 — carry the shared asset id so the /query below resolves a
       // deduped reuse row's vectors (stored under knauf_asset_id), not its own id.
       knauf_asset_id: file.knauf_asset_id,
+      // End [knauf]
       // [knauf] KK20-203 — carry context so query routing can split agent vs chat files.
       context: file.context,
       // End [knauf]
@@ -87,152 +84,8 @@ const primeFiles = async (options) => {
   return { files, toolContext };
 };
 
-/**
- *
- * @param {Object} options
- * @param {string} options.userId
- * @param {Array<{ file_id: string; filename: string; fromAgent?: boolean }>} options.files
- * @param {string} [options.entity_id]
- * @param {boolean} [options.fileCitations=false] - Whether to include citation instructions
- * @returns
- */
-const createFileSearchTool = async ({ userId, files, entity_id, fileCitations = false }) => {
-  return tool(
-    async ({ query }) => {
-      if (files.length === 0) {
-        return ['No files to search. Instruct the user to add files for the search.', undefined];
-      }
-      const jwtToken = generateShortLivedToken(userId);
-      if (!jwtToken) {
-        return ['There was an error authenticating the file search request.', undefined];
-      }
-
-      /**
-       * @param {import('librechat-data-provider').TFile & { fromAgent?: boolean }} file
-       * @returns {{ file_id: string, query: string, k: number, entity_id?: string }}
-       */
-      const createQueryBody = (file) => {
-        const body = {
-          // [knauf] KK20-204 — a deduped reuse row's embeddings live under the shared
-          // asset id; query that, not the row's own file_id (which has no vectors).
-          file_id: file.knauf_asset_id ?? file.file_id,
-          // End [knauf]
-          query,
-          k: 5,
-        };
-        // User-attached files are embedded under the user id (no entity);
-        // only agent knowledge-base files carry the agent's entity_id.
-        // Sending entity_id for user attachments makes the RAG API's entity
-        // filter return no results for them. When files are provided by
-        // primeFiles, fromAgent is always set; for callers that pass files
-        // directly without the flag, the safe default is unscoped (no
-        // entity_id).
-        if (!entity_id || file.fromAgent !== true) {
-          return body;
-        }
-        body.entity_id = entity_id;
-        logger.debug(`[${Tools.file_search}] RAG API /query body`, body);
-        return body;
-      };
-
-      // [knauf] KK20-203 — Per-file query routing: agent files query Azure AI Search
-      // when enabled, chat/message attachments always query pgvector.
-      const azureEnabled = useAzureSearchForAgents();
-      const azureQueryUrl = `${process.env.RAG_API_URL}/agent/query`;
-      const pgvectorQueryUrl = `${process.env.RAG_API_URL}/query`;
-
-      const queryPromises = files.map((file) => {
-        const url = azureEnabled && file.context === 'agents'
-          ? azureQueryUrl
-          : pgvectorQueryUrl;
-        return axios
-          .post(url, createQueryBody(file), {
-            headers: {
-              Authorization: `Bearer ${jwtToken}`,
-              'Content-Type': 'application/json',
-            },
-          })
-          .catch((error) => {
-            logger.error('Error encountered in `file_search` while querying file:', error);
-            return null;
-          });
-      });
-      // End [knauf]
-
-      const results = await Promise.all(queryPromises);
-      const validResults = results.filter((result) => result !== null);
-
-      if (validResults.length === 0) {
-        return ['No results found or errors occurred while searching the files.', undefined];
-      }
-
-      // [knauf] KK20-203 — Azure Search returns objects {page_content, metadata, score},
-      // pgvector returns tuples [docInfo, distance]. Handle both formats.
-      const formattedResults = validResults
-        .flatMap((result, fileIndex) =>
-          result.data.map((item) => {
-            const docInfo = Array.isArray(item) ? item[0] : item;
-            const distance = Array.isArray(item) ? item[1] : item.score;
-            return {
-              filename: docInfo.metadata.source.split('/').pop(),
-              content: docInfo.page_content,
-              distance,
-              file_id: files[fileIndex]?.file_id,
-              page: docInfo.metadata.page || null,
-            };
-          }),
-        )
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, 10);
-
-      if (formattedResults.length === 0) {
-        return [
-          'No content found in the files. The files may not have been processed correctly or you may need to refine your query.',
-          undefined,
-        ];
-      }
-
-      const formattedString = formattedResults
-        .map(
-          (result, index) =>
-            `File: ${result.filename}${
-              fileCitations ? `\nAnchor: \\ue202turn0file${index} (${result.filename})` : ''
-            }\nRelevance: ${(1.0 - result.distance).toFixed(4)}\nContent: ${result.content}\n`,
-        )
-        .join('\n---\n');
-
-      const sources = formattedResults.map((result) => ({
-        type: 'file',
-        fileId: result.file_id,
-        content: result.content,
-        fileName: result.filename,
-        relevance: 1.0 - result.distance,
-        pages: result.page ? [result.page] : [],
-        pageRelevance: result.page ? { [result.page]: 1.0 - result.distance } : {},
-      }));
-
-      return [formattedString, { [Tools.file_search]: { sources, fileCitations } }];
-    },
-    {
-      name: Tools.file_search,
-      responseFormat: 'content_and_artifact',
-      description: `Performs semantic search across attached "${Tools.file_search}" documents using natural language queries. This tool analyzes the content of uploaded files to find relevant information, quotes, and passages that best match your query. Use this to extract specific information or find relevant sections within the available documents.${
-        fileCitations
-          ? `
-
-**CITE FILE SEARCH RESULTS:**
-Use the EXACT anchor markers shown below (copy them verbatim) immediately after statements derived from file content. Reference the filename in your text:
-- File citation: "The document.pdf states that... \\ue202turn0file0"  
-- Page reference: "According to report.docx... \\ue202turn0file1"
-- Multi-file: "Multiple sources confirm... \\ue200\\ue202turn0file0\\ue202turn0file1\\ue201"
-
-**CRITICAL:** Output these escape sequences EXACTLY as shown (e.g., \\ue202turn0file0). Do NOT substitute with other characters like † or similar symbols.
-**ALWAYS mention the filename in your text before the citation marker. NEVER use markdown links or footnotes.**`
-          : ''
-      }`,
-      schema: fileSearchJsonSchema,
-    },
-  );
-};
+// [knauf] Keep the upstream tool surface stable while the implementation remains isolated.
+const createFileSearchTool = (options) => createKnaufFileSearchTool(options, fileSearchJsonSchema);
+// End [knauf]
 
 module.exports = { createFileSearchTool, primeFiles, fileSearchJsonSchema };
