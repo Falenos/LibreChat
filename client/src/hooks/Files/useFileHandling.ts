@@ -120,6 +120,23 @@ export function dedupeFilesByAsset(files: Map<string, ExtendedFile>): Map<string
 }
 // End [knauf]
 
+// [knauf] Accept available attachment slots instead of rejecting a whole multi-file selection. KK20-227.
+export function limitIncomingFiles(
+  fileList: File[],
+  currentFileCount: number,
+  fileLimit?: number,
+): { accepted: File[]; rejected: number } {
+  if (!fileLimit) {
+    return { accepted: fileList, rejected: 0 };
+  }
+  const available = Math.max(fileLimit - currentFileCount, 0);
+  return {
+    accepted: fileList.slice(0, available),
+    rejected: Math.max(fileList.length - available, 0),
+  };
+}
+// End [knauf]
+
 const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: FileHandlingState) => {
   const localize = useLocalize();
   const queryClient = useQueryClient();
@@ -441,7 +458,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
 
   const handleFiles = async (_files: FileList | File[], _toolResource?: string) => {
     abortControllerRef.current = new AbortController();
-    const fileList = Array.from(_files);
+    let fileList = Array.from(_files);
     /* Validate files */
     let filesAreValid: boolean;
     try {
@@ -450,6 +467,27 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         fileConfig,
         endpointType,
       });
+
+      // [knauf] Keep the files that fit and tell the user exactly what was
+      // accepted/rejected. validateFiles still enforces every other limit.
+      // KK20-227.
+      const limitedFiles = limitIncomingFiles(fileList, files.size, endpointFileConfig.fileLimit);
+      fileList = limitedFiles.accepted;
+      if (limitedFiles.rejected > 0) {
+        showToast({
+          message: localize('com_knauf_file_limit_partial', {
+            0: String(fileList.length),
+            1: String(limitedFiles.rejected),
+            2: String(endpointFileConfig.fileLimit),
+          }),
+          status: 'warning',
+        });
+      }
+      if (fileList.length === 0) {
+        setFilesLoading(false);
+        return;
+      }
+      // End [knauf]
 
       filesAreValid = validateFiles({
         files,

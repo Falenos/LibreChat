@@ -18,6 +18,7 @@ const {
   refreshAzureFileUrls,
   refreshAzureUrl,
   isAzureBlobUrl,
+  saveBufferToAzure,
 } = require('../../../../../server/services/Files/Azure/crud');
 // End [knauf]
 
@@ -201,6 +202,33 @@ describe('Azure crud.js - URL refresh tests', () => {
       expect(new URL(url).searchParams.has('sig')).toBe(false);
     });
   });
+
+  // [knauf] KK20-227 — concurrent uploads share one container readiness call.
+  describe('container readiness', () => {
+    it('runs one createIfNotExists call for concurrent uploads to the same container', async () => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
+      const uploadData = jest.fn().mockResolvedValue(undefined);
+      const createIfNotExists = jest.fn().mockResolvedValue({ succeeded: true });
+      const containerClient = {
+        url: 'https://test.blob.core.windows.net/readiness-test',
+        createIfNotExists,
+        getBlockBlobClient: jest.fn((blobPath) => ({
+          url: `https://test.blob.core.windows.net/readiness-test/${blobPath}`,
+          uploadData,
+        })),
+      };
+      getAzureContainerClient.mockResolvedValue(containerClient);
+
+      await Promise.all([
+        saveBufferToAzure({ userId: 'u', buffer: Buffer.from('a'), fileName: 'a.txt' }),
+        saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' }),
+      ]);
+
+      expect(createIfNotExists).toHaveBeenCalledTimes(1);
+      expect(uploadData).toHaveBeenCalledTimes(2);
+    });
+  });
+  // End [knauf]
 
   describe('needsRefreshAzure - leaves non-Azure URLs alone (PR-46 review fix)', () => {
     // User avatars are plain strings with no `source` field. Before the fix,

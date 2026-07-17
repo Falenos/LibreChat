@@ -6,7 +6,7 @@ const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
 const TRANSACTION_COST_FIELDS =
   'model context tokenType rawAmount inputTokens writeTokens readTokens messageId updatedAt';
 
-const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-openai-parity-2026-07-14';
+const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-openai-parity-2026-07-17';
 const EUR_RATES = {
   'gpt-5.4-nano': {
     modelVersion: '2026-03-17',
@@ -39,6 +39,13 @@ const EUR_RATES = {
     inputPerMillion: 4.3879,
     outputPerMillion: 26.3273,
   },
+  'model-router': {
+    modelVersion: 'router-fallback',
+    effectiveFrom: '2026-07-17',
+    pricingBasis: 'Conservative fallback at the highest allowed router-pool rate',
+    inputPerMillion: 4.3879,
+    outputPerMillion: 26.3273,
+  },
   'gpt-image-1': {
     modelVersion: '2025-04-15',
     effectiveFrom: '2025-04-01',
@@ -62,6 +69,9 @@ function absNumber(value) {
 
 function normalizeModel(model) {
   const value = String(model || '').toLowerCase();
+  if (value.includes('model-router')) {
+    return 'model-router';
+  }
   if (value.includes('gpt-5.4-nano') || value.includes('gpt-54-nano')) {
     return 'gpt-5.4-nano';
   }
@@ -96,6 +106,8 @@ function emptySummary() {
     imageOutputTokens: 0,
     unsupportedTokens: 0,
     hasUnsupported: false,
+    isEstimated: false,
+    estimateReason: null,
   };
 }
 
@@ -108,6 +120,8 @@ function addSummary(target, entry) {
   target.imageOutputTokens += entry.imageOutputTokens;
   target.unsupportedTokens += entry.unsupportedTokens;
   target.hasUnsupported = target.hasUnsupported || entry.hasUnsupported;
+  target.isEstimated = target.isEstimated || entry.isEstimated;
+  target.estimateReason = target.estimateReason || entry.estimateReason;
 }
 
 function calculateTransactionCost(transaction) {
@@ -129,6 +143,8 @@ function calculateTransactionCost(transaction) {
     imageOutputTokens: 0,
     unsupportedTokens: 0,
     hasUnsupported: false,
+    isEstimated: false,
+    estimateReason: null,
   };
 
   const rate = EUR_RATES[model];
@@ -150,6 +166,10 @@ function calculateTransactionCost(transaction) {
       ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
         rate.inputPerMillion +
       (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion;
+    if (model === 'model-router') {
+      base.isEstimated = true;
+      base.estimateReason = 'router-model-not-reported';
+    }
     return base;
   }
 

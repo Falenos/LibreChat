@@ -26,9 +26,11 @@ jest.mock('~/utils', () => ({
 import React from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { useRecoilValue } from 'recoil';
+import { Constants, LocalStorageKeys } from 'librechat-data-provider';
 import { useChatFormContext } from '~/Providers';
 import { useGetFiles } from '~/data-provider';
 import { getDraft, setDraft } from '~/utils';
+import { setDraft as setStoredDraft } from '~/utils/drafts';
 import store from '~/store';
 import { useAutoSave } from '~/hooks';
 
@@ -42,6 +44,8 @@ const makeTextAreaRef = (value = '') =>
   }) as unknown as React.RefObject<HTMLTextAreaElement>;
 
 beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
   (useRecoilValue as jest.Mock).mockImplementation((atom) => {
     if (atom === store.saveDrafts) return true;
     return undefined;
@@ -137,6 +141,49 @@ describe('useAutoSave — conversation switching', () => {
     });
 
     expect(setFiles).not.toHaveBeenCalled();
+  });
+
+  it('migrates tab-scoped pending text and files to the real conversation', () => {
+    const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`;
+    const pendingFilesKey = `${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`;
+    const conversationTextKey = `${LocalStorageKeys.TEXT_DRAFT}convo-1`;
+    const conversationFilesKey = `${LocalStorageKeys.FILES_DRAFT}convo-1`;
+    sessionStorage.setItem(pendingTextKey, 'encoded-draft');
+    sessionStorage.setItem(pendingFilesKey, JSON.stringify(['pending-file']));
+    const pendingFiles = new Map([
+      ['pending-file', { file_id: 'pending-file', size: 1024, progress: 1 }],
+    ]);
+
+    const { rerender } = renderHook(
+      ({ isSubmitting }) =>
+        useAutoSave({
+          isSubmitting,
+          conversationId: 'convo-1',
+          textAreaRef: makeTextAreaRef(),
+          files: pendingFiles,
+          setFiles: jest.fn(),
+        }),
+      { initialProps: { isSubmitting: true } },
+    );
+
+    act(() => {
+      rerender({ isSubmitting: false });
+    });
+
+    expect(localStorage.getItem(conversationTextKey)).toBe('encoded-draft');
+    expect(localStorage.getItem(conversationFilesKey)).toBe(JSON.stringify(['pending-file']));
+    expect(sessionStorage.getItem(pendingTextKey)).toBeNull();
+    expect(sessionStorage.getItem(pendingFilesKey)).toBeNull();
+  });
+
+  it('stores the shared pending text key in sessionStorage by default', () => {
+    const pendingId = String(Constants.PENDING_CONVO);
+    const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${pendingId}`;
+
+    setStoredDraft({ id: pendingId, value: 'tab-scoped draft' });
+
+    expect(sessionStorage.getItem(pendingTextKey)).not.toBeNull();
+    expect(localStorage.getItem(pendingTextKey)).toBeNull();
   });
   // End [knauf]
 });

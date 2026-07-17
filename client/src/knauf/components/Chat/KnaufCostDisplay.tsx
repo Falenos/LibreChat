@@ -60,6 +60,9 @@ function buildCostTitle({
   if (summary.hasUnsupported) {
     parts.push(localize('com_knauf_cost_pricing_pending'));
   }
+  if (summary.isEstimated) {
+    parts.push(localize('com_knauf_cost_estimated'));
+  }
   if (source) {
     parts.push(localize('com_knauf_cost_source', { 0: source }));
   }

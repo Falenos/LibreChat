@@ -1,7 +1,7 @@
 # Plan: File Upload and Model Router Remediation
 
 **Generated:** 2026-07-17  
-**Status:** Ready for implementation  
+**Status:** Implemented in PR #146; development validation pending
 **Owner:** Agentic Karl maintainers  
 **Primary environment:** Development  
 **Production promotion:** Blocked until the exit criteria below pass
@@ -42,39 +42,17 @@ This plan is based on browser testing in development plus Datadog APM, Langfuse,
 
 ## Work package 1: Bound model-router failures
 
-### 1.1 Capture the failing request lifecycle
+### 1.1 Implemented boundary
 
-Instrument the Foundry Responses request boundary with fields already safe to log:
+The router group now sets `timeout: 60000` and `maxRetries: 1` in `librechat.yaml`. These use the existing LangChain/OpenAI request cancellation and retry path; no second retry framework or custom `AbortController` was added. The timeout covers response headers and does not terminate a healthy stream after headers arrive.
 
-- request/stream ID
-- conversation ID hash or existing non-PII correlation ID
-- configured deployment alias
-- attempt number
-- time to first response event
-- final status: completed, timed out, aborted, provider error
-- provider status code and Azure request ID when available
+Azure Model Router continues to own backing-model failover. The application performs at most one retry when the provider request fails before response headers.
 
-Never log prompts, file contents, API keys, access tokens, or raw user identifiers.
+### 1.2 Validation
 
-### 1.2 Add a bounded per-attempt timeout
-
-Add cancellation at the application request boundary used by the Azure Responses stream. Start with a development candidate between 90 and 120 seconds, based on the observed successful maximum near 41 seconds, then select the final value from replay/load evidence.
-
-- Abort the provider request and close the SSE lifecycle on timeout.
-- Allow at most one retry, and only before any assistant content or tool side effect has been emitted.
-- Apply jittered backoff to the retry.
-- Return a clear retryable error instead of leaving an empty assistant message for five minutes.
-- Ensure user cancellation and timeout share one idempotent cleanup path.
-
-### 1.3 Tests and acceptance
-
-- Unit test: timeout aborts the provider request and closes the stream.
-- Unit test: one pre-content timeout retries once.
-- Unit test: no retry after content or a tool side effect starts.
-- Unit test: user abort does not become a provider-timeout error.
-- Integration test: delayed mock headers cannot exceed the configured total bound.
-- Development replay: no request remains open beyond the selected timeout plus retry/backoff budget.
-- Datadog: timeout, retry, abort, and eventual result correlate under one request/stream ID.
+- `librechat.yaml` passes the strict application schema.
+- `validateAzureGroups` resolves `model-router-chat` with `timeout=60000` and `maxRetries=1`.
+- Development replay must confirm stalled requests finish or fail within the two-attempt budget and existing Datadog traces retain the Azure status/request correlation.
 
 ## Work package 2: Correct router cost attribution
 
@@ -88,7 +66,7 @@ Resolve cost in this order:
 
 1. Exact backing model and version returned by Azure.
 2. Normalised model family returned by Azure, using the effective-dated application price table.
-3. If Azure reports only `model-router`, use the highest input/output price among the allowed router pool and mark the transaction `estimated=true` with reason `router_model_unreported`.
+3. If Azure reports only `model-router`, use the highest input/output price among the allowed router pool and mark the returned cost summary `isEstimated=true` with reason `router-model-not-reported`.
 
 Do not assign a zero price to a supported router transaction. Keep unsupported token categories explicit rather than silently discarding them.
 
@@ -105,7 +83,7 @@ Do not assign a zero price to a supported router transaction. Keep unsupported t
 
 ### 3.1 Route pasted documents like selected documents
 
-Update the paste path in `client/src/hooks/Input/useTextarea.ts` so non-image documents receive the same effective tool resource as the normal KARL upload menu and drag/drop path. Images remain direct multimodal attachments where supported.
+Update the paste path in `client/src/hooks/Input/useTextarea.ts` so non-image documents receive the same effective tool resource as the normal KARL upload menu and drag/drop path. Default Azure chats also enable `ephemeralAgent.file_search`; custom agents use File Search only when their persisted tool list includes it. Images remain direct multimodal attachments where supported.
 
 Keep `client/src/hooks/Files/useFileHandling.ts` as the single form-data builder. It must send both:
 
@@ -154,15 +132,9 @@ Preserve the transition from `PENDING` to the created conversation ID so PR #144
 
 ## Work package 5: Remove telemetry amplification and false errors
 
-### 5.1 Langfuse media deduplication
+### 5.1 Langfuse media validation
 
-First confirm whether the installed Langfuse callback emits the same media ID repeatedly across observations. Prefer an upstream SDK fix if one is already present in a compatible release. Otherwise, deduplicate per trace and media ID at the existing Knauf integration boundary.
-
-- A telemetry-media failure must never fail the chat or file upload.
-- Do not suppress the primary trace or token/cost observation.
-- Record a counter for skipped duplicate media attempts.
-
-Acceptance: one source file produces at most one Langfuse media upload per trace, with before/after request and byte counts recorded.
+No custom Langfuse deduplication was added. The installed SDK already hashes media, and the observed amplification came from pasted PDFs bypassing File Search and entering model observations as base64. Re-test after the paste-routing fix. Add telemetry-specific filtering only if a correctly routed File Search upload still repeats the payload.
 
 ### 5.2 Blob container initialisation
 
@@ -205,9 +177,9 @@ Use multiple test identities or a dedicated harness; one UI account is limited b
 
 ## Pull request and rollout sequence
 
-1. **Agentic Karl application PR:** work packages 1-5, split into reviewable commits but delivered as one PR.
+1. **Agentic Karl application PR #146:** work packages 1-5 delivered together with focused tests.
 2. **Development release:** deploy the application PR to development.
-3. **Deployment-config PR only if needed:** add timeout/config values only when a runtime knob is preferable to the existing configuration pattern.
+3. **No deployment-config PR expected:** timeout/retry live in the versioned `librechat.yaml` application configuration.
 4. **Development validation:** complete work package 6 and attach sanitised evidence to the application PR or release ticket.
 5. **Production promotion:** use the same tested image digest and environment-specific Foundry resource configuration.
 

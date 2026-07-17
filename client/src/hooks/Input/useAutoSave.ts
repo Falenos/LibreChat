@@ -9,6 +9,11 @@ import { useChatFormContext } from '~/Providers';
 import { useGetFiles } from '~/data-provider';
 import store from '~/store';
 
+// [knauf] The shared PENDING_CONVO key must be tab-scoped; real conversation drafts remain persistent. KK20-227.
+const draftStorage = (id: string) =>
+  id === Constants.PENDING_CONVO ? sessionStorage : localStorage;
+// End [knauf]
+
 export const useAutoSave = ({
   isSubmitting,
   conversationId: _conversationId,
@@ -34,7 +39,7 @@ export const useAutoSave = ({
   const restoreFiles = useCallback(
     (id: string) => {
       const filesDraft = JSON.parse(
-        (localStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${id}`) ?? '') || '[]',
+        (draftStorage(id).getItem(`${LocalStorageKeys.FILES_DRAFT}${id}`) ?? '') || '[]',
       ) as string[];
 
       if (filesDraft.length === 0) {
@@ -179,19 +184,20 @@ export const useAutoSave = ({
         conversationId !== Constants.PENDING_CONVO &&
         conversationId.length > 3
       ) {
-        const pendingDraft = localStorage.getItem(
+        // [knauf] KK20-227 — migrate this tab's pending text/files into the real conversation.
+        const pendingDraft = sessionStorage.getItem(
           `${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`,
         );
 
         // Clear the pending text draft, if it exists, and save the current draft to the new conversationId;
         // otherwise, save the current text area value to the new conversationId
-        localStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`);
+        sessionStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`);
         if (pendingDraft) {
           localStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${conversationId}`, pendingDraft);
         } else if (textAreaRef?.current?.value) {
           setDraft({ id: conversationId, value: textAreaRef.current.value });
         }
-        const pendingFileDraft = localStorage.getItem(
+        const pendingFileDraft = sessionStorage.getItem(
           `${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`,
         );
 
@@ -200,12 +206,13 @@ export const useAutoSave = ({
             `${LocalStorageKeys.FILES_DRAFT}${conversationId}`,
             pendingFileDraft,
           );
-          localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
+          sessionStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`);
           const filesDraft = JSON.parse(pendingFileDraft || '[]') as string[];
           if (filesDraft.length > 0) {
             restoreFiles(conversationId);
           }
         }
+        // End [knauf]
       } else if (currentConversationId != null && currentConversationId) {
         saveText(currentConversationId);
       }
@@ -252,13 +259,15 @@ export const useAutoSave = ({
       return;
     }
 
+    // [knauf] KK20-227 — pending file drafts are tab-scoped; real conversation files stay local.
     if (fileIds.length === 0) {
-      localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${conversationId}`);
+      draftStorage(conversationId).removeItem(`${LocalStorageKeys.FILES_DRAFT}${conversationId}`);
     } else {
-      localStorage.setItem(
+      draftStorage(conversationId).setItem(
         `${LocalStorageKeys.FILES_DRAFT}${conversationId}`,
         JSON.stringify(fileIds),
       );
     }
+    // End [knauf]
   }, [files, conversationId, saveDrafts, currentConversationId, fileIds]);
 };
