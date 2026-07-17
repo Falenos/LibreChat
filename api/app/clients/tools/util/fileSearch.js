@@ -107,7 +107,7 @@ const primeFiles = async (options) => {
  * @returns
  */
 // [knauf] NO-TICKET — canonical dual-backend retrieval replaces per-file fan-out while
-// preserving authorized logical file ids for citations and bounding repeated tool loops.
+// preserving authorized logical file ids for citations and bounding backend retrieval work.
 const DEFAULT_MAX_DISTINCT_QUERIES = 3;
 const DEFAULT_MAX_CITATIONS = 30;
 const DEFAULT_MAX_CITATIONS_PER_FILE = 7;
@@ -395,7 +395,7 @@ const createFileSearchTool = async ({
       const cacheKey = `${normalizedQuery}\n${targetFingerprint}`;
       if (queryCache.has(cacheKey)) {
         const [cachedContent] = await queryCache.get(cacheKey);
-        return [cachedContent, { toolControl: { disableTools: [Tools.file_search] } }];
+        return [cachedContent, undefined];
       }
 
       if (distinctQueries.size >= queryLimit) {
@@ -406,7 +406,7 @@ const createFileSearchTool = async ({
             instruction:
               'Answer with the evidence already retrieved. If it is insufficient, explain the limitation without calling file_search again.',
           }),
-          { toolControl: { disableTools: [Tools.file_search] } },
+          undefined,
         ]);
         queryCache.set(cacheKey, exhausted);
         return exhausted;

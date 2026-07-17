@@ -1,5 +1,5 @@
 // [knauf] NO-TICKET — dual-backend file_search routing, canonicalization, fusion,
-// deduplication, and per-run loop-containment regression tests.
+// deduplication, and per-run backend-budget regression tests.
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({ generateShortLivedToken: jest.fn(() => 'jwt-token') }));
@@ -171,15 +171,14 @@ describe('dual-backend file search', () => {
     });
     const [firstResult, cachedResult] = await Promise.all([first, cached]);
     expect(firstResult[1].file_search.sources).toHaveLength(1);
-    expect(cachedResult[1]).toEqual({ toolControl: { disableTools: ['file_search'] } });
-    expect(cachedResult[1]).not.toHaveProperty('file_search');
+    expect(cachedResult[1]).toBeUndefined();
 
     const [content, artifact] = await searchTool.func({ query: 'different query' });
     expect(JSON.parse(content)).toMatchObject({
       type: 'search_budget_exhausted',
       maxDistinctQueries: 1,
     });
-    expect(artifact).toEqual({ toolControl: { disableTools: ['file_search'] } });
+    expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
   });
 
@@ -212,7 +211,7 @@ describe('dual-backend file search', () => {
     expect(second[0]).toContain('\\ue202turn1file0');
     expect(second[1].file_search.turn).toBe(1);
     expect(cached[0]).toBe(first[0]);
-    expect(cached[1]).toEqual({ toolControl: { disableTools: ['file_search'] } });
+    expect(cached[1]).toBeUndefined();
   });
 
   test('keeps cache and budget state when event-driven execution reloads the tool', async () => {
@@ -229,8 +228,7 @@ describe('dual-backend file search', () => {
 
     const reloadedTool = await createFileSearchTool(options);
     const cachedReload = await reloadedTool.func({ query: ' FIRST   QUERY ' });
-    expect(cachedReload[1]).toEqual({ toolControl: { disableTools: ['file_search'] } });
-    expect(cachedReload[1]).not.toHaveProperty('file_search');
+    expect(cachedReload[1]).toBeUndefined();
     await reloadedTool.func({ query: 'second query' });
 
     const reloadedAgain = await createFileSearchTool(options);
@@ -238,7 +236,7 @@ describe('dual-backend file search', () => {
 
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(JSON.parse(content).type).toBe('search_budget_exhausted');
-    expect(artifact).toEqual({ toolControl: { disableTools: ['file_search'] } });
+    expect(artifact).toBeUndefined();
 
     const nextRunTool = await createFileSearchTool({ ...options, runContext: {} });
     await nextRunTool.func({ query: 'third query' });

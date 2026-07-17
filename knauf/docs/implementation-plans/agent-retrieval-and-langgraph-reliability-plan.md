@@ -1,9 +1,16 @@
 # Plan: Agent Retrieval and LangGraph Reliability
 
 **Generated:** 2026-07-16<br>
-**Status:** Final recommended implementation plan<br>
-**Estimated complexity:** High — three repositories, ordered deployment<br>
+**Status:** Retrieval delivery in progress; SDK reliability work deferred<br>
+**Estimated complexity:** Medium for the SDK-independent retrieval delivery; high for the deferred multi-repository runtime correction<br>
 **Primary evidence:** Langfuse runs `ce9436b2a6956965e9f8838c2cc1edd6` and `fbc4778b4d07737f34dfe6090bf9c4ef`
+
+## Delivery split — 2026-07-17
+
+- RAG API PR #14 is merged and deployed, so the batch retrieval contracts are available.
+- Agentic Karl PR #145 intentionally remains on `@librechat/agents` 3.2.65 and can ship the application-owned routing, batching, deduplication, rank fusion, citation, exact-query cache, and backend-query budget fixes.
+- Agents SDK PR #314 is a deferred follow-up, not a dependency of PR #145. It owns compaction coverage, preservation of the structured current turn, neutral summary transport, and graceful same-turn tool suppression/finalization.
+- Until that SDK work ships, the application query budget caps backend RAG requests but cannot guarantee that the model stops requesting `file_search`; `recursionLimit` remains the graph-level emergency fuse.
 
 ## Executive decision
 
@@ -17,7 +24,7 @@ The target behavior is:
 4. Logical file aliases that share one physical `knauf_asset_id` are queried once. Citations still use an authorized logical `file_id` visible to the user.
 5. Results keep their backend-native order and are fused by reciprocal rank. Raw Azure scores and pgvector distances are never compared.
 6. The latest user turn, including every image/content block, survives context compaction or the request fails before model invocation with a specific context-size error.
-7. Repeated searches are cached and bounded. This application returns typed `search_budget_exhausted` evidence plus a narrow `file_search` suppression artifact; the agents SDK consumes it before the next model call.
+7. Repeated searches reuse cached content and distinct searches are bounded at the RAG boundary. At exhaustion the application returns typed `search_budget_exhausted` evidence; graceful tool suppression is deferred to the agents SDK.
 8. Langfuse shows one main trace for the user turn with nested retrieval/model work. Detached title and memory work may remain separate traces, correlated by source message and conversation session.
 
 No custom reranker model in the initial fix. Azure semantic ranking applies only to the Azure AI Search Agent Knowledge path. PostgreSQL/pgvector uses vector similarity only. The application must preserve each backend's native order, then combine the two ordered lists with deterministic rank fusion; that cross-backend fusion is not semantic ranking.
@@ -60,7 +67,7 @@ If the correct chunk is absent, fix retrieval, filters, embeddings, or chunking.
 
 ## Scope
 
-Included:
+Included in the SDK-independent delivery:
 
 - dual-backend file ownership and routing;
 - retrieval request deduplication and batching;
@@ -68,10 +75,16 @@ Included:
 - removal of legacy double retrieval when `file_search` is active;
 - exact-query caching and a configurable distinct-search budget;
 - RAG batch endpoint scope parity;
-- LangGraph summarization, retained-tail, current-turn, and recursion behavior;
-- content-filter error classification and graceful user-facing failures;
 - Langfuse trace structure and retrieval diagnostics;
-- dev replay, production rollout, and rollback.
+- retrieval-focused dev replay, production rollout, and rollback.
+
+Deferred to the agents SDK release and later Agentic Karl integration:
+
+- LangGraph summarization coverage and retained-tail behavior;
+- preservation of the full structured current turn during compaction;
+- neutral summary/history transport and deterministic content-filter replay;
+- selective tool suppression and graceful graph finalization;
+- typed UI handling that depends on new SDK failure contracts.
 
 Not included:
 
@@ -123,7 +136,7 @@ This diagnosis matches the provider boundary: [Microsoft Prompt Shields](https:/
 | Current images disappear               | Compaction/pruning can remove the latest structured HumanMessage                                               | Pin the entire current turn as an indivisible required message                                        |
 | Prompt Shield `jailbreak` response     | Derived checkpoint/history is transported as a command-shaped user message                                     | Use neutral historical state with durable coverage; never a synthetic user message                    |
 | Legacy double retrieval                | Non-Agents client path can run `createContextHandlers()` while `file_search` is also available                 | Disable only legacy vector augmentation when `file_search` owns retrieval                             |
-| Search loop reaches recursion limit    | No exact-query cache or distinct-query budget                                                                   | Cache, budget, then suppress `file_search` for the current turn; keep recursion limit as an emergency fuse |
+| Search loop reaches recursion limit    | No exact-query cache or distinct-query budget                                                                   | Cache and budget backend calls now; defer same-turn `file_search` suppression to the SDK; keep recursion limit as an emergency fuse |
 | Duplicate pgvector calls               | `fileSearch.js` maps one HTTP request per logical file; multiple rows can resolve to the same `knauf_asset_id` | Deduplicate canonical physical targets before any request                                             |
 | N requests for N files                 | Retrieval uses `/query` and `/agent/query` per file despite batch routes existing                              | One `/query_multiple` request and one `/agent/query-multiple` request at most                         |
 | Duplicate chunks                       | Results are flattened, sorted, and sliced without a chunk identity check                                       | Deduplicate by physical asset plus digest/chunk identity before final cutoff                          |
@@ -165,12 +178,13 @@ A single GitHub PR cannot cover three repositories. Minimum safe sequence:
 | PR  | Repository                                     | Purpose                                                                                                         | Dependency                         |
 | --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | 1   | `Knauf-Group/agentic-karl-rag-api`             | Secure and normalize both batch query contracts                                                                 | none                               |
-| 2   | `danny-avila/agents` or approved internal fork | Fix summary coverage, multimodal current-turn retention, and graceful finalization                              | none; can run parallel with PR 1   |
-| 3   | `Knauf-Group/agentic-karl`                     | One integration PR for grouped retrieval, RRF, search budget, SDK bump, Langfuse, config, tests, and these docs | released RAG image and SDK version |
+| 2   | `Knauf-Group/agentic-karl`                     | Ship grouped retrieval, RRF, citations, cache, backend-query budget, config, tests, and these docs on SDK 3.2.65 | deployed RAG PR #14                |
+| 3   | `danny-avila/agents` or approved internal fork | Later fix summary coverage, multimodal current-turn retention, and graceful finalization                        | deferred; not required by PR #145  |
+| 4   | `Knauf-Group/agentic-karl`                     | Later pin the released SDK and enable/test its runtime behavior                                                  | released SDK version               |
 
-Do not patch `node_modules`, use `patch-package`, or copy the agents SDK into Agentic Karl. Publish an exact SDK release, then pin it.
+Do not patch `node_modules`, use `patch-package`, or copy the agents SDK into Agentic Karl. Keep PR #145 on the existing SDK; publish and pin the corrected SDK in a later PR.
 
-Sprint numbering reflects repository/deployment dependencies, not causal severity. The SDK compaction fix is the primary runtime correction and should start in parallel with the additive RAG batch work. Agentic Karl integration waits for both released prerequisites.
+Sprint numbering preserves the full root-cause plan, not the immediate merge boundary. The SDK compaction fix remains the primary runtime correction for the two original trace failures, but it is explicitly deferred. The SDK-independent retrieval fixes do not wait for it.
 
 ## Sprint 0: Freeze the failures as regression fixtures
 
@@ -315,7 +329,7 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 ### Task 2.4: Add checkpoint-safe tool suppression
 
 - **Location:** agents SDK `src/run.ts`, graph routing files under `src/graphs/`, and graph tests.
-- **Description:** When a tool result artifact contains validated `toolControl.disableTools`, omit only those named tools from subsequent model bindings for the same user turn. Do not infer remaining budget from absolute graph-step values because resumed checkpoints may already contain steps. `file_search` budget exhaustion uses this primitive so the next model call answers from retained evidence. Keep `recursionLimit` as the emergency fuse.
+- **Description:** In the future SDK contract, when a tool result artifact contains validated `toolControl.disableTools`, omit only those named tools from subsequent model bindings for the same user turn. Do not infer remaining budget from absolute graph-step values because resumed checkpoints may already contain steps. A later Agentic Karl integration may map typed `file_search` budget exhaustion to this primitive so the next model call answers from retained evidence. PR #145 does not emit or depend on this artifact. Keep `recursionLimit` as the emergency fuse.
 - **Reference:** LangGraph documents [`GRAPH_RECURSION_LIMIT`](https://docs.langchain.com/oss/javascript/langgraph/errors/GRAPH_RECURSION_LIMIT) as an error when the graph reaches its step limit, not as a mechanism that forces a final answer.
 - **Dependencies:** Tasks 2.1–2.3.
 - **Acceptance criteria:**
@@ -409,21 +423,22 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - [`../../../packages/data-provider/src/config.ts`](../../../packages/data-provider/src/config.ts)
   - [`../../../librechat.yaml`](../../../librechat.yaml)
   - config and tool tests
-- **Description:** Cache the in-flight/completed promise and distinct-query budget by normalized query plus sorted canonical target set in a request-keyed `WeakMap`, nested by agent/entity, while keeping one request-wide next-turn counter at the WeakMap root. This lets ON_TOOL_EXECUTE reloads and multi-agent responses share collision-free citation turns without one agent consuming another agent's cache/budget; a new request starts cleanly. Add one application config value, `endpoints.agents.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable. A repeated exact query returns cached content with a control-only artifact (no duplicate citation attachment); repetition or budget exhaustion emits `toolControl.disableTools: ['file_search']` for the SDK to omit only that tool on the next model call.
+- **Description:** Cache the in-flight/completed promise and distinct-query budget by normalized query plus sorted canonical target set in a request-keyed `WeakMap`, nested by agent/entity, while keeping one request-wide next-turn counter at the WeakMap root. This lets ON_TOOL_EXECUTE reloads and multi-agent responses share collision-free citation turns without one agent consuming another agent's cache/budget; a new request starts cleanly. Add one application config value, `endpoints.agents.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable. A repeated exact query returns cached content without a duplicate citation attachment. Budget exhaustion returns typed `search_budget_exhausted` content and performs no additional backend request.
 - **Dependencies:** Tasks 3.1–3.3.
 - **Acceptance criteria:**
-  - Identical queries reuse cached content, emit no second backend request, and suppress further `file_search` calls without duplicating sources.
+  - Identical queries reuse cached content and emit no second backend request or duplicate source attachment.
   - Concurrent identical calls share one promise.
   - Paraphrased queries count as distinct; no semantic-query deduper is introduced.
-  - At the configured limit, the tool returns typed `search_budget_exhausted` evidence with an answer-from-existing-evidence instruction and narrow suppression artifact.
-  - Guaranteed finalization depends on the agents SDK consuming the artifact; the application does not infer completion from graph-step arithmetic.
+  - At the configured limit, the tool returns typed `search_budget_exhausted` evidence with an answer-from-existing-evidence instruction and performs no backend request.
+  - The budget bounds retrieval traffic only. Guaranteed graph finalization remains deferred to the agents SDK; the application does not infer completion from graph-step arithmetic.
 - **Validation:** Exact, whitespace/case-normalized, concurrent, distinct, and budget tests.
 
 Strict removal of the existing Agent Knowledge pgvector fallback is deferred. It requires a separate inventory/migration decision and is not part of this retrieval PR.
 
-## Sprint 4: Integrate the corrected SDK and failure behavior
+## Sprint 4: Deferred — integrate the corrected SDK and failure behavior
 
-**Goal:** Agentic Karl consumes the corrected SDK without local patching and produces stable final responses.<br>
+**Delivery status:** Not part of PR #145 and not required to merge its retrieval fixes.<br>
+**Goal:** A later Agentic Karl PR consumes the corrected SDK without local patching and produces stable final responses.<br>
 **Demo/validation:** Both failing trace scenarios replay successfully in dev.
 
 ### Task 4.1: Pin the released agents SDK
@@ -492,10 +507,11 @@ Use the existing LangGraph/Langfuse observation tree; this work adds no custom t
 
 ### Task 6.1: Deploy in dependency order
 
-1. Deploy the versioned RAG API to dev.
-2. Merge the Agentic Karl integration PR with the exact SDK version.
+1. Confirm deployed RAG API PR #14 batch routes in dev.
+2. Merge and deploy Agentic Karl PR #145 on the existing SDK 3.2.65.
 3. Confirm GitOps has `AZURE_SEARCH_ENABLED=true` for the application and valid Azure Search endpoint/key settings for the RAG service.
-4. Sync dev and verify actual pod image versions, not only pipeline success.
+4. Smoke-test pgvector-only, Azure-only, and mixed retrieval and verify actual pod image versions.
+5. Later, after the corrected SDK is released, pin it in a separate Agentic Karl PR and replay the compaction/termination scenarios.
 
 ### Task 6.2: Replay acceptance matrix
 
@@ -511,15 +527,15 @@ Use the existing LangGraph/Langfuse observation tree; this work adds no custom t
 | Repeated identical tool query                       | Cache hit; no second backend request                                                                                                                |
 | Two distinct file-search calls                      | Attachments use separate turns; each `turnNfileM` anchor resolves to the exact persisted chunk                                                     |
 | Web `ref0` and file `file0` on the same turn        | Both resolve independently; source cards may still deduplicate files                                                                                |
-| Repeated paraphrased queries                        | Stops at configured budget and finalizes without tools                                                                                              |
-| Five-image latest turn after compaction             | Main-model call contains text plus all five images, or explicit pre-call context error                                                              |
-| Image-only latest turn                              | Remains a valid current user turn                                                                                                                   |
-| Historical images plus new text                     | Historical images may prune; newest text remains                                                                                                    |
+| Repeated paraphrased queries                        | Stops backend retrieval at the configured budget; graph may still reach the recursion fuse on SDK 3.2.65                                            |
+| Five-image latest turn after compaction (deferred)  | After SDK integration: main-model call contains text plus all five images, or explicit pre-call context error                                        |
+| Image-only latest turn (deferred)                   | After SDK integration: remains a valid current user turn                                                                                            |
+| Historical images plus new text (deferred)          | After SDK integration: historical images may prune; newest text remains                                                                             |
 | Chat upload while using an agent                    | pgvector, user-scoped                                                                                                                               |
 | Builder Agent Knowledge upload                      | Azure AI Search, agent-scoped                                                                                                                       |
-| Azure Prompt Shield with derived summary            | Deterministic role/content tests pass, then five equivalent Microsoft.DefaultV2 dev replays preserve the real current turn                         |
-| Summary transport                                   | No summary uses role `user`; durable summary contains no summarizer control instructions                                                            |
-| Cross-run `retainRecent: 2`                         | Retained raw turns survive the next request and are not deleted outside the summary coverage                                                        |
+| Azure Prompt Shield with derived summary (deferred) | After SDK integration: deterministic role/content tests pass, followed by equivalent Microsoft.DefaultV2 dev replays                               |
+| Summary transport (deferred)                        | After SDK integration: no summary uses role `user`; durable summary contains no summarizer control instructions                                     |
+| Cross-run `retainRecent: 2` (deferred)              | After SDK integration: retained raw turns survive the next request and remain outside summary coverage                                              |
 | Generic non-file recursion                          | `recursionLimit` remains the emergency fuse; checkpoint-safe generic finalization is deferred                                                        |
 | Langfuse trace                                      | One main run trace with nested retrieval; title/memory correlated by source and session                                                             |
 
@@ -571,7 +587,7 @@ No new reranker model, key, deployment, package, or environment variable.
 - Focused Jest tests for canonical target construction, batch request counts, physical deduplication, partial failures, RRF, chunk deduplication, citation aliasing, search turns, cache, and search budget.
 - Client hook tests for ordered same-file chunks, explicit/legacy turn mapping, same-turn web/file resolution, and copied citations.
 - Agent client tests proving only legacy vector augmentation is disabled.
-- Package tests for SDK integration, summarization config, typed failures, and selective tool suppression.
+- SDK integration, summarization, and selective tool-suppression tests are deferred to the later SDK pinning PR.
 - Existing upload, image, inline-text, code-file, citation, and vector delete suites remain green.
 
 ### RAG API
@@ -608,19 +624,19 @@ No new reranker model, key, deployment, package, or environment variable.
 | Current turn alone exceeds context                                 | Fail before provider invocation with `current_turn_exceeds_context`; never silently drop blocks               |
 | Prompt Shield still rejects retrieved document text                | Classify the tool-response intervention separately; do not assume every filter error is image/summary-related |
 | Old Agent Knowledge exists in pgvector fallback                    | Leave compatibility behavior unchanged; handle inventory/migration in a separate workstream                  |
-| Version skew from caret dependency                                 | Pin the corrected SDK exactly in both package manifests                                                       |
+| SDK correction is not yet released                                | Keep PR #145 SDK-independent; document remaining compaction/finalization risk and pin later                    |
 | Search budget ends too early                                       | Keep it configurable, trace exhaustion, tune from dev/production evidence                                     |
 | New reranker adds cost and hides retrieval bugs                    | Do not add it until the candidate-present/rank-wrong condition is demonstrated                                |
 
 ## Rollback plan
 
 1. RAG batch changes are additive; old single-file routes remain available during rollback.
-2. Revert Agentic Karl to the prior image and exact prior SDK lock if graph behavior regresses.
+2. Revert Agentic Karl to the prior image if retrieval behavior regresses; PR #145 does not change the SDK version.
 3. Do not roll back by setting `AZURE_SEARCH_ENABLED=false`; that changes Agent Knowledge storage semantics. Roll back the application image instead.
 4. Preserve new RAG images and indexes; no destructive data migration is required for the query contract.
 5. Keep Langfuse trace correlation enabled during rollback so before/after behavior remains comparable.
 
-## Definition of done
+## Definition of done for PR #145
 
 - All acceptance-matrix scenarios pass in dev.
 - Production mixed search emits at most two backend retriever spans per distinct query.
@@ -629,13 +645,11 @@ No new reranker model, key, deployment, package, or environment variable.
 - Azure and pgvector scores are never numerically compared.
 - pgvector retrieval is never labelled as Azure semantic ranking; cross-backend RRF is explicitly non-semantic.
 - Citations always resolve to an authorized logical file record.
-- Every main model call contains the complete verified current turn, or no provider call occurs.
-- The five-image replay preserves exact image IDs/order/MIME types/text and deterministic Prompt Shield regression tests are followed by five unchanged-policy dev replays.
-- Summary coverage survives the next request; unresolved coverage preserves raw history and ignores the summary.
-- No synthetic summary is sent with role `user` or contains summarizer control instructions.
-- Repeated file-search loops terminate by suppressing only `file_search` for the rest of the current turn, then answering from retained evidence.
-- `recursionLimit` remains the emergency fuse for unrelated loops; generic checkpoint-safe finalization is deferred.
-- The two original failing runs have documented successful replays.
+- Repeated exact searches reuse cached content; distinct searches stop producing backend requests at the configured budget.
+- `recursionLimit` remains the emergency fuse because graceful same-turn tool suppression is deferred.
+- The original trace root causes and deferred SDK work remain documented and are not claimed fixed by PR #145.
 - PR #142 upload retry/failed-chip behavior remains green and is reported as a separate transport fix.
 - No custom reranker was added without evaluation evidence.
 - Architecture docs and [`../../../SEAMS.md`](../../../SEAMS.md) match the shipped behavior.
+
+The full plan is done only after the later SDK integration also preserves the complete current turn, transports summaries without a synthetic `user` role, finalizes repeated tool use gracefully, and passes equivalent replays of both original failures.

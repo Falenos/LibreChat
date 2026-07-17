@@ -461,7 +461,8 @@ endpoints:
   #                  -> hidden from end users to reduce configuration burden.
   agents:
     # [knauf] NO-TICKET — recursionLimit is an emergency graph-step fuse, not a
-    # finalizer. Repeated file_search loops are contained by the query budget below.
+    # finalizer. The query budget below caps backend retrieval work; the graph fuse
+    # still catches repeated model/tool turns until upstream termination support ships.
     # maxRecursionLimit is the hard cap — it clamps even per-agent DB overrides.
     recursionLimit: 25
     maxRecursionLimit: 50
