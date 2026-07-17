@@ -360,6 +360,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Messages/useCopyToClipboard.ts` | `refTypeMap.file` | 28–30 | Uses the same dedicated file-reference index space when rendering citations into copied text | `client/src/knauf/hooks/Messages/useSearchResultsByTurn.knauf.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Messages/useSearchResultsByTurn.ts` | `FileSearchAttachmentData`, web/file turn merge | 14–25, 43–53, 57–94 | Honors explicit file-search turns (with local-order fallback), preserves every selected chunk in order, and merges file cards into same-turn web results without colliding anchor indexes | `client/src/knauf/hooks/Messages/useSearchResultsByTurn.knauf.spec.tsx` | NO-TICKET |
 | `packages/data-provider/src/types/web.ts` | `SearchResultData.fileReferences` | 57–59 | Gives file anchors a typed index space separate from web references | `client/src/knauf/hooks/Messages/useSearchResultsByTurn.knauf.spec.tsx` | NO-TICKET |
+| `client/src/hooks/Input/useAutoSave.ts` | `isPendingConversationTransition` | 162–173, 214–219, 229–231 | Preserves next-turn files uploaded during streaming when draft state returns from `PENDING_CONVO` to the current conversation, without changing real conversation-switch cleanup | `client/src/hooks/Input/useAutoSave.spec.ts` (`preserves files uploaded while the current response is still streaming`) | KK20-227 |
+| `client/src/hooks/Input/useAutoSave.spec.ts` | streaming upload draft regression | 111–141 | Reproduces the stale file-list race and proves response completion cannot clear an in-memory pending upload | Self | KK20-227 |
 <!-- seams:auto:end -->
 
 ## Configuration
