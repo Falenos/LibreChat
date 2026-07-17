@@ -114,6 +114,8 @@ function createIndexingWorker({
   markFilesEmbedded,
   logger,
   workerId,
+  // KK20-195 review R11 — optional claim-outcome recorder (prom counter).
+  recordClaimOutcome,
 }) {
   const id = workerId ?? `worker-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   let stopped = false;
@@ -339,11 +341,23 @@ function createIndexingWorker({
    * promise resolves once in-flight work finishes. Leases are never released
    * mid-RAG — an unfinished claim simply expires and is reclaimed.
    */
+  // KK20-195 review R11 — loop liveness for the /ready probe: updated every
+  // iteration (including idle), so "no tick within N poll intervals" means
+  // the loop is wedged, not merely quiet.
+  let lastTickAt = Date.now();
+  const getLastTickAt = () => lastTickAt;
+
   const start = async () => {
     while (!stopped) {
+      lastTickAt = Date.now();
       let outcome = 'idle';
       try {
         ({ outcome } = await processNextDue());
+        // R11 — claim outcomes feed the knauf_file_index_worker_claims_total
+        // counter (no-op recorder unless the entry wired one).
+        if (outcome !== 'idle') {
+          recordClaimOutcome?.(outcome);
+        }
       } catch (error) {
         logger.error(`[indexingWorker:${id}] loop iteration failed: ${error?.message}`);
       }
@@ -357,6 +371,7 @@ function createIndexingWorker({
         });
       }
     }
+    lastTickAt = Date.now();
     logger.info(`[indexingWorker:${id}] stopped`);
   };
 
@@ -364,7 +379,7 @@ function createIndexingWorker({
     stopped = true;
   };
 
-  return { processNextDue, executeClaim, start, stop, workerId: id };
+  return { processNextDue, executeClaim, start, stop, getLastTickAt, workerId: id };
 }
 
 module.exports = {

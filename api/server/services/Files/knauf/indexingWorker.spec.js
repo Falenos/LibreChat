@@ -356,6 +356,26 @@ describe('SIGTERM semantics — stop() halts claiming (§5.2)', () => {
   });
 });
 
+// KK20-195 review R11 — loop liveness + claim-outcome recording for /ready
+// and the knauf_file_index_worker_claims_total counter.
+describe('R11 — loop liveness + claim-outcome recorder', () => {
+  test('getLastTickAt advances when the loop runs; outcomes are recorded', async () => {
+    await seedQueued({ asset_id: 'tick-1' });
+    const recordClaimOutcome = jest.fn();
+    const worker = buildWorker({ recordClaimOutcome });
+    const before = worker.getLastTickAt();
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const loop = worker.start();
+    await new Promise((resolve) => setTimeout(resolve, 50)); // one iteration lands
+    worker.stop();
+    await loop;
+
+    expect(worker.getLastTickAt()).toBeGreaterThan(before);
+    expect(recordClaimOutcome).toHaveBeenCalledWith('ready'); // idle ticks not recorded
+  });
+});
+
 describe('helpers', () => {
   test.each([
     [httpError(429), 'retryable'],

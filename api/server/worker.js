@@ -12,15 +12,23 @@
 require('./telemetry');
 const path = require('path');
 require('module-alias')({ base: path.resolve(__dirname, '..') });
-const http = require('http');
+const express = require('express');
 const mongoose = require('mongoose');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
-const { initializeFileStorage } = require('@librechat/api');
+const {
+  initializeFileStorage,
+  createMetrics,
+  recordFileIndexWorkerClaim,
+  recordFileIndexWorkerQueue,
+} = require('@librechat/api');
 const { connectDb } = require('~/db');
 const { getAppConfig } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { isIndexingWorkerEnabled } = require('~/server/services/Files/knauf/asyncIndexingConfig');
-const { createIndexingWorker } = require('~/server/services/Files/knauf/indexingWorker');
+const {
+  createIndexingWorker,
+  getWorkerConfig,
+} = require('~/server/services/Files/knauf/indexingWorker');
 const {
   createIndexingReconciler,
   getReconcilerConfig,
@@ -158,6 +166,8 @@ const main = async () => {
     resolveScope,
     markFilesEmbedded,
     logger,
+    // KK20-195 review R11 — claim outcomes → knauf_file_index_worker_claims_total.
+    recordClaimOutcome: recordFileIndexWorkerClaim,
   });
   const reconciler = createIndexingReconciler({
     db,
@@ -175,21 +185,53 @@ const main = async () => {
     logger,
   });
 
-  const health = http
-    .createServer((req, res) => {
-      res.writeHead(req.url === '/health' ? 200 : 404, { 'Content-Type': 'text/plain' });
-      res.end('ok');
-    })
-    .listen(WORKER_PORT, () => logger.info(`[worker] health listener on :${WORKER_PORT}`));
+  // KK20-195 review R11 — the probe surface tells the TRUTH. /health stays a
+  // pure liveness probe; /ready is 200 only when Mongo is connected AND the
+  // claim loop ticked within 5 poll intervals (a wedged loop that "catches
+  // iteration failures forever" now fails readiness instead of hiding);
+  // /metrics exposes the knauf_file_index_* worker set via createMetrics.
+  const { metricsRouter } = createMetrics();
+  const probeApp = express();
+  probeApp.disable('x-powered-by');
+  probeApp.get('/health', (req, res) => res.status(200).send('ok'));
+  probeApp.get('/ready', (req, res) => {
+    const mongoUp = mongoose.connection.readyState === 1;
+    const staleAfterMs = 5 * getWorkerConfig().pollMs;
+    const lastTickAgoMs = Date.now() - worker.getLastTickAt();
+    const loopLive = lastTickAgoMs < staleAfterMs;
+    if (mongoUp && loopLive) {
+      return res.status(200).json({ status: 'ready' });
+    }
+    return res.status(503).json({
+      status: 'not_ready',
+      mongo: mongoUp,
+      loop_last_tick_ms_ago: lastTickAgoMs,
+    });
+  });
+  probeApp.use(metricsRouter);
+  const health = probeApp.listen(WORKER_PORT, () =>
+    logger.info(`[worker] health/ready/metrics listener on :${WORKER_PORT}`),
+  );
 
   const loop = runAsSystem(() => worker.start());
   // Reconciler scheduling lives HERE (not reconciler.start()): interval
   // callbacks escape the AsyncLocalStorage context, so every pass must be
   // re-wrapped in runAsSystem for the tenant-isolated models.
   const reconcilePass = () =>
-    runAsSystem(() => reconciler.runOnce()).catch((error) =>
-      logger.error('[worker] reconciliation pass failed:', error),
-    );
+    runAsSystem(async () => {
+      const counts = await reconciler.runOnce();
+      // R11 — queue health gauges, one cheap indexed read per pass.
+      const queued = await mongoose.models.KnaufFileAsset.countDocuments({ status: 'queued' });
+      const oldest = await mongoose.models.KnaufFileAsset.findOne({ status: 'queued' })
+        .sort({ queued_at: 1 })
+        .select({ queued_at: 1 })
+        .lean();
+      const oldestAgeSeconds = oldest?.queued_at
+        ? Math.max(0, (Date.now() - new Date(oldest.queued_at).getTime()) / 1000)
+        : 0;
+      recordFileIndexWorkerQueue(queued, oldestAgeSeconds);
+      return counts;
+    }).catch((error) => logger.error('[worker] reconciliation pass failed:', error));
   reconcilePass(); // one pass at boot: recover from crashes fast
   const reconcileTimer = setInterval(reconcilePass, getReconcilerConfig().intervalMs);
   reconcileTimer.unref?.();

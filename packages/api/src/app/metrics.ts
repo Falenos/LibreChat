@@ -213,6 +213,16 @@ export type FileIndexEmbedRoute = 'embed' | 'agent_embed';
 export type FileIndexEmbedOutcome = 'success' | 'failure' | 'timeout' | 'unsupported_type';
 export type FileIndexProviderStatusClass = '429' | '5xx';
 
+// KK20-195 review R11 — worker observability: claim outcomes + queue health.
+// Bounded tags only (outcome); gauges carry no labels.
+export type WorkerClaimOutcome =
+  | 'ready'
+  | 'requeued'
+  | 'failed'
+  | 'delete_requested'
+  | 'ownership_lost'
+  | 'activation_miss';
+
 type FileIndexMetrics = {
   recordEmbed: (
     route: FileIndexEmbedRoute,
@@ -221,12 +231,16 @@ type FileIndexMetrics = {
   ) => void;
   recordProviderError: (route: FileIndexEmbedRoute, status: FileIndexProviderStatusClass) => void;
   recordEmbedRetry: (route: FileIndexEmbedRoute) => void;
+  recordWorkerClaim: (outcome: WorkerClaimOutcome) => void;
+  recordWorkerQueue: (queued: number, oldestAgeSeconds: number) => void;
 };
 
 let fileIndexMetrics: FileIndexMetrics = {
   recordEmbed: () => undefined,
   recordProviderError: () => undefined,
   recordEmbedRetry: () => undefined,
+  recordWorkerClaim: () => undefined,
+  recordWorkerQueue: () => undefined,
 };
 // End [knauf]
 
@@ -251,6 +265,8 @@ const resetMetricRecorders = (): void => {
     recordEmbed: () => undefined,
     recordProviderError: () => undefined,
     recordEmbedRetry: () => undefined,
+    recordWorkerClaim: () => undefined,
+    recordWorkerQueue: () => undefined,
   };
   // End [knauf]
 };
@@ -301,6 +317,16 @@ export function recordFileIndexProviderError(
 
 export function recordFileIndexEmbedRetry(route: FileIndexEmbedRoute): void {
   fileIndexMetrics.recordEmbedRetry(route);
+}
+
+// KK20-195 review R11 — worker claim outcomes + queue depth/oldest age
+// (recorded by the indexing worker's loop and reconciler passes).
+export function recordFileIndexWorkerClaim(outcome: WorkerClaimOutcome): void {
+  fileIndexMetrics.recordWorkerClaim(outcome);
+}
+
+export function recordFileIndexWorkerQueue(queued: number, oldestAgeSeconds: number): void {
+  fileIndexMetrics.recordWorkerQueue(queued, oldestAgeSeconds);
 }
 // End [knauf]
 
@@ -624,11 +650,34 @@ export function createMetrics(): PrometheusMetrics {
     registers: [registry],
   });
 
+  // KK20-195 review R11 — worker observability set.
+  const fileIndexWorkerClaims = new Counter({
+    name: 'knauf_file_index_worker_claims_total',
+    help: 'Indexing-worker claim outcomes',
+    labelNames: ['outcome'] as const,
+    registers: [registry],
+  });
+  const fileIndexQueueDepth = new Gauge({
+    name: 'knauf_file_index_queue_depth',
+    help: 'Queued FileAsset backlog size (recorded per reconciler pass)',
+    registers: [registry],
+  });
+  const fileIndexQueueOldestAge = new Gauge({
+    name: 'knauf_file_index_queue_oldest_age_seconds',
+    help: 'Age of the oldest queued FileAsset (recorded per reconciler pass)',
+    registers: [registry],
+  });
+
   fileIndexMetrics = {
     recordEmbed: (route, outcome, durationSeconds) =>
       fileIndexEmbedDuration.observe({ route, outcome }, durationSeconds),
     recordProviderError: (route, status) => fileIndexProviderErrors.inc({ route, status }),
     recordEmbedRetry: (route) => fileIndexEmbedRetries.inc({ route }),
+    recordWorkerClaim: (outcome) => fileIndexWorkerClaims.inc({ outcome }),
+    recordWorkerQueue: (queued, oldestAgeSeconds) => {
+      fileIndexQueueDepth.set(queued);
+      fileIndexQueueOldestAge.set(oldestAgeSeconds);
+    },
   };
   // End [knauf]
 
