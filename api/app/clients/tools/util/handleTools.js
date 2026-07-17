@@ -395,10 +395,10 @@ const loadTools = async ({
           entity_id: resourceAgentId,
           cachePartition: agent?.id,
           fileCitations,
-          maxDistinctQueries: options.req.config?.endpoints?.agents?.fileSearch?.maxDistinctQueries,
+          maxDistinctQueries:
+            options.req.config?.endpoints?.agents?.knauf?.fileSearch?.maxDistinctQueries,
           maxCitations: options.req.config?.endpoints?.agents?.maxCitations,
           maxCitationsPerFile: options.req.config?.endpoints?.agents?.maxCitationsPerFile,
-          minRelevanceScore: options.req.config?.endpoints?.agents?.minRelevanceScore,
           runContext: options.req,
           // End [knauf]
         });

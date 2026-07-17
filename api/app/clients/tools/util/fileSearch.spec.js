@@ -147,7 +147,29 @@ describe('dual-backend file search', () => {
       'azure second',
       'pg second',
     ]);
-    expect(artifact.file_search.sources.every((source) => source.relevance >= 0.45)).toBe(true);
+    expect(artifact.file_search.sources.every((source) => source.relevance == null)).toBe(true);
+    expect(artifact.file_search.sources.map((source) => source.metadata)).toEqual([
+      expect.objectContaining({
+        backend: 'azure',
+        backendRank: 1,
+        rankingStrategy: 'cross_backend_rrf',
+      }),
+      expect.objectContaining({
+        backend: 'pgvector',
+        backendRank: 1,
+        rankingStrategy: 'cross_backend_rrf',
+      }),
+      expect.objectContaining({
+        backend: 'azure',
+        backendRank: 2,
+        rankingStrategy: 'cross_backend_rrf',
+      }),
+      expect.objectContaining({
+        backend: 'pgvector',
+        backendRank: 2,
+        rankingStrategy: 'cross_backend_rrf',
+      }),
+    ]);
   });
 
   test('caches normalized exact queries and returns typed exhaustion for a new query', async () => {
@@ -322,7 +344,8 @@ describe('dual-backend file search', () => {
     const [content, artifact] = await searchTool.func({ query: 'no partial matches' });
 
     expect(content).toContain('Warning: azure search was unavailable; these results are partial.');
-    expect(content).toContain('No content found in the files.');
+    expect(content).toContain('No matching content was found in the available files.');
+    expect(content).not.toContain('refine your query');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
   });

@@ -468,8 +468,9 @@ endpoints:
     maxRecursionLimit: 50
     # Unique file_search queries per run; exact repeats reuse
     # the same in-flight/completed promise and do not spend another query.
-    fileSearch:
-      maxDistinctQueries: 3
+    knauf:
+      fileSearch:
+        maxDistinctQueries: 3
     # End [knauf]
     capabilities:
       - file_search

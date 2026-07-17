@@ -775,11 +775,15 @@ export const agentsEndpointSchema = baseEndpointSchema
           maxCatalogSkills: z.number().int().min(1).max(100).optional(),
         })
         .optional(),
-      // [knauf] NO-TICKET — configurable per-run guard against repeated distinct
-      // document searches; exact-query cache hits do not consume the budget.
-      fileSearch: z
+      // [knauf] NO-TICKET — namespace the configurable per-run guard so it cannot
+      // collide with a future upstream agents setting.
+      knauf: z
         .object({
-          maxDistinctQueries: z.number().int().min(1).max(10).optional().default(3),
+          fileSearch: z
+            .object({
+              maxDistinctQueries: z.number().int().min(1).max(10).optional().default(3),
+            })
+            .optional(),
         })
         .optional(),
       // End [knauf]

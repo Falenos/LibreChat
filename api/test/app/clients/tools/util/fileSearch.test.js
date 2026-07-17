@@ -120,7 +120,7 @@ describe('fileSearch.js - tuple return validation', () => {
 
       expect(typeof formattedString).toBe('string');
       expect(formattedString).toContain('File: test.pdf');
-      expect(formattedString).toContain('Relevance:');
+      expect(formattedString).not.toContain('Relevance:');
       expect(formattedString).toContain('This is test content from the document');
       expect(formattedString).toContain('Additional relevant content');
 
@@ -138,9 +138,13 @@ describe('fileSearch.js - tuple return validation', () => {
         fileId: 'file-123',
         fileName: 'test.pdf',
         content: expect.any(String),
-        relevance: expect.any(Number),
         pages: [1],
-        pageRelevance: { 1: expect.any(Number) },
+        metadata: {
+          backend: 'pgvector',
+          backendRank: 1,
+          rankingStrategy: 'cross_backend_rrf',
+          rankingScore: expect.any(Number),
+        },
       });
     });
 
@@ -198,7 +202,6 @@ describe('fileSearch.js - tuple return validation', () => {
         fileCitations: true,
         maxCitations: 1,
         maxCitationsPerFile: 1,
-        minRelevanceScore: 0.99,
       });
 
       const [formattedString, artifact] = await fileSearchTool.func({ query: 'locked order' });

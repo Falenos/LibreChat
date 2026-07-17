@@ -397,7 +397,7 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - Identical chunks from one shared asset appear once.
   - The same text from two genuinely different source assets may remain twice for provenance.
   - Final citations use authorized logical IDs and filenames.
-  - Citation threshold and limits are applied before anchors; only that exact selected chunk array is shown to the model and persisted in the same order/cardinality.
+  - Citation count limits are applied in fused rank order before anchors; no semantic relevance threshold is applied because the two backends expose incompatible scores. Only that exact selected chunk array is shown to the model and persisted in the same order/cardinality.
   - Each distinct search gets a request-wide turn number used by both `turnNfileM` anchors and its attachment, even when several agents contribute tools to one response; cached repeats reuse the original content without creating another attachment.
   - Client rendering keeps `fileN` and web `refN` in separate index arrays, while the source-card list may deduplicate both views by file.
 - **Validation:** Deterministic pure-function tests for order, ties, duplicate digests, fallback content keys, and citation aliases.
@@ -423,7 +423,7 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
   - [`../../../packages/data-provider/src/config.ts`](../../../packages/data-provider/src/config.ts)
   - [`../../../librechat.yaml`](../../../librechat.yaml)
   - config and tool tests
-- **Description:** Cache the in-flight/completed promise and distinct-query budget by normalized query plus sorted canonical target set in a request-keyed `WeakMap`, nested by agent/entity, while keeping one request-wide next-turn counter at the WeakMap root. This lets ON_TOOL_EXECUTE reloads and multi-agent responses share collision-free citation turns without one agent consuming another agent's cache/budget; a new request starts cleanly. Add one application config value, `endpoints.agents.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable. A repeated exact query returns cached content without a duplicate citation attachment. Budget exhaustion returns typed `search_budget_exhausted` content and performs no additional backend request.
+- **Description:** Cache the in-flight/completed promise and distinct-query budget by normalized query plus sorted canonical target set in a request-keyed `WeakMap`, nested by agent/entity, while keeping one request-wide next-turn counter at the WeakMap root. This lets ON_TOOL_EXECUTE reloads and multi-agent responses share collision-free citation turns without one agent consuming another agent's cache/budget; a new request starts cleanly. Add one application config value, `endpoints.agents.knauf.fileSearch.maxDistinctQueries`, default `3`; do not add an environment variable. A repeated exact query returns cached content without a duplicate citation attachment. Budget exhaustion returns typed `search_budget_exhausted` content and performs no additional backend request.
 - **Dependencies:** Tasks 3.1–3.3.
 - **Acceptance criteria:**
   - Identical queries reuse cached content and emit no second backend request or duplicate source attachment.
@@ -572,8 +572,9 @@ One proposed application config value:
 ```yaml
 endpoints:
   agents:
-    fileSearch:
-      maxDistinctQueries: 3
+    knauf:
+      fileSearch:
+        maxDistinctQueries: 3
 ```
 
 Why config instead of an environment variable or hidden constant: this is agent-runtime behavior that must be reviewable beside `recursionLimit`, versioned with the application, and adjustable without inventing another deployment secret.
