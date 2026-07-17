@@ -128,6 +128,20 @@ describe('migrateFileAssetsBatch (KK20-195 WP2)', () => {
     expect(asset.active_generation).toBeNull();
   });
 
+  // KK20-195 review R1 — the migration runs under runAsSystem (no plugin
+  // injection), so the source row's tenant must be copied explicitly.
+  test('copies the source row tenantId onto the created asset', async () => {
+    await seedFile({ file_id: 'tenant-1', knauf_asset_id: 'tenant-1', tenantId: 't-42' });
+    await seedFile({ file_id: 'no-tenant', knauf_asset_id: 'no-tenant' });
+
+    await migrateFileAssetsBatch({ mongoose });
+
+    const tenanted = await KnaufFileAsset.findOne({ asset_id: 'tenant-1' }).lean();
+    expect(tenanted.tenantId).toBe('t-42');
+    const plain = await KnaufFileAsset.findOne({ asset_id: 'no-tenant' }).lean();
+    expect(plain.tenantId ?? null).toBeNull();
+  });
+
   test('batches with a resume cursor and re-runs are idempotent (no duplicates)', async () => {
     for (let i = 0; i < 5; i++) {
       await seedFile({ file_id: `f-${i}`, knauf_asset_id: `f-${i}` });

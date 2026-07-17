@@ -82,8 +82,9 @@ describe('fileAssetSchema (KK20-195 WP2)', () => {
     const assetId = find({ asset_id: 1 });
     expect(assetId?.[1]?.unique).toBe(true);
 
-    // dedup_key unique partial where present.
-    const dedup = find({ dedup_key: 1 });
+    // Tenant-scoped dedup uniqueness (KK20-195 review R1): dedup keys never
+    // coalesce across tenants; partial so agent-library assets stay out.
+    const dedup = find({ tenantId: 1, dedup_key: 1 });
     expect(dedup?.[1]?.unique).toBe(true);
     expect(dedup?.[1]?.partialFilterExpression).toEqual({ dedup_key: { $exists: true } });
 

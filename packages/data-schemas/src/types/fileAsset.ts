@@ -32,6 +32,8 @@ export interface IFileAssetBlob {
 export interface IKnaufFileAsset extends Document {
   /** Stable UUID; the physical identity used by blob and vectors. */
   asset_id: string;
+  /** Tenant isolation scope (KK20-195 review R1); absent on single-tenant deployments. */
+  tenantId?: string | null;
   /** Retrieval/dedup scope: user-owned chat vs agent-owned knowledge. */
   scope_type: FileAssetScopeType;
   scope_id: string;

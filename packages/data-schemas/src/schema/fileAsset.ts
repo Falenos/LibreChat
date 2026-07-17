@@ -17,6 +17,14 @@ const fileAssetSchema: Schema<IKnaufFileAsset> = new Schema(
       required: true,
       index: { unique: true },
     },
+    // KK20-195 review R1 — tenant isolation. `applyTenantIsolation` injects
+    // tenantId into every tenant-scoped query (including the reservation
+    // upsert); without this path, strict mode threw StrictModeError on any
+    // tenant-aware upload. Optional: single-tenant deployments carry none.
+    tenantId: {
+      type: String,
+      index: true,
+    },
     scope_type: {
       type: String,
       enum: ['user', 'agent'],
@@ -110,10 +118,12 @@ const fileAssetSchema: Schema<IKnaufFileAsset> = new Schema(
 );
 
 // Plan §4.3 required indexes.
-// At most one asset per dedup key (authorization scope + content hash);
-// partial so non-deduped (agent-library) assets never enter the index.
+// At most one asset per (tenant, dedup key) — dedup keys never coalesce
+// across tenants (KK20-195 review R1); partial so non-deduped
+// (agent-library) assets never enter the index. Absent tenantId indexes as
+// null, which keeps single-tenant deployments on one uniqueness domain.
 fileAssetSchema.index(
-  { dedup_key: 1 },
+  { tenantId: 1, dedup_key: 1 },
   { unique: true, partialFilterExpression: { dedup_key: { $exists: true } } },
 );
 // Normal claims: due queued work, oldest first.

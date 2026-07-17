@@ -114,6 +114,11 @@ async function migrateFileAssetsBatch({
 
     const assetDoc = {
       asset_id: assetId,
+      // KK20-195 review R1 — the migration runs under runAsSystem (no plugin
+      // injection), so the source row's tenant must be copied explicitly or
+      // legacy assets land tenant-less and become invisible to tenant-scoped
+      // reads.
+      ...(row.tenantId != null ? { tenantId: row.tenantId } : {}),
       scope_type: scopeType,
       scope_id: scopeId,
       content_hash: row.knauf_content_hash,
