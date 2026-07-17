@@ -227,6 +227,57 @@ describe('Azure crud.js - URL refresh tests', () => {
       expect(createIfNotExists).toHaveBeenCalledTimes(1);
       expect(uploadData).toHaveBeenCalledTimes(2);
     });
+
+    it('reuses readiness for a warm second upload', async () => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
+      const uploadData = jest.fn().mockResolvedValue(undefined);
+      const createIfNotExists = jest.fn().mockResolvedValue({ succeeded: true });
+      const containerClient = {
+        url: 'https://test.blob.core.windows.net/readiness-warm-test',
+        createIfNotExists,
+        getBlockBlobClient: jest.fn((blobPath) => ({
+          url: `https://test.blob.core.windows.net/readiness-warm-test/${blobPath}`,
+          uploadData,
+        })),
+      };
+      getAzureContainerClient.mockResolvedValue(containerClient);
+
+      await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('a'), fileName: 'a.txt' });
+      await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' });
+
+      expect(createIfNotExists).toHaveBeenCalledTimes(1);
+      expect(uploadData).toHaveBeenCalledTimes(2);
+    });
+
+    it('evicts rejected readiness and exposes the initialization failure before retrying', async () => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
+      const initializationError = new Error('container initialization failed');
+      const uploadData = jest.fn().mockResolvedValue(undefined);
+      const createIfNotExists = jest
+        .fn()
+        .mockRejectedValueOnce(initializationError)
+        .mockResolvedValueOnce({ succeeded: true });
+      const containerClient = {
+        url: 'https://test.blob.core.windows.net/readiness-retry-test',
+        createIfNotExists,
+        getBlockBlobClient: jest.fn((blobPath) => ({
+          url: `https://test.blob.core.windows.net/readiness-retry-test/${blobPath}`,
+          uploadData,
+        })),
+      };
+      getAzureContainerClient.mockResolvedValue(containerClient);
+
+      await expect(
+        saveBufferToAzure({ userId: 'u', buffer: Buffer.from('a'), fileName: 'a.txt' }),
+      ).rejects.toBe(initializationError);
+      expect(uploadData).not.toHaveBeenCalled();
+
+      await expect(
+        saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' }),
+      ).resolves.toBe('https://test.blob.core.windows.net/readiness-retry-test/images/u/b.txt');
+      expect(createIfNotExists).toHaveBeenCalledTimes(2);
+      expect(uploadData).toHaveBeenCalledTimes(1);
+    });
   });
   // End [knauf]
 

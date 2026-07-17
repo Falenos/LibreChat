@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useMemo } from 'react';
 import debounce from 'lodash/debounce';
 // [knauf] KK20-227 — pasted documents enable the conversation-scoped File Search state.
 import { useRecoilValue, useRecoilState, useSetRecoilState } from 'recoil';
-import { Constants, EModelEndpoint, EToolResources, Tools } from 'librechat-data-provider';
+import { Constants, EModelEndpoint, EToolResources, inferMimeType } from 'librechat-data-provider';
 import type { TEndpointOption, TEphemeralAgent } from 'librechat-data-provider';
 // End [knauf]
 import type { KeyboardEvent } from 'react';
@@ -334,22 +334,23 @@ export default function useTextarea({
           timestampedFiles.push(newFile);
         }
         // [knauf] Documents pasted into default Azure chats must enable the
-        // ephemeral File Search tool; configured custom agents use their own
-        // File Search tool. Images remain direct vision attachments because
+        // ephemeral File Search tool; custom-agent message files use transient
+        // request-scoped retrieval. Images remain direct vision attachments because
         // useFileHandling strips file_search per image in mixed selections.
         // KK20-227.
-        const containsDocument = timestampedFiles.some((file) => !file.type.startsWith('image/'));
-        const agentTools = isAgent ? ((entity as { tools?: string[] } | null)?.tools ?? []) : [];
+        const containsDocument = timestampedFiles.some(
+          (file) => !inferMimeType(file.name, file.type)?.startsWith('image/'),
+        );
         const useFileSearch =
           containsDocument &&
-          (endpoint === EModelEndpoint.azureOpenAI || agentTools.includes(Tools.file_search));
+          (endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents);
         if (useFileSearch && endpoint === EModelEndpoint.azureOpenAI) {
           setEphemeralAgent(enableEphemeralFileSearch);
         }
         handleFiles(timestampedFiles, useFileSearch ? EToolResources.file_search : undefined);
       }
     },
-    [endpoint, entity, handleFiles, isAgent, setEphemeralAgent, setFilesLoading, textAreaRef],
+    [endpoint, handleFiles, setEphemeralAgent, setFilesLoading, textAreaRef],
   );
   // End [knauf]
 

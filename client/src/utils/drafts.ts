@@ -1,9 +1,11 @@
 import debounce from 'lodash/debounce';
 import { Constants, LocalStorageKeys } from 'librechat-data-provider';
 
-// [knauf] KK20-227 — keep the shared pending ID tab-scoped across every draft caller.
+// [knauf] KK20-227 — keep shared temporary conversation IDs tab-scoped.
 const draftStorage = (id?: string | null) =>
-  id === String(Constants.PENDING_CONVO) ? sessionStorage : localStorage;
+  id === String(Constants.NEW_CONVO) || id === String(Constants.PENDING_CONVO)
+    ? sessionStorage
+    : localStorage;
 
 export const clearDraft = debounce((id?: string | null, storage: Storage = draftStorage(id)) => {
   storage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${id ?? ''}`);
@@ -13,7 +15,7 @@ export const clearDraft = debounce((id?: string | null, storage: Storage = draft
 /** Synchronously removes both text and file drafts for a conversation (or NEW_CONVO fallback) */
 export const clearAllDrafts = (conversationId?: string | null) => {
   const key = conversationId || Constants.NEW_CONVO;
-  // [knauf] KK20-227 — clear pending drafts from the same tab-scoped store used to save them.
+  // [knauf] KK20-227 — clear temporary drafts from the tab-scoped store used to save them.
   const storage = draftStorage(String(key));
   // End [knauf]
   storage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${key}`);
@@ -42,7 +44,7 @@ export const decodeBase64 = (base64String: string): string => {
   }
 };
 
-// [knauf] KK20-227 — optional storage keeps existing local drafts while isolating PENDING_CONVO.
+// [knauf] KK20-227 — optional storage preserves callers while temporary drafts stay tab-scoped.
 export const setDraft = ({
   id,
   value,

@@ -236,4 +236,22 @@ describe('useTextarea — Knauf composer placeholder', () => {
     expect(mockHandleFiles).toHaveBeenCalledWith(expect.any(Array), 'file_search');
     expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
   });
+
+  it('routes custom-agent message documents through transient File Search', () => {
+    mockGetEntity.mockReturnValue({
+      entity: { name: 'Document Agent', tools: [] },
+      isAgent: true,
+      isAssistant: false,
+    });
+    const { hook } = renderUseTextareaHook({
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent-1',
+    });
+    const pdf = new File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+
+    hook.handlePaste({ clipboardData: { files: [pdf] } } as never);
+
+    expect(mockHandleFiles).toHaveBeenCalledWith(expect.any(Array), 'file_search');
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
 });

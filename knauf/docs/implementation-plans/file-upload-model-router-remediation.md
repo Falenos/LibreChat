@@ -22,7 +22,7 @@ This plan is based on browser testing in development plus Datadog APM, Langfuse,
 | Model/embedding quota | Pass in observed window | No model or embedding 429 occurred. Capacity must not be increased again without new evidence. |
 | Clipboard document routing | Fail | A byte-identical pasted PDF produced two Azure blobs and bypassed File Search because the paste path omitted `tool_resource=file_search`. |
 | Attachment limit feedback | Fail | Only five of seven pending files were accepted; the remaining files were silently ignored. |
-| New-chat tab isolation | Fail | Multiple `/c/new` tabs shared the `PENDING` local-storage draft. Text from one tab appeared in another. |
+| New-chat tab isolation | Fixed locally; dev validation pending | Both `NEW_CONVO` and `PENDING_CONVO` drafts are tab-scoped and migrate to the real conversation ID. |
 | Router cost attribution | Fail | The primary Responses stream reported `model-router`, so the main token usage was not priced. Only secondary calls were included. |
 | Langfuse media handling | Degraded | The same PDF was uploaded to Langfuse media repeatedly, creating unnecessary network and storage traffic. |
 | Blob container setup telemetry | Degraded | Uploads repeatedly called container `createIfNotExists`; expected 409 responses were recorded as APM errors. |
@@ -83,7 +83,7 @@ Do not assign a zero price to a supported router transaction. Keep unsupported t
 
 ### 3.1 Route pasted documents like selected documents
 
-Update the paste path in `client/src/hooks/Input/useTextarea.ts` so non-image documents receive the same effective tool resource as the normal KARL upload menu and drag/drop path. Default Azure chats also enable `ephemeralAgent.file_search`; custom agents use File Search only when their persisted tool list includes it. Images remain direct multimodal attachments where supported.
+Update the paste path in `client/src/hooks/Input/useTextarea.ts` so non-image documents receive the same effective tool resource as the normal KARL upload menu and drag/drop path. Default Azure chats enable `ephemeralAgent.file_search`; custom-agent message attachments use the existing transient request-scoped File Search tool without mutating the persisted agent. Images remain direct multimodal attachments where supported.
 
 Keep `client/src/hooks/Files/useFileHandling.ts` as the single form-data builder. It must send both:
 
@@ -110,7 +110,7 @@ The accepted files must remain attached. The control must not shift layout or cl
 
 - Paste test: PDF is assigned `file_search`; image is not forced into document retrieval.
 - Menu, drag/drop, and paste tests assert equivalent document metadata.
-- Boundary tests cover 5, 6, and 7 selected files and the notification content.
+- Boundary tests cover single and overlapping actions at the five-file cap, plus validation-aware notification content.
 - Same-user duplicate test: sequential byte-identical documents reuse one shared asset.
 - Same-turn duplicate test: duplicate documents do not create duplicate visible attachments.
 - Cross-user test: deduplication never exposes another user's file record or permissions.
@@ -118,7 +118,7 @@ The accepted files must remain attached. The control must not shift layout or cl
 
 ## Work package 4: Isolate new-chat drafts by browser tab
 
-`client/src/hooks/Input/useAutoSave.ts` currently uses one local-storage key for `Constants.PENDING_CONVO`. Store unsaved `PENDING` text and file state in `sessionStorage`, which is isolated per tab. Continue using the existing persistent storage behaviour for real conversation IDs.
+Store unsaved `NEW_CONVO` and `PENDING_CONVO` text/file state in `sessionStorage`, which is isolated per tab. Continue using the existing persistent storage behaviour for real conversation IDs.
 
 Preserve the transition from `PENDING` to the created conversation ID so PR #144's in-flight upload state survives conversation creation.
 
@@ -140,12 +140,13 @@ No custom Langfuse deduplication was added. The installed SDK already hashes med
 
 Ensure the configured Azure Blob container once per process using a shared promise or existing client initialisation lifecycle. Do not call `createIfNotExists` for every file.
 
-Acceptance:
+Implemented regression coverage:
 
 - Concurrent first uploads share one initialisation request.
 - Warm uploads issue no container-create request.
 - Expected "already exists" does not appear as an application error after warm-up.
 - A real container creation failure remains visible and fails safely.
+- Failed initialisation is evicted so a later upload can retry readiness.
 
 ## Work package 6: Validate the real retrieval paths in development
 

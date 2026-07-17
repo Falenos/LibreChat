@@ -74,6 +74,7 @@ const isTransientUploadError = (error: unknown) => {
 // starting, regardless of how many loops / hook instances are active. Applies to
 // the document (file_search) path only; images take the vision path (no OCR).
 let documentUploadQueue: Promise<unknown> = Promise.resolve();
+const pendingFileSlotReservations = new Map<string, number>();
 function enqueueDocumentUpload<T>(task: () => Promise<T>): Promise<T> {
   const run = documentUploadQueue.then(task, task);
   // Keep the chain alive whatever this upload's outcome (never stays rejected).
@@ -84,6 +85,7 @@ function enqueueDocumentUpload<T>(task: () => Promise<T>): Promise<T> {
 /** Test-only: reset the module-level document-upload queue between tests. */
 export function _resetDocumentUploadQueue(): void {
   documentUploadQueue = Promise.resolve();
+  pendingFileSlotReservations.clear();
 }
 // End [knauf]
 
@@ -459,6 +461,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   const handleFiles = async (_files: FileList | File[], _toolResource?: string) => {
     abortControllerRef.current = new AbortController();
     let fileList = Array.from(_files);
+    const reservationKey = conversation?.conversationId ?? Constants.NEW_CONVO;
     /* Validate files */
     let filesAreValid: boolean;
     try {
@@ -471,19 +474,24 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       // [knauf] Keep the files that fit and tell the user exactly what was
       // accepted/rejected. validateFiles still enforces every other limit.
       // KK20-227.
-      const limitedFiles = limitIncomingFiles(fileList, files.size, endpointFileConfig.fileLimit);
+      const pendingSlots = pendingFileSlotReservations.get(reservationKey) ?? 0;
+      const limitedFiles = limitIncomingFiles(
+        fileList,
+        files.size + pendingSlots,
+        endpointFileConfig.fileLimit,
+      );
       fileList = limitedFiles.accepted;
-      if (limitedFiles.rejected > 0) {
-        showToast({
-          message: localize('com_knauf_file_limit_partial', {
-            0: String(fileList.length),
-            1: String(limitedFiles.rejected),
-            2: String(endpointFileConfig.fileLimit),
-          }),
-          status: 'warning',
-        });
-      }
       if (fileList.length === 0) {
+        if (limitedFiles.rejected > 0) {
+          showToast({
+            message: localize('com_knauf_file_limit_partial', {
+              0: '0',
+              1: String(limitedFiles.rejected),
+              2: String(endpointFileConfig.fileLimit),
+            }),
+            status: 'warning',
+          });
+        }
         setFilesLoading(false);
         return;
       }
@@ -502,6 +510,16 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         endpoint,
         // End [knauf]
       });
+      if (filesAreValid && limitedFiles.rejected > 0) {
+        showToast({
+          message: localize('com_knauf_file_limit_partial', {
+            0: String(fileList.length),
+            1: String(limitedFiles.rejected),
+            2: String(endpointFileConfig.fileLimit),
+          }),
+          status: 'warning',
+        });
+      }
     } catch (error) {
       console.error('file validation error', error);
       setError('com_error_files_validation');
@@ -512,15 +530,26 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       return;
     }
 
-    /* Process files */
+    // [knauf] Reserve all accepted slots before the first asynchronous conversion/upload.
+    // Picker, paste, and drag handlers can otherwise observe the same stale files.size and
+    // collectively exceed the five-file cap. The reservation only spans this event turn;
+    // the synchronously-added placeholders become authoritative afterwards. KK20-227.
+    const reservedSlots = fileList.length;
+    pendingFileSlotReservations.set(
+      reservationKey,
+      (pendingFileSlotReservations.get(reservationKey) ?? 0) + reservedSlots,
+    );
+    const queuedFiles: Array<{
+      originalFile: File;
+      file_id: string;
+      initialPreview: string;
+      initialExtendedFile: ExtendedFile;
+    }> = [];
     for (const originalFile of fileList) {
       const file_id = v4();
       try {
-        // Create initial preview with original file
         const initialPreview = URL.createObjectURL(originalFile);
         cachePreview(file_id, initialPreview);
-
-        // Create initial ExtendedFile to show immediately
         const initialExtendedFile: ExtendedFile = {
           file_id,
           file: originalFile,
@@ -542,9 +571,26 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         }
         // End [knauf]
 
-        // Add file immediately to show in UI
         addFile(initialExtendedFile);
+        queuedFiles.push({ originalFile, file_id, initialPreview, initialExtendedFile });
+      } catch (error) {
+        console.log('file handling error', error);
+        setError('com_error_files_process');
+      }
+    }
+    queueMicrotask(() => {
+      const remaining = (pendingFileSlotReservations.get(reservationKey) ?? 0) - reservedSlots;
+      if (remaining > 0) {
+        pendingFileSlotReservations.set(reservationKey, remaining);
+      } else {
+        pendingFileSlotReservations.delete(reservationKey);
+      }
+    });
+    // End [knauf]
 
+    /* Process files */
+    for (const { originalFile, file_id, initialPreview, initialExtendedFile } of queuedFiles) {
+      try {
         const originalFileName = originalFile.name.toLowerCase();
 
         // Check if HEIC conversion is needed and show toast

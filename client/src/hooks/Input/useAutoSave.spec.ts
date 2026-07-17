@@ -143,47 +143,62 @@ describe('useAutoSave — conversation switching', () => {
     expect(setFiles).not.toHaveBeenCalled();
   });
 
-  it('migrates tab-scoped pending text and files to the real conversation', () => {
-    const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${Constants.PENDING_CONVO}`;
-    const pendingFilesKey = `${LocalStorageKeys.FILES_DRAFT}${Constants.PENDING_CONVO}`;
-    const conversationTextKey = `${LocalStorageKeys.TEXT_DRAFT}convo-1`;
-    const conversationFilesKey = `${LocalStorageKeys.FILES_DRAFT}convo-1`;
-    sessionStorage.setItem(pendingTextKey, 'encoded-draft');
-    sessionStorage.setItem(pendingFilesKey, JSON.stringify(['pending-file']));
-    const pendingFiles = new Map([
-      ['pending-file', { file_id: 'pending-file', size: 1024, progress: 1 }],
-    ]);
+  it.each([Constants.NEW_CONVO, Constants.PENDING_CONVO])(
+    'migrates tab-scoped %s text and files to the real conversation',
+    (temporaryId) => {
+      const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${temporaryId}`;
+      const pendingFilesKey = `${LocalStorageKeys.FILES_DRAFT}${temporaryId}`;
+      const conversationTextKey = `${LocalStorageKeys.TEXT_DRAFT}convo-1`;
+      const conversationFilesKey = `${LocalStorageKeys.FILES_DRAFT}convo-1`;
+      sessionStorage.setItem(pendingTextKey, 'encoded-draft');
+      sessionStorage.setItem(pendingFilesKey, JSON.stringify(['pending-file']));
+      const pendingFiles = new Map([
+        ['pending-file', { file_id: 'pending-file', size: 1024, progress: 1 }],
+      ]);
 
-    const { rerender } = renderHook(
-      ({ isSubmitting }) =>
-        useAutoSave({
-          isSubmitting,
-          conversationId: 'convo-1',
-          textAreaRef: makeTextAreaRef(),
-          files: pendingFiles,
-          setFiles: jest.fn(),
-        }),
-      { initialProps: { isSubmitting: true } },
-    );
+      const setFiles = jest.fn();
+      const { rerender } = renderHook(
+        ({ conversationId, isSubmitting }: { conversationId: string; isSubmitting: boolean }) =>
+          useAutoSave({
+            isSubmitting,
+            conversationId,
+            textAreaRef: makeTextAreaRef(),
+            files: pendingFiles,
+            setFiles,
+          }),
+        {
+          initialProps: {
+            conversationId: temporaryId === Constants.NEW_CONVO ? temporaryId : 'convo-1',
+            isSubmitting: temporaryId === Constants.PENDING_CONVO,
+          },
+        },
+      );
+      setFiles.mockClear();
 
-    act(() => {
-      rerender({ isSubmitting: false });
-    });
+      act(() => {
+        rerender({ conversationId: 'convo-1', isSubmitting: false });
+      });
 
-    expect(localStorage.getItem(conversationTextKey)).toBe('encoded-draft');
-    expect(localStorage.getItem(conversationFilesKey)).toBe(JSON.stringify(['pending-file']));
-    expect(sessionStorage.getItem(pendingTextKey)).toBeNull();
-    expect(sessionStorage.getItem(pendingFilesKey)).toBeNull();
-  });
+      expect(localStorage.getItem(conversationTextKey)).toBe('encoded-draft');
+      expect(localStorage.getItem(conversationFilesKey)).toBe(JSON.stringify(['pending-file']));
+      expect(sessionStorage.getItem(pendingTextKey)).toBeNull();
+      expect(sessionStorage.getItem(pendingFilesKey)).toBeNull();
+      expect(localStorage.getItem(pendingTextKey)).toBeNull();
+      expect(localStorage.getItem(pendingFilesKey)).toBeNull();
+      expect(setFiles).not.toHaveBeenCalled();
+    },
+  );
 
-  it('stores the shared pending text key in sessionStorage by default', () => {
-    const pendingId = String(Constants.PENDING_CONVO);
-    const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${pendingId}`;
+  it.each([Constants.NEW_CONVO, Constants.PENDING_CONVO])(
+    'stores the shared %s text key in sessionStorage by default',
+    (temporaryId) => {
+      const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${temporaryId}`;
 
-    setStoredDraft({ id: pendingId, value: 'tab-scoped draft' });
+      setStoredDraft({ id: String(temporaryId), value: 'tab-scoped draft' });
 
-    expect(sessionStorage.getItem(pendingTextKey)).not.toBeNull();
-    expect(localStorage.getItem(pendingTextKey)).toBeNull();
-  });
+      expect(sessionStorage.getItem(pendingTextKey)).not.toBeNull();
+      expect(localStorage.getItem(pendingTextKey)).toBeNull();
+    },
+  );
   // End [knauf]
 });
