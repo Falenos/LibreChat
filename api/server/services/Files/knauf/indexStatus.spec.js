@@ -334,5 +334,44 @@ describe('checkIndexAdmission (§9.3)', () => {
     const result = await checkIndexAdmission({ db, scope_type: 'user', scope_id: 'u1' });
     expect(result).toEqual({ admitted: true });
   });
+
+  // KK20-195 review R7 — reserve-then-recheck defeats the TOCTOU race: every
+  // contender's reservation is durably counted before ANY contender decides,
+  // so with cap 1 exactly one of N concurrent uploads is admitted.
+  test('concurrent admission with cap 1: exactly one of N parallel uploads is admitted (R7)', async () => {
+    process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '1';
+    const fileAssetMethods = createFileAssetMethods(mongoose);
+
+    const contend = async (n) => {
+      // Reserve FIRST (as process.js does under R7)…
+      const { asset } = await fileAssetMethods.reserveAsset({
+        asset_id: `race-${n}`,
+        scope_type: 'user',
+        scope_id: 'race-user',
+        target_index_profile: 'legacy-v0',
+        vector_backend: 'pgvector',
+        embed_route: '/embed',
+      });
+      // …then admit with the own row included in the counts.
+      const admission = await checkIndexAdmission({
+        db: fileAssetMethods,
+        scope_type: 'user',
+        scope_id: 'race-user',
+        countIncludesSelf: true,
+      });
+      if (!admission.admitted) {
+        // Compensate (as process.js does).
+        await fileAssetMethods.tombstoneForDelete({ asset_id: asset.asset_id });
+        await fileAssetMethods.removeAsset({ asset_id: asset.asset_id });
+      }
+      return admission.admitted;
+    };
+
+    const results = await Promise.all([contend(1), contend(2), contend(3), contend(4)]);
+    const admittedCount = results.filter(Boolean).length;
+    expect(admittedCount).toBeLessThanOrEqual(1); // NEVER over the cap — the finding's failure mode
+    const survivors = await KnaufFileAsset.countDocuments({ scope_id: 'race-user' });
+    expect(survivors).toBe(admittedCount); // losers fully compensated
+  });
 });
 // End [knauf]

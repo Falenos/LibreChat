@@ -1846,11 +1846,13 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     }
   });
 
-  test('async acceptance over the backlog cap — 429 before any durable state (WP3c)', async () => {
+  test('async acceptance over the backlog cap — 429, reservation compensated (WP3c/R7)', async () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
     process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '2';
     try {
-      db.countActiveByScope.mockResolvedValueOnce(2); // scope already at cap
+      // R7 reserve-then-recheck: the count INCLUDES this request's own
+      // reservation (3 - self = 2 effective ≥ cap 2 → rejected).
+      db.countActiveByScope.mockResolvedValueOnce(3);
 
       await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
@@ -1860,8 +1862,12 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
         reason: 'queued_files',
         file_id: 'up-1',
       });
-      expect(db.reserveAsset).not.toHaveBeenCalled(); // nothing durable reserved
-      expect(handleFileUpload).not.toHaveBeenCalled();
+      // The reservation was made (that's what defeats the TOCTOU race) and
+      // then compensated — nothing durable survives the rejection.
+      expect(db.reserveAsset).toHaveBeenCalledTimes(1);
+      expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
+      expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+      expect(handleFileUpload).not.toHaveBeenCalled(); // no physical work
       expect(db.createFile).not.toHaveBeenCalled();
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;

@@ -942,23 +942,6 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
 
     knaufAsyncAccepted = isAsyncAcceptedForUser(req.user);
 
-    if (knaufAsyncAccepted) {
-      // WP3c admission (plan §9.3): the durable backlog one scope may hold is
-      // bounded BEFORE any durable state is reserved. Sync uploads skip this —
-      // they embed in-request and leave no backlog behind.
-      const admission = await checkIndexAdmission({
-        db,
-        scope_type: messageAttachment ? 'user' : 'agent',
-        scope_id: messageAttachment ? req.user.id : String(entity_id ?? req.user.id),
-        incomingBytes: file.size ?? 0,
-      });
-      if (!admission.admitted) {
-        return res
-          .status(429)
-          .json({ error: 'file_indexing_backlog_full', reason: admission.reason, file_id });
-      }
-    }
-
     knaufContentHash = messageAttachment ? await computeContentHash(file.path) : undefined;
 
     const reservation = await reserveForUpload({
@@ -973,6 +956,28 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     knaufUploadAsset = reservation.asset;
     knaufAssetId = reservation.asset.asset_id;
     knaufDedupOwner = messageAttachment && reservation.created ? true : undefined;
+
+    if (knaufAsyncAccepted && reservation.created) {
+      // Admission (plan §9.3, review R7) — reserve-then-recheck-or-compensate:
+      // the reservation above is durably counted BEFORE this decision, so
+      // concurrent uploads can never all pass the same stale count (TOCTOU).
+      // Rejection removes the reservation this request just made. Sync
+      // uploads and found-assets skip: no new backlog either way.
+      const admission = await checkIndexAdmission({
+        db,
+        scope_type: messageAttachment ? 'user' : 'agent',
+        scope_id: messageAttachment ? req.user.id : String(entity_id ?? req.user.id),
+        incomingBytes: file.size ?? 0,
+        countIncludesSelf: true,
+      });
+      if (!admission.admitted) {
+        await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
+        await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        return res
+          .status(429)
+          .json({ error: 'file_indexing_backlog_full', reason: admission.reason, file_id });
+      }
+    }
 
     let runCreatedPath = reservation.created;
     if (!reservation.created) {
