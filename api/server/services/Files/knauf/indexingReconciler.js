@@ -56,7 +56,14 @@ const getReconcilerConfig = () => ({
  * @param {{ info: Function, warn: Function, error: Function }} deps.logger
  * @returns {{ runOnce: Function }}
  */
-function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAsset, logger }) {
+function createIndexingReconciler({
+  db,
+  listAssets,
+  listFileAssetRefs,
+  cleanupAsset,
+  deleteGeneration,
+  logger,
+}) {
   /** Alert = error-level log with a stable, grep/monitor-able marker. */
   const alert = (caseName, detail) =>
     logger.error(`[indexingReconciler][alert][${caseName}] ${detail}`);
@@ -285,6 +292,43 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
   };
 
   /**
+   * Case 8 (KK20-195 review R9) — drain cleanup DEBT: generations whose RAG
+   * delete failed when the worker cleaned a failed/lost attempt
+   * (`stale_generations`, recorded token-less). Each confirmed delete pulls
+   * its entry; a still-failing delete stays recorded and alerts, never lost.
+   */
+  const staleGenerationsCursor = makeRotatingCursor();
+  const reconcileStaleGenerations = async (config) => {
+    if (typeof deleteGeneration !== 'function') {
+      return { scanned: 0, repaired: 0, alerted: 0 };
+    }
+    const assets = await listAssets(
+      staleGenerationsCursor.apply({ 'stale_generations.0': { $exists: true } }),
+      config.batchLimit,
+      { _id: 1 },
+    );
+    staleGenerationsCursor.advance(assets, config.batchLimit);
+    let repaired = 0;
+    let alerted = 0;
+    for (const asset of assets) {
+      for (const generation of asset.stale_generations ?? []) {
+        try {
+          await deleteGeneration(asset, generation);
+          await db.clearStaleGeneration({ asset_id: asset.asset_id, generation });
+          repaired += 1;
+        } catch (error) {
+          alert(
+            'cleanup_debt_unpaid',
+            `generation ${asset.asset_id}:${generation} still undeletable: ${error?.message}`,
+          );
+          alerted += 1;
+        }
+      }
+    }
+    return { scanned: assets.length, repaired, alerted };
+  };
+
+  /**
    * One bounded pass over all seven cases. Never throws — each case is
    * contained so one bad document cannot stall the rest.
    * @returns {Promise<Object>} per-case counts
@@ -300,6 +344,7 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
       delete_failed: (c, n) => reconcileDeleteFailed(c, n),
       ready_without_generation: (c) => reconcileReadyWithoutGeneration(c),
       migration_inconsistent: (c) => reconcileMigrationInconsistent(c),
+      stale_generations: (c) => reconcileStaleGenerations(c),
     };
     const counts = {};
     for (const [name, run] of Object.entries(cases)) {

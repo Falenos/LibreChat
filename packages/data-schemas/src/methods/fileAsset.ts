@@ -72,6 +72,8 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     target_index_profile: string;
   }) => Promise<IKnaufFileAsset | null>;
   retryFailed: (params: { asset_id: string }) => Promise<IKnaufFileAsset | null>;
+  recordStaleGeneration: (params: { asset_id: string; generation: number }) => Promise<boolean>;
+  clearStaleGeneration: (params: { asset_id: string; generation: number }) => Promise<boolean>;
   tombstoneForDelete: (params: { asset_id: string }) => Promise<IKnaufFileAsset | null>;
   markDeleteFailed: (params: { asset_id: string; error_code: string }) => Promise<boolean>;
   retryDelete: (params: { asset_id: string }) => Promise<boolean>;
@@ -337,6 +339,34 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   }
 
   /** Authorized user retry: ONLY failed → queued (plan §6.4); resets attempts. */
+  /**
+   * KK20-195 review R9 — cleanup debt. Token-less on purpose: recording that
+   * a generation's vectors may still exist is ADDITIVE bookkeeping, valid
+   * even after ownership was lost (that is exactly when it matters most).
+   */
+  async function recordStaleGeneration(params: {
+    asset_id: string;
+    generation: number;
+  }): Promise<boolean> {
+    const result = await getModel().updateOne(
+      { asset_id: params.asset_id },
+      { $addToSet: { stale_generations: params.generation } },
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** R9 — drop a debt entry once its RAG delete is confirmed. */
+  async function clearStaleGeneration(params: {
+    asset_id: string;
+    generation: number;
+  }): Promise<boolean> {
+    const result = await getModel().updateOne(
+      { asset_id: params.asset_id },
+      { $pull: { stale_generations: params.generation } },
+    );
+    return result.modifiedCount === 1;
+  }
+
   async function retryFailed(params: { asset_id: string }): Promise<IKnaufFileAsset | null> {
     const now = new Date();
     return getModel()
@@ -457,6 +487,8 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     failClaim,
     activateGeneration,
     retryFailed,
+    recordStaleGeneration,
+    clearStaleGeneration,
     tombstoneForDelete,
     markDeleteFailed,
     retryDelete,

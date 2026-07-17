@@ -118,7 +118,14 @@ function createIndexingWorker({
   const id = workerId ?? `worker-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   let stopped = false;
 
-  /** Best-effort: delete ONLY the generation this claim wrote (§7.4/§5.3). */
+  /**
+   * Best-effort: delete ONLY the generation this claim wrote (§7.4/§5.3).
+   * KK20-195 review R9 — a failed delete is no longer forgotten: it is
+   * persisted as cleanup DEBT (`stale_generations`, token-less additive), so
+   * a retry claim's generation bump can't orphan the partial write — the
+   * reconciler drains the debt, and final deletion removes listed
+   * generations too.
+   */
   const cleanupGeneration = async (claim, userId) => {
     try {
       await ragClient.deleteGeneration({
@@ -129,8 +136,15 @@ function createIndexingWorker({
       });
     } catch (error) {
       logger.warn(
-        `[indexingWorker:${id}] generation cleanup failed for ${claim.asset_id}:${claim.target_generation}: ${error?.message}`,
+        `[indexingWorker:${id}] generation cleanup failed for ${claim.asset_id}:${claim.target_generation}; recording debt: ${error?.message}`,
       );
+      await db
+        .recordStaleGeneration({ asset_id: claim.asset_id, generation: claim.target_generation })
+        .catch((debtError) =>
+          logger.error(
+            `[indexingWorker:${id}][alert][cleanup_debt_unrecorded] ${claim.asset_id}:${claim.target_generation}: ${debtError?.message}`,
+          ),
+        );
     }
   };
 

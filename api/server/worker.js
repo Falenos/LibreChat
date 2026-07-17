@@ -97,9 +97,13 @@ const listFileAssetRefs = (limit, afterId = null) =>
 const buildCleanupAsset = (ragClient) => async (asset) => {
   let cleaned = true;
   const ownerUserId = await resolveOwnerUserId(asset);
+  // KK20-195 review R9 — recorded cleanup debt is part of the deletion set:
+  // a failed attempt's generation must not outlive the asset.
   const generations = [
     ...new Set(
-      [asset.active_generation, asset.target_generation].filter((g) => g != null && g > 0),
+      [asset.active_generation, asset.target_generation, ...(asset.stale_generations ?? [])].filter(
+        (g) => g != null && g > 0,
+      ),
     ),
   ];
   for (const generation of generations) {
@@ -160,6 +164,14 @@ const main = async () => {
     listAssets,
     listFileAssetRefs,
     cleanupAsset: buildCleanupAsset(ragClient),
+    // KK20-195 review R9 — the debt-drain case deletes ONE generation with
+    // the owning user's identity resolved from persisted rows.
+    deleteGeneration: async (asset, generation) =>
+      ragClient.deleteGeneration({
+        asset_id: asset.asset_id,
+        generation,
+        userId: await resolveOwnerUserId(asset),
+      }),
     logger,
   });
 

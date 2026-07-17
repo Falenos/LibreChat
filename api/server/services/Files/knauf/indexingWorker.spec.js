@@ -173,6 +173,26 @@ describe('worker dies mid-embed → lease reclaim (plan §14)', () => {
 });
 
 describe('retry classification (§5.3)', () => {
+  // KK20-195 review R9 — a failed generation cleanup becomes persisted DEBT.
+  test('a failed generation cleanup is recorded as stale_generations debt (R9)', async () => {
+    await seedQueued({ asset_id: 'debt-w1' });
+    const rag = {
+      async embedGeneration() {
+        throw httpError(503); // retryable embed failure → cleanup runs
+      },
+      async deleteGeneration() {
+        throw new Error('rag down'); // …and the cleanup itself fails
+      },
+    };
+    const worker = buildWorker({ ragClient: rag });
+
+    const { outcome } = await worker.processNextDue();
+
+    expect(outcome).toBe('requeued');
+    const asset = await db.getAssetByAssetId('debt-w1');
+    expect(asset.stale_generations).toEqual([1]); // the debt survives the requeue
+  });
+
   test('retryable failure → requeued with future next_attempt_at; its generation cleaned', async () => {
     await seedQueued({ asset_id: 'r1' });
     const rag = createFakeRag();

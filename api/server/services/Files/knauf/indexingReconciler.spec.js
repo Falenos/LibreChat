@@ -28,8 +28,18 @@ const listFileAssetRefs = (limit, afterId = null) =>
     .select({ file_id: 1, knauf_asset_id: 1 })
     .lean();
 
+// KK20-195 review R9 — the debt-drain case deletes single generations.
+const deleteGenerationMock = jest.fn().mockResolvedValue(undefined);
+
 const buildReconciler = () =>
-  createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAsset, logger });
+  createIndexingReconciler({
+    db,
+    listAssets,
+    listFileAssetRefs,
+    cleanupAsset,
+    deleteGeneration: deleteGenerationMock,
+    logger,
+  });
 
 const alerts = () => logger.error.mock.calls.map(([msg]) => msg);
 
@@ -57,6 +67,7 @@ beforeEach(async () => {
   await File.deleteMany({});
   jest.clearAllMocks();
   cleanupAsset.mockResolvedValue(true);
+  deleteGenerationMock.mockReset().mockResolvedValue(undefined);
 });
 
 const LONG_AGO = new Date(Date.now() - 48 * 60 * 60 * 1000);
@@ -197,6 +208,41 @@ describe('case 4 — asset with no logical references', () => {
     } finally {
       delete process.env.KNAUF_RECONCILE_BATCH_LIMIT;
     }
+  });
+});
+
+// KK20-195 review R9 — case 8: cleanup debt is drained, one generation at a
+// time; a confirmed delete pulls its entry, a still-failing one alerts and
+// STAYS recorded.
+describe('case 8 — stale-generation cleanup debt (R9)', () => {
+  test('confirmed deletes pull their debt; failing ones alert and stay', async () => {
+    await seedAsset({
+      asset_id: 'debt-a',
+      status: 'ready',
+      active_generation: 3,
+      stale_generations: [1, 2],
+      aged: false,
+    });
+    await seedFile({ file_id: 'ref-a', knauf_asset_id: 'debt-a' }); // keeps case 4 away
+    deleteGenerationMock.mockImplementation(async (_asset, generation) => {
+      if (generation === 2) {
+        throw new Error('rag still down');
+      }
+    });
+
+    const counts = await buildReconciler().runOnce();
+
+    expect(counts.stale_generations).toMatchObject({ scanned: 1, repaired: 1, alerted: 1 });
+    const asset = await db.getAssetByAssetId('debt-a');
+    expect(asset.stale_generations).toEqual([2]); // unpaid debt survives
+    expect(alerts().some((m) => m.includes('cleanup_debt_unpaid'))).toBe(true);
+  });
+
+  test('debt-free assets are never scanned', async () => {
+    await seedAsset({ asset_id: 'clean-a', status: 'ready', active_generation: 1, aged: false });
+    const counts = await buildReconciler().runOnce();
+    expect(counts.stale_generations).toMatchObject({ scanned: 0 });
+    expect(deleteGenerationMock).not.toHaveBeenCalled();
   });
 });
 

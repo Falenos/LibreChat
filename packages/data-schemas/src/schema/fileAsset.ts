@@ -98,6 +98,14 @@ const fileAssetSchema: Schema<IKnaufFileAsset> = new Schema(
       type: Number,
       default: null,
     },
+    // KK20-195 review R9 — cleanup debt: generations whose RAG delete failed
+    // (or that a lost claim wrote and could not clean). Recorded token-less
+    // ($addToSet — additive, never part of the state machine) and drained by
+    // the reconciler; final deletion also removes every listed generation.
+    stale_generations: {
+      type: [Number],
+      default: [],
+    },
     last_error_code: {
       type: String,
     },
@@ -142,6 +150,8 @@ fileAssetSchema.index({ scope_type: 1, scope_id: 1, status: 1 });
 // matches instead of walking the whole ready/failed steady state every pass.
 fileAssetSchema.index({ status: 1, active_generation: 1 });
 fileAssetSchema.index({ status: 1, last_error_code: 1 });
+// KK20-195 review R9 — cleanup-debt sweep (multikey; near-zero cardinality).
+fileAssetSchema.index({ stale_generations: 1 });
 
 export default fileAssetSchema;
 // End [knauf]

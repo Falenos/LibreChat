@@ -290,6 +290,32 @@ describe('retry and deletion lifecycle', () => {
   });
 });
 
+// KK20-195 review R9 — cleanup debt is token-less additive bookkeeping.
+describe('stale-generation cleanup debt (review R9)', () => {
+  test('record adds once ($addToSet), clear pulls the confirmed entry', async () => {
+    await seedQueued({ asset_id: 'debt-1' });
+
+    expect(await methods.recordStaleGeneration({ asset_id: 'debt-1', generation: 2 })).toBe(true);
+    // Idempotent: the same generation is never listed twice ($addToSet).
+    await methods.recordStaleGeneration({ asset_id: 'debt-1', generation: 2 });
+    await methods.recordStaleGeneration({ asset_id: 'debt-1', generation: 3 });
+
+    let asset = await methods.getAssetByAssetId('debt-1');
+    expect(asset?.stale_generations).toEqual([2, 3]);
+
+    expect(await methods.clearStaleGeneration({ asset_id: 'debt-1', generation: 2 })).toBe(true);
+    asset = await methods.getAssetByAssetId('debt-1');
+    expect(asset?.stale_generations).toEqual([3]);
+  });
+
+  test('recording works without an execution token (ownership already lost)', async () => {
+    await seedQueued({ asset_id: 'debt-2' });
+    // No claim, no token — exactly the lost-ownership situation where the
+    // debt matters most.
+    expect(await methods.recordStaleGeneration({ asset_id: 'debt-2', generation: 5 })).toBe(true);
+  });
+});
+
 describe('admission-control counters', () => {
   test('counts and sums only non-terminal work in the scope', async () => {
     await seedQueued({ asset_id: 's1', scope_id: 'u1', blob: { bytes: 10 } });

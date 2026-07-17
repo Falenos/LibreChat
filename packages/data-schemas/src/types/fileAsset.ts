@@ -65,6 +65,8 @@ export interface IKnaufFileAsset extends Document {
   /** Only generation visible to queries; null before first successful index. */
   active_generation?: number | null;
   /** Stable bounded machine code (plan §15 taxonomy). */
+  /** KK20-195 review R9 — generations whose RAG delete failed; reconciler-drained cleanup debt. */
+  stale_generations?: number[];
   last_error_code?: string;
   /** Sanitized, truncated diagnostic; never document text or credentials. */
   last_error_detail?: string;
