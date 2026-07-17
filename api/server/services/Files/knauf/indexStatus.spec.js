@@ -177,6 +177,23 @@ describe('buildBatchIndexStatus (§6.3)', () => {
     const empty = await buildBatchIndexStatus({ db, userId: owner.toString(), batchId: 'none' });
     expect(empty).toMatchObject({ total: 0, terminal: false, failures: [] });
   });
+
+  test('a transient asset-load failure PROPAGATES (never reports a false terminal)', async () => {
+    // Unlike the list endpoints, batch status must NOT swallow: a degraded page
+    // would project every row to ready/failed → false terminal:true → the
+    // client stops polling mid-flight. It must throw → route 500 → client retries.
+    const failingDb = {
+      getFiles: async () => [
+        { file_id: 'bf1', knauf_asset_id: 'a-x', knauf_upload_batch_id: 'b3' },
+      ],
+      getAssetsByAssetIds: async () => {
+        throw new Error('transient mongo error');
+      },
+    };
+    await expect(
+      buildBatchIndexStatus({ db: failingDb, userId: 'u1', batchId: 'b3' }),
+    ).rejects.toThrow('transient mongo error');
+  });
 });
 
 describe('retryFileIndexing (§6.4)', () => {

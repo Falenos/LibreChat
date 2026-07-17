@@ -921,7 +921,10 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       classifyExistingAsset,
       recordSyncEmbed,
     } = require('./knauf/fileSearchAssetLifecycle');
-    const { isAsyncAcceptedForUser } = require('./knauf/asyncIndexingConfig');
+    const {
+      isAsyncAcceptedForUser,
+      isIndexingWorkerEnabled,
+    } = require('./knauf/asyncIndexingConfig');
     const { uploadVectors, isAzureSearchEnabledForAgents } = require('./VectorDB/crud');
     const { embedWithBlobCompensation } = require('./knauf/embedCompensation');
     const { checkIndexAdmission } = require('./knauf/indexAdmission');
@@ -962,7 +965,13 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
 
     let runCreatedPath = reservation.created;
     if (!reservation.created) {
-      const verdict = classifyExistingAsset(reservation.asset, { now: new Date() });
+      const verdict = classifyExistingAsset(reservation.asset, {
+        now: new Date(),
+        // Reclaim only when nothing else reaps stale assets: with the worker
+        // enabled its expired-lease re-claim + the reconciler own recovery, so
+        // deleting a stale asset here would race/discard their work.
+        reclaimable: !isIndexingWorkerEnabled(),
+      });
       if (verdict === 'reuse' || verdict === 'reuse_stale_profile') {
         // Same semantics as the KK20-204 dedup HIT: reuse the shared asset's
         // blob + embeddings; no storage upload, no embed. The route's finally

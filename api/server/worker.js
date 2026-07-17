@@ -63,7 +63,12 @@ const resolveOwnerUserId = async (asset) => {
     return asset.scope_id;
   }
   const rows = await db.getFiles({ knauf_asset_id: asset.asset_id }, null, { user: 1 });
-  return rows?.[0]?.user ? String(rows[0].user) : null;
+  // Fall back to the agent id (scope_id) as a last-resort authenticated subject
+  // when no File row survives (an agent-scoped orphan): an UNauthenticated
+  // delete 401s and churns forever in delete_failed. A signed token is what
+  // rag_api requires; WP1 should persist an owner_user_id on the asset so the
+  // subject is exact rather than the agent id.
+  return rows?.[0]?.user ? String(rows[0].user) : asset.scope_id;
 };
 
 // WP4b — bounded raw queries the createMethods surface doesn't expose; the

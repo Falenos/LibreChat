@@ -136,6 +136,21 @@ describe('classifyExistingAsset — reclaim of abandoned reservations (KK20-195 
     );
     expect(classifyExistingAsset({ status: 'queued', updatedAt: stale }, { now })).toBe('reclaim');
   });
+
+  test('reclaimable=false (worker enabled) → abandoned asset stays in_progress, not reclaim', () => {
+    // With the worker on, its expired-lease re-claim + the reconciler own
+    // recovery; the upload path must not delete the asset out from under them.
+    const stale = ago(20 * 60 * 1000);
+    expect(
+      classifyExistingAsset(
+        { status: 'processing', lease_expires_at: ago(1000) },
+        { now, reclaimable: false },
+      ),
+    ).toBe('in_progress');
+    expect(
+      classifyExistingAsset({ status: 'queued', updatedAt: stale }, { now, reclaimable: false }),
+    ).toBe('in_progress');
+  });
 });
 
 describe('recordSyncEmbed — sync execution through the asset (rollout step 4)', () => {
@@ -209,6 +224,26 @@ describe('recordSyncEmbed — sync execution through the asset (rollout step 4)'
         embed: async () => ({ embedded: true }),
       }),
     ).rejects.toMatchObject({ knaufCode: 'file_indexing_in_progress' });
+  });
+
+  test('a lost activation CAS (asset tombstoned mid-embed) throws instead of reporting success', async () => {
+    const id = await queueAsset('s5');
+    await expect(
+      recordSyncEmbed({
+        db,
+        asset_id: id,
+        createdThisRequest: true,
+        logger,
+        embed: async () => {
+          // A concurrent last-reference delete tombstones the shared asset
+          // while we embed → the post-embed activation CAS misses.
+          await db.tombstoneForDelete({ asset_id: id });
+          return { embedded: true };
+        },
+      }),
+    ).rejects.toMatchObject({ knaufCode: 'file_indexing_activation_lost' });
+    // Must NOT have reported success with a File row that would dangle.
+    expect(await db.getAssetByAssetId(id)).toBeNull();
   });
 });
 

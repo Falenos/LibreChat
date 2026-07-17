@@ -55,28 +55,35 @@ function projectFileIndexing(file, asset) {
  * @param {Array<Object>} params.files - lean File rows
  * @returns {Promise<Array<Object>>}
  */
-async function attachIndexingToFiles({ db, files }) {
-  if (!Array.isArray(files) || files.length === 0) {
-    return files ?? [];
-  }
+async function attachIndexingCore({ db, files }) {
   const assetIds = [...new Set(files.map((f) => f?.knauf_asset_id).filter(Boolean))];
   if (assetIds.length === 0) {
     return files;
   }
+  const assets = await db.getAssetsByAssetIds(assetIds);
+  const byId = new Map(assets.map((a) => [a.asset_id, a]));
+  return files.map((file) => {
+    if (!file?.knauf_asset_id) {
+      return file;
+    }
+    const raw = typeof file.toObject === 'function' ? file.toObject() : file;
+    return { ...raw, indexing: projectFileIndexing(file, byId.get(file.knauf_asset_id)) };
+  });
+}
+
+async function attachIndexingToFiles({ db, files }) {
+  if (!Array.isArray(files) || files.length === 0) {
+    return files ?? [];
+  }
   try {
-    const assets = await db.getAssetsByAssetIds(assetIds);
-    const byId = new Map(assets.map((a) => [a.asset_id, a]));
-    return files.map((file) => {
-      if (!file?.knauf_asset_id) {
-        return file;
-      }
-      const raw = typeof file.toObject === 'function' ? file.toObject() : file;
-      return { ...raw, indexing: projectFileIndexing(file, byId.get(file.knauf_asset_id)) };
-    });
+    return await attachIndexingCore({ db, files });
   } catch (error) {
     // Attaching the indexing projection is enrichment, not core: a transient
     // asset-collection failure (or a stale dist missing getAssetsByAssetIds)
-    // must not take the whole file listing down. Degrade to the upstream rows.
+    // must not take the whole file LISTING down. Degrade to the upstream rows.
+    // NOTE: batch-status uses attachIndexingCore directly — it must NOT swallow
+    // here, or a degraded page projects every row to ready/failed and reports a
+    // FALSE `terminal: true`, stopping the client's progress poll mid-flight.
     logger.warn(
       `[attachIndexingToFiles] indexing projection failed; returning plain rows: ${error?.message}`,
     );
@@ -101,7 +108,9 @@ async function attachIndexingToFiles({ db, files }) {
 async function buildBatchIndexStatus({ db, userId, batchId }) {
   const files =
     (await db.getFiles({ user: userId, knauf_upload_batch_id: batchId }, null, { text: 0 })) ?? [];
-  const withIndexing = await attachIndexingToFiles({ db, files });
+  // Strict (non-swallowing): a projection failure must propagate so the route
+  // returns 500 and the client retries the tick — never a false `terminal`.
+  const withIndexing = await attachIndexingCore({ db, files });
 
   const counts = Object.fromEntries(BATCH_STATUSES.map((s) => [s, 0]));
   const failures = [];

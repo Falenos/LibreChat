@@ -89,10 +89,14 @@ async function reserveForUpload({
  * The existing-asset branch table (plan §6.1). Only meaningful when the
  * reservation found an asset instead of creating one.
  * @param {{ status: string, active_index_profile?: string | null, delete_requested_at?: Date | null, lease_expires_at?: Date | null, updatedAt?: Date | null }} asset
- * @param {{ now?: Date }} [options]
+ * @param {{ now?: Date, reclaimable?: boolean }} [options] - `reclaimable` gates
+ *   upload-path reclaim to the flags-off world; when the worker is enabled its
+ *   expired-lease re-claim + the reconciler own recovery, so the upload path
+ *   must NOT delete a stale asset out from under them (that would discard
+ *   in-flight worker work and legitimately-queued backlog).
  * @returns {'reuse' | 'reuse_stale_profile' | 'in_progress' | 'reclaim' | 'retry_failed' | 'deleting'}
  */
-function classifyExistingAsset(asset, { now = new Date() } = {}) {
+function classifyExistingAsset(asset, { now = new Date(), reclaimable = true } = {}) {
   if (
     asset.delete_requested_at != null ||
     asset.status === 'deleting' ||
@@ -111,8 +115,9 @@ function classifyExistingAsset(asset, { now = new Date() } = {}) {
   }
   // uploading | queued | processing: a live owner is a genuine conflict, but a
   // provably-abandoned reservation is reclaimable (else it wedges the dedup
-  // slot behind a permanent 409 with no worker/reconciler to reap it).
-  if (isAbandonedNonTerminal(asset, now)) {
+  // slot behind a permanent 409 with no worker/reconciler to reap it) — only
+  // when nothing else will reap it (flags off; see `reclaimable`).
+  if (reclaimable && isAbandonedNonTerminal(asset, now)) {
     return 'reclaim';
   }
   return 'in_progress';
@@ -152,12 +157,21 @@ async function recordSyncEmbed({
   }
   try {
     const embeddingResult = await embed();
-    await db.activateGeneration({
+    const activated = await db.activateGeneration({
       asset_id,
       execution_token: claim.execution_token,
       target_generation: claim.target_generation,
       target_index_profile: claim.target_index_profile,
     });
+    if (!activated) {
+      // Activation CAS miss: a concurrent op (reclaim / tombstone / lease
+      // reclaim) moved or removed the asset while we embedded. Do NOT report
+      // success — a File row pointing at a removed/tombstoned asset would look
+      // ready but resolve to nothing. Fall to the catch (fail + compensate).
+      const lost = new Error('file_indexing_activation_lost');
+      lost.knaufCode = 'file_indexing_activation_lost';
+      throw lost;
+    }
     return embeddingResult;
   } catch (error) {
     try {
