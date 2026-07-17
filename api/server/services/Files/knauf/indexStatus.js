@@ -9,7 +9,9 @@
 // through `buildIndexingProjection` (ready = active generation exists and no
 // delete tombstone — a replacement re-index keeps `ready=true`).
 
+const { logger } = require('@librechat/data-schemas');
 const { buildIndexingProjection } = require('./fileSearchAssetLifecycle');
+const { isIndexingWorkerEnabled } = require('./asyncIndexingConfig');
 
 /** The §6.3 batch counters. Anything unknown lands in `processing`. */
 const BATCH_STATUSES = ['uploading', 'queued', 'processing', 'ready', 'failed'];
@@ -61,15 +63,25 @@ async function attachIndexingToFiles({ db, files }) {
   if (assetIds.length === 0) {
     return files;
   }
-  const assets = await db.getAssetsByAssetIds(assetIds);
-  const byId = new Map(assets.map((a) => [a.asset_id, a]));
-  return files.map((file) => {
-    if (!file?.knauf_asset_id) {
-      return file;
-    }
-    const raw = typeof file.toObject === 'function' ? file.toObject() : file;
-    return { ...raw, indexing: projectFileIndexing(file, byId.get(file.knauf_asset_id)) };
-  });
+  try {
+    const assets = await db.getAssetsByAssetIds(assetIds);
+    const byId = new Map(assets.map((a) => [a.asset_id, a]));
+    return files.map((file) => {
+      if (!file?.knauf_asset_id) {
+        return file;
+      }
+      const raw = typeof file.toObject === 'function' ? file.toObject() : file;
+      return { ...raw, indexing: projectFileIndexing(file, byId.get(file.knauf_asset_id)) };
+    });
+  } catch (error) {
+    // Attaching the indexing projection is enrichment, not core: a transient
+    // asset-collection failure (or a stale dist missing getAssetsByAssetIds)
+    // must not take the whole file listing down. Degrade to the upstream rows.
+    logger.warn(
+      `[attachIndexingToFiles] indexing projection failed; returning plain rows: ${error?.message}`,
+    );
+    return files;
+  }
 }
 
 /**
@@ -148,6 +160,17 @@ async function retryFileIndexing({ db, file }) {
       return {
         httpStatus: 409,
         body: { error: 'file_reupload_required', file_id: file.file_id },
+      };
+    }
+    if (!isIndexingWorkerEnabled()) {
+      // KK20-195 review — with the worker disabled nothing will ever claim a
+      // queued asset. Requeuing here would strand it in a non-terminal state
+      // that polls and gates chat send forever. Keep it 'failed' (terminal, so
+      // the client stops polling and shows the failure); recovery is
+      // delete + re-upload until WP6 enables the worker.
+      return {
+        httpStatus: 409,
+        body: { error: 'indexing_worker_unavailable', file_id: file.file_id },
       };
     }
     const retried = await db.retryFailed({ asset_id });

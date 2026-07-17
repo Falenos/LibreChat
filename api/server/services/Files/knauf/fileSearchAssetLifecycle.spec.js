@@ -101,6 +101,43 @@ describe('classifyExistingAsset — the §6.1 branch table', () => {
   });
 });
 
+describe('classifyExistingAsset — reclaim of abandoned reservations (KK20-195 review)', () => {
+  const now = new Date('2026-07-17T12:00:00Z');
+  const ago = (ms) => new Date(now.getTime() - ms);
+
+  test('processing with a live lease is a genuine conflict (in_progress)', () => {
+    expect(
+      classifyExistingAsset(
+        { status: 'processing', lease_expires_at: new Date(now.getTime() + 60_000) },
+        { now },
+      ),
+    ).toBe('in_progress');
+  });
+
+  test('processing past its lease is reclaimable', () => {
+    expect(
+      classifyExistingAsset({ status: 'processing', lease_expires_at: ago(1000) }, { now }),
+    ).toBe('reclaim');
+  });
+
+  test('recently-updated uploading/queued stays in_progress', () => {
+    expect(classifyExistingAsset({ status: 'uploading', updatedAt: ago(1000) }, { now })).toBe(
+      'in_progress',
+    );
+    expect(classifyExistingAsset({ status: 'queued', updatedAt: ago(1000) }, { now })).toBe(
+      'in_progress',
+    );
+  });
+
+  test('uploading/queued idle past the reclaim window is reclaimable', () => {
+    const stale = ago(20 * 60 * 1000); // > the 15m default window
+    expect(classifyExistingAsset({ status: 'uploading', updatedAt: stale }, { now })).toBe(
+      'reclaim',
+    );
+    expect(classifyExistingAsset({ status: 'queued', updatedAt: stale }, { now })).toBe('reclaim');
+  });
+});
+
 describe('recordSyncEmbed — sync execution through the asset (rollout step 4)', () => {
   const queueAsset = async (asset_id) => {
     const { asset } = await reserve({ file_id: asset_id });

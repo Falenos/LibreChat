@@ -594,5 +594,32 @@ describe('uploadVectors (KK20-195 WP0 containment)', () => {
       }
     }
   });
+
+  test('compensates an agent Azure-Search embed against Azure Search, not pgvector (KK20-195 review)', async () => {
+    const OLD_SEARCH = process.env.AZURE_SEARCH_ENABLED;
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    try {
+      axios.post.mockRejectedValue({ response: { status: 503 }, message: 'unavailable' });
+      axios.delete.mockResolvedValue({ status: 200 });
+
+      await expect(
+        uploadVectors({ req, file, file_id: 'f1', entity_id: 'agent1', isAgentFile: true }),
+      ).rejects.toThrow();
+
+      // Partial vectors landed in Azure Search → compensate against the SAME
+      // store (DELETE /agent/documents/:id), never the pgvector /documents route.
+      expect(axios.delete).toHaveBeenCalledWith(
+        'http://rag.test/agent/documents/f1',
+        expect.any(Object),
+      );
+      expect(axios.delete).not.toHaveBeenCalledWith('http://rag.test/documents', expect.anything());
+    } finally {
+      if (OLD_SEARCH === undefined) {
+        delete process.env.AZURE_SEARCH_ENABLED;
+      } else {
+        process.env.AZURE_SEARCH_ENABLED = OLD_SEARCH;
+      }
+    }
+  });
 });
 // End [knauf]

@@ -103,6 +103,18 @@ describe('attachIndexingToFiles', () => {
     expect(out[1].indexing).toBeUndefined();
     expect(out[1]).toBe(files[1]);
   });
+
+  test('asset-load failure degrades to the plain rows (never takes the listing down)', async () => {
+    const failingDb = {
+      getAssetsByAssetIds: async () => {
+        throw new Error('transient mongo error');
+      },
+    };
+    const files = [{ file_id: 'f1', knauf_asset_id: 'a1' }];
+    const out = await attachIndexingToFiles({ db: failingDb, files });
+    expect(out).toBe(files);
+    expect(out[0].indexing).toBeUndefined();
+  });
 });
 
 describe('buildBatchIndexStatus (§6.3)', () => {
@@ -168,7 +180,12 @@ describe('buildBatchIndexStatus (§6.3)', () => {
 });
 
 describe('retryFileIndexing (§6.4)', () => {
-  test('failed with blob metadata → CAS to queued, 202 + projection', async () => {
+  afterEach(() => {
+    delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
+  });
+
+  test('failed with blob + worker enabled → CAS to queued, 202 + projection', async () => {
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     await seedAsset({
       asset_id: 'r1',
       status: 'failed',
@@ -185,6 +202,24 @@ describe('retryFileIndexing (§6.4)', () => {
     expect(asset.status).toBe('queued');
     expect(asset.attempt_count).toBe(0);
     expect(asset.last_error_code).toBeNull();
+  });
+
+  test('failed with blob but worker DISABLED → 409, asset stays failed (no wedge)', async () => {
+    delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
+    await seedAsset({
+      asset_id: 'r1b',
+      status: 'failed',
+      last_error_code: 'rag_5xx',
+      attempt_count: 3,
+    });
+    const { httpStatus, body } = await retryFileIndexing({
+      db,
+      file: { file_id: 'f1b', knauf_asset_id: 'r1b' },
+    });
+    expect(httpStatus).toBe(409);
+    expect(body.error).toBe('indexing_worker_unavailable');
+    // Must remain terminal so the client stops polling instead of parking queued.
+    expect((await db.getAssetByAssetId('r1b')).status).toBe('failed');
   });
 
   test('failed WITHOUT blob metadata → 409 file_reupload_required', async () => {

@@ -960,8 +960,9 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     knaufAssetId = reservation.asset.asset_id;
     knaufDedupOwner = messageAttachment && reservation.created ? true : undefined;
 
+    let runCreatedPath = reservation.created;
     if (!reservation.created) {
-      const verdict = classifyExistingAsset(reservation.asset);
+      const verdict = classifyExistingAsset(reservation.asset, { now: new Date() });
       if (verdict === 'reuse' || verdict === 'reuse_stale_profile') {
         // Same semantics as the KK20-204 dedup HIT: reuse the shared asset's
         // blob + embeddings; no storage upload, no embed. The route's finally
@@ -974,6 +975,37 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
           embedded: true,
         };
         embeddingResult = { embedded: true, filename: file.originalname };
+      } else if (verdict === 'reclaim') {
+        // KK20-195 review — the prior reservation was abandoned (a crashed sync
+        // upload; with the flags off there is no worker/reconciler to reap it).
+        // Free the wedged dedup slot and re-drive as a fresh upload instead of
+        // returning `file_indexing_in_progress` to this (user, content) forever.
+        // Partial blob/vectors from the dead attempt are swept by the reconciler
+        // once WP6 enables it.
+        logger.warn(
+          `[knauf][KK20-195] reclaiming abandoned '${reservation.asset.status}' asset ${knaufAssetId} for re-upload`,
+        );
+        await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
+        await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        const fresh = await reserveForUpload({
+          db,
+          userId: req.user.id,
+          file_id,
+          entityId: entity_id,
+          messageAttachment,
+          contentHash: knaufContentHash,
+          azureSearchForAgents: isAzureSearchEnabledForAgents(),
+        });
+        if (!fresh.created) {
+          // A concurrent upload took the freed slot between remove and
+          // re-reserve — that request is the live owner now, so this is a
+          // genuine in-flight conflict.
+          return res.status(409).json({ error: 'file_indexing_in_progress', file_id });
+        }
+        knaufUploadAsset = fresh.asset;
+        knaufAssetId = fresh.asset.asset_id;
+        knaufDedupOwner = messageAttachment ? true : undefined;
+        runCreatedPath = true;
       } else {
         // in_progress / retry_failed / deleting — stable conflicts for now:
         // the WP3c status/retry endpoints upgrade in_progress to a 202 "join"
@@ -985,7 +1017,9 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         };
         return res.status(409).json({ error: codes[verdict] ?? 'file_asset_conflict', file_id });
       }
-    } else {
+    }
+
+    if (runCreatedPath) {
       try {
         const { handleFileUpload } = getStrategyFunctions(source);
         const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);

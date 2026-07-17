@@ -803,7 +803,16 @@ router.post('/', async (req, res) => {
       });
       if (verdict.outcome === 'replay') {
         logger.info(`[/files] idempotent replay for file_id ${metadata.file_id}`);
-        return res.status(200).json({ message: 'File already processed', ...existing });
+        // KK20-195 review — carry the `indexing` projection (and batch id) so a
+        // replayed async-accepted upload isn't mistaken for ready by the client,
+        // which would open the send gate and then 409 on send. attachIndexingToFiles
+        // is resilient (falls back to the plain row if the asset load fails).
+        const [projected] = await attachIndexingToFiles({ db, files: [existing] });
+        return res.status(200).json({
+          message: 'File already processed',
+          ...(projected ?? existing),
+          ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
+        });
       }
       if (verdict.outcome === 'conflict') {
         return res.status(409).json({

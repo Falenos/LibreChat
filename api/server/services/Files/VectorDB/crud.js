@@ -173,14 +173,22 @@ const handleEmbedAttemptError = (error, attempt, metricRoute, deadlineAtMs, atte
  * @param {ServerRequest} req
  * @param {string} file_id
  * @param {boolean} attempted - whether any embed POST was actually fired
+ * @param {{ azureSearch?: boolean }} [options] - route cleanup to the store the embed targeted
  * @returns {Promise<void>}
  */
-const compensateEmbedFailure = async (req, file_id, attempted) => {
+const compensateEmbedFailure = async (req, file_id, attempted, { azureSearch = false } = {}) => {
   if (!attempted) {
     return;
   }
   try {
-    await deleteVectorsByIds(req, [file_id]);
+    if (azureSearch) {
+      // [knauf] KK20-195 review — the failed embed went to Azure AI Search
+      // (/agent/embed); its partial vectors live there, not in pgvector, so
+      // compensate against the SAME store or they orphan permanently.
+      await deleteAzureSearchVectors(req, file_id);
+    } else {
+      await deleteVectorsByIds(req, [file_id]);
+    }
   } catch (cleanupError) {
     logger.warn(
       `[uploadVectors] compensating vector delete failed for ${file_id}: ${cleanupError?.message}`,
@@ -471,7 +479,9 @@ async function uploadVectors({ req, file, file_id, entity_id, isAgentFile, stora
     throw attemptState.lastError ?? new Error('Embed aborted: end-to-end budget exhausted.');
   } catch (error) {
     attemptState.outcome = error?.knaufOutcome ?? attemptState.outcome;
-    await compensateEmbedFailure(req, file_id, attempted);
+    await compensateEmbedFailure(req, file_id, attempted, {
+      azureSearch: metricRoute === 'agent_embed',
+    });
     logAxiosError({
       error,
       message: 'Error uploading vectors',

@@ -15,6 +15,35 @@
 const { buildDedupKey } = require('./dedupKey');
 const { getIndexProfile } = require('./asyncIndexingConfig');
 
+// [knauf] KK20-195 review — a non-terminal asset is only a genuine in-flight
+// conflict while its owner is alive. A crashed upload (flags-off: no worker
+// and no reconciler to reap it) otherwise leaves the dedup slot wedged behind
+// a permanent `file_indexing_in_progress` 409 for that (user, content) — so a
+// provably-abandoned reservation is reclaimable: `processing` past its lease,
+// or `uploading`/`queued` idle longer than the reclaim window. Fresh work is
+// still protected — the lease guards a live sync/worker embed, and the window
+// is far longer than any legitimate uploading/queued dwell.
+const RECLAIM_STALE_MS =
+  Number.parseInt(process.env.KNAUF_ASSET_RECLAIM_STALE_MS ?? '', 10) || 15 * 60 * 1000;
+
+/**
+ * True when a non-terminal asset has no live owner and can be re-driven.
+ * @param {{ status: string, lease_expires_at?: Date | null, updatedAt?: Date | null }} asset
+ * @param {Date} now
+ * @returns {boolean}
+ */
+function isAbandonedNonTerminal(asset, now) {
+  const nowMs = now.getTime();
+  if (asset.status === 'processing') {
+    return asset.lease_expires_at != null && new Date(asset.lease_expires_at).getTime() <= nowMs;
+  }
+  if (asset.status === 'uploading' || asset.status === 'queued') {
+    const updatedAtMs = asset.updatedAt != null ? new Date(asset.updatedAt).getTime() : null;
+    return updatedAtMs != null && updatedAtMs <= nowMs - RECLAIM_STALE_MS;
+  }
+  return false;
+}
+
 /**
  * Reserve (find-or-create) the physical asset for this upload — the dedup
  * reservation happens BEFORE blob upload and embed, so concurrent identical
@@ -59,10 +88,11 @@ async function reserveForUpload({
 /**
  * The existing-asset branch table (plan §6.1). Only meaningful when the
  * reservation found an asset instead of creating one.
- * @param {{ status: string, active_index_profile?: string | null, delete_requested_at?: Date | null }} asset
- * @returns {'reuse' | 'reuse_stale_profile' | 'in_progress' | 'retry_failed' | 'deleting'}
+ * @param {{ status: string, active_index_profile?: string | null, delete_requested_at?: Date | null, lease_expires_at?: Date | null, updatedAt?: Date | null }} asset
+ * @param {{ now?: Date }} [options]
+ * @returns {'reuse' | 'reuse_stale_profile' | 'in_progress' | 'reclaim' | 'retry_failed' | 'deleting'}
  */
-function classifyExistingAsset(asset) {
+function classifyExistingAsset(asset, { now = new Date() } = {}) {
   if (
     asset.delete_requested_at != null ||
     asset.status === 'deleting' ||
@@ -79,7 +109,13 @@ function classifyExistingAsset(asset) {
   if (asset.status === 'failed') {
     return 'retry_failed';
   }
-  return 'in_progress'; // uploading | queued | processing
+  // uploading | queued | processing: a live owner is a genuine conflict, but a
+  // provably-abandoned reservation is reclaimable (else it wedges the dedup
+  // slot behind a permanent 409 with no worker/reconciler to reap it).
+  if (isAbandonedNonTerminal(asset, now)) {
+    return 'reclaim';
+  }
+  return 'in_progress';
 }
 
 /**
