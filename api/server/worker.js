@@ -75,9 +75,15 @@ const resolveOwnerUserId = async (asset) => {
 // reconciler injects limits so every pass stays indexed and finite (§8.4).
 const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
   mongoose.models.KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
-const listFileAssetRefs = (limit) =>
-  mongoose.models.File.find({ knauf_asset_id: { $exists: true, $ne: null } })
-    .sort({ updatedAt: -1 })
+// KK20-195 review R8 — rotating _id cursor (afterId) so the dangling-refs
+// sweep converges over the WHOLE File space across passes instead of
+// re-reading the same most-recently-updated window forever.
+const listFileAssetRefs = (limit, afterId = null) =>
+  mongoose.models.File.find({
+    knauf_asset_id: { $exists: true, $ne: null },
+    ...(afterId != null ? { _id: { $gt: afterId } } : {}),
+  })
+    .sort({ _id: 1 })
     .limit(limit)
     .select({ file_id: 1, knauf_asset_id: 1 })
     .lean();

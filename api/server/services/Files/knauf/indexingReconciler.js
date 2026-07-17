@@ -73,19 +73,41 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
     return new Set(rows.map((r) => r.knauf_asset_id));
   };
 
-  // KK20-195 review — a rotating _id cursor so case 4 sweeps the whole
-  // ready/failed space over successive passes. Referenced assets keep their
-  // updatedAt, so an updatedAt-ordered window would freeze on them and never
-  // reach genuine orphans behind them; advancing by _id guarantees progress.
-  let orphanCursorId = null;
+  // KK20-195 review R8 — rotating _id cursors so every bounded case sweeps
+  // its WHOLE space over successive passes. Rows the pass deliberately leaves
+  // in place (referenced/alert-only ones) keep their sort position, so a
+  // sort-from-the-beginning window would re-select the same batch forever and
+  // starve everything behind it. Advancing by _id guarantees progress; a
+  // short page means the sweep reached the end → wrap to the start.
+  const makeRotatingCursor = () => {
+    let cursorId = null;
+    return {
+      /** Decorate a filter with the cursor position. */
+      apply: (filter) => (cursorId != null ? { ...filter, _id: { $gt: cursorId } } : filter),
+      /** Advance past this page (or wrap when the space is exhausted). */
+      advance: (rows, batchLimit) => {
+        cursorId = rows.length < batchLimit ? null : rows.at(-1)._id;
+      },
+    };
+  };
+  const staleUploadingCursor = makeRotatingCursor();
+  const orphanCursor = makeRotatingCursor();
+  const deleteSweepCursor = makeRotatingCursor();
+  let danglingRefsAfterId = null;
 
   /** Case 1 — stale `uploading`: reservation whose request died before queueing. */
   const reconcileStaleUploading = async (config, now) => {
     const cutoff = new Date(now.getTime() - config.staleUploadingMs);
     const assets = await listAssets(
-      { status: 'uploading', updatedAt: { $lte: cutoff }, delete_requested_at: null },
+      staleUploadingCursor.apply({
+        status: 'uploading',
+        updatedAt: { $lte: cutoff },
+        delete_requested_at: null,
+      }),
       config.batchLimit,
+      { _id: 1 },
     );
+    staleUploadingCursor.advance(assets, config.batchLimit);
     const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
@@ -128,7 +150,10 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
 
   /** Case 3 — File rows pointing at a missing asset. */
   const reconcileDanglingFileRefs = async (config) => {
-    const refs = await listFileAssetRefs(config.batchLimit);
+    // R8 — rotating cursor over the File space (alert-only case: nothing here
+    // changes rows, so a fixed window would re-read the same refs forever).
+    const refs = await listFileAssetRefs(config.batchLimit, danglingRefsAfterId);
+    danglingRefsAfterId = refs.length < config.batchLimit ? null : refs.at(-1)._id;
     const assetIds = [...new Set(refs.map((r) => r.knauf_asset_id).filter(Boolean))];
     if (assetIds.length === 0) {
       return { scanned: 0, repaired: 0, alerted: 0 };
@@ -147,18 +172,17 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
   /** Case 4 — assets with no logical references (missed last-reference delete). */
   const reconcileOrphanAssets = async (config, now) => {
     const cutoff = new Date(now.getTime() - config.orphanAssetMs);
-    const filter = {
-      status: { $in: ['ready', 'failed'] },
-      updatedAt: { $lte: cutoff },
-      delete_requested_at: null,
-    };
-    if (orphanCursorId != null) {
-      filter._id = { $gt: orphanCursorId };
-    }
-    const assets = await listAssets(filter, config.batchLimit, { _id: 1 });
-    // Advance the cursor so kept (referenced) assets don't freeze the window;
-    // a short page means the sweep reached the end → wrap to the start next pass.
-    orphanCursorId = assets.length < config.batchLimit ? null : assets.at(-1)._id;
+    const assets = await listAssets(
+      orphanCursor.apply({
+        status: { $in: ['ready', 'failed'] },
+        updatedAt: { $lte: cutoff },
+        delete_requested_at: null,
+      }),
+      config.batchLimit,
+      { _id: 1 },
+    );
+    // Advance the cursor so kept (referenced) assets don't freeze the window.
+    orphanCursor.advance(assets, config.batchLimit);
     const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
@@ -188,9 +212,14 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
     // rows survived). A tombstoned asset that still HAS references is the
     // partial-failure signature → alert, never auto-destroy.
     const assets = await listAssets(
-      { status: { $in: ['delete_failed', 'deleting'] }, updatedAt: { $lte: cutoff } },
+      deleteSweepCursor.apply({
+        status: { $in: ['delete_failed', 'deleting'] },
+        updatedAt: { $lte: cutoff },
+      }),
       config.batchLimit,
+      { _id: 1 },
     );
+    deleteSweepCursor.advance(assets, config.batchLimit);
     const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;

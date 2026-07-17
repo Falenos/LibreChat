@@ -17,9 +17,13 @@ const cleanupAsset = jest.fn().mockResolvedValue(true);
 
 const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
   KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
-const listFileAssetRefs = (limit) =>
-  File.find({ knauf_asset_id: { $exists: true, $ne: null } })
-    .sort({ updatedAt: -1 })
+// KK20-195 review R8 — mirrors worker.js: rotating _id cursor (afterId).
+const listFileAssetRefs = (limit, afterId = null) =>
+  File.find({
+    knauf_asset_id: { $exists: true, $ne: null },
+    ...(afterId != null ? { _id: { $gt: afterId } } : {}),
+  })
+    .sort({ _id: 1 })
     .limit(limit)
     .select({ file_id: 1, knauf_asset_id: 1 })
     .lean();
@@ -193,6 +197,71 @@ describe('case 4 — asset with no logical references', () => {
     } finally {
       delete process.env.KNAUF_RECONCILE_BATCH_LIMIT;
     }
+  });
+});
+
+// KK20-195 review R8 — every bounded case converges: rows a pass leaves in
+// place (referenced / alert-only) must not freeze the window and starve the
+// rows behind them. Datasets deliberately exceed the batch limit.
+describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
+  beforeEach(() => {
+    process.env.KNAUF_RECONCILE_BATCH_LIMIT = '2';
+  });
+  afterEach(() => {
+    delete process.env.KNAUF_RECONCILE_BATCH_LIMIT;
+  });
+
+  test('case 1: a dead reservation behind two REFERENCED stale-uploading assets is reached', async () => {
+    await seedAsset({ asset_id: 'su-1', status: 'uploading' });
+    await seedAsset({ asset_id: 'su-2', status: 'uploading' });
+    await seedAsset({ asset_id: 'su-behind', status: 'uploading' });
+    await seedFile({ file_id: 'r1', knauf_asset_id: 'su-1' }); // alert-only, stays
+    await seedFile({ file_id: 'r2', knauf_asset_id: 'su-2' });
+
+    const reconciler = buildReconciler();
+    const first = await reconciler.runOnce();
+    expect(first.stale_uploading).toMatchObject({ alerted: 2, repaired: 0 });
+    expect(await db.getAssetByAssetId('su-behind')).not.toBeNull();
+
+    const second = await reconciler.runOnce();
+    expect(second.stale_uploading).toMatchObject({ repaired: 1 });
+    expect(await db.getAssetByAssetId('su-behind')).toBeNull();
+  });
+
+  test('case 3: a dangling ref behind two intact refs is reached (alert-only case)', async () => {
+    await seedAsset({ asset_id: 'ok-1', status: 'ready', active_generation: 1, aged: false });
+    await seedFile({ file_id: 'ref-1', knauf_asset_id: 'ok-1' });
+    await seedFile({ file_id: 'ref-2', knauf_asset_id: 'ok-1' });
+    await seedFile({ file_id: 'ref-dangling', knauf_asset_id: 'gone-asset' });
+
+    const reconciler = buildReconciler();
+    const first = await reconciler.runOnce();
+    expect(first.dangling_file_refs).toMatchObject({ scanned: 2, alerted: 0 });
+
+    const second = await reconciler.runOnce();
+    expect(second.dangling_file_refs).toMatchObject({ alerted: 1 });
+    expect(alerts().some((m) => m.includes('gone-asset'))).toBe(true);
+  });
+
+  test('case 5: a finishable deletion behind two referenced tombstones is reached', async () => {
+    await seedAsset({ asset_id: 'ts-1', status: 'deleting', delete_requested_at: LONG_AGO });
+    await seedAsset({ asset_id: 'ts-2', status: 'deleting', delete_requested_at: LONG_AGO });
+    await seedAsset({
+      asset_id: 'ts-behind',
+      status: 'delete_failed',
+      delete_requested_at: LONG_AGO,
+    });
+    await seedFile({ file_id: 't1', knauf_asset_id: 'ts-1' }); // alert-only, stays
+    await seedFile({ file_id: 't2', knauf_asset_id: 'ts-2' });
+
+    const reconciler = buildReconciler();
+    const first = await reconciler.runOnce();
+    expect(first.delete_failed).toMatchObject({ alerted: 2, repaired: 0 });
+    expect(await db.getAssetByAssetId('ts-behind')).not.toBeNull();
+
+    const second = await reconciler.runOnce();
+    expect(second.delete_failed).toMatchObject({ repaired: 1 });
+    expect(await db.getAssetByAssetId('ts-behind')).toBeNull();
   });
 });
 

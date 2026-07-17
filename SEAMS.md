@@ -427,6 +427,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/middleware/knaufFileIndexRetryAuth.spec.js` | — | 1–82 | KK20-195 review R6 — owner allowed, agent-editor allowed, shared-agent VIEWER denied, no-agent denied, check-failure denied | Self | KK20-195 |
 | `api/server/routes/files/files.js` | retry route gains `knaufFileIndexRetryAuth` (+ import) | 62–64, 224–235 | KK20-195 review R6 — VIEW keeps the read-only status endpoints; retry requires ownership or agent EDIT | `api/server/middleware/knaufFileIndexRetryAuth.spec.js` | KK20-195 |
 | `api/server/services/Files/process.js` | admission moved AFTER the reservation (reserve-then-recheck-or-compensate) | 962–999 | KK20-195 review R7 — the reservation is durably counted before the decision (`countIncludesSelf`), so N concurrent uploads can never all pass the same stale count; rejection compensates the just-made reservation → 429 unchanged. Found-assets and sync uploads skip (no new backlog) | `api/server/services/Files/knauf/indexStatus.spec.js` (R7 concurrent test), `api/server/services/Files/process.spec.js` | KK20-195 |
+| `api/server/worker.js` | `listFileAssetRefs` gains a rotating `afterId` cursor (sort `_id` asc) | ~78–90 | KK20-195 review R8 — the dangling-refs sweep converges over the whole File space across passes instead of re-reading the same most-recently-updated window forever | `api/server/services/Files/knauf/indexingReconciler.spec.js` (R8 describes) | KK20-195 |
 <!-- seams:auto:end -->
 
 ## Configuration
