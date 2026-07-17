@@ -1,8 +1,8 @@
 # Plan: Agent Retrieval and LangGraph Reliability
 
-**Generated:** 2026-07-16  
-**Status:** Final recommended implementation plan  
-**Estimated complexity:** High — three repositories, ordered deployment  
+**Generated:** 2026-07-16<br>
+**Status:** Final recommended implementation plan<br>
+**Estimated complexity:** High — three repositories, ordered deployment<br>
 **Primary evidence:** Langfuse runs `ce9436b2a6956965e9f8838c2cc1edd6` and `fbc4778b4d07737f34dfe6090bf9c4ef`
 
 ## Executive decision
@@ -174,7 +174,7 @@ Sprint numbering reflects repository/deployment dependencies, not causal severit
 
 ## Sprint 0: Freeze the failures as regression fixtures
 
-**Goal:** Make the two production failures and duplicate retrieval deterministic before behavior changes.  
+**Goal:** Make the two production failures and duplicate retrieval deterministic before behavior changes.<br>
 **Demo/validation:** Tests fail against current code for the expected reasons and Langfuse trace exports identify each retrieval invocation.
 
 ### Task 0.1: Capture retrieval regression cases
@@ -215,8 +215,8 @@ Sprint numbering reflects repository/deployment dependencies, not causal severit
 
 ## Sprint 1: Make RAG batch endpoints safe and predictable
 
-**Goal:** Ship additive batch contracts that Agentic Karl can use without weakening scope behavior.  
-**Repository:** `agentic-karl-rag-api`.  
+**Goal:** Ship additive batch contracts that Agentic Karl can use without weakening scope behavior.<br>
+**Repository:** `agentic-karl-rag-api`.<br>
 **Demo/validation:** One authorized batch query returns ranked results; mixed unauthorized IDs cannot return another scope’s chunks; no matches return `[]`.
 
 ### Task 1.1: Bring pgvector `/query_multiple` to `/query` parity
@@ -263,8 +263,8 @@ Sprint numbering reflects repository/deployment dependencies, not causal severit
 
 ## Sprint 2: Fix compaction and termination in the agents SDK
 
-**Goal:** Make summarization a durable history replacement without losing the current turn or looping into a hard recursion error.  
-**Repository:** `danny-avila/agents` or an approved internal fork.  
+**Goal:** Make summarization a durable history replacement without losing the current turn or looping into a hard recursion error.<br>
+**Repository:** `danny-avila/agents` or an approved internal fork.<br>
 **Demo/validation:** The five-image replay reaches the main model with all five image blocks after compaction; repeated compaction retains history coverage; near-limit runs produce a final response.
 
 LangGraph’s current guidance treats summaries as explicit state and injects historical summary context separately from retained messages. See [LangGraph short-term memory and summarization](https://docs.langchain.com/oss/javascript/langgraph/add-memory).
@@ -336,8 +336,8 @@ LangGraph’s current guidance treats summaries as explicit state and injects hi
 
 ## Sprint 3: Replace per-file retrieval with one dual-backend pipeline
 
-**Goal:** Agentic Karl performs one canonical, authorized, deduplicated retrieval operation per distinct search.  
-**Repository:** `agentic-karl`.  
+**Goal:** Agentic Karl performs one canonical, authorized, deduplicated retrieval operation per distinct search.<br>
+**Repository:** `agentic-karl`.<br>
 **Demo/validation:** A run with 27 chat documents and Agent Knowledge produces at most one pgvector batch span and one Azure batch span.
 
 ### Task 3.1: Build canonical search targets once
@@ -423,7 +423,7 @@ Strict removal of the existing Agent Knowledge pgvector fallback is deferred. It
 
 ## Sprint 4: Integrate the corrected SDK and failure behavior
 
-**Goal:** Agentic Karl consumes the corrected SDK without local patching and produces stable final responses.  
+**Goal:** Agentic Karl consumes the corrected SDK without local patching and produces stable final responses.<br>
 **Demo/validation:** Both failing trace scenarios replay successfully in dev.
 
 ### Task 4.1: Pin the released agents SDK
@@ -457,7 +457,7 @@ Strict removal of the existing Agent Knowledge pgvector fallback is deferred. It
 
 ## Sprint 5: Make Langfuse prove the fix
 
-**Goal:** A developer can diagnose routing, deduplication, ranking, compaction, and termination from one main trace.  
+**Goal:** A developer can diagnose routing, deduplication, ranking, compaction, and termination from one main trace.<br>
 **Demo/validation:** The trace tree and metadata answer “what searched where, why, how often, and what ended the run?” without reading application logs.
 
 Langfuse models a trace as one request with nested observations and recommends sessions for multi-turn chats. See [Langfuse tracing concepts](https://langfuse.com/docs/observability/data-model) and [LangChain/LangGraph integration](https://langfuse.com/integrations/frameworks/langchain).
@@ -487,7 +487,7 @@ Use the existing LangGraph/Langfuse observation tree; this work adds no custom t
 
 ## Sprint 6: Dev replay, rollout, and production verification
 
-**Goal:** Prove correctness under real infrastructure before production.  
+**Goal:** Prove correctness under real infrastructure before production.<br>
 **Demo/validation:** Both original failing scenarios pass, retrieval request counts meet the contract, and no regression appears for ordinary chat uploads or Agent Knowledge.
 
 ### Task 6.1: Deploy in dependency order

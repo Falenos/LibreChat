@@ -362,6 +362,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-provider/src/types/web.ts` | `SearchResultData.fileReferences` | 57–59 | Gives file anchors a typed index space separate from web references | `client/src/knauf/hooks/Messages/useSearchResultsByTurn.knauf.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Input/useAutoSave.ts` | `isPendingConversationTransition` | 162–173, 214–219, 229–231 | Preserves next-turn files uploaded during streaming when draft state returns from `PENDING_CONVO` to the current conversation, without changing real conversation-switch cleanup | `client/src/hooks/Input/useAutoSave.spec.ts` (`preserves files uploaded while the current response is still streaming`) | KK20-227 |
 | `client/src/hooks/Input/useAutoSave.spec.ts` | streaming upload draft regression | 111–141 | Reproduces the stale file-list race and proves response completion cannot clear an in-memory pending upload | Self | KK20-227 |
+| `client/src/components/Web/__tests__/Citation.test.tsx` | composite file citation fixture | 70–89 | Aligns the component-level regression with the dedicated `fileReferences` index used by `fileN` anchors | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
