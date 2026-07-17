@@ -20,6 +20,7 @@ import {
   Providers,
   EToolResources,
   EModelEndpoint,
+  inferMimeType,
   isPermissiveMimeConfig,
   defaultAgentCapabilities,
   bedrockDocumentExtensions,
@@ -28,7 +29,6 @@ import {
   knaufChatUploadAccept,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
-import type { ExtendedFile, FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
   useAgentCapabilities,
@@ -38,6 +38,7 @@ import {
 } from '~/hooks';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
+import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
@@ -222,28 +223,13 @@ const AttachFileMenu = ({
             // Other document-capable providers keep upstream provider-upload.
             // KK20-190.
             //
-            // NB: do NOT gate on `fileSearchAllowedByAgent` here — for an
-            // ephemeral (default) chat that flag is `ephemeralAgent.file_search
-            // ?? false`, i.e. false until file_search is enabled. This click is
-            // what enables it (setEphemeralAgent below), so gating on it would
-            // be a chicken-and-egg that falls back to the provider path and the
-            // picker would only offer images + PDF. `capabilities.fileSearchEnabled`
-            // (from endpoints.agents.capabilities) is the correct platform gate.
-            //
-            // NORMAL CHAT vs AGENT CHAT — `useKnaufFileSearch` follows the
-            // conversation/agent provider, so this app-level RAG path works for
-            // Azure Chat Completions (including Model Router) as well as Responses.
-            // The drag-drop handler (useDragHelpers.handleDrop) instead gates on
-            // `conv.endpoint === azureOpenAI`, which a custom agent (endpoint
-            // `agents`) never satisfies — so on an agent chat a DROP shows the
-            // capability-picker modal while this MENU may still route to ephemeral
-            // File Search. That asymmetry is intentional: custom agents are meant to
-            // get file search from their OWN pre-configured `file_search` tool, not
-            // the ephemeral mechanism, so the modal is the correct path for them. On
-            // the default chat the two are symmetric (both route here). KK20-190.
+            // Default chats enable ephemeral File Search after document selection.
+            // Custom-agent message attachments use the server's transient File
+            // Search path without mutating persistent Agent Knowledge. Azure Chat
+            // Completions (including Model Router) and Responses share this path.
+            // KK20-190.
             if (useKnaufFileSearch) {
               setToolResource(EToolResources.file_search);
-              setEphemeralAgent(enableEphemeralFileSearch);
               onAction('knauf_allowed');
               return;
             }
@@ -442,6 +428,21 @@ const AttachFileMenu = ({
           // file metadata.
           if ((e.target.files?.length ?? 0) > 0) {
             dispatchChatUploadInteraction();
+          }
+          // End [knauf]
+          // [knauf] Enable ephemeral File Search only after the picker confirms
+          // that this default-chat selection contains a document. Image-only
+          // selections stay on the vision path; custom agents use transient
+          // message retrieval without changing Agent Knowledge. KK20-227.
+          const containsDocument = Array.from(e.target.files ?? []).some(
+            (file) => !inferMimeType(file.name, file.type)?.startsWith('image/'),
+          );
+          if (
+            toolResourceRef.current === EToolResources.file_search &&
+            containsDocument &&
+            (!agentId || isEphemeralAgent(agentId))
+          ) {
+            setEphemeralAgent(enableEphemeralFileSearch);
           }
           // End [knauf]
           handleFileChange(e, toolResourceRef.current);

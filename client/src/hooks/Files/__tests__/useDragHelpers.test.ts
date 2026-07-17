@@ -74,6 +74,7 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
   });
 
   const pdf = () => new File([new ArrayBuffer(1024)], 'doc.pdf', { type: 'application/pdf' });
+  const image = () => new File([new ArrayBuffer(1024)], 'image.png', { type: 'image/png' });
 
   it('routes a drop into File Search on Model Router Chat Completions', () => {
     mockConversation = {
@@ -90,6 +91,23 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
 
     expect(mockSetEphemeralAgent).toHaveBeenCalledTimes(1);
     expect(mockHandleFiles).toHaveBeenCalledWith([file], EToolResources.file_search);
+  });
+
+  it('keeps an image-only Model Router drop on vision without enabling File Search', () => {
+    mockConversation = {
+      conversationId: 'c1',
+      endpoint: EModelEndpoint.azureOpenAI,
+      useResponsesApi: false,
+    };
+    renderHook(() => useDragHelpers());
+
+    const file = image();
+    act(() => {
+      mockCapturedDrop?.({ files: [file] });
+    });
+
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+    expect(mockHandleFiles).toHaveBeenCalledWith([file], undefined);
   });
 
   it('does NOT route to File Search when the chat is not Azure (falls through to the modal)', () => {
@@ -133,6 +151,32 @@ describe('[knauf] useDragHelpers — File Search drag-drop routing', () => {
 
     // Auto-routed like the normal chat (no popup); no ephemeral toggle since the
     // persisted agent already carries the file_search tool.
+    expect(mockHandleFiles).toHaveBeenCalledWith([file], EToolResources.file_search);
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
+
+  it('uses transient File Search for a custom-agent message document', () => {
+    mockConversation = {
+      conversationId: 'c1',
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent_abc',
+    };
+    mockGetQueryData.mockImplementation((key: unknown) => {
+      if (Array.isArray(key) && key[0] === QueryKeys.endpoints) {
+        return { [EModelEndpoint.agents]: { capabilities: [AgentCapabilities.file_search] } };
+      }
+      if (Array.isArray(key) && key[0] === QueryKeys.agent) {
+        return { id: 'agent_abc', tools: [] };
+      }
+      return undefined;
+    });
+    renderHook(() => useDragHelpers());
+
+    const file = pdf();
+    act(() => {
+      mockCapturedDrop?.({ files: [file] });
+    });
+
     expect(mockHandleFiles).toHaveBeenCalledWith([file], EToolResources.file_search);
     expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
   });

@@ -7,8 +7,8 @@
  * file Map so an identical re-attachment appears — and sends — only once. This
  * spec fails if that collapse breaks or if knauf_asset_id stops being honoured.
  */
-import { dedupeFilesByAsset } from '~/hooks/Files/useFileHandling';
 import type { ExtendedFile } from '~/common';
+import { dedupeFilesByAsset, limitIncomingFiles } from '~/hooks/Files/useFileHandling';
 
 const mk = (file_id: string, knauf_asset_id?: string): ExtendedFile =>
   ({ file_id, knauf_asset_id, size: 0, progress: 1 }) as ExtendedFile;
@@ -53,5 +53,17 @@ describe('dedupeFilesByAsset (KK20-204)', () => {
     const result = dedupeFilesByAsset(files);
     expect(result.size).toBe(3);
     expect([...result.keys()]).toEqual(['a1', 'b1', 'plain']);
+  });
+});
+
+describe('limitIncomingFiles (KK20-227)', () => {
+  const files = ['a', 'b', 'c'].map((name) => new File([name], `${name}.pdf`));
+
+  it('accepts only the remaining slots and reports the rejected files', () => {
+    expect(limitIncomingFiles(files, 4, 5)).toEqual({ accepted: [files[0]], rejected: 2 });
+  });
+
+  it('rejects all incoming files when the message is already at the limit', () => {
+    expect(limitIncomingFiles(files, 5, 5)).toEqual({ accepted: [], rejected: 3 });
   });
 });

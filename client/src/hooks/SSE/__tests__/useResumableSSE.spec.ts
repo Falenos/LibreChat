@@ -317,8 +317,14 @@ describe('useResumableSSE - 404 error path', () => {
   });
 
   it('clears both TEXT and FILES drafts for new-convo when conversationId is absent', async () => {
-    localStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`, 'unsent message');
-    localStorage.setItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`, '[]');
+    // [knauf] KK20-227 — NEW_CONVO drafts are tab-scoped (sessionStorage) since
+    // the drafts.ts change; seed/assert the store clearAllDrafts actually uses.
+    sessionStorage.setItem(
+      `${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`,
+      'unsent message',
+    );
+    sessionStorage.setItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`, '[]');
+    // End [knauf]
 
     const submission = buildSubmission({ conversation: {} });
     const chatHelpers = buildChatHelpers();
@@ -334,10 +340,14 @@ describe('useResumableSSE - 404 error path', () => {
       sse._emit('error', { responseCode: 404 });
     });
 
-    expect(localStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`)).toBeNull();
+    // [knauf] KK20-227 — see seeding note above.
     expect(
-      localStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`),
+      sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`),
     ).toBeNull();
+    expect(
+      sessionStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`),
+    ).toBeNull();
+    // End [knauf]
     unmount();
   });
 

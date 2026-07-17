@@ -36,42 +36,41 @@ import useLocalize from '../useLocalize';
 //   • Custom agent chat (endpoint `agents`) where File Search is the SOLE destination:
 //     route into the agent's own file_search tool (no ephemeral toggle). If the agent
 //     also offers code execution / context, returns false so the modal still shows.
-// Documents embed; images divert to vision via the per-file override in useFileHandling.
+// Documents embed; image-only drops route directly to vision without enabling File Search.
 // KK20-190.
 function routeKnaufFileSearchDrop({
   endpoint,
+  containsDocument,
   fileSearchEnabled,
-  fileSearchAllowedByAgent,
   codeEnabled,
   codeAllowedByAgent,
   contextEnabled,
   enableEphemeralFileSearch,
-  routeToFileSearch,
+  routeFiles,
 }: {
   endpoint?: string;
+  containsDocument: boolean;
   fileSearchEnabled: boolean;
-  fileSearchAllowedByAgent: boolean;
   codeEnabled: boolean;
   codeAllowedByAgent: boolean;
   contextEnabled: boolean;
   enableEphemeralFileSearch: () => void;
-  routeToFileSearch: () => void;
+  routeFiles: (useFileSearch: boolean) => void;
 }): boolean {
   if (!fileSearchEnabled) {
     return false;
   }
   if (endpoint === EModelEndpoint.azureOpenAI) {
-    enableEphemeralFileSearch();
-    routeToFileSearch();
+    if (containsDocument) {
+      enableEphemeralFileSearch();
+    }
+    routeFiles(containsDocument);
     return true;
   }
   const agentFileSearchOnly =
-    endpoint === EModelEndpoint.agents &&
-    fileSearchAllowedByAgent &&
-    !(codeEnabled && codeAllowedByAgent) &&
-    !contextEnabled;
+    endpoint === EModelEndpoint.agents && !(codeEnabled && codeAllowedByAgent) && !contextEnabled;
   if (agentFileSearchOnly) {
-    routeToFileSearch();
+    routeFiles(containsDocument);
     return true;
   }
   return false;
@@ -163,6 +162,9 @@ export default function useDragHelpers() {
       const fileSearchEnabled = capabilities.includes(AgentCapabilities.file_search) === true;
       const codeEnabled = capabilities.includes(AgentCapabilities.execute_code) === true;
       const contextEnabled = capabilities.includes(AgentCapabilities.context) === true;
+      const containsDocument = item.files.some(
+        (file) => !inferMimeType(file.name, file.type)?.startsWith('image/'),
+      );
 
       let fileSearchAllowedByAgent = true;
       let codeAllowedByAgent = true;
@@ -183,14 +185,18 @@ export default function useDragHelpers() {
       const conv = conversationRef.current;
       const handledByKnauf = routeKnaufFileSearchDrop({
         endpoint: conv?.endpoint ?? undefined,
+        containsDocument,
         fileSearchEnabled,
-        fileSearchAllowedByAgent,
         codeEnabled,
         codeAllowedByAgent,
         contextEnabled,
         enableEphemeralFileSearch: () =>
           setEphemeralAgent((prev) => ({ ...prev, [EToolResources.file_search]: true })),
-        routeToFileSearch: () => handleFilesRef.current(item.files, EToolResources.file_search),
+        routeFiles: (useFileSearch) =>
+          handleFilesRef.current(
+            item.files,
+            useFileSearch ? EToolResources.file_search : undefined,
+          ),
       });
       if (handledByKnauf) {
         return;

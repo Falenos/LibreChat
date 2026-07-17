@@ -8,6 +8,8 @@ const mockGetEntity = jest.fn();
 const mockGetSender = jest.fn();
 const mockGetEntityName = jest.fn();
 const mockSetActivePrompt = jest.fn();
+const mockSetEphemeralAgent = jest.fn();
+const mockHandleFiles = jest.fn();
 let mockAgentsMap: Record<string, unknown> = {};
 
 jest.mock('recoil', () => ({
@@ -19,6 +21,7 @@ jest.mock('recoil', () => ({
     return true;
   }),
   useRecoilState: jest.fn(() => [undefined, mockSetActivePrompt]),
+  useSetRecoilState: jest.fn(() => mockSetEphemeralAgent),
   // v0.8.7: useTextarea's dependency graph now calls useRecoilCallback +
   // selectorFamily (both absent from the pre-v0.8.7 mock).
   useRecoilCallback: jest.fn(() => jest.fn()),
@@ -43,6 +46,7 @@ jest.mock('~/store', () => ({
     messagesSiblingIdxFamily: jest.fn((id) => ({ key: `messagesSiblingIdxFamily-${id}` })),
     customShortcuts: { key: 'customShortcuts' },
   },
+  ephemeralAgentByConvoId: jest.fn((id) => ({ key: `ephemeralAgent-${id}` })),
 }));
 
 jest.mock('~/Providers/ChatContext', () => ({
@@ -64,7 +68,7 @@ jest.mock('~/hooks/Conversations/useGetSender', () => ({
 
 jest.mock('~/hooks/Files/useFileHandling', () => ({
   __esModule: true,
-  default: () => ({ handleFiles: jest.fn() }),
+  default: () => ({ handleFiles: mockHandleFiles }),
 }));
 
 jest.mock('~/data-provider', () => ({
@@ -93,7 +97,7 @@ jest.mock('~/utils', () => ({
   checkIfScrollable: jest.fn(() => false),
 }));
 
-function renderUseTextarea(conversation: Partial<TConversation>) {
+function renderUseTextareaHook(conversation: Partial<TConversation>) {
   const textAreaRef = { current: document.createElement('textarea') };
   const submitButtonRef = { current: document.createElement('button') };
 
@@ -105,7 +109,7 @@ function renderUseTextarea(conversation: Partial<TConversation>) {
     setFilesLoading: jest.fn(),
   });
 
-  renderHook(() =>
+  const { result } = renderHook(() =>
     useTextarea({
       textAreaRef,
       submitButtonRef,
@@ -117,7 +121,11 @@ function renderUseTextarea(conversation: Partial<TConversation>) {
     jest.advanceTimersByTime(100);
   });
 
-  return textAreaRef.current;
+  return { textarea: textAreaRef.current, hook: result.current };
+}
+
+function renderUseTextarea(conversation: Partial<TConversation>) {
+  return renderUseTextareaHook(conversation).textarea;
 }
 
 describe('useTextarea — Knauf composer placeholder', () => {
@@ -180,5 +188,70 @@ describe('useTextarea — Knauf composer placeholder', () => {
     });
 
     expect(textarea).toHaveAttribute('placeholder', 'Message Finance Assistant');
+  });
+
+  it('routes pasted documents through ephemeral File Search in the default Azure chat', () => {
+    const { hook } = renderUseTextareaHook({
+      conversationId: 'convo-1',
+      endpoint: EModelEndpoint.azureOpenAI,
+    });
+    const pdf = new File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+
+    hook.handlePaste({ clipboardData: { files: [pdf] } } as never);
+
+    expect(mockHandleFiles).toHaveBeenCalledWith(
+      [expect.objectContaining({ type: 'application/pdf' })],
+      'file_search',
+    );
+    expect(mockSetEphemeralAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps image-only paste on the vision attachment path', () => {
+    const { hook } = renderUseTextareaHook({ endpoint: EModelEndpoint.azureOpenAI });
+    const image = new File(['image'], 'image.png', { type: 'image/png' });
+
+    hook.handlePaste({ clipboardData: { files: [image] } } as never);
+
+    expect(mockHandleFiles).toHaveBeenCalledWith(
+      [expect.objectContaining({ type: 'image/png' })],
+      undefined,
+    );
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
+
+  it('routes pasted documents through a custom agent configured with File Search', () => {
+    mockGetEntity.mockReturnValue({
+      entity: { name: 'Document Agent', tools: ['file_search'] },
+      isAgent: true,
+      isAssistant: false,
+    });
+    const { hook } = renderUseTextareaHook({
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent-1',
+    });
+    const pdf = new File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+
+    hook.handlePaste({ clipboardData: { files: [pdf] } } as never);
+
+    expect(mockHandleFiles).toHaveBeenCalledWith(expect.any(Array), 'file_search');
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+  });
+
+  it('routes custom-agent message documents through transient File Search', () => {
+    mockGetEntity.mockReturnValue({
+      entity: { name: 'Document Agent', tools: [] },
+      isAgent: true,
+      isAssistant: false,
+    });
+    const { hook } = renderUseTextareaHook({
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent-1',
+    });
+    const pdf = new File(['pdf'], 'document.pdf', { type: 'application/pdf' });
+
+    hook.handlePaste({ clipboardData: { files: [pdf] } } as never);
+
+    expect(mockHandleFiles).toHaveBeenCalledWith(expect.any(Array), 'file_search');
+    expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
   });
 });

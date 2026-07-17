@@ -26,9 +26,11 @@ jest.mock('~/utils', () => ({
 import React from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { useRecoilValue } from 'recoil';
+import { Constants, LocalStorageKeys } from 'librechat-data-provider';
 import { useChatFormContext } from '~/Providers';
 import { useGetFiles } from '~/data-provider';
 import { getDraft, setDraft } from '~/utils';
+import { setDraft as setStoredDraft } from '~/utils/drafts';
 import store from '~/store';
 import { useAutoSave } from '~/hooks';
 
@@ -42,6 +44,8 @@ const makeTextAreaRef = (value = '') =>
   }) as unknown as React.RefObject<HTMLTextAreaElement>;
 
 beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
   (useRecoilValue as jest.Mock).mockImplementation((atom) => {
     if (atom === store.saveDrafts) return true;
     return undefined;
@@ -138,5 +142,63 @@ describe('useAutoSave — conversation switching', () => {
 
     expect(setFiles).not.toHaveBeenCalled();
   });
+
+  it.each([Constants.NEW_CONVO, Constants.PENDING_CONVO])(
+    'migrates tab-scoped %s text and files to the real conversation',
+    (temporaryId) => {
+      const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${temporaryId}`;
+      const pendingFilesKey = `${LocalStorageKeys.FILES_DRAFT}${temporaryId}`;
+      const conversationTextKey = `${LocalStorageKeys.TEXT_DRAFT}convo-1`;
+      const conversationFilesKey = `${LocalStorageKeys.FILES_DRAFT}convo-1`;
+      sessionStorage.setItem(pendingTextKey, 'encoded-draft');
+      sessionStorage.setItem(pendingFilesKey, JSON.stringify(['pending-file']));
+      const pendingFiles = new Map([
+        ['pending-file', { file_id: 'pending-file', size: 1024, progress: 1 }],
+      ]);
+
+      const setFiles = jest.fn();
+      const { rerender } = renderHook(
+        ({ conversationId, isSubmitting }: { conversationId: string; isSubmitting: boolean }) =>
+          useAutoSave({
+            isSubmitting,
+            conversationId,
+            textAreaRef: makeTextAreaRef(),
+            files: pendingFiles,
+            setFiles,
+          }),
+        {
+          initialProps: {
+            conversationId: temporaryId === Constants.NEW_CONVO ? temporaryId : 'convo-1',
+            isSubmitting: temporaryId === Constants.PENDING_CONVO,
+          },
+        },
+      );
+      setFiles.mockClear();
+
+      act(() => {
+        rerender({ conversationId: 'convo-1', isSubmitting: false });
+      });
+
+      expect(localStorage.getItem(conversationTextKey)).toBe('encoded-draft');
+      expect(localStorage.getItem(conversationFilesKey)).toBe(JSON.stringify(['pending-file']));
+      expect(sessionStorage.getItem(pendingTextKey)).toBeNull();
+      expect(sessionStorage.getItem(pendingFilesKey)).toBeNull();
+      expect(localStorage.getItem(pendingTextKey)).toBeNull();
+      expect(localStorage.getItem(pendingFilesKey)).toBeNull();
+      expect(setFiles).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([Constants.NEW_CONVO, Constants.PENDING_CONVO])(
+    'stores the shared %s text key in sessionStorage by default',
+    (temporaryId) => {
+      const pendingTextKey = `${LocalStorageKeys.TEXT_DRAFT}${temporaryId}`;
+
+      setStoredDraft({ id: String(temporaryId), value: 'tab-scoped draft' });
+
+      expect(sessionStorage.getItem(pendingTextKey)).not.toBeNull();
+      expect(localStorage.getItem(pendingTextKey)).toBeNull();
+    },
+  );
   // End [knauf]
 });
