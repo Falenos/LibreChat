@@ -58,6 +58,8 @@ const {
   buildBatchIndexStatus,
   retryFileIndexing,
 } = require('~/server/services/Files/knauf/indexStatus');
+// KK20-195 review R6 — ownership/agent-EDIT gate for the mutating retry.
+const { knaufFileIndexRetryAuth } = require('~/server/middleware/knaufFileIndexRetryAuth');
 // End [knauf]
 const { cleanFileName, getContentDisposition } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
@@ -223,9 +225,13 @@ router.get('/:file_id/index-status', fileAccess, async (req, res) => {
  * the physical asset (idempotent when another reference already retried);
  * assets without durable blob metadata answer `file_reupload_required`.
  *
+ * KK20-195 review R6 — retry MUTATES a shared asset (requeue + OCR/embedding
+ * capacity), so VIEW-level `fileAccess` alone is not enough: ownership or
+ * agent EDIT is enforced by `knaufFileIndexRetryAuth` on top of it.
+ *
  * @route POST /files/:file_id/index/retry
  */
-router.post('/:file_id/index/retry', fileAccess, async (req, res) => {
+router.post('/:file_id/index/retry', fileAccess, knaufFileIndexRetryAuth, async (req, res) => {
   try {
     const { httpStatus, body } = await retryFileIndexing({ db, file: req.fileAccess.file });
     return res.status(httpStatus).json(body);

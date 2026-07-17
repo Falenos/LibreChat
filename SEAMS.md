@@ -423,6 +423,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/middleware/knaufFileIndexReadiness.spec.js` | — | 1–108 | KK20-195 review R5 — fail-closed tests replace the fail-open ones: missing asset → 409, store down → 503 | Self | KK20-195 |
 | `api/app/clients/tools/util/fileSearch.js` | `primeFiles` readiness filter → positive confirmation | 62–98 | KK20-195 review R5 — hydration fails closed: a dangling pointer drops the file, a store error drops ALL asset-backed files (legacy no-pointer rows always pass) with the `[fileSearch][alert][readiness_store_unavailable]` marker | `api/app/clients/tools/util/fileSearch.spec.js` | KK20-195 |
 | `api/app/clients/tools/util/fileSearch.spec.js` | R5 fail-closed tests (+ `info` on the logger mock) | 7–9, 167–186 | KK20-195 review R5 — store failure keeps only legacy rows; missing asset dropped | Self | KK20-195 |
+| `api/server/middleware/knaufFileIndexRetryAuth.js` | — | 1–64 | KK20-195 review R6 — ownership-or-agent-EDIT gate for the MUTATING retry endpoint (VIEW-level `fileAccess` alone let a viewer of a shared agent requeue a shared asset and consume OCR/embedding capacity); mirrors `checkAgentBasedFileAccess` with `PermissionBits.EDIT`; fails closed | `api/server/middleware/knaufFileIndexRetryAuth.spec.js` | KK20-195 |
+| `api/server/middleware/knaufFileIndexRetryAuth.spec.js` | — | 1–82 | KK20-195 review R6 — owner allowed, agent-editor allowed, shared-agent VIEWER denied, no-agent denied, check-failure denied | Self | KK20-195 |
+| `api/server/routes/files/files.js` | retry route gains `knaufFileIndexRetryAuth` (+ import) | 62–64, 224–235 | KK20-195 review R6 — VIEW keeps the read-only status endpoints; retry requires ownership or agent EDIT | `api/server/middleware/knaufFileIndexRetryAuth.spec.js` | KK20-195 |
 <!-- seams:auto:end -->
 
 ## Configuration
