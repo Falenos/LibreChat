@@ -1,15 +1,25 @@
 import debounce from 'lodash/debounce';
 import { Constants, LocalStorageKeys } from 'librechat-data-provider';
 
-export const clearDraft = debounce((id?: string | null) => {
-  localStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${id ?? ''}`);
+// [knauf] KK20-227 — keep shared temporary conversation IDs tab-scoped.
+const draftStorage = (id?: string | null) =>
+  id === String(Constants.NEW_CONVO) || id === String(Constants.PENDING_CONVO)
+    ? sessionStorage
+    : localStorage;
+
+export const clearDraft = debounce((id?: string | null, storage: Storage = draftStorage(id)) => {
+  storage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${id ?? ''}`);
 }, 2500);
+// End [knauf]
 
 /** Synchronously removes both text and file drafts for a conversation (or NEW_CONVO fallback) */
 export const clearAllDrafts = (conversationId?: string | null) => {
   const key = conversationId || Constants.NEW_CONVO;
-  localStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${key}`);
-  localStorage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${key}`);
+  // [knauf] KK20-227 — clear temporary drafts from the tab-scoped store used to save them.
+  const storage = draftStorage(String(key));
+  // End [knauf]
+  storage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${key}`);
+  storage.removeItem(`${LocalStorageKeys.FILES_DRAFT}${key}`);
 };
 
 export const encodeBase64 = (plainText: string): string => {
@@ -34,13 +44,23 @@ export const decodeBase64 = (base64String: string): string => {
   }
 };
 
-export const setDraft = ({ id, value }: { id: string; value?: string }) => {
+// [knauf] KK20-227 — optional storage preserves callers while temporary drafts stay tab-scoped.
+export const setDraft = ({
+  id,
+  value,
+  storage = draftStorage(id),
+}: {
+  id: string;
+  value?: string;
+  storage?: Storage;
+}) => {
   if (value && value.length > 1) {
-    localStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${id}`, encodeBase64(value));
+    storage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${id}`, encodeBase64(value));
     return;
   }
-  localStorage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${id}`);
+  storage.removeItem(`${LocalStorageKeys.TEXT_DRAFT}${id}`);
 };
 
-export const getDraft = (id?: string): string | null =>
-  decodeBase64((localStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${id ?? ''}`) ?? '') || '');
+export const getDraft = (id?: string, storage: Storage = draftStorage(id)): string | null =>
+  decodeBase64((storage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${id ?? ''}`) ?? '') || '');
+// End [knauf]

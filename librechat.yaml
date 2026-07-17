@@ -484,6 +484,11 @@ endpoints:
         baseURL: '${AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1'
         addParams:
           model: 'model-router'
+          # Bound the wait for response headers and allow one retry through the
+          # existing LangChain/OpenAI retry path. Azure Model Router handles
+          # provider/model failover behind this deployment.
+          timeout: 60000
+          maxRetries: 1
         dropParams:
           - temperature
           - top_p

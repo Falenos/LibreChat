@@ -50,6 +50,7 @@ const {
 const {
   createResponsesToolEndCallback,
   buildSummarizationHandlers,
+  getResponseModel,
   markSummarizationUsage,
   createToolEndCallback,
   agentLogHandlerObj,
@@ -741,6 +742,9 @@ const createResponse = async (req, res) => {
             responsesHandlers.on_chat_model_end.handle(event, data);
             const usage = data?.output?.usage_metadata;
             if (usage) {
+              // [knauf] Persist the backing model selected by Azure Model Router. KK20-227.
+              usage.model = getResponseModel(data) ?? usage.model;
+              // End [knauf]
               const taggedUsage = markSummarizationUsage(usage, metadata);
               collectedUsage.push(taggedUsage);
             }
@@ -920,6 +924,9 @@ const createResponse = async (req, res) => {
             aggregatorHandlers.on_chat_model_end.handle(event, data);
             const usage = data?.output?.usage_metadata;
             if (usage) {
+              // [knauf] Persist the backing model selected by Azure Model Router. KK20-227.
+              usage.model = getResponseModel(data) ?? usage.model;
+              // End [knauf]
               const taggedUsage = markSummarizationUsage(usage, metadata);
               collectedUsage.push(taggedUsage);
             }

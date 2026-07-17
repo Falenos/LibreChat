@@ -1,7 +1,10 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react';
 import debounce from 'lodash/debounce';
-import { useRecoilValue, useRecoilState } from 'recoil';
-import type { TEndpointOption } from 'librechat-data-provider';
+// [knauf] KK20-227 — pasted documents enable the conversation-scoped File Search state.
+import { useRecoilValue, useRecoilState, useSetRecoilState } from 'recoil';
+import { Constants, EModelEndpoint, EToolResources, inferMimeType } from 'librechat-data-provider';
+import type { TEndpointOption, TEphemeralAgent } from 'librechat-data-provider';
+// End [knauf]
 import type { KeyboardEvent } from 'react';
 import {
   parseBinding,
@@ -26,9 +29,18 @@ import { useChatContext } from '~/Providers/ChatContext';
 import { globalAudioId } from '~/common';
 import { useLocalize } from '~/hooks';
 import { KARL_CHAT_ASSISTANT_NAME, isKarlSpecName } from '~/knauf/common/constants';
-import store from '~/store';
+// [knauf] KK20-227 — resolve the per-conversation ephemeral File Search atom for paste.
+import store, { ephemeralAgentByConvoId } from '~/store';
+// End [knauf]
 
 type KeyEvent = KeyboardEvent<HTMLTextAreaElement>;
+
+// [knauf] Keep pasted documents on the same File Search path as picker/drag uploads. KK20-227.
+const enableEphemeralFileSearch = (prev: TEphemeralAgent | null): TEphemeralAgent => ({
+  ...prev,
+  [EToolResources.file_search]: true,
+});
+// End [knauf]
 
 // [knauf] Brand default Karl model-spec chats in the composer placeholder without changing custom agent names.
 const getKnaufComposerSender = ({
@@ -92,6 +104,9 @@ export default function useTextarea({
   }, [customShortcuts]);
 
   const { index, conversation, isSubmitting, filesLoading, setFilesLoading } = useChatContext();
+  const setEphemeralAgent = useSetRecoilState(
+    ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
+  );
   const latestMessage = useLatestMessage(index);
   const [activePrompt, setActivePrompt] = useRecoilState(store.activePromptByIndex(index));
 
@@ -318,11 +333,26 @@ export default function useTextarea({
           });
           timestampedFiles.push(newFile);
         }
-        handleFiles(timestampedFiles);
+        // [knauf] Documents pasted into default Azure chats must enable the
+        // ephemeral File Search tool; custom-agent message files use transient
+        // request-scoped retrieval. Images remain direct vision attachments because
+        // useFileHandling strips file_search per image in mixed selections.
+        // KK20-227.
+        const containsDocument = timestampedFiles.some(
+          (file) => !inferMimeType(file.name, file.type)?.startsWith('image/'),
+        );
+        const useFileSearch =
+          containsDocument &&
+          (endpoint === EModelEndpoint.azureOpenAI || endpoint === EModelEndpoint.agents);
+        if (useFileSearch && endpoint === EModelEndpoint.azureOpenAI) {
+          setEphemeralAgent(enableEphemeralFileSearch);
+        }
+        handleFiles(timestampedFiles, useFileSearch ? EToolResources.file_search : undefined);
       }
     },
-    [handleFiles, setFilesLoading, textAreaRef],
+    [endpoint, handleFiles, setEphemeralAgent, setFilesLoading, textAreaRef],
   );
+  // End [knauf]
 
   return {
     textAreaRef,

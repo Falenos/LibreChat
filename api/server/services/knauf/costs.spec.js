@@ -6,6 +6,7 @@ const {
   EUR_RATES,
   getConversationCosts,
   normalizeModel,
+  resolveModelPricing,
   RATE_SOURCE,
 } = require('./costs');
 
@@ -31,9 +32,19 @@ describe('knauf costs', () => {
     ['gpt-54', 'gpt-5.4'],
     ['gpt-55-2026-04-24', 'gpt-5.5'],
     ['azure/gpt-5.6-sol-2026-07-09', 'gpt-5.6-sol'],
+    ['model-router-chat', 'model-router'],
     ['gpt-image-2-2026-04-21', 'gpt-image-2'],
   ])('normalizes %s to %s', (input, expected) => {
     expect(normalizeModel(input)).toBe(expected);
+  });
+
+  it.each([
+    ['gpt-55-2026-04-24', 'exact-version', false],
+    ['gpt-5.5', 'model-family', false],
+    ['model-router-chat', 'router-fallback', true],
+    ['unknown-model', 'unknown', false],
+  ])('resolves %s as %s', (model, pricingMatch, isEstimated) => {
+    expect(resolveModelPricing(model)).toMatchObject({ pricingMatch, isEstimated });
   });
 
   it.each([
@@ -59,7 +70,7 @@ describe('knauf costs', () => {
   });
 
   it('stores effective model versions with the static retail rates', () => {
-    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-openai-parity-2026-07-14');
+    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-openai-parity-2026-07-17');
     expect(EUR_RATES['gpt-5.5']).toMatchObject({
       modelVersion: '2026-04-24',
       effectiveFrom: '2026-05-01',
@@ -82,6 +93,36 @@ describe('knauf costs', () => {
     expect(result.inputTokens).toBe(1_000_000);
     expect(result.cachedInputTokens).toBe(1_000_000);
     expect(result.cost).toBeCloseTo(4.3878);
+  });
+
+  it('uses the conservative fallback when Azure reports only the router alias', () => {
+    const input = calculateTransactionCost({
+      model: 'model-router-chat',
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+    });
+    const output = calculateTransactionCost({
+      model: 'model-router',
+      tokenType: 'completion',
+      rawAmount: -1_000_000,
+    });
+
+    expect(input.cost).toBeCloseTo(EUR_RATES['gpt-5.5'].inputPerMillion);
+    expect(output.cost).toBeCloseTo(EUR_RATES['gpt-5.5'].outputPerMillion);
+    expect(input).toMatchObject({
+      isEstimated: true,
+      estimateReason: 'router-model-not-reported',
+    });
+  });
+
+  it('keeps unknown model tokens explicit', () => {
+    const result = calculateTransactionCost({
+      model: 'unknown-model',
+      tokenType: 'prompt',
+      rawAmount: -123,
+    });
+
+    expect(result).toMatchObject({ cost: 0, unsupportedTokens: 123, hasUnsupported: true });
   });
 
   it('aggregates per conversation and per message', () => {
@@ -212,6 +253,50 @@ describe('knauf costs', () => {
         summary: result,
       }),
       expect.any(Number),
+    );
+  });
+
+  it('persists router pricing provenance on transaction rows', async () => {
+    const bulkWrite = jest.fn().mockResolvedValue(undefined);
+    const Transaction = {
+      bulkWrite,
+      findOne: jest.fn(() => chain({ _id: 'tx-router', updatedAt: new Date(0) })),
+      find: jest.fn(() =>
+        chain([
+          {
+            _id: 'tx-router',
+            model: 'model-router-chat',
+            tokenType: 'prompt',
+            rawAmount: -100,
+          },
+        ]),
+      ),
+    };
+
+    await getConversationCosts({
+      userId: 'user-1',
+      conversationId: 'conversation-1',
+      Transaction,
+      cache: createCache(null),
+    });
+
+    expect(bulkWrite).toHaveBeenCalledWith(
+      [
+        {
+          updateOne: {
+            filter: { _id: 'tx-router' },
+            update: {
+              $set: {
+                knauf_costEstimated: true,
+                knauf_costEstimateReason: 'router-model-not-reported',
+                knauf_costRateSource: RATE_SOURCE,
+                knauf_pricingMatch: 'router-fallback',
+              },
+            },
+          },
+        },
+      ],
+      { ordered: false, timestamps: false },
     );
   });
 });

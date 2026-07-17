@@ -18,6 +18,12 @@ export interface ITransaction extends Document {
   createdAt?: Date;
   updatedAt?: Date;
   tenantId?: string;
+  // [knauf] Persist cost provenance resolved by the Knauf conversation-cost service. KK20-227.
+  knauf_costEstimated?: boolean;
+  knauf_costEstimateReason?: string | null;
+  knauf_costRateSource?: string;
+  knauf_pricingMatch?: 'exact-version' | 'model-family' | 'router-fallback' | 'unknown';
+  // End [knauf]
 }
 
 const transactionSchema: Schema<ITransaction> = new Schema(
@@ -59,6 +65,15 @@ const transactionSchema: Schema<ITransaction> = new Schema(
       type: String,
       index: true,
     },
+    // [knauf] Keep exact/family/router pricing provenance on each transaction. KK20-227.
+    knauf_costEstimated: { type: Boolean },
+    knauf_costEstimateReason: { type: String, default: null },
+    knauf_costRateSource: { type: String },
+    knauf_pricingMatch: {
+      type: String,
+      enum: ['exact-version', 'model-family', 'router-fallback', 'unknown'],
+    },
+    // End [knauf]
   },
   {
     timestamps: true,

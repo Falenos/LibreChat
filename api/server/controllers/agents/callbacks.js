@@ -103,10 +103,7 @@ class ModelEndHandler {
         return this.finalize(errorMessage);
       }
       // [knauf] Model Router returns the selected underlying model in response metadata.
-      const responseModel =
-        data?.output?.response_metadata?.model_name ??
-        data?.output?.response_metadata?.model ??
-        data?.output?.response_metadata?.modelName;
+      const responseModel = getResponseModel(data);
       const modelName =
         responseModel || metadata?.ls_model_name || agentContext.clientOptions?.model;
       // End [knauf]
@@ -1191,6 +1188,16 @@ function markSummarizationUsage(usage, metadata) {
   return usage;
 }
 
+// [knauf] Share Azure Model Router backing-model extraction across every agent API path. KK20-227.
+function getResponseModel(data) {
+  return (
+    data?.output?.response_metadata?.model_name ??
+    data?.output?.response_metadata?.model ??
+    data?.output?.response_metadata?.modelName
+  );
+}
+// End [knauf]
+
 const agentLogHandlerObj = { handle: agentLogHandler };
 
 /**
@@ -1226,6 +1233,7 @@ module.exports = {
   createToolEndCallback,
   isStreamWritable,
   markSummarizationUsage,
+  getResponseModel,
   buildSummarizationHandlers,
   createResponsesToolEndCallback,
 };

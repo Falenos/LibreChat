@@ -1,12 +1,13 @@
 const EUR_PER_MILLION_TOKENS = 1_000_000;
 const COST_CACHE_NAMESPACE = 'knauf:conversation-costs';
+const COST_CACHE_FORMAT_VERSION = 'v2';
 const COST_CACHE_TTL_MS = 86_400_000;
 const COST_LOOKUP_INDEX = { user: 1, conversationId: 1, updatedAt: -1, _id: -1 };
 const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
 const TRANSACTION_COST_FIELDS =
-  'model context tokenType rawAmount inputTokens writeTokens readTokens messageId updatedAt';
+  '_id model context tokenType rawAmount inputTokens writeTokens readTokens messageId updatedAt knauf_costEstimated knauf_costEstimateReason knauf_costRateSource knauf_pricingMatch';
 
-const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-openai-parity-2026-07-14';
+const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-openai-parity-2026-07-17';
 const EUR_RATES = {
   'gpt-5.4-nano': {
     modelVersion: '2026-03-17',
@@ -39,6 +40,13 @@ const EUR_RATES = {
     inputPerMillion: 4.3879,
     outputPerMillion: 26.3273,
   },
+  'model-router': {
+    modelVersion: 'router-fallback',
+    effectiveFrom: '2026-07-17',
+    pricingBasis: 'Conservative fallback at the highest allowed router-pool rate',
+    inputPerMillion: 4.3879,
+    outputPerMillion: 26.3273,
+  },
   'gpt-image-1': {
     modelVersion: '2025-04-15',
     effectiveFrom: '2025-04-01',
@@ -62,6 +70,9 @@ function absNumber(value) {
 
 function normalizeModel(model) {
   const value = String(model || '').toLowerCase();
+  if (value.includes('model-router')) {
+    return 'model-router';
+  }
   if (value.includes('gpt-5.4-nano') || value.includes('gpt-54-nano')) {
     return 'gpt-5.4-nano';
   }
@@ -86,6 +97,40 @@ function normalizeModel(model) {
   return value || 'unknown';
 }
 
+function resolveModelPricing(model) {
+  const normalizedModel = normalizeModel(model);
+  const rate = EUR_RATES[normalizedModel];
+  if (!rate) {
+    return {
+      normalizedModel,
+      rate: null,
+      pricingMatch: 'unknown',
+      isEstimated: false,
+      estimateReason: null,
+    };
+  }
+  if (normalizedModel === 'model-router') {
+    return {
+      normalizedModel,
+      rate,
+      pricingMatch: 'router-fallback',
+      isEstimated: true,
+      estimateReason: 'router-model-not-reported',
+    };
+  }
+  return {
+    normalizedModel,
+    rate,
+    pricingMatch: String(model || '')
+      .toLowerCase()
+      .includes(rate.modelVersion)
+      ? 'exact-version'
+      : 'model-family',
+    isEstimated: false,
+    estimateReason: null,
+  };
+}
+
 function emptySummary() {
   return {
     cost: 0,
@@ -96,6 +141,8 @@ function emptySummary() {
     imageOutputTokens: 0,
     unsupportedTokens: 0,
     hasUnsupported: false,
+    isEstimated: false,
+    estimateReason: null,
   };
 }
 
@@ -108,10 +155,12 @@ function addSummary(target, entry) {
   target.imageOutputTokens += entry.imageOutputTokens;
   target.unsupportedTokens += entry.unsupportedTokens;
   target.hasUnsupported = target.hasUnsupported || entry.hasUnsupported;
+  target.isEstimated = target.isEstimated || entry.isEstimated;
+  target.estimateReason = target.estimateReason || entry.estimateReason;
 }
 
 function calculateTransactionCost(transaction) {
-  const model = normalizeModel(transaction.model);
+  const pricing = resolveModelPricing(transaction.model);
   const rawAmount = absNumber(transaction.rawAmount);
   const inputTokens = absNumber(transaction.inputTokens);
   const writeTokens = absNumber(transaction.writeTokens);
@@ -129,9 +178,11 @@ function calculateTransactionCost(transaction) {
     imageOutputTokens: 0,
     unsupportedTokens: 0,
     hasUnsupported: false,
+    isEstimated: false,
+    estimateReason: null,
   };
 
-  const rate = EUR_RATES[model];
+  const { rate } = pricing;
   if (rate?.imageInputPerMillion) {
     base.inputTokens = transaction.tokenType === 'prompt' ? inputTokens || rawAmount : 0;
     base.cachedInputTokens = 0;
@@ -150,6 +201,8 @@ function calculateTransactionCost(transaction) {
       ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
         rate.inputPerMillion +
       (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion;
+    base.isEstimated = pricing.isEstimated;
+    base.estimateReason = pricing.estimateReason;
     return base;
   }
 
@@ -198,7 +251,7 @@ function getCostCache() {
 }
 
 function buildCostCacheKey(userId, conversationId) {
-  return `${RATE_SOURCE}:${String(userId)}:${conversationId}`;
+  return `${COST_CACHE_FORMAT_VERSION}:${RATE_SOURCE}:${String(userId)}:${conversationId}`;
 }
 
 function sameFingerprint(left, right) {
@@ -235,6 +288,31 @@ async function readTransactionCostRows(Transaction, filter) {
   return Transaction.find(filter).select(TRANSACTION_COST_FIELDS).lean();
 }
 
+async function persistTransactionCostProvenance(Transaction, transactions) {
+  if (typeof Transaction?.bulkWrite !== 'function') {
+    return;
+  }
+  const operations = transactions.flatMap((transaction) => {
+    if (!transaction?._id) {
+      return [];
+    }
+    const pricing = resolveModelPricing(transaction.model);
+    const provenance = {
+      knauf_costEstimated: pricing.isEstimated,
+      knauf_costEstimateReason: pricing.estimateReason,
+      knauf_costRateSource: RATE_SOURCE,
+      knauf_pricingMatch: pricing.pricingMatch,
+    };
+    if (Object.entries(provenance).every(([key, value]) => transaction[key] === value)) {
+      return [];
+    }
+    return [{ updateOne: { filter: { _id: transaction._id }, update: { $set: provenance } } }];
+  });
+  if (operations.length > 0) {
+    await Transaction.bulkWrite(operations, { ordered: false, timestamps: false });
+  }
+}
+
 async function safeGet(cache, key) {
   try {
     return await cache.get(key);
@@ -268,6 +346,7 @@ async function getConversationCosts({
   }
 
   const transactions = await readTransactionCostRows(Transaction, filter);
+  await persistTransactionCostProvenance(Transaction, transactions);
   const summary = aggregateConversationCosts(transactions);
   await safeSet(cache, key, { fingerprint, summary });
   return summary;
@@ -284,6 +363,8 @@ module.exports = {
   COST_LOOKUP_INDEX_NAME,
   getConversationCosts,
   normalizeModel,
+  persistTransactionCostProvenance,
   readTransactionFingerprint,
+  resolveModelPricing,
   sameFingerprint,
 };

@@ -87,6 +87,15 @@ test('Transaction schema includes the Knauf cost lookup index', () => {
 });
 // End [knauf]
 
+// [knauf] Cost provenance must remain persisted on transaction rows. KK20-227.
+test('Transaction schema includes Knauf cost provenance fields', () => {
+  expect(Transaction.schema.path('knauf_costEstimated')).toBeDefined();
+  expect(Transaction.schema.path('knauf_costEstimateReason')).toBeDefined();
+  expect(Transaction.schema.path('knauf_costRateSource')).toBeDefined();
+  expect(Transaction.schema.path('knauf_pricingMatch')).toBeDefined();
+});
+// End [knauf]
+
 describe('Regular Token Spending Tests', () => {
   test('Balance should decrease when spending tokens with spendTokens', async () => {
     // Arrange

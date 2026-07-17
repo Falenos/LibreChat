@@ -1,6 +1,9 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ErrorDisplay } from '../ErrorDisplay';
+// [knauf] Exercise the default-chat timeout renderer alongside the agent error surface. KK20-227.
+import MessageError from '../../Messages/Content/Error';
+// End [knauf]
 
 // Mock matchMedia
 Object.defineProperty(window, 'matchMedia', {
@@ -125,6 +128,24 @@ describe('ErrorDisplay', () => {
       expect(mockLocalize).toHaveBeenCalledWith('com_agents_error_timeout_message');
       expect(mockLocalize).toHaveBeenCalledWith('com_agents_error_timeout_suggestion');
     });
+
+    // [knauf] Azure Model Router header timeouts must be actionable on both chat surfaces. KK20-227.
+    it('handles uppercase Undici header timeout codes', () => {
+      render(<ErrorDisplay error={{ code: 'UND_ERR_HEADERS_TIMEOUT' }} />);
+
+      expect(screen.getByText('Connection Timeout')).toBeInTheDocument();
+    });
+
+    it('replaces the default-chat Undici timeout detail with retry guidance', () => {
+      render(<MessageError text="TypeError: UND_ERR_HEADERS_TIMEOUT" />);
+
+      expect(
+        screen.getByText(
+          'The request took too long to complete. Please check your internet connection and try again.',
+        ),
+      ).toBeInTheDocument();
+    });
+    // End [knauf]
   });
 
   describe('HTTP status codes', () => {
