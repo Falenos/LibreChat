@@ -15,8 +15,8 @@ let db;
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 const cleanupAsset = jest.fn().mockResolvedValue(true);
 
-const listAssets = (filter, limit) =>
-  KnaufFileAsset.find(filter).sort({ updatedAt: 1 }).limit(limit).lean();
+const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
+  KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
 const listFileAssetRefs = (limit) =>
   File.find({ knauf_asset_id: { $exists: true, $ne: null } })
     .sort({ updatedAt: -1 })
@@ -167,6 +167,32 @@ describe('case 4 — asset with no logical references', () => {
     const counts = await buildReconciler().runOnce();
     expect(counts.orphan_assets).toMatchObject({ repaired: 0, alerted: 1 });
     expect((await db.getAssetByAssetId('orphan-bad')).status).toBe('delete_failed');
+  });
+
+  test('rotating cursor reaches an orphan behind kept (referenced) assets (KK20-195 review)', async () => {
+    // Without the cursor, referenced assets keep their updatedAt and freeze the
+    // oldest-N window forever, so orphans behind them are never reached.
+    process.env.KNAUF_RECONCILE_BATCH_LIMIT = '2';
+    try {
+      // Two referenced assets (kept, never removed) at the front by _id…
+      await seedAsset({ asset_id: 'kept-1', status: 'ready', active_generation: 1 });
+      await seedAsset({ asset_id: 'kept-2', status: 'ready', active_generation: 1 });
+      // …and one orphan behind them.
+      await seedAsset({ asset_id: 'orphan-behind', status: 'ready', active_generation: 1 });
+      await seedFile({ file_id: 'fk1', knauf_asset_id: 'kept-1' });
+      await seedFile({ file_id: 'fk2', knauf_asset_id: 'kept-2' });
+
+      const reconciler = buildReconciler(); // one instance → the cursor persists across passes
+      const first = await reconciler.runOnce();
+      expect(first.orphan_assets).toMatchObject({ kept: 2, repaired: 0 });
+      expect(await db.getAssetByAssetId('orphan-behind')).not.toBeNull();
+
+      const second = await reconciler.runOnce();
+      expect(second.orphan_assets).toMatchObject({ repaired: 1 });
+      expect(await db.getAssetByAssetId('orphan-behind')).toBeNull();
+    } finally {
+      delete process.env.KNAUF_RECONCILE_BATCH_LIMIT;
+    }
   });
 });
 

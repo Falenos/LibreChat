@@ -239,8 +239,31 @@ describe('retry classification (§5.3)', () => {
     }
   });
 
-  test('unresolvable scope → failed scope_unresolved, no RAG call', async () => {
+  test('unresolvable scope below the attempt cap → requeued (createFile-race grace), no RAG call', async () => {
+    // KK20-195 review — a null scope is usually the brief window between
+    // markQueued and the File-row insert, not a true orphan. Requeue, don't fail.
     await seedQueued({ asset_id: 'ns-1' });
+    const rag = createFakeRag();
+    const worker = createIndexingWorker({
+      db,
+      ragClient: rag,
+      resolveScope: async () => null,
+      markFilesEmbedded: jest.fn(),
+      logger,
+      workerId: 'w1',
+    });
+
+    const { outcome } = await worker.processNextDue();
+
+    expect(outcome).toBe('requeued');
+    expect(rag.written).toEqual([]);
+    expect((await db.getAssetByAssetId('ns-1')).status).toBe('queued');
+  });
+
+  test('unresolvable scope at the attempt cap → failed scope_unresolved', async () => {
+    // attempt_count seeded at the default cap (5); the claim increments it past
+    // the cap, so the grace window is exhausted and the asset is failed.
+    await seedQueued({ asset_id: 'ns-2', attempt_count: 5 });
     const rag = createFakeRag();
     const worker = createIndexingWorker({
       db,
@@ -255,7 +278,31 @@ describe('retry classification (§5.3)', () => {
 
     expect(outcome).toBe('failed');
     expect(rag.written).toEqual([]);
-    expect((await db.getAssetByAssetId('ns-1')).last_error_code).toBe('scope_unresolved');
+    expect((await db.getAssetByAssetId('ns-2')).last_error_code).toBe('scope_unresolved');
+  });
+
+  test('a persistent File.embedded lockstep failure still returns ready and alerts', async () => {
+    // The asset IS ready; a failed embedded flip would silently drop it from
+    // file_search (getToolFilesByIds filters embedded:true) — retry then alert.
+    await seedQueued({ asset_id: 'lk1' });
+    const rag = createFakeRag();
+    const markFilesEmbedded = jest.fn().mockRejectedValue(new Error('mongo down'));
+    const worker = createIndexingWorker({
+      db,
+      ragClient: rag,
+      resolveScope: async () => ({ userId: 'u1', entityId: 'u1' }),
+      markFilesEmbedded,
+      logger,
+      workerId: 'w1',
+    });
+
+    const { outcome } = await worker.processNextDue();
+
+    expect(outcome).toBe('ready');
+    expect(markFilesEmbedded).toHaveBeenCalledTimes(3);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('[alert][embedded_lockstep_failed]'),
+    );
   });
 });
 
@@ -319,6 +366,18 @@ describe('helpers', () => {
       const next = computeNextAttemptAt({ attempt, baseMs: 1_000, maxMs: 5_000, now });
       expect(next.getTime() - now.getTime()).toBeLessThanOrEqual(30_000 + 5_000);
     }
+  });
+
+  test('computeNextAttemptAt caps a hostile Retry-After at maxMs (no day-long park)', () => {
+    const now = new Date('2026-07-16T00:00:00Z');
+    const next = computeNextAttemptAt({
+      attempt: 1,
+      retryAfter: 86_400_000, // a bogus 24h Retry-After
+      baseMs: 1_000,
+      maxMs: 60_000,
+      now,
+    });
+    expect(next.getTime() - now.getTime()).toBeLessThanOrEqual(60_000);
   });
 });
 // End [knauf]

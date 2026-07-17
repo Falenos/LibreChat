@@ -15,9 +15,14 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { generateShortLivedToken } = require('@librechat/api');
 
-/** @returns {number} finite request cap (§7.5) — same knob as the sync path */
+/**
+ * @returns {number} finite request cap (§7.5). The worker has its OWN budget:
+ * async indexing exists precisely to allow long (20-minute) OCR jobs, so it
+ * must NOT inherit RAG_EMBED_SYNC_TIMEOUT_MS — that knob is the in-request
+ * budget WP0 tunes DOWN to stop uploads hanging (see VectorDB/crud.js).
+ */
 const embedTimeoutMs = () => {
-  const parsed = Number.parseInt(process.env.RAG_EMBED_SYNC_TIMEOUT_MS ?? '', 10);
+  const parsed = Number.parseInt(process.env.KNAUF_WORKER_EMBED_TIMEOUT_MS ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 30 * 60 * 1000;
 };
 
@@ -73,11 +78,19 @@ function createGenerationRagClient({ getStrategyFunctions }) {
 
   /**
    * §7.6 — delete one (inactive) generation; idempotent on the RAG side.
-   * @param {{ asset_id: string, generation: number }} params
+   * Authenticated like every other rag_api call — the JWT is minted from the
+   * asset's owning user (resolved by the caller); without it rag_api 401s and
+   * cleanup churns forever in delete_failed.
+   * @param {{ asset_id: string, generation: number, userId?: string }} params
    */
-  async function deleteGeneration({ asset_id, generation }) {
+  async function deleteGeneration({ asset_id, generation, userId }) {
+    const headers = {};
+    if (userId) {
+      headers.Authorization = `Bearer ${generateShortLivedToken(userId)}`;
+    }
     await axios.delete(`${baseUrl()}/generation`, {
       data: { asset_id, generation },
+      headers,
       timeout: Number.parseInt(process.env.RAG_DELETE_TIMEOUT_MS ?? '', 10) || 60 * 1000,
     });
   }

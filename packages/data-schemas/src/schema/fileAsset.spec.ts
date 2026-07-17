@@ -92,6 +92,11 @@ describe('fileAssetSchema (KK20-195 WP2)', () => {
     expect(find({ status: 1, lease_expires_at: 1 })).toBeDefined();
     expect(find({ delete_requested_at: 1, status: 1 })).toBeDefined();
     expect(find({ updatedAt: 1, status: 1 })).toBeDefined();
+
+    // KK20-195 review — admission counters + reconciler invariant sweeps.
+    expect(find({ scope_type: 1, scope_id: 1, status: 1 })).toBeDefined();
+    expect(find({ status: 1, active_generation: 1 })).toBeDefined();
+    expect(find({ status: 1, last_error_code: 1 })).toBeDefined();
   });
 
   test('attempt/generation counters default safely', () => {

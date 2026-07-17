@@ -54,17 +54,30 @@ const getReconcilerConfig = () => ({
  * @param {(asset: Object) => Promise<boolean>} deps.cleanupAsset
  *   - physical GC (vectors by asset id + blob); resolves true on confirmed cleanup
  * @param {{ info: Function, warn: Function, error: Function }} deps.logger
- * @returns {{ runOnce: Function, start: Function, stop: Function }}
+ * @returns {{ runOnce: Function }}
  */
 function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAsset, logger }) {
   /** Alert = error-level log with a stable, grep/monitor-able marker. */
   const alert = (caseName, detail) =>
     logger.error(`[indexingReconciler][alert][${caseName}] ${detail}`);
 
-  const hasReferences = async (asset_id) => {
-    const rows = (await db.getFiles({ knauf_asset_id: asset_id }, null, { file_id: 1 })) ?? [];
-    return rows.length > 0;
+  // KK20-195 review — one $in query answers references for a whole batch
+  // instead of a point query per asset (the §4.3 File.knauf_asset_id partial
+  // index covers it), so a pass is O(cases) round trips, not O(batchLimit).
+  const referencedAssetIds = async (assetIds) => {
+    if (assetIds.length === 0) {
+      return new Set();
+    }
+    const rows =
+      (await db.getFiles({ knauf_asset_id: { $in: assetIds } }, null, { knauf_asset_id: 1 })) ?? [];
+    return new Set(rows.map((r) => r.knauf_asset_id));
   };
+
+  // KK20-195 review — a rotating _id cursor so case 4 sweeps the whole
+  // ready/failed space over successive passes. Referenced assets keep their
+  // updatedAt, so an updatedAt-ordered window would freeze on them and never
+  // reach genuine orphans behind them; advancing by _id guarantees progress.
+  let orphanCursorId = null;
 
   /** Case 1 — stale `uploading`: reservation whose request died before queueing. */
   const reconcileStaleUploading = async (config, now) => {
@@ -73,10 +86,11 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
       { status: 'uploading', updatedAt: { $lte: cutoff }, delete_requested_at: null },
       config.batchLimit,
     );
+    const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
     for (const asset of assets) {
-      if (await hasReferences(asset.asset_id)) {
+      if (referenced.has(asset.asset_id)) {
         // A File row pointing at an asset that never reached `queued` should
         // not exist (rows are created after markQueued) — never auto-delete.
         alert('stale_uploading_referenced', `asset ${asset.asset_id} has File references`);
@@ -133,19 +147,24 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
   /** Case 4 — assets with no logical references (missed last-reference delete). */
   const reconcileOrphanAssets = async (config, now) => {
     const cutoff = new Date(now.getTime() - config.orphanAssetMs);
-    const assets = await listAssets(
-      {
-        status: { $in: ['ready', 'failed'] },
-        updatedAt: { $lte: cutoff },
-        delete_requested_at: null,
-      },
-      config.batchLimit,
-    );
+    const filter = {
+      status: { $in: ['ready', 'failed'] },
+      updatedAt: { $lte: cutoff },
+      delete_requested_at: null,
+    };
+    if (orphanCursorId != null) {
+      filter._id = { $gt: orphanCursorId };
+    }
+    const assets = await listAssets(filter, config.batchLimit, { _id: 1 });
+    // Advance the cursor so kept (referenced) assets don't freeze the window;
+    // a short page means the sweep reached the end → wrap to the start next pass.
+    orphanCursorId = assets.length < config.batchLimit ? null : assets.at(-1)._id;
+    const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
     let kept = 0;
     for (const asset of assets) {
-      if (await hasReferences(asset.asset_id)) {
+      if (referenced.has(asset.asset_id)) {
         kept += 1;
         continue;
       }
@@ -250,28 +269,11 @@ function createIndexingReconciler({ db, listAssets, listFileAssetRefs, cleanupAs
     return counts;
   };
 
-  let timer = null;
-  /** Schedule periodic passes (worker process only). */
-  const start = () => {
-    if (timer) {
-      return;
-    }
-    const tick = () => {
-      runOnce().catch((error) =>
-        logger.error(`[indexingReconciler] pass crashed: ${error?.message}`),
-      );
-    };
-    timer = setInterval(tick, getReconcilerConfig().intervalMs);
-    timer.unref?.();
-  };
-  const stop = () => {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-  };
-
-  return { runOnce, start, stop };
+  // Scheduling deliberately lives in the worker entry point (worker.js), NOT
+  // here: setInterval callbacks escape the AsyncLocalStorage context, so every
+  // pass must be re-wrapped in runAsSystem for the tenant-isolated models. A
+  // start()/stop() here would silently run passes without that context.
+  return { runOnce };
 }
 
 module.exports = { createIndexingReconciler, getReconcilerConfig };

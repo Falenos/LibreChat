@@ -124,6 +124,14 @@ fileAssetSchema.index({ status: 1, lease_expires_at: 1 });
 fileAssetSchema.index({ delete_requested_at: 1, status: 1 });
 // Stale uploading / failed operational queries (timestamps => camelCase).
 fileAssetSchema.index({ updatedAt: 1, status: 1 });
+// [knauf] KK20-195 review — admission counters (countActiveByScope /
+// sumActiveBytesByScope) filter by authorization scope + status; without this
+// each upload scanned every tenant's non-terminal assets via the status prefix.
+fileAssetSchema.index({ scope_type: 1, scope_id: 1, status: 1 });
+// Reconciler invariant sweeps (cases 6 & 7): bound the scan to the (near-zero)
+// matches instead of walking the whole ready/failed steady state every pass.
+fileAssetSchema.index({ status: 1, active_generation: 1 });
+fileAssetSchema.index({ status: 1, last_error_code: 1 });
 
 export default fileAssetSchema;
 // End [knauf]

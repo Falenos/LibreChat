@@ -53,10 +53,23 @@ const resolveScope = async (claim) => {
 const markFilesEmbedded = (asset_id) =>
   mongoose.models.File.updateMany({ knauf_asset_id: asset_id }, { $set: { embedded: true } });
 
+/**
+ * KK20-195 review — the owning user for an asset's RAG token and blob deletion:
+ * user-scope embeds under the user id (scope_id IS the user), agent-scope under
+ * a referencing File's user (scope_id is the AGENT id, not a user).
+ */
+const resolveOwnerUserId = async (asset) => {
+  if (asset.scope_type === 'user') {
+    return asset.scope_id;
+  }
+  const rows = await db.getFiles({ knauf_asset_id: asset.asset_id }, null, { user: 1 });
+  return rows?.[0]?.user ? String(rows[0].user) : null;
+};
+
 // WP4b — bounded raw queries the createMethods surface doesn't expose; the
 // reconciler injects limits so every pass stays indexed and finite (§8.4).
-const listAssets = (filter, limit) =>
-  mongoose.models.KnaufFileAsset.find(filter).sort({ updatedAt: 1 }).limit(limit).lean();
+const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
+  mongoose.models.KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
 const listFileAssetRefs = (limit) =>
   mongoose.models.File.find({ knauf_asset_id: { $exists: true, $ne: null } })
     .sort({ updatedAt: -1 })
@@ -72,6 +85,7 @@ const listFileAssetRefs = (limit) =>
  */
 const buildCleanupAsset = (ragClient) => async (asset) => {
   let cleaned = true;
+  const ownerUserId = await resolveOwnerUserId(asset);
   const generations = [
     ...new Set(
       [asset.active_generation, asset.target_generation].filter((g) => g != null && g > 0),
@@ -79,7 +93,11 @@ const buildCleanupAsset = (ragClient) => async (asset) => {
   ];
   for (const generation of generations) {
     try {
-      await ragClient.deleteGeneration({ asset_id: asset.asset_id, generation });
+      await ragClient.deleteGeneration({
+        asset_id: asset.asset_id,
+        generation,
+        userId: ownerUserId,
+      });
     } catch (error) {
       cleaned = false;
       logger.warn(
@@ -91,7 +109,7 @@ const buildCleanupAsset = (ragClient) => async (asset) => {
     try {
       const { deleteFile } = getStrategyFunctions(asset.blob.source ?? 'local');
       await deleteFile(
-        { user: { id: asset.scope_id } },
+        { user: { id: ownerUserId ?? asset.scope_id } },
         {
           file_id: asset.asset_id,
           filepath: asset.blob.path,

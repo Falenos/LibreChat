@@ -89,7 +89,10 @@ function retryAfterMs(error) {
 function computeNextAttemptAt({ attempt, retryAfter = 0, baseMs, maxMs, now = new Date() }) {
   const ceiling = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt - 1));
   const jitter = Math.floor(crypto.randomInt(0, Math.max(1, ceiling)));
-  return new Date(now.getTime() + Math.max(retryAfter, jitter));
+  // Cap the provider's Retry-After at the backoff max: a hostile/bogus value
+  // (e.g. `Retry-After: 86400`) must not park a claimed asset a day out.
+  const cappedRetryAfter = Math.min(Math.max(0, retryAfter), maxMs);
+  return new Date(now.getTime() + Math.max(cappedRetryAfter, jitter));
 }
 
 /**
@@ -116,12 +119,13 @@ function createIndexingWorker({
   let stopped = false;
 
   /** Best-effort: delete ONLY the generation this claim wrote (§7.4/§5.3). */
-  const cleanupGeneration = async (claim) => {
+  const cleanupGeneration = async (claim, userId) => {
     try {
       await ragClient.deleteGeneration({
         asset_id: claim.asset_id,
         generation: claim.target_generation,
         embed_route: claim.embed_route,
+        userId,
       });
     } catch (error) {
       logger.warn(
@@ -131,9 +135,9 @@ function createIndexingWorker({
   };
 
   /** §5.3 failure handling for one claimed asset. Token-fenced throughout. */
-  const handleEmbedFailure = async (claim, error) => {
+  const handleEmbedFailure = async (claim, error, userId) => {
     const config = getWorkerConfig();
-    await cleanupGeneration(claim);
+    await cleanupGeneration(claim, userId);
     const kind = classifyWorkerError(error);
     const fenced = {
       asset_id: claim.asset_id,
@@ -215,8 +219,26 @@ function createIndexingWorker({
 
       const scope = await resolveScope(claim);
       if (!scope) {
-        // No surviving File row → nothing grants retrieval scope. The WP4b
-        // reconciler owns "asset with no logical references".
+        // KK20-195 review — a null scope is almost always the brief window
+        // between markQueued (which makes the asset claimable) and the File-row
+        // insert, NOT a true orphan. Requeue with backoff for a bounded number
+        // of attempts so that window can close; only a persistently
+        // reference-less asset is failed (then owned by the reconciler's
+        // orphan-assets case). Permanently failing on the first miss would kill
+        // healthy uploads the worker simply claimed too early.
+        if (claim.attempt_count < config.attemptCap) {
+          await db.requeueClaim({
+            asset_id: claim.asset_id,
+            execution_token: claim.execution_token,
+            error_code: 'scope_unresolved',
+            next_attempt_at: computeNextAttemptAt({
+              attempt: claim.attempt_count,
+              baseMs: config.backoffBaseMs,
+              maxMs: config.backoffMaxMs,
+            }),
+          });
+          return { outcome: 'requeued' };
+        }
         await db.failClaim({
           asset_id: claim.asset_id,
           execution_token: claim.execution_token,
@@ -236,13 +258,13 @@ function createIndexingWorker({
           scope,
         });
       } catch (error) {
-        return await handleEmbedFailure(claim, error);
+        return await handleEmbedFailure(claim, error, scope.userId);
       }
 
       if (ownershipLost) {
         // §5.2: a lost heartbeat forbids ANY state update; the vectors this
         // worker wrote are staging data under its own generation — remove them.
-        await cleanupGeneration(claim);
+        await cleanupGeneration(claim, scope.userId);
         return { outcome: 'ownership_lost' };
       }
 
@@ -255,17 +277,26 @@ function createIndexingWorker({
       if (!activated) {
         // §7.4 activation miss (stale token / tombstone / reclaim): delete
         // only what THIS worker wrote.
-        await cleanupGeneration(claim);
+        await cleanupGeneration(claim, scope.userId);
         return { outcome: 'activation_miss' };
       }
 
-      try {
-        // WP2c lockstep: legacy consumers key readiness off File.embedded.
-        await markFilesEmbedded(claim.asset_id);
-      } catch (error) {
-        logger.warn(
-          `[indexingWorker:${id}] embedded-flag lockstep failed for ${claim.asset_id}: ${error?.message}`,
-        );
+      // WP2c lockstep: legacy consumers (getToolFilesByIds filters embedded:true)
+      // key readiness off File.embedded, so a failed flip leaves a READY asset
+      // whose files are silently absent from file_search. Retry a few times;
+      // escalate to an alert marker if it persists so a monitor catches the drift.
+      let embeddedFlagged = false;
+      for (let attempt = 1; attempt <= 3 && !embeddedFlagged; attempt++) {
+        try {
+          await markFilesEmbedded(claim.asset_id);
+          embeddedFlagged = true;
+        } catch (error) {
+          if (attempt === 3) {
+            logger.error(
+              `[indexingWorker:${id}][alert][embedded_lockstep_failed] asset ${claim.asset_id} is ready but the File.embedded flip failed after ${attempt} attempts: ${error?.message}`,
+            );
+          }
+        }
       }
       return { outcome: 'ready' };
     } finally {
