@@ -76,8 +76,10 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ error, onRetry, cont
 
     const errorCode = isErrorObject(error) ? (error as any)?.code : '';
 
-    // Handle timeout errors specifically
-    if (errorCode === 'ECONNABORTED' || errorMessage?.includes('timeout')) {
+    // [knauf] Undici reports Azure header timeouts as uppercase UND_ERR_HEADERS_TIMEOUT. KK20-227.
+    const timeoutSignal = `${errorCode} ${errorMessage}`.toLowerCase();
+    // End [knauf]
+    if (errorCode === 'ECONNABORTED' || timeoutSignal.includes('timeout')) {
       return {
         title: localize('com_agents_error_timeout_title'),
         message: localize('com_agents_error_timeout_message'),

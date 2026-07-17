@@ -6,6 +6,7 @@ const {
   EUR_RATES,
   getConversationCosts,
   normalizeModel,
+  resolveModelPricing,
   RATE_SOURCE,
 } = require('./costs');
 
@@ -35,6 +36,15 @@ describe('knauf costs', () => {
     ['gpt-image-2-2026-04-21', 'gpt-image-2'],
   ])('normalizes %s to %s', (input, expected) => {
     expect(normalizeModel(input)).toBe(expected);
+  });
+
+  it.each([
+    ['gpt-55-2026-04-24', 'exact-version', false],
+    ['gpt-5.5', 'model-family', false],
+    ['model-router-chat', 'router-fallback', true],
+    ['unknown-model', 'unknown', false],
+  ])('resolves %s as %s', (model, pricingMatch, isEstimated) => {
+    expect(resolveModelPricing(model)).toMatchObject({ pricingMatch, isEstimated });
   });
 
   it.each([
@@ -103,6 +113,16 @@ describe('knauf costs', () => {
       isEstimated: true,
       estimateReason: 'router-model-not-reported',
     });
+  });
+
+  it('keeps unknown model tokens explicit', () => {
+    const result = calculateTransactionCost({
+      model: 'unknown-model',
+      tokenType: 'prompt',
+      rawAmount: -123,
+    });
+
+    expect(result).toMatchObject({ cost: 0, unsupportedTokens: 123, hasUnsupported: true });
   });
 
   it('aggregates per conversation and per message', () => {
@@ -233,6 +253,50 @@ describe('knauf costs', () => {
         summary: result,
       }),
       expect.any(Number),
+    );
+  });
+
+  it('persists router pricing provenance on transaction rows', async () => {
+    const bulkWrite = jest.fn().mockResolvedValue(undefined);
+    const Transaction = {
+      bulkWrite,
+      findOne: jest.fn(() => chain({ _id: 'tx-router', updatedAt: new Date(0) })),
+      find: jest.fn(() =>
+        chain([
+          {
+            _id: 'tx-router',
+            model: 'model-router-chat',
+            tokenType: 'prompt',
+            rawAmount: -100,
+          },
+        ]),
+      ),
+    };
+
+    await getConversationCosts({
+      userId: 'user-1',
+      conversationId: 'conversation-1',
+      Transaction,
+      cache: createCache(null),
+    });
+
+    expect(bulkWrite).toHaveBeenCalledWith(
+      [
+        {
+          updateOne: {
+            filter: { _id: 'tx-router' },
+            update: {
+              $set: {
+                knauf_costEstimated: true,
+                knauf_costEstimateReason: 'router-model-not-reported',
+                knauf_costRateSource: RATE_SOURCE,
+                knauf_pricingMatch: 'router-fallback',
+              },
+            },
+          },
+        },
+      ],
+      { ordered: false, timestamps: false },
     );
   });
 });

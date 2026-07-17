@@ -130,6 +130,14 @@ const Error = ({ text }: { text: string }) => {
   const errorMessage = text.length > 512 && !jsonString ? text.slice(0, 512) + '...' : text;
   const defaultResponse = `Something went wrong. Here's the specific error message we encountered: ${errorMessage}`;
 
+  // [knauf] Replace Azure/Undici header-timeout internals with an actionable message. KK20-227.
+  if (/timeout|timed out/i.test(errorMessage)) {
+    return `${localize('com_agents_error_timeout_message')} ${localize(
+      'com_agents_error_timeout_suggestion',
+    )}`;
+  }
+  // End [knauf]
+
   if (!isJson(jsonString)) {
     return defaultResponse;
   }

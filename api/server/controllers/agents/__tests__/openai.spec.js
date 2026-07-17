@@ -176,6 +176,11 @@ const mockGetCacheMultiplier = jest.fn().mockReturnValue(null);
 jest.mock('~/server/controllers/agents/callbacks', () => ({
   createToolEndCallback: jest.fn().mockReturnValue(jest.fn()),
   buildSummarizationHandlers: jest.fn().mockReturnValue({}),
+  // [knauf] Mirror the real backing-model extractor used by compatibility controllers. KK20-227.
+  getResponseModel: jest.fn(
+    (data) => data?.output?.response_metadata?.model_name ?? data?.output?.response_metadata?.model,
+  ),
+  // End [knauf]
   markSummarizationUsage: jest.fn().mockImplementation((usage) => usage),
   agentLogHandlerObj: { handle: jest.fn() },
 }));
@@ -392,6 +397,33 @@ describe('OpenAIChatCompletionController', () => {
         }),
       );
     });
+
+    // [knauf] Compatibility Chat Completions usage must preserve Azure's backing model. KK20-227.
+    it('should collect the routed model from response metadata', async () => {
+      const { createRun } = require('@librechat/api');
+      createRun.mockImplementationOnce(async ({ customHandlers }) => ({
+        processStream: jest.fn(async () => {
+          customHandlers.on_chat_model_end.handle('on_chat_model_end', {
+            output: {
+              usage_metadata: { input_tokens: 20, output_tokens: 10 },
+              response_metadata: { model_name: 'gpt-5.5-2026-04-24' },
+            },
+          });
+        }),
+      }));
+
+      await OpenAIChatCompletionController(req, res);
+
+      expect(mockRecordCollectedUsage).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          collectedUsage: expect.arrayContaining([
+            expect.objectContaining({ model: 'gpt-5.5-2026-04-24' }),
+          ]),
+        }),
+      );
+    });
+    // End [knauf]
   });
 
   describe('recursionLimit resolution', () => {

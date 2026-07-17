@@ -20,12 +20,12 @@ This plan is based on browser testing in development plus Datadog APM, Langfuse,
 | PR #144 upload/stream race | Pass | Five uploads started during an active answer remained pending after the answer completed. Keep this behaviour under regression test. |
 | File persistence | Pass | File cards and responses survived reload. Large PDFs, including a 4.8 MB/46-page file, completed. |
 | Model/embedding quota | Pass in observed window | No model or embedding 429 occurred. Capacity must not be increased again without new evidence. |
-| Clipboard document routing | Fail | A byte-identical pasted PDF produced two Azure blobs and bypassed File Search because the paste path omitted `tool_resource=file_search`. |
-| Attachment limit feedback | Fail | Only five of seven pending files were accepted; the remaining files were silently ignored. |
+| Clipboard document routing | Fixed locally; dev validation pending | Pasted documents now use the same File Search metadata as picker and drag/drop uploads. |
+| Attachment limit feedback | Fixed locally; dev validation pending | The five-file cap reserves slots across overlapping actions and reports accepted/rejected counts. |
 | New-chat tab isolation | Fixed locally; dev validation pending | Both `NEW_CONVO` and `PENDING_CONVO` drafts are tab-scoped and migrate to the real conversation ID. |
-| Router cost attribution | Fail | The primary Responses stream reported `model-router`, so the main token usage was not priced. Only secondary calls were included. |
+| Router cost attribution | Fixed locally; dev validation pending | Backing-model metadata is preserved across agent API paths; router-only usage receives the conservative fallback and persisted provenance. |
 | Langfuse media handling | Degraded | The same PDF was uploaded to Langfuse media repeatedly, creating unnecessary network and storage traffic. |
-| Blob container setup telemetry | Degraded | Uploads repeatedly called container `createIfNotExists`; expected 409 responses were recorded as APM errors. |
+| Blob container setup telemetry | Fixed locally; dev validation pending | Container readiness is coalesced once per process and failed initialisation remains retryable. |
 | Foundry embedding path | Not validated by automation | In-app browser automation pasted files and produced zero `text-embedding-3-large` requests. A real file chooser test is required. |
 | Custom-agent retrieval | Partially validated | A message attachment returned a citation, but persistent Agent Builder knowledge was not exercised by the automated run. |
 
@@ -48,6 +48,8 @@ The router group now sets `timeout: 60000` and `maxRetries: 1` in `librechat.yam
 
 Azure Model Router continues to own backing-model failover. The application performs at most one retry when the provider request fails before response headers.
 
+Both default-chat and agent error surfaces classify `UND_ERR_HEADERS_TIMEOUT` case-insensitively and replace the transport detail with localised retry guidance.
+
 ### 1.2 Validation
 
 - `librechat.yaml` passes the strict application schema.
@@ -60,6 +62,8 @@ Azure Model Router continues to own backing-model failover. The application perf
 
 Capture the shape, not the content, of the final Azure Responses event in development. Confirm whether an underlying model/version appears in the final response, response headers, or Azure metadata. Add a focused parser test using the observed payload shape.
 
+The shared agent callback and the OpenAI-compatible Responses controllers now preserve `response_metadata.model_name` when Azure returns it.
+
 ### 2.2 Price deterministically
 
 Resolve cost in this order:
@@ -67,6 +71,8 @@ Resolve cost in this order:
 1. Exact backing model and version returned by Azure.
 2. Normalised model family returned by Azure, using the effective-dated application price table.
 3. If Azure reports only `model-router`, use the highest input/output price among the allowed router pool and mark the returned cost summary `isEstimated=true` with reason `router-model-not-reported`.
+
+Each read transaction is classified as `exact-version`, `model-family`, `router-fallback`, or `unknown`. The classification, rate source, estimate flag, and estimate reason are persisted on the transaction using `knauf_`-prefixed fields.
 
 Do not assign a zero price to a supported router transaction. Keep unsupported token categories explicit rather than silently discarding them.
 
