@@ -60,33 +60,39 @@ const primeFiles = async (options) => {
   dbFiles = dbFiles.concat(resourceFiles);
 
   // [knauf] KK20-195 WP3c — defense-in-depth readiness filter (plan §6.5):
-  // drop files whose physical asset is not queryable (no active generation,
-  // or delete-tombstoned). The request layer already 409s explicit selections
-  // of non-ready files; this guards agent-library files that went non-ready
-  // between attach and run. Files without an asset row (legacy / pre-
-  // migration) pass through — their vectors predate the FileAsset ledger.
+  // a file carrying an asset pointer is searchable only when a matching
+  // asset with an active generation and no tombstone is POSITIVELY
+  // confirmed (KK20-195 review R5 — fail closed). An asset missing from the
+  // lookup drops the file (deleted/corrupt pointer), and a status-read
+  // failure drops ALL asset-backed files rather than searching unknown index
+  // state — legacy rows without a pointer (vectors predate the ledger)
+  // always pass.
   const knaufAssetIds = [...new Set(dbFiles.map((f) => f?.knauf_asset_id).filter(Boolean))];
   if (knaufAssetIds.length > 0) {
+    let knaufReadyAssets = null;
     try {
       const knaufAssets = await getAssetsByAssetIds(knaufAssetIds);
-      const knaufNotReady = new Set(
+      knaufReadyAssets = new Set(
         knaufAssets
-          .filter((a) => a.active_generation == null || a.delete_requested_at != null)
+          .filter((a) => a.active_generation != null && a.delete_requested_at == null)
           .map((a) => a.asset_id),
       );
-      if (knaufNotReady.size > 0) {
-        const dropped = dbFiles.filter((f) => f && knaufNotReady.has(f.knauf_asset_id));
-        dbFiles = dbFiles.filter((f) => !f || !knaufNotReady.has(f.knauf_asset_id));
-        logger.info(
-          `[fileSearch] primeFiles dropped ${dropped.length} non-ready file(s): ${dropped
-            .map((f) => f.file_id)
-            .join(', ')}`,
-        );
-      }
     } catch (error) {
-      // Hydration must not take chat down: on a status-read failure keep the
-      // upstream behavior (all files) — the RAG query simply finds no vectors.
-      logger.warn('[fileSearch] primeFiles readiness filter failed:', error);
+      // R5 — readiness store down: fail closed for asset-backed files.
+      logger.error('[fileSearch][alert][readiness_store_unavailable] primeFiles:', error);
+    }
+    const dropped = dbFiles.filter(
+      (f) => f?.knauf_asset_id != null && !knaufReadyAssets?.has(f.knauf_asset_id),
+    );
+    if (dropped.length > 0) {
+      dbFiles = dbFiles.filter(
+        (f) => f?.knauf_asset_id == null || knaufReadyAssets?.has(f.knauf_asset_id),
+      );
+      logger.info(
+        `[fileSearch] primeFiles dropped ${dropped.length} non-ready file(s): ${dropped
+          .map((f) => f.file_id)
+          .join(', ')}`,
+      );
     }
   }
   // End [knauf]

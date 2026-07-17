@@ -81,12 +81,28 @@ test('a delete-tombstoned asset also blocks the send', async () => {
   expect(res.status).toHaveBeenCalledWith(409);
 });
 
-test('a lookup failure fails open (chat must not go down)', async () => {
+// KK20-195 review R5 — the gate FAILS CLOSED.
+test('an asset MISSING from the lookup blocks the send (409)', async () => {
+  getFiles.mockResolvedValue([{ file_id: 'f1', knauf_asset_id: 'gone' }]);
+  getAssetsByAssetIds.mockResolvedValue([]); // pointer dangles — nothing confirmed
+  const res = makeRes();
+  const next = jest.fn();
+  await knaufFileIndexReadiness(makeReq([{ file_id: 'f1' }]), res, next);
+  expect(next).not.toHaveBeenCalled();
+  expect(res.status).toHaveBeenCalledWith(409);
+  expect(res.json).toHaveBeenCalledWith({
+    error: 'file_indexing_not_ready',
+    file_ids: ['f1'],
+  });
+});
+
+test('an unavailable readiness store answers 503, never next() (R5)', async () => {
   getFiles.mockRejectedValue(new Error('mongo down'));
   const res = makeRes();
   const next = jest.fn();
   await knaufFileIndexReadiness(makeReq([{ file_id: 'f1' }]), res, next);
-  expect(next).toHaveBeenCalledTimes(1);
-  expect(res.status).not.toHaveBeenCalled();
+  expect(next).not.toHaveBeenCalled();
+  expect(res.status).toHaveBeenCalledWith(503);
+  expect(res.json).toHaveBeenCalledWith({ error: 'file_readiness_unavailable' });
 });
 // End [knauf]

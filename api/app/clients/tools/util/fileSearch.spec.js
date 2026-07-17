@@ -5,7 +5,7 @@
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({ generateShortLivedToken: jest.fn(() => 'jwt-token') }));
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { debug: jest.fn(), error: jest.fn(), warn: jest.fn() },
+  logger: { debug: jest.fn(), info: jest.fn(), error: jest.fn(), warn: jest.fn() },
 }));
 jest.mock('~/server/services/Files/permissions', () => ({ filterFilesByAgentAccess: jest.fn() }));
 jest.mock('~/models', () => ({ getFiles: jest.fn(), getAssetsByAssetIds: jest.fn() }));
@@ -164,12 +164,24 @@ describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
     expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'pending-1']);
   });
 
-  test('keeps all files when the status read fails (chat must not go down)', async () => {
+  // KK20-195 review R5 — hydration fails CLOSED for asset-backed files.
+  test('a status-read failure drops ALL asset-backed files, keeps legacy rows', async () => {
     getAssetsByAssetIds.mockRejectedValue(new Error('mongo down'));
 
     const { files } = await primeFiles({ tool_resources: toolResources });
 
-    expect(files).toHaveLength(3);
+    expect(files.map((f) => f.file_id)).toEqual(['legacy-1']);
+  });
+
+  test('a file whose asset is MISSING from the lookup is dropped (dangling pointer)', async () => {
+    getAssetsByAssetIds.mockResolvedValue([
+      { asset_id: 'ready-1', active_generation: 1, delete_requested_at: null },
+      // pending-1 absent — deleted or corrupt pointer
+    ]);
+
+    const { files } = await primeFiles({ tool_resources: toolResources });
+
+    expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'ready-1']);
   });
 });
 // End [knauf]
