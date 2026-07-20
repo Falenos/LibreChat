@@ -12,6 +12,7 @@ const {
   createIndexingWorker,
   classifyWorkerError,
   computeNextAttemptAt,
+  generationsToClean,
 } = require('./indexingWorker');
 
 let mongoServer;
@@ -169,6 +170,52 @@ describe('worker dies mid-embed → lease reclaim (plan §14)', () => {
     const asset = await db.getAssetByAssetId('dead-1');
     expect(asset.status).toBe('ready');
     expect(asset.active_generation).toBe(2);
+  });
+});
+
+// KK20-195 review F8 (re-review) — the three residual generation-leak paths.
+describe('F8 — generation-leak paths', () => {
+  test('a false debt write (asset row absent) alerts instead of silently losing the generation', async () => {
+    await seedQueued({ asset_id: 'debt-absent' });
+    const rag = {
+      async embedGeneration() {
+        throw httpError(503); // retryable → cleanup runs
+      },
+      async deleteGeneration() {
+        throw new Error('rag down'); // …and the cleanup itself fails → record debt
+      },
+    };
+    // The row is gone by the time the debt write runs (matchedCount 0 → false):
+    // the generation is orphaned with no ledger entry, which MUST alert.
+    const dbRowGone = { ...db, recordStaleGeneration: async () => false };
+    const worker = buildWorker({ ragClient: rag, db: dbRowGone });
+
+    await worker.processNextDue();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('[alert][cleanup_debt_unrecorded]'),
+    );
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('asset row absent'));
+  });
+
+  test('activation throwing after a successful embed cleans the written generation and rethrows', async () => {
+    await seedQueued({ asset_id: 'act-throw' });
+    const rag = createFakeRag();
+    const boom = new Error('mongo unavailable at activation');
+    const dbThrows = {
+      ...db,
+      activateGeneration: async () => {
+        throw boom;
+      },
+    };
+    const claim = await dbThrows.claimNextDue({ workerId: 'w-at', leaseMs: 60_000 });
+    const worker = buildWorker({ ragClient: rag, db: dbThrows, workerId: 'w-at' });
+
+    // The error propagates (lease-expiry reclaim handles the retry)…
+    await expect(worker.executeClaim(claim)).rejects.toThrow('mongo unavailable at activation');
+    // …but only AFTER the written generation is cleaned — no orphaned vectors.
+    expect(rag.written).toEqual(['act-throw:1']);
+    expect(rag.deleted).toEqual(['act-throw:1']);
   });
 });
 
@@ -446,6 +493,24 @@ describe('helpers', () => {
       now,
     });
     expect(next.getTime() - now.getTime()).toBeLessThanOrEqual(60_000);
+  });
+
+  // KK20-195 review F8 (re-review) — generation 0 (the sync/migration label) is
+  // a REAL generation and must be cleaned; only null (never written) is dropped.
+  test('generationsToClean keeps generation 0, drops null, dedupes', () => {
+    expect(
+      generationsToClean({ active_generation: 0, target_generation: 0, stale_generations: [] }),
+    ).toEqual([0]);
+    expect(
+      generationsToClean({ active_generation: 2, target_generation: 3, stale_generations: [1, 2] }),
+    ).toEqual([2, 3, 1]);
+    // never-activated: active null, target defaults to 0 — a gen-0 delete here is
+    // an idempotent no-op, so it's harmless to include.
+    expect(
+      generationsToClean({ active_generation: null, target_generation: 0, stale_generations: [] }),
+    ).toEqual([0]);
+    // a missing stale_generations array is tolerated.
+    expect(generationsToClean({ active_generation: null, target_generation: 5 })).toEqual([5]);
   });
 });
 // End [knauf]

@@ -96,6 +96,25 @@ function computeNextAttemptAt({ attempt, retryAfter = 0, baseMs, maxMs, now = ne
 }
 
 /**
+ * KK20-195 review R9 (re-review, F8) — every generation that may hold vectors
+ * in RAG for this asset: the active one, the in-flight target, and all recorded
+ * cleanup debt. Generation 0 is REAL: the sync/migration path activates as
+ * generation 0 (rag_api wrote vectors with no `generation` field), so a final
+ * deletion MUST clean it — the earlier `g > 0` filter leaked those vectors.
+ * Only null (never written) is excluded; deleting a never-written generation is
+ * a harmless no-op because §7.6 delete is idempotent.
+ * @param {{ active_generation?: number|null, target_generation?: number|null, stale_generations?: number[] }} asset
+ * @returns {number[]}
+ */
+const generationsToClean = (asset) => [
+  ...new Set(
+    [asset.active_generation, asset.target_generation, ...(asset.stale_generations ?? [])].filter(
+      (g) => g != null,
+    ),
+  ),
+];
+
+/**
  * @param {Object} deps
  * @param {Object} deps.db - createMethods surface
  * @param {{ embedGeneration: Function, deleteGeneration: Function }} deps.ragClient - §7 contract
@@ -145,17 +164,31 @@ function createIndexingWorker({
         embed_route: claim.embed_route,
         userId,
       });
+      return;
     } catch (error) {
       logger.warn(
         `[indexingWorker:${id}] generation cleanup failed for ${claim.asset_id}:${claim.target_generation}; recording debt: ${error?.message}`,
       );
-      await db
-        .recordStaleGeneration({ asset_id: claim.asset_id, generation: claim.target_generation })
-        .catch((debtError) =>
-          logger.error(
-            `[indexingWorker:${id}][alert][cleanup_debt_unrecorded] ${claim.asset_id}:${claim.target_generation}: ${debtError?.message}`,
-          ),
+    }
+    // KK20-195 review R9 (re-review, F8) — the delete failed, so persist the
+    // generation as cleanup debt for the reconciler to drain. A FALSE return
+    // (the asset row is gone ⇒ the update matched nothing) loses that debt just
+    // as a throw does: the generation's vectors are then orphaned in RAG with
+    // no ledger entry pointing at them. Treat both as failure and alert.
+    try {
+      const recorded = await db.recordStaleGeneration({
+        asset_id: claim.asset_id,
+        generation: claim.target_generation,
+      });
+      if (!recorded) {
+        logger.error(
+          `[indexingWorker:${id}][alert][cleanup_debt_unrecorded] ${claim.asset_id}:${claim.target_generation}: asset row absent — orphaned generation not recorded`,
         );
+      }
+    } catch (debtError) {
+      logger.error(
+        `[indexingWorker:${id}][alert][cleanup_debt_unrecorded] ${claim.asset_id}:${claim.target_generation}: ${debtError?.message}`,
+      );
     }
   };
 
@@ -298,12 +331,23 @@ function createIndexingWorker({
         return { outcome: 'ownership_lost' };
       }
 
-      const activated = await db.activateGeneration({
-        asset_id: claim.asset_id,
-        execution_token: claim.execution_token,
-        target_generation: claim.target_generation,
-        target_index_profile: claim.target_index_profile,
-      });
+      let activated;
+      try {
+        activated = await db.activateGeneration({
+          asset_id: claim.asset_id,
+          execution_token: claim.execution_token,
+          target_generation: claim.target_generation,
+          target_index_profile: claim.target_index_profile,
+        });
+      } catch (error) {
+        // KK20-195 review R9 (re-review, F8) — activation threw AFTER embed
+        // wrote vectors: without this the written generation leaks (never
+        // activated, never cleaned). Clean it (debt-on-failure) before letting
+        // the error propagate, so the lease-expiry reclaim starts a fresh
+        // generation without orphaning this one.
+        await cleanupGeneration(claim, scope.userId);
+        throw error;
+      }
       if (!activated) {
         // §7.4 activation miss (stale token / tombstone / reclaim): delete
         // only what THIS worker wrote.
@@ -394,6 +438,7 @@ module.exports = {
   createIndexingWorker,
   classifyWorkerError,
   computeNextAttemptAt,
+  generationsToClean,
   getWorkerConfig,
 };
 // End [knauf]

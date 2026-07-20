@@ -352,7 +352,12 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
       { asset_id: params.asset_id },
       { $addToSet: { stale_generations: params.generation } },
     );
-    return result.modifiedCount === 1;
+    // KK20-195 review F8 (re-review) — matchedCount, NOT modifiedCount: the debt
+    // is "recorded" as long as the row exists and now lists the generation
+    // ($addToSet is idempotent, so re-recording an already-listed generation is
+    // still success). A false return means the row is ABSENT — the generation
+    // is orphaned and the caller must alert.
+    return result.matchedCount === 1;
   }
 
   /** R9 — drop a debt entry once its RAG delete is confirmed. */

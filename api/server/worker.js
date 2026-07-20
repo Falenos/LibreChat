@@ -27,6 +27,7 @@ const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { isIndexingWorkerEnabled } = require('~/server/services/Files/knauf/asyncIndexingConfig');
 const {
   createIndexingWorker,
+  generationsToClean,
   getWorkerConfig,
 } = require('~/server/services/Files/knauf/indexingWorker');
 const {
@@ -105,15 +106,11 @@ const listFileAssetRefs = (limit, afterId = null) =>
 const buildCleanupAsset = (ragClient) => async (asset) => {
   let cleaned = true;
   const ownerUserId = await resolveOwnerUserId(asset);
-  // KK20-195 review R9 — recorded cleanup debt is part of the deletion set:
-  // a failed attempt's generation must not outlive the asset.
-  const generations = [
-    ...new Set(
-      [asset.active_generation, asset.target_generation, ...(asset.stale_generations ?? [])].filter(
-        (g) => g != null && g > 0,
-      ),
-    ),
-  ];
+  // KK20-195 review R9 — recorded cleanup debt is part of the deletion set: a
+  // failed attempt's generation must not outlive the asset. F8 (re-review):
+  // generationsToClean keeps generation 0 (the sync/migration label) so those
+  // vectors are cleaned too — the earlier `g > 0` filter leaked them.
+  const generations = generationsToClean(asset);
   for (const generation of generations) {
     try {
       await ragClient.deleteGeneration({

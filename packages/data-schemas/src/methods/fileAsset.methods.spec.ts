@@ -314,6 +314,21 @@ describe('stale-generation cleanup debt (review R9)', () => {
     // debt matters most.
     expect(await methods.recordStaleGeneration({ asset_id: 'debt-2', generation: 5 })).toBe(true);
   });
+
+  // KK20-195 review F8 (re-review) — matchedCount semantics: the boolean means
+  // "the debt is persisted on the row", so an idempotent re-record is still
+  // success and only an ABSENT row is failure (the caller alerts on false).
+  test('re-recording an already-listed generation still returns true (idempotent)', async () => {
+    await seedQueued({ asset_id: 'debt-3' });
+    expect(await methods.recordStaleGeneration({ asset_id: 'debt-3', generation: 7 })).toBe(true);
+    expect(await methods.recordStaleGeneration({ asset_id: 'debt-3', generation: 7 })).toBe(true);
+    const asset = await methods.getAssetByAssetId('debt-3');
+    expect(asset?.stale_generations).toEqual([7]);
+  });
+
+  test('returns false when the asset row is absent (generation is orphaned)', async () => {
+    expect(await methods.recordStaleGeneration({ asset_id: 'gone', generation: 1 })).toBe(false);
+  });
 });
 
 describe('admission-control counters', () => {
