@@ -87,15 +87,21 @@ describe('classifyUploadReplay (KK20-195 WP3a)', () => {
     ).toEqual({ outcome: 'replay' });
   });
 
-  test('hash on one side only falls back to the byte-length check', () => {
+  // KK20-195 review F4 (re-review) — when the STORED row is hash-identified but
+  // the incoming bytes could not be hashed, equality is unverifiable: fail
+  // closed (indeterminate), never a byte-length replay onto the original.
+  test('stored hash + missing incoming hash → indeterminate (never a byte-length replay)', () => {
     expect(
       classifyUploadReplay({
         existing: { user: userId, bytes: 10, knauf_content_hash: 'aaa' },
         userId,
-        incomingBytes: 10,
+        incomingBytes: 10, // same size — the dangerous case the old fallback replayed
         incomingHash: undefined,
       }),
-    ).toEqual({ outcome: 'replay' });
+    ).toEqual({ outcome: 'indeterminate', reason: 'content_hash_unavailable' });
+  });
+
+  test('legacy row without a stored hash still uses the byte-length check', () => {
     expect(
       classifyUploadReplay({
         existing: { user: userId, bytes: 10 },

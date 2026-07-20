@@ -203,6 +203,7 @@ async function retryFileIndexing({ db, file }) {
 
 module.exports = {
   projectFileIndexing,
+  attachIndexingCore,
   attachIndexingToFiles,
   buildBatchIndexStatus,
   retryFileIndexing,

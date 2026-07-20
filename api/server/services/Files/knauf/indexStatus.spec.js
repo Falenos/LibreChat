@@ -7,6 +7,7 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const { fileSchema, fileAssetSchema, createFileAssetMethods } = require('@librechat/data-schemas');
 const {
   projectFileIndexing,
+  attachIndexingCore,
   attachIndexingToFiles,
   buildBatchIndexStatus,
   retryFileIndexing,
@@ -114,6 +115,20 @@ describe('attachIndexingToFiles', () => {
     const out = await attachIndexingToFiles({ db: failingDb, files });
     expect(out).toBe(files);
     expect(out[0].indexing).toBeUndefined();
+  });
+
+  // KK20-195 review F4 (re-review) — the STRICT variant must NOT swallow: the
+  // upload-replay path relies on this to 503 when readiness is unestablishable
+  // (a resilient plain row would read as "ready" and open the send gate).
+  test('attachIndexingCore throws on asset-load failure (strict — used by the replay 503 path)', async () => {
+    const failingDb = {
+      getAssetsByAssetIds: async () => {
+        throw new Error('transient mongo error');
+      },
+    };
+    await expect(
+      attachIndexingCore({ db: failingDb, files: [{ file_id: 'f1', knauf_asset_id: 'a1' }] }),
+    ).rejects.toThrow('transient mongo error');
   });
 });
 

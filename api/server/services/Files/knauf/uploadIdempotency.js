@@ -29,7 +29,7 @@ const isValidClientFileId = (id) => typeof id === 'string' && UUID_RE.test(id);
  * @param {string} params.userId
  * @param {number | undefined} params.incomingBytes
  * @param {string | undefined} [params.incomingHash] - SHA-256 of the incoming bytes (R3: authoritative when both sides have one)
- * @returns {{ outcome: 'proceed' } | { outcome: 'replay' } | { outcome: 'conflict', reason: 'file_id_taken' | 'different_content' }}
+ * @returns {{ outcome: 'proceed' } | { outcome: 'replay' } | { outcome: 'conflict', reason: 'file_id_taken' | 'different_content' } | { outcome: 'indeterminate', reason: 'content_hash_unavailable' }}
  */
 const classifyUploadReplay = ({ existing, userId, incomingBytes, incomingHash }) => {
   if (!existing) {
@@ -39,11 +39,20 @@ const classifyUploadReplay = ({ existing, userId, incomingBytes, incomingHash })
     // The id belongs to someone else — never overwrite, never reveal whose.
     return { outcome: 'conflict', reason: 'file_id_taken' };
   }
-  if (existing.knauf_content_hash != null && incomingHash != null) {
+  if (existing.knauf_content_hash != null) {
+    // The stored content is hash-identified. KK20-195 review F4 (re-review):
+    // if the incoming bytes could not be hashed, content equality is
+    // UNVERIFIABLE — never fall back to byte length (a same-size different file
+    // would replay onto the original). Fail closed so the caller can 503.
+    if (incomingHash == null) {
+      return { outcome: 'indeterminate', reason: 'content_hash_unavailable' };
+    }
     return existing.knauf_content_hash === incomingHash
       ? { outcome: 'replay' }
       : { outcome: 'conflict', reason: 'different_content' };
   }
+  // Legacy rows that predate hashing (e.g. agent-library rows): byte length is
+  // the only available signal.
   if (existing.bytes != null && incomingBytes != null && existing.bytes !== incomingBytes) {
     return { outcome: 'conflict', reason: 'different_content' };
   }

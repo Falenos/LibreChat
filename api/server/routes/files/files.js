@@ -54,6 +54,7 @@ const {
 // list attachment) and the failed→queued retry decision.
 const {
   projectFileIndexing,
+  attachIndexingCore,
   attachIndexingToFiles,
   buildBatchIndexStatus,
   retryFileIndexing,
@@ -819,11 +820,24 @@ router.post('/', async (req, res) => {
       });
       if (verdict.outcome === 'replay') {
         logger.info(`[/files] idempotent replay for file_id ${metadata.file_id}`);
-        // KK20-195 review — carry the `indexing` projection (and batch id) so a
-        // replayed async-accepted upload isn't mistaken for ready by the client,
-        // which would open the send gate and then 409 on send. attachIndexingToFiles
-        // is resilient (falls back to the plain row if the asset load fails).
-        const [projected] = await attachIndexingToFiles({ db, files: [existing] });
+        // KK20-195 review R3/F4 — carry the `indexing` projection (and batch id)
+        // so a replayed async-accepted upload isn't mistaken for ready by the
+        // client, which would open the send gate and then 409 on send.
+        // F4 (re-review): use the STRICT projection (attachIndexingCore). If the
+        // asset load throws, readiness is UNKNOWN — return 503 rather than a
+        // resilient plain row the client would read as "ready" (false readiness).
+        let projected;
+        try {
+          [projected] = await attachIndexingCore({ db, files: [existing] });
+        } catch (indexingError) {
+          logger.warn(
+            `[/files] replay readiness unestablishable for ${metadata.file_id}: ${indexingError?.message}`,
+          );
+          return res.status(503).json({
+            error: 'indexing_status_unavailable',
+            file_id: metadata.file_id,
+          });
+        }
         // R3 — same status semantics as the fresh path: pending work replays
         // as 202, never a 200 the client could read as "ready".
         const knaufReplayPending = projected?.indexing != null && !projected.indexing.ready;
@@ -838,6 +852,20 @@ router.post('/', async (req, res) => {
       if (verdict.outcome === 'conflict') {
         return res.status(409).json({
           error: 'upload_idempotency_conflict',
+          reason: verdict.reason,
+          file_id: metadata.file_id,
+        });
+      }
+      if (verdict.outcome === 'indeterminate') {
+        // KK20-195 review F4 (re-review) — the stored row is hash-identified but
+        // the incoming bytes could not be hashed, so replay-vs-different-content
+        // is UNVERIFIABLE. Fail closed with a retryable 503 — never a byte-length
+        // guess that could replay a same-size different file onto the original.
+        logger.warn(
+          `[/files] upload replay indeterminate for ${metadata.file_id}: ${verdict.reason}`,
+        );
+        return res.status(503).json({
+          error: 'upload_idempotency_indeterminate',
           reason: verdict.reason,
           file_id: metadata.file_id,
         });
