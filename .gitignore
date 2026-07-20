@@ -75,6 +75,14 @@ bower_components/
 # librechat.yaml
 # librechat.yml
 
+# [knauf] KK20-108 — local-only config variant for evaluating optional
+# features (code interpreter, artifacts) via a CONFIG_PATH override. Never
+# committed: the canonical librechat.yaml above stays the source of truth and
+# is what ships in the image. See
+# knauf/docs/implementation-plans/code-interpreter-artifacts-rollout.md
+librechat.local.yaml
+librechat.local.yml
+
 # Environment
 .npmrc
 .env*

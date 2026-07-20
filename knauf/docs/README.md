@@ -50,6 +50,7 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
 | [implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md](implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md) | Correct dual-backend retrieval, deduplication, LangGraph compaction/finalization, and Langfuse verification |
+| [implementation-plans/code-interpreter-artifacts-rollout.md](implementation-plans/code-interpreter-artifacts-rollout.md) | Enable Code Interpreter (self-hosted ClickHouse sandbox) + Artifacts — the two capability gates, local eval record, and the AGK prod rollout (new GitOps service, JWT trust, KVM node pool) — KK20-108 |
 
 ## Upstream releases
 
