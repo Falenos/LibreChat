@@ -17,6 +17,8 @@ const cleanupAsset = jest.fn().mockResolvedValue(true);
 
 const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
   KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
+// KK20-195 review F7 — mirrors worker.js: full indexed count for alert-only cases.
+const countAssets = (filter) => KnaufFileAsset.countDocuments(filter);
 // KK20-195 review R8 — mirrors worker.js: rotating _id cursor (afterId).
 const listFileAssetRefs = (limit, afterId = null) =>
   File.find({
@@ -35,6 +37,7 @@ const buildReconciler = () =>
   createIndexingReconciler({
     db,
     listAssets,
+    countAssets,
     listFileAssetRefs,
     cleanupAsset,
     deleteGeneration: deleteGenerationMock,
@@ -311,6 +314,71 @@ describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
   });
 });
 
+// KK20-195 review F7 (re-review) — the alert-only cases 2, 6, 7 previously read
+// only the first page (no cursor): records beyond batchLimit were never observed
+// and counts were truncated. They now report a COMPLETE count (restart-safe,
+// stateless) and rotate a bounded detail sample.
+describe('F7 — alert-only cases: complete counts + detail convergence + restart-safety', () => {
+  beforeEach(() => {
+    process.env.KNAUF_RECONCILE_BATCH_LIMIT = '2';
+  });
+  afterEach(() => {
+    delete process.env.KNAUF_RECONCILE_BATCH_LIMIT;
+  });
+
+  test('case 2: reports the FULL count over batchLimit and the detail reaches the tail', async () => {
+    for (const n of [1, 2, 3]) {
+      await seedAsset({ asset_id: `el-${n}`, status: 'processing', lease_expires_at: LONG_AGO });
+    }
+    const reconciler = buildReconciler();
+    const first = await reconciler.runOnce();
+    // total is the FULL count (3), not the batchLimit page (2) — the finding.
+    expect(first.expired_lease).toMatchObject({ total: 3, alerted: 3, scanned: 2 });
+    expect(alerts().some((m) => m.includes('3 processing asset(s)'))).toBe(true);
+
+    await reconciler.runOnce(); // rotate to the next page
+    expect(alerts().some((m) => m.includes('el-3'))).toBe(true); // record behind page 1 is reached
+  });
+
+  test('case 2: a redeploy (fresh in-memory cursor) still reports the complete count', async () => {
+    for (const n of [1, 2, 3]) {
+      await seedAsset({ asset_id: `elr-${n}`, status: 'processing', lease_expires_at: LONG_AGO });
+    }
+    // A brand-new reconciler models a worker restart — the metric is stateless.
+    const counts = await buildReconciler().runOnce();
+    expect(counts.expired_lease).toMatchObject({ total: 3 });
+  });
+
+  test('case 6: ready-without-generation reports the complete count over batchLimit', async () => {
+    // aged:false so the orphan sweep (case 4, which requires an aged updatedAt)
+    // doesn't consume these before case 6 counts them.
+    for (const n of [1, 2, 3]) {
+      await seedAsset({
+        asset_id: `rg-${n}`,
+        status: 'ready',
+        active_generation: null,
+        aged: false,
+      });
+    }
+    const counts = await buildReconciler().runOnce();
+    expect(counts.ready_without_generation).toMatchObject({ total: 3, alerted: 3, scanned: 2 });
+    expect(alerts().some((m) => m.includes('3 ready asset(s)'))).toBe(true);
+  });
+
+  test('case 7: migration-inconsistent reports the complete count over batchLimit', async () => {
+    for (const n of [1, 2, 3]) {
+      await seedAsset({
+        asset_id: `mi-${n}`,
+        status: 'failed',
+        last_error_code: 'migration_inconsistent',
+        aged: false,
+      });
+    }
+    const counts = await buildReconciler().runOnce();
+    expect(counts.migration_inconsistent).toMatchObject({ total: 3, alerted: 3, scanned: 2 });
+  });
+});
+
 describe('case 5 — delete_failed due for retry', () => {
   // KK20-195 review R4 — the deletion owner is a request that can die
   // mid-delete; stale 'deleting' is swept too, and a tombstoned asset that
@@ -400,6 +468,7 @@ describe('containment', () => {
         }
         return listAssets(filter, limit);
       },
+      countAssets,
       listFileAssetRefs,
       cleanupAsset,
       logger,

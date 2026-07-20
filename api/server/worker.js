@@ -84,6 +84,9 @@ const resolveOwnerUserId = async (asset) => {
 // reconciler injects limits so every pass stays indexed and finite (§8.4).
 const listAssets = (filter, limit, sort = { updatedAt: 1 }) =>
   mongoose.models.KnaufFileAsset.find(filter).sort(sort).limit(limit).lean();
+// KK20-195 review F7 — full indexed count for the alert-only cases, so their
+// reported metric is complete (never truncated at batchLimit) and restart-safe.
+const countAssets = (filter) => mongoose.models.KnaufFileAsset.countDocuments(filter);
 // KK20-195 review R8 — rotating _id cursor (afterId) so the dangling-refs
 // sweep converges over the WHOLE File space across passes instead of
 // re-reading the same most-recently-updated window forever.
@@ -169,6 +172,7 @@ const main = async () => {
   const reconciler = createIndexingReconciler({
     db,
     listAssets,
+    countAssets,
     listFileAssetRefs,
     cleanupAsset: buildCleanupAsset(ragClient),
     // KK20-195 review R9 — the debt-drain case deletes ONE generation with

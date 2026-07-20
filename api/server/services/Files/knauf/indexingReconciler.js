@@ -49,6 +49,9 @@ const getReconcilerConfig = () => ({
  * @param {Object} deps.db - createMethods surface
  * @param {(filter: Object, limit: number) => Promise<Object[]>} deps.listAssets
  *   - bounded, lean KnaufFileAsset query (filters hit the §4.3 indexes)
+ * @param {(filter: Object) => Promise<number>} deps.countAssets
+ *   - full indexed countDocuments (F7: alert-only cases report the COMPLETE
+ *     count so the metric is never truncated at batchLimit or lost on restart)
  * @param {(limit: number) => Promise<Array<{ file_id: string, knauf_asset_id: string }>>} deps.listFileAssetRefs
  *   - most-recently-updated File rows carrying an asset pointer
  * @param {(asset: Object) => Promise<boolean>} deps.cleanupAsset
@@ -59,6 +62,7 @@ const getReconcilerConfig = () => ({
 function createIndexingReconciler({
   db,
   listAssets,
+  countAssets,
   listFileAssetRefs,
   cleanupAsset,
   deleteGeneration,
@@ -101,6 +105,42 @@ function createIndexingReconciler({
   const orphanCursor = makeRotatingCursor();
   const deleteSweepCursor = makeRotatingCursor();
   let danglingRefsAfterId = null;
+  // KK20-195 review F7 (re-review) — cursors for the alert-only cases 2, 6, 7
+  // (previously they read only the first page, so records beyond batchLimit were
+  // never observed).
+  const expiredLeaseCursor = makeRotatingCursor();
+  const readyWithoutGenCursor = makeRotatingCursor();
+  const migrationInconsistentCursor = makeRotatingCursor();
+
+  /**
+   * KK20-195 review F7 (re-review) — shared body for the ALERT-ONLY cases (2, 6,
+   * 7), with two independent guarantees:
+   *   • completeness (restart-safe): the reported `total` is a full indexed
+   *     countDocuments, so it is never truncated at batchLimit and needs no
+   *     cursor state to be correct — a redeploy cannot lose it.
+   *   • convergence: a rotating _id cursor advances a bounded detail sample
+   *     across successive passes, so every offending record is eventually named
+   *     for triage even when the backlog exceeds batchLimit.
+   * @param {Object} p
+   * @param {string} p.caseName
+   * @param {Object} p.filter
+   * @param {ReturnType<typeof makeRotatingCursor>} p.cursor
+   * @param {Object} p.config
+   * @param {(total: number) => string} p.summarize - the aggregate alert line
+   * @param {(asset: Object) => string} p.describe - one detail line per sampled asset
+   */
+  const reconcileAlertOnly = async ({ caseName, filter, cursor, config, summarize, describe }) => {
+    const total = await countAssets(filter);
+    const page = await listAssets(cursor.apply(filter), config.batchLimit, { _id: 1 });
+    cursor.advance(page, config.batchLimit);
+    if (total > 0) {
+      alert(caseName, summarize(total));
+      for (const asset of page) {
+        alert(caseName, describe(asset));
+      }
+    }
+    return { scanned: page.length, total, repaired: 0, alerted: total };
+  };
 
   /** Case 1 — stale `uploading`: reservation whose request died before queueing. */
   const reconcileStaleUploading = async (config, now) => {
@@ -138,21 +178,20 @@ function createIndexingReconciler({
   };
 
   /** Case 2 — long-expired `processing` leases: claimable, but nobody claims. */
-  const reconcileExpiredLeases = async (config, now) => {
+  const reconcileExpiredLeases = (config, now) => {
     const cutoff = new Date(now.getTime() - config.staleLeaseAlertMs);
-    const assets = await listAssets(
-      { status: 'processing', lease_expires_at: { $lte: cutoff } },
-      config.batchLimit,
-    );
-    if (assets.length > 0) {
-      // §5.1 reclaims expired leases naturally — leases THIS stale mean the
-      // worker fleet is not draining. Repairing here would mask the outage.
-      alert(
-        'expired_lease_not_reclaimed',
-        `${assets.length} processing asset(s) with leases expired > ${config.staleLeaseAlertMs}ms`,
-      );
-    }
-    return { scanned: assets.length, repaired: 0, alerted: assets.length };
+    // §5.1 reclaims expired leases naturally — leases THIS stale mean the worker
+    // fleet is not draining. Repairing here would mask the outage → alert only.
+    return reconcileAlertOnly({
+      caseName: 'expired_lease_not_reclaimed',
+      filter: { status: 'processing', lease_expires_at: { $lte: cutoff } },
+      cursor: expiredLeaseCursor,
+      config,
+      summarize: (total) =>
+        `${total} processing asset(s) with leases expired > ${config.staleLeaseAlertMs}ms`,
+      describe: (asset) =>
+        `asset ${asset.asset_id} lease expired at ${asset.lease_expires_at?.toISOString?.() ?? asset.lease_expires_at}`,
+    });
   };
 
   /** Case 3 — File rows pointing at a missing asset. */
@@ -262,34 +301,27 @@ function createIndexingReconciler({
   };
 
   /** Case 6 — `ready` without an active generation (should be impossible). */
-  const reconcileReadyWithoutGeneration = async (config) => {
-    const assets = await listAssets(
-      { status: 'ready', active_generation: null },
-      config.batchLimit,
-    );
-    for (const asset of assets) {
-      alert(
-        'ready_without_generation',
-        `asset ${asset.asset_id} is ready with no active generation`,
-      );
-    }
-    return { scanned: assets.length, repaired: 0, alerted: assets.length };
-  };
+  const reconcileReadyWithoutGeneration = (config) =>
+    reconcileAlertOnly({
+      caseName: 'ready_without_generation',
+      filter: { status: 'ready', active_generation: null },
+      cursor: readyWithoutGenCursor,
+      config,
+      summarize: (total) => `${total} ready asset(s) with no active generation`,
+      describe: (asset) => `asset ${asset.asset_id} is ready with no active generation`,
+    });
 
   /** Case 7 — legacy migration inconsistencies (WP2d marked these failed). */
-  const reconcileMigrationInconsistent = async (config) => {
-    const assets = await listAssets(
-      { status: 'failed', last_error_code: 'migration_inconsistent' },
-      config.batchLimit,
-    );
-    if (assets.length > 0) {
-      alert(
-        'migration_inconsistent',
-        `${assets.length} asset(s) need re-upload (legacy migration found partial state)`,
-      );
-    }
-    return { scanned: assets.length, repaired: 0, alerted: assets.length };
-  };
+  const reconcileMigrationInconsistent = (config) =>
+    reconcileAlertOnly({
+      caseName: 'migration_inconsistent',
+      filter: { status: 'failed', last_error_code: 'migration_inconsistent' },
+      cursor: migrationInconsistentCursor,
+      config,
+      summarize: (total) =>
+        `${total} asset(s) need re-upload (legacy migration found partial state)`,
+      describe: (asset) => `asset ${asset.asset_id} needs re-upload (migration_inconsistent)`,
+    });
 
   /**
    * Case 8 (KK20-195 review R9) — drain cleanup DEBT: generations whose RAG
