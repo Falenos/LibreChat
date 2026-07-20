@@ -26,6 +26,7 @@ import useClientResize from './useClientResize';
 import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
 import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
+// End [knauf]
 // [knauf] KK20-195 WP5a — indexing projection type for the upload response.
 import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
 // End [knauf]

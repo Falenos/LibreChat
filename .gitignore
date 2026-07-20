@@ -191,3 +191,7 @@ mise.toml
 
 local/
 codedb.snapshot
+
+# [knauf] local scratch — ad-hoc test uploads and Windows/WSL Zone.Identifier turds
+knauf/teste_files/
+*:Zone.Identifier
