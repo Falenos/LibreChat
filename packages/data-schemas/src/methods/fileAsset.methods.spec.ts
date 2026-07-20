@@ -381,31 +381,18 @@ describe('admission-control counters', () => {
 });
 
 describe('claimAsset — claim one specific asset (KK20-195 WP3b)', () => {
-  // KK20-195 review R2 — the sync path claims without a generation bump so
-  // activation records generation 0 (unversioned legacy vectors), matching
-  // the WP2d migration's labeling. The worker path keeps incrementing.
-  test('legacyGeneration keeps target_generation at 0 (sync legacy writes)', async () => {
-    await seedQueued({ asset_id: 'legacy-claim' });
-
-    const claimed = await methods.claimAsset({
-      asset_id: 'legacy-claim',
-      workerId: 'sync-request',
-      leaseMs: 60_000,
-      legacyGeneration: true,
+  test('claims sync-fenced work before it becomes visible to the worker', async () => {
+    await methods.reserveAsset(baseParams({ asset_id: 'sync-fenced', dedup_key: 'sync-key' }));
+    await methods.markQueued({
+      asset_id: 'sync-fenced',
+      next_attempt_at: new Date(Date.now() + 60_000),
+      blob: { path: '/blob/sync.pdf' },
     });
 
-    expect(claimed?.target_generation).toBe(0);
-    expect(claimed?.attempt_count).toBe(1); // attempts still count
-    expect(claimed?.execution_token).toBeDefined(); // fencing unchanged
-
-    const activated = await methods.activateGeneration({
-      asset_id: 'legacy-claim',
-      execution_token: claimed!.execution_token!,
-      target_generation: 0,
-      target_index_profile: claimed!.target_index_profile,
-    });
-    expect(activated?.active_generation).toBe(0);
-    expect(activated?.status).toBe('ready');
+    expect(await methods.claimNextDue({ workerId: 'worker', leaseMs: 60_000 })).toBeNull();
+    expect(
+      await methods.claimAsset({ asset_id: 'sync-fenced', workerId: 'request', leaseMs: 60_000 }),
+    ).toEqual(expect.objectContaining({ asset_id: 'sync-fenced', lease_owner: 'request' }));
   });
 
   test('claims exactly the requested asset with lease + token + increments', async () => {

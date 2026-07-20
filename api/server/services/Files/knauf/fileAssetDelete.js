@@ -26,7 +26,7 @@
  * @param {Object} params
  * @param {Object} params.db - createMethods surface
  * @param {string} params.asset_id
- * @param {() => Promise<boolean>} params.cleanup - physical GC; resolves true on confirmed cleanup
+ * @param {(asset?: Object) => Promise<boolean>} params.cleanup - physical GC; receives the tombstoned ledger row when present
  * @param {{ warn: Function }} params.logger
  * @returns {Promise<boolean>} whether physical cleanup reported success
  */
@@ -38,10 +38,10 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
   //   throw (store error, state unknown) → ABORT: cleaning here could delete
   //          blob/vectors underneath an active worker whose claim the failed
   //          tombstone never revoked. The reconciler owns the retry.
-  let hasAssetRow = false;
+  let tombstonedAsset = null;
   try {
-    hasAssetRow = (await db.tombstoneForDelete({ asset_id })) != null;
-    if (!hasAssetRow) {
+    tombstonedAsset = await db.tombstoneForDelete({ asset_id });
+    if (!tombstonedAsset) {
       const stillThere = await db.getAssetByAssetId(asset_id);
       if (stillThere != null) {
         // Tombstone CAS returned null but the row exists — unexpected state
@@ -58,8 +58,8 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
     );
     return false;
   }
-  const cleaned = await cleanup();
-  if (!hasAssetRow) {
+  const cleaned = await cleanup(tombstonedAsset);
+  if (!tombstonedAsset) {
     return cleaned;
   }
   try {
@@ -70,6 +70,69 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
     }
   } catch (error) {
     logger?.warn(`[fileAssetDelete] lifecycle record failed for ${asset_id}: ${error?.message}`);
+  }
+  return cleaned;
+}
+
+/**
+ * Delete the physical state recorded by one FileAsset. The ledger, not the
+ * logical File.embedded projection, is authoritative: activation may have
+ * completed before the File row was finalised, and cleanup debt can contain
+ * additional inactive generations.
+ *
+ * @param {Object} params
+ * @param {import('express').Request} params.req
+ * @param {Object} params.asset - tombstoned FileAsset projection
+ * @param {string} params.userId - owning user for RAG auth and blob strategy
+ * @param {{ deleteGeneration: Function }} params.ragClient
+ * @param {(source: string) => { deleteFile: Function }} params.getStrategyFunctions
+ * @param {{ warn: Function }} params.logger
+ * @returns {Promise<boolean>} true only when every physical cleanup succeeded
+ */
+async function cleanupFileAssetPhysical({
+  req,
+  asset,
+  userId,
+  ragClient,
+  getStrategyFunctions,
+  logger,
+}) {
+  const { generationsToClean } = require('./indexingWorker');
+  let cleaned = true;
+  for (const generation of generationsToClean(asset)) {
+    try {
+      await ragClient.deleteGeneration({
+        asset_id: asset.asset_id,
+        generation,
+        vector_backend: asset.vector_backend,
+        userId,
+      });
+    } catch (error) {
+      cleaned = false;
+      logger?.warn(
+        `[fileAssetDelete] vector cleanup failed for ${asset.asset_id}:${generation}: ${error?.message}`,
+      );
+    }
+  }
+
+  if (asset.blob?.path) {
+    try {
+      const { deleteFile } = getStrategyFunctions(asset.blob.source ?? 'local');
+      await deleteFile(
+        { ...req, user: { ...req?.user, id: userId } },
+        {
+          file_id: asset.asset_id,
+          filepath: asset.blob.path,
+          source: asset.blob.source,
+          embedded: false,
+        },
+      );
+    } catch (error) {
+      cleaned = false;
+      logger?.warn(
+        `[fileAssetDelete] blob cleanup failed for ${asset.asset_id}: ${error?.message}`,
+      );
+    }
   }
   return cleaned;
 }
@@ -94,12 +157,17 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
  * @param {Object} params.db - createMethods surface
  * @param {Array<{ file_id: string, knauf_asset_id?: string }>} params.files - the delete set
  * @param {{ warn: Function }} params.logger
- * @returns {Promise<{ unfenced: Set<string> }>} asset ids whose fence failed
+ * @returns {Promise<{ unfenced: Set<string>, retained: Set<string>, tombstoned: Map<string, Object>, legacy: Set<string> }>}
+ *   retained assets still have outside references; tombstoned assets own the
+ *   physical cleanup; legacy ids have no ledger row and use the old path.
  */
 async function preTombstoneLastReferences({ db, files, logger }) {
   const deleteIds = (files ?? []).map((f) => f?.file_id).filter(Boolean);
   const assetIds = [...new Set((files ?? []).map((f) => f?.knauf_asset_id).filter(Boolean))];
   const unfenced = new Set();
+  const retained = new Set();
+  const tombstoned = new Map();
+  const legacy = new Set();
   for (const asset_id of assetIds) {
     try {
       const survivors =
@@ -107,9 +175,17 @@ async function preTombstoneLastReferences({ db, files, logger }) {
           file_id: 1,
         })) ?? [];
       if (survivors.length > 0) {
+        retained.add(asset_id);
         continue; // referenced outside the delete set → asset stays live
       }
-      await db.tombstoneForDelete({ asset_id });
+      const asset = await db.tombstoneForDelete({ asset_id });
+      if (asset) {
+        tombstoned.set(asset_id, asset);
+      } else {
+        // Pre-ledger dedup rows can still carry knauf_asset_id. With no
+        // FileAsset document there is no worker/activation state to fence.
+        legacy.add(asset_id);
+      }
     } catch (error) {
       // Fence failed / state unknown → do NOT let the caller delete underneath
       // a possibly-live asset. Mark it unfenced and skip its physical delete.
@@ -119,7 +195,7 @@ async function preTombstoneLastReferences({ db, files, logger }) {
       );
     }
   }
-  return { unfenced };
+  return { unfenced, retained, tombstoned, legacy };
 }
 
 /**
@@ -158,9 +234,53 @@ async function finalizeAssetsAfterRowDelete({ db, deletedFiles, logger }) {
   }
 }
 
+/**
+ * A retained asset can lose its final two references concurrently: both
+ * requests observe the other row, both delete only their own row, and neither
+ * initially owns physical cleanup. Recount after the logical delete and only
+ * tombstone the now-orphaned asset. The reconciler owns physical cleanup, so
+ * concurrent recounts remain idempotent and never double-delete storage.
+ *
+ * @param {Object} params
+ * @param {Object} params.db
+ * @param {Array<{ file_id: string, knauf_asset_id?: string }>} params.deletedFiles
+ * @param {Set<string>} params.retainedAssetIds
+ * @param {{ warn: Function }} params.logger
+ * @returns {Promise<void>} never throws
+ */
+async function tombstoneRetainedOrphansAfterRowDelete({
+  db,
+  deletedFiles,
+  retainedAssetIds,
+  logger,
+}) {
+  const candidates = [
+    ...new Set(
+      (deletedFiles ?? [])
+        .map((file) => file?.knauf_asset_id)
+        .filter((asset_id) => asset_id && retainedAssetIds?.has(asset_id)),
+    ),
+  ];
+  for (const asset_id of candidates) {
+    try {
+      const survivors =
+        (await db.getFiles({ knauf_asset_id: asset_id }, null, { file_id: 1 })) ?? [];
+      if (survivors.length === 0) {
+        await db.tombstoneForDelete({ asset_id });
+      }
+    } catch (error) {
+      logger?.warn(
+        `[fileAssetDelete] retained-orphan recount failed for ${asset_id}: ${error?.message}`,
+      );
+    }
+  }
+}
+
 module.exports = {
   gcAssetThroughLifecycle,
+  cleanupFileAssetPhysical,
   preTombstoneLastReferences,
   finalizeAssetsAfterRowDelete,
+  tombstoneRetainedOrphansAfterRowDelete,
 };
 // End [knauf]

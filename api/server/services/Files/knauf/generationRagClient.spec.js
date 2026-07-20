@@ -68,6 +68,7 @@ describe('generation RAG client contract', () => {
           filename: 'Quarterly Report.pdf',
         },
         scope: { userId: 'user-1', entityId: 'user-1' },
+        timeoutMs: 12_345,
       }),
     ).resolves.toEqual(ready);
 
@@ -76,6 +77,7 @@ describe('generation RAG client contract', () => {
       expect.anything(),
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'Bearer rag-token' }),
+        timeout: 12_345,
       }),
     );
     const form = axios.post.mock.calls[0][1];

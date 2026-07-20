@@ -236,10 +236,32 @@ async function collectConvoFilesForCleanup({ req, filter }) {
  * KK20-195 WP3d — reports success: `true` only when every attempted cleanup
  * step succeeded, so the FileAsset lifecycle wrapper can decide between
  * `removeAsset` and `delete_failed` (plan §8.3).
- * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
+ * @param {{ req: import('express').Request, assetId: string, asset: { filepath?: string, source?: string, embedded?: boolean }, ledgerAsset?: Object, userId: string, deleteVectorsByIds: Function, getStrategyFunctions: Function }} params
  * @returns {Promise<boolean>}
  */
-async function gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }) {
+async function gcCanonicalAsset({
+  req,
+  assetId,
+  asset,
+  ledgerAsset,
+  userId,
+  deleteVectorsByIds,
+  getStrategyFunctions,
+}) {
+  if (ledgerAsset) {
+    const { createGenerationRagClient } = require('./generationRagClient');
+    const { cleanupFileAssetPhysical } = require('./fileAssetDelete');
+    return cleanupFileAssetPhysical({
+      req,
+      asset: ledgerAsset,
+      userId,
+      ragClient: createGenerationRagClient({ getStrategyFunctions }),
+      getStrategyFunctions,
+      logger,
+    });
+  }
+
+  // Pre-FileAsset rows retain the legacy file-id based cleanup path.
   let cleaned = true;
   if (asset.embedded) {
     // [knauf] Deduped assets are always chat attachments → always pgvector
@@ -378,8 +400,16 @@ async function gcDedupRows({ req, dedupRows }) {
         db,
         asset_id: assetId,
         logger,
-        cleanup: () =>
-          gcCanonicalAsset({ req, assetId, asset, deleteVectorsByIds, getStrategyFunctions }),
+        cleanup: (ledgerAsset) =>
+          gcCanonicalAsset({
+            req,
+            assetId,
+            asset,
+            ledgerAsset,
+            userId: String(user),
+            deleteVectorsByIds,
+            getStrategyFunctions,
+          }),
       });
     }
   }

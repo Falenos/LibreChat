@@ -26,6 +26,7 @@ process.env.RAG_EMBED_SYNC_TIMEOUT_MS = '5000';
 
 const axios = require('axios');
 const {
+  deleteVectors,
   deleteVectorsByIds,
   deleteVectorsForFiles,
   // [knauf] KK20-195 WP0 exports under test.
@@ -146,6 +147,50 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(axios.delete).toHaveBeenCalledWith(
       'http://rag.test/documents',
       expect.objectContaining({ data: ['chat-file-1'] }),
+    );
+  });
+
+  test('FileAsset-backed batch deletes use immutable physical ids', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      {
+        file_id: 'logical-agent',
+        knauf_asset_id: 'physical-agent',
+        context: 'agents',
+      },
+      {
+        file_id: 'logical-chat',
+        knauf_asset_id: 'physical-chat',
+        context: 'message_attachment',
+      },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/agent/documents/physical-agent',
+      expect.any(Object),
+    );
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['physical-chat'] }),
+    );
+  });
+
+  test('single-file deletes use immutable physical ids', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'false';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectors(req, {
+      file_id: 'logical-chat',
+      knauf_asset_id: 'physical-chat',
+      context: 'message_attachment',
+      embedded: true,
+    });
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['physical-chat'] }),
     );
   });
 

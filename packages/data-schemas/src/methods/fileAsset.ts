@@ -37,6 +37,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   reserveAsset: (params: ReserveAssetParams) => Promise<ReserveAssetResult>;
   markQueued: (params: {
     asset_id: string;
+    next_attempt_at?: Date;
     blob: {
       source?: string;
       path?: string;
@@ -60,7 +61,6 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     workerId: string;
     leaseMs: number;
     now?: Date;
-    legacyGeneration?: boolean;
   }) => Promise<IKnaufFileAsset | null>;
   heartbeatClaim: (params: {
     asset_id: string;
@@ -159,6 +159,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   /** CAS uploading → queued once the blob is durably stored. */
   async function markQueued(params: {
     asset_id: string;
+    next_attempt_at?: Date;
     blob: {
       source?: string;
       path?: string;
@@ -172,7 +173,14 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     return getModel()
       .findOneAndUpdate(
         { asset_id: params.asset_id, status: 'uploading', delete_requested_at: null },
-        { $set: { status: 'queued', blob: params.blob, queued_at: now, next_attempt_at: now } },
+        {
+          $set: {
+            status: 'queued',
+            blob: params.blob,
+            queued_at: now,
+            next_attempt_at: params.next_attempt_at ?? now,
+          },
+        },
         { new: true },
       )
       .lean<IKnaufFileAsset>();
@@ -238,20 +246,14 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
    * asset_id). Used by the synchronous flag-off upload path, which must
    * execute the asset it just queued — never someone else's oldest-due work.
    *
-   * KK20-195 review R2: `legacyGeneration: true` keeps target_generation at 0
-   * — the pre-WP1 sync embed writes UNVERSIONED legacy vectors (the multipart
-   * request carries no generation), the exact format the WP2d migration
-   * labels generation 0. Claiming generation 1 for those writes would record
-   * an active generation RAG never created and break later generation-
-   * filtered retrieval/deletion. The worker path (claimNextDue) keeps
-   * incrementing — it targets the WP1 generation-safe contract.
+   * Synchronous and worker claims both target the generation-safe RAG
+   * contract. Generation 0 is reserved for migrated legacy vectors.
    */
   async function claimAsset(params: {
     asset_id: string;
     workerId: string;
     leaseMs: number;
     now?: Date;
-    legacyGeneration?: boolean;
   }): Promise<IKnaufFileAsset | null> {
     const now = params.now ?? new Date();
     return getModel()
@@ -260,7 +262,10 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
           asset_id: params.asset_id,
           delete_requested_at: null,
           $or: [
-            { status: 'queued', next_attempt_at: { $lte: now } },
+            // An explicit request claim is allowed before the worker-visible
+            // due time. Sync uploads publish a future recovery time so a
+            // running worker cannot steal the claim between queue and claim.
+            { status: 'queued' },
             { status: 'processing', lease_expires_at: { $lte: now } },
           ],
         },
@@ -272,9 +277,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
             execution_token: crypto.randomUUID(),
             started_at: now,
           },
-          $inc: params.legacyGeneration
-            ? { attempt_count: 1 }
-            : { attempt_count: 1, target_generation: 1 },
+          $inc: { attempt_count: 1, target_generation: 1 },
         },
         { new: true },
       )

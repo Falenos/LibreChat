@@ -39,6 +39,7 @@ function createGenerationRagClient({ getStrategyFunctions }) {
    * @param {string} params.embed_route - '/embed' | '/agent/embed'
    * @param {{ source?: string, path?: string, mime?: string, filename?: string }} params.blob
    * @param {{ userId: string, entityId: string }} params.scope
+   * @param {number} [params.timeoutMs] - caller budget; worker default when omitted
    */
   async function embedGeneration({
     asset_id,
@@ -47,6 +48,7 @@ function createGenerationRagClient({ getStrategyFunctions }) {
     embed_route,
     blob,
     scope,
+    timeoutMs,
   }) {
     const jwtToken = generateShortLivedToken(scope.userId);
     const { getDownloadStream } = getStrategyFunctions(blob?.source ?? 'local');
@@ -67,7 +69,7 @@ function createGenerationRagClient({ getStrategyFunctions }) {
     });
     const response = await axios.post(`${baseUrl()}${embed_route}`, form, {
       headers: { ...form.getHeaders(), Authorization: `Bearer ${jwtToken}` },
-      timeout: embedTimeoutMs(),
+      timeout: timeoutMs ?? embedTimeoutMs(),
       maxBodyLength: Infinity,
     });
     // §7.5: HTTP 200 with a body-level failure is a failure, never a success.

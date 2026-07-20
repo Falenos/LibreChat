@@ -11,8 +11,9 @@
 //   2. expired `processing` lease   → claimable by design (§5.1 reclaims
 //                                     them); long-expired leases mean no
 //                                     worker is draining → alert only.
-//   3. File → missing asset         → alert only (fabricating an asset or
-//                                     deleting a user's row is never safe).
+//   3. File → missing asset         → unfinished finalization: remove the
+//                                     irrecoverable pending row; finalized
+//                                     historical corruption stays alert-only.
 //   4. asset with no references     → repair: tombstone + physical cleanup +
 //                                     remove (the WP3d lifecycle — same
 //                                     §8.2/§8.3 guarantees).
@@ -53,7 +54,7 @@ const getReconcilerConfig = () => ({
  * @param {(filter: Object) => Promise<number>} deps.countAssets
  *   - full indexed countDocuments (F7: alert-only cases report the COMPLETE
  *     count so the metric is never truncated at batchLimit or lost on restart)
- * @param {(limit: number) => Promise<Array<{ file_id: string, knauf_asset_id: string }>>} deps.listFileAssetRefs
+ * @param {(limit: number) => Promise<Array<{ file_id: string, knauf_asset_id: string, knauf_upload_finalized?: boolean }>>} deps.listFileAssetRefs
  *   - most-recently-updated File rows carrying an asset pointer
  * @param {(asset: Object) => Promise<boolean>} deps.cleanupAsset
  *   - physical GC (vectors by asset id + blob); resolves true on confirmed cleanup
@@ -258,13 +259,37 @@ function createIndexingReconciler({
     }
     const found = new Set((await db.getAssetsByAssetIds(assetIds)).map((a) => a.asset_id));
     const dangling = refs.filter((r) => r.knauf_asset_id && !found.has(r.knauf_asset_id));
+    let repaired = 0;
+    let alerted = 0;
     for (const ref of dangling) {
+      if (ref.knauf_upload_finalized === false) {
+        try {
+          await db.deleteFiles([ref.file_id]);
+          try {
+            await db.removeAgentResourceFilesFromAllAgents({ file_ids: [ref.file_id] });
+          } catch (error) {
+            logger.warn(
+              `[indexingReconciler] agent-reference cleanup failed for dangling file ${ref.file_id}: ${error?.message}`,
+            );
+          }
+          repaired += 1;
+          continue;
+        } catch (error) {
+          alert(
+            'unfinished_file_missing_asset_cleanup_failed',
+            `file ${ref.file_id} cleanup failed: ${error?.message}`,
+          );
+          alerted += 1;
+          continue;
+        }
+      }
       alert(
         'file_missing_asset',
         `file ${ref.file_id} points at missing asset ${ref.knauf_asset_id}`,
       );
+      alerted += 1;
     }
-    return { scanned: refs.length, repaired: 0, alerted: dangling.length };
+    return { scanned: refs.length, repaired, alerted };
   };
 
   /** Case 4 — assets with no logical references (missed last-reference delete). */
@@ -305,10 +330,10 @@ function createIndexingReconciler({
   const reconcileDeleteFailed = async (config, now) => {
     const cutoff = new Date(now.getTime() - config.deleteRetryMs);
     // KK20-195 review R4 — stale 'deleting' is swept too: the deletion owner
-    // is a request that can die mid-delete (and R4's pre-tombstone can leave
-    // a tombstoned asset behind when part of the physical delete failed and
-    // rows survived). A tombstoned asset that still HAS references is the
-    // partial-failure signature → alert, never auto-destroy.
+    // is a request that can die mid-delete. A tombstone is an authoritative
+    // deletion request and already blocks retrieval/activation; surviving File
+    // rows are an interrupted metadata commit, so remove them before retrying
+    // physical cleanup rather than leaving a permanently broken reference.
     const assets = await listAssets(
       deleteSweepCursor.apply({
         status: { $in: ['delete_failed', 'deleting'] },
@@ -323,12 +348,28 @@ function createIndexingReconciler({
     let alerted = 0;
     for (const asset of assets) {
       if (referenced.has(asset.asset_id)) {
-        alert(
-          'tombstoned_with_references',
-          `asset ${asset.asset_id} is ${asset.status} but File rows still reference it (partial delete failure)`,
-        );
-        alerted += 1;
-        continue;
+        try {
+          const refs =
+            (await db.getFiles({ knauf_asset_id: asset.asset_id }, null, { file_id: 1 })) ?? [];
+          const fileIds = refs.map((ref) => ref.file_id).filter(Boolean);
+          if (fileIds.length > 0) {
+            await db.deleteFiles(fileIds);
+            try {
+              await db.removeAgentResourceFilesFromAllAgents({ file_ids: fileIds });
+            } catch (error) {
+              logger.warn(
+                `[indexingReconciler] agent-reference cleanup failed for ${asset.asset_id}: ${error?.message}`,
+              );
+            }
+          }
+        } catch (error) {
+          alert(
+            'tombstoned_metadata_cleanup_failed',
+            `asset ${asset.asset_id} metadata cleanup failed: ${error?.message}`,
+          );
+          alerted += 1;
+          continue;
+        }
       }
       if (asset.status === 'delete_failed') {
         const resumed = await db.retryDelete({ asset_id: asset.asset_id });

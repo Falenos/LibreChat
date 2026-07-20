@@ -97,7 +97,7 @@ const listFileAssetRefs = (limit, afterId = null) =>
   })
     .sort({ _id: 1 })
     .limit(limit)
-    .select({ file_id: 1, knauf_asset_id: 1 })
+    .select({ file_id: 1, knauf_asset_id: 1, knauf_upload_finalized: 1 })
     .lean();
 
 /**

@@ -84,7 +84,7 @@ What made this a production problem (the motivation for KK20-195):
 
 ### 2.1 WP0 — containment on the sync path (first commit series on this branch)
 
-Before any async machinery, WP0 hardened the existing inline embed: retry **only on HTTP 429**, one overall deadline for the embed call, and compensation (best-effort vector delete) when a partial embed fails. This bounded the old failure modes without changing the architecture — and stays active as the sync path's guardrails.
+Before any async machinery, WP0 bounded the existing inline embed. The reconciled sync path keeps one overall deadline, retries only transient failures (408/429/5xx/network), honors bounded `Retry-After`, and deletes only the failed claim's generation when a write does not activate.
 
 ---
 
@@ -159,7 +159,7 @@ Three mechanisms replace transactions:
 
 ### 3.4 Upload flow, both modes
 
-Upload is **reservation-first** ([fileSearchAssetLifecycle.js](../../../../api/server/services/Files/knauf/fileSearchAssetLifecycle.js)): reserve/adopt the asset row, write the blob, then either embed inline (sync) or stop at `queued` (async). Client-supplied `file_id` idempotency (WP3a) makes upload retries safe: a replayed request adopts the existing reservation instead of double-writing.
+Upload is **reservation-first** ([fileSearchAssetLifecycle.js](../../../../api/server/services/Files/knauf/fileSearchAssetLifecycle.js)): reserve/adopt the asset row, persist a pending logical `File` row, write the blob, then either embed inline (sync) or stop at `queued` (async). The pending row carries the content hash, physical asset id, deterministic Azure blob intent, and `knauf_upload_finalized=false` before bytes are streamed. Final agent binding and metadata flip the marker to `true`. Client-supplied `file_id` idempotency (WP3a) makes upload retries safe: a replayed request adopts the existing reservation instead of double-writing; a replay that finds a ready asset with an unfinished logical row reuses that exact asset and repairs finalization.
 
 ```mermaid
 sequenceDiagram
@@ -192,12 +192,14 @@ sequenceDiagram
 
 Upload behavior in detail:
 
-- **Reservation branch table** (`classifyExistingAsset`): a dedup hit on a `ready` asset with the current profile is **reused** (no re-embed, mirrors the KK20-204 dedup HIT); `ready` on an older profile → `reuse_stale_profile` (re-index deferred to the worker); `failed` → retry through the same asset; `uploading|queued|processing` → **409 `file_indexing_in_progress`** (someone else's identical upload is in flight); tombstoned/`deleting`/`delete_failed` → conflict.
-- **Sync failure keeps the old contract**: if the embed fails and this request created the asset, the lifecycle tombstones and removes it — a failed sync upload leaves nothing behind (plus WP0 compensation deletes the just-written blob).
+- **Reservation branch table** (`classifyExistingAsset`): a dedup hit on a `ready` asset with the current profile is **reused** (no re-embed, mirrors the KK20-204 dedup HIT); `ready` on an older profile → `reuse_stale_profile` (re-index deferred to the worker); `failed` → retry through the same asset; `uploading|queued|processing` → **409 `file_indexing_in_progress`** (someone else's identical upload is in flight); tombstoned/`deleting`/`delete_failed` → conflict. Reuse first writes a pending logical reference, then re-reads the asset; a concurrent last-reference tombstone returns **409 `file_asset_conflict`** and removes the pending row.
+- **Sync failure is generation-safe**: the claimed generation is cleaned before the lifecycle is failed. Confirmed cleanup removes request-created blob/ledger/pending state; an unconfirmed generation or blob cleanup keeps the recovery anchors and records durable cleanup debt instead of hiding an orphan.
 - **Response code**: 202 only when async was accepted for this request and the asset isn't already `ready`; otherwise 200. The response carries an `indexing` projection `{ status, ready, retryable, error_code, queued_at }`.
 - **Admission control** ([indexAdmission.js](../../../../api/server/services/Files/knauf/indexAdmission.js)) bounds the durable backlog per authorization scope before accepting new work: `KNAUF_INDEX_MAX_QUEUED_FILES` (default 20 non-terminal files) and `KNAUF_INDEX_MAX_QUEUED_BYTES` (default 500 MB); rejection is **429 `file_indexing_backlog_full`**.
 - **Dedup** ([dedupKey.js](../../../../api/server/services/Files/knauf/dedupKey.js) + [contentDedup.js](../../../../api/server/services/Files/knauf/contentDedup.js)): `dedup_key = u:<user>:h:<sha256>` — authorization scope + content hash only (deliberately **not** the index profile; a profile change re-indexes the same asset through a new generation). Chat scope only; agent-library assets are never deduped.
 - **Idempotent replay** ([uploadIdempotency.js](../../../../api/server/services/Files/knauf/uploadIdempotency.js)): a valid client-supplied UUID `file_id` is adopted as the logical idempotency key; a replayed request joins the existing upload (`replay`), while a `file_id` owned by someone else (`file_id_taken`) or carrying different bytes (`different_content`) is a conflict.
+- **Physical isolation**: blob keys and vector ids use the immutable `knauf_asset_id`, never the reusable logical `file_id`. A delayed cleanup from an old logical-file incarnation therefore cannot delete a newer upload.
+- **Sync/worker fence**: flag-off uploads publish `next_attempt_at` at the end of the bounded sync budget, then explicitly claim their own asset immediately. A running worker cannot steal the queue-to-claim window; if the API process dies, the same work becomes worker-eligible after the budget expires.
 
 ### 3.5 Status, retry, and readiness enforcement (WP3c)
 
@@ -213,7 +215,7 @@ Readiness is enforced server-side, not just in the UI: [knaufFileIndexReadiness.
 
 ### 3.6 Delete lifecycle (§8.1–§8.3)
 
-Every File Search delete surface funnels through [fileAssetDelete.js](../../../../api/server/services/Files/knauf/fileAssetDelete.js): the direct `DELETE /api/files` path and the conversation cascade (both via [cascadeDeleteConvoFiles.js](../../../../api/server/services/Files/knauf/cascadeDeleteConvoFiles.js)'s dedup-aware GC), the process.js delete seam (`finalizeAssetsAfterRowDelete` — the §8.1 last-reference recount after File rows are removed), and the reconciler. The sequence is always: `tombstoneForDelete` CAS (stamps `delete_requested_at` — instantly non-searchable and blocks claims/activation mid-delete) → physical cleanup (vectors by asset id, then blob) → `removeAsset` only on confirmed success, else `delete_failed` for the reconciler to retry. Failures are recorded, never silently orphaned. This closes the "delete is metadata-only" GDPR gap of [`overview.md`](./overview.md) §5 **for File Search assets** (other paths unchanged).
+Every File Search delete surface funnels through [fileAssetDelete.js](../../../../api/server/services/Files/knauf/fileAssetDelete.js): the direct `DELETE /api/files` path and the conversation cascade (both via [cascadeDeleteConvoFiles.js](../../../../api/server/services/Files/knauf/cascadeDeleteConvoFiles.js)'s dedup-aware GC), the process.js delete seam, and the reconciler. Surviving logical references delete only their own `File` row. The last reference runs: `tombstoneForDelete` CAS (instantly non-searchable and blocks claims/activation) → generation-scoped cleanup of `active_generation`, `target_generation`, and `stale_generations` → blob cleanup → logical metadata commit → `removeAsset`. A physical failure becomes `delete_failed`; a metadata failure leaves the tombstoned ledger for an idempotent retry. This uses the FileAsset ledger even when a crash left `File.embedded=false`, and closes the "delete is metadata-only" GDPR gap of [`overview.md`](./overview.md) §5 **for File Search assets** (other paths unchanged).
 
 ### 3.7 The reconciler — §8.4, seven cases
 
@@ -223,9 +225,9 @@ A bounded periodic loop ([indexingReconciler.js](../../../../api/server/services
 |---|---|---|---|
 | 1 | `stale_uploading` | `uploading` reservation older than 1 h | Unreferenced → GC; referenced with blob intent → queue; referenced without intent → visible failed/re-upload state |
 | 2 | `expired_lease` | `processing` lease expired ≥30 min and never reclaimed | Alert (worker fleet not draining) |
-| 3 | `dangling_file_refs` | File rows pointing at a missing asset | Alert |
+| 3 | `dangling_file_refs` | File rows pointing at a missing asset | Remove only unfinished (`knauf_upload_finalized=false`) recovery rows and their agent refs; alert on finalized historical corruption |
 | 4 | `orphan_assets` | `ready`/`failed` asset ≥24 h old with no File references | Tombstone + cleanup + remove |
-| 5 | `delete_failed` | Failed physical cleanup due for retry (15 min) | `retryDelete` CAS → cleanup → remove, or re-mark + alert |
+| 5 | `delete_failed` / stale `deleting` | Interrupted metadata commit or failed physical cleanup due for retry (15 min) | Remove surviving logical/agent references under the authoritative tombstone → `retryDelete` CAS when needed → cleanup → remove, or re-mark + alert |
 | 6 | `ready_without_generation` | `ready` with `active_generation: null` | Alert (invariant violation) |
 | 7 | `migration_inconsistent` | Backfilled asset whose legacy state disagrees | Alert (needs re-upload) |
 
@@ -233,7 +235,7 @@ Every case advances a rotating `_id` cursor so successive passes sweep the whole
 
 ### 3.8 Generation-safe RAG contract
 
-[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. New physical assets receive an immutable server UUID independent of the reusable logical File id, so late cleanup from an old incarnation cannot delete a new generation. The persisted sanitized filename preserves the extension used by RAG parser/OCR routing. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 includes legacy vectors without generation metadata.
+[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. Both worker and synchronous flag-off uploads use this contract. New physical assets receive an immutable server UUID independent of the reusable logical File id, so late cleanup from an old incarnation cannot delete a new generation. If embedding succeeds but activation loses its CAS, only that claimant's generation is deleted; a failed delete is recorded as `stale_generations` cleanup debt while the winning asset lifecycle is preserved. The persisted sanitized filename preserves the extension used by RAG parser/OCR routing. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 is reserved for migrated legacy vectors without generation metadata.
 
 ---
 
@@ -250,7 +252,7 @@ Three **independent** switches ([asyncIndexingConfig.js](../../../../api/server/
 
 | Mode | ACCEPT | WORKER | Behavior |
 |---|---|---|---|
-| **Today (both off)** | off | off | Sync-through-the-asset: inline embed with WP0 guardrails, but every file now has a FileAsset row + status |
+| **Today (both off)** | off | off | Sync-through-the-asset: request waits for the generation-safe RAG write + activation; every file has a FileAsset row + status |
 | Drain / rollback | off | on | No new async uploads; worker finishes the queued backlog |
 | Canary / production | on | on | 202-accept + worker indexing (requires WP1 RAG contract + WP6 deploy/monitors) |
 
@@ -307,7 +309,7 @@ Error classification mirrors the plan §5.3 table: 408/429/5xx/connection-reset 
 
 Local dev runs the API and the worker **on the host**, against the compose datastores. The `api` compose service stays off (`profiles: [manual-start]`, see [CLAUDE.md](../../../../CLAUDE.md)). Nothing here needs the two flags on — with both off you still get the full FileAsset lifecycle on the sync path; turn them on only to exercise the worker/queue.
 
-> **WP1 caveat — read first.** The deployed and local `rag_api` do **not** implement the generation-safe contract yet (`generation`/`index_profile` fields, `DELETE /generation`; §3.8). So with async **on**, the worker's embed call fails against the legacy image (4xx/404) and the asset rides the §5.3 retry/backoff path. That is the expected local outcome until WP1: end-to-end "queued → ready" indexing is **not** verifiable locally today. What you *can* verify locally: reservation + `queued`, the atomic claim, lease/heartbeat, retry/backoff + `stale_generations`, the reconciler passes, the probes, and SIGTERM drain. (The spec suites cover the embed happy-path against an in-memory fake RAG.)
+> **WP1 deployment gate — read first.** This application change requires the generation-safe `agentic-karl-rag-api#16` contract (`generation`/`index_profile` fields and `DELETE /generation`) for **both** synchronous and asynchronous File Search ingestion. Deploy/release RAG #16 before this application image. A legacy RAG image will reject new File Search uploads even while async acceptance is off.
 
 ### 5.1 Datastores
 
@@ -359,7 +361,7 @@ SIGTERM drain (§5.2 semantics): `kill -TERM <worker-pid>` → logs `stop claimi
 
 1. Set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` and restart the API (the worker can keep running).
 2. Upload a document to a chat's File Search (or an agent's knowledge). The response is **202** `{ indexing: { status: "queued", ready: false } }`; the row shows "Indexing…"; the asset is `queued`.
-3. The worker claims it (`claimed <asset_id> … generation N`), calls the embed route, and — per the WP1 caveat — the legacy rag_api rejects it → the worker requeues with backoff (`next_attempt_at`) or, after the attempt cap, marks it `failed`. Watch the asset transition and `attempt_count`/`stale_generations` in Mongo, and the reconciler pass counts in the worker log.
+3. The worker claims it (`claimed <asset_id> … generation N`) and calls the generation-safe embed route. Against RAG #16, the asset activates to `ready`; against a legacy RAG image, it requeues with backoff (`next_attempt_at`) or, after the attempt cap, becomes `failed`. Watch the asset transition and `attempt_count`/`stale_generations` in Mongo, and the reconciler pass counts in the worker log.
 4. The file's retry endpoint (`POST /api/files/:file_id/index/retry`) answers `202` (re-queue) while the worker is enabled, or `409 indexing_worker_unavailable` when it is off.
 5. **Turn acceptance back OFF** (`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false`) and restart the API — the sync path resumes for everyone else.
 

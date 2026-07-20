@@ -43,6 +43,13 @@ jest.mock('~/server/services/Files/strategies', () => ({
   })),
 }));
 
+const mockDeleteGeneration = jest.fn().mockResolvedValue(undefined);
+jest.mock('./generationRagClient', () => ({
+  createGenerationRagClient: jest.fn(() => ({
+    deleteGeneration: (...args) => mockDeleteGeneration(...args),
+  })),
+}));
+
 jest.mock('~/models', () => {
   const m = require('mongoose');
   const { createMethods } = require('@librechat/data-schemas');
@@ -95,6 +102,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
     mockDeleteVectorsForFiles.mockClear();
     mockDeleteAzureSearchVectors.mockClear();
     mockUseAzureSearchForAgents.mockClear().mockReturnValue(false);
+    mockDeleteGeneration.mockClear().mockResolvedValue(undefined);
   });
 
   const buildReq = () => ({ user: { id: userId.toString() }, body: {}, config: {} });
@@ -514,6 +522,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       await deleteFilesWithDedupAwareness({ req: buildReq(), files });
 
       expect(await db.getAssetByAssetId('canon-1')).toBeNull(); // tombstoned + removed
+      expect(mockDeleteGeneration.mock.calls.map(([arg]) => arg.generation)).toEqual([1, 0]);
       expect(mockStrategyDeleteFile).toHaveBeenCalledTimes(1); // physical GC still ran
     });
 

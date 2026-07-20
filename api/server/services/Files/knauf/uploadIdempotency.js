@@ -10,7 +10,7 @@
 // Content equality (KK20-195 review R3): the SHA-256 content hash is
 // authoritative whenever both sides have one — same-length different-content
 // retries must conflict, not replay. Byte length remains the fallback for
-// rows that predate hashing (agent-library rows carry no hash).
+// rows that predate universal File Search hashing.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -51,8 +51,7 @@ const classifyUploadReplay = ({ existing, userId, incomingBytes, incomingHash })
       ? { outcome: 'replay' }
       : { outcome: 'conflict', reason: 'different_content' };
   }
-  // Legacy rows that predate hashing (e.g. agent-library rows): byte length is
-  // the only available signal.
+  // Legacy rows that predate hashing: byte length is the only available signal.
   if (existing.bytes != null && incomingBytes != null && existing.bytes !== incomingBytes) {
     return { outcome: 'conflict', reason: 'different_content' };
   }

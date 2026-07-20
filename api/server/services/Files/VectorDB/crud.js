@@ -331,7 +331,9 @@ const deleteVectorsForFiles = async (req, files) => {
     return;
   }
 
-  const validFiles = files.filter((f) => f.file_id);
+  const validFiles = files
+    .filter((f) => f.file_id)
+    .map((f) => ({ ...f, file_id: f.knauf_asset_id ?? f.file_id }));
   if (!validFiles.length) {
     return;
   }
@@ -377,12 +379,14 @@ const deleteVectors = async (req, file) => {
   if (!file.embedded || !process.env.RAG_API_URL) {
     return;
   }
-  // [knauf] Agent files → Azure Search when enabled; everything else → pgvector.
+  // [knauf] KK20-195 FileAsset-backed vectors use the immutable physical id;
+  // agent files route to Azure Search when enabled, everything else to pgvector.
+  const vectorFileId = file.knauf_asset_id ?? file.file_id;
   if (isAzureSearchEnabledForAgents() && file.context === 'agents') {
-    return deleteAzureSearchVectors(req, file.file_id);
+    return deleteAzureSearchVectors(req, vectorFileId);
   }
+  return deleteVectorsByIds(req, [vectorFileId]);
   // End [knauf]
-  return deleteVectorsByIds(req, [file.file_id]);
 };
 // End [knauf]
 
