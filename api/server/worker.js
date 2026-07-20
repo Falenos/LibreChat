@@ -12,7 +12,7 @@
 require('./telemetry');
 const path = require('path');
 require('module-alias')({ base: path.resolve(__dirname, '..') });
-const express = require('express');
+const { createProbeApp, evaluateReadiness } = require('~/server/services/Files/knauf/workerProbes');
 const mongoose = require('mongoose');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const {
@@ -185,30 +185,27 @@ const main = async () => {
     logger,
   });
 
-  // KK20-195 review R11 — the probe surface tells the TRUTH. /health stays a
-  // pure liveness probe; /ready is 200 only when Mongo is connected AND the
-  // claim loop ticked within 5 poll intervals (a wedged loop that "catches
-  // iteration failures forever" now fails readiness instead of hiding);
-  // /metrics exposes the knauf_file_index_* worker set via createMetrics.
+  // KK20-195 review R11 — the probe surface tells the TRUTH (see workerProbes.js).
+  // Readiness tolerates a valid long-running claim: progress is a loop tick OR
+  // a live heartbeat, and the staleness window covers both idle polling and the
+  // heartbeat cadence, so an embed/OCR job longer than the poll interval keeps
+  // /ready green. /metrics is mounted at /metrics (the router serves at '/').
   const { metricsRouter } = createMetrics();
-  const probeApp = express();
-  probeApp.disable('x-powered-by');
-  probeApp.get('/health', (req, res) => res.status(200).send('ok'));
-  probeApp.get('/ready', (req, res) => {
-    const mongoUp = mongoose.connection.readyState === 1;
-    const staleAfterMs = 5 * getWorkerConfig().pollMs;
-    const lastTickAgoMs = Date.now() - worker.getLastTickAt();
-    const loopLive = lastTickAgoMs < staleAfterMs;
-    if (mongoUp && loopLive) {
-      return res.status(200).json({ status: 'ready' });
-    }
-    return res.status(503).json({
-      status: 'not_ready',
-      mongo: mongoUp,
-      loop_last_tick_ms_ago: lastTickAgoMs,
-    });
+  const probeApp = createProbeApp({
+    metricsRouter,
+    getReadiness: () => {
+      const config = getWorkerConfig();
+      // Tolerate the slower of idle polling and the heartbeat cadence, with
+      // headroom for jitter — only a genuinely wedged loop trips this.
+      const staleAfterMs = Math.max(5 * config.pollMs, 3 * config.heartbeatMs);
+      const lastProgressAgoMs = Date.now() - worker.getLastProgressAt();
+      const mongoConnected = mongoose.connection.readyState === 1;
+      return {
+        ready: evaluateReadiness({ mongoConnected, lastProgressAgoMs, staleAfterMs }),
+        detail: { mongo: mongoConnected, loop_last_progress_ms_ago: lastProgressAgoMs },
+      };
+    },
   });
-  probeApp.use(metricsRouter);
   const health = probeApp.listen(WORKER_PORT, () =>
     logger.info(`[worker] health/ready/metrics listener on :${WORKER_PORT}`),
   );

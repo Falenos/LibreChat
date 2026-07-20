@@ -120,6 +120,15 @@ function createIndexingWorker({
   const id = workerId ?? `worker-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   let stopped = false;
 
+  // KK20-195 review R11 (re-review) — loop liveness for /ready. Progress is
+  // EITHER an idle/claim loop tick OR a successful heartbeat during an
+  // in-flight claim, so a valid long-running embed/OCR (which blocks the loop
+  // in `await processNextDue` but keeps its lease alive) stays healthy instead
+  // of flipping /ready to 503. Both go stale only when the loop is truly wedged.
+  let lastTickAt = Date.now();
+  let lastHeartbeatAt = 0;
+  const getLastProgressAt = () => Math.max(lastTickAt, lastHeartbeatAt);
+
   /**
    * Best-effort: delete ONLY the generation this claim wrote (§7.4/§5.3).
    * KK20-195 review R9 — a failed delete is no longer forgotten: it is
@@ -212,7 +221,12 @@ function createIndexingWorker({
         leaseMs: config.leaseMs,
       })
         .then((ok) => {
-          if (!ok) {
+          if (ok) {
+            // R11 (re-review) — a live heartbeat is loop progress; it keeps
+            // /ready green through a valid long claim that outlasts the
+            // idle-tick window.
+            lastHeartbeatAt = Date.now();
+          } else {
             ownershipLost = true;
           }
         })
@@ -341,12 +355,6 @@ function createIndexingWorker({
    * promise resolves once in-flight work finishes. Leases are never released
    * mid-RAG — an unfinished claim simply expires and is reclaimed.
    */
-  // KK20-195 review R11 — loop liveness for the /ready probe: updated every
-  // iteration (including idle), so "no tick within N poll intervals" means
-  // the loop is wedged, not merely quiet.
-  let lastTickAt = Date.now();
-  const getLastTickAt = () => lastTickAt;
-
   const start = async () => {
     while (!stopped) {
       lastTickAt = Date.now();
@@ -379,7 +387,7 @@ function createIndexingWorker({
     stopped = true;
   };
 
-  return { processNextDue, executeClaim, start, stop, getLastTickAt, workerId: id };
+  return { processNextDue, executeClaim, start, stop, getLastProgressAt, workerId: id };
 }
 
 module.exports = {

@@ -359,11 +359,11 @@ describe('SIGTERM semantics — stop() halts claiming (§5.2)', () => {
 // KK20-195 review R11 — loop liveness + claim-outcome recording for /ready
 // and the knauf_file_index_worker_claims_total counter.
 describe('R11 — loop liveness + claim-outcome recorder', () => {
-  test('getLastTickAt advances when the loop runs; outcomes are recorded', async () => {
+  test('getLastProgressAt advances when the loop runs; outcomes are recorded', async () => {
     await seedQueued({ asset_id: 'tick-1' });
     const recordClaimOutcome = jest.fn();
     const worker = buildWorker({ recordClaimOutcome });
-    const before = worker.getLastTickAt();
+    const before = worker.getLastProgressAt();
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     const loop = worker.start();
@@ -371,8 +371,36 @@ describe('R11 — loop liveness + claim-outcome recorder', () => {
     worker.stop();
     await loop;
 
-    expect(worker.getLastTickAt()).toBeGreaterThan(before);
+    expect(worker.getLastProgressAt()).toBeGreaterThan(before);
     expect(recordClaimOutcome).toHaveBeenCalledWith('ready'); // idle ticks not recorded
+  });
+
+  // KK20-195 re-review R11 — a valid long claim keeps /ready green: the
+  // heartbeat advances getLastProgressAt even while the loop is blocked in the
+  // embed await (previously only the pre-await tick counted, so a >25s job
+  // flipped /ready to 503).
+  test('a live heartbeat during a long claim advances getLastProgressAt', async () => {
+    await seedQueued({ asset_id: 'slow-1' });
+    let releaseEmbed;
+    const rag = createFakeRag();
+    rag.embedGeneration = () =>
+      new Promise((resolve) => {
+        releaseEmbed = () => resolve({ status: 'ready' });
+      });
+    // Heartbeat every 20ms so it fires while the embed is parked.
+    process.env.KNAUF_WORKER_HEARTBEAT_MS = '20';
+    try {
+      const worker = buildWorker({ ragClient: rag });
+      const claim = await db.claimNextDue({ workerId: 'w-slow', leaseMs: 60_000 });
+      const exec = worker.executeClaim(claim);
+      const beforeHeartbeat = worker.getLastProgressAt();
+      await new Promise((resolve) => setTimeout(resolve, 70)); // let heartbeats fire
+      expect(worker.getLastProgressAt()).toBeGreaterThan(beforeHeartbeat);
+      releaseEmbed();
+      await exec;
+    } finally {
+      delete process.env.KNAUF_WORKER_HEARTBEAT_MS;
+    }
   });
 });
 
