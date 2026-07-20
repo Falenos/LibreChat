@@ -17,6 +17,11 @@ import { isIndexingPending } from '~/knauf/common/fileIndexing';
 
 export const KNAUF_INDEX_POLL_MS = 5_000;
 
+// Module-level so the poll tick doesn't nest a fetch+catch arrow inside map()
+// inside tick() inside useEffect() (Sonar S2004: functions >4 levels deep).
+// A failed fetch resolves to null; the tick drops nulls and retries next tick.
+const fetchIndexStatus = (fileId: string) => getFileIndexStatus(fileId).catch(() => null);
+
 export default function useKnaufIndexStatus({
   files,
   setFiles,
@@ -32,7 +37,10 @@ export default function useKnaufIndexStatus({
         ids.push(file.file_id);
       }
     }
-    return ids.sort();
+    // Sorted only to make `pendingKey` a stable identity for the effect's deps
+    // (the ORDER is irrelevant); localeCompare satisfies Sonar S2871 vs the
+    // default code-unit sort.
+    return ids.sort((a, b) => a.localeCompare(b));
   }, [files]);
   const pendingKey = pendingIds.join(',');
 
@@ -43,9 +51,7 @@ export default function useKnaufIndexStatus({
     let cancelled = false;
 
     const tick = async () => {
-      const updates = await Promise.all(
-        pendingIds.map((fileId) => getFileIndexStatus(fileId).catch(() => null)),
-      );
+      const updates = await Promise.all(pendingIds.map(fetchIndexStatus));
       if (cancelled) {
         return;
       }
