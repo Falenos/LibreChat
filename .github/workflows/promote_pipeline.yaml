@@ -44,6 +44,10 @@ jobs:
       AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
+      # [knauf] KK20-195 — prod worker values, bumped in lock-step with the app.
+      # Guarded by a file-exists check: the prod worker dir is intentionally NOT
+      # created until WP1 + WP6 sign-off, so this stays a no-op until then.
+      AGK_PROD_WORKER_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-worker
       AGK_PROD_DOMAIN: https://agentic-karl.knauf.com
       AGK_ARGOCD_DOMAIN: argocd.agk.prod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-prod-agentic-karl
@@ -173,19 +177,32 @@ jobs:
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
 
+          # [knauf] KK20-195 — bump the prod worker values in lock-step, in the
+          # same PR. Guarded: no-op until the prod worker dir exists (deferred to
+          # WP1 + WP6 sign-off), so promotions keep working unchanged until then.
+          BUMP_PATHS=("$AGK_PROD_CONFIG_DIRECTORY/values.yaml")
+          PROD_WORKER_VALUES="$AGK_PROD_WORKER_CONFIG_DIRECTORY/values.yaml"
+          if [ -f "$PROD_WORKER_VALUES" ]; then
+            sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$PROD_WORKER_VALUES"
+            BUMP_PATHS+=("$PROD_WORKER_VALUES")
+            echo "Bumping prod worker values $PROD_WORKER_VALUES to $VERSION"
+          else
+            echo "Prod worker values $PROD_WORKER_VALUES not present — skipping (deferred to WP1/WP6)"
+          fi
+
           BRANCH="release/agk-prod-$VERSION"
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          if git diff --quiet -- "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"; then
+          if git diff --quiet -- "${BUMP_PATHS[@]}"; then
             echo "AGK prod deployment config already points at $VERSION"
             echo "| Prod deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           git checkout -b "$BRANCH"
-          git add "$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
+          git add "${BUMP_PATHS[@]}"
           git commit -m "Update agentic-karl prod to $VERSION"
           # Plain --force: automation-owned throwaway branch and a fresh clone has
           # no remote-tracking ref, so --force-with-lease would reject re-runs.
