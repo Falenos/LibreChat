@@ -119,6 +119,7 @@ const buildCleanupAsset = (ragClient) => async (asset) => {
       await ragClient.deleteGeneration({
         asset_id: asset.asset_id,
         generation,
+        vector_backend: asset.vector_backend,
         userId: ownerUserId,
       });
     } catch (error) {
@@ -181,6 +182,7 @@ const main = async () => {
       ragClient.deleteGeneration({
         asset_id: asset.asset_id,
         generation,
+        vector_backend: asset.vector_backend,
         userId: await resolveOwnerUserId(asset),
       }),
     logger,

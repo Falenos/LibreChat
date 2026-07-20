@@ -231,9 +231,9 @@ A bounded periodic loop ([indexingReconciler.js](../../../../api/server/services
 
 Every case advances a rotating `_id` cursor so successive passes sweep the whole space (not just the first page) even when a case leaves rows in place. The three alert-only cases (2, 6, 7) additionally report a **complete count** (a full indexed `countDocuments`, not the bounded page) so the alerted metric is never truncated at `batchLimit` and survives a worker redeploy; the bounded page just names a rotating sample for triage.
 
-### 3.8 Generation-safe RAG contract (provisional)
+### 3.8 Generation-safe RAG contract
 
-[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`, chosen at reservation time along with `vector_backend: pgvector | azure_search`) with `generation` + `index_profile` fields, and `deleteGeneration` issues an idempotent `DELETE /generation { asset_id, generation }`. **The field names and the `/generation` endpoint are provisional** — nothing calls this module in production until WP1 lands the real contract in `agentic-karl-rag-api`; this module is the single reconciliation point when it does.
+[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 includes legacy vectors without generation metadata.
 
 ---
 
@@ -394,6 +394,6 @@ This resolves the BUG-03/BUG-04 flash-and-disappear class and gives BUG-05 (sile
 
 ## 8. Open ends (tracked, not in this repo/branch)
 
-- **WP1** — real generation-safe contract in `agentic-karl-rag-api`; reconcile field names in `generationRagClient.js`.
+- **WP1** — merge and deploy the generation-safe contract in `agentic-karl-rag-api#16`, then pass its integration/fault-test gate before enabling async acceptance.
 - **WP6** — worker deployment (agk-deployment-configs), monitors on the reconciler alert markers, fault-injection tests; only then flip the two flags.
 - **§17 assumption ledger** in the plan — naming, dedup scope, admission caps, worker identity — awaiting ratification by the plan owner.

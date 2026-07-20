@@ -1,10 +1,7 @@
 // [knauf] KK20-195 WP4a — HTTP client for the generation-safe RAG contract
-// (hardened plan §7.2/§7.6). PROVISIONAL: coded to the plan's documented
-// contract before WP1 lands in agentic-karl-rag-api; the worker stays behind
-// KNAUF_INDEXING_WORKER_ENABLED until the deployed rag_api implements it, so
-// nothing calls this in production yet. Tests drive the claim loop against
-// the in-memory fake — this module exists so the entry point wires a real
-// shape, and so WP1 has one place to reconcile field names.
+// (hardened plan §7.2/§7.6), implemented by agentic-karl-rag-api#16. The
+// worker stays behind KNAUF_INDEXING_WORKER_ENABLED until that contract is
+// deployed and its integration gate passes.
 //
 // §7.2 write request: asset_id, generation (positive int from the claim),
 // blob materialization (multipart stream), persisted scope (never inferred
@@ -68,12 +65,23 @@ function createGenerationRagClient({ getStrategyFunctions }) {
       maxBodyLength: Infinity,
     });
     // §7.5: HTTP 200 with a body-level failure is a failure, never a success.
-    if (response.data?.status === false || response.data?.known_type === false) {
-      const bodyError = new Error(`RAG reported failure for ${asset_id}:${generation}`);
-      bodyError.status = 422;
-      throw bodyError;
+    const result = response.data;
+    const complete =
+      result?.status === 'ready' &&
+      result.asset_id === asset_id &&
+      result.generation === generation &&
+      result.index_profile === index_profile &&
+      Number.isInteger(result.chunks_expected) &&
+      result.chunks_expected >= 0 &&
+      result.chunks_written === result.chunks_expected;
+    if (!complete) {
+      const contractError = new Error(
+        `RAG returned an incomplete generation for ${asset_id}:${generation}`,
+      );
+      contractError.status = 502;
+      throw contractError;
     }
-    return response.data;
+    return result;
   }
 
   /**
@@ -81,15 +89,15 @@ function createGenerationRagClient({ getStrategyFunctions }) {
    * Authenticated like every other rag_api call — the JWT is minted from the
    * asset's owning user (resolved by the caller); without it rag_api 401s and
    * cleanup churns forever in delete_failed.
-   * @param {{ asset_id: string, generation: number, userId?: string }} params
+   * @param {{ asset_id: string, generation: number, vector_backend?: 'pgvector'|'azure_search', userId?: string }} params
    */
-  async function deleteGeneration({ asset_id, generation, userId }) {
+  async function deleteGeneration({ asset_id, generation, vector_backend, userId }) {
     const headers = {};
     if (userId) {
       headers.Authorization = `Bearer ${generateShortLivedToken(userId)}`;
     }
     await axios.delete(`${baseUrl()}/generation`, {
-      data: { asset_id, generation },
+      data: { asset_id, generation, ...(vector_backend ? { backend: vector_backend } : {}) },
       headers,
       timeout: Number.parseInt(process.env.RAG_DELETE_TIMEOUT_MS ?? '', 10) || 60 * 1000,
     });
