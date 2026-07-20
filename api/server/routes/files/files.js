@@ -841,13 +841,36 @@ router.post('/', async (req, res) => {
         // R3 — same status semantics as the fresh path: pending work replays
         // as 202, never a 200 the client could read as "ready".
         const knaufReplayPending = projected?.indexing != null && !projected.indexing.ready;
-        return res.status(knaufReplayPending ? 202 : 200).json({
-          message: knaufReplayPending
-            ? 'File accepted; indexing in progress'
-            : 'File already processed',
-          ...(projected ?? existing),
-          ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
-        });
+        let recoverStaleSyncReplay = false;
+        if (knaufReplayPending && existing.knauf_asset_id) {
+          const {
+            isAsyncAcceptedForUser,
+            isIndexingWorkerEnabled,
+          } = require('~/server/services/Files/knauf/asyncIndexingConfig');
+          if (!isAsyncAcceptedForUser(req.user) && !isIndexingWorkerEnabled()) {
+            const asset = await db.getAssetByAssetId(existing.knauf_asset_id);
+            const {
+              shouldRecoverStaleSyncReplay,
+            } = require('~/server/services/Files/knauf/fileSearchAssetLifecycle');
+            recoverStaleSyncReplay = shouldRecoverStaleSyncReplay({
+              asset,
+              asyncAccepted: false,
+              workerEnabled: false,
+            });
+          }
+        }
+        if (!recoverStaleSyncReplay) {
+          return res.status(knaufReplayPending ? 202 : 200).json({
+            message: knaufReplayPending
+              ? 'File accepted; indexing in progress'
+              : 'File already processed',
+            ...(projected ?? existing),
+            ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
+          });
+        }
+        logger.warn(
+          `[/files] stale synchronous replay ${metadata.file_id} will re-enter lifecycle recovery`,
+        );
       }
       if (verdict.outcome === 'conflict') {
         return res.status(409).json({

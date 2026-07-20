@@ -221,7 +221,7 @@ A bounded periodic loop ([indexingReconciler.js](../../../../api/server/services
 
 | # | Case | Detects | Action |
 |---|---|---|---|
-| 1 | `stale_uploading` | `uploading` reservation older than 1 h | Unreferenced → GC through the lifecycle; referenced → alert |
+| 1 | `stale_uploading` | `uploading` reservation older than 1 h | Unreferenced → GC; referenced with blob intent → queue; referenced without intent → visible failed/re-upload state |
 | 2 | `expired_lease` | `processing` lease expired ≥30 min and never reclaimed | Alert (worker fleet not draining) |
 | 3 | `dangling_file_refs` | File rows pointing at a missing asset | Alert |
 | 4 | `orphan_assets` | `ready`/`failed` asset ≥24 h old with no File references | Tombstone + cleanup + remove |
@@ -233,7 +233,7 @@ Every case advances a rotating `_id` cursor so successive passes sweep the whole
 
 ### 3.8 Generation-safe RAG contract
 
-[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 includes legacy vectors without generation metadata.
+[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. New physical assets receive an immutable server UUID independent of the reusable logical File id, so late cleanup from an old incarnation cannot delete a new generation. The persisted sanitized filename preserves the extension used by RAG parser/OCR routing. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 includes legacy vectors without generation metadata.
 
 ---
 
@@ -386,7 +386,7 @@ This resolves the BUG-03/BUG-04 flash-and-disappear class and gives BUG-05 (sile
 
 ## 7. What deliberately did NOT change
 
-- **Retrieval** — `POST /query`, the `file_search` tool, citations, `RAG_USE_FULL_CONTEXT`: untouched ([`rag-search.md`](./rag-search.md)).
+- **Retrieval presentation** — ranking, citations and `RAG_USE_FULL_CONTEXT` are unchanged ([`rag-search.md`](./rag-search.md)); query requests now add the authoritative active-generation filter described in §3.8.
 - **Storage** — `fileStrategy` adapters, SAS serving: untouched ([`storage.md`](./storage.md)). FileAsset stores a **stable blob identity**, never a SAS URL.
 - **Binding model** — message-level vs agent-level visibility ([`overview.md`](./overview.md) §3).
 - **Non-File-Search paths** — vision, upload-as-text, code files, provider uploads: no FileAsset involvement.

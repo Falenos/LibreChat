@@ -5,8 +5,9 @@
 // (log at error level with a stable marker) and leaves state intact.
 //
 //   1. stale `uploading` asset      → no File reference: remove the dead
-//                                     reservation (via the WP3d lifecycle);
-//                                     referenced: alert (ambiguous).
+//                                     reservation; referenced + persisted
+//                                     blob intent: resume at queued; otherwise
+//                                     fail visibly and require re-upload.
 //   2. expired `processing` lease   → claimable by design (§5.1 reclaims
 //                                     them); long-expired leases mean no
 //                                     worker is draining → alert only.
@@ -84,6 +85,29 @@ function createIndexingReconciler({
     return new Set(rows.map((r) => r.knauf_asset_id));
   };
 
+  const referencedFilesByAsset = async (assetIds) => {
+    if (assetIds.length === 0) {
+      return new Map();
+    }
+    const rows =
+      (await db.getFiles({ knauf_asset_id: { $in: assetIds } }, null, {
+        knauf_asset_id: 1,
+        filepath: 1,
+        source: 1,
+        bytes: 1,
+        type: 1,
+        filename: 1,
+      })) ?? [];
+    const byAsset = new Map();
+    for (const row of rows) {
+      const current = byAsset.get(row.knauf_asset_id);
+      if (row.knauf_asset_id && (!current || (!current.filepath && row.filepath))) {
+        byAsset.set(row.knauf_asset_id, row);
+      }
+    }
+    return byAsset;
+  };
+
   // KK20-195 review R8 — rotating _id cursors so every bounded case sweeps
   // its WHOLE space over successive passes. Rows the pass deliberately leaves
   // in place (referenced/alert-only ones) keep their sort position, so a
@@ -155,14 +179,42 @@ function createIndexingReconciler({
       { _id: 1 },
     );
     staleUploadingCursor.advance(assets, config.batchLimit);
-    const referenced = await referencedAssetIds(assets.map((a) => a.asset_id));
+    const referenced = await referencedFilesByAsset(assets.map((a) => a.asset_id));
     let repaired = 0;
     let alerted = 0;
     for (const asset of assets) {
-      if (referenced.has(asset.asset_id)) {
-        // A File row pointing at an asset that never reached `queued` should
-        // not exist (rows are created after markQueued) — never auto-delete.
-        alert('stale_uploading_referenced', `asset ${asset.asset_id} has File references`);
+      const file = referenced.get(asset.asset_id);
+      if (file) {
+        if (file.filepath) {
+          const queued = await db.markQueued({
+            asset_id: asset.asset_id,
+            blob: {
+              source: file.source,
+              path: file.filepath,
+              bytes: file.bytes,
+              mime: file.type,
+              filename: file.filename,
+            },
+          });
+          if (queued) {
+            repaired += 1;
+          } else {
+            alert('stale_uploading_transition_lost', `asset ${asset.asset_id} changed state`);
+            alerted += 1;
+          }
+          continue;
+        }
+        const failed = await db.failStaleUpload({
+          asset_id: asset.asset_id,
+          error_code: 'upload_interrupted_reupload_required',
+        });
+        if (failed) {
+          repaired += 1;
+        }
+        alert(
+          'stale_uploading_reupload_required',
+          `asset ${asset.asset_id} has no recoverable blob intent`,
+        );
         alerted += 1;
         continue;
       }

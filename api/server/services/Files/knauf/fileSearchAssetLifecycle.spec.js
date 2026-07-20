@@ -10,6 +10,7 @@ const { createFileAssetMethods } = require('@librechat/data-schemas');
 const {
   reserveForUpload,
   classifyExistingAsset,
+  shouldRecoverStaleSyncReplay,
   recordSyncEmbed,
   buildIndexingProjection,
 } = require('./fileSearchAssetLifecycle');
@@ -42,7 +43,7 @@ const reserve = (overrides = {}) =>
   reserveForUpload({
     db,
     userId: 'u1',
-    file_id: `f-${Math.random().toString(36).slice(2)}`,
+    asset_id: `asset-${Math.random().toString(36).slice(2)}`,
     entityId: 'agent-1',
     messageAttachment: true,
     contentHash: 'h1',
@@ -52,18 +53,18 @@ const reserve = (overrides = {}) =>
 
 describe('reserveForUpload (KK20-195 WP3b)', () => {
   test('chat uploads reserve by scope+hash dedup key; identical uploads coalesce', async () => {
-    const first = await reserve({ file_id: 'f1' });
-    const second = await reserve({ file_id: 'f2' });
+    const first = await reserve({ asset_id: 'asset-1' });
+    const second = await reserve({ asset_id: 'asset-2' });
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
-    expect(second.asset.asset_id).toBe('f1');
+    expect(second.asset.asset_id).toBe('asset-1');
     expect(first.asset.scope_type).toBe('user');
     expect(first.asset.embed_route).toBe('/embed');
   });
 
   test('agent-library uploads stay un-deduplicated and agent-scoped', async () => {
-    const a = await reserve({ file_id: 'a1', messageAttachment: false, contentHash: 'h1' });
-    const b = await reserve({ file_id: 'a2', messageAttachment: false, contentHash: 'h1' });
+    const a = await reserve({ asset_id: 'asset-a1', messageAttachment: false, contentHash: 'h1' });
+    const b = await reserve({ asset_id: 'asset-a2', messageAttachment: false, contentHash: 'h1' });
     expect(a.created).toBe(true);
     expect(b.created).toBe(true); // same content, DIFFERENT assets
     expect(a.asset.scope_type).toBe('agent');
@@ -74,7 +75,7 @@ describe('reserveForUpload (KK20-195 WP3b)', () => {
 
   test('azure routing applies to agent assets when enabled', async () => {
     const a = await reserve({
-      file_id: 'az1',
+      asset_id: 'asset-az1',
       messageAttachment: false,
       azureSearchForAgents: true,
     });
@@ -153,9 +154,38 @@ describe('classifyExistingAsset — reclaim of abandoned reservations (KK20-195 
   });
 });
 
+describe('stale synchronous replay recovery', () => {
+  const now = new Date('2026-07-20T12:00:00Z');
+  const stale = new Date(now.getTime() - 20 * 60 * 1000);
+
+  test('re-enters upload recovery only for stale work with no worker or async acceptance', () => {
+    const asset = { status: 'queued', updatedAt: stale };
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: false, workerEnabled: false, now }),
+    ).toBe(true);
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: true, workerEnabled: false, now }),
+    ).toBe(false);
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: false, workerEnabled: true, now }),
+    ).toBe(false);
+  });
+
+  test('keeps a fresh replay joined to the in-flight upload', () => {
+    expect(
+      shouldRecoverStaleSyncReplay({
+        asset: { status: 'queued', updatedAt: new Date(now.getTime() - 1000) },
+        asyncAccepted: false,
+        workerEnabled: false,
+        now,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('recordSyncEmbed — sync execution through the asset (rollout step 4)', () => {
   const queueAsset = async (asset_id) => {
-    const { asset } = await reserve({ file_id: asset_id });
+    const { asset } = await reserve({ asset_id });
     await db.markQueued({ asset_id: asset.asset_id, blob: { path: '/p', bytes: 5 } });
     return asset.asset_id;
   };
@@ -271,8 +301,16 @@ describe('buildIndexingProjection', () => {
         status: 'failed',
         active_generation: null,
         last_error_code: 'rag_5xx',
+        blob: { path: '/blob/doc.pdf' },
       }),
     ).toMatchObject({ status: 'failed', ready: false, retryable: true, error_code: 'rag_5xx' });
+    expect(
+      buildIndexingProjection({
+        status: 'failed',
+        active_generation: null,
+        last_error_code: 'upload_interrupted_reupload_required',
+      }),
+    ).toMatchObject({ status: 'failed', ready: false, retryable: false });
   });
 
   test('a ready generation stays ready during a replacement re-index', () => {

@@ -959,7 +959,10 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     const reservation = await reserveForUpload({
       db,
       userId: req.user.id,
-      file_id,
+      // The physical identity must not be reusable with the logical client
+      // file id. Otherwise a late cleanup from a deleted incarnation can
+      // remove the same numbered generation of a later upload.
+      asset_id: v4(),
       entityId: entity_id,
       messageAttachment,
       contentHash: knaufContentHash,
@@ -1063,7 +1066,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         const fresh = await reserveForUpload({
           db,
           userId: req.user.id,
-          file_id,
+          asset_id: v4(),
           entityId: entity_id,
           messageAttachment,
           contentHash: knaufContentHash,
@@ -1102,7 +1105,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       // createFile upserts it (same file_id) to its finished state. embedded=false
       // so the indexing projection shows it as in-flight, not ready.
       try {
-        await db.createFile(
+        const pendingFile = await db.createFile(
           removeNullishValues({
             user: req.user.id,
             file_id,
@@ -1127,13 +1130,16 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
           true,
           { userId: req.user.id, tenantId: req.user.tenantId ?? null },
         );
+        if (!pendingFile) {
+          throw new Error('file_asset_pending_file_lost');
+        }
       } catch (pendingError) {
-        // A concurrent owner already holds this (user, hash) row, or another
-        // insert raced this file_id — the physical work below still proceeds and
-        // the final createFile reconciles the row. Never block on the marker.
-        logger.warn(
-          `[processAgentFileUpload] pending File marker skipped for ${file_id}: ${pendingError?.message}`,
-        );
+        // No physical work has started yet. Fail closed and release the empty
+        // reservation; continuing without the recovery anchor can create a
+        // queued asset that no user can poll, retry, or delete.
+        await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
+        await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        throw pendingError;
       }
       try {
         const { handleFileUpload } = getStrategyFunctions(source);
@@ -1142,13 +1148,16 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         // F3 — record the blob path on the pending File as soon as it is known
         // (recoverable blob intent): a crash before markQueued still leaves a
         // discoverable blob (File.filepath) for delete/reconcile to clean.
-        await db
-          .updateFile({ file_id, filepath: storageResult.filepath, bytes: storageResult.bytes })
-          .catch((intentError) =>
-            logger.warn(
-              `[processAgentFileUpload] blob-intent update failed for ${file_id}: ${intentError?.message}`,
-            ),
-          );
+        const blobIntent = await db.updateFile({
+          file_id,
+          filepath: storageResult.filepath,
+          bytes: storageResult.bytes,
+        });
+        if (!blobIntent) {
+          const intentLost = new Error('file_asset_blob_intent_lost');
+          intentLost.knaufCode = 'file_asset_blob_intent_lost';
+          throw intentLost;
+        }
         // KK20-195 review R3 — the CAS can MISS (null), not just throw: a
         // concurrent tombstone leaves the asset 'uploading' and nothing would
         // ever drain it. A miss is the same failure as a throw.
@@ -1159,6 +1168,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
             path: storageResult.filepath,
             bytes: storageResult.bytes,
             mime: file.mimetype,
+            filename: sanitizeFilename(file.originalname),
           },
         });
         if (!queued) {
@@ -1186,7 +1196,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
                   uploadVectors({
                     req,
                     file,
-                    file_id,
+                    file_id: knaufAssetId,
                     entity_id: messageAttachment ? req.user.id : entity_id,
                     isAgentFile: !messageAttachment,
                   }),
@@ -1328,8 +1338,8 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       tenantId: req.user.tenantId,
       // [knauf] KK20-204 — content-hash dedup bookkeeping. All undefined on non-
       // file_search paths (→ dropped by removeNullishValues). knauf_asset_id is the
-      // file_id the shared blob + embeddings live under (own id when this row is the
-      // asset owner; the owner's id when this row reuses an existing asset).
+      // immutable physical id the shared blob + embeddings live under (new UUID
+      // for a new asset; the existing physical id on dedup reuse).
       // knauf_dedup_owner marks the embed owner (unique per (user, hash) via index).
       knauf_content_hash: knaufContentHash,
       knauf_asset_id: knaufAssetId,

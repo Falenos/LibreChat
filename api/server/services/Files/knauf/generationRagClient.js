@@ -37,7 +37,7 @@ function createGenerationRagClient({ getStrategyFunctions }) {
    * @param {number} params.generation
    * @param {string} params.index_profile
    * @param {string} params.embed_route - '/embed' | '/agent/embed'
-   * @param {{ source?: string, path?: string, mime?: string }} params.blob
+   * @param {{ source?: string, path?: string, mime?: string, filename?: string }} params.blob
    * @param {{ userId: string, entityId: string }} params.scope
    */
   async function embedGeneration({
@@ -58,7 +58,13 @@ function createGenerationRagClient({ getStrategyFunctions }) {
     form.append('generation', String(generation));
     form.append('index_profile', index_profile);
     form.append('entity_id', scope.entityId);
-    form.append('file', stream, { filename: asset_id, contentType: blob?.mime });
+    // RAG loader selection is extension-based. Keep the sanitized original
+    // name so async PDF/PPTX/DOCX uploads take the same parser/OCR path as
+    // synchronous uploads; asset_id alone has no extension.
+    form.append('file', stream, {
+      filename: blob?.filename ?? asset_id,
+      contentType: blob?.mime,
+    });
     const response = await axios.post(`${baseUrl()}${embed_route}`, form, {
       headers: { ...form.getHeaders(), Authorization: `Bearer ${jwtToken}` },
       timeout: embedTimeoutMs(),

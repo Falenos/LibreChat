@@ -2,6 +2,23 @@ const { Readable } = require('stream');
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({ generateShortLivedToken: jest.fn(() => 'rag-token') }));
+jest.mock(
+  'form-data',
+  () =>
+    class FormDataMock {
+      constructor() {
+        this.parts = [];
+      }
+
+      append(...args) {
+        this.parts.push(args);
+      }
+
+      getHeaders() {
+        return { 'content-type': 'multipart/form-data' };
+      }
+    },
+);
 
 const axios = require('axios');
 const { createGenerationRagClient } = require('./generationRagClient');
@@ -44,7 +61,12 @@ describe('generation RAG client contract', () => {
         generation: 3,
         index_profile: 'profile-v1',
         embed_route: '/embed',
-        blob: { source: 'azure_blob', path: 'asset-1', mime: 'text/plain' },
+        blob: {
+          source: 'azure_blob',
+          path: 'asset-1',
+          mime: 'application/pdf',
+          filename: 'Quarterly Report.pdf',
+        },
         scope: { userId: 'user-1', entityId: 'user-1' },
       }),
     ).resolves.toEqual(ready);
@@ -56,6 +78,12 @@ describe('generation RAG client contract', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer rag-token' }),
       }),
     );
+    const form = axios.post.mock.calls[0][1];
+    expect(form.parts).toContainEqual([
+      'file',
+      expect.anything(),
+      { filename: 'Quarterly Report.pdf', contentType: 'application/pdf' },
+    ]);
   });
 
   test.each([

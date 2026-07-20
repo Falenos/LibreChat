@@ -67,6 +67,7 @@ const fileAssetSchema: Schema<IKnaufFileAsset> = new Schema(
       region: { type: String },
       bytes: { type: Number },
       mime: { type: String },
+      filename: { type: String },
     },
     // KK20-195 review F9 (re-review) — expected upload size, recorded at
     // reservation time (before the blob exists). The byte-cap admission counts

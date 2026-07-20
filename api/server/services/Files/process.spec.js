@@ -1750,7 +1750,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     // Reservation happens BEFORE physical work, keyed by user scope + hash.
     expect(db.reserveAsset).toHaveBeenCalledWith(
       expect.objectContaining({
-        asset_id: 'up-1',
+        asset_id: 'mock-uuid',
         scope_type: 'user',
         scope_id: 'user-123',
         dedup_key: 'u:user-123:h:hashABC',
@@ -1758,17 +1758,23 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       }),
     );
     expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
-    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.markQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'mock-uuid',
+        blob: expect.objectContaining({ filename: 'doc.pdf' }),
+      }),
+    );
     expect(uploadVectors).toHaveBeenCalledTimes(1);
+    expect(uploadVectors).toHaveBeenCalledWith(expect.objectContaining({ file_id: 'mock-uuid' }));
     expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
     // Sync (flag-off) execution is recorded through the asset: claim → activate.
-    expect(db.claimAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.claimAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'mock-uuid' }));
     expect(db.activateGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({ asset_id: 'up-1', execution_token: 'test-token' }),
+      expect.objectContaining({ asset_id: 'mock-uuid', execution_token: 'test-token' }),
     );
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
-    expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
+    expect(fileInfo.knauf_asset_id).toBe('mock-uuid');
     expect(fileInfo.knauf_dedup_owner).toBe(true); // claims the unique owner slot
   });
 
@@ -1792,7 +1798,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     expect(pending.embedded).toBe(false); // in-flight until the final upsert
     expect(ownerAttempt.knauf_dedup_owner).toBe(true); // final row tries to own
     expect(retry.knauf_dedup_owner).toBeUndefined(); // retried as a non-owner duplicate
-    expect(retry.knauf_asset_id).toBe('up-1'); // still its own embedded asset (transient dup, GC-cleaned)
+    expect(retry.knauf_asset_id).toBe('mock-uuid');
     expect(mockRes.json).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.any(String) }),
     );
@@ -1819,8 +1825,37 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     expect(order.indexOf('pending')).toBeLessThan(order.indexOf('blob'));
     const pending = db.createFile.mock.calls[0][0];
     expect(pending.embedded).toBe(false);
-    expect(pending.knauf_asset_id).toBe('up-1'); // references the asset from the start
+    expect(pending.knauf_asset_id).toBe('mock-uuid'); // references the physical asset from the start
     expect(pending.knauf_dedup_owner).toBeUndefined(); // ownership is claimed by the final upsert
+  });
+
+  test('fails before physical work when the pending File cannot be persisted', async () => {
+    db.createFile.mockRejectedValueOnce(new Error('mongo down at pending marker'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down at pending marker');
+
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+  });
+
+  test('compensates the blob when its durable File intent cannot be recorded', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.updateFile.mockRejectedValueOnce(new Error('mongo down at blob intent'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down at blob intent');
+
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ filepath: '/blob/doc.pdf', embedded: false }),
+    );
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
   });
 
   test('F3: a createFile failure after queueing leaves the pending File as a recovery anchor', async () => {
@@ -1836,7 +1871,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
     ).rejects.toThrow('mongo down at finalize');
 
-    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'mock-uuid' }));
     expect(db.createFile.mock.calls[0][0].embedded).toBe(false); // the pending marker persisted
     // The pending File is the recovery anchor — a finalize failure must NOT delete it.
     expect(db.deleteFiles).not.toHaveBeenCalled();
@@ -1898,7 +1933,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     try {
       const queuedAt = new Date('2026-07-16T00:00:00.000Z');
       db.getAssetByAssetId.mockResolvedValueOnce({
-        asset_id: 'up-1',
+        asset_id: 'mock-uuid',
         status: 'queued',
         active_generation: null,
         queued_at: queuedAt,
@@ -1948,8 +1983,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       // The reservation was made (that's what defeats the TOCTOU race) and
       // then compensated — nothing durable survives the rejection.
       expect(db.reserveAsset).toHaveBeenCalledTimes(1);
-      expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
-      expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+      expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+      expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
       expect(handleFileUpload).not.toHaveBeenCalled(); // no physical work
       expect(db.createFile).not.toHaveBeenCalled();
     } finally {
@@ -1977,8 +2012,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect.anything(),
       expect.objectContaining({ filepath: '/blob/doc.pdf', embedded: false }),
     );
-    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
-    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
     // KK20-195 review F3 — a pending File marker is written before physical work.
     // A HANDLED failure compensates it (the marker only survives PROCESS DEATH,
     // by design), so the request still leaves nothing behind.
@@ -1997,7 +2032,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     ).rejects.toThrow('file_asset_queue_transition_lost');
 
     expect(deleteFile).toHaveBeenCalledTimes(1);
-    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
     // F3 — the pending File marker is compensated on the handled failure.
     expect(db.createFile).toHaveBeenCalledTimes(1);
     expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
@@ -2045,7 +2080,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     expect(computeContentHash).not.toHaveBeenCalled();
     expect(db.reserveAsset).toHaveBeenCalledWith(
       expect.objectContaining({
-        asset_id: 'lib-1',
+        asset_id: 'mock-uuid',
         scope_type: 'agent',
         scope_id: 'agent-abc',
         embed_route: '/agent/embed',
@@ -2056,10 +2091,10 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     expect(uploadVectors).toHaveBeenCalledTimes(1);
     expect(uploadVectors.mock.calls[0][0].entity_id).toBe('agent-abc');
     // Row carries no dedup bookkeeping (dropped by removeNullishValues), but
-    // points at its own asset for the WP3c status projection + delete refcount.
+    // points at its immutable physical asset for status + delete refcount.
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBeUndefined();
-    expect(fileInfo.knauf_asset_id).toBe('lib-1');
+    expect(fileInfo.knauf_asset_id).toBe('mock-uuid');
     expect(fileInfo.knauf_dedup_owner).toBeUndefined();
     // Added to the agent's persistent file_search library.
     expect(db.addAgentResourceFile).toHaveBeenCalled();

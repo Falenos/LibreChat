@@ -117,13 +117,26 @@ describe('case 1 — stale uploading', () => {
     expect(await db.getAssetByAssetId('u-stale')).toBeNull();
   });
 
-  test('a REFERENCED uploading asset is never auto-deleted — alert only', async () => {
+  test('a referenced upload with durable blob intent resumes at queued', async () => {
     await seedAsset({ asset_id: 'u-ref', status: 'uploading' });
     await seedFile({ file_id: 'fr', knauf_asset_id: 'u-ref' });
     const counts = await buildReconciler().runOnce();
-    expect(counts.stale_uploading).toMatchObject({ repaired: 0, alerted: 1 });
-    expect(await db.getAssetByAssetId('u-ref')).not.toBeNull();
-    expect(alerts().some((m) => m.includes('stale_uploading_referenced'))).toBe(true);
+    expect(counts.stale_uploading).toMatchObject({ repaired: 1, alerted: 0 });
+    const asset = await db.getAssetByAssetId('u-ref');
+    expect(asset.status).toBe('queued');
+    expect(asset.blob).toMatchObject({ path: '/blob/a', filename: 'doc.pdf' });
+  });
+
+  test('a referenced upload without blob intent fails visibly for re-upload', async () => {
+    await seedAsset({ asset_id: 'u-no-blob', status: 'uploading' });
+    await seedFile({ file_id: 'fr-no-blob', knauf_asset_id: 'u-no-blob' });
+    await File.collection.updateOne({ file_id: 'fr-no-blob' }, { $unset: { filepath: '' } });
+    const counts = await buildReconciler().runOnce();
+    expect(counts.stale_uploading).toMatchObject({ repaired: 1, alerted: 1 });
+    const asset = await db.getAssetByAssetId('u-no-blob');
+    expect(asset.status).toBe('failed');
+    expect(asset.last_error_code).toBe('upload_interrupted_reupload_required');
+    expect(alerts().some((m) => m.includes('stale_uploading_reupload_required'))).toBe(true);
   });
 
   test('a FRESH uploading asset is out of scope', async () => {
@@ -250,7 +263,7 @@ describe('case 8 — stale-generation cleanup debt (R9)', () => {
 });
 
 // KK20-195 review R8 — every bounded case converges: rows a pass leaves in
-// place (referenced / alert-only) must not freeze the window and starve the
+// place or are repaired must not freeze the window and starve the
 // rows behind them. Datasets deliberately exceed the batch limit.
 describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
   beforeEach(() => {
@@ -264,12 +277,12 @@ describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
     await seedAsset({ asset_id: 'su-1', status: 'uploading' });
     await seedAsset({ asset_id: 'su-2', status: 'uploading' });
     await seedAsset({ asset_id: 'su-behind', status: 'uploading' });
-    await seedFile({ file_id: 'r1', knauf_asset_id: 'su-1' }); // alert-only, stays
+    await seedFile({ file_id: 'r1', knauf_asset_id: 'su-1' });
     await seedFile({ file_id: 'r2', knauf_asset_id: 'su-2' });
 
     const reconciler = buildReconciler();
     const first = await reconciler.runOnce();
-    expect(first.stale_uploading).toMatchObject({ alerted: 2, repaired: 0 });
+    expect(first.stale_uploading).toMatchObject({ alerted: 0, repaired: 2 });
     expect(await db.getAssetByAssetId('su-behind')).not.toBeNull();
 
     const second = await reconciler.runOnce();

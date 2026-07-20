@@ -27,6 +27,8 @@ export interface IFileAssetBlob {
   region?: string;
   bytes?: number;
   mime?: string;
+  /** Sanitized original name; preserves the extension for async parser routing. */
+  filename?: string;
 }
 
 export interface IKnaufFileAsset extends Document {

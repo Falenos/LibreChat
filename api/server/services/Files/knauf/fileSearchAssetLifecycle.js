@@ -53,7 +53,7 @@ function isAbandonedNonTerminal(asset, now) {
  * @param {Object} params
  * @param {Object} params.db - createMethods surface (reserveAsset, ...)
  * @param {string} params.userId
- * @param {string} params.file_id
+ * @param {string} params.asset_id - immutable physical UUID, independent of the logical File id
  * @param {string | undefined} params.entityId - agent id on the agent-library path
  * @param {boolean} params.messageAttachment - chat (true) vs agent library (false)
  * @param {string | undefined} params.contentHash
@@ -64,7 +64,7 @@ function isAbandonedNonTerminal(asset, now) {
 async function reserveForUpload({
   db,
   userId,
-  file_id,
+  asset_id,
   entityId,
   messageAttachment,
   contentHash,
@@ -75,7 +75,7 @@ async function reserveForUpload({
   const dedupKey =
     !isAgent && contentHash ? buildDedupKey({ user: userId, contentHash }) : undefined;
   const { asset, created } = await db.reserveAsset({
-    asset_id: file_id,
+    asset_id,
     scope_type: isAgent ? 'agent' : 'user',
     scope_id: isAgent ? String(entityId ?? userId) : userId,
     target_index_profile: getIndexProfile(),
@@ -126,6 +126,15 @@ function classifyExistingAsset(asset, { now = new Date(), reclaimable = true } =
     return 'reclaim';
   }
   return 'in_progress';
+}
+
+function shouldRecoverStaleSyncReplay({ asset, asyncAccepted, workerEnabled, now = new Date() }) {
+  return (
+    !asyncAccepted &&
+    !workerEnabled &&
+    asset != null &&
+    classifyExistingAsset(asset, { now, reclaimable: true }) === 'reclaim'
+  );
 }
 
 /**
@@ -215,7 +224,7 @@ async function recordSyncEmbed({
 /**
  * The `indexing` projection added to upload responses (superset body — the
  * flat TFile spread stays for current clients; plan §6.2 fields as siblings).
- * @param {{ status?: string, active_generation?: number | null, delete_requested_at?: Date | null, last_error_code?: string | null, queued_at?: Date } | null | undefined} asset
+ * @param {{ status?: string, active_generation?: number | null, delete_requested_at?: Date | null, last_error_code?: string | null, queued_at?: Date, blob?: { path?: string } } | null | undefined} asset
  * @returns {{ status: string, ready: boolean, retryable: boolean, error_code: string | null, queued_at: Date | null }}
  */
 function buildIndexingProjection(asset) {
@@ -226,7 +235,7 @@ function buildIndexingProjection(asset) {
   return {
     status: asset.status ?? 'ready',
     ready,
-    retryable: asset.status === 'failed',
+    retryable: asset.status === 'failed' && Boolean(asset.blob?.path),
     error_code: asset.last_error_code ?? null,
     queued_at: asset.queued_at ?? null,
   };
@@ -235,6 +244,7 @@ function buildIndexingProjection(asset) {
 module.exports = {
   reserveForUpload,
   classifyExistingAsset,
+  shouldRecoverStaleSyncReplay,
   recordSyncEmbed,
   buildIndexingProjection,
 };

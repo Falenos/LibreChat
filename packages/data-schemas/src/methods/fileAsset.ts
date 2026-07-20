@@ -37,7 +37,18 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   reserveAsset: (params: ReserveAssetParams) => Promise<ReserveAssetResult>;
   markQueued: (params: {
     asset_id: string;
-    blob: { source?: string; path?: string; region?: string; bytes?: number; mime?: string };
+    blob: {
+      source?: string;
+      path?: string;
+      region?: string;
+      bytes?: number;
+      mime?: string;
+      filename?: string;
+    };
+  }) => Promise<IKnaufFileAsset | null>;
+  failStaleUpload: (params: {
+    asset_id: string;
+    error_code: string;
   }) => Promise<IKnaufFileAsset | null>;
   claimNextDue: (params: {
     workerId: string;
@@ -148,13 +159,40 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   /** CAS uploading → queued once the blob is durably stored. */
   async function markQueued(params: {
     asset_id: string;
-    blob: { source?: string; path?: string; region?: string; bytes?: number; mime?: string };
+    blob: {
+      source?: string;
+      path?: string;
+      region?: string;
+      bytes?: number;
+      mime?: string;
+      filename?: string;
+    };
   }): Promise<IKnaufFileAsset | null> {
     const now = new Date();
     return getModel()
       .findOneAndUpdate(
         { asset_id: params.asset_id, status: 'uploading', delete_requested_at: null },
         { $set: { status: 'queued', blob: params.blob, queued_at: now, next_attempt_at: now } },
+        { new: true },
+      )
+      .lean<IKnaufFileAsset>();
+  }
+
+  /** Reconciler-only CAS for an abandoned upload that has no recoverable blob intent. */
+  async function failStaleUpload(params: {
+    asset_id: string;
+    error_code: string;
+  }): Promise<IKnaufFileAsset | null> {
+    return getModel()
+      .findOneAndUpdate(
+        { asset_id: params.asset_id, status: 'uploading', delete_requested_at: null },
+        {
+          $set: {
+            status: 'failed',
+            last_error_code: params.error_code,
+            last_error_detail: null,
+          },
+        },
         { new: true },
       )
       .lean<IKnaufFileAsset>();
@@ -501,6 +539,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
   return {
     reserveAsset,
     markQueued,
+    failStaleUpload,
     claimNextDue,
     claimAsset,
     heartbeatClaim,

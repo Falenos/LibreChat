@@ -89,9 +89,13 @@ describe('reserveAsset — the dedup reservation', () => {
 describe('markQueued', () => {
   test('CAS uploading→queued stores the blob and stamps timestamps', async () => {
     await methods.reserveAsset(baseParams({ asset_id: 'q1', dedup_key: 'kq1' }));
-    const queued = await methods.markQueued({ asset_id: 'q1', blob: { path: 'p', bytes: 5 } });
+    const queued = await methods.markQueued({
+      asset_id: 'q1',
+      blob: { path: 'p', bytes: 5, filename: 'scan.pdf' },
+    });
     expect(queued?.status).toBe('queued');
     expect(queued?.blob?.path).toBe('p');
+    expect(queued?.blob?.filename).toBe('scan.pdf');
     expect(queued?.next_attempt_at).toBeDefined();
   });
 
@@ -100,6 +104,22 @@ describe('markQueued', () => {
     expect(await methods.markQueued({ asset_id: 'q2', blob: {} })).toBeNull();
     await methods.tombstoneForDelete({ asset_id: 'q2' });
     expect(await methods.markQueued({ asset_id: 'q2', blob: {} })).toBeNull();
+  });
+
+  test('fails only an abandoned uploading reservation', async () => {
+    await methods.reserveAsset(baseParams({ asset_id: 'stale-upload', dedup_key: 'stale-key' }));
+    const failed = await methods.failStaleUpload({
+      asset_id: 'stale-upload',
+      error_code: 'upload_interrupted_reupload_required',
+    });
+    expect(failed?.status).toBe('failed');
+    expect(failed?.last_error_code).toBe('upload_interrupted_reupload_required');
+    expect(
+      await methods.failStaleUpload({
+        asset_id: 'stale-upload',
+        error_code: 'upload_interrupted_reupload_required',
+      }),
+    ).toBeNull();
   });
 });
 
