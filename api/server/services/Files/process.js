@@ -1018,13 +1018,48 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         // upload; with the flags off there is no worker/reconciler to reap it).
         // Free the wedged dedup slot and re-drive as a fresh upload instead of
         // returning `file_indexing_in_progress` to this (user, content) forever.
-        // Partial blob/vectors from the dead attempt are swept by the reconciler
-        // once WP6 enables it.
+        //
+        // KK20-195 review F3 (re-review) — physically clean the abandoned asset's
+        // blob/vectors BEFORE dropping its ledger row. The old code removed the
+        // ledger with no cleanup, orphaning the bytes with nothing left to
+        // reclaim them. gcAssetThroughLifecycle tombstones → cleanup → removes on
+        // success, or keeps the row as delete_failed on failure; if cleanup
+        // fails we do NOT re-drive onto un-cleaned bytes (409, recoverable).
         logger.warn(
           `[knauf][KK20-195] reclaiming abandoned '${reservation.asset.status}' asset ${knaufAssetId} for re-upload`,
         );
-        await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
-        await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        const { gcAssetThroughLifecycle } = require('./knauf/fileAssetDelete');
+        const staleAsset = reservation.asset;
+        const reclaimed = await gcAssetThroughLifecycle({
+          db,
+          asset_id: knaufAssetId,
+          logger,
+          cleanup: async () => {
+            if (!staleAsset.blob?.path) {
+              return true; // died before a blob was persisted — nothing to clean
+            }
+            try {
+              const { deleteFile } = getStrategyFunctions(staleAsset.blob.source ?? source);
+              await deleteFile(req, {
+                file_id: knaufAssetId,
+                filepath: staleAsset.blob.path,
+                source: staleAsset.blob.source ?? source,
+                embedded: false,
+              });
+              return true;
+            } catch (blobError) {
+              logger.warn(
+                `[knauf][KK20-195] reclaim blob cleanup failed for ${knaufAssetId}: ${blobError?.message}`,
+              );
+              return false;
+            }
+          },
+        });
+        if (!reclaimed) {
+          // The abandoned blob could not be cleaned — the ledger is kept
+          // (delete_failed) for recovery; never re-drive onto un-cleaned bytes.
+          return res.status(409).json({ error: 'file_indexing_in_progress', file_id });
+        }
         const fresh = await reserveForUpload({
           db,
           userId: req.user.id,
@@ -1059,10 +1094,61 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     }
 
     if (runCreatedPath) {
+      // KK20-195 review F3 (re-review) — persist a PENDING File row BEFORE any
+      // physical work. Process death after markQueued but before the final
+      // createFile below used to leave a queued asset with NO user-visible File
+      // (no status, no retry, and the worker's resolveScope finds no owning
+      // user). The pending row references the asset from the start; the final
+      // createFile upserts it (same file_id) to its finished state. embedded=false
+      // so the indexing projection shows it as in-flight, not ready.
+      try {
+        await db.createFile(
+          removeNullishValues({
+            user: req.user.id,
+            file_id,
+            temp_file_id,
+            knauf_asset_id: knaufAssetId,
+            knauf_upload_batch_id:
+              typeof metadata.batch_id === 'string' && metadata.batch_id.length <= 64
+                ? metadata.batch_id
+                : undefined,
+            conversationId:
+              req.body.conversationId && req.body.conversationId !== Constants.NEW_CONVO
+                ? req.body.conversationId
+                : undefined,
+            filename: sanitizeFilename(file.originalname),
+            type: file.mimetype,
+            bytes: file.size,
+            context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
+            embedded: false,
+            source,
+            tenantId: req.user.tenantId,
+          }),
+          true,
+          { userId: req.user.id, tenantId: req.user.tenantId ?? null },
+        );
+      } catch (pendingError) {
+        // A concurrent owner already holds this (user, hash) row, or another
+        // insert raced this file_id — the physical work below still proceeds and
+        // the final createFile reconciles the row. Never block on the marker.
+        logger.warn(
+          `[processAgentFileUpload] pending File marker skipped for ${file_id}: ${pendingError?.message}`,
+        );
+      }
       try {
         const { handleFileUpload } = getStrategyFunctions(source);
         const sanitizedUploadFn = createSanitizedUploadWrapper(handleFileUpload);
         storageResult = await sanitizedUploadFn({ req, file, file_id, basePath, entity_id });
+        // F3 — record the blob path on the pending File as soon as it is known
+        // (recoverable blob intent): a crash before markQueued still leaves a
+        // discoverable blob (File.filepath) for delete/reconcile to clean.
+        await db
+          .updateFile({ file_id, filepath: storageResult.filepath, bytes: storageResult.bytes })
+          .catch((intentError) =>
+            logger.warn(
+              `[processAgentFileUpload] blob-intent update failed for ${file_id}: ${intentError?.message}`,
+            ),
+          );
         // KK20-195 review R3 — the CAS can MISS (null), not just throw: a
         // concurrent tombstone leaves the asset 'uploading' and nothing would
         // ever drain it. A miss is the same failure as a throw.
@@ -1080,12 +1166,45 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
           missed.knaufCode = 'file_asset_queue_transition_lost';
           throw missed;
         }
+
+        if (knaufAsyncAccepted) {
+          // Async acceptance: the worker embeds; this request only records
+          // durable state. embedded=false until generation activation (WP4).
+          embeddingResult = { embedded: false, filename: file.originalname };
+        } else {
+          // Synchronous execution recorded through the asset lifecycle
+          // (claim → embed → activate). Embed keys stay as today: chat embeds
+          // USER-owned, agent-library embeds AGENT-scoped.
+          embeddingResult = await recordSyncEmbed({
+            db,
+            asset_id: knaufAssetId,
+            createdThisRequest: true,
+            logger,
+            embed: () =>
+              embedWithBlobCompensation({
+                embed: () =>
+                  uploadVectors({
+                    req,
+                    file,
+                    file_id,
+                    entity_id: messageAttachment ? req.user.id : entity_id,
+                    isAgentFile: !messageAttachment,
+                  }),
+                req,
+                file_id,
+                source,
+                storageResult,
+                getStrategyFunctions,
+              }),
+          });
+        }
       } catch (error) {
-        // Blob upload / queue transition failed — release the reservation this
-        // request made so it can't linger as an unreachable 'uploading' asset.
-        // KK20-195 review R3 — if the blob DID land before the transition
-        // failed, delete it too: removing only the ledger row orphaned the
-        // uploaded bytes with nothing left to ever reclaim them.
+        // A HANDLED failure (blob upload / queue transition / sync embed) —
+        // release everything this request created so nothing lingers. (Process
+        // DEATH is the recoverable case F3 covers: the pending File + asset
+        // remain, user-visible and retryable, blob discoverable via File.filepath.)
+        // KK20-195 review R3 — if the blob DID land, delete it too: removing only
+        // the ledger row orphaned the uploaded bytes.
         if (storageResult?.filepath) {
           try {
             const { deleteFile } = getStrategyFunctions(source);
@@ -1103,39 +1222,10 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
         }
         await db.tombstoneForDelete({ asset_id: knaufAssetId }).catch(() => {});
         await db.removeAsset({ asset_id: knaufAssetId }).catch(() => {});
+        // F3 — remove the pending File row this request inserted, so a handled
+        // failure leaves no orphaned "uploading" row.
+        await db.deleteFiles([file_id]).catch(() => {});
         throw error;
-      }
-
-      if (knaufAsyncAccepted) {
-        // Async acceptance: the worker embeds; this request only records
-        // durable state. embedded=false until generation activation (WP4).
-        embeddingResult = { embedded: false, filename: file.originalname };
-      } else {
-        // Synchronous execution recorded through the asset lifecycle
-        // (claim → embed → activate). Embed keys stay as today: chat embeds
-        // USER-owned, agent-library embeds AGENT-scoped.
-        embeddingResult = await recordSyncEmbed({
-          db,
-          asset_id: knaufAssetId,
-          createdThisRequest: true,
-          logger,
-          embed: () =>
-            embedWithBlobCompensation({
-              embed: () =>
-                uploadVectors({
-                  req,
-                  file,
-                  file_id,
-                  entity_id: messageAttachment ? req.user.id : entity_id,
-                  isAgentFile: !messageAttachment,
-                }),
-              req,
-              file_id,
-              source,
-              storageResult,
-              getStrategyFunctions,
-            }),
-        });
       }
     }
     // End [knauf]

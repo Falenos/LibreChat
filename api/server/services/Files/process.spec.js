@@ -81,8 +81,13 @@ jest.mock('~/server/services/Tools/credentials', () => ({
 
 jest.mock('~/models', () => ({
   createFile: jest.fn().mockResolvedValue({ file_id: 'created-file-id' }),
+  // [knauf] KK20-195 review F3 — the created path writes a pending File before
+  // physical work (updateFile records the blob intent; deleteFiles compensates a
+  // handled failure). Both resolve so the promise chains in process.js don't blow up.
+  updateFile: jest.fn().mockResolvedValue({}),
+  // End [knauf]
   updateFileUsage: jest.fn(),
-  deleteFiles: jest.fn(),
+  deleteFiles: jest.fn().mockResolvedValue({ deletedCount: 1 }),
   findFileById: jest.fn(),
   getConvo: jest.fn(),
   getExpiredFiles: jest.fn(),
@@ -1768,21 +1773,73 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
   });
 
   test('concurrent owner race — duplicate-key on insert → falls back to a non-owner row', async () => {
-    // First createFile rejects with the unique-owner index collision; retry succeeds.
+    // KK20-195 review F3 — call 0 is the pending File marker (no owner). The
+    // FINAL owner createFile hits the unique-owner index collision; its retry
+    // succeeds as a non-owner.
     const dupErr = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
-    db.createFile.mockRejectedValueOnce(dupErr).mockResolvedValueOnce({ file_id: 'up-1' });
+    db.createFile
+      .mockResolvedValueOnce({ file_id: 'up-1' }) // pending marker (F3)
+      .mockRejectedValueOnce(dupErr) // final owner attempt → collision
+      .mockResolvedValueOnce({ file_id: 'up-1' }); // retry as a non-owner duplicate
 
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
-    expect(db.createFile).toHaveBeenCalledTimes(2);
-    const firstAttempt = db.createFile.mock.calls[0][0];
-    const retry = db.createFile.mock.calls[1][0];
-    expect(firstAttempt.knauf_dedup_owner).toBe(true); // tried to own
+    expect(db.createFile).toHaveBeenCalledTimes(3);
+    const pending = db.createFile.mock.calls[0][0];
+    const ownerAttempt = db.createFile.mock.calls[1][0];
+    const retry = db.createFile.mock.calls[2][0];
+    expect(pending.knauf_dedup_owner).toBeUndefined(); // the marker never claims ownership
+    expect(pending.embedded).toBe(false); // in-flight until the final upsert
+    expect(ownerAttempt.knauf_dedup_owner).toBe(true); // final row tries to own
     expect(retry.knauf_dedup_owner).toBeUndefined(); // retried as a non-owner duplicate
     expect(retry.knauf_asset_id).toBe('up-1'); // still its own embedded asset (transient dup, GC-cleaned)
     expect(mockRes.json).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.any(String) }),
     );
+  });
+
+  // KK20-195 review F3 (re-review) — the crash-recovery anchor: a pending File is
+  // persisted BEFORE any physical work, so process death at either boundary
+  // (after the blob store, or after markQueued) leaves a user-visible, retryable
+  // File that references the asset — never a queued asset with no File.
+  test('F3: persists a pending File BEFORE physical work, referencing the asset', async () => {
+    const order = [];
+    handleFileUpload.mockImplementationOnce(async () => {
+      order.push('blob');
+      return { bytes: 10, filename: 'doc.pdf', filepath: '/blob/doc.pdf' };
+    });
+    db.createFile.mockImplementation(async (info) => {
+      order.push(info.embedded === false ? 'pending' : 'final');
+      return { file_id: 'up-1' };
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(order[0]).toBe('pending'); // written first, before the blob store
+    expect(order.indexOf('pending')).toBeLessThan(order.indexOf('blob'));
+    const pending = db.createFile.mock.calls[0][0];
+    expect(pending.embedded).toBe(false);
+    expect(pending.knauf_asset_id).toBe('up-1'); // references the asset from the start
+    expect(pending.knauf_dedup_owner).toBeUndefined(); // ownership is claimed by the final upsert
+  });
+
+  test('F3: a createFile failure after queueing leaves the pending File as a recovery anchor', async () => {
+    // The pending marker succeeds; the FINAL createFile (after markQueued + embed)
+    // throws — modeling a crash while finalizing. The pending File + queued asset
+    // survive, so the upload stays user-visible/retryable instead of becoming a
+    // queued asset with no File.
+    db.createFile
+      .mockResolvedValueOnce({ file_id: 'up-1' }) // pending marker
+      .mockRejectedValueOnce(new Error('mongo down at finalize')); // final row
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down at finalize');
+
+    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.createFile.mock.calls[0][0].embedded).toBe(false); // the pending marker persisted
+    // The pending File is the recovery anchor — a finalize failure must NOT delete it.
+    expect(db.deleteFiles).not.toHaveBeenCalled();
   });
 
   const readyAsset = () => ({
@@ -1922,7 +1979,12 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     );
     expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
     expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
-    expect(db.createFile).not.toHaveBeenCalled(); // failure leaves nothing
+    // KK20-195 review F3 — a pending File marker is written before physical work.
+    // A HANDLED failure compensates it (the marker only survives PROCESS DEATH,
+    // by design), so the request still leaves nothing behind.
+    expect(db.createFile).toHaveBeenCalledTimes(1);
+    expect(db.createFile.mock.calls[0][0].embedded).toBe(false); // it was the pending marker
+    expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
   });
 
   test('kill-point: markQueued CAS MISS (null) is the same failure as a throw (R3)', async () => {
@@ -1936,7 +1998,9 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 
     expect(deleteFile).toHaveBeenCalledTimes(1);
     expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
-    expect(db.createFile).not.toHaveBeenCalled();
+    // F3 — the pending File marker is compensated on the handled failure.
+    expect(db.createFile).toHaveBeenCalledTimes(1);
+    expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
   });
 });
 // End [knauf]
