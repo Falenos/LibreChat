@@ -415,6 +415,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/package.json`, `packages/api/package.json` | Raises `@librechat/agents` to `^3.2.65`, adopting upstream Langfuse-team trace shaping: stable agent/tool names, scoped tool args, clean root question/answer, and dropped LangGraph plumbing spans |
 | `.env.example` | Documents `LANGFUSE_TRACING_ENVIRONMENT` and `LANGFUSE_RELEASE` so deployments can filter production traffic and attribute traces to an application release |
 | `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | Keeps `LANGFUSE_RELEASE` synchronized with the exact AGK dev/prod image tag and fails the deployment-config update if release attribution is absent |
+| `.github/workflows/release_pipeline.yaml` | Keeps the optional async indexing worker image tag in lock-step with the dev application release while remaining compatible before the worker GitOps directory exists |
 
 ## Net-New Files
 
