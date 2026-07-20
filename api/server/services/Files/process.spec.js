@@ -1206,6 +1206,32 @@ describe('processDeleteRequest', () => {
     expect(db.tombstoneForDelete).not.toHaveBeenCalled();
     expect(db.removeAsset).not.toHaveBeenCalled();
   });
+
+  // KK20-195 review F5 (re-review) — the pre-tombstone is the deletion FENCE. If
+  // it fails, the asset may still be claimable/activatable, so physical deletion
+  // MUST be skipped and the row kept (reported failed); the reconciler retries.
+  it('skips physical deletion when the pre-tombstone fence fails (F5)', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.getFiles.mockResolvedValue([]); // no survivors → the fence would apply
+    db.tombstoneForDelete.mockRejectedValue(new Error('mongo down')); // fence fails
+
+    const result = await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'unfenced-file',
+          knauf_asset_id: 'unfenced-asset',
+          filepath: '/blob/unfenced',
+          source: FileSources.local,
+        },
+      ],
+    });
+
+    expect(deleteFile).not.toHaveBeenCalled(); // no blob/vector delete under a live asset
+    expect(db.deleteFiles).not.toHaveBeenCalled(); // row kept → reference preserved
+    expect(result).toEqual({ deletedFileIds: [], failedFileIds: ['unfenced-file'] });
+  });
   // End [knauf]
 
   it('does not treat unrelated not found messages as missing storage', async () => {

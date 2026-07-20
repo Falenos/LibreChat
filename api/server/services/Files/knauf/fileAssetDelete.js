@@ -80,19 +80,26 @@ async function gcAssetThroughLifecycle({ db, asset_id, cleanup, logger }) {
  * asset whose references all sit inside the in-flight delete set — a
  * queued/processing asset can then never be claimed or activated while its
  * blob/vectors are being destroyed underneath it. Assets with surviving
- * outside references are untouched (§8.1). Best-effort: a store error here
- * must not block the user's delete — the asset simply stays un-tombstoned
- * and the post-delete finalize/reconciler picks it up.
+ * outside references are untouched (§8.1).
+ *
+ * KK20-195 review F5 (re-review) — the tombstone IS the deletion fence, so a
+ * store error is NOT best-effort: an asset that could not be tombstoned (or
+ * whose survivor count could not be read) is still claimable/activatable, and
+ * physically deleting its blob/vectors would race a worker. Such assets are
+ * returned in `unfenced` so the caller SKIPS physical deletion for their files;
+ * the rows stay, the reference is preserved, and the reconciler retries the
+ * whole delete. Never throws.
  *
  * @param {Object} params
  * @param {Object} params.db - createMethods surface
  * @param {Array<{ file_id: string, knauf_asset_id?: string }>} params.files - the delete set
  * @param {{ warn: Function }} params.logger
- * @returns {Promise<void>} never throws
+ * @returns {Promise<{ unfenced: Set<string> }>} asset ids whose fence failed
  */
 async function preTombstoneLastReferences({ db, files, logger }) {
   const deleteIds = (files ?? []).map((f) => f?.file_id).filter(Boolean);
   const assetIds = [...new Set((files ?? []).map((f) => f?.knauf_asset_id).filter(Boolean))];
+  const unfenced = new Set();
   for (const asset_id of assetIds) {
     try {
       const survivors =
@@ -104,9 +111,15 @@ async function preTombstoneLastReferences({ db, files, logger }) {
       }
       await db.tombstoneForDelete({ asset_id });
     } catch (error) {
-      logger?.warn(`[fileAssetDelete] pre-tombstone failed for ${asset_id}: ${error?.message}`);
+      // Fence failed / state unknown → do NOT let the caller delete underneath
+      // a possibly-live asset. Mark it unfenced and skip its physical delete.
+      unfenced.add(asset_id);
+      logger?.warn(
+        `[fileAssetDelete] pre-tombstone failed for ${asset_id}; skipping physical delete (state unknown): ${error?.message}`,
+      );
     }
   }
+  return { unfenced };
 }
 
 /**

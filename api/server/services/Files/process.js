@@ -250,15 +250,27 @@ const processDeleteRequest = async ({ req, files }) => {
   // [knauf] KK20-195 review R4 — §8.2 tombstone-before-physical: assets whose
   // every reference sits inside this delete set are tombstoned BEFORE their
   // blob/vectors are destroyed, so a queued/processing asset can't be claimed
-  // or activated mid-delete. Best-effort; the post-delete finalize below
-  // remains the remove step.
+  // or activated mid-delete. The post-delete finalize below remains the remove
+  // step. F5 (re-review): the tombstone is the deletion FENCE — assets whose
+  // fence could not be established come back in `unfenced`, and their physical
+  // delete is SKIPPED so we never destroy blob/vectors under a still-claimable
+  // asset (the reconciler retries the whole delete).
+  let unfencedAssetIds = new Set();
   {
     const { preTombstoneLastReferences } = require('./knauf/fileAssetDelete');
-    await preTombstoneLastReferences({ db, files, logger });
+    ({ unfenced: unfencedAssetIds } = await preTombstoneLastReferences({ db, files, logger }));
   }
   // End [knauf]
 
   for (const file of files) {
+    // [knauf] KK20-195 review F5 — fence failed for this asset; skip its
+    // physical delete and leave the row intact (reported as failed) so a worker
+    // can't be racing an in-flight claim while its blob/vectors are destroyed.
+    if (file.knauf_asset_id && unfencedAssetIds.has(file.knauf_asset_id)) {
+      failedFileIds.add(file.file_id);
+      continue;
+    }
+    // End [knauf]
     const source = file.source ?? FileSources.local;
     if (req.body.agent_id && req.body.tool_resource) {
       agentFiles.push({

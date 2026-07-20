@@ -150,7 +150,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     await seedAsset({ asset_id: 'pre-1', status: 'queued' });
     await seedFile({ file_id: 'only-ref', knauf_asset_id: 'pre-1' });
 
-    await preTombstoneLastReferences({
+    const { unfenced } = await preTombstoneLastReferences({
       db,
       files: [{ file_id: 'only-ref', knauf_asset_id: 'pre-1' }],
       logger,
@@ -159,6 +159,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     const asset = await db.getAssetByAssetId('pre-1');
     expect(asset.status).toBe('deleting');
     expect(asset.delete_requested_at).not.toBeNull();
+    expect(unfenced.size).toBe(0); // fenced cleanly → nothing to skip
     // Tombstone blocks the claim path mid-delete.
     expect(await db.claimNextDue({ workerId: 'w1', leaseMs: 60_000 })).toBeNull();
   });
@@ -168,7 +169,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     await seedFile({ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' });
     await seedFile({ file_id: 'outside-ref', knauf_asset_id: 'pre-2' });
 
-    await preTombstoneLastReferences({
+    const { unfenced } = await preTombstoneLastReferences({
       db,
       files: [{ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' }],
       logger,
@@ -177,23 +178,42 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     const asset = await db.getAssetByAssetId('pre-2');
     expect(asset.status).toBe('ready');
     expect(asset.delete_requested_at ?? null).toBeNull();
+    expect(unfenced.has('pre-2')).toBe(false); // a live survivor is NOT a fence failure
   });
 
-  test('a store failure is contained (the user delete must not block)', async () => {
+  // KK20-195 review F5 (re-review) — the tombstone is the deletion fence, so a
+  // store error must be PROPAGATED (so the caller skips physical delete), never
+  // swallowed as best-effort.
+  test('a survivor-read failure marks the asset unfenced (never swallowed)', async () => {
     const brokenDb = {
       ...db,
       getFiles: async () => {
         throw new Error('mongo down');
       },
     };
-    await expect(
-      preTombstoneLastReferences({
-        db: brokenDb,
-        files: [{ file_id: 'x', knauf_asset_id: 'any' }],
-        logger,
-      }),
-    ).resolves.toBeUndefined();
+    const { unfenced } = await preTombstoneLastReferences({
+      db: brokenDb,
+      files: [{ file_id: 'x', knauf_asset_id: 'any' }],
+      logger,
+    });
+    expect(unfenced.has('any')).toBe(true); // caller will skip physical deletion
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  test('a tombstone-write failure marks the asset unfenced (fence not established)', async () => {
+    await seedFile({ file_id: 'lone', knauf_asset_id: 'pre-fail' });
+    const brokenDb = {
+      ...db,
+      tombstoneForDelete: async () => {
+        throw new Error('tombstone write failed');
+      },
+    };
+    const { unfenced } = await preTombstoneLastReferences({
+      db: brokenDb,
+      files: [{ file_id: 'lone', knauf_asset_id: 'pre-fail' }],
+      logger,
+    });
+    expect(unfenced.has('pre-fail')).toBe(true);
   });
 });
 
