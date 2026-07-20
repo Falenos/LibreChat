@@ -68,6 +68,16 @@ const fileAssetSchema: Schema<IKnaufFileAsset> = new Schema(
       bytes: { type: Number },
       mime: { type: String },
     },
+    // KK20-195 review F9 (re-review) — expected upload size, recorded at
+    // reservation time (before the blob exists). The byte-cap admission counts
+    // max(blob.bytes, reserved_bytes) so N concurrent 'uploading' reservations
+    // (which have no blob.bytes yet) can't each read 0 and collectively exceed
+    // the scope's queued-bytes cap. Superseded by blob.bytes once markQueued
+    // records the real size.
+    reserved_bytes: {
+      type: Number,
+      default: null,
+    },
     status: {
       type: String,
       enum: ['uploading', 'queued', 'processing', 'ready', 'failed', 'deleting', 'delete_failed'],

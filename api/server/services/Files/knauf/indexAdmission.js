@@ -24,22 +24,23 @@ const getAdmissionLimits = () => ({
 
 /**
  * Count the scope's non-terminal backlog (uploading | queued | processing)
- * and admit or reject the upload. Byte sums only see blob metadata recorded
- * so far (uploading assets may count 0 bytes) — the file-count cap is the
- * hard backstop.
+ * and admit or reject the upload.
  *
- * KK20-195 review R7 — TOCTOU-safe usage is reserve-FIRST, then admit with
- * `countIncludesSelf: true`, compensating the reservation on rejection: every
- * contender's reservation is durably counted before any contender decides,
- * so N concurrent uploads can never all read the same pre-reservation count
- * and collectively exceed the cap. (A pure read-then-reserve check raced.)
+ * KK20-195 review R7/F9 — TOCTOU-safe usage is reserve-FIRST (carrying the
+ * expected bytes as `reserved_bytes`), then admit with `countIncludesSelf: true`,
+ * compensating the reservation on rejection. Every contender's reservation —
+ * both its row AND its reserved bytes — is durably counted before any contender
+ * decides, so N concurrent uploads can never all read the same pre-reservation
+ * total and collectively exceed either cap. (F9: before reserved_bytes, an
+ * 'uploading' row counted 0 bytes, so two concurrent 300 MB uploads both passed
+ * a 500 MB cap.)
  *
  * @param {Object} params
  * @param {Object} params.db - createMethods surface (countActiveByScope, sumActiveBytesByScope)
  * @param {'user' | 'agent'} params.scope_type
  * @param {string} params.scope_id
  * @param {number} [params.incomingBytes]
- * @param {boolean} [params.countIncludesSelf] - the caller already reserved; its own row is in the counts
+ * @param {boolean} [params.countIncludesSelf] - the caller already reserved; its own row (and reserved_bytes) are in the counts
  * @returns {Promise<{ admitted: boolean, reason?: 'queued_files' | 'queued_bytes' }>}
  */
 async function checkIndexAdmission({
@@ -56,7 +57,11 @@ async function checkIndexAdmission({
     return { admitted: false, reason: 'queued_files' };
   }
   const activeBytes = await db.sumActiveBytesByScope({ scope_type, scope_id });
-  if (activeBytes + incomingBytes > maxQueuedBytes) {
+  // When we've already reserved, our own reserved_bytes are IN activeBytes —
+  // adding incomingBytes again would double-count. When we haven't (a pure
+  // pre-reserve check), our bytes aren't counted yet, so add them.
+  const effectiveBytes = countIncludesSelf ? activeBytes : activeBytes + incomingBytes;
+  if (effectiveBytes > maxQueuedBytes) {
     return { admitted: false, reason: 'queued_bytes' };
   }
   return { admitted: true };

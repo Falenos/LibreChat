@@ -388,5 +388,73 @@ describe('checkIndexAdmission (§9.3)', () => {
     const survivors = await KnaufFileAsset.countDocuments({ scope_id: 'race-user' });
     expect(survivors).toBe(admittedCount); // losers fully compensated
   });
+
+  // KK20-195 review F9 (re-review) — an 'uploading' reservation has no
+  // blob.bytes yet; reserved_bytes is what makes the byte cap see it. Before
+  // this, a concurrent contender read 0 for it and could exceed the cap.
+  test('an uploading reservation counts its reserved_bytes before its blob exists (F9)', async () => {
+    process.env.KNAUF_INDEX_MAX_QUEUED_BYTES = '500';
+    const fileAssetMethods = createFileAssetMethods(mongoose);
+    await fileAssetMethods.reserveAsset({
+      asset_id: 'seq-first',
+      scope_type: 'user',
+      scope_id: 'seq-user',
+      target_index_profile: 'legacy-v0',
+      vector_backend: 'pgvector',
+      embed_route: '/embed',
+      reserved_bytes: 300, // reserved at upload time; no blob stored yet
+    });
+    // A second 300-byte upload must be rejected: 300 reserved + 300 incoming > 500,
+    // even though the first reservation carries no blob.bytes.
+    const admission = await checkIndexAdmission({
+      db: fileAssetMethods,
+      scope_type: 'user',
+      scope_id: 'seq-user',
+      incomingBytes: 300,
+    });
+    expect(admission).toEqual({ admitted: false, reason: 'queued_bytes' });
+  });
+
+  // AlexZahar F9 — the concurrency test the byte cap was missing (R7 covered
+  // only file count).
+  test('concurrent byte-cap admission: two parallel uploads cannot both exceed it (F9)', async () => {
+    process.env.KNAUF_INDEX_MAX_QUEUED_BYTES = '500';
+    process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '20'; // not the binding cap here
+    const fileAssetMethods = createFileAssetMethods(mongoose);
+
+    const contend = async (n) => {
+      const { asset } = await fileAssetMethods.reserveAsset({
+        asset_id: `bytes-${n}`,
+        scope_type: 'user',
+        scope_id: 'bytes-user',
+        target_index_profile: 'legacy-v0',
+        vector_backend: 'pgvector',
+        embed_route: '/embed',
+        reserved_bytes: 300,
+      });
+      const admission = await checkIndexAdmission({
+        db: fileAssetMethods,
+        scope_type: 'user',
+        scope_id: 'bytes-user',
+        incomingBytes: 300,
+        countIncludesSelf: true,
+      });
+      if (!admission.admitted) {
+        await fileAssetMethods.tombstoneForDelete({ asset_id: asset.asset_id });
+        await fileAssetMethods.removeAsset({ asset_id: asset.asset_id });
+      }
+      return admission;
+    };
+
+    const results = await Promise.all([contend(1), contend(2)]);
+    // 2 * 300 = 600 > 500 → they can NEVER both be admitted (the finding's bug).
+    expect(results.filter((r) => r.admitted).length).toBeLessThanOrEqual(1);
+    results.filter((r) => !r.admitted).forEach((r) => expect(r.reason).toBe('queued_bytes'));
+    const survivorBytes = await db.sumActiveBytesByScope({
+      scope_type: 'user',
+      scope_id: 'bytes-user',
+    });
+    expect(survivorBytes).toBeLessThanOrEqual(500); // never over the cap
+  });
 });
 // End [knauf]

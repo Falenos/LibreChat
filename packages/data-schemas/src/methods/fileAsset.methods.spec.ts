@@ -341,6 +341,23 @@ describe('admission-control counters', () => {
     expect(await methods.countActiveByScope({ scope_type: 'user', scope_id: 'u1' })).toBe(2);
     expect(await methods.sumActiveBytesByScope({ scope_type: 'user', scope_id: 'u1' })).toBe(30);
   });
+
+  // KK20-195 review F9 (re-review) — the byte sum counts reserved_bytes for an
+  // 'uploading' row (no blob yet) and blob.bytes once stored; $max coalesces so
+  // a queued row that carries both is never double-counted.
+  test('byte sum uses reserved_bytes while uploading and blob.bytes once stored', async () => {
+    await seedQueued({
+      asset_id: 'up',
+      scope_id: 'ub',
+      status: 'uploading',
+      blob: undefined,
+      reserved_bytes: 300,
+    });
+    await seedQueued({ asset_id: 'qd', scope_id: 'ub', blob: { bytes: 50 }, reserved_bytes: 40 });
+
+    // 300 (reserved, no blob) + max(50, 40) = 350
+    expect(await methods.sumActiveBytesByScope({ scope_type: 'user', scope_id: 'ub' })).toBe(350);
+  });
 });
 
 describe('claimAsset — claim one specific asset (KK20-195 WP3b)', () => {

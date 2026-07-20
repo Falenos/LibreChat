@@ -22,6 +22,9 @@ export interface ReserveAssetParams {
   embed_route: FileAssetEmbedRoute;
   content_hash?: string;
   dedup_key?: string;
+  /** KK20-195 review F9 — expected upload size, counted by the byte-cap admission
+   *  while the reservation is still 'uploading' (no blob.bytes yet). */
+  reserved_bytes?: number;
 }
 
 export interface ReserveAssetResult {
@@ -477,7 +480,20 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
           status: { $in: ['uploading', 'queued', 'processing'] },
         },
       },
-      { $group: { _id: null, total: { $sum: '$blob.bytes' } } },
+      {
+        // KK20-195 review F9 — count each asset's real size once it's stored
+        // (blob.bytes), else its reserved size ('uploading' rows have no blob
+        // yet). $max coalesces without double-counting: after markQueued both
+        // are set and blob.bytes (the truth) wins.
+        $group: {
+          _id: null,
+          total: {
+            $sum: {
+              $max: [{ $ifNull: ['$blob.bytes', 0] }, { $ifNull: ['$reserved_bytes', 0] }],
+            },
+          },
+        },
+      },
     ]);
     return rows[0]?.total ?? 0;
   }

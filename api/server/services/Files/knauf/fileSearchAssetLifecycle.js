@@ -58,6 +58,7 @@ function isAbandonedNonTerminal(asset, now) {
  * @param {boolean} params.messageAttachment - chat (true) vs agent library (false)
  * @param {string | undefined} params.contentHash
  * @param {boolean} params.azureSearchForAgents
+ * @param {number} [params.bytes] - expected upload size; reserved for the byte-cap admission (F9)
  * @returns {Promise<{ asset: Object, created: boolean, dedupKey?: string }>}
  */
 async function reserveForUpload({
@@ -68,6 +69,7 @@ async function reserveForUpload({
   messageAttachment,
   contentHash,
   azureSearchForAgents,
+  bytes,
 }) {
   const isAgent = !messageAttachment;
   const dedupKey =
@@ -81,6 +83,9 @@ async function reserveForUpload({
     embed_route: isAgent ? '/agent/embed' : '/embed',
     content_hash: contentHash,
     dedup_key: dedupKey,
+    // KK20-195 review F9 — carry the expected size so a concurrent contender's
+    // byte-cap check sees this reservation's bytes before its blob is stored.
+    reserved_bytes: Number.isFinite(bytes) ? bytes : undefined,
   });
   return { asset, created, dedupKey };
 }

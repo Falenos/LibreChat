@@ -964,6 +964,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       messageAttachment,
       contentHash: knaufContentHash,
       azureSearchForAgents: isAzureSearchEnabledForAgents(),
+      bytes: file.size, // F9 — reserved for the byte-cap admission below
     });
     knaufUploadAsset = reservation.asset;
     knaufAssetId = reservation.asset.asset_id;
@@ -1032,6 +1033,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
           messageAttachment,
           contentHash: knaufContentHash,
           azureSearchForAgents: isAzureSearchEnabledForAgents(),
+          bytes: file.size, // F9 — reserved for the byte-cap admission
         });
         if (!fresh.created) {
           // A concurrent upload took the freed slot between remove and
