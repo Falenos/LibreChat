@@ -31,7 +31,7 @@ export function postAutogeneratePrompt(
   return request.post(endpoints.autogeneratePrompt(), body);
 }
 
-export interface ConversationCostSummary {
+export interface CostSummary {
   cost: number;
   inputTokens: number;
   outputTokens: number;
@@ -42,6 +42,16 @@ export interface ConversationCostSummary {
   hasUnsupported: boolean;
   isEstimated?: boolean;
   estimateReason?: string | null;
+}
+
+export interface ModelCostSummary extends CostSummary {
+  returnedModel: string;
+  requestedModel: string | null;
+  pricingModel: string;
+}
+
+export interface ConversationCostSummary extends CostSummary {
+  models?: ModelCostSummary[];
 }
 
 export type MessageCostSummary = ConversationCostSummary;

@@ -8,6 +8,7 @@ const {
   normalizeModel,
   resolveModelPricing,
   RATE_SOURCE,
+  RATE_SOURCE_LABEL,
 } = require('./costs');
 
 function chain(result) {
@@ -213,8 +214,47 @@ describe('knauf costs', () => {
     ]);
 
     expect(result.currency).toBe('EUR');
+    expect(result.source).toBe(RATE_SOURCE_LABEL);
     expect(result.conversation.cost).toBeCloseTo(13.38309);
     expect(result.messages.m1.cost).toBeCloseTo(13.38309);
+    expect(result.conversation.models).toEqual([
+      expect.objectContaining({
+        returnedModel: 'gpt-54',
+        requestedModel: null,
+        pricingModel: 'gpt-5.4',
+        cost: result.conversation.cost,
+        inputTokens: 100_000,
+        outputTokens: 1_000_000,
+      }),
+    ]);
+  });
+
+  it('separates requested and returned models in the cost breakdown', () => {
+    const result = aggregateConversationCosts([
+      {
+        model: 'gpt-5.4-mini-2026-03-17',
+        knauf_requestedModel: 'model-router-chat',
+        tokenType: 'prompt',
+        rawAmount: -1_000_000,
+        messageId: 'm1',
+      },
+      {
+        model: 'gpt-5.4-mini-2026-03-17',
+        knauf_requestedModel: 'model-router-chat',
+        tokenType: 'completion',
+        rawAmount: -1_000_000,
+        messageId: 'm1',
+      },
+    ]);
+
+    expect(result.messages.m1.models).toEqual([
+      expect.objectContaining({
+        returnedModel: 'gpt-5.4-mini-2026-03-17',
+        requestedModel: 'model-router-chat',
+        pricingModel: 'gpt-5.4-mini',
+        cost: 0.6582 + 0.1229 + 3.9491,
+      }),
+    ]);
   });
 
   it.each([

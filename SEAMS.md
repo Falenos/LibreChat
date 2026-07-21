@@ -520,6 +520,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | Keeps `LANGFUSE_RELEASE` synchronized with the exact AGK dev/prod image tag and fails the deployment-config update if release attribution is absent |
 | `.github/workflows/release_pipeline.yaml` | Keeps the optional async indexing worker image tag in lock-step with the dev application release while remaining compatible before the worker GitOps directory exists |
 | `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | KK20-195 — worker deploy plumbing: best-effort post-deploy refresh of the worker ArgoCD app in the release pipeline (a 404 is a clean skip until the infra PR registers the app; other probe failures warn distinctly; never fails the release), and a guarded, verified prod worker values bump on promotion (`[ -f ]` no-op until the prod worker dir exists — deferred to WP1 + WP6 sign-off). The dev worker VALUES bump itself lives in PR #151. |
+| `client/src/locales/{en,de}/translation.json` | Cost audit labels — localizes the requested-to-returned model route and exact per-model cost shown in Knauf cost tooltips |
 
 ## Net-New Files
 
@@ -706,6 +707,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/indexingReconciler.js` | `db.deleteFiles`, `db.removeAgentResourceFilesFromAllAgents`, physical cleanup injected by worker | Medium — case 3 removes only unfinished rows whose asset is irrecoverably missing; case 5 repairs references left by an interrupted tombstoned delete before retrying idempotent physical cleanup | `api/server/services/Files/knauf/indexingReconciler.spec.js` | KK20-195 |
 | `api/server/services/Files/knauf/indexingReconciler.spec.js` | Subject under test; real File/FileAsset models and mocked physical cleanup | Low — proves unfinished dangling rows and stale tombstones repair metadata, retain state on DB failure, and then complete physical deletion | Self | KK20-195 |
 | `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | `packages/data-schemas/src/config/{winston,meiliLogger}` | Low — test-only identity check pinning the shared logging contract | Self | NO-TICKET |
+| `api/server/services/knauf/costs*.js` | `@librechat/api` cache helpers (lazy); transaction rows supplied by the authenticated Knauf route | Medium — preserves exact requested/returned model identifiers through cost aggregation and exposes their token-cost breakdown | `api/server/services/knauf/costs.spec.js` | NO-TICKET |
+| `client/src/knauf/data-provider/data-service.ts` | `librechat-data-provider` request client | Low — types the additive per-model cost breakdown returned by the Knauf cost API | `client/src/knauf/components/Chat/KnaufCostDisplay.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Chat/KnaufCostDisplay*.tsx` | `lucide-react`, `~/hooks`, `~/utils`, `~/knauf/data-provider/*` | Medium — displays exact requested-to-returned model routes, per-model costs, and readable Azure pricing provenance | `client/src/knauf/components/Chat/KnaufCostDisplay.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

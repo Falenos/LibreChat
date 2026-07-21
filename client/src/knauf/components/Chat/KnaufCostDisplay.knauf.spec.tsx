@@ -16,6 +16,8 @@ jest.mock('~/hooks', () => ({
       com_knauf_cost_image_tokens: 'Image tokens: {{0}} input / {{1}} output',
       com_knauf_cost_input: 'Input tokens: {{0}}',
       com_knauf_cost_message: 'Message cost: {{0}}',
+      com_knauf_cost_model_route: 'Requested → returned: {{0}} → {{1}} — {{2}}',
+      com_knauf_cost_model_returned: 'Returned model: {{0}} — {{1}}',
       com_knauf_cost_output: 'Output tokens: {{0}}',
       com_knauf_cost_pricing_pending: 'Image pricing pending',
       com_knauf_cost_source: 'Rate source: {{0}}',
@@ -33,6 +35,21 @@ const summary = {
   imageOutputTokens: 0,
   unsupportedTokens: 0,
   hasUnsupported: false,
+  models: [
+    {
+      cost: 0.1234,
+      inputTokens: 1,
+      outputTokens: 2,
+      cachedInputTokens: 3,
+      imageInputTokens: 0,
+      imageOutputTokens: 0,
+      unsupportedTokens: 0,
+      hasUnsupported: false,
+      returnedModel: 'gpt-5.5-2026-04-24',
+      requestedModel: 'model-router-chat',
+      pricingModel: 'gpt-5.5',
+    },
+  ],
 };
 
 const data = {
@@ -62,6 +79,12 @@ describe('[knauf] KnaufCostDisplay', () => {
     const icon = screen.getByLabelText(/Message cost:/);
     expect(icon).toHaveAttribute('title', expect.stringContaining('Input tokens: 1'));
     expect(icon).toHaveAttribute('title', expect.stringContaining('Output tokens: 2'));
+    expect(icon).toHaveAttribute(
+      'title',
+      expect.stringContaining(
+        'Requested → returned: model-router-chat → gpt-5.5-2026-04-24 — €0.1234',
+      ),
+    );
     expect(icon).toHaveAttribute('title', expect.stringContaining(data.source));
   });
 
