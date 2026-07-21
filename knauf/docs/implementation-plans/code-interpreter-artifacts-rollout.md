@@ -1,5 +1,7 @@
 # Code Interpreter + Artifacts on AGK — rollout
 
+> **Hands-on local setup guide** (how to run the sandbox + enable both features on a dev machine): [`../architecture/code-interpreter-and-artifacts.md`](../architecture/code-interpreter-and-artifacts.md). This doc is the *production rollout plan*.
+
 > **TL;DR** — Two upstream LibreChat features are fully present in the fork but deliberately **dark** on KARL: **Code Interpreter** (sandboxed code execution) and **Artifacts** (React/HTML/Mermaid preview in a side panel). Both are gated off by one line in [`librechat.yaml`](../../../librechat.yaml) — `endpoints.agents.capabilities` lists only `file_search` and `tools`. Neither needs a code change to turn on. **Code Interpreter also needs a backend**: upstream no longer calls a paid API — it targets the self-hosted, Apache-2.0 **[ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter)** sandbox, which we would run as a new AGK GitOps service (mirroring the Langfuse / rag-api pattern). **Artifacts needs no backend** — rendering is browser-side via Sandpack — but has a CDN-egress decision. **Status: local evaluation done; prod not started.** This doc is the evaluation record + the prod rollout plan. Ticket: **KK20-108**.
 
 ## Tickets

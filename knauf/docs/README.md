@@ -25,6 +25,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/processing.md](architecture/files/processing.md) | Which formats each upload mode accepts (MIME allow-lists) and how each is processed — image transforms, document parser, OCR, speech-to-text, RAG embedding; plus what's active vs dormant today |
 | [architecture/files/async-indexing.md](architecture/files/async-indexing.md) | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md) | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
+| [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How Code Interpreter (self-hosted ClickHouse sandbox) + Artifacts work and how to enable/run them locally — the two capability gates, `librechat.local.yaml` + `CONFIG_PATH` wiring, where `KVM_ENABLED` lives, the sandbox service topology, and whether to launch it from KARL's compose |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 
