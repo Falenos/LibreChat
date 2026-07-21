@@ -417,6 +417,8 @@
   "com_knauf_cost_image_tokens": "Bild-Tokens: {{0}} Eingabe / {{1}} Ausgabe",
   "com_knauf_cost_input": "Eingabe-Tokens: {{0}}",
   "com_knauf_cost_message": "Nachrichtenkosten: {{0}}",
+  "com_knauf_cost_model_route": "Angefordert → zurückgegeben: {{0}} → {{1}} — {{2}}",
+  "com_knauf_cost_model_returned": "Zurückgegebenes Modell: {{0}} — {{1}}",
   "com_knauf_cost_output": "Ausgabe-Tokens: {{0}}",
   "com_knauf_cost_pricing_pending": "Bildpreise sind offen, bis die Azure-Abrechnungseinheit bestätigt ist.",
   "com_knauf_cost_source": "Preisquelle: {{0}}",

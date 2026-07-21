@@ -11,8 +11,7 @@ function hasCostSignal(summary?: ConversationCostSummary | null) {
   return Boolean(summary && (summary.cost > 0 || summary.hasUnsupported));
 }
 
-function formatCurrency(value: number) {
-  const digits = value > 0 && value < 0.01 ? 4 : 2;
+function formatCurrency(value: number, digits = value > 0 && value < 0.01 ? 4 : 2) {
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: 'EUR',
@@ -62,6 +61,20 @@ function buildCostTitle({
   }
   if (summary.isEstimated) {
     parts.push(localize('com_knauf_cost_estimated'));
+  }
+  for (const model of summary.models ?? []) {
+    parts.push(
+      model.requestedModel && model.requestedModel !== model.returnedModel
+        ? localize('com_knauf_cost_model_route', {
+            0: model.requestedModel,
+            1: model.returnedModel,
+            2: formatCurrency(model.cost, 4),
+          })
+        : localize('com_knauf_cost_model_returned', {
+            0: model.returnedModel,
+            1: formatCurrency(model.cost, 4),
+          }),
+    );
   }
   if (source) {
     parts.push(localize('com_knauf_cost_source', { 0: source }));

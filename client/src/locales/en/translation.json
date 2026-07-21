@@ -418,6 +418,8 @@
   "com_knauf_cost_image_tokens": "Image tokens: {{0}} input / {{1}} output",
   "com_knauf_cost_input": "Input tokens: {{0}}",
   "com_knauf_cost_message": "Message cost: {{0}}",
+  "com_knauf_cost_model_route": "Requested → returned: {{0}} → {{1}} — {{2}}",
+  "com_knauf_cost_model_returned": "Returned model: {{0}} — {{1}}",
   "com_knauf_cost_output": "Output tokens: {{0}}",
   "com_knauf_cost_pricing_pending": "Image pricing is pending until the Azure billing unit is confirmed.",
   "com_knauf_cost_source": "Rate source: {{0}}",

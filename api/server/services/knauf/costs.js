@@ -1,6 +1,6 @@
 const EUR_PER_MILLION_TOKENS = 1_000_000;
 const COST_CACHE_NAMESPACE = 'knauf:conversation-costs';
-const COST_CACHE_FORMAT_VERSION = 'v2';
+const COST_CACHE_FORMAT_VERSION = 'v3';
 const COST_CACHE_TTL_MS = 86_400_000;
 const COST_LOOKUP_INDEX = { user: 1, conversationId: 1, updatedAt: -1, _id: -1 };
 const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
@@ -8,6 +8,7 @@ const TRANSACTION_COST_FIELDS =
   '_id model context tokenType rawAmount inputTokens inputTokenCount writeTokens readTokens messageId updatedAt knauf_requestedModel knauf_costEstimated knauf_costEstimateReason knauf_costRateSource knauf_pricingMatch';
 
 const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-07-21';
+const RATE_SOURCE_LABEL = 'Azure Retail Prices API · Global Standard · EUR · 2026-07-21';
 const LONG_CONTEXT_THRESHOLD = 272_000;
 const MODEL_ROUTER_INPUT_PER_MILLION = 0.1229;
 const EUR_RATES = {
@@ -164,7 +165,7 @@ function resolveModelPricing(model) {
   };
 }
 
-function emptySummary() {
+function emptyCostTotals() {
   return {
     cost: 0,
     inputTokens: 0,
@@ -179,6 +180,10 @@ function emptySummary() {
   };
 }
 
+function emptySummary() {
+  return { ...emptyCostTotals(), models: [] };
+}
+
 function addSummary(target, entry) {
   target.cost += entry.cost;
   target.inputTokens += entry.inputTokens;
@@ -190,6 +195,26 @@ function addSummary(target, entry) {
   target.hasUnsupported = target.hasUnsupported || entry.hasUnsupported;
   target.isEstimated = target.isEstimated || entry.isEstimated;
   target.estimateReason = target.estimateReason || entry.estimateReason;
+}
+
+function addModelSummary(target, transaction, entry) {
+  const returnedModel = String(transaction.model || 'unknown');
+  const requestedModel = transaction.knauf_requestedModel
+    ? String(transaction.knauf_requestedModel)
+    : null;
+  let modelSummary = target.models.find(
+    (model) => model.returnedModel === returnedModel && model.requestedModel === requestedModel,
+  );
+  if (!modelSummary) {
+    modelSummary = {
+      returnedModel,
+      requestedModel,
+      pricingModel: normalizeModel(returnedModel),
+      ...emptyCostTotals(),
+    };
+    target.models.push(modelSummary);
+  }
+  addSummary(modelSummary, entry);
 }
 
 function calculateTransactionCost(transaction) {
@@ -270,17 +295,24 @@ function aggregateConversationCosts(transactions = []) {
     }
     const entry = calculateTransactionCost(transaction);
     addSummary(conversation, entry);
+    addModelSummary(conversation, transaction, entry);
 
     const messageId = transaction.messageId || unassignedMessageId;
     if (!messages[messageId]) {
       messages[messageId] = emptySummary();
     }
     addSummary(messages[messageId], entry);
+    addModelSummary(messages[messageId], transaction, entry);
   }
+
+  conversation.models.sort((left, right) => right.cost - left.cost);
+  Object.values(messages).forEach((message) =>
+    message.models.sort((left, right) => right.cost - left.cost),
+  );
 
   return {
     currency: 'EUR',
-    source: RATE_SOURCE,
+    source: RATE_SOURCE_LABEL,
     rates: EUR_RATES,
     conversation,
     messages,
@@ -404,6 +436,7 @@ module.exports = {
   COST_CACHE_NAMESPACE,
   COST_CACHE_TTL_MS,
   RATE_SOURCE,
+  RATE_SOURCE_LABEL,
   EUR_RATES,
   aggregateConversationCosts,
   calculateTransactionCost,
