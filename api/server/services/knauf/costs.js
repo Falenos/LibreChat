@@ -5,47 +5,80 @@ const COST_CACHE_TTL_MS = 86_400_000;
 const COST_LOOKUP_INDEX = { user: 1, conversationId: 1, updatedAt: -1, _id: -1 };
 const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
 const TRANSACTION_COST_FIELDS =
-  '_id model context tokenType rawAmount inputTokens writeTokens readTokens messageId updatedAt knauf_costEstimated knauf_costEstimateReason knauf_costRateSource knauf_pricingMatch';
+  '_id model context tokenType rawAmount inputTokens inputTokenCount writeTokens readTokens messageId updatedAt knauf_requestedModel knauf_costEstimated knauf_costEstimateReason knauf_costRateSource knauf_pricingMatch';
 
-const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-openai-parity-2026-07-17';
+const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-07-21';
+const LONG_CONTEXT_THRESHOLD = 272_000;
+const MODEL_ROUTER_INPUT_PER_MILLION = 0.1229;
 const EUR_RATES = {
   'gpt-5.4-nano': {
     modelVersion: '2026-03-17',
     effectiveFrom: '2026-03-01',
     inputPerMillion: 0.1755,
+    cachedInputPerMillion: 0.0176,
     outputPerMillion: 1.097,
   },
   'gpt-5.4-mini': {
     modelVersion: '2026-03-17',
     effectiveFrom: '2026-03-01',
     inputPerMillion: 0.6582,
+    cachedInputPerMillion: 0.0658,
     outputPerMillion: 3.9491,
   },
   'gpt-5.4': {
     modelVersion: '2026-03-05',
     effectiveFrom: '2026-03-01',
     inputPerMillion: 2.1939,
+    cachedInputPerMillion: 0.2194,
     outputPerMillion: 13.1637,
+    longContext: {
+      inputPerMillion: 4.3879,
+      cachedInputPerMillion: 0.4388,
+      outputPerMillion: 19.7455,
+    },
   },
   'gpt-5.5': {
     modelVersion: '2026-04-24',
     effectiveFrom: '2026-05-01',
     inputPerMillion: 4.3879,
+    cachedInputPerMillion: 0.4388,
     outputPerMillion: 26.3273,
+    longContext: {
+      inputPerMillion: 8.7758,
+      cachedInputPerMillion: 0.8776,
+      outputPerMillion: 39.491,
+    },
   },
   'gpt-5.6-sol': {
     modelVersion: '2026-07-09',
-    effectiveFrom: '2026-07-09',
-    pricingBasis: 'OpenAI GPT-5.5 price parity; Azure EUR meter pending',
+    effectiveFrom: '2026-07-01',
+    pricingBasis: 'Azure Retail Prices API, Global Standard',
     inputPerMillion: 4.3879,
+    cacheWritePerMillion: 5.4849,
+    cachedInputPerMillion: 0.4388,
     outputPerMillion: 26.3273,
+    longContext: {
+      inputPerMillion: 8.7758,
+      cacheWritePerMillion: 10.9697,
+      cachedInputPerMillion: 0.8776,
+      outputPerMillion: 39.491,
+    },
   },
   'model-router': {
     modelVersion: 'router-fallback',
     effectiveFrom: '2026-07-17',
     pricingBasis: 'Conservative fallback at the highest allowed router-pool rate',
     inputPerMillion: 4.3879,
+    cacheWritePerMillion: 5.4849,
+    cachedInputPerMillion: 0.4388,
     outputPerMillion: 26.3273,
+    routerInputPerMillion: MODEL_ROUTER_INPUT_PER_MILLION,
+    longContext: {
+      inputPerMillion: 8.7758,
+      cacheWritePerMillion: 10.9697,
+      cachedInputPerMillion: 0.8776,
+      outputPerMillion: 39.491,
+    },
   },
   'gpt-image-1': {
     modelVersion: '2025-04-15',
@@ -182,7 +215,13 @@ function calculateTransactionCost(transaction) {
     estimateReason: null,
   };
 
-  const { rate } = pricing;
+  const inputTokenCount =
+    absNumber(transaction.inputTokenCount) ||
+    (transaction.tokenType === 'prompt' ? promptTokens + cachedInputTokens : 0);
+  const rate =
+    pricing.rate?.longContext && inputTokenCount > LONG_CONTEXT_THRESHOLD
+      ? { ...pricing.rate, ...pricing.rate.longContext }
+      : pricing.rate;
   if (rate?.imageInputPerMillion) {
     base.inputTokens = transaction.tokenType === 'prompt' ? inputTokens || rawAmount : 0;
     base.cachedInputTokens = 0;
@@ -197,10 +236,19 @@ function calculateTransactionCost(transaction) {
   }
 
   if (rate) {
+    const standardInputTokens = Math.max(0, base.inputTokens - writeTokens);
     base.cost =
-      ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
-        rate.inputPerMillion +
+      (standardInputTokens / EUR_PER_MILLION_TOKENS) * rate.inputPerMillion +
+      (writeTokens / EUR_PER_MILLION_TOKENS) * (rate.cacheWritePerMillion ?? rate.inputPerMillion) +
+      (base.cachedInputTokens / EUR_PER_MILLION_TOKENS) *
+        (rate.cachedInputPerMillion ?? rate.inputPerMillion) +
       (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion;
+    const requestedModel = transaction.knauf_requestedModel || transaction.model;
+    if (transaction.tokenType === 'prompt' && normalizeModel(requestedModel) === 'model-router') {
+      base.cost +=
+        ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
+        MODEL_ROUTER_INPUT_PER_MILLION;
+    }
     base.isEstimated = pricing.isEstimated;
     base.estimateReason = pricing.estimateReason;
     return base;
