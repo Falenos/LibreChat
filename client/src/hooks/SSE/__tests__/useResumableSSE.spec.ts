@@ -318,10 +318,7 @@ describe('useResumableSSE - 404 error path', () => {
 
   // [knauf] KK20-227 — temporary drafts are tab-scoped in sessionStorage.
   it('clears both session drafts for new-convo when conversationId is absent', async () => {
-    sessionStorage.setItem(
-      `${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`,
-      'unsent message',
-    );
+    sessionStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`, 'unsent message');
     sessionStorage.setItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`, '[]');
 
     const submission = buildSubmission({ conversation: {} });
@@ -338,9 +335,7 @@ describe('useResumableSSE - 404 error path', () => {
       sse._emit('error', { responseCode: 404 });
     });
 
-    expect(
-      sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`),
-    ).toBeNull();
+    expect(sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`)).toBeNull();
     expect(
       sessionStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`),
     ).toBeNull();

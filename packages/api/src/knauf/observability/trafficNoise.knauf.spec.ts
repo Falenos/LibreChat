@@ -1,6 +1,6 @@
 // [knauf] Probe and scrape traffic exclusion regressions.
-import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
+import { EventEmitter } from 'node:events';
 import type { Request, Response } from 'express';
 import { createMetrics, isObservabilityPath } from '../../app/metrics';
 import { shouldIgnoreIncomingRequest } from '../../telemetry/sdk';
