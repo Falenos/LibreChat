@@ -488,6 +488,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | duplicate batch filtering regression | 51–53, 223–258 | Proves a batch containing one saved duplicate still validates, stages, and uploads its unique file while reporting the skipped duplicate as a warning | Self | KK20-195 |
 | `client/src/components/Chat/Input/Files/FileRow.tsx` | `KnaufChatFileIndexingStatus` import + document-row mount | 11–13, 159–174 | Shows live async-indexing state below chat document chips and exposes the server-authorized manual retry action outside `FileContainer`'s button, avoiding nested interactive controls | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx`, `client/src/knauf/components/Files/KnaufChatFileIndexingStatus.knauf.spec.tsx` | KK20-195 |
 | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` | retryable failed-indexing row regression | 20–26, 195–212 | Proves a retryable failed document renders its indexing failure and retry action in the chat attachment row | Self | KK20-195 |
+| `packages/api/src/auth/openid.ts` | `findOpenIDUser` email fallback | 252–256 | Removes the routine identifier-bearing warning from normal OpenID-to-email fallback; the existing bounded lookup metric retains the operational outcome | `packages/api/src/auth/openid.spec.ts` (`routine OpenID fallback misses must not become operational warnings`) | NO-TICKET |
+| `packages/api/src/auth/openid.spec.ts` | OpenID fallback warning regressions | 299–304, 626–666 | Proves a normal fallback miss emits no warning while genuine provider conflicts still retain strategy-scoped warning coverage | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
