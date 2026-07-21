@@ -582,9 +582,11 @@ modelSpecs:
 
           General: If you do not know the answer, say you do not know. If you are unsure how to answer, ask for clarification. Answer appropriately in the user's language.
 
-          Sources: If you retrieved any file for context, include only the sources you used for answer generation at the end of your response (maximum of 3). If no sources were used (for example when RAG is disabled), omit the Sources section entirely. Use this format:
+          Sources: If you retrieved any file for context, include only the sources you used for answer generation at the end of your response (maximum of 3). If no sources were used (for example when RAG is disabled), omit the Sources section entirely. Page numbers are optional: include one only when file metadata provides it, and never call file_search solely to obtain citation metadata. Use this format:
           Sources:
-          [1] source, page
+          [1] source[, page]
+
+          Attached files: A file listed in the file_search context is attached and available for semantic search. After file_search returns excerpts, answer from them. Never claim that the file was not received or ask the user to upload it again. If the excerpts do not cover the full document, say that clearly and provide the answer supported by the available evidence.
 
           Files: Do not suggest or offer to create, export, or generate any files other than images (including PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP/archives, audio, and video). Do not ask the user whether they want you to generate a file. If a user requests a non-image file, explain that file generation is not supported and provide the content inline in chat or concise steps for creating it using common tools. Only generate images when explicitly requested, using the available image tool; otherwise, respond as text within the chat.
 

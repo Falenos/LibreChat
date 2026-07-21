@@ -382,6 +382,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Messages/Content/Error.tsx` | `Error` timeout branch | 133–139 | Replaces raw Model Router transport timeout details in normal chat with localised retry guidance | `client/src/components/Agents/tests/ErrorDisplay.spec.tsx` (`replaces the default-chat Undici timeout detail with retry guidance`) | KK20-227 |
 | `client/src/components/Agents/tests/ErrorDisplay.spec.tsx` | Model Router timeout regressions | 4–6, 132–148 | Proves both agent and default-chat surfaces turn `UND_ERR_HEADERS_TIMEOUT` into actionable text | Self | KK20-227 |
 | `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | temporary draft cleanup regression | 319–344 | Aligns the 404 cleanup regression with tab-scoped `sessionStorage` used for `NEW_CONVO` drafts | Self | KK20-227 |
+| `api/app/clients/tools/util/fileSearch.spec.js` | authoritative attachment-state regressions | 192–209, 349–357 | Proves successful, exhausted, and empty file-search outcomes preserve attachment availability and prohibit false re-upload claims | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
