@@ -44,3 +44,6 @@ export * from './mcp';
 // [knauf] Migration allowlist type.
 export * from './migrationAllowlist';
 // End [knauf]
+// [knauf] KK20-195 WP2 — physical FileAsset aggregate types.
+export * from './fileAsset';
+// End [knauf]

@@ -2,6 +2,9 @@ import type { RoleMethods, RoleDeps } from './role';
 import { createSessionMethods, DEFAULT_REFRESH_TOKEN_EXPIRY, type SessionMethods } from './session';
 import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './user';
 import { createFileMethods, type FileMethods, type FileOwnerScope } from './file';
+// [knauf] KK20-195 WP2 — FileAsset state-machine methods.
+import { createFileAssetMethods, type FileAssetMethods } from './fileAsset';
+// End [knauf]
 import { createTokenMethods, type TokenMethods } from './token';
 import { createRoleMethods, RoleConflictError } from './role';
 import { createKeyMethods, type KeyMethods } from './key';
@@ -97,6 +100,10 @@ import { createAgentMethods, type AgentMethods, type AgentDeps } from './agent';
 import { createConfigMethods, type ConfigMethods } from './config';
 
 export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY };
+// [knauf] KK20-195 WP3b — factory exported for api-side specs that run the
+// real FileAsset state machine against mongodb-memory-server.
+export { createFileAssetMethods };
+// End [knauf]
 export { tokenValues, cacheTokenValues, premiumTokenValues, defaultRate, createTxMethods };
 export { permissionBitSupersets };
 export {
@@ -117,6 +124,9 @@ export type AllMethods = UserMethods &
   RoleMethods &
   KeyMethods &
   FileMethods &
+  // [knauf] KK20-195 WP2 — FileAsset state machine.
+  FileAssetMethods &
+  // End [knauf]
   MemoryMethods &
   AgentCategoryMethods &
   AgentApiKeyMethods &
@@ -244,6 +254,9 @@ export function createMethods(
     ...roleMethods,
     ...createKeyMethods(mongoose),
     ...createFileMethods(mongoose),
+    // [knauf] KK20-195 WP2 — FileAsset state machine.
+    ...createFileAssetMethods(mongoose),
+    // End [knauf]
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
     ...createAgentApiKeyMethods(mongoose),
@@ -289,6 +302,9 @@ export type {
   KeyMethods,
   FileMethods,
   FileOwnerScope,
+  // [knauf] KK20-195 WP2 — FileAsset state machine.
+  FileAssetMethods,
+  // End [knauf]
   MemoryMethods,
   AgentCategoryMethods,
   AgentApiKeyMethods,

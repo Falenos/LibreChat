@@ -16,6 +16,9 @@ const promptTemplates = require('./promptTemplates');
 // [knauf] Migration access gate — public endpoint queried by the frontend after Okta login.
 const migrationAccess = require('./migrationAccess');
 // End [knauf]
+// [knauf] KK20-195 WP2 — FileAsset backfill trigger (X-Knauf-Api-Key guarded).
+const fileAssetMigration = require('./fileAssetMigration');
+// End [knauf]
 
 const router = express.Router();
 router.use('/analytics', analyticsDiagnostics);
@@ -24,6 +27,9 @@ router.use('/costs', costs);
 router.use('/prompt-templates', promptTemplates);
 // [knauf] Mount migration access check endpoint.
 router.use('/migration/access', migrationAccess);
+// End [knauf]
+// [knauf] KK20-195 WP2 — mount the FileAsset backfill trigger.
+router.use('/migration/file-assets', fileAssetMigration);
 // End [knauf]
 
 module.exports = router;

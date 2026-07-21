@@ -9,6 +9,10 @@ const {
   canAccessAgentFromBody,
 } = require('~/server/middleware');
 const { initializeClient } = require('~/server/services/Endpoints/agents');
+// [knauf] KK20-195 WP3c — 409 `file_indexing_not_ready` before the SSE stream
+// starts when a send explicitly selects a file whose asset isn't ready.
+const { knaufFileIndexReadiness } = require('~/server/middleware/knaufFileIndexReadiness');
+// End [knauf]
 const AgentController = require('~/server/controllers/agents/request');
 const addTitle = require('~/server/services/Endpoints/agents/title');
 const { getRoleByName } = require('~/models');
@@ -30,6 +34,10 @@ router.use(moderateText);
 router.use(checkAgentAccess);
 router.use(checkAgentResourceAccess);
 router.use(validateConvoAccess);
+// [knauf] KK20-195 WP3c — readiness gate runs after access checks, before the
+// endpoint option build (which consumes req.body.files).
+router.use(knaufFileIndexReadiness);
+// End [knauf]
 router.use(buildEndpointOption);
 
 const controller = async (req, res, next) => {

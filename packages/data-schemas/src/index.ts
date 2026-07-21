@@ -28,6 +28,9 @@ export {
   MAX_AUDIT_EXPORT_ROWS,
   MAX_AUDIT_LOG_LIMIT,
   MAX_AUDIT_VERIFY_ROWS,
+  // [knauf] KK20-195 WP3b — FileAsset methods factory for api-side specs.
+  createFileAssetMethods,
+  // End [knauf]
 } from './methods';
 export type * from './types';
 export type * from './methods';

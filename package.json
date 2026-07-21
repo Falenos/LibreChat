@@ -42,6 +42,7 @@
     "backend:dev": "cross-env NODE_ENV=development npx nodemon api/server/index.js",
     "backend:experimental": "cross-env NODE_ENV=production node api/server/experimental.js",
     "backend:stop": "node config/stop-backend.js",
+    "backend:worker": "cross-env NODE_ENV=production node api/server/worker.js",
     "build:data-provider": "cd packages/data-provider && npm run build",
     "build:api": "cd packages/api && npm run build",
     "build:data-schemas": "cd packages/data-schemas && npm run build",

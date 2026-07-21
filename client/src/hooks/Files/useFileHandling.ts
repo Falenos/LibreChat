@@ -27,6 +27,9 @@ import useUpdateFiles from './useUpdateFiles';
 // [knauf] KK20-204 — shared dedup asset-key accessor (also used by the file-manager list deduper).
 import { knaufAssetKey } from '~/knauf/hooks/Files/dedupeLibraryFiles';
 // End [knauf]
+// [knauf] KK20-195 WP5a — indexing projection type for the upload response.
+import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
+// End [knauf]
 // [knauf] KK20-227 — warn before an accidental refresh strands an in-flight upload.
 import { useUploadBeforeUnloadGuard } from '~/knauf/hooks/Files/useUploadBeforeUnloadGuard';
 // End [knauf]
@@ -265,6 +268,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               // non-deduped uploads) so identical re-attachments collapse below.
               knauf_asset_id: (data as { knauf_asset_id?: string }).knauf_asset_id,
               // End [knauf]
+              // [knauf] KK20-195 WP5a — capture the async-indexing projection
+              // from the superset upload body (202 = accepted, still indexing);
+              // useKnaufIndexStatus polls it to terminal from here.
+              indexing: (data as { indexing?: KnaufFileIndexing }).indexing,
+              // End [knauf]
             },
             assistant_id ? true : false,
           );
@@ -359,6 +367,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         }
       }
     }
+
+    // [knauf] KK20-195 WP5b — one client-generated batch id shared by every
+    // file of a multi-file selection (plan §6.1 step 3); the server stores it
+    // as knauf_upload_batch_id and the batch-status endpoint aggregates on it.
+    if (extendedFile.knauf_upload_batch_id) {
+      formData.append('batch_id', extendedFile.knauf_upload_batch_id);
+    }
+    // End [knauf]
 
     if (!isAssistantsEndpoint(endpointType ?? endpoint)) {
       if (!agent_id) {
@@ -530,7 +546,13 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       return;
     }
 
-    // [knauf] Reserve all accepted slots before the first asynchronous conversion/upload.
+    // [knauf] KK20-195 WP5b — a multi-file selection shares ONE client batch
+    // id (plan §6.1 step 3); single files stay batch-less. Drives the §6.3
+    // aggregate summary; the server scopes it to the owner, never authorization.
+    const knaufBatchId = fileList.length > 1 ? v4() : undefined;
+    // End [knauf]
+
+    // [knauf] KK20-227/KK20-195 — reserve accepted slots and stamp the shared batch id.
     // Picker, paste, and drag handlers can otherwise observe the same stale files.size and
     // collectively exceed the five-file cap. The reservation only spans this event turn;
     // the synchronously-added placeholders become authoritative afterwards. KK20-227.
@@ -557,7 +579,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           preview: initialPreview,
           progress: 0.1, // Show as processing
           size: originalFile.size,
+          // KK20-195 WP5b — see knaufBatchId above.
+          knauf_upload_batch_id: knaufBatchId,
         };
+        // End [knauf]
 
         // [knauf] Chat "Upload files" routes documents to File Search (RAG),
         // but images must stay on the vision path — the server rejects images
@@ -571,6 +596,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         }
         // End [knauf]
 
+        // [knauf] KK20-227 — complete accepted-slot reservation bookkeeping.
         addFile(initialExtendedFile);
         queuedFiles.push({ originalFile, file_id, initialPreview, initialExtendedFile });
       } catch (error) {

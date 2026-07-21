@@ -205,6 +205,45 @@ let rumProxyMetrics: RumProxyMetrics = {
   recordRequest: () => undefined,
 };
 
+// [knauf] KK20-195 WP0 — File Search indexing baseline metrics. Measures the RAG
+// embed call (duration/outcome/provider throttles) so async-indexing SLOs and
+// concurrency caps are set from data. Bounded tags only — route, outcome, status
+// class — never file ids, user ids, filenames, or content hashes.
+export type FileIndexEmbedRoute = 'embed' | 'agent_embed';
+export type FileIndexEmbedOutcome = 'success' | 'failure' | 'timeout' | 'unsupported_type';
+export type FileIndexProviderStatusClass = '429' | '5xx';
+
+// KK20-195 review R11 — worker observability: claim outcomes + queue health.
+// Bounded tags only (outcome); gauges carry no labels.
+export type WorkerClaimOutcome =
+  | 'ready'
+  | 'requeued'
+  | 'failed'
+  | 'delete_requested'
+  | 'ownership_lost'
+  | 'activation_miss';
+
+type FileIndexMetrics = {
+  recordEmbed: (
+    route: FileIndexEmbedRoute,
+    outcome: FileIndexEmbedOutcome,
+    durationSeconds: number,
+  ) => void;
+  recordProviderError: (route: FileIndexEmbedRoute, status: FileIndexProviderStatusClass) => void;
+  recordEmbedRetry: (route: FileIndexEmbedRoute) => void;
+  recordWorkerClaim: (outcome: WorkerClaimOutcome) => void;
+  recordWorkerQueue: (queued: number, oldestAgeSeconds: number) => void;
+};
+
+let fileIndexMetrics: FileIndexMetrics = {
+  recordEmbed: () => undefined,
+  recordProviderError: () => undefined,
+  recordEmbedRetry: () => undefined,
+  recordWorkerClaim: () => undefined,
+  recordWorkerQueue: () => undefined,
+};
+// End [knauf]
+
 const resetMetricRecorders = (): void => {
   openIDUserLookupMetrics = {
     recordLookup: () => undefined,
@@ -221,6 +260,15 @@ const resetMetricRecorders = (): void => {
   rumProxyMetrics = {
     recordRequest: () => undefined,
   };
+  // [knauf] KK20-195 WP0 — reset file-index recorders to no-ops.
+  fileIndexMetrics = {
+    recordEmbed: () => undefined,
+    recordProviderError: () => undefined,
+    recordEmbedRetry: () => undefined,
+    recordWorkerClaim: () => undefined,
+    recordWorkerQueue: () => undefined,
+  };
+  // End [knauf]
 };
 
 export function recordGenerationJob(store: GenerationJobStore, result: GenerationJobResult): void {
@@ -249,6 +297,38 @@ export function recordGenerationStreamResumePendingEvents(
 export function recordRumProxyRequest(endpoint: RumProxyEndpoint, result: RumProxyResult): void {
   rumProxyMetrics.recordRequest(endpoint, result);
 }
+
+// [knauf] KK20-195 WP0 — public wrappers for the file-index recorders (no-ops
+// until createMetrics() wires them; callers never touch prom-client directly).
+export function recordFileIndexEmbed(
+  route: FileIndexEmbedRoute,
+  outcome: FileIndexEmbedOutcome,
+  durationSeconds: number,
+): void {
+  fileIndexMetrics.recordEmbed(route, outcome, durationSeconds);
+}
+
+export function recordFileIndexProviderError(
+  route: FileIndexEmbedRoute,
+  status: FileIndexProviderStatusClass,
+): void {
+  fileIndexMetrics.recordProviderError(route, status);
+}
+
+export function recordFileIndexEmbedRetry(route: FileIndexEmbedRoute): void {
+  fileIndexMetrics.recordEmbedRetry(route);
+}
+
+// KK20-195 review R11 — worker claim outcomes + queue depth/oldest age
+// (recorded by the indexing worker's loop and reconciler passes).
+export function recordFileIndexWorkerClaim(outcome: WorkerClaimOutcome): void {
+  fileIndexMetrics.recordWorkerClaim(outcome);
+}
+
+export function recordFileIndexWorkerQueue(queued: number, oldestAgeSeconds: number): void {
+  fileIndexMetrics.recordWorkerQueue(queued, oldestAgeSeconds);
+}
+// End [knauf]
 
 const getElapsedSeconds = (startedAt: bigint): number =>
   Number(process.hrtime.bigint() - startedAt) / 1_000_000_000;
@@ -545,6 +625,61 @@ export function createMetrics(): PrometheusMetrics {
   rumProxyMetrics = {
     recordRequest: (endpoint, result) => rumProxyRequests.inc({ endpoint, result }),
   };
+
+  // [knauf] KK20-195 WP0 — File Search indexing baseline metrics. Buckets span
+  // text embeds (seconds) through OCR-heavy PDFs (observed valid job: 21.4 min).
+  const fileIndexEmbedDuration = new Histogram({
+    name: 'knauf_file_index_embed_duration_seconds',
+    help: 'RAG embed call duration by route and outcome (KK20-195 WP0 baseline)',
+    labelNames: ['route', 'outcome'] as const,
+    buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1200, 1800],
+    registers: [registry],
+  });
+
+  const fileIndexProviderErrors = new Counter({
+    name: 'knauf_file_index_provider_errors_total',
+    help: 'RAG embed provider throttles (429) and server errors (5xx) by route',
+    labelNames: ['route', 'status'] as const,
+    registers: [registry],
+  });
+
+  const fileIndexEmbedRetries = new Counter({
+    name: 'knauf_file_index_embed_retries_total',
+    help: 'RAG embed retry attempts scheduled by route',
+    labelNames: ['route'] as const,
+    registers: [registry],
+  });
+
+  // KK20-195 review R11 — worker observability set.
+  const fileIndexWorkerClaims = new Counter({
+    name: 'knauf_file_index_worker_claims_total',
+    help: 'Indexing-worker claim outcomes',
+    labelNames: ['outcome'] as const,
+    registers: [registry],
+  });
+  const fileIndexQueueDepth = new Gauge({
+    name: 'knauf_file_index_queue_depth',
+    help: 'Queued FileAsset backlog size (recorded per reconciler pass)',
+    registers: [registry],
+  });
+  const fileIndexQueueOldestAge = new Gauge({
+    name: 'knauf_file_index_queue_oldest_age_seconds',
+    help: 'Age of the oldest queued FileAsset (recorded per reconciler pass)',
+    registers: [registry],
+  });
+
+  fileIndexMetrics = {
+    recordEmbed: (route, outcome, durationSeconds) =>
+      fileIndexEmbedDuration.observe({ route, outcome }, durationSeconds),
+    recordProviderError: (route, status) => fileIndexProviderErrors.inc({ route, status }),
+    recordEmbedRetry: (route) => fileIndexEmbedRetries.inc({ route }),
+    recordWorkerClaim: (outcome) => fileIndexWorkerClaims.inc({ outcome }),
+    recordWorkerQueue: (queued, oldestAgeSeconds) => {
+      fileIndexQueueDepth.set(queued);
+      fileIndexQueueOldestAge.set(oldestAgeSeconds);
+    },
+  };
+  // End [knauf]
 
   const metricsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
     // [knauf] Probe/scrape volume is platform overhead, not application load.
