@@ -8,6 +8,7 @@ import {
   QueryKeys,
   Constants,
   EToolResources,
+  inferMimeType,
   mergeFileConfig,
   isAssistantsEndpoint,
   getEndpointFileConfig,
@@ -139,6 +140,34 @@ export function limitIncomingFiles(
     accepted: fileList.slice(0, available),
     rejected: Math.max(fileList.length - available, 0),
   };
+}
+// End [knauf]
+
+// [knauf] KK20-195 — discard duplicates individually so one repeated file cannot
+// reject every unique file selected alongside it. Identity deliberately mirrors
+// validateFiles: name + byte size + top-level MIME family.
+export function discardDuplicateFiles(
+  fileList: File[],
+  files: Map<string, ExtendedFile>,
+): { accepted: File[]; rejected: number } {
+  const seen = new Set(
+    Array.from(files.values(), (file) =>
+      [file.file?.name ?? file.filename, file.size, file.type?.split('/')[0] ?? 'file'].join('-'),
+    ),
+  );
+  const accepted: File[] = [];
+  let rejected = 0;
+  for (const file of fileList) {
+    const fileType = inferMimeType(file.name, file.type);
+    const identity = [file.name, file.size, fileType?.split('/')[0] ?? 'file'].join('-');
+    if (seen.has(identity)) {
+      rejected += 1;
+      continue;
+    }
+    seen.add(identity);
+    accepted.push(file);
+  }
+  return { accepted, rejected };
 }
 // End [knauf]
 
@@ -486,6 +515,21 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         fileConfig,
         endpointType,
       });
+
+      // [knauf] KK20-195 — duplicate rows are a per-file skip, not a batch failure.
+      const uniqueFiles = discardDuplicateFiles(fileList, files);
+      fileList = uniqueFiles.accepted;
+      if (uniqueFiles.rejected > 0) {
+        showToast({
+          message: localize('com_error_files_dupe'),
+          status: 'warning',
+        });
+      }
+      if (fileList.length === 0) {
+        setFilesLoading(false);
+        return;
+      }
+      // End [knauf]
 
       // [knauf] Keep the files that fit and tell the user exactly what was
       // accepted/rejected. validateFiles still enforces every other limit.

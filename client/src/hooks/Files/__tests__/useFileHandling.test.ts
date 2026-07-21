@@ -5,6 +5,7 @@ import {
   EToolResources,
   getEndpointFileConfig,
 } from 'librechat-data-provider';
+import type { ExtendedFile } from '~/common';
 // [knauf] KK20-227 — reset the module-level document-upload queue between tests.
 import { _resetDocumentUploadQueue } from '../useFileHandling';
 // End [knauf]
@@ -47,10 +48,13 @@ const mockLocalize = jest.fn((key: string) => key);
 let mockConversation: Record<string, string | null | undefined> = {};
 let mockIsTemporary = false;
 let mockFileConfig: Record<string, unknown> | null = null;
+// [knauf] KK20-195 — mutable chat files fixture for duplicate-batch regressions.
+let mockFiles = new Map<string, ExtendedFile>();
+// End [knauf]
 
 jest.mock('~/Providers/ChatContext', () => ({
   useChatContext: jest.fn(() => ({
-    files: new Map(),
+    files: mockFiles,
     setFiles: jest.fn(),
     setFilesLoading: mockSetFilesLoading,
     conversation: mockConversation,
@@ -149,6 +153,7 @@ describe('useFileHandling', () => {
     mockConversation = {};
     mockIsTemporary = false;
     mockFileConfig = null;
+    mockFiles = new Map();
     // [knauf] KK20-227 — clear the module-level upload queue so a deferred
     // upload from one test can't stall the next.
     _resetDocumentUploadQueue();
@@ -211,6 +216,43 @@ describe('useFileHandling', () => {
 
       expect(mockAddFile).not.toHaveBeenCalled();
       expect(mockShowToast).not.toHaveBeenCalled();
+    });
+  });
+  // End [knauf]
+
+  // [knauf] KK20-195 — one duplicate must not reject the unique remainder of a batch.
+  describe('duplicate batch filtering', () => {
+    it('skips duplicate files and uploads every unique file in the selection', async () => {
+      mockFiles = new Map([
+        [
+          'existing-id',
+          {
+            file_id: 'existing-id',
+            filename: 'existing.pdf',
+            size: 3,
+            type: 'application/pdf',
+            progress: 1,
+          },
+        ],
+      ]);
+      const duplicate = new File(['pdf'], 'existing.pdf', { type: 'application/pdf' });
+      const unique = new File(['new'], 'new.pdf', { type: 'application/pdf' });
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+
+      await act(async () => {
+        await result.current.handleFiles([duplicate, unique]);
+      });
+
+      expect(mockValidateFiles).toHaveBeenCalledWith(
+        expect.objectContaining({ fileList: [unique] }),
+      );
+      expect(mockAddFile).toHaveBeenCalledTimes(1);
+      expect(mockAddFile.mock.calls[0][0].file).toBe(unique);
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'com_error_files_dupe',
+        status: 'warning',
+      });
     });
   });
   // End [knauf]

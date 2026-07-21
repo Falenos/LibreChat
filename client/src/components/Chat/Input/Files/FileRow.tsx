@@ -8,6 +8,9 @@ import { useFileDeletion } from '~/hooks/Files';
 import FileContainer from './FileContainer';
 import { useLocalize } from '~/hooks';
 import Image from './Image';
+// [knauf] KK20-195 — chat attachments expose async-indexing state and retry.
+import KnaufChatFileIndexingStatus from '~/knauf/components/Files/KnaufChatFileIndexingStatus';
+// End [knauf]
 
 export default function FileRow({
   files: _files,
@@ -153,7 +156,9 @@ export default function FileRow({
                   />
                 ) : (
                   <>
-                    {/* [knauf] KK20-227 — show the retained upload failure on its file chip. */}
+                    {/* [knauf] KK20-227 — show the retained upload failure on its file chip.
+                        KK20-195 — keep async-index retry outside FileContainer's button so
+                        the retry button is never nested inside another button. */}
                     <FileContainer
                       file={displayFile}
                       onDelete={handleDelete}
@@ -165,6 +170,7 @@ export default function FileRow({
                         ) : undefined
                       }
                     />
+                    <KnaufChatFileIndexingStatus file={file} setFiles={setFiles} />
                     {/* End [knauf] */}
                   </>
                 )}
