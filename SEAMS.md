@@ -383,6 +383,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Agents/tests/ErrorDisplay.spec.tsx` | Model Router timeout regressions | 4–6, 132–148 | Proves both agent and default-chat surfaces turn `UND_ERR_HEADERS_TIMEOUT` into actionable text | Self | KK20-227 |
 | `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | temporary draft cleanup regression | 319–344 | Aligns the 404 cleanup regression with tab-scoped `sessionStorage` used for `NEW_CONVO` drafts | Self | KK20-227 |
 | `api/app/clients/tools/util/fileSearch.spec.js` | authoritative attachment-state regressions | 192–209, 349–357 | Proves successful, exhausted, and empty file-search outcomes preserve attachment availability and prohibit false re-upload claims | Self | NO-TICKET |
+| `packages/data-schemas/src/config/meiliLogger.ts` | shared logger export | 1–3 | Removes the divergent colored-text Meilisearch logger so sync events inherit the main structured JSON, redaction, and severity contract | `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -549,6 +550,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/hooks/Messages/useSearchResultsByTurn.knauf.spec.tsx` | `~/hooks/Messages/useSearchResultsByTurn`, `~/components/Web/Context`, `~/hooks/Messages/useCopyToClipboard` | Low — focused client regression proving same-file chunks retain distinct indexes, explicit and legacy turns stay separate, and same-turn web/file anchors both resolve and copy correctly | Self | NO-TICKET |
 | `api/server/services/Files/knauf/fileSearchRetrieval.js` | `axios`, `@librechat/agents`, `@librechat/api`, `../VectorDB/crud` | Medium — Knauf-owned dual-backend retrieval, physical-target deduplication, RRF ordering, exact-query caching, citation selection, and per-run query budget behind a thin upstream adapter | `api/app/clients/tools/util/fileSearch.spec.js`, `api/test/app/clients/tools/util/fileSearch.test.js` | NO-TICKET |
 | `knauf/docs/implementation-plans/file-upload-model-router-remediation.md` | None (markdown plan; advisory references to application source paths and sanitised telemetry evidence) | Low — documentation-only remediation plan; no runtime coupling | Docs only | NO-TICKET |
+| `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | `packages/data-schemas/src/config/{winston,meiliLogger}` | Low — test-only identity check pinning the shared logging contract | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
