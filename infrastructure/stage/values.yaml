@@ -1,0 +1,9 @@
+agentic-karl:
+  configmap:
+    KNAUF_RESTRICT_USER_PERMISSIONS: 'true'
+    KNAUF_RESTRICT_PROD_USER_PERMISSIONS: 'true'
+
+  externalSecret:
+    secrets: {}
+    # Add env-specific Key Vault secrets here, e.g.:
+    #   OKTA_CLIENT_SECRET: my-app-stage-OKTA-SECRET
