@@ -5,7 +5,7 @@
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { fileSchema, fileAssetSchema, createFileAssetMethods } = require('@librechat/data-schemas');
-const { createIndexingReconciler } = require('./indexingReconciler');
+const { createIndexingReconciler, createMongoReconcilerLease } = require('./indexingReconciler');
 
 let mongoServer;
 let KnaufFileAsset;
@@ -33,7 +33,7 @@ const listFileAssetRefs = (limit, afterId = null) =>
 // KK20-195 review R9 — the debt-drain case deletes single generations.
 const deleteGenerationMock = jest.fn().mockResolvedValue(undefined);
 
-const buildReconciler = () =>
+const buildReconciler = (overrides = {}) =>
   createIndexingReconciler({
     db,
     listAssets,
@@ -42,6 +42,7 @@ const buildReconciler = () =>
     cleanupAsset,
     deleteGeneration: deleteGenerationMock,
     logger,
+    ...overrides,
   });
 
 const alerts = () => logger.error.mock.calls.map(([msg]) => msg);
@@ -70,6 +71,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await KnaufFileAsset.deleteMany({});
   await File.deleteMany({});
+  await mongoose.connection.db.collection('knauf_file_indexing_locks_test').deleteMany({});
   jest.clearAllMocks();
   cleanupAsset.mockResolvedValue(true);
   deleteGenerationMock.mockReset().mockResolvedValue(undefined);
@@ -204,6 +206,74 @@ describe('case 3 — File pointing at a missing asset', () => {
     expect(db.removeAgentResourceFilesFromAllAgents).toHaveBeenCalledWith({
       file_ids: ['pending-dangling'],
     });
+  });
+
+  test('a dangling-ref backlog emits one bounded summary while preserving the affected count', async () => {
+    for (let index = 1; index <= 12; index += 1) {
+      await seedFile({ file_id: `dangling-${index}`, knauf_asset_id: `gone-${index}` });
+    }
+
+    const counts = await buildReconciler().runOnce();
+    const missingAssetAlerts = alerts().filter((message) => message.includes('file_missing_asset'));
+
+    expect(counts.dangling_file_refs).toMatchObject({ scanned: 12, alerted: 12 });
+    expect(missingAssetAlerts).toHaveLength(1);
+    expect(missingAssetAlerts[0]).toContain('12 finalized file(s)');
+    expect(missingAssetAlerts[0]).toContain('dangling-1');
+    expect(missingAssetAlerts[0]).not.toContain('dangling-12');
+  });
+});
+
+describe('fleet-wide reconciler lease', () => {
+  const collection = () => mongoose.connection.db.collection('knauf_file_indexing_locks_test');
+  const at = (iso) => () => new Date(iso);
+
+  test('only one of five worker replicas acquires a fresh lease', async () => {
+    const acquire = Array.from({ length: 5 }, (_, index) =>
+      createMongoReconcilerLease({
+        collection: collection(),
+        ownerId: `worker-${index}`,
+        leaseMs: 60_000,
+        now: at('2026-07-21T12:00:00.000Z'),
+      }),
+    );
+
+    const outcomes = await Promise.all(acquire.map((tryAcquire) => tryAcquire()));
+
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+  });
+
+  test('another worker takes over only after the lease expires', async () => {
+    const first = createMongoReconcilerLease({
+      collection: collection(),
+      ownerId: 'worker-a',
+      leaseMs: 60_000,
+      now: at('2026-07-21T12:00:00.000Z'),
+    });
+    const tooEarly = createMongoReconcilerLease({
+      collection: collection(),
+      ownerId: 'worker-b',
+      leaseMs: 60_000,
+      now: at('2026-07-21T12:00:59.999Z'),
+    });
+    const afterExpiry = createMongoReconcilerLease({
+      collection: collection(),
+      ownerId: 'worker-b',
+      leaseMs: 60_000,
+      now: at('2026-07-21T12:01:00.001Z'),
+    });
+
+    await expect(first()).resolves.toBe(true);
+    await expect(tooEarly()).resolves.toBe(false);
+    await expect(afterExpiry()).resolves.toBe(true);
+  });
+
+  test('a replica without the lease skips the pass', async () => {
+    const acquireRunLease = jest.fn().mockResolvedValue(false);
+
+    await expect(buildReconciler({ acquireRunLease }).runOnce()).resolves.toBeNull();
+    expect(acquireRunLease).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('pass complete'));
   });
 });
 
