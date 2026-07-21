@@ -299,6 +299,9 @@ describe('findOpenIDUser', () => {
         error: null,
         migration: false,
       });
+      // [knauf] routine OpenID fallback misses must not become operational warnings
+      expect(logger.warn).not.toHaveBeenCalled();
+      // End [knauf]
     });
   });
 
@@ -620,15 +623,22 @@ describe('findOpenIDUser', () => {
     });
   });
 
+  // [knauf] preserve strategy-name coverage on genuine provider-conflict warnings
   describe('Custom strategy names', () => {
+    const conflictingUser = {
+      provider: 'google',
+      email: 'user@example.com',
+    } as IUser;
+
     it('should use custom strategy name in logs', async () => {
       const loggerWarn = logger.warn as jest.Mock;
       loggerWarn.mockClear();
 
-      mockFindUser.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockFindUser.mockResolvedValueOnce(null).mockResolvedValueOnce(conflictingUser);
 
       await findOpenIDUser({
         openidId: 'openid_123',
+        openidIssuer: issuer,
         findUser: mockFindUser,
         email: 'user@example.com',
         strategyName: 'customStrategy',
@@ -641,10 +651,11 @@ describe('findOpenIDUser', () => {
       const loggerWarn = logger.warn as jest.Mock;
       loggerWarn.mockClear();
 
-      mockFindUser.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockFindUser.mockResolvedValueOnce(null).mockResolvedValueOnce(conflictingUser);
 
       await findOpenIDUser({
         openidId: 'openid_123',
+        openidIssuer: issuer,
         findUser: mockFindUser,
         email: 'user@example.com',
       });
@@ -652,6 +663,7 @@ describe('findOpenIDUser', () => {
       expect(loggerWarn).toHaveBeenCalledWith(expect.stringContaining('[openid]'));
     });
   });
+  // End [knauf]
 
   describe('Edge cases', () => {
     it('should handle empty string openidId', async () => {
