@@ -509,6 +509,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.env.example` | Documents `LANGFUSE_TRACING_ENVIRONMENT` and `LANGFUSE_RELEASE` so deployments can filter production traffic and attribute traces to an application release |
 | `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | Keeps `LANGFUSE_RELEASE` synchronized with the exact AGK dev/prod image tag and fails the deployment-config update if release attribution is absent |
 | `.github/workflows/release_pipeline.yaml` | Keeps the optional async indexing worker image tag in lock-step with the dev application release while remaining compatible before the worker GitOps directory exists |
+| `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | KK20-195 — worker deploy plumbing: best-effort post-deploy refresh of the worker ArgoCD app in the release pipeline (a 404 is a clean skip until the infra PR registers the app; other probe failures warn distinctly; never fails the release), and a guarded, verified prod worker values bump on promotion (`[ -f ]` no-op until the prod worker dir exists — deferred to WP1 + WP6 sign-off). The dev worker VALUES bump itself lives in PR #151. |
 
 ## Net-New Files
 
