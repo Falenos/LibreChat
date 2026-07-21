@@ -474,6 +474,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/worker.js` | `listFileAssetRefs` recovery projection | 90–101 | Include `knauf_upload_finalized` so the bounded dangling-reference reconciler can distinguish irrecoverable pending rows from finalized historical corruption | `api/server/services/Files/knauf/indexingReconciler.spec.js` | KK20-195 |
 | `api/app/clients/tools/util/fileSearch.spec.js` | authoritative attachment-state regressions | 192–209, 349–357 | Proves successful, exhausted, and empty file-search outcomes preserve attachment availability and prohibit false re-upload claims | Self | NO-TICKET |
 | `packages/data-schemas/src/config/meiliLogger.ts` | shared logger export | 1–3 | Removes the divergent colored-text Meilisearch logger so sync events inherit the main structured JSON, redaction, and severity contract | `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | NO-TICKET |
+| `api/server/worker.js` | `queueMetrics` sampler wiring | 217–254 | Refresh queue depth and oldest-age gauges every 30 seconds independently of the 15-minute reconciler, while preserving tenant context and stopping the sampler during graceful shutdown | `api/server/services/Files/knauf/indexingWorker.spec.js` (queue metrics sampler) | KK20-195 |
 <!-- seams:auto:end -->
 
 ## Configuration

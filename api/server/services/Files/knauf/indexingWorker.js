@@ -33,11 +33,50 @@ const getWorkerConfig = () => ({
   leaseMs: envInt(process.env.KNAUF_WORKER_LEASE_MS, 5 * 60 * 1000),
   heartbeatMs: envInt(process.env.KNAUF_WORKER_HEARTBEAT_MS, 30 * 1000),
   pollMs: envInt(process.env.KNAUF_WORKER_POLL_MS, 5 * 1000),
+  queueMetricsMs: envInt(process.env.KNAUF_WORKER_QUEUE_METRICS_MS, 30 * 1000),
   attemptCap: envInt(process.env.KNAUF_WORKER_ATTEMPT_CAP, 5),
   authAttemptCap: envInt(process.env.KNAUF_WORKER_AUTH_ATTEMPT_CAP, 2),
   backoffBaseMs: envInt(process.env.KNAUF_WORKER_BACKOFF_BASE_MS, 10 * 1000),
   backoffMaxMs: envInt(process.env.KNAUF_WORKER_BACKOFF_MAX_MS, 10 * 60 * 1000),
 });
+
+/**
+ * Periodically records queue pressure without coupling it to the 15-minute
+ * reconciler. Slow samples never overlap and telemetry failures never stop the
+ * worker claim loop.
+ */
+function createQueueMetricsSampler({ sample, record, logger, intervalMs }) {
+  let timer;
+  let inFlight;
+  const runOnce = () => {
+    if (inFlight) {
+      return inFlight;
+    }
+    inFlight = Promise.resolve()
+      .then(sample)
+      .then(({ queued, oldestAgeSeconds }) => record(queued, oldestAgeSeconds))
+      .catch((error) =>
+        logger.warn(`[indexingWorker][metrics] queue sample failed: ${error?.message}`),
+      )
+      .finally(() => {
+        inFlight = undefined;
+      });
+    return inFlight;
+  };
+  const start = () => {
+    if (timer) {
+      return;
+    }
+    void runOnce();
+    timer = setInterval(() => void runOnce(), intervalMs ?? getWorkerConfig().queueMetricsMs);
+    timer.unref?.();
+  };
+  const stop = () => {
+    clearInterval(timer);
+    timer = undefined;
+  };
+  return { runOnce, start, stop };
+}
 
 /**
  * §5.3 error classes.
@@ -435,6 +474,7 @@ function createIndexingWorker({
 }
 
 module.exports = {
+  createQueueMetricsSampler,
   createIndexingWorker,
   classifyWorkerError,
   computeNextAttemptAt,

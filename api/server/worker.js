@@ -26,6 +26,7 @@ const { getAppConfig } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { isIndexingWorkerEnabled } = require('~/server/services/Files/knauf/asyncIndexingConfig');
 const {
+  createQueueMetricsSampler,
   createIndexingWorker,
   generationsToClean,
   getWorkerConfig,
@@ -214,24 +215,34 @@ const main = async () => {
   );
 
   const loop = runAsSystem(() => worker.start());
+  const queueMetrics = createQueueMetricsSampler({
+    sample: () =>
+      runAsSystem(async () => {
+        const [queued, oldest] = await Promise.all([
+          mongoose.models.KnaufFileAsset.countDocuments({ status: 'queued' }),
+          mongoose.models.KnaufFileAsset.findOne({ status: 'queued' })
+            .sort({ queued_at: 1 })
+            .select({ queued_at: 1 })
+            .lean(),
+        ]);
+        return {
+          queued,
+          oldestAgeSeconds: oldest?.queued_at
+            ? Math.max(0, (Date.now() - new Date(oldest.queued_at).getTime()) / 1000)
+            : 0,
+        };
+      }),
+    record: recordFileIndexWorkerQueue,
+    logger,
+  });
+  queueMetrics.start();
   // Reconciler scheduling lives HERE (not reconciler.start()): interval
   // callbacks escape the AsyncLocalStorage context, so every pass must be
   // re-wrapped in runAsSystem for the tenant-isolated models.
   const reconcilePass = () =>
-    runAsSystem(async () => {
-      const counts = await reconciler.runOnce();
-      // R11 — queue health gauges, one cheap indexed read per pass.
-      const queued = await mongoose.models.KnaufFileAsset.countDocuments({ status: 'queued' });
-      const oldest = await mongoose.models.KnaufFileAsset.findOne({ status: 'queued' })
-        .sort({ queued_at: 1 })
-        .select({ queued_at: 1 })
-        .lean();
-      const oldestAgeSeconds = oldest?.queued_at
-        ? Math.max(0, (Date.now() - new Date(oldest.queued_at).getTime()) / 1000)
-        : 0;
-      recordFileIndexWorkerQueue(queued, oldestAgeSeconds);
-      return counts;
-    }).catch((error) => logger.error('[worker] reconciliation pass failed:', error));
+    runAsSystem(() => reconciler.runOnce()).catch((error) =>
+      logger.error('[worker] reconciliation pass failed:', error),
+    );
   reconcilePass(); // one pass at boot: recover from crashes fast
   const reconcileTimer = setInterval(reconcilePass, getReconcilerConfig().intervalMs);
   reconcileTimer.unref?.();
@@ -239,6 +250,7 @@ const main = async () => {
   const shutdown = (signal) => {
     logger.info(`[worker] ${signal} received — stop claiming, draining in-flight work`);
     worker.stop();
+    queueMetrics.stop();
     clearInterval(reconcileTimer);
     health.close();
     const hardExit = setTimeout(() => {
