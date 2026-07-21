@@ -106,6 +106,9 @@ class ModelEndHandler {
       const responseModel = getResponseModel(data);
       const modelName =
         responseModel || metadata?.ls_model_name || agentContext.clientOptions?.model;
+      if (agentContext.clientOptions?.model) {
+        usage.knauf_requestedModel = agentContext.clientOptions.model;
+      }
       // End [knauf]
       if (modelName) {
         usage.model = modelName;

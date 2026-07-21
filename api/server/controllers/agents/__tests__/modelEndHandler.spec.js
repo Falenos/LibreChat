@@ -212,6 +212,7 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
       );
 
       expect(collectedUsage[0].model).toBe(expectedModel);
+      expect(collectedUsage[0].knauf_requestedModel).toBe('model-router-chat');
       expect(emitUsage).toHaveBeenCalledWith(expect.objectContaining({ model: expectedModel }));
     },
   );

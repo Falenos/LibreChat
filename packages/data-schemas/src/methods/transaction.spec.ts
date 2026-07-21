@@ -96,6 +96,28 @@ test('Transaction schema includes Knauf cost provenance fields', () => {
 });
 // End [knauf]
 
+// [knauf] Routed-model cost inputs must remain persisted on transaction rows.
+test('Transaction schema persists routed-model attribution fields', async () => {
+  expect(Transaction.schema.path('knauf_requestedModel')).toBeDefined();
+  expect(Transaction.schema.path('inputTokenCount')).toBeDefined();
+
+  const user = new mongoose.Types.ObjectId();
+  await Transaction.create({
+    user,
+    tokenType: 'prompt',
+    model: 'gpt-5.4-mini-2026-03-17',
+    rawAmount: -100,
+    inputTokenCount: 100,
+    knauf_requestedModel: 'model-router-chat',
+  });
+
+  await expect(Transaction.findOne({ user }).lean()).resolves.toMatchObject({
+    inputTokenCount: 100,
+    knauf_requestedModel: 'model-router-chat',
+  });
+});
+// End [knauf]
+
 describe('Regular Token Spending Tests', () => {
   test('Balance should decrease when spending tokens with spendTokens', async () => {
     // Arrange
