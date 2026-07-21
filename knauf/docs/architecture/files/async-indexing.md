@@ -273,6 +273,7 @@ Worker tuning knobs ([indexingWorker.js](../../../../api/server/services/Files/k
 | `KNAUF_WORKER_PORT` | 3081 | Port for the `/health`, `/ready`, `/metrics` probes |
 | `KNAUF_WORKER_GRACE_MS` | 60 s | SIGTERM drain window: stop claiming, finish in-flight, then exit |
 | `KNAUF_WORKER_POLL_MS` | 5 s | Idle sleep between claim attempts (one asset per iteration) |
+| `KNAUF_WORKER_QUEUE_METRICS_MS` | 30 s | Queue depth/oldest-age sampling cadence; samples never overlap and failures do not stop claims |
 | `KNAUF_WORKER_LEASE_MS` | 5 min | Claim lease; expired `processing` leases become reclaimable |
 | `KNAUF_WORKER_HEARTBEAT_MS` | 30 s | Token-fenced lease renewal; a CAS miss = ownership lost, stop writing state. Also feeds `/ready` liveness |
 | `KNAUF_WORKER_EMBED_TIMEOUT_MS` | 30 min | Per-embed request cap (its OWN budget — NOT `RAG_EMBED_SYNC_TIMEOUT_MS`; async exists to allow long OCR) |

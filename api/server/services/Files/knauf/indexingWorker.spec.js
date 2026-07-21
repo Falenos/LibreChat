@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { fileAssetSchema, createFileAssetMethods } = require('@librechat/data-schemas');
 const {
+  createQueueMetricsSampler,
   createIndexingWorker,
   classifyWorkerError,
   computeNextAttemptAt,
@@ -452,6 +453,42 @@ describe('R11 — loop liveness + claim-outcome recorder', () => {
 });
 
 describe('helpers', () => {
+  test('queue metrics sampler records immediately, does not overlap, and survives failures', async () => {
+    jest.useFakeTimers();
+    let releaseSample;
+    const sample = jest
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseSample = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error('metrics unavailable'))
+      .mockResolvedValue({ queued: 3, oldestAgeSeconds: 12 });
+    const record = jest.fn();
+    const sampler = createQueueMetricsSampler({ sample, record, logger, intervalMs: 30_000 });
+
+    sampler.start();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(sample).toHaveBeenCalledTimes(1);
+
+    releaseSample({ queued: 2, oldestAgeSeconds: 8 });
+    await sampler.runOnce();
+    expect(record).toHaveBeenCalledWith(2, 8);
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[indexingWorker][metrics] queue sample failed: metrics unavailable',
+    );
+
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(record).toHaveBeenLastCalledWith(3, 12);
+    sampler.stop();
+    jest.useRealTimers();
+  });
+
   test.each([
     [httpError(429), 'retryable'],
     [httpError(503), 'retryable'],

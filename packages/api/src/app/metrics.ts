@@ -320,7 +320,7 @@ export function recordFileIndexEmbedRetry(route: FileIndexEmbedRoute): void {
 }
 
 // KK20-195 review R11 — worker claim outcomes + queue depth/oldest age
-// (recorded by the indexing worker's loop and reconciler passes).
+// (recorded by the indexing worker's claim loop and queue sampler).
 export function recordFileIndexWorkerClaim(outcome: WorkerClaimOutcome): void {
   fileIndexMetrics.recordWorkerClaim(outcome);
 }
@@ -659,12 +659,12 @@ export function createMetrics(): PrometheusMetrics {
   });
   const fileIndexQueueDepth = new Gauge({
     name: 'knauf_file_index_queue_depth',
-    help: 'Queued FileAsset backlog size (recorded per reconciler pass)',
+    help: 'Queued FileAsset backlog size (sampled periodically by the indexing worker)',
     registers: [registry],
   });
   const fileIndexQueueOldestAge = new Gauge({
     name: 'knauf_file_index_queue_oldest_age_seconds',
-    help: 'Age of the oldest queued FileAsset (recorded per reconciler pass)',
+    help: 'Age of the oldest queued FileAsset (sampled periodically by the indexing worker)',
     registers: [registry],
   });
 
