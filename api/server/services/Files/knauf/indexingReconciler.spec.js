@@ -141,6 +141,20 @@ describe('case 1 — stale uploading', () => {
     expect(alerts().some((m) => m.includes('stale_uploading_reupload_required'))).toBe(true);
   });
 
+  test('a lost stale-upload transition does not emit a false re-upload alert', async () => {
+    await seedAsset({ asset_id: 'u-raced', status: 'uploading' });
+    await seedFile({ file_id: 'fr-raced', knauf_asset_id: 'u-raced' });
+    await File.collection.updateOne({ file_id: 'fr-raced' }, { $unset: { filepath: '' } });
+    const failStaleUpload = jest.spyOn(db, 'failStaleUpload').mockResolvedValueOnce(null);
+
+    const counts = await buildReconciler().runOnce();
+
+    expect(counts.stale_uploading).toMatchObject({ repaired: 0, alerted: 1 });
+    expect(alerts().some((m) => m.includes('stale_uploading_transition_lost'))).toBe(true);
+    expect(alerts().some((m) => m.includes('stale_uploading_reupload_required'))).toBe(false);
+    failStaleUpload.mockRestore();
+  });
+
   test('a FRESH uploading asset is out of scope', async () => {
     await seedAsset({ asset_id: 'u-fresh', status: 'uploading', aged: false });
     const counts = await buildReconciler().runOnce();

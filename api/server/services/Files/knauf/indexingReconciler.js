@@ -211,12 +211,15 @@ function createIndexingReconciler({
         });
         if (failed) {
           repaired += 1;
+          alert(
+            'stale_uploading_reupload_required',
+            `asset ${asset.asset_id} has no recoverable blob intent`,
+          );
+          alerted += 1;
+        } else {
+          alert('stale_uploading_transition_lost', `asset ${asset.asset_id} changed state`);
+          alerted += 1;
         }
-        alert(
-          'stale_uploading_reupload_required',
-          `asset ${asset.asset_id} has no recoverable blob intent`,
-        );
-        alerted += 1;
         continue;
       }
       const cleaned = await gcAssetThroughLifecycle({

@@ -116,6 +116,30 @@ describe('generation RAG client contract', () => {
     ).rejects.toMatchObject({ status: 502 });
   });
 
+  test('rejects an empty parse as a permanent input failure', async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        status: 'ready',
+        asset_id: 'asset-1',
+        generation: 3,
+        index_profile: 'profile-v1',
+        chunks_expected: 0,
+        chunks_written: 0,
+      },
+    });
+
+    await expect(
+      client.embedGeneration({
+        asset_id: 'asset-1',
+        generation: 3,
+        index_profile: 'profile-v1',
+        embed_route: '/embed',
+        blob: { source: 'azure_blob', path: 'asset-1', mime: 'text/plain' },
+        scope: { userId: 'user-1', entityId: 'user-1' },
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'parse_empty' });
+  });
+
   test('scopes deletion to the asset backend', async () => {
     axios.delete.mockResolvedValue({ data: { status: 'deleted' } });
 

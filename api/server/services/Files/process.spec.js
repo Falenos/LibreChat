@@ -2033,6 +2033,20 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
   });
 
+  test('retries a transient duplicate-key race while persisting the pending File', async () => {
+    const duplicateKey = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+    db.createFile
+      .mockRejectedValueOnce(duplicateKey)
+      .mockResolvedValueOnce({ file_id: 'up-1' })
+      .mockResolvedValueOnce({ file_id: 'up-1' });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile).toHaveBeenCalledTimes(3);
+    expect(db.createFile.mock.calls[1]).toEqual(db.createFile.mock.calls[0]);
+    expect(handleFileUpload).toHaveBeenCalledTimes(1);
+  });
+
   test('compensates the blob when its durable File intent cannot be recorded', async () => {
     const deleteFile = jest.fn().mockResolvedValue(undefined);
     getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });

@@ -1388,35 +1388,42 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
             userId: req.user.id,
           });
         }
-        const pendingFile = await db.createFile(
-          removeNullishValues({
-            user: req.user.id,
-            file_id,
-            temp_file_id,
-            knauf_asset_id: knaufAssetId,
-            knauf_upload_batch_id:
-              typeof metadata.batch_id === 'string' && metadata.batch_id.length <= 64
-                ? metadata.batch_id
-                : undefined,
-            conversationId:
-              req.body.conversationId && req.body.conversationId !== Constants.NEW_CONVO
-                ? req.body.conversationId
-                : undefined,
-            filename: sanitizeFilename(file.originalname),
-            filepath: knaufBlobIntentPath,
-            type: file.mimetype,
-            bytes: file.size,
-            context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
-            embedded: false,
-            source,
-            tenantId: req.user.tenantId,
-            knauf_content_hash: knaufContentHash,
-            knauf_dedup_owner: knaufDedupOwner,
-            knauf_upload_finalized: false,
-          }),
-          true,
-          { userId: req.user.id, tenantId: req.user.tenantId ?? null },
-        );
+        const pendingFileData = removeNullishValues({
+          user: req.user.id,
+          file_id,
+          temp_file_id,
+          knauf_asset_id: knaufAssetId,
+          knauf_upload_batch_id:
+            typeof metadata.batch_id === 'string' && metadata.batch_id.length <= 64
+              ? metadata.batch_id
+              : undefined,
+          conversationId:
+            req.body.conversationId && req.body.conversationId !== Constants.NEW_CONVO
+              ? req.body.conversationId
+              : undefined,
+          filename: sanitizeFilename(file.originalname),
+          filepath: knaufBlobIntentPath,
+          type: file.mimetype,
+          bytes: file.size,
+          context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
+          embedded: false,
+          source,
+          tenantId: req.user.tenantId,
+          knauf_content_hash: knaufContentHash,
+          knauf_dedup_owner: knaufDedupOwner,
+          knauf_upload_finalized: false,
+        });
+        const pendingOwnerScope = { userId: req.user.id, tenantId: req.user.tenantId ?? null };
+        let pendingFile;
+        try {
+          pendingFile = await db.createFile(pendingFileData, true, pendingOwnerScope);
+        } catch (pendingError) {
+          if (pendingError?.code !== 11000) {
+            throw pendingError;
+          }
+          // Concurrent upserts can both miss; after one insert wins, the retry is an update.
+          pendingFile = await db.createFile(pendingFileData, true, pendingOwnerScope);
+        }
         if (!pendingFile) {
           throw new Error('file_asset_pending_file_lost');
         }

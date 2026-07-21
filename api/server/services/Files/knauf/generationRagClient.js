@@ -74,13 +74,26 @@ function createGenerationRagClient({ getStrategyFunctions }) {
     });
     // §7.5: HTTP 200 with a body-level failure is a failure, never a success.
     const result = response.data;
+    if (
+      result?.status === 'ready' &&
+      result.asset_id === asset_id &&
+      result.generation === generation &&
+      result.index_profile === index_profile &&
+      result.chunks_expected === 0 &&
+      result.chunks_written === 0
+    ) {
+      const emptyParseError = new Error(`RAG parsed no searchable content for ${asset_id}`);
+      emptyParseError.status = 422;
+      emptyParseError.code = 'parse_empty';
+      throw emptyParseError;
+    }
     const complete =
       result?.status === 'ready' &&
       result.asset_id === asset_id &&
       result.generation === generation &&
       result.index_profile === index_profile &&
       Number.isInteger(result.chunks_expected) &&
-      result.chunks_expected >= 0 &&
+      result.chunks_expected > 0 &&
       result.chunks_written === result.chunks_expected;
     if (!complete) {
       const contractError = new Error(
