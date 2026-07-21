@@ -1,6 +1,22 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+// [knauf] KK20-195 WP5b — the list now uses useQueryClient (agent-files
+// refetch after an indexing retry), so renders need a QueryClientProvider.
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
+// End [knauf]
 import type { ExtendedFile } from '~/common';
 import KnaufKnowledgeFileList from './KnaufKnowledgeFileList';
+
+// [knauf] KK20-195 WP5b — provider-wrapped render for every test below.
+const render = (ui: ReactElement) =>
+  rtlRender(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      {ui}
+    </QueryClientProvider>,
+  );
+// End [knauf]
 
 // [knauf] KK20-227 seam test — a saved knowledge file with a retained session
 // blob exposes a Re-index action that runs the server delete then re-uploads the

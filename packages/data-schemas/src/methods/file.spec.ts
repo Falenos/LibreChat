@@ -297,9 +297,12 @@ describe('File Methods', () => {
   });
 
   describe('getToolFilesByIds', () => {
-    it('should retrieve files for file_search tool (embedded files)', async () => {
+    // [knauf] KK20-195 FileAsset-backed readiness remains queryable when the
+    // legacy embedded projection misses its cross-document update.
+    it('should retrieve legacy embedded and FileAsset-backed files for file_search', async () => {
       const userId = new mongoose.Types.ObjectId();
       const embeddedFileId = uuidv4();
+      const assetBackedFileId = uuidv4();
       const regularFileId = uuidv4();
 
       await fileMethods.createFile({
@@ -313,6 +316,17 @@ describe('File Methods', () => {
       });
 
       await fileMethods.createFile({
+        file_id: assetBackedFileId,
+        user: userId,
+        filename: 'asset-backed.txt',
+        filepath: '/uploads/asset-backed.txt',
+        type: 'text/plain',
+        bytes: 100,
+        embedded: false,
+        knauf_asset_id: uuidv4(),
+      });
+
+      await fileMethods.createFile({
         file_id: regularFileId,
         user: userId,
         filename: 'regular.txt',
@@ -322,11 +336,16 @@ describe('File Methods', () => {
       });
 
       const toolSet = new Set([EToolResources.file_search]);
-      const files = await fileMethods.getToolFilesByIds([embeddedFileId, regularFileId], toolSet);
+      const files = await fileMethods.getToolFilesByIds(
+        [embeddedFileId, assetBackedFileId, regularFileId],
+        toolSet,
+      );
 
-      expect(files).toHaveLength(1);
-      expect(files[0].file_id).toBe(embeddedFileId);
+      expect(files.map((file) => file.file_id).sort((a, b) => a.localeCompare(b))).toEqual(
+        [embeddedFileId, assetBackedFileId].sort((a, b) => a.localeCompare(b)),
+      );
     });
+    // End [knauf]
 
     it('should retrieve files for context tool', async () => {
       const userId = new mongoose.Types.ObjectId();

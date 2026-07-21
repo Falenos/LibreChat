@@ -23,9 +23,10 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/storage.md](architecture/files/storage.md) | Where the bytes live — `fileStrategy` adapters + the Azure Blob / SAS-signed-URL machinery (anatomy, refresh chain, TTL math, signing modes, before/after diagrams) |
 | [architecture/files/rag-search.md](architecture/files/rag-search.md) | How file search works — conversation uploads in pgvector, Agent Knowledge in Azure AI Search, mixed retrieval, deletion, and citations |
 | [architecture/files/processing.md](architecture/files/processing.md) | Which formats each upload mode accepts (MIME allow-lists) and how each is processed — image transforms, document parser, OCR, speech-to-text, RAG embedding; plus what's active vs dormant today |
+| [architecture/files/async-indexing.md](architecture/files/async-indexing.md) | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md) | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
 
-> The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, and **processing** are the domain deep-dives it links into.
+> The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 
 ## Contributing — how we work on this fork
 

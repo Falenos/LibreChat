@@ -3,7 +3,9 @@ const { logger } = require('@librechat/data-schemas');
 const { tool } = require('@librechat/agents/langchain/tools');
 const { generateShortLivedToken } = require('@librechat/api');
 const { Tools } = require('librechat-data-provider');
-const { useAzureSearchForAgents: isAzureSearchEnabledForAgents } = require('../VectorDB/crud');
+// Semantic merge fix: this branch renamed the flag accessor in WP0
+// (useAzureSearchForAgents → isAzureSearchEnabledForAgents, eslint react-hooks).
+const { isAzureSearchEnabledForAgents } = require('../VectorDB/crud');
 
 const DEFAULT_MAX_DISTINCT_QUERIES = 3;
 const DEFAULT_MAX_CITATIONS = 30;
@@ -91,12 +93,22 @@ const createKnaufFileSearchTool = async (
   const candidates = files
     .map((file) => {
       const physicalId = file.knauf_asset_id ?? file.file_id;
+      const configuredBackend =
+        file.knauf_vector_backend === 'azure_search' ? 'azure' : file.knauf_vector_backend;
       const backend =
-        azureEnabled && file.fromAgent === true && file.context === 'agents' ? 'azure' : 'pgvector';
+        configuredBackend ??
+        (azureEnabled && file.fromAgent === true && file.context === 'agents'
+          ? 'azure'
+          : 'pgvector');
+      const generation =
+        Number.isInteger(file.knauf_active_generation) && file.knauf_active_generation >= 0
+          ? file.knauf_active_generation
+          : 0;
       return {
-        key: `${backend}:${physicalId}`,
+        key: `${backend}:${physicalId}:${generation}`,
         backend,
         physicalId,
+        generation,
         fileId: file.file_id,
         filename: file.filename,
       };
@@ -151,6 +163,9 @@ const createKnaufFileSearchTool = async (
         body: {
           query,
           file_ids: targetsByBackend.pgvector.map((target) => target.physicalId),
+          generations: Object.fromEntries(
+            targetsByBackend.pgvector.map((target) => [target.physicalId, target.generation]),
+          ),
           k: MAX_RESULTS,
           ...(entity_id ? { entity_id } : {}),
         },
@@ -167,6 +182,9 @@ const createKnaufFileSearchTool = async (
               body: {
                 query,
                 file_ids: targetsByBackend.azure.map((target) => target.physicalId),
+                generations: Object.fromEntries(
+                  targetsByBackend.azure.map((target) => [target.physicalId, target.generation]),
+                ),
                 k: MAX_RESULTS,
                 entity_id,
               },

@@ -29,6 +29,9 @@ import { createConfigModel } from './config';
 // [knauf] Migration allowlist model — who is allowed into the new platform.
 import { createMigrationAllowlistModel } from './migrationAllowlist';
 // End [knauf]
+// [knauf] KK20-195 WP2 — physical FileAsset aggregate model.
+import { createFileAssetModel } from './fileAsset';
+// End [knauf]
 import { createTokenModel } from './token';
 import { createAgentModel } from './agent';
 import { createSkillModel } from './skill';
@@ -78,6 +81,11 @@ export function createModels(mongoose: typeof import('mongoose')): {
   AuditLog: ReturnType<typeof createAuditLogModel>;
   Group: ReturnType<typeof createGroupModel>;
   Config: ReturnType<typeof createConfigModel>;
+  // [knauf] KK20-195 WP2 — physical FileAsset aggregate. (MigrationAllowlist is
+  // deliberately absent here: its factory has no explicit return type, and
+  // --isolatedDeclarations rejects inferred types on this exported annotation.)
+  KnaufFileAsset: ReturnType<typeof createFileAssetModel>;
+  // End [knauf]
 } {
   return {
     User: createUserModel(mongoose),
@@ -118,6 +126,9 @@ export function createModels(mongoose: typeof import('mongoose')): {
     Config: createConfigModel(mongoose),
     // [knauf] Migration allowlist — who can access the new platform.
     MigrationAllowlist: createMigrationAllowlistModel(mongoose),
+    // End [knauf]
+    // [knauf] KK20-195 WP2 — physical FileAsset aggregate.
+    KnaufFileAsset: createFileAssetModel(mongoose),
     // End [knauf]
   };
 }

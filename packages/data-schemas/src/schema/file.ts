@@ -171,6 +171,19 @@ const file: Schema<IMongoFile> = new Schema(
       type: Boolean,
     },
     // End [knauf]
+    // [knauf] KK20-195 WP2 — client-generated batch id shared by every file of a
+    // multi-file selection; drives the aggregate batch-status projection. The
+    // batch id alone is NEVER authorization — queries are always owner-scoped
+    // (see the compound index below). Optional for single-file uploads.
+    knauf_upload_batch_id: {
+      type: String,
+    },
+    // False only for the crash-recovery marker written before physical work;
+    // true after agent binding, retention, and final metadata are durable.
+    knauf_upload_finalized: {
+      type: Boolean,
+    },
+    // End [knauf]
     expiredAt: {
       /* Retention deadline for persisted files. The file sweep deletes the
        * backing storage first, then removes this metadata record. */
@@ -202,6 +215,20 @@ file.index(
 file.index(
   { user: 1, knauf_content_hash: 1, knauf_dedup_owner: 1 },
   { unique: true, partialFilterExpression: { knauf_dedup_owner: true } },
+);
+// End [knauf]
+// [knauf] KK20-195 WP2 — async-indexing lookups.
+// Batch-status projection: compound index STARTS with the owner scope and ends
+// with the batch id (hardened plan §4.1: never query a batch id globally).
+file.index(
+  { user: 1, knauf_upload_batch_id: 1 },
+  { partialFilterExpression: { knauf_upload_batch_id: { $exists: true } } },
+);
+// Reference recount (last-reference delete) + list-API status hydration key on
+// knauf_asset_id across a user's rows; partial so legacy rows stay out.
+file.index(
+  { knauf_asset_id: 1 },
+  { partialFilterExpression: { knauf_asset_id: { $exists: true } } },
 );
 // End [knauf]
 
