@@ -184,6 +184,7 @@ jobs:
           PROD_WORKER_VALUES="$AGK_PROD_WORKER_CONFIG_DIRECTORY/values.yaml"
           if [ -f "$PROD_WORKER_VALUES" ]; then
             sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$PROD_WORKER_VALUES"
+            grep -F "tag: \"$VERSION\"" "$PROD_WORKER_VALUES"
             BUMP_PATHS+=("$PROD_WORKER_VALUES")
             echo "Bumping prod worker values $PROD_WORKER_VALUES to $VERSION"
           else

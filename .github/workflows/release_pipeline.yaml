@@ -315,10 +315,10 @@ jobs:
           exit 1
 
       # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
-      # Best-effort by design: the worker is gated (acceptance flag off ⇒ empty
-      # queue), the app-deploy above is the release's success criterion, and the
-      # worker app may not be registered yet. A missing app or a slow sync warns
-      # in the summary but never fails the release.
+      # Best-effort visibility only: the app deploy above is the release's success
+      # criterion, while worker rollout has separate GitOps/pod gates before async
+      # acceptance is enabled. Missing, unreachable, or slow worker apps warn in
+      # the summary but never fail the release.
       - name: Refresh AGK worker ArgoCD application (best-effort)
         if: success()
         run: |
@@ -337,13 +337,20 @@ jobs:
             | jq -r '.token')
           echo "::add-mask::$ARGOCD_TOKEN"
 
-          # Probe once — a 404 (app not registered yet) is a clean skip.
-          PROBE=$(curl -fsS \
+          # Probe once — only a real 404 means the app is not registered yet.
+          PROBE_FILE="$RUNNER_TEMP/agk-worker-argocd-probe.json"
+          PROBE_STATUS=$(curl -sS -o "$PROBE_FILE" -w '%{http_code}' \
             "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
-            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" 2>/dev/null || true)
-          if [ -z "$PROBE" ]; then
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          PROBE_EXIT=$?
+          if [ "$PROBE_STATUS" = "404" ]; then
             echo "Worker ArgoCD app $AGK_WORKER_ARGOCD_APP not found — skipping (infra PR pending)"
             echo "| Worker ArgoCD app | not registered yet (skipped) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$PROBE_EXIT" -ne 0 ] || [ "$PROBE_STATUS" != "200" ]; then
+            echo "::warning::Worker ArgoCD probe failed (curl exit=$PROBE_EXIT, HTTP ${PROBE_STATUS:-unknown})"
+            echo "| Worker ArgoCD app | probe failed: HTTP \`${PROBE_STATUS:-unknown}\` (non-blocking) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -364,6 +371,6 @@ jobs:
             fi
             sleep 10
           done
-          echo "::warning::Worker ArgoCD app did not converge on $EXPECTED_IMAGE in time (non-blocking — worker is gated off)"
+          echo "::warning::Worker ArgoCD app did not converge on $EXPECTED_IMAGE in time (non-blocking — rollout validation remains required before async acceptance)"
           echo "| Worker ArgoCD app | not converged (non-blocking) — check $AGK_WORKER_ARGOCD_APP |" >> "$GITHUB_STEP_SUMMARY"
           exit 0
