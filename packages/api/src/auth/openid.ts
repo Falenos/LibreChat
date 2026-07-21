@@ -251,9 +251,9 @@ export async function findOpenIDUser({
 
     if (!user && email) {
       user = await findUser({ email });
-      logger.warn(
-        `[${strategyName}] user ${user ? 'found' : 'not found'} with email: ${email} for openidId: ${openidId}`,
-      );
+      // [knauf] routine fallback outcomes are metrics, not identifier-bearing operational warnings
+      // recordOpenIDUserLookup records the final lookup outcome below.
+      // End [knauf]
 
       // If user found by email, check if they're allowed to use OpenID provider
       if (user && user.provider && user.provider !== 'openid') {

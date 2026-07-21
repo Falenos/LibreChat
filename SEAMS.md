@@ -490,6 +490,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` | retryable failed-indexing row regression | 20–26, 195–212 | Proves a retryable failed document renders its indexing failure and retry action in the chat attachment row | Self | KK20-195 |
 | `packages/api/src/agents/transactions.ts` | `prepareTokenSpend.normalizedPromptTokens` | 237–239, 246–248 | Sanitizes non-finite prompt usage before it reaches pricing and persisted `inputTokenCount` while preserving the legacy sentinel that drops only the malformed prompt transaction | `packages/api/src/agents/transactions.bulk-parity.spec.ts` (`NaN promptTokens — only completion doc inserted, identical to legacy`) | NO-TICKET |
 | `packages/api/src/agents/usage.spec.ts` | `recordCollectedUsage` transaction metadata expectation | 818–820 | Updates the exact metadata contract to include the configured model now persisted for router-cost attribution | Self | NO-TICKET |
+| `packages/api/src/auth/openid.ts` | `findOpenIDUser` email fallback | 252–256 | Removes the routine identifier-bearing warning from normal OpenID-to-email fallback; the existing bounded lookup metric retains the operational outcome | `packages/api/src/auth/openid.spec.ts` (`routine OpenID fallback misses must not become operational warnings`) | NO-TICKET |
+| `packages/api/src/auth/openid.spec.ts` | OpenID fallback warning regressions | 299–304, 626–666 | Proves a normal fallback miss emits no warning while genuine provider conflicts still retain strategy-scoped warning coverage | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
