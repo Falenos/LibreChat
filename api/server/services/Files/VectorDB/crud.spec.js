@@ -1,6 +1,7 @@
 // [knauf] KK20-203 — seam test for the hardened, batched pgvector delete used by
 // the chat-delete cascade (cascadeDeleteConvoFiles). Asserts bounded retry on
 // transient failures, 404-as-success idempotency, and fail-fast on a 4xx.
+// End [knauf]
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({
@@ -257,7 +258,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  // [knauf] Azure-failure branch — pinning the round-2/round-3 semantics: pgvector
+  // Azure-failure branch — pinning the round-2/round-3 semantics: pgvector
   // runs first and unconditionally, an Azure failure aggregate-throws with the
   // failed ids afterward, and a 404 on /agent/documents/:id is swallowed as success.
   test('mixed batch: pgvector still runs and succeeds even when an Azure delete fails', async () => {
@@ -338,7 +339,6 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     // Wave 1 = 5 concurrent, wave 2 = 2 — never all 7 at once.
     expect(maxInFlight).toBeLessThanOrEqual(5);
   });
-  // End [knauf]
 });
 // End [knauf]
 

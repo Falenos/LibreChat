@@ -24,6 +24,7 @@ const {
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
   knaufLegacyOfficeErrorKey,
+  // End [knauf]
 } = require('librechat-data-provider');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const {

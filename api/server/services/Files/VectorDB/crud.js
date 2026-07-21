@@ -22,6 +22,7 @@ const {
 // the /agent/* endpoints (Azure AI Search) instead of the default pgvector ones.
 const isAzureSearchEnabledForAgents = () =>
   (process.env.AZURE_SEARCH_ENABLED || '').toLowerCase() === 'true';
+// End [knauf]
 
 /**
  * Deletes a file from the vector database. This function takes a file object, constructs the full path, and
@@ -43,6 +44,7 @@ const isAzureSearchEnabledForAgents = () =>
 // a whole chat's embeddings in one call and `deleteVectors` delegates to it.
 const RAG_DELETE_MAX_ATTEMPTS = 3;
 const ragDeleteSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// End [knauf]
 
 // [knauf] KK20-195 WP0 — RAG containment guardrails (accepted plan, WP0).
 // The embed call had no timeout and no retry: a slow OCR/embed held the upload
@@ -182,7 +184,7 @@ const compensateEmbedFailure = async (req, file_id, attempted, { azureSearch = f
   }
   try {
     if (azureSearch) {
-      // [knauf] KK20-195 review — the failed embed went to Azure AI Search
+      // KK20-195 review — the failed embed went to Azure AI Search
       // (/agent/embed); its partial vectors live there, not in pgvector, so
       // compensate against the SAME store or they orphan permanently.
       await deleteAzureSearchVectors(req, file_id);
@@ -260,9 +262,8 @@ const deleteAzureSearchVectors = async (req, fileId) => {
           'Content-Type': 'application/json',
           accept: 'application/json',
         },
-        // [knauf] KK20-195 WP0 — bound the delete call (retry already exists).
+        // KK20-195 WP0 — bound the delete call (retry already exists).
         timeout: RAG_DELETE_TIMEOUT_MS,
-        // End [knauf]
       });
     } catch (error) {
       const status = error.response?.status;
@@ -388,7 +389,6 @@ const deleteVectors = async (req, file) => {
   return deleteVectorsByIds(req, [vectorFileId]);
   // End [knauf]
 };
-// End [knauf]
 
 /**
  * Uploads a file to the configured Vector database
@@ -501,12 +501,12 @@ module.exports = {
   deleteVectors,
   // [knauf] KK20-203 — batched, retried vector delete for the chat-delete cascade.
   deleteVectorsByIds,
-  // [knauf] Context-aware batch delete — agent files to Azure Search, rest to pgvector.
+  // Context-aware batch delete — agent files to Azure Search, rest to pgvector.
   deleteVectorsForFiles,
-  // [knauf] Per-file Azure Search delete with bounded retry; used by
+  // Per-file Azure Search delete with bounded retry; used by
   // deleteVectorsForFiles and deleteVectors for agent-file routing.
   deleteAzureSearchVectors,
-  // [knauf] Flag check; used by deleteVectorsForFiles, deleteVectors, and
+  // Flag check; used by deleteVectorsForFiles, deleteVectors, and
   // fileSearch.js (query routing).
   isAzureSearchEnabledForAgents,
   // KK20-195 WP0 — exported for unit tests of the containment guardrails.

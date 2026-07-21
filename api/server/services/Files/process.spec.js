@@ -168,10 +168,10 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   deleteVectorsByIds: jest.fn(),
   deleteVectorsForFiles: jest.fn().mockResolvedValue(undefined),
   parseRetryAfterMs: jest.fn(() => 0),
-  // [knauf] KK20-195 WP3b — reservation routing reads the agent-search backend flag.
+  // KK20-195 WP3b — reservation routing reads the agent-search backend flag.
   isAzureSearchEnabledForAgents: jest.fn().mockReturnValue(false),
-  // End [knauf]
 }));
+// End [knauf]
 
 // [knauf] KK20-204/KK20-195 — the file_search path hashes the bytes before the
 // FileAsset reservation; stub so tests don't touch the disk.
@@ -1730,7 +1730,7 @@ describe('filterFile per-category size caps', () => {
   });
 });
 
-// [knauf] filterFile actionable rejection for off-allow-list types (KK20-190). When
+// filterFile actionable rejection for off-allow-list types (KK20-190). When
 // the endpoint's restricted allow-list rejects the mime, the Knauf endpoints throw
 // an actionable i18n key (legacy-Office Save-As help, or a friendly unsupported-type
 // message); other endpoints keep the upstream generic 'Unsupported file type'.

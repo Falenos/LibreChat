@@ -552,7 +552,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     const knaufBatchId = fileList.length > 1 ? v4() : undefined;
     // End [knauf]
 
-    // [knauf] Reserve all accepted slots before the first asynchronous conversion/upload.
+    // [knauf] KK20-227/KK20-195 — reserve accepted slots and stamp the shared batch id.
     // Picker, paste, and drag handlers can otherwise observe the same stale files.size and
     // collectively exceed the five-file cap. The reservation only spans this event turn;
     // the synchronously-added placeholders become authoritative afterwards. KK20-227.
@@ -579,10 +579,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           preview: initialPreview,
           progress: 0.1, // Show as processing
           size: originalFile.size,
-          // [knauf] KK20-195 WP5b — see knaufBatchId above.
+          // KK20-195 WP5b — see knaufBatchId above.
           knauf_upload_batch_id: knaufBatchId,
-          // End [knauf]
         };
+        // End [knauf]
 
         // [knauf] Chat "Upload files" routes documents to File Search (RAG),
         // but images must stay on the vision path — the server rejects images
@@ -596,6 +596,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         }
         // End [knauf]
 
+        // [knauf] KK20-227 — complete accepted-slot reservation bookkeeping.
         addFile(initialExtendedFile);
         queuedFiles.push({ originalFile, file_id, initialPreview, initialExtendedFile });
       } catch (error) {
