@@ -47,6 +47,45 @@ const getReconcilerConfig = () => ({
 });
 
 /**
+ * One renewable Mongo lease keeps the periodic reconciler singleton across
+ * worker replicas. A failed conditional upsert is the normal losing path: the
+ * fixed _id already exists with another owner's unexpired lease.
+ */
+const createMongoReconcilerLease =
+  ({ collection, ownerId, leaseMs, now = () => new Date() }) =>
+  async () => {
+    const acquiredAt = now();
+    const leaseExpiresAt = new Date(acquiredAt.getTime() + leaseMs);
+    try {
+      const result = await collection.findOneAndUpdate(
+        {
+          _id: 'indexing-reconciler',
+          $or: [
+            { lease_owner: ownerId },
+            { lease_expires_at: { $lte: acquiredAt } },
+            { lease_expires_at: { $exists: false } },
+          ],
+        },
+        {
+          $set: {
+            lease_owner: ownerId,
+            lease_expires_at: leaseExpiresAt,
+            updated_at: acquiredAt,
+          },
+        },
+        { upsert: true, returnDocument: 'after' },
+      );
+      const lease = result?.value ?? result;
+      return lease?.lease_owner === ownerId;
+    } catch (error) {
+      if (error?.code === 11000) {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+/**
  * @param {Object} deps
  * @param {Object} deps.db - createMethods surface
  * @param {(filter: Object, limit: number) => Promise<Object[]>} deps.listAssets
@@ -69,6 +108,7 @@ function createIndexingReconciler({
   cleanupAsset,
   deleteGeneration,
   logger,
+  acquireRunLease = async () => true,
 }) {
   /** Alert = error-level log with a stable, grep/monitor-able marker. */
   const alert = (caseName, detail) =>
@@ -264,6 +304,7 @@ function createIndexingReconciler({
     const dangling = refs.filter((r) => r.knauf_asset_id && !found.has(r.knauf_asset_id));
     let repaired = 0;
     let alerted = 0;
+    const finalizedDangling = [];
     for (const ref of dangling) {
       if (ref.knauf_upload_finalized === false) {
         try {
@@ -286,11 +327,18 @@ function createIndexingReconciler({
           continue;
         }
       }
+      finalizedDangling.push(ref);
+    }
+    if (finalizedDangling.length > 0) {
+      const sample = finalizedDangling
+        .slice(0, 10)
+        .map((ref) => `${ref.file_id}->${ref.knauf_asset_id}`)
+        .join(', ');
       alert(
         'file_missing_asset',
-        `file ${ref.file_id} points at missing asset ${ref.knauf_asset_id}`,
+        `${finalizedDangling.length} finalized file(s) point at missing assets; sample: ${sample}`,
       );
-      alerted += 1;
+      alerted += finalizedDangling.length;
     }
     return { scanned: refs.length, repaired, alerted };
   };
@@ -462,6 +510,9 @@ function createIndexingReconciler({
    * @returns {Promise<Object>} per-case counts
    */
   const runOnce = async () => {
+    if (!(await acquireRunLease())) {
+      return null;
+    }
     const config = getReconcilerConfig();
     const now = new Date();
     const cases = {
@@ -494,5 +545,9 @@ function createIndexingReconciler({
   return { runOnce };
 }
 
-module.exports = { createIndexingReconciler, getReconcilerConfig };
+module.exports = {
+  createIndexingReconciler,
+  createMongoReconcilerLease,
+  getReconcilerConfig,
+};
 // End [knauf]

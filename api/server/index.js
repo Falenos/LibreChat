@@ -255,6 +255,7 @@ const startServer = async () => {
   //                              redirect to /login showing "account temporarily banned".
   //                              The visual gate is handled by useMigrationAccess in Root.tsx.
   //   /knauf/migration/access  — the access-check endpoint the frontend calls
+  //   /knauf/migration/file-assets — API-key-protected operational backfill
   //
   // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
   // (our current setting) share links already required login before this gate existed.
@@ -268,6 +269,7 @@ const startServer = async () => {
       '/user',
       '/knauf/migration/access',
       '/knauf/migration/access/check',
+      '/knauf/migration/file-assets',
     ];
     app.use('/api', (req, res, next) => {
       if (

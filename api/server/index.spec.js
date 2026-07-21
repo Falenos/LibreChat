@@ -110,6 +110,20 @@ describe('Startup readiness wiring', () => {
   });
 });
 
+// [knauf] KK20-195 — operational FileAsset migration must reach its API-key guard.
+describe('Migration gate wiring', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+
+  it('lets the API-key-protected file-asset migration route reach its own authentication', () => {
+    const exemptionStart = source.indexOf('const MIGRATION_GATE_EXEMPT = [');
+    const exemptionEnd = source.indexOf('];', exemptionStart);
+    const exemptions = source.slice(exemptionStart, exemptionEnd);
+
+    expect(exemptions).toContain("'/knauf/migration/file-assets'");
+  });
+});
+// End [knauf]
+
 describe('Server Configuration', () => {
   // Increase the default timeout to allow for Mongo cleanup
   jest.setTimeout(30_000);

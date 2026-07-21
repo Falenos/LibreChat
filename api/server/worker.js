@@ -33,6 +33,7 @@ const {
 } = require('~/server/services/Files/knauf/indexingWorker');
 const {
   createIndexingReconciler,
+  createMongoReconcilerLease,
   getReconcilerConfig,
 } = require('~/server/services/Files/knauf/indexingReconciler');
 const { createGenerationRagClient } = require('~/server/services/Files/knauf/generationRagClient');
@@ -162,6 +163,12 @@ const main = async () => {
   initializeFileStorage(appConfig);
 
   const ragClient = createGenerationRagClient({ getStrategyFunctions });
+  const reconcilerConfig = getReconcilerConfig();
+  const acquireReconcilerLease = createMongoReconcilerLease({
+    collection: mongoose.connection.db.collection('knauf_file_indexing_locks'),
+    ownerId: process.env.HOSTNAME ?? `worker-${process.pid}`,
+    leaseMs: 2 * reconcilerConfig.intervalMs,
+  });
   const worker = createIndexingWorker({
     db,
     ragClient,
@@ -187,6 +194,7 @@ const main = async () => {
         userId: await resolveOwnerUserId(asset),
       }),
     logger,
+    acquireRunLease: acquireReconcilerLease,
   });
 
   // KK20-195 review R11 — the probe surface tells the TRUTH (see workerProbes.js).
@@ -244,7 +252,7 @@ const main = async () => {
       logger.error('[worker] reconciliation pass failed:', error),
     );
   reconcilePass(); // one pass at boot: recover from crashes fast
-  const reconcileTimer = setInterval(reconcilePass, getReconcilerConfig().intervalMs);
+  const reconcileTimer = setInterval(reconcilePass, reconcilerConfig.intervalMs);
   reconcileTimer.unref?.();
 
   const shutdown = (signal) => {
