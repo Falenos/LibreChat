@@ -2,13 +2,6 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
-  FileUpload,
-  TooltipAnchor,
-  DropdownPopup,
-  AttachmentIcon,
-  SharePointIcon,
-} from '@librechat/client';
-import {
   Info,
   FileSearch,
   ImageUpIcon,
@@ -16,6 +9,13 @@ import {
   FileImageIcon,
   TerminalSquareIcon,
 } from 'lucide-react';
+import {
+  FileUpload,
+  TooltipAnchor,
+  DropdownPopup,
+  AttachmentIcon,
+  SharePointIcon,
+} from '@librechat/client';
 import {
   Providers,
   EToolResources,
@@ -29,6 +29,7 @@ import {
   knaufChatUploadAccept,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
+import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
   useAgentCapabilities,
@@ -38,7 +39,6 @@ import {
 } from '~/hooks';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
-import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';

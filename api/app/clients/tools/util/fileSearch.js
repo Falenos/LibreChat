@@ -67,25 +67,25 @@ const primeFiles = async (options) => {
   // state — legacy rows without a pointer (vectors predate the ledger)
   // always pass.
   const knaufAssetIds = [...new Set(dbFiles.map((f) => f?.knauf_asset_id).filter(Boolean))];
+  let knaufReadyAssets = new Map();
   if (knaufAssetIds.length > 0) {
-    let knaufReadyAssets = null;
     try {
       const knaufAssets = await getAssetsByAssetIds(knaufAssetIds);
-      knaufReadyAssets = new Set(
+      knaufReadyAssets = new Map(
         knaufAssets
           .filter((a) => a.active_generation != null && a.delete_requested_at == null)
-          .map((a) => a.asset_id),
+          .map((a) => [a.asset_id, a]),
       );
     } catch (error) {
       // R5 — readiness store down: fail closed for asset-backed files.
       logger.error('[fileSearch][alert][readiness_store_unavailable] primeFiles:', error);
     }
     const dropped = dbFiles.filter(
-      (f) => f?.knauf_asset_id != null && !knaufReadyAssets?.has(f.knauf_asset_id),
+      (f) => f?.knauf_asset_id != null && !knaufReadyAssets.has(f.knauf_asset_id),
     );
     if (dropped.length > 0) {
       dbFiles = dbFiles.filter(
-        (f) => f?.knauf_asset_id == null || knaufReadyAssets?.has(f.knauf_asset_id),
+        (f) => f?.knauf_asset_id == null || knaufReadyAssets.has(f.knauf_asset_id),
       );
       logger.info(
         `[fileSearch] primeFiles dropped ${dropped.length} non-ready file(s): ${dropped
@@ -104,6 +104,9 @@ const primeFiles = async (options) => {
     if (!file) {
       continue;
     }
+    // [knauf] KK20-195 carry the active generation selected by the FileAsset ledger.
+    const asset = file.knauf_asset_id ? knaufReadyAssets.get(file.knauf_asset_id) : null;
+    // End [knauf]
     if (i === 0) {
       toolContext = `- Note: Use the ${Tools.file_search} tool to find relevant information within:`;
     }
@@ -116,6 +119,10 @@ const primeFiles = async (options) => {
       // [knauf] KK20-204 — carry the shared asset id so the /query below resolves a
       // deduped reuse row's vectors (stored under knauf_asset_id), not its own id.
       knauf_asset_id: file.knauf_asset_id,
+      // End [knauf]
+      // [knauf] KK20-195 generation and backend are authoritative asset state.
+      knauf_active_generation: asset?.active_generation ?? 0,
+      knauf_vector_backend: asset?.vector_backend,
       // End [knauf]
       // [knauf] KK20-203 — carry context so query routing can split agent vs chat files.
       context: file.context,

@@ -6,7 +6,11 @@
 // taxonomy) and the LangChain wrapper contract.
 
 const OpenUrl = require('../OpenUrl');
-const { fetchAndExtract, assertUrlAllowed, FetchError } = require('../openUrl/fetcher');
+const {
+  fetchAndExtract,
+  assertUrlAllowed,
+  FetchError,
+} = require('../openUrl/fetcher');
 const { extractAndWrap, __internal__ } = require('@knauf/knauf/server/htmlExtract');
 const { MAX_PARSE_BYTES } = __internal__;
 
@@ -23,9 +27,7 @@ function mockHtmlResponse({
 
 describe('[knauf] assertUrlAllowed — pre-validation gates', () => {
   test('rejects unsupported scheme', async () => {
-    await expect(
-      assertUrlAllowed('file:///etc/passwd', { allowHttp: false }),
-    ).rejects.toMatchObject({
+    await expect(assertUrlAllowed('file:///etc/passwd', { allowHttp: false })).rejects.toMatchObject({
       code: 'unsupported_scheme',
     });
   });
@@ -40,9 +42,7 @@ describe('[knauf] assertUrlAllowed — pre-validation gates', () => {
     });
   });
   test('blocks SSRF target (single integration case — full deny-list coverage in domain.spec.ts)', async () => {
-    await expect(
-      assertUrlAllowed('https://10.160.0.7/', { allowHttp: false }),
-    ).rejects.toMatchObject({
+    await expect(assertUrlAllowed('https://10.160.0.7/', { allowHttp: false })).rejects.toMatchObject({
       code: 'ssrf_blocked',
     });
   });
@@ -61,11 +61,9 @@ describe('[knauf] fetchAndExtract — behaviour', () => {
 
   test('SSRF pre-check fires before opening a socket', async () => {
     const impl = jest.fn();
-    await expect(fetchAndExtract('https://10.160.0.7/', { fetchImpl: impl })).rejects.toMatchObject(
-      {
-        code: 'ssrf_blocked',
-      },
-    );
+    await expect(fetchAndExtract('https://10.160.0.7/', { fetchImpl: impl })).rejects.toMatchObject({
+      code: 'ssrf_blocked',
+    });
     expect(impl).not.toHaveBeenCalled();
   });
 
@@ -110,24 +108,16 @@ describe('[knauf] fetchAndExtract — behaviour', () => {
       startIndex: 10,
       fetchImpl: mockHtmlResponse({ body: longBody }),
     });
-    const m = out.content.match(
-      /<UNTRUSTED_WEB_CONTENT[^>]*>\n([\s\S]*)\n<\/UNTRUSTED_WEB_CONTENT>$/,
-    );
+    const m = out.content.match(/<UNTRUSTED_WEB_CONTENT[^>]*>\n([\s\S]*)\n<\/UNTRUSTED_WEB_CONTENT>$/);
     expect(m[1].length).toBe(50);
     expect(out.truncated).toBe(true);
   });
 
   test('4xx upstream produces FetchError with http_<status> code', async () => {
     const impl = jest.fn(
-      async () =>
-        new Response('not found', {
-          status: 404,
-          headers: new Headers({ 'content-type': 'text/plain' }),
-        }),
+      async () => new Response('not found', { status: 404, headers: new Headers({ 'content-type': 'text/plain' }) }),
     );
-    await expect(
-      fetchAndExtract('https://8.8.8.8/missing', { fetchImpl: impl }),
-    ).rejects.toMatchObject({
+    await expect(fetchAndExtract('https://8.8.8.8/missing', { fetchImpl: impl })).rejects.toMatchObject({
       code: 'http_404',
     });
   });
@@ -151,16 +141,11 @@ describe('[knauf] fetchAndExtract — behaviour', () => {
     const impl = jest.fn(async () => {
       hop += 1;
       if (hop === 1) {
-        return new Response('', {
-          status: 302,
-          headers: new Headers({ location: 'https://10.160.0.7/' }),
-        });
+        return new Response('', { status: 302, headers: new Headers({ location: 'https://10.160.0.7/' }) });
       }
       throw new Error('should not have been called after SSRF block');
     });
-    await expect(
-      fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl }),
-    ).rejects.toMatchObject({
+    await expect(fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl })).rejects.toMatchObject({
       code: 'ssrf_blocked',
     });
     expect(hop).toBe(1);
@@ -178,9 +163,7 @@ describe('[knauf] fetchAndExtract — behaviour', () => {
       }
       throw new Error('should not have been called');
     });
-    await expect(
-      fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl }),
-    ).rejects.toMatchObject({
+    await expect(fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl })).rejects.toMatchObject({
       code: 'ssrf_blocked',
     });
     expect(hop).toBe(1);
@@ -196,9 +179,7 @@ describe('[knauf] fetchAndExtract — behaviour', () => {
       Object.defineProperty(res, 'body', { value: { cancel }, configurable: true });
       return res;
     });
-    await expect(
-      fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl }),
-    ).rejects.toMatchObject({
+    await expect(fetchAndExtract('https://8.8.8.8/start', { fetchImpl: impl })).rejects.toMatchObject({
       code: 'ssrf_blocked',
     });
     expect(cancel).toHaveBeenCalledTimes(1);

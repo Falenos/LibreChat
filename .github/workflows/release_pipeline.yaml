@@ -33,6 +33,7 @@ jobs:
       AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_WORKER_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl-worker
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
       # [knauf] KK20-195 — the async-indexing worker's own ArgoCD app (same image
@@ -180,14 +181,22 @@ jobs:
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
-          if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
+          CONFIG_FILES=("$AGK_CONFIG_DIRECTORY/values.yaml")
+          WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
+          if [ -f "$WORKER_VALUES" ]; then
+            sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+            grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+            CONFIG_FILES+=("$WORKER_VALUES")
+          fi
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
             echo "AGK deployment config already points at $VERSION"
             echo "| Deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           git checkout -b "$BRANCH"
-          git add "$AGK_CONFIG_DIRECTORY/values.yaml"
+          git add "${CONFIG_FILES[@]}"
           git commit -m "Update agentic-karl dev to $VERSION"
           git push --force origin "$BRANCH"
 
@@ -196,7 +205,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl dev to $VERSION" \
-              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps \`$AGK_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
+              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps the app image tag and Langfuse release to \`$VERSION\`, plus the worker image tag when that deployment exists.")
           fi
           echo "Deployment config PR: $PR_URL"
 

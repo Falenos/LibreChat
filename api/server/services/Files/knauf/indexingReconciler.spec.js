@@ -27,7 +27,7 @@ const listFileAssetRefs = (limit, afterId = null) =>
   })
     .sort({ _id: 1 })
     .limit(limit)
-    .select({ file_id: 1, knauf_asset_id: 1 })
+    .select({ file_id: 1, knauf_asset_id: 1, knauf_upload_finalized: 1 })
     .lean();
 
 // KK20-195 review R9 — the debt-drain case deletes single generations.
@@ -54,6 +54,8 @@ beforeAll(async () => {
   db = {
     ...createFileAssetMethods(mongoose),
     getFiles: async (filter, _sort, select) => File.find(filter, select).lean(),
+    deleteFiles: async (fileIds) => File.deleteMany({ file_id: { $in: fileIds } }),
+    removeAgentResourceFilesFromAllAgents: jest.fn().mockResolvedValue(undefined),
     getAssetsByAssetIds: async (ids) => KnaufFileAsset.find({ asset_id: { $in: ids } }).lean(),
   };
   await mongoose.connect(mongoServer.getUri());
@@ -117,13 +119,40 @@ describe('case 1 — stale uploading', () => {
     expect(await db.getAssetByAssetId('u-stale')).toBeNull();
   });
 
-  test('a REFERENCED uploading asset is never auto-deleted — alert only', async () => {
+  test('a referenced upload with durable blob intent resumes at queued', async () => {
     await seedAsset({ asset_id: 'u-ref', status: 'uploading' });
     await seedFile({ file_id: 'fr', knauf_asset_id: 'u-ref' });
     const counts = await buildReconciler().runOnce();
+    expect(counts.stale_uploading).toMatchObject({ repaired: 1, alerted: 0 });
+    const asset = await db.getAssetByAssetId('u-ref');
+    expect(asset.status).toBe('queued');
+    expect(asset.blob).toMatchObject({ path: '/blob/a', filename: 'doc.pdf' });
+  });
+
+  test('a referenced upload without blob intent fails visibly for re-upload', async () => {
+    await seedAsset({ asset_id: 'u-no-blob', status: 'uploading' });
+    await seedFile({ file_id: 'fr-no-blob', knauf_asset_id: 'u-no-blob' });
+    await File.collection.updateOne({ file_id: 'fr-no-blob' }, { $unset: { filepath: '' } });
+    const counts = await buildReconciler().runOnce();
+    expect(counts.stale_uploading).toMatchObject({ repaired: 1, alerted: 1 });
+    const asset = await db.getAssetByAssetId('u-no-blob');
+    expect(asset.status).toBe('failed');
+    expect(asset.last_error_code).toBe('upload_interrupted_reupload_required');
+    expect(alerts().some((m) => m.includes('stale_uploading_reupload_required'))).toBe(true);
+  });
+
+  test('a lost stale-upload transition does not emit a false re-upload alert', async () => {
+    await seedAsset({ asset_id: 'u-raced', status: 'uploading' });
+    await seedFile({ file_id: 'fr-raced', knauf_asset_id: 'u-raced' });
+    await File.collection.updateOne({ file_id: 'fr-raced' }, { $unset: { filepath: '' } });
+    const failStaleUpload = jest.spyOn(db, 'failStaleUpload').mockResolvedValueOnce(null);
+
+    const counts = await buildReconciler().runOnce();
+
     expect(counts.stale_uploading).toMatchObject({ repaired: 0, alerted: 1 });
-    expect(await db.getAssetByAssetId('u-ref')).not.toBeNull();
-    expect(alerts().some((m) => m.includes('stale_uploading_referenced'))).toBe(true);
+    expect(alerts().some((m) => m.includes('stale_uploading_transition_lost'))).toBe(true);
+    expect(alerts().some((m) => m.includes('stale_uploading_reupload_required'))).toBe(false);
+    failStaleUpload.mockRestore();
   });
 
   test('a FRESH uploading asset is out of scope', async () => {
@@ -159,6 +188,22 @@ describe('case 3 — File pointing at a missing asset', () => {
 
     expect(counts.dangling_file_refs).toMatchObject({ scanned: 2, alerted: 1 });
     expect(alerts().some((m) => m.includes('file_missing_asset') && m.includes('gone'))).toBe(true);
+  });
+
+  test('unfinished finalization pointing at a missing asset is removed', async () => {
+    await seedFile({
+      file_id: 'pending-dangling',
+      knauf_asset_id: 'already-deleted',
+      knauf_upload_finalized: false,
+    });
+
+    const counts = await buildReconciler().runOnce();
+
+    expect(counts.dangling_file_refs).toMatchObject({ scanned: 1, repaired: 1, alerted: 0 });
+    expect(await File.findOne({ file_id: 'pending-dangling' })).toBeNull();
+    expect(db.removeAgentResourceFilesFromAllAgents).toHaveBeenCalledWith({
+      file_ids: ['pending-dangling'],
+    });
   });
 });
 
@@ -250,7 +295,7 @@ describe('case 8 — stale-generation cleanup debt (R9)', () => {
 });
 
 // KK20-195 review R8 — every bounded case converges: rows a pass leaves in
-// place (referenced / alert-only) must not freeze the window and starve the
+// place or are repaired must not freeze the window and starve the
 // rows behind them. Datasets deliberately exceed the batch limit.
 describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
   beforeEach(() => {
@@ -264,12 +309,12 @@ describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
     await seedAsset({ asset_id: 'su-1', status: 'uploading' });
     await seedAsset({ asset_id: 'su-2', status: 'uploading' });
     await seedAsset({ asset_id: 'su-behind', status: 'uploading' });
-    await seedFile({ file_id: 'r1', knauf_asset_id: 'su-1' }); // alert-only, stays
+    await seedFile({ file_id: 'r1', knauf_asset_id: 'su-1' });
     await seedFile({ file_id: 'r2', knauf_asset_id: 'su-2' });
 
     const reconciler = buildReconciler();
     const first = await reconciler.runOnce();
-    expect(first.stale_uploading).toMatchObject({ alerted: 2, repaired: 0 });
+    expect(first.stale_uploading).toMatchObject({ alerted: 0, repaired: 2 });
     expect(await db.getAssetByAssetId('su-behind')).not.toBeNull();
 
     const second = await reconciler.runOnce();
@@ -300,12 +345,12 @@ describe('R8 — rotating cursors converge for cases 1, 3, and 5', () => {
       status: 'delete_failed',
       delete_requested_at: LONG_AGO,
     });
-    await seedFile({ file_id: 't1', knauf_asset_id: 'ts-1' }); // alert-only, stays
+    await seedFile({ file_id: 't1', knauf_asset_id: 'ts-1' });
     await seedFile({ file_id: 't2', knauf_asset_id: 'ts-2' });
 
     const reconciler = buildReconciler();
     const first = await reconciler.runOnce();
-    expect(first.delete_failed).toMatchObject({ alerted: 2, repaired: 0 });
+    expect(first.delete_failed).toMatchObject({ alerted: 0, repaired: 2 });
     expect(await db.getAssetByAssetId('ts-behind')).not.toBeNull();
 
     const second = await reconciler.runOnce();
@@ -382,7 +427,8 @@ describe('F7 — alert-only cases: complete counts + detail convergence + restar
 describe('case 5 — delete_failed due for retry', () => {
   // KK20-195 review R4 — the deletion owner is a request that can die
   // mid-delete; stale 'deleting' is swept too, and a tombstoned asset that
-  // still has references (partial physical failure) alerts, never destroys.
+  // still has references (interrupted metadata commit) removes those logical
+  // rows before retrying the durable physical cleanup.
   test('a stale deleting asset (crashed owner) with no references is finished', async () => {
     await seedAsset({ asset_id: 'dl-1', status: 'deleting', delete_requested_at: LONG_AGO });
     const counts = await buildReconciler().runOnce();
@@ -390,15 +436,30 @@ describe('case 5 — delete_failed due for retry', () => {
     expect(await db.getAssetByAssetId('dl-1')).toBeNull();
   });
 
-  test('a tombstoned asset that still has references alerts — never auto-destroyed (R4)', async () => {
+  test('a tombstoned asset repairs surviving metadata before physical cleanup (R4)', async () => {
     await seedAsset({ asset_id: 'dl-2', status: 'deleting', delete_requested_at: LONG_AGO });
     await seedFile({ file_id: 'still-here', knauf_asset_id: 'dl-2' });
 
     const counts = await buildReconciler().runOnce();
 
+    expect(counts.delete_failed).toMatchObject({ repaired: 1, alerted: 0 });
+    expect(await File.findOne({ file_id: 'still-here' })).toBeNull();
+    expect(await db.getAssetByAssetId('dl-2')).toBeNull();
+    expect(cleanupAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'dl-2' }));
+  });
+
+  test('a metadata cleanup failure alerts and leaves the tombstone for retry', async () => {
+    await seedAsset({ asset_id: 'dl-meta', status: 'deleting', delete_requested_at: LONG_AGO });
+    await seedFile({ file_id: 'still-here', knauf_asset_id: 'dl-meta' });
+    const deleteSpy = jest.spyOn(db, 'deleteFiles').mockRejectedValueOnce(new Error('mongo down'));
+
+    const counts = await buildReconciler().runOnce();
+
     expect(counts.delete_failed).toMatchObject({ repaired: 0, alerted: 1 });
-    expect(await db.getAssetByAssetId('dl-2')).not.toBeNull(); // intact
-    expect(alerts().some((m) => m.includes('tombstoned_with_references'))).toBe(true);
+    expect(await File.findOne({ file_id: 'still-here' })).not.toBeNull();
+    expect(await db.getAssetByAssetId('dl-meta')).not.toBeNull();
+    expect(alerts().some((m) => m.includes('tombstoned_metadata_cleanup_failed'))).toBe(true);
+    deleteSpy.mockRestore();
   });
 
   test('successful retry finishes the deletion', async () => {

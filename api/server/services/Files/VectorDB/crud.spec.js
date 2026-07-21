@@ -1,6 +1,7 @@
 // [knauf] KK20-203 — seam test for the hardened, batched pgvector delete used by
 // the chat-delete cascade (cascadeDeleteConvoFiles). Asserts bounded retry on
 // transient failures, 404-as-success idempotency, and fail-fast on a 4xx.
+// End [knauf]
 
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({
@@ -26,6 +27,7 @@ process.env.RAG_EMBED_SYNC_TIMEOUT_MS = '5000';
 
 const axios = require('axios');
 const {
+  deleteVectors,
   deleteVectorsByIds,
   deleteVectorsForFiles,
   // [knauf] KK20-195 WP0 exports under test.
@@ -149,6 +151,50 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     );
   });
 
+  test('FileAsset-backed batch deletes use immutable physical ids', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectorsForFiles(req, [
+      {
+        file_id: 'logical-agent',
+        knauf_asset_id: 'physical-agent',
+        context: 'agents',
+      },
+      {
+        file_id: 'logical-chat',
+        knauf_asset_id: 'physical-chat',
+        context: 'message_attachment',
+      },
+    ]);
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/agent/documents/physical-agent',
+      expect.any(Object),
+    );
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['physical-chat'] }),
+    );
+  });
+
+  test('single-file deletes use immutable physical ids', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'false';
+    axios.delete.mockResolvedValue({ status: 200 });
+
+    await deleteVectors(req, {
+      file_id: 'logical-chat',
+      knauf_asset_id: 'physical-chat',
+      context: 'message_attachment',
+      embedded: true,
+    });
+
+    expect(axios.delete).toHaveBeenCalledWith(
+      'http://rag.test/documents',
+      expect.objectContaining({ data: ['physical-chat'] }),
+    );
+  });
+
   test('mixed batch — agent files to Azure Search, chat files to pgvector', async () => {
     process.env.AZURE_SEARCH_ENABLED = 'true';
     axios.delete.mockResolvedValue({ status: 200 });
@@ -212,7 +258,7 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     expect(axios.delete).not.toHaveBeenCalled();
   });
 
-  // [knauf] Azure-failure branch — pinning the round-2/round-3 semantics: pgvector
+  // Azure-failure branch — pinning the round-2/round-3 semantics: pgvector
   // runs first and unconditionally, an Azure failure aggregate-throws with the
   // failed ids afterward, and a 404 on /agent/documents/:id is swallowed as success.
   test('mixed batch: pgvector still runs and succeeds even when an Azure delete fails', async () => {
@@ -293,7 +339,6 @@ describe('deleteVectorsForFiles (Azure Search routing)', () => {
     // Wave 1 = 5 concurrent, wave 2 = 2 — never all 7 at once.
     expect(maxInFlight).toBeLessThanOrEqual(5);
   });
-  // End [knauf]
 });
 // End [knauf]
 

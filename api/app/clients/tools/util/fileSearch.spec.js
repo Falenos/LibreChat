@@ -41,13 +41,27 @@ describe('dual-backend file search', () => {
       userId: 'u1',
       entity_id: 'agent-1',
       files: [
-        { file_id: 'reuse-1', filename: 'chat.pdf', knauf_asset_id: 'asset-1' },
-        { file_id: 'reuse-2', filename: 'chat-copy.pdf', knauf_asset_id: 'asset-1' },
+        {
+          file_id: 'reuse-1',
+          filename: 'chat.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
+        {
+          file_id: 'reuse-2',
+          filename: 'chat-copy.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
         {
           file_id: 'agent-1',
           filename: 'knowledge.pdf',
           context: 'agents',
           fromAgent: true,
+          knauf_active_generation: 2,
+          knauf_vector_backend: 'azure_search',
         },
         { file_id: 'agent-like', filename: 'upload.pdf', context: 'agents' },
       ],
@@ -58,12 +72,24 @@ describe('dual-backend file search', () => {
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/query_multiple',
-      { query: 'hello', file_ids: ['agent-like', 'asset-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-like', 'asset-1'],
+        generations: { 'agent-like': 0, 'asset-1': 4 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/agent/query-multiple',
-      { query: 'hello', file_ids: ['agent-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-1'],
+        generations: { 'agent-1': 2 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
   });
@@ -192,6 +218,8 @@ describe('dual-backend file search', () => {
       data: [[{ page_content: 'Cached evidence', metadata: { file_id: 'chat-1' } }, 0.2]],
     });
     const [firstResult, cachedResult] = await Promise.all([first, cached]);
+    expect(firstResult[0]).toContain('The attached file is available');
+    expect(firstResult[0]).toContain('Do not claim the file is missing');
     expect(firstResult[1].file_search.sources).toHaveLength(1);
     expect(cachedResult[1]).toBeUndefined();
 
@@ -199,7 +227,10 @@ describe('dual-backend file search', () => {
     expect(JSON.parse(content)).toMatchObject({
       type: 'search_budget_exhausted',
       maxDistinctQueries: 1,
+      fileStatus: 'available',
+      evidenceStatus: 'retrieved',
     });
+    expect(JSON.parse(content).instruction).toContain('do not claim the file is missing');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
   });
@@ -344,7 +375,10 @@ describe('dual-backend file search', () => {
     const [content, artifact] = await searchTool.func({ query: 'no partial matches' });
 
     expect(content).toContain('Warning: azure search was unavailable; these results are partial.');
-    expect(content).toContain('No matching content was found in the available files.');
+    expect(content).toContain(
+      'The attached files are available, but no matching content was found.',
+    );
+    expect(content).toContain('do not claim the files are missing');
     expect(content).not.toContain('refine your query');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
@@ -375,7 +409,12 @@ describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
 
   test('drops non-ready assets, keeps ready assets and legacy rows', async () => {
     getAssetsByAssetIds.mockResolvedValue([
-      { asset_id: 'ready-1', active_generation: 1, delete_requested_at: null },
+      {
+        asset_id: 'ready-1',
+        active_generation: 1,
+        vector_backend: 'pgvector',
+        delete_requested_at: null,
+      },
       { asset_id: 'pending-1', active_generation: null, delete_requested_at: null },
     ]);
 
@@ -383,6 +422,13 @@ describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
 
     expect(getAssetsByAssetIds).toHaveBeenCalledWith(['ready-1', 'pending-1']);
     expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'ready-1']);
+    expect(files.find((f) => f.file_id === 'ready-1')).toMatchObject({
+      knauf_active_generation: 1,
+      knauf_vector_backend: 'pgvector',
+    });
+    expect(files.find((f) => f.file_id === 'legacy-1')).toMatchObject({
+      knauf_active_generation: 0,
+    });
   });
 
   test('drops delete-tombstoned assets even with an active generation', async () => {

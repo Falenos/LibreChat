@@ -1,5 +1,14 @@
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid') }));
 
+const mockEmbedGeneration = jest.fn().mockResolvedValue({ status: 'ready' });
+const mockDeleteGeneration = jest.fn().mockResolvedValue(undefined);
+jest.mock('./knauf/generationRagClient', () => ({
+  createGenerationRagClient: jest.fn(() => ({
+    embedGeneration: mockEmbedGeneration,
+    deleteGeneration: mockDeleteGeneration,
+  })),
+}));
+
 jest.mock('@librechat/data-schemas', () => ({
   logger: { warn: jest.fn(), debug: jest.fn(), error: jest.fn(), info: jest.fn() },
   runAsSystem: jest.fn((fn) => fn()),
@@ -42,6 +51,9 @@ jest.mock('@librechat/api', () => {
     parseText: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
     processAudioFile: jest.fn(),
     getStorageMetadata: jest.fn(() => ({})),
+    recordFileIndexEmbed: jest.fn(),
+    recordFileIndexProviderError: jest.fn(),
+    recordFileIndexEmbedRetry: jest.fn(),
     getRetentionExpiry,
     getAgentFileRetentionExpiry: jest.fn(({ req, messageAttachment, toolResource }) => {
       const interfaceConfig = req?.config?.interfaceConfig;
@@ -115,7 +127,9 @@ jest.mock('~/models', () => ({
   })),
   activateGeneration: jest.fn().mockResolvedValue({}),
   failClaim: jest.fn().mockResolvedValue({}),
+  recordStaleGeneration: jest.fn().mockResolvedValue(true),
   tombstoneForDelete: jest.fn().mockResolvedValue({}),
+  markDeleteFailed: jest.fn().mockResolvedValue(true),
   removeAsset: jest.fn().mockResolvedValue(undefined),
   getAssetByAssetId: jest.fn().mockResolvedValue(null),
   // WP3c admission counters (async-accept path only); default = empty backlog.
@@ -152,10 +166,12 @@ jest.mock('~/server/services/Files/VectorDB/crud', () => ({
   }),
   deleteVectors: jest.fn(),
   deleteVectorsByIds: jest.fn(),
-  // [knauf] KK20-195 WP3b — reservation routing reads the agent-search backend flag.
+  deleteVectorsForFiles: jest.fn().mockResolvedValue(undefined),
+  parseRetryAfterMs: jest.fn(() => 0),
+  // KK20-195 WP3b — reservation routing reads the agent-search backend flag.
   isAzureSearchEnabledForAgents: jest.fn().mockReturnValue(false),
-  // End [knauf]
 }));
+// End [knauf]
 
 // [knauf] KK20-204/KK20-195 — the file_search path hashes the bytes before the
 // FileAsset reservation; stub so tests don't touch the disk.
@@ -177,6 +193,9 @@ const {
   getAgentFileRetentionExpiry,
   sweepExpiredFiles: sweepExpiredFilesWithDeps,
   startExpiredFileSweep: startExpiredFileSweepWithDeps,
+  recordFileIndexEmbed,
+  recordFileIndexProviderError,
+  recordFileIndexEmbedRetry,
 } = require('@librechat/api');
 const {
   EToolResources,
@@ -188,7 +207,6 @@ const {
 const { mergeFileConfig } = require('librechat-data-provider');
 const { checkCapability } = require('~/server/services/Config');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { uploadVectors } = require('./VectorDB/crud');
 const db = require('~/models');
 const {
   processAgentFileUpload,
@@ -623,7 +641,7 @@ describe('processAgentFileUpload', () => {
         metadata: { ...makeMetadata(), tool_resource: EToolResources.file_search },
       });
 
-      expect(uploadVectors).toHaveBeenCalled();
+      expect(mockEmbedGeneration).toHaveBeenCalled();
       expect(getRetentionExpiry).not.toHaveBeenCalled();
       expect(db.createFile).toHaveBeenCalledWith(expect.not.objectContaining({ expiredAt }), true, {
         userId: 'user-123',
@@ -653,7 +671,7 @@ describe('processAgentFileUpload', () => {
         metadata: { ...makeMetadata(), tool_resource: EToolResources.file_search },
       });
 
-      expect(uploadVectors).toHaveBeenCalled();
+      expect(mockEmbedGeneration).toHaveBeenCalled();
       expect(getRetentionExpiry).toHaveBeenCalledTimes(1);
       expect(getRetentionExpiry.mock.calls[0][0]).toBe(req);
       expect(db.createFile).toHaveBeenCalledWith(
@@ -1141,6 +1159,17 @@ describe('processDeleteRequest', () => {
     getStrategyFunctions.mockReturnValue({ deleteFile });
     db.deleteFiles.mockResolvedValue({ deletedCount: 1 });
     db.getFiles.mockResolvedValue([]); // recount after row delete: no survivors
+    db.tombstoneForDelete.mockResolvedValueOnce({
+      asset_id: 'kb-file',
+      status: 'deleting',
+      scope_type: 'user',
+      scope_id: 'user-123',
+      vector_backend: 'pgvector',
+      active_generation: 3,
+      target_generation: 4,
+      stale_generations: [2],
+      blob: { source: FileSources.local, path: '/blob/kb' },
+    });
 
     await processDeleteRequest({
       req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
@@ -1154,8 +1183,17 @@ describe('processDeleteRequest', () => {
       ],
     });
 
-    expect(db.getFiles).toHaveBeenCalledWith({ knauf_asset_id: 'kb-file' }, null, { file_id: 1 });
+    expect(db.getFiles).toHaveBeenCalledWith(
+      { knauf_asset_id: 'kb-file', file_id: { $nin: ['kb-file'] } },
+      null,
+      { file_id: 1 },
+    );
     expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'kb-file' });
+    expect(mockDeleteGeneration.mock.calls.map(([arg]) => arg.generation)).toEqual([3, 4, 2]);
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'user-123' }) }),
+      expect.objectContaining({ file_id: 'kb-file', filepath: '/blob/kb', embedded: false }),
+    );
     expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'kb-file' });
   });
 
@@ -1171,7 +1209,15 @@ describe('processDeleteRequest', () => {
     db.getFiles.mockResolvedValue([]); // no references outside the delete set
     db.tombstoneForDelete.mockImplementationOnce(async () => {
       sequence.push('tombstone');
-      return {};
+      return {
+        asset_id: 'kb-file',
+        status: 'deleting',
+        scope_type: 'user',
+        scope_id: 'user-123',
+        vector_backend: 'pgvector',
+        active_generation: 1,
+        blob: { source: FileSources.local, path: '/blob/kb' },
+      };
     });
 
     await processDeleteRequest({
@@ -1194,7 +1240,7 @@ describe('processDeleteRequest', () => {
     const deleteFile = jest.fn().mockResolvedValue(undefined);
     getStrategyFunctions.mockReturnValue({ deleteFile });
     db.deleteFiles.mockResolvedValue({ deletedCount: 1 });
-    db.getFiles.mockResolvedValue([{ file_id: 'survivor' }]); // reference remains
+    db.getFiles.mockResolvedValue([{ file_id: 'survivor' }]); // reference remains on both recounts
 
     await processDeleteRequest({
       req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
@@ -1209,7 +1255,10 @@ describe('processDeleteRequest', () => {
     });
 
     expect(db.tombstoneForDelete).not.toHaveBeenCalled();
+    expect(db.getFiles).toHaveBeenCalledTimes(2); // pre-delete + retained-orphan recount
     expect(db.removeAsset).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled(); // shared physical state stays live
+    expect(db.deleteFiles).toHaveBeenCalledWith(['shared-ref']); // logical reference is removed
   });
 
   // KK20-195 review F5 (re-review) — the pre-tombstone is the deletion FENCE. If
@@ -1222,7 +1271,11 @@ describe('processDeleteRequest', () => {
     db.tombstoneForDelete.mockRejectedValue(new Error('mongo down')); // fence fails
 
     const result = await processDeleteRequest({
-      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      req: {
+        body: { agent_id: 'agent-1', tool_resource: EToolResources.file_search },
+        config: {},
+        user: { id: 'user-123', tenantId: 'tenant-a' },
+      },
       files: [
         {
           file_id: 'unfenced-file',
@@ -1235,7 +1288,81 @@ describe('processDeleteRequest', () => {
 
     expect(deleteFile).not.toHaveBeenCalled(); // no blob/vector delete under a live asset
     expect(db.deleteFiles).not.toHaveBeenCalled(); // row kept → reference preserved
+    expect(db.removeAgentResourceFiles).not.toHaveBeenCalled(); // logical reference stays attached
     expect(result).toEqual({ deletedFileIds: [], failedFileIds: ['unfenced-file'] });
+  });
+
+  it('keeps metadata and records delete_failed when a ledger generation cannot be removed', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.getFiles.mockResolvedValue([]);
+    db.tombstoneForDelete.mockResolvedValueOnce({
+      asset_id: 'generation-fail',
+      status: 'deleting',
+      scope_type: 'user',
+      scope_id: 'user-123',
+      vector_backend: 'pgvector',
+      active_generation: 7,
+      blob: { source: FileSources.local, path: '/blob/generation-fail' },
+    });
+    mockDeleteGeneration.mockRejectedValueOnce(new Error('rag unavailable'));
+
+    const result = await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'logical-file',
+          knauf_asset_id: 'generation-fail',
+          filepath: '/blob/generation-fail',
+          source: FileSources.local,
+          embedded: false,
+        },
+      ],
+    });
+
+    expect(mockDeleteGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({ asset_id: 'generation-fail', generation: 7 }),
+    );
+    expect(db.markDeleteFailed).toHaveBeenCalledWith({
+      asset_id: 'generation-fail',
+      error_code: 'physical_cleanup_failed',
+    });
+    expect(db.deleteFiles).not.toHaveBeenCalled();
+    expect(result).toEqual({ deletedFileIds: [], failedFileIds: ['logical-file'] });
+  });
+
+  it('keeps the tombstoned ledger when logical metadata deletion fails after physical cleanup', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+    db.getFiles.mockResolvedValue([]);
+    db.tombstoneForDelete.mockResolvedValueOnce({
+      asset_id: 'metadata-fail',
+      status: 'deleting',
+      scope_type: 'user',
+      scope_id: 'user-123',
+      vector_backend: 'pgvector',
+      active_generation: 2,
+      blob: { source: FileSources.local, path: '/blob/metadata-fail' },
+    });
+    db.deleteFiles.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+    await expect(
+      processDeleteRequest({
+        req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+        files: [
+          {
+            file_id: 'logical-file',
+            knauf_asset_id: 'metadata-fail',
+            filepath: '/blob/metadata-fail',
+            source: FileSources.local,
+          },
+        ],
+      }),
+    ).rejects.toThrow('mongo unavailable');
+
+    expect(mockDeleteGeneration).toHaveBeenCalled();
+    expect(deleteFile).toHaveBeenCalled();
+    expect(db.removeAsset).not.toHaveBeenCalled();
   });
   // End [knauf]
 
@@ -1603,7 +1730,7 @@ describe('filterFile per-category size caps', () => {
   });
 });
 
-// [knauf] filterFile actionable rejection for off-allow-list types (KK20-190). When
+// filterFile actionable rejection for off-allow-list types (KK20-190). When
 // the endpoint's restricted allow-list rejects the mime, the Knauf endpoints throw
 // an actionable i18n key (legacy-Office Save-As help, or a friendly unsupported-type
 // message); other endpoints keep the upstream generic 'Unsupported file type'.
@@ -1716,7 +1843,6 @@ describe('processAgentFileUpload conversationId stamp (KK20-203)', () => {
 // created → blob + markQueued + sync claim→embed→activate; found → branch table.
 describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => {
   const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
-  const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
     .fn()
@@ -1750,7 +1876,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     // Reservation happens BEFORE physical work, keyed by user scope + hash.
     expect(db.reserveAsset).toHaveBeenCalledWith(
       expect.objectContaining({
-        asset_id: 'up-1',
+        asset_id: 'mock-uuid',
         scope_type: 'user',
         scope_id: 'user-123',
         dedup_key: 'u:user-123:h:hashABC',
@@ -1758,22 +1884,69 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       }),
     );
     expect(handleFileUpload).toHaveBeenCalledTimes(1); // storage upload happened
-    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
-    expect(uploadVectors).toHaveBeenCalledTimes(1);
-    expect(uploadVectors.mock.calls[0][0].entity_id).toBe('user-123'); // user-owned embed (the spike lever)
+    expect(handleFileUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ file_id: 'mock-uuid' }),
+    );
+    expect(db.markQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'mock-uuid',
+        blob: expect.objectContaining({ filename: 'doc.pdf' }),
+      }),
+    );
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'mock-uuid',
+        generation: 1,
+        embed_route: '/embed',
+        scope: { userId: 'user-123', entityId: 'user-123' },
+      }),
+    );
     // Sync (flag-off) execution is recorded through the asset: claim → activate.
-    expect(db.claimAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.claimAsset).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'mock-uuid' }));
     expect(db.activateGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({ asset_id: 'up-1', execution_token: 'test-token' }),
+      expect.objectContaining({ asset_id: 'mock-uuid', execution_token: 'test-token' }),
     );
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
-    expect(fileInfo.knauf_asset_id).toBe('up-1'); // owner: asset id = its own file_id (vectors live here)
+    expect(fileInfo.knauf_asset_id).toBe('mock-uuid');
     expect(fileInfo.knauf_dedup_owner).toBe(true); // claims the unique owner slot
+    expect(fileInfo.knauf_upload_finalized).toBe(true);
+  });
+
+  test('generation-safe synchronous embed retries a provider throttle', async () => {
+    mockEmbedGeneration
+      .mockRejectedValueOnce({ response: { status: 429, headers: { 'retry-after': '0' } } })
+      .mockResolvedValueOnce({ status: 'ready' });
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+    } finally {
+      random.mockRestore();
+    }
+
+    expect(mockEmbedGeneration).toHaveBeenCalledTimes(2);
+    expect(recordFileIndexProviderError).toHaveBeenCalledWith('embed', '429');
+    expect(recordFileIndexEmbedRetry).toHaveBeenCalledWith('embed');
+    expect(recordFileIndexEmbed).toHaveBeenCalledWith('embed', 'success', expect.any(Number));
+  });
+
+  test('generation-safe synchronous embed safely retries an HTTP timeout', async () => {
+    mockEmbedGeneration
+      .mockRejectedValueOnce({ response: { status: 408 } })
+      .mockResolvedValueOnce({ status: 'ready' });
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+    } finally {
+      random.mockRestore();
+    }
+
+    expect(mockEmbedGeneration).toHaveBeenCalledTimes(2);
+    expect(recordFileIndexEmbedRetry).toHaveBeenCalledWith('embed');
   });
 
   test('concurrent owner race — duplicate-key on insert → falls back to a non-owner row', async () => {
-    // KK20-195 review F3 — call 0 is the pending File marker (no owner). The
+    // KK20-195 review F3 — call 0 is the pending File marker. The
     // FINAL owner createFile hits the unique-owner index collision; its retry
     // succeeds as a non-owner.
     const dupErr = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
@@ -1788,11 +1961,13 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     const pending = db.createFile.mock.calls[0][0];
     const ownerAttempt = db.createFile.mock.calls[1][0];
     const retry = db.createFile.mock.calls[2][0];
-    expect(pending.knauf_dedup_owner).toBeUndefined(); // the marker never claims ownership
+    expect(pending.knauf_dedup_owner).toBe(true); // ownership is durable before physical work
+    expect(pending.knauf_content_hash).toBe('hashABC');
+    expect(pending.knauf_upload_finalized).toBe(false);
     expect(pending.embedded).toBe(false); // in-flight until the final upsert
     expect(ownerAttempt.knauf_dedup_owner).toBe(true); // final row tries to own
     expect(retry.knauf_dedup_owner).toBeUndefined(); // retried as a non-owner duplicate
-    expect(retry.knauf_asset_id).toBe('up-1'); // still its own embedded asset (transient dup, GC-cleaned)
+    expect(retry.knauf_asset_id).toBe('mock-uuid');
     expect(mockRes.json).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.any(String) }),
     );
@@ -1819,8 +1994,96 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     expect(order.indexOf('pending')).toBeLessThan(order.indexOf('blob'));
     const pending = db.createFile.mock.calls[0][0];
     expect(pending.embedded).toBe(false);
-    expect(pending.knauf_asset_id).toBe('up-1'); // references the asset from the start
-    expect(pending.knauf_dedup_owner).toBeUndefined(); // ownership is claimed by the final upsert
+    expect(pending.knauf_asset_id).toBe('mock-uuid'); // references the physical asset from the start
+    expect(pending.knauf_dedup_owner).toBe(true);
+    expect(pending.knauf_content_hash).toBe('hashABC');
+    expect(pending.knauf_upload_finalized).toBe(false);
+  });
+
+  test('persists the deterministic Azure blob intent before streaming bytes', async () => {
+    const { getFileStrategy } = require('~/server/utils/getFileStrategy');
+    const getFileURL = jest
+      .fn()
+      .mockResolvedValue('https://storage.example/files/images/user-123/mock-uuid__u.pdf?sig=test');
+    getFileStrategy.mockReturnValueOnce('azure_blob');
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, getFileURL });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(getFileURL).toHaveBeenCalledWith({
+      fileName: 'mock-uuid__u.pdf',
+      basePath: 'uploads',
+      userId: 'user-123',
+    });
+    expect(db.createFile.mock.calls[0][0].filepath).toContain('mock-uuid__u.pdf');
+    expect(handleFileUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ file_id: 'mock-uuid' }),
+    );
+  });
+
+  test('fails before physical work when the pending File cannot be persisted', async () => {
+    db.createFile.mockRejectedValueOnce(new Error('mongo down at pending marker'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down at pending marker');
+
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+  });
+
+  test('retries a transient duplicate-key race while persisting the pending File', async () => {
+    const duplicateKey = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+    db.createFile
+      .mockRejectedValueOnce(duplicateKey)
+      .mockResolvedValueOnce({ file_id: 'up-1' })
+      .mockResolvedValueOnce({ file_id: 'up-1' });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile).toHaveBeenCalledTimes(3);
+    expect(db.createFile.mock.calls[1]).toEqual(db.createFile.mock.calls[0]);
+    expect(handleFileUpload).toHaveBeenCalledTimes(1);
+  });
+
+  test('compensates the blob when its durable File intent cannot be recorded', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.updateFile.mockRejectedValueOnce(new Error('mongo down at blob intent'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down at blob intent');
+
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ filepath: '/blob/doc.pdf', embedded: false }),
+    );
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
+  });
+
+  test('keeps the asset and pending File when blob compensation fails', async () => {
+    const deleteFile = jest.fn().mockRejectedValue(new Error('blob store unavailable'));
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.markQueued.mockRejectedValueOnce(new Error('mongo down after blob upload'));
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('mongo down after blob upload');
+
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ file_id: 'mock-uuid', filepath: '/blob/doc.pdf' }),
+    );
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.markDeleteFailed).toHaveBeenCalledWith({
+      asset_id: 'mock-uuid',
+      error_code: 'blob_cleanup_failed',
+    });
+    expect(db.removeAsset).not.toHaveBeenCalled();
+    expect(db.deleteFiles).not.toHaveBeenCalled();
   });
 
   test('F3: a createFile failure after queueing leaves the pending File as a recovery anchor', async () => {
@@ -1836,9 +2099,23 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
     ).rejects.toThrow('mongo down at finalize');
 
-    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'up-1' }));
+    expect(db.markQueued).toHaveBeenCalledWith(expect.objectContaining({ asset_id: 'mock-uuid' }));
     expect(db.createFile.mock.calls[0][0].embedded).toBe(false); // the pending marker persisted
     // The pending File is the recovery anchor — a finalize failure must NOT delete it.
+    expect(db.deleteFiles).not.toHaveBeenCalled();
+  });
+
+  test('preserves the lifecycle when the explicit post-queue claim is lost', async () => {
+    db.claimAsset.mockResolvedValueOnce(null);
+
+    await expect(
+      processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() }),
+    ).rejects.toThrow('file_indexing_in_progress');
+
+    expect(db.markQueued).toHaveBeenCalled();
+    expect(mockEmbedGeneration).not.toHaveBeenCalled();
+    expect(db.tombstoneForDelete).not.toHaveBeenCalled();
+    expect(db.removeAsset).not.toHaveBeenCalled();
     expect(db.deleteFiles).not.toHaveBeenCalled();
   });
 
@@ -1852,27 +2129,59 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 
   test('HIT — reuses the shared asset blob + embeddings; skips upload + embed', async () => {
     db.reserveAsset.mockResolvedValueOnce({ created: false, asset: readyAsset() });
+    db.getAssetByAssetId.mockResolvedValueOnce(readyAsset());
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
     expect(handleFileUpload).not.toHaveBeenCalled(); // no storage upload
-    expect(uploadVectors).not.toHaveBeenCalled(); // no embed
+    expect(mockEmbedGeneration).not.toHaveBeenCalled(); // no embed
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row points at the shared asset
     expect(fileInfo.filepath).toBe('/blob/canon'); // reuses the shared blob
     expect(fileInfo.knauf_content_hash).toBe('hashABC');
     expect(fileInfo.embedded).toBe(true);
+    expect(fileInfo.knauf_upload_finalized).toBe(true);
+    expect(db.createFile.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        file_id: 'up-1',
+        knauf_asset_id: 'canon-1',
+        embedded: false,
+        knauf_upload_finalized: false,
+      }),
+    );
   });
 
   test('cross-chat — same content uploaded in another of the user’s chats reuses the asset', async () => {
     // Different chat (message attachment), same user + content → HIT, no re-embed.
     db.reserveAsset.mockResolvedValueOnce({ created: false, asset: readyAsset() });
+    db.getAssetByAssetId.mockResolvedValueOnce(readyAsset());
 
     await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
 
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
     expect(fileInfo.knauf_asset_id).toBe('canon-1'); // reuse row points at the shared asset
     expect(handleFileUpload).not.toHaveBeenCalled(); // no re-upload/embed
-    expect(uploadVectors).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).not.toHaveBeenCalled();
+  });
+
+  test('ready reuse aborts when a concurrent last-reference delete tombstones the asset', async () => {
+    db.reserveAsset.mockResolvedValueOnce({ created: false, asset: readyAsset() });
+    db.getAssetByAssetId.mockResolvedValueOnce({
+      ...readyAsset(),
+      status: 'deleting',
+      delete_requested_at: new Date(),
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile).toHaveBeenCalledTimes(1); // pending reference only
+    expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
+    expect(mockRes.status).toHaveBeenCalledWith(409);
+    expect(mockRes.json).toHaveBeenCalledWith({
+      error: 'file_asset_conflict',
+      file_id: 'up-1',
+    });
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).not.toHaveBeenCalled();
   });
 
   test('in-progress asset — stable 409 conflict, no duplicate physical work (WP3b)', async () => {
@@ -1889,8 +2198,45 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       file_id: 'up-1',
     });
     expect(handleFileUpload).not.toHaveBeenCalled();
-    expect(uploadVectors).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).not.toHaveBeenCalled();
     expect(db.createFile).not.toHaveBeenCalled();
+  });
+
+  test('stale processing replay resumes the same physical asset without deleting its blob', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });
+    db.reserveAsset.mockResolvedValueOnce({
+      created: false,
+      asset: {
+        asset_id: 'stale-physical-1',
+        status: 'processing',
+        lease_expires_at: new Date(0),
+        vector_backend: 'pgvector',
+        blob: {
+          source: 'local',
+          path: '/blob/stale.pdf',
+          bytes: 10,
+          filename: 'doc.pdf',
+        },
+      },
+    });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(db.removeAsset).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'stale-physical-1',
+        blob: expect.objectContaining({ path: '/blob/stale.pdf' }),
+      }),
+    );
+    expect(db.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({ knauf_asset_id: 'stale-physical-1', embedded: true }),
+      true,
+      { userId: 'user-123', tenantId: null },
+    );
   });
 
   test('async acceptance flag ON — 202 + indexing projection, no in-request embed (WP3b)', async () => {
@@ -1898,7 +2244,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     try {
       const queuedAt = new Date('2026-07-16T00:00:00.000Z');
       db.getAssetByAssetId.mockResolvedValueOnce({
-        asset_id: 'up-1',
+        asset_id: 'mock-uuid',
         status: 'queued',
         active_generation: null,
         queued_at: queuedAt,
@@ -1908,7 +2254,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 
       expect(handleFileUpload).toHaveBeenCalledTimes(1); // blob IS uploaded
       expect(db.markQueued).toHaveBeenCalled(); // durable state exists
-      expect(uploadVectors).not.toHaveBeenCalled(); // the worker embeds, not this request
+      expect(mockEmbedGeneration).not.toHaveBeenCalled(); // the worker embeds, not this request
       expect(db.claimAsset).not.toHaveBeenCalled();
       expect(mockRes.status).toHaveBeenCalledWith(202);
       expect(mockRes.json).toHaveBeenCalledWith(
@@ -1948,8 +2294,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       // The reservation was made (that's what defeats the TOCTOU race) and
       // then compensated — nothing durable survives the rejection.
       expect(db.reserveAsset).toHaveBeenCalledTimes(1);
-      expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
-      expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+      expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+      expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
       expect(handleFileUpload).not.toHaveBeenCalled(); // no physical work
       expect(db.createFile).not.toHaveBeenCalled();
     } finally {
@@ -1977,8 +2323,8 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect.anything(),
       expect.objectContaining({ filepath: '/blob/doc.pdf', embedded: false }),
     );
-    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'up-1' });
-    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.tombstoneForDelete).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
     // KK20-195 review F3 — a pending File marker is written before physical work.
     // A HANDLED failure compensates it (the marker only survives PROCESS DEATH,
     // by design), so the request still leaves nothing behind.
@@ -1997,7 +2343,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     ).rejects.toThrow('file_asset_queue_transition_lost');
 
     expect(deleteFile).toHaveBeenCalledTimes(1);
-    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'up-1' });
+    expect(db.removeAsset).toHaveBeenCalledWith({ asset_id: 'mock-uuid' });
     // F3 — the pending File marker is compensated on the handled failure.
     expect(db.createFile).toHaveBeenCalledTimes(1);
     expect(db.deleteFiles).toHaveBeenCalledWith(['up-1']);
@@ -2010,7 +2356,6 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 // user with access to the agent can retrieve them, and are NOT per-user deduped.
 describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', () => {
   const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
-  const { uploadVectors } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
     .fn()
@@ -2034,6 +2379,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     checkCapability.mockResolvedValue(true);
     mergeFileConfig.mockReturnValue(makeFileConfig());
     getStrategyFunctions.mockReturnValue({ handleFileUpload });
+    computeContentHash.mockResolvedValue('agentHashABC');
   });
 
   test('embeds AGENT-scoped, skips per-user dedup, and adds to the agent library', async () => {
@@ -2042,10 +2388,10 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     // No dedup work on the library path — but the physical asset IS reserved
     // (KK20-195 WP3b: every file_search upload records its lifecycle),
     // agent-scoped and WITHOUT a dedup key (same content ⇒ separate assets).
-    expect(computeContentHash).not.toHaveBeenCalled();
+    expect(computeContentHash).toHaveBeenCalledWith('/tmp/kb.pdf');
     expect(db.reserveAsset).toHaveBeenCalledWith(
       expect.objectContaining({
-        asset_id: 'lib-1',
+        asset_id: 'mock-uuid',
         scope_type: 'agent',
         scope_id: 'agent-abc',
         embed_route: '/agent/embed',
@@ -2053,16 +2399,119 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
       }),
     );
     // Embedded AGENT-scoped → readable by everyone with access to the agent.
-    expect(uploadVectors).toHaveBeenCalledTimes(1);
-    expect(uploadVectors.mock.calls[0][0].entity_id).toBe('agent-abc');
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'mock-uuid',
+        generation: 1,
+        embed_route: '/agent/embed',
+        scope: { userId: 'user-123', entityId: 'agent-abc' },
+      }),
+    );
     // Row carries no dedup bookkeeping (dropped by removeNullishValues), but
-    // points at its own asset for the WP3c status projection + delete refcount.
+    // points at its immutable physical asset for status + delete refcount.
     const fileInfo = db.createFile.mock.calls.at(-1)[0];
-    expect(fileInfo.knauf_content_hash).toBeUndefined();
-    expect(fileInfo.knauf_asset_id).toBe('lib-1');
+    expect(fileInfo.knauf_content_hash).toBe('agentHashABC');
+    expect(fileInfo.knauf_asset_id).toBe('mock-uuid');
     expect(fileInfo.knauf_dedup_owner).toBeUndefined();
     // Added to the agent's persistent file_search library.
     expect(db.addAgentResourceFile).toHaveBeenCalled();
+  });
+
+  test('repairs an incomplete agent-library finalization using the existing ready asset', async () => {
+    const req = { ...libReq(), knaufRecoverAssetId: 'ready-lib-asset' };
+    db.getAssetByAssetId.mockResolvedValue({
+      asset_id: 'ready-lib-asset',
+      status: 'ready',
+      active_generation: 1,
+      active_index_profile: 'legacy-v0',
+      scope_type: 'agent',
+      scope_id: 'agent-abc',
+      blob: { source: 'local', path: '/blob/ready-kb.pdf', bytes: 10, mime: PDF_MIME },
+    });
+
+    await processAgentFileUpload({ req, res: mockRes, metadata: libMeta() });
+
+    expect(db.reserveAsset).not.toHaveBeenCalled();
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).not.toHaveBeenCalled();
+    expect(db.addAgentResourceFile).toHaveBeenCalledWith({
+      file_id: 'lib-1',
+      agent_id: 'agent-abc',
+      tool_resource: EToolResources.file_search,
+      updatingUserId: 'user-123',
+    });
+    expect(db.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file_id: 'lib-1',
+        filepath: '/blob/ready-kb.pdf',
+        embedded: true,
+        knauf_asset_id: 'ready-lib-asset',
+        knauf_upload_finalized: true,
+      }),
+      true,
+      { userId: 'user-123', tenantId: null },
+    );
+  });
+
+  test('resumes a stale agent-library generation on the handed-off physical asset', async () => {
+    const req = { ...libReq(), knaufRecoverAssetId: 'stale-lib-asset' };
+    db.getAssetByAssetId.mockResolvedValue({
+      asset_id: 'stale-lib-asset',
+      status: 'processing',
+      lease_expires_at: new Date(0),
+      vector_backend: 'azure_search',
+      scope_type: 'agent',
+      scope_id: 'agent-abc',
+      blob: {
+        source: 'local',
+        path: '/blob/stale-kb.pdf',
+        bytes: 10,
+        mime: PDF_MIME,
+        filename: 'kb.pdf',
+      },
+    });
+
+    await processAgentFileUpload({ req, res: mockRes, metadata: libMeta() });
+
+    expect(db.reserveAsset).not.toHaveBeenCalled();
+    expect(handleFileUpload).not.toHaveBeenCalled();
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset_id: 'stale-lib-asset',
+        generation: 1,
+        embed_route: '/agent/embed',
+        blob: expect.objectContaining({ path: '/blob/stale-kb.pdf' }),
+      }),
+    );
+    expect(db.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file_id: 'lib-1',
+        embedded: true,
+        knauf_asset_id: 'stale-lib-asset',
+        knauf_upload_finalized: true,
+      }),
+      true,
+      { userId: 'user-123', tenantId: null },
+    );
+  });
+
+  test('rejects finalization recovery when the asset belongs to another agent scope', async () => {
+    const req = { ...libReq(), knaufRecoverAssetId: 'other-agent-asset' };
+    db.getAssetByAssetId.mockResolvedValue({
+      asset_id: 'other-agent-asset',
+      status: 'ready',
+      active_generation: 1,
+      scope_type: 'agent',
+      scope_id: 'agent-other',
+      blob: { source: 'local', path: '/blob/other.pdf', bytes: 10, mime: PDF_MIME },
+    });
+
+    await expect(
+      processAgentFileUpload({ req, res: mockRes, metadata: libMeta() }),
+    ).rejects.toThrow('file_asset_finalization_scope_mismatch');
+
+    expect(db.addAgentResourceFile).not.toHaveBeenCalled();
+    expect(db.createFile).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

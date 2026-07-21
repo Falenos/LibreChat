@@ -179,6 +179,36 @@ describe('primeResources', () => {
       expect(result.tool_resources?.[EToolResources.file_search]?.files).toEqual(mockFiles);
     });
 
+    // [knauf] KK20-195 FileAsset-backed rows reach the authoritative readiness gate.
+    it('should process asset-backed files as file_search resources despite embedded drift', async () => {
+      const mockFiles: TFile[] = [
+        {
+          user: 'user1',
+          file_id: 'file2',
+          filename: 'document.txt',
+          filepath: '/uploads/document.txt',
+          object: 'file',
+          type: 'text/plain',
+          bytes: 256,
+          embedded: false,
+          knauf_asset_id: 'physical-asset-2',
+          usage: 0,
+        },
+      ];
+
+      const result = await primeResources({
+        req: mockReq,
+        appConfig: mockAppConfig,
+        getFiles: mockGetFiles,
+        requestFileSet,
+        attachments: Promise.resolve(mockFiles),
+        tool_resources: {},
+      });
+
+      expect(result.tool_resources?.[EToolResources.file_search]?.files).toEqual(mockFiles);
+    });
+    // End [knauf]
+
     it('should process image files in requestFileSet as image_edit resources', async () => {
       const mockFiles: TFile[] = [
         {

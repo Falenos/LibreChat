@@ -841,13 +841,57 @@ router.post('/', async (req, res) => {
         // R3 — same status semantics as the fresh path: pending work replays
         // as 202, never a 200 the client could read as "ready".
         const knaufReplayPending = projected?.indexing != null && !projected.indexing.ready;
-        return res.status(knaufReplayPending ? 202 : 200).json({
-          message: knaufReplayPending
-            ? 'File accepted; indexing in progress'
-            : 'File already processed',
-          ...(projected ?? existing),
-          ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
-        });
+        let recoverStaleSyncReplay = false;
+        let recoverIncompleteFinalization = false;
+        if (existing.knauf_asset_id) {
+          let asset;
+          try {
+            asset = await db.getAssetByAssetId(existing.knauf_asset_id);
+          } catch (indexingError) {
+            logger.warn(
+              `[/files] replay asset reload failed for ${metadata.file_id}: ${indexingError?.message}`,
+            );
+            return res.status(503).json({
+              error: 'indexing_status_unavailable',
+              file_id: metadata.file_id,
+            });
+          }
+          const {
+            shouldRecoverStaleSyncReplay,
+            shouldRecoverIncompleteFinalization,
+          } = require('~/server/services/Files/knauf/fileSearchAssetLifecycle');
+          recoverIncompleteFinalization = shouldRecoverIncompleteFinalization({
+            asset,
+            file: existing,
+          });
+          if (knaufReplayPending) {
+            const {
+              isAsyncAcceptedForUser,
+              isIndexingWorkerEnabled,
+            } = require('~/server/services/Files/knauf/asyncIndexingConfig');
+            recoverStaleSyncReplay = shouldRecoverStaleSyncReplay({
+              asset,
+              asyncAccepted: isAsyncAcceptedForUser(req.user),
+              workerEnabled: isIndexingWorkerEnabled(),
+            });
+          }
+        }
+        if (!recoverStaleSyncReplay && !recoverIncompleteFinalization) {
+          return res.status(knaufReplayPending ? 202 : 200).json({
+            message: knaufReplayPending
+              ? 'File accepted; indexing in progress'
+              : 'File already processed',
+            ...(projected ?? existing),
+            ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
+          });
+        }
+        if (recoverStaleSyncReplay || recoverIncompleteFinalization) {
+          // Server-only handoff. Agent-library uploads have no content dedup
+          // key, so processAgentFileUpload must reuse this exact physical asset
+          // for stale execution recovery or final metadata repair.
+          req.knaufRecoverAssetId = existing.knauf_asset_id;
+        }
+        logger.warn(`[/files] replay ${metadata.file_id} will re-enter lifecycle recovery`);
       }
       if (verdict.outcome === 'conflict') {
         return res.status(409).json({

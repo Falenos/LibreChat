@@ -10,6 +10,8 @@ const { createFileAssetMethods } = require('@librechat/data-schemas');
 const {
   reserveForUpload,
   classifyExistingAsset,
+  shouldRecoverStaleSyncReplay,
+  shouldRecoverIncompleteFinalization,
   recordSyncEmbed,
   buildIndexingProjection,
 } = require('./fileSearchAssetLifecycle');
@@ -42,7 +44,7 @@ const reserve = (overrides = {}) =>
   reserveForUpload({
     db,
     userId: 'u1',
-    file_id: `f-${Math.random().toString(36).slice(2)}`,
+    asset_id: `asset-${Math.random().toString(36).slice(2)}`,
     entityId: 'agent-1',
     messageAttachment: true,
     contentHash: 'h1',
@@ -52,18 +54,18 @@ const reserve = (overrides = {}) =>
 
 describe('reserveForUpload (KK20-195 WP3b)', () => {
   test('chat uploads reserve by scope+hash dedup key; identical uploads coalesce', async () => {
-    const first = await reserve({ file_id: 'f1' });
-    const second = await reserve({ file_id: 'f2' });
+    const first = await reserve({ asset_id: 'asset-1' });
+    const second = await reserve({ asset_id: 'asset-2' });
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
-    expect(second.asset.asset_id).toBe('f1');
+    expect(second.asset.asset_id).toBe('asset-1');
     expect(first.asset.scope_type).toBe('user');
     expect(first.asset.embed_route).toBe('/embed');
   });
 
   test('agent-library uploads stay un-deduplicated and agent-scoped', async () => {
-    const a = await reserve({ file_id: 'a1', messageAttachment: false, contentHash: 'h1' });
-    const b = await reserve({ file_id: 'a2', messageAttachment: false, contentHash: 'h1' });
+    const a = await reserve({ asset_id: 'asset-a1', messageAttachment: false, contentHash: 'h1' });
+    const b = await reserve({ asset_id: 'asset-a2', messageAttachment: false, contentHash: 'h1' });
     expect(a.created).toBe(true);
     expect(b.created).toBe(true); // same content, DIFFERENT assets
     expect(a.asset.scope_type).toBe('agent');
@@ -74,7 +76,7 @@ describe('reserveForUpload (KK20-195 WP3b)', () => {
 
   test('azure routing applies to agent assets when enabled', async () => {
     const a = await reserve({
-      file_id: 'az1',
+      asset_id: 'asset-az1',
       messageAttachment: false,
       azureSearchForAgents: true,
     });
@@ -153,49 +155,112 @@ describe('classifyExistingAsset — reclaim of abandoned reservations (KK20-195 
   });
 });
 
+describe('stale synchronous replay recovery', () => {
+  const now = new Date('2026-07-20T12:00:00Z');
+  const stale = new Date(now.getTime() - 20 * 60 * 1000);
+
+  test('re-enters upload recovery only for stale work with no worker or async acceptance', () => {
+    const asset = { status: 'queued', updatedAt: stale };
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: false, workerEnabled: false, now }),
+    ).toBe(true);
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: true, workerEnabled: false, now }),
+    ).toBe(false);
+    expect(
+      shouldRecoverStaleSyncReplay({ asset, asyncAccepted: false, workerEnabled: true, now }),
+    ).toBe(false);
+  });
+
+  test('keeps a fresh replay joined to the in-flight upload', () => {
+    expect(
+      shouldRecoverStaleSyncReplay({
+        asset: { status: 'queued', updatedAt: new Date(now.getTime() - 1000) },
+        asyncAccepted: false,
+        workerEnabled: false,
+        now,
+      }),
+    ).toBe(false);
+  });
+
+  test('re-enters finalization only for an active asset with an unfinished marker', () => {
+    expect(
+      shouldRecoverIncompleteFinalization({
+        asset: { status: 'ready', active_generation: 0, delete_requested_at: null },
+        file: { knauf_upload_finalized: false },
+      }),
+    ).toBe(true);
+    expect(
+      shouldRecoverIncompleteFinalization({
+        asset: { status: 'ready', active_generation: null, delete_requested_at: null },
+        file: { knauf_upload_finalized: false },
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecoverIncompleteFinalization({
+        asset: { status: 'ready', active_generation: 0, delete_requested_at: null },
+        file: { knauf_upload_finalized: true },
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecoverIncompleteFinalization({
+        asset: { status: 'processing', active_generation: 0, delete_requested_at: null },
+        file: { knauf_upload_finalized: false },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('recordSyncEmbed — sync execution through the asset (rollout step 4)', () => {
   const queueAsset = async (asset_id) => {
-    const { asset } = await reserve({ file_id: asset_id });
+    const { asset } = await reserve({ asset_id });
     await db.markQueued({ asset_id: asset.asset_id, blob: { path: '/p', bytes: 5 } });
     return asset.asset_id;
   };
 
   test('success: claim → embed → activated ready generation', async () => {
     const id = await queueAsset('s1');
+    const cleanupGeneration = jest.fn();
     const result = await recordSyncEmbed({
       db,
       asset_id: id,
       createdThisRequest: true,
       logger,
-      embed: async () => ({ embedded: true, filename: 'doc.pdf' }),
+      embed: async (target) => ({ embedded: true, filename: 'doc.pdf', target }),
+      cleanupGeneration,
     });
     expect(result.embedded).toBe(true);
+    expect(result.target).toEqual({ generation: 1, index_profile: 'legacy-v0' });
+    expect(cleanupGeneration).not.toHaveBeenCalled();
     const asset = await db.getAssetByAssetId(id);
     expect(asset.status).toBe('ready');
-    // KK20-195 review R2 — the sync embed writes UNVERSIONED legacy vectors;
-    // the ledger must record the generation RAG actually has: 0 (migration
-    // parity), never a phantom generation 1.
-    expect(asset.active_generation).toBe(0);
-    expect(asset.target_generation).toBe(0);
+    expect(asset.active_generation).toBe(1);
+    expect(asset.target_generation).toBe(1);
     expect(asset.active_index_profile).toBe('legacy-v0');
     expect(asset.execution_token).toBeUndefined();
   });
 
-  test('failure on a request-created asset removes the reservation and rethrows', async () => {
+  test('failure on a request-created asset confirms ownership before caller compensation', async () => {
     const id = await queueAsset('s2');
-    await expect(
-      recordSyncEmbed({
-        db,
-        asset_id: id,
-        createdThisRequest: true,
-        logger,
-        embed: async () => {
-          throw new Error('embed exploded');
-        },
-      }),
-    ).rejects.toThrow('embed exploded');
-    // "Failure leaves nothing": the asset this request created is gone.
-    expect(await db.getAssetByAssetId(id)).toBeNull();
+    const cleanupGeneration = jest.fn().mockResolvedValue(undefined);
+    const thrown = await recordSyncEmbed({
+      db,
+      asset_id: id,
+      createdThisRequest: true,
+      logger,
+      embed: async () => {
+        throw new Error('embed exploded');
+      },
+      cleanupGeneration,
+    }).catch((error) => error);
+    expect(thrown).toMatchObject({ message: 'embed exploded', knaufOwnedFailure: true });
+    expect(cleanupGeneration).toHaveBeenCalledWith({
+      generation: 1,
+      index_profile: 'legacy-v0',
+    });
+    // The helper never removes the ledger/blob itself; the caller compensates
+    // only after seeing knaufOwnedFailure.
+    expect((await db.getAssetByAssetId(id)).status).toBe('failed');
   });
 
   test('failure on a PRE-EXISTING asset keeps it as failed (retryable), not removed', async () => {
@@ -209,6 +274,7 @@ describe('recordSyncEmbed — sync execution through the asset (rollout step 4)'
         embed: async () => {
           throw new Error('boom');
         },
+        cleanupGeneration: jest.fn(),
       }),
     ).rejects.toThrow('boom');
     const asset = await db.getAssetByAssetId(id);
@@ -226,12 +292,17 @@ describe('recordSyncEmbed — sync execution through the asset (rollout step 4)'
         createdThisRequest: true,
         logger,
         embed: async () => ({ embedded: true }),
+        cleanupGeneration: jest.fn(),
       }),
-    ).rejects.toMatchObject({ knaufCode: 'file_indexing_in_progress' });
+    ).rejects.toMatchObject({
+      knaufCode: 'file_indexing_in_progress',
+      knaufPreserveLifecycle: true,
+    });
   });
 
   test('a lost activation CAS (asset tombstoned mid-embed) throws instead of reporting success', async () => {
     const id = await queueAsset('s5');
+    const cleanupGeneration = jest.fn().mockResolvedValue(undefined);
     await expect(
       recordSyncEmbed({
         db,
@@ -244,10 +315,103 @@ describe('recordSyncEmbed — sync execution through the asset (rollout step 4)'
           await db.tombstoneForDelete({ asset_id: id });
           return { embedded: true };
         },
+        cleanupGeneration,
+      }),
+    ).rejects.toMatchObject({
+      knaufCode: 'file_indexing_activation_lost',
+      knaufPreserveLifecycle: true,
+    });
+    expect(cleanupGeneration).toHaveBeenCalledWith({
+      generation: 1,
+      index_profile: 'legacy-v0',
+    });
+    expect((await db.getAssetByAssetId(id)).status).toBe('deleting');
+  });
+
+  test('a failed activation-lost cleanup is durable reconciliation debt', async () => {
+    const id = await queueAsset('s6');
+    await expect(
+      recordSyncEmbed({
+        db,
+        asset_id: id,
+        createdThisRequest: true,
+        logger,
+        embed: async () => {
+          await db.tombstoneForDelete({ asset_id: id });
+          return { embedded: true };
+        },
+        cleanupGeneration: async () => {
+          throw new Error('RAG delete unavailable');
+        },
+      }),
+    ).rejects.toMatchObject({
+      knaufCode: 'file_indexing_activation_lost',
+      knaufCleanupDeferred: true,
+    });
+    const asset = await db.getAssetByAssetId(id);
+    expect(asset.status).toBe('deleting');
+    expect(asset.stale_generations).toContain(1);
+  });
+
+  test('a reclaimed successor survives the stale claimant activation loss', async () => {
+    const id = await queueAsset('s7');
+    const cleanupGeneration = jest.fn().mockResolvedValue(undefined);
+    await expect(
+      recordSyncEmbed({
+        db,
+        asset_id: id,
+        createdThisRequest: true,
+        leaseMs: 1,
+        logger,
+        embed: async () => {
+          const successor = await db.claimAsset({
+            asset_id: id,
+            workerId: 'successor',
+            leaseMs: 60_000,
+            now: new Date(Date.now() + 5_000),
+          });
+          expect(successor.target_generation).toBe(2);
+          return { embedded: true };
+        },
+        cleanupGeneration,
       }),
     ).rejects.toMatchObject({ knaufCode: 'file_indexing_activation_lost' });
-    // Must NOT have reported success with a File row that would dangle.
-    expect(await db.getAssetByAssetId(id)).toBeNull();
+
+    expect(cleanupGeneration).toHaveBeenCalledWith({
+      generation: 1,
+      index_profile: 'legacy-v0',
+    });
+    const asset = await db.getAssetByAssetId(id);
+    expect(asset.status).toBe('processing');
+    expect(asset.target_generation).toBe(2);
+    expect(asset.lease_owner).toBe('successor');
+  });
+
+  test('alerts when generation cleanup debt cannot be attached to a removed asset', async () => {
+    const id = await queueAsset('s8');
+    const thrown = await recordSyncEmbed({
+      db,
+      asset_id: id,
+      createdThisRequest: true,
+      logger,
+      embed: async () => {
+        await db.tombstoneForDelete({ asset_id: id });
+        await db.removeAsset({ asset_id: id });
+        return { embedded: true };
+      },
+      cleanupGeneration: async () => {
+        throw new Error('RAG delete unavailable');
+      },
+    }).catch((error) => error);
+
+    expect(thrown).toMatchObject({
+      knaufCode: 'file_indexing_activation_lost',
+      knaufPreserveLifecycle: true,
+      knaufCleanupDebtUnconfirmed: true,
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('[alert][cleanup_debt_unconfirmed]'),
+    );
   });
 });
 
@@ -271,8 +435,16 @@ describe('buildIndexingProjection', () => {
         status: 'failed',
         active_generation: null,
         last_error_code: 'rag_5xx',
+        blob: { path: '/blob/doc.pdf' },
       }),
     ).toMatchObject({ status: 'failed', ready: false, retryable: true, error_code: 'rag_5xx' });
+    expect(
+      buildIndexingProjection({
+        status: 'failed',
+        active_generation: null,
+        last_error_code: 'upload_interrupted_reupload_required',
+      }),
+    ).toMatchObject({ status: 'failed', ready: false, retryable: false });
   });
 
   test('a ready generation stays ready during a replacement re-index', () => {

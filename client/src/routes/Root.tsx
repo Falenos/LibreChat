@@ -62,12 +62,7 @@ export default function Root() {
   const { isAuthenticated, logout } = useAuthContext();
 
   // [knauf] Block non-allowlisted users immediately after login.
-  const {
-    allowed: migrationAllowed,
-    isLoading: migrationLoading,
-    isError: migrationError,
-    hasData: migrationHasData,
-  } = useMigrationAccess();
+  const { allowed: migrationAllowed, isLoading: migrationLoading, isError: migrationError, hasData: migrationHasData } = useMigrationAccess();
   // End [knauf]
 
   useHealthCheck(isAuthenticated);

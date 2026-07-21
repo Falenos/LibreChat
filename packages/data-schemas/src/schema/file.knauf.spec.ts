@@ -6,6 +6,7 @@ import fileSchema from './file';
 describe('file schema — KK20-195 async-indexing seam', () => {
   test('carries knauf_upload_batch_id', () => {
     expect(fileSchema.path('knauf_upload_batch_id')).toBeDefined();
+    expect(fileSchema.path('knauf_upload_finalized')).toBeDefined();
   });
 
   test('batch lookups are owner-scoped and partial (never a global batch query)', () => {

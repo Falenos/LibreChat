@@ -7,8 +7,8 @@
  * file Map so an identical re-attachment appears — and sends — only once. This
  * spec fails if that collapse breaks or if knauf_asset_id stops being honoured.
  */
-import type { ExtendedFile } from '~/common';
 import { dedupeFilesByAsset, limitIncomingFiles } from '~/hooks/Files/useFileHandling';
+import type { ExtendedFile } from '~/common';
 
 const mk = (file_id: string, knauf_asset_id?: string): ExtendedFile =>
   ({ file_id, knauf_asset_id, size: 0, progress: 1 }) as ExtendedFile;

@@ -12,14 +12,14 @@
  * isEnabled, then renders one CapabilitySwitch per entry, wiring the
  * applyToForm/readFromForm helpers into the form.
  */
+import type { ComponentType } from 'react';
+import type { LucideProps } from 'lucide-react';
 import { Globe } from 'lucide-react';
 import {
   AgentCapabilities,
   type AgentCapabilities as AgentCapabilitiesEnum,
 } from 'librechat-data-provider';
 import type { UseFormGetValues, UseFormSetValue } from 'react-hook-form';
-import type { LucideProps } from 'lucide-react';
-import type { ComponentType } from 'react';
 import type { AgentForm } from '~/common';
 
 interface FormHelpers {

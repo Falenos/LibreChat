@@ -49,8 +49,9 @@ const TOO_LARGE_NOTICE =
 function wrapAsUntrusted(content, finalUrl) {
   // Defensive scrub: mangle any inner occurrence of the delimiter so the
   // envelope cannot be terminated early.
-  const sanitised = content.replace(/<\/?UNTRUSTED_WEB_CONTENT[^>]*>/gi, (m) =>
-    m.replace(/[<>]/g, ''),
+  const sanitised = content.replace(
+    /<\/?UNTRUSTED_WEB_CONTENT[^>]*>/gi,
+    (m) => m.replace(/[<>]/g, ''),
   );
   return (
     `<UNTRUSTED_WEB_CONTENT url=${JSON.stringify(finalUrl)}>\n` +
@@ -141,12 +142,11 @@ function extractJsonLd(html) {
     } catch {
       continue;
     }
-    let nodes = [data];
-    if (Array.isArray(data)) {
-      nodes = data;
-    } else if (Array.isArray(data && data['@graph'])) {
-      nodes = data['@graph'];
-    }
+    const nodes = Array.isArray(data)
+      ? data
+      : Array.isArray(data && data['@graph'])
+        ? data['@graph']
+        : [data];
     for (const node of nodes) {
       if (!node || typeof node !== 'object') {
         continue;
@@ -232,11 +232,7 @@ function extractHtml(html, finalUrl) {
   if (tooLargeToParse) {
     return { title: null, content: TOO_LARGE_NOTICE, outcome: 'too_large' };
   }
-  return {
-    title: (best && best.title) || null,
-    content: (best && best.content) || '',
-    outcome: 'low',
-  };
+  return { title: (best && best.title) || null, content: (best && best.content) || '', outcome: 'low' };
 }
 
 /**

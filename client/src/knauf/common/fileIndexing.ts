@@ -10,8 +10,17 @@
  */
 import type { ExtendedFile } from '~/common';
 
+export type KnaufFileIndexingStatus =
+  | 'uploading'
+  | 'queued'
+  | 'processing'
+  | 'ready'
+  | 'failed'
+  | 'deleting'
+  | 'delete_failed';
+
 export interface KnaufFileIndexing {
-  status: string;
+  status: KnaufFileIndexingStatus;
   ready: boolean;
   retryable: boolean;
   error_code: string | null;
