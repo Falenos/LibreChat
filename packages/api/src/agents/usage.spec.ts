@@ -815,6 +815,9 @@ describe('recordCollectedUsage', () => {
           balance: { enabled: true },
           transactions: { enabled: true },
           endpointTokenConfig,
+          // [knauf] Pin the configured model metadata used for router-cost attribution.
+          knauf_requestedModel: 'gpt-4',
+          // End [knauf]
         },
         { promptTokens: 100, completionTokens: 50 },
       );
