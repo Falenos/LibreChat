@@ -174,34 +174,47 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
   });
 
   // [knauf] Pin Model Router usage to the provider-returned underlying model.
-  it('uses the routed model from response metadata for usage', async () => {
-    const collectedUsage = [];
-    const emitUsage = jest.fn();
-    const handler = new ModelEndHandler(collectedUsage, null, emitUsage);
-    const graph = {
-      getAgentContext: () => ({
-        provider: 'openai',
-        clientOptions: { model: 'model-router-chat' },
-      }),
-    };
+  it.each([
+    [
+      'LangChain-concatenated metadata',
+      { model_name: 'model-router', model: 'model-routergpt-5.4-mini-2026-03-17' },
+      'gpt-5.4-mini-2026-03-17',
+    ],
+    [
+      'provider-separated metadata',
+      { model_name: 'model-router', model: 'gpt-5.4-mini-2026-03-17' },
+      'gpt-5.4-mini-2026-03-17',
+    ],
+    ['missing terminal metadata', { model_name: 'model-router' }, 'model-router'],
+  ])(
+    'resolves the response model from %s for usage',
+    async (_case, responseMetadata, expectedModel) => {
+      const collectedUsage = [];
+      const emitUsage = jest.fn();
+      const handler = new ModelEndHandler(collectedUsage, null, emitUsage);
+      const graph = {
+        getAgentContext: () => ({
+          provider: 'openai',
+          clientOptions: { model: 'model-router-chat' },
+        }),
+      };
 
-    await handler.handle(
-      'on_chat_model_end',
-      {
-        output: {
-          usage_metadata: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-          response_metadata: { model_name: 'gpt-5.4-mini-2026-03-17' },
+      await handler.handle(
+        'on_chat_model_end',
+        {
+          output: {
+            usage_metadata: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+            response_metadata: responseMetadata,
+          },
         },
-      },
-      { ls_model_name: 'model-router-chat', run_id: 'r1', user_id: 'u1' },
-      graph,
-    );
+        { ls_model_name: 'model-router-chat', run_id: 'r1', user_id: 'u1' },
+        graph,
+      );
 
-    expect(collectedUsage[0].model).toBe('gpt-5.4-mini-2026-03-17');
-    expect(emitUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-5.4-mini-2026-03-17' }),
-    );
-  });
+      expect(collectedUsage[0].model).toBe(expectedModel);
+      expect(emitUsage).toHaveBeenCalledWith(expect.objectContaining({ model: expectedModel }));
+    },
+  );
   // End [knauf]
 
   it('leaves usage untagged when the graph context has no agentId (single-endpoint)', async () => {

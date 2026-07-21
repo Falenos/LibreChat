@@ -384,6 +384,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | temporary draft cleanup regression | 319–344 | Aligns the 404 cleanup regression with tab-scoped `sessionStorage` used for `NEW_CONVO` drafts | Self | KK20-227 |
 | `api/app/clients/tools/util/fileSearch.spec.js` | authoritative attachment-state regressions | 192–209, 349–357 | Proves successful, exhausted, and empty file-search outcomes preserve attachment availability and prohibit false re-upload claims | Self | NO-TICKET |
 | `packages/data-schemas/src/config/meiliLogger.ts` | shared logger export | 1–3 | Removes the divergent colored-text Meilisearch logger so sync events inherit the main structured JSON, redaction, and severity contract | `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | NO-TICKET |
+| `api/server/controllers/agents/callbacks.js` | `getResponseModel` | 1191–1210 | Recovers Azure's terminal backing model from LangChain's concatenated Model Router stream metadata so usage is priced against the model that ran, while retaining the router fallback when the terminal model is absent | `api/server/controllers/agents/__tests__/modelEndHandler.spec.js` (`resolves the response model from ... for usage`) | NO-TICKET |
+| `api/server/controllers/agents/__tests__/modelEndHandler.spec.js` | Model Router merged-metadata table | 176–218 | Reproduces LangChain's concatenated stream metadata and pins clean provider metadata plus the missing-terminal fallback | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
