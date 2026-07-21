@@ -12,6 +12,8 @@ const DEFAULT_MAX_CITATIONS = 30;
 const DEFAULT_MAX_CITATIONS_PER_FILE = 7;
 const MAX_RESULTS = 10;
 const RRF_K = 60;
+const SUCCESS_GROUNDING =
+  "File search succeeded. The attached file is available. Use the excerpts below to answer the user's request. Do not claim the file is missing or ask the user to upload it again. If the excerpts do not cover the whole document, state that limitation and answer from the available evidence. Page numbers may be unavailable; do not search only to obtain citation metadata.";
 const runStates = new WeakMap();
 
 const getRunState = (runContext, entityId) => {
@@ -28,7 +30,11 @@ const getRunState = (runContext, entityId) => {
   const entityKey = entityId ?? '__unscoped__';
   let entityState = requestState.statesByEntity.get(entityKey);
   if (!entityState) {
-    entityState = { queryCache: new Map(), distinctQueries: new Set() };
+    entityState = {
+      queryCache: new Map(),
+      distinctQueries: new Set(),
+      hasRetrievedEvidence: false,
+    };
     requestState.statesByEntity.set(entityKey, entityState);
   }
   return { requestState, entityState };
@@ -280,7 +286,7 @@ const createKnaufFileSearchTool = async (
         : '';
     if (fusedResults.length === 0) {
       return [
-        `${partialWarning}No matching content was found in the available files. Answer that the files do not contain sufficient evidence; do not call file_search again for this question.`,
+        `${partialWarning}The attached files are available, but no matching content was found. Explain that the available excerpts do not contain sufficient evidence; do not claim the files are missing, ask the user to upload them again, or call file_search again for this question.`,
         undefined,
       ];
     }
@@ -305,9 +311,10 @@ const createKnaufFileSearchTool = async (
       allSources.map((source, index) => [source, fusedResults[index]]),
     );
     const visibleResults = sources.map((source) => resultBySource.get(source)).filter(Boolean);
+    entityState.hasRetrievedEvidence = true;
 
     const formattedString =
-      partialWarning +
+      `${SUCCESS_GROUNDING}\n\n${partialWarning}` +
       visibleResults
         .map(
           (result, index) =>
@@ -337,8 +344,10 @@ const createKnaufFileSearchTool = async (
           JSON.stringify({
             type: 'search_budget_exhausted',
             maxDistinctQueries: queryLimit,
+            fileStatus: 'available',
+            evidenceStatus: entityState.hasRetrievedEvidence ? 'retrieved' : 'not_retrieved',
             instruction:
-              'Answer with the evidence already retrieved. If it is insufficient, explain the limitation without calling file_search again.',
+              'The attached file is available. Answer with the evidence already retrieved. If it is insufficient, explain that limitation; do not claim the file is missing, ask the user to upload it again, or call file_search again.',
           }),
           undefined,
         ]);
@@ -355,7 +364,7 @@ const createKnaufFileSearchTool = async (
     {
       name: Tools.file_search,
       responseFormat: 'content_and_artifact',
-      description: `Searches extracted text from attached documents using natural language queries. It cannot inspect images or recover image pixels from earlier turns; current images are supplied directly through multimodal message input. If a needed image is no longer in context, ask the user to reattach it. Use this to extract specific information or find relevant passages in available documents.${
+      description: `Searches extracted text from attached documents using natural language queries. A listed document is already attached; when results are returned, treat the file as available and never ask the user to upload it again. Page metadata may be unavailable, so do not search only to obtain page numbers or citation metadata. It cannot inspect images or recover image pixels from earlier turns; current images are supplied directly through multimodal message input. If a needed image is no longer in context, ask the user to reattach it. Use this to extract specific information or find relevant passages in available documents.${
         fileCitations
           ? `
 

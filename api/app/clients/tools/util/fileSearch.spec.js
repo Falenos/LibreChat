@@ -218,6 +218,8 @@ describe('dual-backend file search', () => {
       data: [[{ page_content: 'Cached evidence', metadata: { file_id: 'chat-1' } }, 0.2]],
     });
     const [firstResult, cachedResult] = await Promise.all([first, cached]);
+    expect(firstResult[0]).toContain('The attached file is available');
+    expect(firstResult[0]).toContain('Do not claim the file is missing');
     expect(firstResult[1].file_search.sources).toHaveLength(1);
     expect(cachedResult[1]).toBeUndefined();
 
@@ -225,7 +227,10 @@ describe('dual-backend file search', () => {
     expect(JSON.parse(content)).toMatchObject({
       type: 'search_budget_exhausted',
       maxDistinctQueries: 1,
+      fileStatus: 'available',
+      evidenceStatus: 'retrieved',
     });
+    expect(JSON.parse(content).instruction).toContain('do not claim the file is missing');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
   });
@@ -370,7 +375,10 @@ describe('dual-backend file search', () => {
     const [content, artifact] = await searchTool.func({ query: 'no partial matches' });
 
     expect(content).toContain('Warning: azure search was unavailable; these results are partial.');
-    expect(content).toContain('No matching content was found in the available files.');
+    expect(content).toContain(
+      'The attached files are available, but no matching content was found.',
+    );
+    expect(content).toContain('do not claim the files are missing');
     expect(content).not.toContain('refine your query');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);

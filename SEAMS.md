@@ -472,6 +472,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/types/file.ts` | `IMongoFile.knauf_upload_finalized` | 84–87 | Type the server-only finalization recovery marker carried by File rows | `packages/data-schemas/src/schema/file.knauf.spec.ts`, `npm run build:data-schemas` | KK20-195 |
 | `packages/data-schemas/src/schema/file.knauf.spec.ts` | `knauf_upload_finalized` schema assertion | 6–10 | Prove the crash-recovery finalization marker remains part of the persisted File schema | Self | KK20-195 |
 | `api/server/worker.js` | `listFileAssetRefs` recovery projection | 90–101 | Include `knauf_upload_finalized` so the bounded dangling-reference reconciler can distinguish irrecoverable pending rows from finalized historical corruption | `api/server/services/Files/knauf/indexingReconciler.spec.js` | KK20-195 |
+| `api/app/clients/tools/util/fileSearch.spec.js` | authoritative attachment-state regressions | 192–209, 349–357 | Proves successful, exhausted, and empty file-search outcomes preserve attachment availability and prohibit false re-upload claims | Self | NO-TICKET |
+| `packages/data-schemas/src/config/meiliLogger.ts` | shared logger export | 1–3 | Removes the divergent colored-text Meilisearch logger so sync events inherit the main structured JSON, redaction, and severity contract | `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -506,6 +508,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/package.json`, `packages/api/package.json` | Raises `@librechat/agents` to `^3.2.65`, adopting upstream Langfuse-team trace shaping: stable agent/tool names, scoped tool args, clean root question/answer, and dropped LangGraph plumbing spans |
 | `.env.example` | Documents `LANGFUSE_TRACING_ENVIRONMENT` and `LANGFUSE_RELEASE` so deployments can filter production traffic and attribute traces to an application release |
 | `.github/workflows/{release_pipeline,promote_pipeline}.yaml` | Keeps `LANGFUSE_RELEASE` synchronized with the exact AGK dev/prod image tag and fails the deployment-config update if release attribution is absent |
+| `.github/workflows/release_pipeline.yaml` | Keeps the optional async indexing worker image tag in lock-step with the dev application release while remaining compatible before the worker GitOps directory exists |
 
 ## Net-New Files
 
@@ -691,6 +694,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` | Subject under test; mocked generation RAG client plus real File/FileAsset models | Low — proves generation-scoped cascade cleanup removes the ledger only after vectors and blob succeed | Self | KK20-195 |
 | `api/server/services/Files/knauf/indexingReconciler.js` | `db.deleteFiles`, `db.removeAgentResourceFilesFromAllAgents`, physical cleanup injected by worker | Medium — case 3 removes only unfinished rows whose asset is irrecoverably missing; case 5 repairs references left by an interrupted tombstoned delete before retrying idempotent physical cleanup | `api/server/services/Files/knauf/indexingReconciler.spec.js` | KK20-195 |
 | `api/server/services/Files/knauf/indexingReconciler.spec.js` | Subject under test; real File/FileAsset models and mocked physical cleanup | Low — proves unfinished dangling rows and stale tombstones repair metadata, retain state on DB failure, and then complete physical deletion | Self | KK20-195 |
+| `packages/data-schemas/src/knauf/observability/meiliLogger.knauf.spec.ts` | `packages/data-schemas/src/config/{winston,meiliLogger}` | Low — test-only identity check pinning the shared logging contract | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
