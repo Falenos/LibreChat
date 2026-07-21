@@ -178,6 +178,11 @@ const file: Schema<IMongoFile> = new Schema(
     knauf_upload_batch_id: {
       type: String,
     },
+    // False only for the crash-recovery marker written before physical work;
+    // true after agent binding, retention, and final metadata are durable.
+    knauf_upload_finalized: {
+      type: Boolean,
+    },
     // End [knauf]
     expiredAt: {
       /* Retention deadline for persisted files. The file sweep deletes the

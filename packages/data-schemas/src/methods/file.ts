@@ -161,7 +161,15 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
         orConditions.push({ text: { $exists: true, $ne: null }, context: FileContext.agents });
       }
       if (toolResourceSet.has(EToolResources.file_search)) {
-        orConditions.push({ embedded: true });
+        // [knauf] KK20-195 FileAsset-backed readiness is authoritative.
+        // FileAsset is authoritative for new uploads. Include asset-backed
+        // rows even if the legacy embedded flag missed its cross-document
+        // update; primeFiles fails closed unless the asset has an active
+        // generation. Legacy rows still require embedded=true.
+        orConditions.push({
+          $or: [{ embedded: true }, { knauf_asset_id: { $exists: true, $ne: null } }],
+        });
+        // End [knauf]
       }
 
       // If no conditions to match, return empty

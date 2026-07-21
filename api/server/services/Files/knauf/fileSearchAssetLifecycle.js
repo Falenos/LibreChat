@@ -4,11 +4,10 @@
 // mocking the world.
 //
 // Both flag states share the trunk: reserve (physical identity BEFORE any
-// physical work) → blob → markQueued → logical File. They differ only after:
+// physical work) → pending logical File → blob → markQueued. They differ only after:
 //   flag OFF (sync, rollout step 4): claim THIS asset, embed in-request,
-//     activate generation — user-visible behavior unchanged, but the asset
-//     now records the whole lifecycle. On failure the asset this request
-//     created is removed again (old clients expect "failure leaves nothing").
+//     activate generation. Cleanup remains generation-scoped; failed cleanup
+//     keeps durable FileAsset/File recovery anchors.
 //   flag ON (async acceptance): no embed in-request; respond 202 with the
 //     indexing projection; the dedicated worker (WP4) drains the queue.
 
@@ -53,7 +52,7 @@ function isAbandonedNonTerminal(asset, now) {
  * @param {Object} params
  * @param {Object} params.db - createMethods surface (reserveAsset, ...)
  * @param {string} params.userId
- * @param {string} params.file_id
+ * @param {string} params.asset_id - immutable physical UUID, independent of the logical File id
  * @param {string | undefined} params.entityId - agent id on the agent-library path
  * @param {boolean} params.messageAttachment - chat (true) vs agent library (false)
  * @param {string | undefined} params.contentHash
@@ -64,7 +63,7 @@ function isAbandonedNonTerminal(asset, now) {
 async function reserveForUpload({
   db,
   userId,
-  file_id,
+  asset_id,
   entityId,
   messageAttachment,
   contentHash,
@@ -75,7 +74,7 @@ async function reserveForUpload({
   const dedupKey =
     !isAgent && contentHash ? buildDedupKey({ user: userId, contentHash }) : undefined;
   const { asset, created } = await db.reserveAsset({
-    asset_id: file_id,
+    asset_id,
     scope_type: isAgent ? 'agent' : 'user',
     scope_id: isAgent ? String(entityId ?? userId) : userId,
     target_index_profile: getIndexProfile(),
@@ -128,18 +127,35 @@ function classifyExistingAsset(asset, { now = new Date(), reclaimable = true } =
   return 'in_progress';
 }
 
+function shouldRecoverStaleSyncReplay({ asset, asyncAccepted, workerEnabled, now = new Date() }) {
+  return (
+    !asyncAccepted &&
+    !workerEnabled &&
+    asset != null &&
+    classifyExistingAsset(asset, { now, reclaimable: true }) === 'reclaim'
+  );
+}
+
+function shouldRecoverIncompleteFinalization({ asset, file }) {
+  return (
+    file?.knauf_upload_finalized === false &&
+    asset?.status === 'ready' &&
+    asset?.active_generation != null &&
+    asset?.delete_requested_at == null
+  );
+}
+
 /**
- * Synchronous (flag-off) execution: claim THIS asset, run the embed, activate
- * the generation. On failure: token-fenced fail, and when this request
- * created the asset, remove it again (with the blob/vector compensation the
- * embed wrapper already performed) so old clients keep today's "failure
- * leaves nothing" semantics; then rethrow.
+ * Synchronous (flag-off) execution through the same generation-safe RAG
+ * contract as the worker. Compensation is permitted only after the
+ * token-fenced failure transition confirms this request still owns the claim.
  *
  * @param {Object} params
  * @param {Object} params.db
  * @param {string} params.asset_id
  * @param {boolean} params.createdThisRequest
- * @param {() => Promise<Object>} params.embed - thunk (uploadVectors, usually via embedWithBlobCompensation)
+ * @param {(target: { generation: number, index_profile: string }) => Promise<Object>} params.embed
+ * @param {(target: { generation: number, index_profile: string }) => Promise<void>} params.cleanupGeneration
  * @param {number} [params.leaseMs]
  * @param {{ warn: Function }} params.logger
  * @returns {Promise<Object>} the embed result
@@ -149,29 +165,62 @@ async function recordSyncEmbed({
   asset_id,
   createdThisRequest,
   embed,
+  cleanupGeneration,
   leaseMs = 10 * 60 * 1000,
   logger,
 }) {
-  // KK20-195 review R2 — the pre-WP1 sync embed writes UNVERSIONED legacy
-  // vectors (no generation field in the multipart request), exactly what the
-  // WP2d migration labels generation 0. Claim WITHOUT incrementing the
-  // generation so activation records active_generation=0 — never a
-  // generation RAG did not create.
-  const claim = await db.claimAsset({
-    asset_id,
-    workerId: 'sync-request',
-    leaseMs,
-    legacyGeneration: true,
-  });
+  const claim = await db.claimAsset({ asset_id, workerId: 'sync-request', leaseMs });
   if (!claim) {
-    // Someone else holds the claim (rare concurrent race) — surface as a
-    // stable conflict rather than double-embedding.
     const conflict = new Error('file_indexing_in_progress');
     conflict.knaufCode = 'file_indexing_in_progress';
+    conflict.knaufPreserveLifecycle = true;
     throw conflict;
   }
+
+  const target = {
+    generation: claim.target_generation,
+    index_profile: claim.target_index_profile,
+  };
+
+  const recordCleanupDebt = async (error, cleanupError) => {
+    error.knaufPreserveLifecycle = true;
+    let debtRecorded = false;
+    try {
+      debtRecorded = await db.recordStaleGeneration({
+        asset_id,
+        generation: claim.target_generation,
+      });
+    } catch (ledgerError) {
+      logger?.warn(
+        `[fileSearchAssetLifecycle][alert][cleanup_debt_write_failed] ${asset_id}:${claim.target_generation}: ${ledgerError?.message}`,
+      );
+    }
+    if (debtRecorded) {
+      error.knaufCleanupDeferred = true;
+    } else {
+      // The pending File row still carries this physical asset id, so the
+      // orphan remains observable even if the asset disappeared concurrently.
+      error.knaufCleanupDebtUnconfirmed = true;
+      logger?.warn(
+        `[fileSearchAssetLifecycle][alert][cleanup_debt_unconfirmed] ${asset_id}:${claim.target_generation}`,
+      );
+    }
+    logger?.warn(
+      `[fileSearchAssetLifecycle] generation cleanup failed for ${asset_id}:${claim.target_generation}; debtRecorded=${debtRecorded}: ${cleanupError?.message}`,
+    );
+  };
+
+  const cleanTargetGeneration = async (error) => {
+    try {
+      await cleanupGeneration(target);
+      error.knaufGenerationCleanupConfirmed = true;
+    } catch (cleanupError) {
+      await recordCleanupDebt(error, cleanupError);
+    }
+  };
+
   try {
-    const embeddingResult = await embed();
+    const embeddingResult = await embed(target);
     const activated = await db.activateGeneration({
       asset_id,
       execution_token: claim.execution_token,
@@ -179,34 +228,40 @@ async function recordSyncEmbed({
       target_index_profile: claim.target_index_profile,
     });
     if (!activated) {
-      // Activation CAS miss: a concurrent op (reclaim / tombstone / lease
-      // reclaim) moved or removed the asset while we embedded. Do NOT report
-      // success — a File row pointing at a removed/tombstoned asset would look
-      // ready but resolve to nothing. Fall to the catch (fail + compensate).
       const lost = new Error('file_indexing_activation_lost');
       lost.knaufCode = 'file_indexing_activation_lost';
+      // Another claimant or a delete fence owns the asset now. Clean only our
+      // generation and never tombstone/remove the winner's ledger or blob.
+      lost.knaufPreserveLifecycle = true;
+      await cleanTargetGeneration(lost);
       throw lost;
     }
     return embeddingResult;
   } catch (error) {
+    // A claimed generation is immutable and unique to this attempt. Clean it
+    // after every failed attempt, including recovered assets and ownership
+    // loss; a successor can only write a different generation number.
+    if (!error.knaufGenerationCleanupConfirmed) {
+      await cleanTargetGeneration(error);
+    }
     try {
-      await db.failClaim({
+      const failedByOwner = await db.failClaim({
         asset_id,
         execution_token: claim.execution_token,
         error_code: 'embed_failed_sync',
         error_detail: error?.message,
       });
-      if (createdThisRequest) {
-        // Blob + vectors were already compensated by the embed wrapper; the
-        // reservation this request made must not linger as a failed asset the
-        // (pre-WP5) client cannot see or retry.
-        await db.tombstoneForDelete({ asset_id });
-        await db.removeAsset({ asset_id });
+      if (!failedByOwner) {
+        error.knaufPreserveLifecycle = true;
+      }
+      if (createdThisRequest && failedByOwner && !error.knaufPreserveLifecycle) {
+        error.knaufOwnedFailure = true;
       }
     } catch (cleanupError) {
       logger?.warn(
-        `[fileSearchAssetLifecycle] sync-failure cleanup failed for ${asset_id}: ${cleanupError?.message}`,
+        `[fileSearchAssetLifecycle][alert][claim_failure_record_failed] ${asset_id}: ${cleanupError?.message}`,
       );
+      error.knaufPreserveLifecycle = true;
     }
     throw error;
   }
@@ -215,7 +270,7 @@ async function recordSyncEmbed({
 /**
  * The `indexing` projection added to upload responses (superset body — the
  * flat TFile spread stays for current clients; plan §6.2 fields as siblings).
- * @param {{ status?: string, active_generation?: number | null, delete_requested_at?: Date | null, last_error_code?: string | null, queued_at?: Date } | null | undefined} asset
+ * @param {{ status?: string, active_generation?: number | null, delete_requested_at?: Date | null, last_error_code?: string | null, queued_at?: Date, blob?: { path?: string } } | null | undefined} asset
  * @returns {{ status: string, ready: boolean, retryable: boolean, error_code: string | null, queued_at: Date | null }}
  */
 function buildIndexingProjection(asset) {
@@ -226,7 +281,7 @@ function buildIndexingProjection(asset) {
   return {
     status: asset.status ?? 'ready',
     ready,
-    retryable: asset.status === 'failed',
+    retryable: asset.status === 'failed' && Boolean(asset.blob?.path),
     error_code: asset.last_error_code ?? null,
     queued_at: asset.queued_at ?? null,
   };
@@ -235,6 +290,8 @@ function buildIndexingProjection(asset) {
 module.exports = {
   reserveForUpload,
   classifyExistingAsset,
+  shouldRecoverStaleSyncReplay,
+  shouldRecoverIncompleteFinalization,
   recordSyncEmbed,
   buildIndexingProjection,
 };

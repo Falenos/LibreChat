@@ -37,8 +37,8 @@ const createFakeRag = () => {
       written.push(`${asset_id}:${generation}`);
       return { status: 'ready', asset_id, generation, index_profile };
     },
-    async deleteGeneration({ asset_id, generation }) {
-      deleted.push(`${asset_id}:${generation}`);
+    async deleteGeneration({ asset_id, generation, vector_backend }) {
+      deleted.push(`${asset_id}:${generation}:${vector_backend}`);
     },
   };
 };
@@ -166,7 +166,7 @@ describe('worker dies mid-embed → lease reclaim (plan §14)', () => {
       staleClaim,
     );
     expect(lateResult.outcome).toBe('activation_miss');
-    expect(rag.deleted).toEqual(['dead-1:1']);
+    expect(rag.deleted).toEqual(['dead-1:1:pgvector']);
     const asset = await db.getAssetByAssetId('dead-1');
     expect(asset.status).toBe('ready');
     expect(asset.active_generation).toBe(2);
@@ -215,7 +215,7 @@ describe('F8 — generation-leak paths', () => {
     await expect(worker.executeClaim(claim)).rejects.toThrow('mongo unavailable at activation');
     // …but only AFTER the written generation is cleaned — no orphaned vectors.
     expect(rag.written).toEqual(['act-throw:1']);
-    expect(rag.deleted).toEqual(['act-throw:1']);
+    expect(rag.deleted).toEqual(['act-throw:1:pgvector']);
   });
 });
 
@@ -254,7 +254,7 @@ describe('retry classification (§5.3)', () => {
     expect(asset.last_error_code).toBe('embed_retryable');
     expect(asset.next_attempt_at.getTime()).toBeGreaterThan(Date.now() - 1000);
     expect(asset.execution_token).toBeUndefined(); // fenced transition cleared the lease
-    expect(rag.deleted).toEqual(['r1:1']); // failed attempt's staging data removed
+    expect(rag.deleted).toEqual(['r1:1:pgvector']); // failed attempt's staging data removed
   });
 
   test('permanent input failure → failed, never retried', async () => {

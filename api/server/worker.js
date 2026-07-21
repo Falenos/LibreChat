@@ -97,7 +97,7 @@ const listFileAssetRefs = (limit, afterId = null) =>
   })
     .sort({ _id: 1 })
     .limit(limit)
-    .select({ file_id: 1, knauf_asset_id: 1 })
+    .select({ file_id: 1, knauf_asset_id: 1, knauf_upload_finalized: 1 })
     .lean();
 
 /**
@@ -119,6 +119,7 @@ const buildCleanupAsset = (ragClient) => async (asset) => {
       await ragClient.deleteGeneration({
         asset_id: asset.asset_id,
         generation,
+        vector_backend: asset.vector_backend,
         userId: ownerUserId,
       });
     } catch (error) {
@@ -181,6 +182,7 @@ const main = async () => {
       ragClient.deleteGeneration({
         asset_id: asset.asset_id,
         generation,
+        vector_backend: asset.vector_backend,
         userId: await resolveOwnerUserId(asset),
       }),
     logger,

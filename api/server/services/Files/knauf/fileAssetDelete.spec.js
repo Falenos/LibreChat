@@ -11,6 +11,7 @@ const {
   gcAssetThroughLifecycle,
   preTombstoneLastReferences,
   finalizeAssetsAfterRowDelete,
+  tombstoneRetainedOrphansAfterRowDelete,
 } = require('./fileAssetDelete');
 
 let mongoServer;
@@ -150,7 +151,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     await seedAsset({ asset_id: 'pre-1', status: 'queued' });
     await seedFile({ file_id: 'only-ref', knauf_asset_id: 'pre-1' });
 
-    const { unfenced } = await preTombstoneLastReferences({
+    const { unfenced, tombstoned } = await preTombstoneLastReferences({
       db,
       files: [{ file_id: 'only-ref', knauf_asset_id: 'pre-1' }],
       logger,
@@ -160,6 +161,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     expect(asset.status).toBe('deleting');
     expect(asset.delete_requested_at).not.toBeNull();
     expect(unfenced.size).toBe(0); // fenced cleanly → nothing to skip
+    expect(tombstoned.get('pre-1')).toEqual(expect.objectContaining({ status: 'deleting' }));
     // Tombstone blocks the claim path mid-delete.
     expect(await db.claimNextDue({ workerId: 'w1', leaseMs: 60_000 })).toBeNull();
   });
@@ -169,7 +171,7 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     await seedFile({ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' });
     await seedFile({ file_id: 'outside-ref', knauf_asset_id: 'pre-2' });
 
-    const { unfenced } = await preTombstoneLastReferences({
+    const { unfenced, retained } = await preTombstoneLastReferences({
       db,
       files: [{ file_id: 'deleting-ref', knauf_asset_id: 'pre-2' }],
       logger,
@@ -179,6 +181,20 @@ describe('preTombstoneLastReferences (§8.2, review R4)', () => {
     expect(asset.status).toBe('ready');
     expect(asset.delete_requested_at ?? null).toBeNull();
     expect(unfenced.has('pre-2')).toBe(false); // a live survivor is NOT a fence failure
+    expect(retained.has('pre-2')).toBe(true); // caller deletes only its logical row
+  });
+
+  test('a pre-ledger asset id is classified for legacy physical cleanup', async () => {
+    await seedFile({ file_id: 'legacy-ref', knauf_asset_id: 'legacy-asset' });
+
+    const { legacy, tombstoned } = await preTombstoneLastReferences({
+      db,
+      files: [{ file_id: 'legacy-ref', knauf_asset_id: 'legacy-asset' }],
+      logger,
+    });
+
+    expect(legacy.has('legacy-asset')).toBe(true);
+    expect(tombstoned.has('legacy-asset')).toBe(false);
   });
 
   // KK20-195 review F5 (re-review) — the tombstone is the deletion fence, so a
@@ -277,6 +293,37 @@ describe('finalizeAssetsAfterRowDelete (§8.1)', () => {
       }),
     ).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('tombstoneRetainedOrphansAfterRowDelete', () => {
+  test('fences an asset when concurrent retained-reference deletes remove the final rows', async () => {
+    await seedAsset({ asset_id: 'retained-race', status: 'ready', active_generation: 1 });
+
+    await tombstoneRetainedOrphansAfterRowDelete({
+      db,
+      deletedFiles: [{ file_id: 'gone', knauf_asset_id: 'retained-race' }],
+      retainedAssetIds: new Set(['retained-race']),
+      logger,
+    });
+
+    const asset = await db.getAssetByAssetId('retained-race');
+    expect(asset.status).toBe('deleting');
+    expect(asset.delete_requested_at).not.toBeNull();
+  });
+
+  test('keeps a retained asset live while another logical row still exists', async () => {
+    await seedAsset({ asset_id: 'still-retained', status: 'ready', active_generation: 1 });
+    await seedFile({ file_id: 'survivor', knauf_asset_id: 'still-retained' });
+
+    await tombstoneRetainedOrphansAfterRowDelete({
+      db,
+      deletedFiles: [{ file_id: 'gone', knauf_asset_id: 'still-retained' }],
+      retainedAssetIds: new Set(['still-retained']),
+      logger,
+    });
+
+    expect((await db.getAssetByAssetId('still-retained')).status).toBe('ready');
   });
 });
 // End [knauf]

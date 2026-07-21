@@ -43,6 +43,7 @@ describe('fileAssetSchema (KK20-195 WP2)', () => {
     expect(path('blob.source')).toBeDefined();
     expect(path('blob.path')).toBeDefined();
     expect(path('blob.bytes')).toBeDefined();
+    expect(path('blob.filename')).toBeDefined();
   });
 
   test('status covers all seven plan-§5 states and defaults to uploading', () => {

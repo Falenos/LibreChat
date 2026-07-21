@@ -110,7 +110,10 @@ const categorizeFileForToolResources = ({
     return;
   }
 
-  if (file.embedded === true) {
+  // [knauf] KK20-195 FileAsset readiness is authoritative for new uploads.
+  // Asset-backed rows must reach primeFiles even when the legacy embedded
+  // projection drifts; primeFiles still fails closed without an active generation.
+  if (file.embedded === true || file.knauf_asset_id != null) {
     addFileToResource({
       file,
       resourceType: EToolResources.file_search,
@@ -119,6 +122,7 @@ const categorizeFileForToolResources = ({
     });
     return;
   }
+  // End [knauf]
 
   if (
     requestFileSet.has(file.file_id) &&

@@ -16,6 +16,7 @@ import { getFileIndexStatus } from '~/knauf/data-provider/data-service';
 import { isIndexingPending } from '~/knauf/common/fileIndexing';
 
 export const KNAUF_INDEX_POLL_MS = 5_000;
+const SORT_LOCALE = 'en';
 
 // Module-level so the poll tick doesn't nest a fetch+catch arrow inside map()
 // inside tick() inside useEffect() (Sonar S2004: functions >4 levels deep).
@@ -40,7 +41,7 @@ export default function useKnaufIndexStatus({
     // Sorted only to make `pendingKey` a stable identity for the effect's deps
     // (the ORDER is irrelevant); localeCompare satisfies Sonar S2871 vs the
     // default code-unit sort.
-    return ids.sort((a, b) => a.localeCompare(b));
+    return ids.sort((a, b) => a.localeCompare(b, SORT_LOCALE));
   }, [files]);
   const pendingKey = pendingIds.join(',');
 

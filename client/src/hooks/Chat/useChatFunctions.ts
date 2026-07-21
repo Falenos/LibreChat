@@ -46,9 +46,9 @@ import useUserKey from '~/hooks/Input/useUserKey';
 import { useAuthContext } from '~/hooks';
 // [knauf] emit privacy-safe Adobe app interaction events from the shared chat submission path
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
+// End [knauf]
 // [knauf] KK20-195 WP5a — submit-map filter for non-ready indexing (plan §6.5).
 import { filterIndexReadyFiles } from '~/knauf/common/fileIndexing';
-// End [knauf]
 // End [knauf]
 
 const logChatRequest = (request: Record<string, unknown>) => {

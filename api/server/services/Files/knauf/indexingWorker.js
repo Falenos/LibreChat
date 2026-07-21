@@ -161,7 +161,7 @@ function createIndexingWorker({
       await ragClient.deleteGeneration({
         asset_id: claim.asset_id,
         generation: claim.target_generation,
-        embed_route: claim.embed_route,
+        vector_backend: claim.vector_backend,
         userId,
       });
       return;

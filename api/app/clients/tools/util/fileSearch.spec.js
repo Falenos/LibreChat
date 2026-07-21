@@ -41,13 +41,27 @@ describe('dual-backend file search', () => {
       userId: 'u1',
       entity_id: 'agent-1',
       files: [
-        { file_id: 'reuse-1', filename: 'chat.pdf', knauf_asset_id: 'asset-1' },
-        { file_id: 'reuse-2', filename: 'chat-copy.pdf', knauf_asset_id: 'asset-1' },
+        {
+          file_id: 'reuse-1',
+          filename: 'chat.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
+        {
+          file_id: 'reuse-2',
+          filename: 'chat-copy.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
         {
           file_id: 'agent-1',
           filename: 'knowledge.pdf',
           context: 'agents',
           fromAgent: true,
+          knauf_active_generation: 2,
+          knauf_vector_backend: 'azure_search',
         },
         { file_id: 'agent-like', filename: 'upload.pdf', context: 'agents' },
       ],
@@ -58,12 +72,24 @@ describe('dual-backend file search', () => {
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/query_multiple',
-      { query: 'hello', file_ids: ['agent-like', 'asset-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-like', 'asset-1'],
+        generations: { 'agent-like': 0, 'asset-1': 4 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/agent/query-multiple',
-      { query: 'hello', file_ids: ['agent-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-1'],
+        generations: { 'agent-1': 2 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
   });
@@ -375,7 +401,12 @@ describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
 
   test('drops non-ready assets, keeps ready assets and legacy rows', async () => {
     getAssetsByAssetIds.mockResolvedValue([
-      { asset_id: 'ready-1', active_generation: 1, delete_requested_at: null },
+      {
+        asset_id: 'ready-1',
+        active_generation: 1,
+        vector_backend: 'pgvector',
+        delete_requested_at: null,
+      },
       { asset_id: 'pending-1', active_generation: null, delete_requested_at: null },
     ]);
 
@@ -383,6 +414,13 @@ describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
 
     expect(getAssetsByAssetIds).toHaveBeenCalledWith(['ready-1', 'pending-1']);
     expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'ready-1']);
+    expect(files.find((f) => f.file_id === 'ready-1')).toMatchObject({
+      knauf_active_generation: 1,
+      knauf_vector_backend: 'pgvector',
+    });
+    expect(files.find((f) => f.file_id === 'legacy-1')).toMatchObject({
+      knauf_active_generation: 0,
+    });
   });
 
   test('drops delete-tombstoned assets even with an active generation', async () => {
