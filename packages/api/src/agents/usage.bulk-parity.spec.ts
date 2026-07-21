@@ -91,6 +91,34 @@ describe('recordCollectedUsage — bulk path parity', () => {
       expect(completionDoc.rawAmount).toBe(-50);
     });
 
+    // [knauf] Preserve the configured router separately from the provider-selected model.
+    it('persists router origin on prompt and completion transaction docs', async () => {
+      const collectedUsage: Array<UsageMetadata & { knauf_requestedModel?: string }> = [
+        {
+          input_tokens: 100,
+          output_tokens: 50,
+          model: 'gpt-5.4-mini-2026-03-17',
+          knauf_requestedModel: 'model-router-chat',
+        },
+      ];
+
+      await recordCollectedUsage(deps, { ...baseParams, collectedUsage });
+
+      expect(mockInsertMany.mock.calls[0][0]).toEqual([
+        expect.objectContaining({
+          tokenType: 'prompt',
+          model: 'gpt-5.4-mini-2026-03-17',
+          knauf_requestedModel: 'model-router-chat',
+        }),
+        expect.objectContaining({
+          tokenType: 'completion',
+          model: 'gpt-5.4-mini-2026-03-17',
+          knauf_requestedModel: 'model-router-chat',
+        }),
+      ]);
+    });
+    // End [knauf]
+
     it('should skip null entries — same return value as legacy path', async () => {
       const collectedUsage = [
         { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },

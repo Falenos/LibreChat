@@ -106,6 +106,9 @@ class ModelEndHandler {
       const responseModel = getResponseModel(data);
       const modelName =
         responseModel || metadata?.ls_model_name || agentContext.clientOptions?.model;
+      if (agentContext.clientOptions?.model) {
+        usage.knauf_requestedModel = agentContext.clientOptions.model;
+      }
       // End [knauf]
       if (modelName) {
         usage.model = modelName;
@@ -1190,11 +1193,22 @@ function markSummarizationUsage(usage, metadata) {
 
 // [knauf] Share Azure Model Router backing-model extraction across every agent API path. KK20-227.
 function getResponseModel(data) {
-  return (
-    data?.output?.response_metadata?.model_name ??
-    data?.output?.response_metadata?.model ??
-    data?.output?.response_metadata?.modelName
-  );
+  const responseMetadata = data?.output?.response_metadata;
+  const initialModel = responseMetadata?.model_name;
+  const completedModel = responseMetadata?.model;
+
+  // LangChain concatenates created.model and completed.model across streamed chunks.
+  if (
+    typeof initialModel === 'string' &&
+    initialModel.toLowerCase().includes('model-router') &&
+    typeof completedModel === 'string'
+  ) {
+    return completedModel.startsWith(initialModel)
+      ? completedModel.slice(initialModel.length) || initialModel
+      : completedModel;
+  }
+
+  return initialModel ?? completedModel ?? responseMetadata?.modelName;
 }
 // End [knauf]
 

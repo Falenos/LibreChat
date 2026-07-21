@@ -24,6 +24,10 @@ export interface ITransaction extends Document {
   knauf_costRateSource?: string;
   knauf_pricingMatch?: 'exact-version' | 'model-family' | 'router-fallback' | 'unknown';
   // End [knauf]
+  // [knauf] Persist prompt size and configured model for routed-model cost attribution.
+  inputTokenCount?: number;
+  knauf_requestedModel?: string;
+  // End [knauf]
 }
 
 const transactionSchema: Schema<ITransaction> = new Schema(
@@ -58,6 +62,10 @@ const transactionSchema: Schema<ITransaction> = new Schema(
     rawAmount: Number,
     tokenValue: Number,
     inputTokens: { type: Number },
+    // [knauf] Persist prompt size for premium tiers and the configured model for router markup.
+    inputTokenCount: { type: Number },
+    knauf_requestedModel: { type: String },
+    // End [knauf]
     writeTokens: { type: Number },
     readTokens: { type: Number },
     messageId: { type: String },
