@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import ControlCombobox from './ControlCombobox';
 
 type CapturedObserver = {
@@ -197,3 +197,89 @@ describe('ControlCombobox popover sizing', () => {
     expect(getPopoverWidth()).toBe('275px');
   });
 });
+
+// [knauf] Pin the searched-value extension used by agent custom groups.
+describe('ControlCombobox creatable values', () => {
+  it('opens an inline form and saves a new value from the persistent prompt', () => {
+    const setValue = jest.fn();
+    render(
+      <ControlCombobox
+        selectedValue="a"
+        displayValue="Option A"
+        items={items}
+        setValue={setValue}
+        ariaLabel="Creatable combobox"
+        searchPlaceholder="Search"
+        isCollapsed={false}
+        createPromptLabel="Create new group"
+        createInputPlaceholder="Name"
+        createSaveLabel="Save"
+        getCreateLabel={(value) => `Create group ${value}`}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox'));
+    const createPrompt = screen.getByRole('button', { name: 'Create new group' });
+    fireEvent.click(createPrompt);
+
+    const nameInput = screen.getByRole('textbox', { name: 'Name' });
+    expect(nameInput).toHaveFocus();
+    fireEvent.change(nameInput, { target: { value: 'Field Operations' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(setValue).toHaveBeenCalledWith('Field Operations');
+  });
+
+  it('offers an unmatched search as a create option but not an exact item', () => {
+    render(
+      <ControlCombobox
+        selectedValue="a"
+        displayValue="Option A"
+        items={items}
+        setValue={() => undefined}
+        ariaLabel="Creatable combobox"
+        searchPlaceholder="Search"
+        isCollapsed={false}
+        createPromptLabel="Create new group"
+        createInputPlaceholder="Name"
+        createSaveLabel="Save"
+        getCreateLabel={(value) => `Create group ${value}`}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox'));
+    const search = screen.getByPlaceholderText('Search');
+    fireEvent.change(search, { target: { value: 'Field Operations' } });
+    expect(screen.queryByRole('button', { name: 'Create new group' })).not.toBeInTheDocument();
+    expect(screen.getByText('Create group Field Operations')).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'Option A' } });
+    expect(screen.queryByText('Create group Option A')).not.toBeInTheDocument();
+  });
+
+  it('deletes only eligible option rows without selecting them', () => {
+    const setValue = jest.fn();
+    const onDeleteItem = jest.fn();
+    render(
+      <ControlCombobox
+        selectedValue="a"
+        displayValue="Option A"
+        items={items}
+        setValue={setValue}
+        ariaLabel="Deletable combobox"
+        isCollapsed={false}
+        isItemDeletable={(value) => value === 'b'}
+        onDeleteItem={onDeleteItem}
+        getDeleteItemLabel={(label) => `Delete ${label}`}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(screen.queryByRole('button', { name: 'Delete Option A' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Option B' }));
+
+    expect(onDeleteItem).toHaveBeenCalledWith('b');
+    expect(setValue).not.toHaveBeenCalled();
+  });
+});
+// End [knauf]

@@ -3,8 +3,16 @@
  * 401-refresh interceptor, JSON content-type handling, and Authorization
  * header that upstream's dataService relies on.
  */
-import { request } from 'librechat-data-provider';
+import { request, type TMarketplaceCategory } from 'librechat-data-provider';
 import * as endpoints from './api-endpoints';
+
+export function postAgentCategory(body: { label: string }): Promise<TMarketplaceCategory> {
+  return request.post(endpoints.agentCategories(), body);
+}
+
+export function deleteAgentCategory(value: string): Promise<void> {
+  return request.delete(endpoints.agentCategory(value));
+}
 
 export interface AutogeneratePromptRequest {
   agent: {

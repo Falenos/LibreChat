@@ -58,3 +58,20 @@ describe('getValidCategoryValues is scoped to the active tenant', () => {
     expect(bValues).toEqual(['beta']);
   });
 });
+
+// [knauf] Pin Procurement as a seeded default category for every tenant.
+describe('ensureDefaultCategories', () => {
+  it('creates the localized Procurement category', async () => {
+    await runAs(TENANT_A, () => methods.ensureDefaultCategories());
+
+    const procurement = await runAs(TENANT_A, () => methods.findCategoryByValue('procurement'));
+    expect(procurement).toMatchObject({
+      label: 'com_agents_category_procurement',
+      description: 'com_agents_category_procurement_description',
+      order: 7,
+      custom: false,
+      isActive: true,
+    });
+  });
+});
+// End [knauf]

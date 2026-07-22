@@ -1323,6 +1323,9 @@ const getAgentCategories = async (_req, res) => {
       label: category.label,
       count: category.agentCount,
       description: category.description,
+      // [knauf] Preserve custom-group ownership for admin row actions.
+      custom: category.custom,
+      // End [knauf]
     }));
 
     if (promotedCount > 0) {
