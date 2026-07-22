@@ -18,6 +18,9 @@ jest.mock('@librechat/client', () => ({
     createSaveLabel,
     getCreateLabel,
     items,
+    isItemDeletable,
+    onDeleteItem,
+    getDeleteItemLabel,
   }: {
     setValue: (value: string) => void;
     createPromptLabel?: string;
@@ -25,15 +28,26 @@ jest.mock('@librechat/client', () => ({
     createSaveLabel?: string;
     getCreateLabel?: (value: string) => string;
     items: Array<{ value: string; label?: string }>;
+    isItemDeletable?: (value: string) => boolean;
+    onDeleteItem?: (value: string) => void;
+    getDeleteItemLabel?: (label: string) => string;
   }) => (
     <>
       {items.map((item) => (
-        <button
-          key={item.value}
-          type="button"
-          aria-label={`select-${item.value}`}
-          onClick={() => setValue(item.value)}
-        />
+        <span key={item.value}>
+          <button
+            type="button"
+            aria-label={`select-${item.value}`}
+            onClick={() => setValue(item.value)}
+          />
+          {isItemDeletable?.(item.value) && onDeleteItem && getDeleteItemLabel && (
+            <button
+              type="button"
+              aria-label={getDeleteItemLabel(item.label ?? item.value)}
+              onClick={() => onDeleteItem(item.value)}
+            />
+          )}
+        </span>
       ))}
       {createPromptLabel && createInputPlaceholder && createSaveLabel && (
         <>
@@ -192,6 +206,9 @@ describe('AgentCategorySelector custom groups', () => {
       </QueryClientProvider>,
     );
 
+    expect(
+      screen.queryByRole('button', { name: 'Delete group “General”' }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'select-custom_field_ops' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete group “Field Operations”' }));
 

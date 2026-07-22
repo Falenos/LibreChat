@@ -256,5 +256,30 @@ describe('ControlCombobox creatable values', () => {
     fireEvent.change(search, { target: { value: 'Option A' } });
     expect(screen.queryByText('Create group Option A')).not.toBeInTheDocument();
   });
+
+  it('deletes only eligible option rows without selecting them', () => {
+    const setValue = jest.fn();
+    const onDeleteItem = jest.fn();
+    render(
+      <ControlCombobox
+        selectedValue="a"
+        displayValue="Option A"
+        items={items}
+        setValue={setValue}
+        ariaLabel="Deletable combobox"
+        isCollapsed={false}
+        isItemDeletable={(value) => value === 'b'}
+        onDeleteItem={onDeleteItem}
+        getDeleteItemLabel={(label) => `Delete ${label}`}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(screen.queryByRole('button', { name: 'Delete Option A' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Option B' }));
+
+    expect(onDeleteItem).toHaveBeenCalledWith('b');
+    expect(setValue).not.toHaveBeenCalled();
+  });
 });
 // End [knauf]

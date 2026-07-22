@@ -3,7 +3,6 @@ import React, { memo, useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ControlCombobox, useToastContext } from '@librechat/client';
 import { QueryKeys, SystemRoles, type TMarketplaceCategory } from 'librechat-data-provider';
-import { Trash2 } from 'lucide-react';
 // End [knauf]
 import {
   useWatch,
@@ -75,16 +74,35 @@ const AgentCategorySelector: React.FC<{ className?: string }> = ({ className }) 
   });
   // End [knauf]
   // [knauf] Remove deleted custom groups from the shared category cache.
-  const deleteCategory = useMutation(deleteAgentCategory, {
-    onSuccess: (_, value) => {
-      queryClient.setQueryData<TMarketplaceCategory[]>(
-        [QueryKeys.agentCategories],
-        (current = []) => current.filter((category) => category.value !== value),
-      );
-      queryClient.invalidateQueries([QueryKeys.agentCategories]);
-      showToast({ message: localize('com_ui_deleted'), status: 'success' });
+  const { mutate: deleteCategory, isLoading: isDeletingCategory } = useMutation(
+    deleteAgentCategory,
+    {
+      onSuccess: (_, value) => {
+        queryClient.setQueryData<TMarketplaceCategory[]>(
+          [QueryKeys.agentCategories],
+          (current = []) => current.filter((category) => category.value !== value),
+        );
+        queryClient.invalidateQueries([QueryKeys.agentCategories]);
+        if (formContext.getValues('category') === value) {
+          formContext.setValue('category', 'general');
+        }
+        showToast({ message: localize('com_ui_deleted'), status: 'success' });
+      },
+      onError: (_, value) => {
+        const category = categories.find((item) => item.value === value);
+        const label =
+          category?.label && category.label.startsWith('com_')
+            ? localize(category.label as TranslationKeys)
+            : (category?.label ?? value);
+        showToast({
+          message: localize('com_knauf_delete_agent_group_error', {
+            0: label,
+          }),
+          status: 'error',
+        });
+      },
     },
-  });
+  );
   // End [knauf]
 
   const agent_id = useWatch({
@@ -118,6 +136,32 @@ const AgentCategorySelector: React.FC<{ className?: string }> = ({ className }) 
     [localize],
   );
   // End [knauf]
+  // [knauf] Expose stable admin-only delete controls to custom-group option rows.
+  const isCategoryDeletable = useCallback(
+    (value: string) => categories.some((category) => category.value === value && category.custom),
+    [categories],
+  );
+  const getDeleteItemLabel = useCallback(
+    (label: string) => localize('com_knauf_delete_agent_group', { 0: label }),
+    [localize],
+  );
+  const handleDeleteCategory = useCallback(
+    (value: string) => {
+      const category = categories.find((item) => item.value === value);
+      if (!isAdmin || category?.custom !== true) {
+        return;
+      }
+      const label = category.label.startsWith('com_')
+        ? localize(category.label as TranslationKeys)
+        : category.label;
+      if (!window.confirm(localize('com_knauf_delete_agent_group_confirm', { 0: label }))) {
+        return;
+      }
+      deleteCategory(value);
+    },
+    [categories, deleteCategory, isAdmin, localize],
+  );
+  // End [knauf]
 
   return (
     <Controller
@@ -129,12 +173,6 @@ const AgentCategorySelector: React.FC<{ className?: string }> = ({ className }) 
         syncCategory(field);
 
         const displayValue = getCategoryDisplayValue(field.value);
-        // [knauf] Resolve whether the selected group is custom and therefore admin-deletable.
-        const selectedCategory = categories.find((category) => category.value === field.value);
-        const selectedCategoryLabel = selectedCategory
-          ? getCategoryLabel(selectedCategory)
-          : displayValue;
-        // End [knauf]
 
         return (
           <>
@@ -170,46 +208,11 @@ const AgentCategorySelector: React.FC<{ className?: string }> = ({ className }) 
               createInputPlaceholder={isAdmin ? localize('com_ui_name') : undefined}
               createSaveLabel={isAdmin ? localize('com_ui_save') : undefined}
               getCreateLabel={isAdmin ? getCreateLabel : undefined}
+              isItemDeletable={isAdmin ? isCategoryDeletable : undefined}
+              onDeleteItem={isAdmin ? handleDeleteCategory : undefined}
+              getDeleteItemLabel={isAdmin ? getDeleteItemLabel : undefined}
+              deleteItemDisabled={isDeletingCategory}
             />
-            {/* End [knauf] */}
-            {/* [knauf] Let administrators delete only unused custom groups. */}
-            {isAdmin && selectedCategory?.custom === true && (
-              <button
-                type="button"
-                disabled={deleteCategory.isLoading}
-                aria-label={localize('com_knauf_delete_agent_group', {
-                  0: selectedCategoryLabel,
-                })}
-                title={localize('com_knauf_delete_agent_group', { 0: selectedCategoryLabel })}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      localize('com_knauf_delete_agent_group_confirm', {
-                        0: selectedCategoryLabel,
-                      }),
-                    )
-                  ) {
-                    return;
-                  }
-                  deleteCategory.mutate(selectedCategory.value, {
-                    onSuccess: () => field.onChange('general'),
-                    onError: () =>
-                      showToast({
-                        message: localize('com_knauf_delete_agent_group_error', {
-                          0: selectedCategoryLabel,
-                        }),
-                        status: 'error',
-                      }),
-                  });
-                }}
-                className="mt-1 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
-              >
-                <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
-                <span>
-                  {localize('com_knauf_delete_agent_group', { 0: selectedCategoryLabel })}
-                </span>
-              </button>
-            )}
             {/* End [knauf] */}
           </>
         );

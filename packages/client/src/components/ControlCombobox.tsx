@@ -1,8 +1,17 @@
-import { useMemo, useState, useRef, memo, useEffect, MemoExoticComponent } from 'react';
+import {
+  useMemo,
+  useState,
+  useRef,
+  memo,
+  useEffect,
+  useCallback,
+  type MouseEvent,
+  MemoExoticComponent,
+} from 'react';
 import * as Ariakit from '@ariakit/react';
 import { matchSorter } from 'match-sorter';
-// [knauf] Plus icon for the persistent custom-group creation action.
-import { Search, ChevronDown, Plus } from 'lucide-react';
+// [knauf] Icons for custom-group creation and row-level deletion actions.
+import { Search, ChevronDown, Plus, X } from 'lucide-react';
 // End [knauf]
 import { SelectRenderer } from '@ariakit/react-core/select/select-renderer';
 import type { OptionWithIcon } from '~/common';
@@ -34,6 +43,12 @@ interface ControlComboboxProps {
   createSaveLabel?: string;
   getCreateLabel?: (value: string) => string;
   // End [knauf]
+  // [knauf] Optional row-level deletion for admin-managed custom groups.
+  isItemDeletable?: (value: string) => boolean;
+  onDeleteItem?: (value: string) => void;
+  getDeleteItemLabel?: (label: string) => string;
+  deleteItemDisabled?: boolean;
+  // End [knauf]
 }
 
 const ROW_HEIGHT = 36;
@@ -61,6 +76,12 @@ function ControlCombobox({
   createInputPlaceholder,
   createSaveLabel,
   getCreateLabel,
+  // End [knauf]
+  // [knauf] Read optional row-level deletion controls.
+  isItemDeletable,
+  onDeleteItem,
+  getDeleteItemLabel,
+  deleteItemDisabled,
   // End [knauf]
 }: ControlComboboxProps): JSX.Element {
   const [searchValue, setSearchValue] = useState('');
@@ -134,6 +155,23 @@ function ControlCombobox({
     }
     return filteredItems.map(getItem);
   }, [getCreateLabel, searchValue, items]);
+  // End [knauf]
+
+  // [knauf] Keep delete clicks from selecting or closing the surrounding option row.
+  const stopDeletePointer = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+  const handleDeleteItem = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      stopDeletePointer(event);
+      const value = event.currentTarget.dataset.value;
+      if (value) {
+        onDeleteItem?.(value);
+      }
+    },
+    [onDeleteItem, stopDeletePointer],
+  );
   // End [knauf]
 
   useEffect(() => {
@@ -248,6 +286,25 @@ function ControlCombobox({
                   {icon != null && iconSide === 'right' && (
                     <div className={optionIconClassName}>{icon}</div>
                   )}
+                  {/* [knauf] Put the admin delete action directly on each custom-group row. */}
+                  {value != null &&
+                    isItemDeletable?.(value) &&
+                    onDeleteItem &&
+                    getDeleteItemLabel && (
+                      <button
+                        type="button"
+                        data-value={value}
+                        disabled={deleteItemDisabled}
+                        aria-label={getDeleteItemLabel(String(label ?? value))}
+                        title={getDeleteItemLabel(String(label ?? value))}
+                        onMouseDown={stopDeletePointer}
+                        onClick={handleDeleteItem}
+                        className="ml-2 shrink-0 rounded p-1 text-text-secondary hover:bg-surface-tertiary hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:text-red-400"
+                      >
+                        <X aria-hidden="true" className="h-4 w-4" />
+                      </button>
+                    )}
+                  {/* End [knauf] */}
                 </Ariakit.ComboboxItem>
               )}
             </SelectRenderer>
