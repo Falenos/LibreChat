@@ -725,6 +725,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Files/KnaufChatFileIndexingStatus.knauf.spec.tsx` | Subject under test; data service, toast, and localization mocked | Low — focused retry success/failure regression with no live API dependency | Self | KK20-195 |
 | `api/server/services/Files/knauf/indexingReconciler.js` | Mongo collection injected by `worker.js`; existing reconciliation dependencies | Medium — renewable fixed-id lease makes reconciliation fleet-singleton; finalized dangling references retain exact affected counts but emit one bounded 10-row alert sample per pass | `api/server/services/Files/knauf/indexingReconciler.spec.js` (`fleet-wide reconciler lease`, dangling-ref backlog) | KK20-195 |
 | `api/server/services/Files/knauf/indexingReconciler.spec.js` | Subject under test; mongodb-memory-server raw lock collection plus real File/FileAsset models | Low — proves one winner across five replicas, expiry takeover, losing-replica skip, and bounded legacy-alert output without losing counts | Self | KK20-195 |
+| `api/server/services/Files/knauf/fileAssetMigration.js` | `mongoose.models.{File,KnaufFileAsset}` via injected mongoose | Medium — preserves valid legacy double-embed assets while assigning the unique future dedup slot to only one physical asset | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | KK20-195 |
+| `api/server/services/Files/knauf/fileAssetMigration.spec.js` | Subject under test; real FileAsset unique index from `@librechat/data-schemas`; mongodb-memory-server | Low — reproduces the production dedup-index collision and proves both physical assets survive | Self | KK20-195 |
 <!-- seams:new:end -->
 
 ## Static Assets
