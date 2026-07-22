@@ -342,6 +342,24 @@ export default function useChatFunctions({
     }
 
     const ephemeralAgent = getEphemeralAgent(conversationId ?? Constants.NEW_CONVO);
+    // [knauf] Resolve a failed optimistic turn before draining compose-time context.
+    const failedStartResponse =
+      parentMessageId == null &&
+      !isRegenerate &&
+      !isContinued &&
+      !isEdited &&
+      hasStreamStartFailed(latestMessage)
+        ? latestMessage
+        : null;
+    const failedStartUser = failedStartResponse
+      ? (overrideMessages ?? getMessages() ?? []).find(
+          (message) =>
+            message.messageId === failedStartResponse.parentMessageId &&
+            message.isCreatedByUser === true,
+        )
+      : undefined;
+    const isFailedStartRetry = failedStartUser != null;
+    // End [knauf]
     /**
      * Manual skill selection resolution:
      *  - Explicit `overrideManualSkills` wins (regenerate / save-and-submit
@@ -355,10 +373,13 @@ export default function useChatFunctions({
      */
     let manualSkills = overrideManualSkills;
     if (manualSkills == null) {
+      // [knauf] A retry must preserve the failed turn's model-facing skill context.
       manualSkills =
-        isRegenerate || isContinued || isEdited
+        failedStartUser?.manualSkills ??
+        (isRegenerate || isContinued || isEdited
           ? []
-          : drainPendingManualSkills(conversationId ?? Constants.NEW_CONVO);
+          : drainPendingManualSkills(conversationId ?? Constants.NEW_CONVO));
+      // End [knauf]
     }
     /**
      * Quoted-excerpt resolution mirrors manual skills, but is skipped entirely
@@ -377,11 +398,17 @@ export default function useChatFunctions({
     if (quotesSupported) {
       if (overrideQuotes != null) {
         quotes = overrideQuotes;
+      } else if (failedStartUser?.quotes != null) {
+        // [knauf] Retry the exact quoted context that accompanied the failed turn.
+        quotes = failedStartUser.quotes;
+        // End [knauf]
       } else if (!isRegenerate && !isContinued && !isEdited) {
         quotes = drainPendingQuotes(conversationId ?? Constants.NEW_CONVO);
       }
     }
-    const isEditOrContinue = isEdited || isContinued;
+    // [knauf] An explicit parent on an ordinary ask is the user-message edit/resubmit flow.
+    const isEditOrContinue = isEdited || isContinued || (parentMessageId != null && !isRegenerate);
+    // End [knauf]
 
     let currentMessages: TMessage[] = overrideMessages ?? getMessages() ?? [];
 
@@ -405,22 +432,6 @@ export default function useChatFunctions({
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
     // [knauf] A start-failure retry replaces the failed optimistic turn in place.
-    const failedStartResponse =
-      parentMessageId == null &&
-      !isRegenerate &&
-      !isContinued &&
-      !isEdited &&
-      hasStreamStartFailed(latestMessage)
-        ? latestMessage
-        : null;
-    const failedStartUser = failedStartResponse
-      ? currentMessages.find(
-          (message) =>
-            message.messageId === failedStartResponse.parentMessageId &&
-            message.isCreatedByUser === true,
-        )
-      : undefined;
-    const isFailedStartRetry = failedStartUser != null;
     const intermediateId = overrideUserMessageId ?? failedStartUser?.messageId ?? v4();
     if (parentMessageId == null) {
       parentMessageId = isFailedStartRetry
@@ -530,11 +541,13 @@ export default function useChatFunctions({
       quotes: quotes.length > 0 ? quotes : undefined,
     };
 
-    const submissionFiles = overrideFiles ?? targetParentMessage?.files;
+    // [knauf] Preserve attachments when replaying a failed optimistic turn.
+    const submissionFiles = overrideFiles ?? failedStartUser?.files ?? targetParentMessage?.files;
     const reuseFiles =
-      (isRegenerate || (overrideFiles != null && overrideFiles.length)) &&
+      (isFailedStartRetry || isRegenerate || (overrideFiles != null && overrideFiles.length)) &&
       submissionFiles &&
       submissionFiles.length > 0;
+    // End [knauf]
 
     if (setFiles && reuseFiles === true) {
       currentMsg.files = [...submissionFiles];

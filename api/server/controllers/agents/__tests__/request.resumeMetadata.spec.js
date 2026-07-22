@@ -176,7 +176,19 @@ describe('ResumableAgentController resume metadata', () => {
     mockCheckAndIncrementPendingRequest.mockResolvedValue({ allowed: true });
     mockDecrementPendingRequest.mockResolvedValue(undefined);
     mockGetConvo.mockResolvedValue({ createdAt: '2026-06-07T00:00:00.000Z' });
-    mockGetMessages.mockResolvedValue([]);
+    mockGetMessages.mockImplementation((filter) => {
+      if (filter?.$or) {
+        const parentMessageId = filter.$or[0]?.messageId;
+        return Promise.resolve([
+          {
+            messageId: parentMessageId,
+            parentMessageId: 'parent-user',
+            isCreatedByUser: false,
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
     mockGenerationJobManager.createJob.mockResolvedValue({
       createdAt: 1000,
       readyPromise: Promise.resolve(),
@@ -230,7 +242,18 @@ describe('ResumableAgentController resume metadata', () => {
 
   it('allows an underscore-suffixed parent when it is already persisted', async () => {
     const conversationId = 'conversation-123';
-    mockGetMessages.mockResolvedValue([{ _id: 'persisted-parent' }]);
+    mockGetMessages.mockImplementation((filter) => {
+      if (filter?.$or) {
+        return Promise.resolve([
+          {
+            messageId: 'persisted-response_',
+            parentMessageId: 'parent-user',
+            isCreatedByUser: false,
+          },
+        ]);
+      }
+      return Promise.resolve([{ _id: 'persisted-parent' }]);
+    });
     const initializeClient = jest.fn().mockRejectedValue(new Error('stop before tool loading'));
     const req = {
       user: { id: 'user-123' },
@@ -302,9 +325,12 @@ describe('ResumableAgentController resume metadata', () => {
     await AgentController(req, res, jest.fn(), initializeClient, null);
 
     expect(mockGetMessages).toHaveBeenCalledWith(
-      { user: 'user-123', conversationId },
-      'messageId parentMessageId isCreatedByUser',
-      { limit: 1 },
+      {
+        user: 'user-123',
+        conversationId,
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+      },
+      'messageId isCreatedByUser',
     );
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({
@@ -355,6 +381,183 @@ describe('ResumableAgentController resume metadata', () => {
       'user-123',
       conversationId,
     );
+  });
+
+  it('allows an explicit edit to replace an existing root', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([
+      {
+        messageId: 'existing-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        isCreatedByUser: true,
+      },
+    ]);
+    const initializeClient = jest.fn().mockRejectedValue(new Error('stop after history guard'));
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Edited root',
+        messageId: 'replacement-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        conversationId,
+        isEdited: true,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      headersSent: true,
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(res.status).not.toHaveBeenCalledWith(409);
+    expect(mockCheckAndIncrementPendingRequest).toHaveBeenCalledWith('user-123');
+    expect(mockGenerationJobManager.createJob).toHaveBeenCalledWith(
+      conversationId,
+      'user-123',
+      conversationId,
+    );
+  });
+
+  it('rejects an ordinary send from a parent that already has a different child', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([
+      {
+        messageId: 'existing-response',
+        parentMessageId: 'existing-user',
+        isCreatedByUser: false,
+      },
+      {
+        messageId: 'existing-child',
+        parentMessageId: 'existing-response',
+        isCreatedByUser: true,
+      },
+    ]);
+    const initializeClient = jest.fn();
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Stale sibling',
+        messageId: 'new-child',
+        parentMessageId: 'existing-response',
+        conversationId,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(mockGetMessages).toHaveBeenCalledWith(
+      {
+        user: 'user-123',
+        conversationId,
+        $or: [{ messageId: 'existing-response' }, { parentMessageId: 'existing-response' }],
+      },
+      'messageId parentMessageId isCreatedByUser',
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      code: 'conversation_history_conflict',
+      error: 'Conversation history changed. Reload the conversation and try again.',
+    });
+    expect(mockCheckAndIncrementPendingRequest).not.toHaveBeenCalled();
+    expect(mockGenerationJobManager.createJob).not.toHaveBeenCalled();
+    expect(initializeClient).not.toHaveBeenCalled();
+  });
+
+  it('allows an idempotent retry of the existing child message', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([
+      {
+        messageId: 'existing-response',
+        parentMessageId: 'existing-user',
+        isCreatedByUser: false,
+      },
+      {
+        messageId: 'retry-child',
+        parentMessageId: 'existing-response',
+        isCreatedByUser: true,
+      },
+    ]);
+    const initializeClient = jest.fn().mockRejectedValue(new Error('stop after history guard'));
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Retry child',
+        messageId: 'retry-child',
+        parentMessageId: 'existing-response',
+        conversationId,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      headersSent: true,
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(res.status).not.toHaveBeenCalledWith(409);
+    expect(mockCheckAndIncrementPendingRequest).toHaveBeenCalledWith('user-123');
+    expect(mockGenerationJobManager.createJob).toHaveBeenCalledWith(
+      conversationId,
+      'user-123',
+      conversationId,
+    );
+  });
+
+  it('rejects an ordinary send when its selected parent is missing', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([]);
+    const initializeClient = jest.fn();
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Missing parent',
+        messageId: 'new-child',
+        parentMessageId: 'missing-response',
+        conversationId,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      code: 'conversation_history_conflict',
+      error: 'Conversation history changed. Reload the conversation and try again.',
+    });
+    expect(mockCheckAndIncrementPendingRequest).not.toHaveBeenCalled();
+    expect(mockGenerationJobManager.createJob).not.toHaveBeenCalled();
+    expect(initializeClient).not.toHaveBeenCalled();
   });
   // End [knauf]
 

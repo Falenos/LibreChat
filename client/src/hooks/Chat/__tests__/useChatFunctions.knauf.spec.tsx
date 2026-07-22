@@ -193,6 +193,23 @@ describe('useChatFunctions — Knauf linear recovery', () => {
     expect(dispatchAdobeAppInteraction).not.toHaveBeenCalled();
   });
 
+  it('marks an explicit user-message resubmission as an edit flow', () => {
+    const setSubmission = jest.fn();
+    const { result } = renderUseChatFunctions({ setSubmission });
+
+    act(() => {
+      result.current.ask({
+        text: 'Edited root message',
+        conversationId: 'conversation-1',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+      });
+    });
+
+    expect(setSubmission.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ isEdited: true }),
+    );
+  });
+
   it('reuses the failed turn IDs and parent when retrying a start failure', () => {
     const messages = [
       {
@@ -218,6 +235,16 @@ describe('useChatFunctions — Knauf linear recovery', () => {
         isCreatedByUser: true,
         sender: 'User',
         text: 'Retry this turn',
+        files: [
+          {
+            file_id: 'file-1',
+            filename: 'diagram.png',
+            filepath: '/files/diagram.png',
+            type: 'image/png',
+          },
+        ],
+        manualSkills: ['quality-audit'],
+        quotes: ['Keep this evidence'],
       },
       {
         messageId: 'failed-response_',
@@ -249,8 +276,12 @@ describe('useChatFunctions — Knauf linear recovery', () => {
         messageId: 'failed-user',
         parentMessageId: 'assistant-1',
         responseMessageId: 'failed-response_',
+        files: [expect.objectContaining({ file_id: 'file-1' })],
+        manualSkills: ['quality-audit'],
+        quotes: ['Keep this evidence'],
       }),
     );
+    expect(submission.manualSkills).toEqual(['quality-audit']);
     expect(submission.initialResponse).toEqual(
       expect.objectContaining({
         messageId: 'failed-response_',
