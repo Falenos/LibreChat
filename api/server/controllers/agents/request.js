@@ -168,6 +168,97 @@ function rejectPreliminaryParentMessageId(res) {
   });
 }
 
+// [knauf] A populated conversation cannot accept a different ordinary root message.
+async function hasConversationRootConflict({
+  userId,
+  conversationId,
+  messageId,
+  parentMessageId,
+  isRegenerate,
+  isContinued,
+  isEdited,
+  editedContent,
+}) {
+  if (
+    !conversationId ||
+    conversationId === Constants.NEW_CONVO ||
+    parentMessageId !== Constants.NO_PARENT ||
+    isRegenerate ||
+    isContinued ||
+    isEdited ||
+    editedContent != null
+  ) {
+    return false;
+  }
+
+  const existingRoots = await getMessages(
+    { user: userId, conversationId, parentMessageId: Constants.NO_PARENT },
+    'messageId isCreatedByUser',
+  );
+  if (existingRoots.length === 0) {
+    return false;
+  }
+
+  return !existingRoots.some(
+    (root) => root.messageId === messageId && root.isCreatedByUser === true,
+  );
+}
+
+function rejectConversationRootConflict(res) {
+  return res.status(409).json({
+    code: 'conversation_root_conflict',
+    error: 'Conversation history changed. Reload the conversation and try again.',
+  });
+}
+
+async function hasConversationParentConflict({
+  userId,
+  conversationId,
+  messageId,
+  parentMessageId,
+  isRegenerate,
+  isContinued,
+  isEdited,
+  editedContent,
+}) {
+  if (
+    !conversationId ||
+    conversationId === Constants.NEW_CONVO ||
+    !parentMessageId ||
+    parentMessageId === Constants.NO_PARENT ||
+    isRegenerate ||
+    isContinued ||
+    isEdited ||
+    editedContent != null
+  ) {
+    return false;
+  }
+
+  const messages = await getMessages(
+    {
+      user: userId,
+      conversationId,
+      $or: [{ messageId: parentMessageId }, { parentMessageId }],
+    },
+    'messageId parentMessageId isCreatedByUser',
+  );
+  const parentExists = messages.some((message) => message.messageId === parentMessageId);
+  const children = messages.filter((message) => message.parentMessageId === parentMessageId);
+  const isIdempotentRetry = children.some(
+    (message) => message.messageId === messageId && message.isCreatedByUser === true,
+  );
+
+  return !parentExists || (children.length > 0 && !isIdempotentRetry);
+}
+
+function rejectConversationHistoryConflict(res) {
+  return res.status(409).json({
+    code: 'conversation_history_conflict',
+    error: 'Conversation history changed. Reload the conversation and try again.',
+  });
+}
+// End [knauf]
+
 /**
  * Resumable Agent Controller - Generation runs independently of HTTP connection.
  * Returns streamId immediately, client subscribes separately via SSE.
@@ -175,7 +266,9 @@ function rejectPreliminaryParentMessageId(res) {
 const ResumableAgentController = async (req, res, next, initializeClient, addTitle) => {
   const {
     text,
+    messageId,
     isRegenerate,
+    isEdited = false,
     endpointOption,
     conversationId: reqConversationId,
     isContinued = false,
@@ -197,6 +290,38 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   ) {
     return rejectPreliminaryParentMessageId(res);
   }
+
+  // [knauf] Server backstop for a client that submitted before history hydration.
+  if (
+    await hasConversationRootConflict({
+      userId,
+      conversationId: reqConversationId,
+      messageId,
+      parentMessageId,
+      isRegenerate,
+      isContinued,
+      isEdited,
+      editedContent,
+    })
+  ) {
+    return rejectConversationRootConflict(res);
+  }
+
+  if (
+    await hasConversationParentConflict({
+      userId,
+      conversationId: reqConversationId,
+      messageId,
+      parentMessageId,
+      isRegenerate,
+      isContinued,
+      isEdited,
+      editedContent,
+    })
+  ) {
+    return rejectConversationHistoryConflict(res);
+  }
+  // End [knauf]
 
   /** When to generate the conversation title. `immediate` (default) fires title
    *  generation in parallel with the response, from the user's first message;

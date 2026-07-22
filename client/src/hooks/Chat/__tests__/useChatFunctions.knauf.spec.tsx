@@ -1,7 +1,7 @@
 // [knauf] message submission analytics seam coverage
 import { act, renderHook } from '@testing-library/react';
 import { EModelEndpoint, QueryKeys } from 'librechat-data-provider';
-import type { TConversation } from 'librechat-data-provider';
+import type { TConversation, TMessage, TSubmission } from 'librechat-data-provider';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 import useChatFunctions from '../useChatFunctions';
 
@@ -16,6 +16,7 @@ const mockGetSender = jest.fn();
 const mockGetExpiry = jest.fn();
 const mockQueryClient = {
   getQueryData: jest.fn(),
+  getQueryState: jest.fn(),
 };
 
 jest.mock('react-router-dom', () => ({
@@ -72,9 +73,11 @@ jest.mock('~/hooks', () => ({
 
 jest.mock('~/utils', () => ({
   createDualMessageContent: jest.fn(() => []),
+  hasStreamStartFailed: jest.fn((message) => message?.metadata?.streamStartFailed === true),
   logger: {
     dir: jest.fn(),
     log: jest.fn(),
+    warn: jest.fn(),
   },
 }));
 
@@ -108,6 +111,7 @@ describe('useChatFunctions — Knauf analytics', () => {
     mockGetEphemeralAgent.mockReturnValue(null);
     mockGetSender.mockReturnValue('KARL');
     mockGetExpiry.mockReturnValue('expiry-key');
+    mockQueryClient.getQueryState.mockReturnValue({ status: 'success' });
     mockQueryClient.getQueryData.mockImplementation((key) => {
       if (Array.isArray(key) && key[0] === QueryKeys.endpoints) {
         return {
@@ -151,3 +155,146 @@ describe('useChatFunctions — Knauf analytics', () => {
     expect(dispatchAdobeAppInteraction).not.toHaveBeenCalled();
   });
 });
+
+// [knauf] Keep ordinary sends linear across message hydration and start-failure recovery.
+describe('useChatFunctions — Knauf linear recovery', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetEphemeralAgent.mockReturnValue(null);
+    mockGetSender.mockReturnValue('KARL');
+    mockGetExpiry.mockReturnValue('expiry-key');
+    mockQueryClient.getQueryState.mockReturnValue({ status: 'success' });
+    mockQueryClient.getQueryData.mockImplementation((key) => {
+      if (Array.isArray(key) && key[0] === QueryKeys.endpoints) {
+        return {
+          [EModelEndpoint.azureOpenAI]: {
+            type: EModelEndpoint.azureOpenAI,
+          },
+        };
+      }
+      return undefined;
+    });
+  });
+
+  it('blocks an ordinary send until an existing conversation history is loaded', () => {
+    const setSubmission = jest.fn();
+    mockQueryClient.getQueryState.mockReturnValue({ status: 'pending' });
+    const { result } = renderUseChatFunctions({
+      setSubmission,
+    });
+
+    let submitted: false | void = undefined;
+    act(() => {
+      submitted = result.current.ask({ text: 'Do not create a second root' });
+    });
+
+    expect(submitted).toBe(false);
+    expect(setSubmission).not.toHaveBeenCalled();
+    expect(dispatchAdobeAppInteraction).not.toHaveBeenCalled();
+  });
+
+  it('marks an explicit user-message resubmission as an edit flow', () => {
+    const setSubmission = jest.fn();
+    const { result } = renderUseChatFunctions({ setSubmission });
+
+    act(() => {
+      result.current.ask({
+        text: 'Edited root message',
+        conversationId: 'conversation-1',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+      });
+    });
+
+    expect(setSubmission.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ isEdited: true }),
+    );
+  });
+
+  it('reuses the failed turn IDs and parent when retrying a start failure', () => {
+    const messages = [
+      {
+        messageId: 'user-1',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        conversationId: 'conversation-1',
+        isCreatedByUser: true,
+        sender: 'User',
+        text: 'First turn',
+      },
+      {
+        messageId: 'assistant-1',
+        parentMessageId: 'user-1',
+        conversationId: 'conversation-1',
+        isCreatedByUser: false,
+        sender: 'KARL',
+        text: 'First response',
+      },
+      {
+        messageId: 'failed-user',
+        parentMessageId: 'assistant-1',
+        conversationId: 'conversation-1',
+        isCreatedByUser: true,
+        sender: 'User',
+        text: 'Retry this turn',
+        files: [
+          {
+            file_id: 'file-1',
+            filename: 'diagram.png',
+            filepath: '/files/diagram.png',
+            type: 'image/png',
+          },
+        ],
+        manualSkills: ['quality-audit'],
+        quotes: ['Keep this evidence'],
+      },
+      {
+        messageId: 'failed-response_',
+        parentMessageId: 'failed-user',
+        conversationId: 'conversation-1',
+        isCreatedByUser: false,
+        sender: 'KARL',
+        text: 'Failed to start',
+        error: true,
+        metadata: { streamStartFailed: true },
+      },
+    ] as TMessage[];
+    const setMessages = jest.fn();
+    const setSubmission = jest.fn();
+    const { result } = renderUseChatFunctions({
+      getMessages: () => messages,
+      latestMessage: messages[3],
+      setMessages,
+      setSubmission,
+    });
+
+    act(() => {
+      result.current.ask({ text: 'Retry this turn' });
+    });
+
+    const submission = setSubmission.mock.calls.at(-1)?.[0] as TSubmission;
+    expect(submission.userMessage).toEqual(
+      expect.objectContaining({
+        messageId: 'failed-user',
+        parentMessageId: 'assistant-1',
+        responseMessageId: 'failed-response_',
+        files: [expect.objectContaining({ file_id: 'file-1' })],
+        manualSkills: ['quality-audit'],
+        quotes: ['Keep this evidence'],
+      }),
+    );
+    expect(submission.manualSkills).toEqual(['quality-audit']);
+    expect(submission.initialResponse).toEqual(
+      expect.objectContaining({
+        messageId: 'failed-response_',
+        parentMessageId: 'failed-user',
+      }),
+    );
+    expect(submission.messages.map((message) => message.messageId)).toEqual([
+      'user-1',
+      'assistant-1',
+    ]);
+    expect(
+      setMessages.mock.calls.at(-1)?.[0].map((message: TMessage) => message.messageId),
+    ).toEqual(['user-1', 'assistant-1', 'failed-user', 'failed-response_']);
+  });
+});
+// End [knauf]

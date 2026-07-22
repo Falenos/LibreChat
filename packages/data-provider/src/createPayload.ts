@@ -46,6 +46,10 @@ export default function createPayload(submission: t.TSubmission) {
     addedConvo,
     isTemporary,
     isRegenerate,
+    // [knauf] The agent controller needs this flag to distinguish an explicit
+    // user-message edit from an accidental second root or stale-parent send.
+    isEdited,
+    // End [knauf]
     editedContent,
     conversationId,
     isContinued: !!(isEdited && isContinued),

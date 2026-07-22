@@ -120,6 +120,10 @@ export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
     isContinued: boolean;
     isRegenerate?: boolean;
+    // [knauf] Forward explicit user-message edits to the agent controller so
+    // linear-history validation does not reject an intentional replacement.
+    isEdited?: boolean;
+    // End [knauf]
     conversationId: string | null;
     messages?: TMessages;
     isTemporary: boolean;
