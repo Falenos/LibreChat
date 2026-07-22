@@ -222,6 +222,14 @@ export function createAgentCategoryMethods(mongoose: typeof import('mongoose')):
         description: 'com_agents_category_aftersales_description',
         order: 6,
       },
+      // [knauf] Make Procurement available as a built-in agent category.
+      {
+        value: 'procurement',
+        label: 'com_agents_category_procurement',
+        description: 'com_agents_category_procurement_description',
+        order: 7,
+      },
+      // End [knauf]
     ];
 
     const existingCategories = await getAllCategories();

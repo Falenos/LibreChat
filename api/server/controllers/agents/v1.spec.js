@@ -77,6 +77,9 @@ const {
   revertAgentVersion: revertAgentVersionHandler,
   updateAgent: updateAgentHandler,
   getListAgents: getListAgentsHandler,
+  // [knauf] Exercise custom-category ownership metadata at the API boundary.
+  getAgentCategories: getAgentCategoriesHandler,
+  // End [knauf]
 } = require('./v1');
 
 const {
@@ -511,6 +514,29 @@ describe('Agent Controllers - Mass Assignment Protection', () => {
       expect(response.model_parameters.apiKey).toBeUndefined();
     });
   });
+
+  // [knauf] Keep custom-category ownership metadata in the selector API response.
+  describe('getAgentCategoriesHandler', () => {
+    test('returns the custom flag for admin-managed categories', async () => {
+      require('~/models').getCategoriesWithCounts.mockResolvedValue([
+        {
+          value: 'custom_test',
+          label: 'TEST',
+          description: '',
+          custom: true,
+          agentCount: 0,
+        },
+      ]);
+
+      await getAgentCategoriesHandler(mockReq, mockRes);
+
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ value: 'custom_test', custom: true })]),
+      );
+    });
+  });
+  // End [knauf]
 
   describe('updateAgentHandler', () => {
     let existingAgentId;

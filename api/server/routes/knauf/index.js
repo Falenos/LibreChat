@@ -9,6 +9,7 @@
  * upstream marker work.
  */
 const express = require('express');
+const agentCategories = require('./agentCategories');
 const analyticsDiagnostics = require('./analyticsDiagnostics');
 const autogeneratePrompt = require('./autogeneratePrompt');
 const costs = require('./costs');
@@ -21,6 +22,7 @@ const fileAssetMigration = require('./fileAssetMigration');
 // End [knauf]
 
 const router = express.Router();
+router.use('/agent-categories', agentCategories);
 router.use('/analytics', analyticsDiagnostics);
 router.use('/autogenerate-prompt', autogeneratePrompt);
 router.use('/costs', costs);

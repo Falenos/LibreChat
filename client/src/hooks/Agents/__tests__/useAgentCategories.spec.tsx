@@ -24,6 +24,9 @@ jest.mock('~/data-provider/Agents', () => ({
       { value: 'it', label: 'com_ui_agent_category_it' },
       { value: 'sales', label: 'com_ui_agent_category_sales' },
       { value: 'aftersales', label: 'com_ui_agent_category_aftersales' },
+      // [knauf] Pin custom-category metadata through the processed hook output.
+      { value: 'custom_field_ops', label: 'Field Operations', custom: true },
+      // End [knauf]
       { value: 'promoted', label: 'Promoted' }, // Should be filtered out
       { value: 'all', label: 'All' }, // Should be filtered out
     ],
@@ -54,7 +57,7 @@ describe('useAgentCategories', () => {
 
     await waitFor(() => {
       // Check that we have the expected number of categories (excluding 'promoted' and 'all')
-      expect(result.current.categories.length).toBe(7);
+      expect(result.current.categories.length).toBe(8);
     });
 
     // Check that the first category has the expected structure
@@ -67,6 +70,11 @@ describe('useAgentCategories', () => {
     const categoryValues = result.current.categories.map((cat) => cat.value);
     expect(categoryValues).not.toContain('promoted');
     expect(categoryValues).not.toContain('all');
+    // [knauf] Admin deletion relies on this flag surviving normalization.
+    expect(result.current.categories.find((cat) => cat.value === 'custom_field_ops')?.custom).toBe(
+      true,
+    );
+    // End [knauf]
 
     // Check the empty category
     expect(result.current.emptyCategory.value).toBe(EMPTY_AGENT_CATEGORY.value);
