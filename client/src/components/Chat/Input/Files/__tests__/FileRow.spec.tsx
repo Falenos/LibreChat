@@ -18,6 +18,7 @@ jest.mock('~/hooks/Files', () => ({
 }));
 
 jest.mock('~/utils', () => ({
+  cn: (...classes: string[]) => classes.filter(Boolean).join(' '),
   logger: {
     log: jest.fn(),
   },
@@ -64,6 +65,8 @@ describe('FileRow', () => {
       const translations: Record<string, string> = {
         com_ui_deleting_file: 'Deleting file...',
         com_error_files_upload: 'An error occurred while uploading the file.',
+        com_knauf_file_indexing_failed: 'Indexing failed',
+        com_knauf_file_indexing_retry: 'Retry indexing',
       };
       return translations[key] || key;
     });
@@ -187,6 +190,25 @@ describe('FileRow', () => {
         file: { ...file, progress: 1, attached: true },
         setFiles: mockSetFiles,
       });
+    });
+
+    it('renders the indexing retry action for a retryable failed document', () => {
+      const file = createMockFile({
+        type: 'application/pdf',
+        filename: 'failed-indexing.pdf',
+        indexing: {
+          status: 'failed',
+          ready: false,
+          retryable: true,
+          error_code: 'rag_5xx',
+          queued_at: null,
+        },
+      });
+
+      renderFileRow(new Map([[file.file_id, file]]));
+
+      expect(screen.getByText('Indexing failed')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Retry indexing' })).toBeInTheDocument();
     });
     // End [knauf]
 

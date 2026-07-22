@@ -577,7 +577,11 @@ export async function recordCollectedUsage(
         total_output_tokens += completion;
       }
 
-      const txMetadata: TxMetadata = {
+      // [knauf] Persist router origin without replacing the provider-selected billing model.
+      const requestedModel =
+        (usage as UsageMetadata & { knauf_requestedModel?: string }).knauf_requestedModel ??
+        (usage.usage_type === 'subagent' ? usage.model : model);
+      const txMetadata: TxMetadata & { knauf_requestedModel?: string } = {
         user,
         balance,
         messageId,
@@ -591,7 +595,9 @@ export async function recordCollectedUsage(
           : endpointTokenConfig,
         context: usageContext,
         model: usage.model ?? model,
+        ...(requestedModel && { knauf_requestedModel: requestedModel }),
       };
+      // End [knauf]
 
       if (useBulk) {
         const entries =

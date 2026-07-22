@@ -234,14 +234,18 @@ export function prepareTokenSpend(
 ): PreparedEntry[] {
   const { promptTokens, completionTokens } = tokenUsage;
   const results: PreparedEntry[] = [];
-  const normalizedPromptTokens = Math.max(promptTokens ?? 0, 0);
+  // [knauf] Prevent invalid prompt usage from poisoning an otherwise valid completion row.
+  const normalizedPromptTokens = Number.isFinite(promptTokens) ? Math.max(promptTokens ?? 0, 0) : 0;
+  // End [knauf]
 
   if (promptTokens !== undefined) {
     const entry = prepareStandardTx(
       {
         ...txData,
         tokenType: 'prompt',
-        rawAmount: promptTokens === 0 ? 0 : -normalizedPromptTokens,
+        // [knauf] Preserve the legacy NaN sentinel so prepareStandardTx drops the invalid prompt row.
+        rawAmount: promptTokens === 0 ? 0 : -Math.max(promptTokens ?? 0, 0),
+        // End [knauf]
         inputTokenCount: normalizedPromptTokens,
       },
       pricing,

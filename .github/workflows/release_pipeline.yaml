@@ -33,8 +33,14 @@ jobs:
       AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_WORKER_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl-worker
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
+      # [knauf] KK20-195 — the async-indexing worker's own ArgoCD app (same image
+      # as the api, separate Deployment). Refreshed best-effort post-deploy; a
+      # 404 (app not registered yet) is a clean skip until the infra PR lands.
+      # The worker VALUES bump itself lives in the values-update step (PR #151).
+      AGK_WORKER_ARGOCD_APP: agentic-karl-dev-agentic-karl-worker
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
     steps:
@@ -175,14 +181,22 @@ jobs:
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
-          if git diff --quiet -- "$AGK_CONFIG_DIRECTORY/values.yaml"; then
+          CONFIG_FILES=("$AGK_CONFIG_DIRECTORY/values.yaml")
+          WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
+          if [ -f "$WORKER_VALUES" ]; then
+            sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+            grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+            CONFIG_FILES+=("$WORKER_VALUES")
+          fi
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
             echo "AGK deployment config already points at $VERSION"
             echo "| Deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           git checkout -b "$BRANCH"
-          git add "$AGK_CONFIG_DIRECTORY/values.yaml"
+          git add "${CONFIG_FILES[@]}"
           git commit -m "Update agentic-karl dev to $VERSION"
           git push --force origin "$BRANCH"
 
@@ -191,7 +205,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl dev to $VERSION" \
-              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps \`$AGK_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
+              --body "Automated GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps the app image tag and Langfuse release to \`$VERSION\`, plus the worker image tag when that deployment exists.")
           fi
           echo "Deployment config PR: $PR_URL"
 
@@ -299,3 +313,64 @@ jobs:
             echo "| Failure | AGK ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
+      # Best-effort visibility only: the app deploy above is the release's success
+      # criterion, while worker rollout has separate GitOps/pod gates before async
+      # acceptance is enabled. Missing, unreachable, or slow worker apps warn in
+      # the summary but never fail the release.
+      - name: Refresh AGK worker ArgoCD application (best-effort)
+        if: success()
+        run: |
+          set -uo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          EXPECTED_IMAGE="$AGK_IMAGE_REPOSITORY:$VERSION"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          # Probe once — only a real 404 means the app is not registered yet.
+          PROBE_FILE="$RUNNER_TEMP/agk-worker-argocd-probe.json"
+          PROBE_STATUS=$(curl -sS -o "$PROBE_FILE" -w '%{http_code}' \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          PROBE_EXIT=$?
+          if [ "$PROBE_STATUS" = "404" ]; then
+            echo "Worker ArgoCD app $AGK_WORKER_ARGOCD_APP not found — skipping (infra PR pending)"
+            echo "| Worker ArgoCD app | not registered yet (skipped) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$PROBE_EXIT" -ne 0 ] || [ "$PROBE_STATUS" != "200" ]; then
+            echo "::warning::Worker ArgoCD probe failed (curl exit=$PROBE_EXIT, HTTP ${PROBE_STATUS:-unknown})"
+            echo "| Worker ArgoCD app | probe failed: HTTP \`${PROBE_STATUS:-unknown}\` (non-blocking) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for attempt in {1..30}; do
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" > /dev/null 2>&1 || true
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" 2>/dev/null || true)
+            SYNC_STATUS=$(jq -r '.status.sync.status // "unknown"' <<< "${APP_JSON:-}")
+            HEALTH_STATUS=$(jq -r '.status.health.status // "unknown"' <<< "${APP_JSON:-}")
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "${APP_JSON:-}" | grep -F "$EXPECTED_IMAGE" || true)
+            echo "Attempt $attempt: worker sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              echo "| Worker ArgoCD app | Synced/Healthy on \`$EXPECTED_IMAGE\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Worker ArgoCD app did not converge on $EXPECTED_IMAGE in time (non-blocking — rollout validation remains required before async acceptance)"
+          echo "| Worker ArgoCD app | not converged (non-blocking) — check $AGK_WORKER_ARGOCD_APP |" >> "$GITHUB_STEP_SUMMARY"
+          exit 0

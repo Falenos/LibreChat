@@ -8,6 +8,7 @@ const {
   normalizeModel,
   resolveModelPricing,
   RATE_SOURCE,
+  RATE_SOURCE_LABEL,
 } = require('./costs');
 
 function chain(result) {
@@ -57,7 +58,7 @@ describe('knauf costs', () => {
     const input = calculateTransactionCost({
       model,
       tokenType: 'prompt',
-      rawAmount: -1_000_000,
+      rawAmount: -100_000,
     });
     const output = calculateTransactionCost({
       model,
@@ -65,35 +66,106 @@ describe('knauf costs', () => {
       rawAmount: -1_000_000,
     });
 
-    expect(input.cost).toBeCloseTo(inputPrice);
+    expect(input.cost).toBeCloseTo(inputPrice / 10);
     expect(output.cost).toBeCloseTo(outputPrice);
   });
 
   it('stores effective model versions with the static retail rates', () => {
-    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-openai-parity-2026-07-17');
+    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-2026-07-21');
     expect(EUR_RATES['gpt-5.5']).toMatchObject({
       modelVersion: '2026-04-24',
       effectiveFrom: '2026-05-01',
     });
     expect(EUR_RATES['gpt-5.6-sol']).toMatchObject({
       modelVersion: '2026-07-09',
-      inputPerMillion: EUR_RATES['gpt-5.5'].inputPerMillion,
-      outputPerMillion: EUR_RATES['gpt-5.5'].outputPerMillion,
+      effectiveFrom: '2026-07-01',
+      pricingBasis: 'Azure Retail Prices API, Global Standard',
+      inputPerMillion: 4.3879,
+      outputPerMillion: 26.3273,
     });
   });
 
-  it('counts cache reads at the standard input rate', () => {
+  it('counts cache reads at the discounted cached-input rate', () => {
     const result = calculateTransactionCost({
       model: 'gpt-54',
       tokenType: 'prompt',
-      inputTokens: -1_000_000,
-      readTokens: -1_000_000,
+      inputTokens: -100_000,
+      readTokens: -100_000,
     });
 
-    expect(result.inputTokens).toBe(1_000_000);
-    expect(result.cachedInputTokens).toBe(1_000_000);
-    expect(result.cost).toBeCloseTo(4.3878);
+    expect(result.inputTokens).toBe(100_000);
+    expect(result.cachedInputTokens).toBe(100_000);
+    expect(result.cost).toBeCloseTo(0.24133);
   });
+
+  it('adds the Model Router input fee to the selected model rate', () => {
+    const input = calculateTransactionCost({
+      model: 'gpt-5.4-mini-2026-03-17',
+      knauf_requestedModel: 'model-router-chat',
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+    });
+    const output = calculateTransactionCost({
+      model: 'gpt-5.4-mini-2026-03-17',
+      knauf_requestedModel: 'model-router-chat',
+      tokenType: 'completion',
+      rawAmount: -1_000_000,
+    });
+
+    expect(input.cost).toBeCloseTo(0.6582 + 0.1229);
+    expect(output.cost).toBeCloseTo(3.9491);
+    expect(input.isEstimated).toBe(false);
+  });
+
+  it('does not add the Model Router fee to a direct model call', () => {
+    const input = calculateTransactionCost({
+      model: 'gpt-5.4-mini-2026-03-17',
+      knauf_requestedModel: 'gpt-5.4-mini',
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+    });
+
+    expect(input.cost).toBeCloseTo(0.6582);
+  });
+
+  it.each([
+    ['gpt-5.4', 4.3879, 19.7455],
+    ['gpt-5.5', 8.7758, 39.491],
+    ['gpt-5.6-sol', 8.7758, 39.491],
+  ])('uses %s long-context rates above 272k input tokens', (model, inputPrice, outputPrice) => {
+    const input = calculateTransactionCost({
+      model,
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+      inputTokenCount: 272_001,
+    });
+    const output = calculateTransactionCost({
+      model,
+      tokenType: 'completion',
+      rawAmount: -1_000_000,
+      inputTokenCount: 272_001,
+    });
+
+    expect(input.cost).toBeCloseTo(inputPrice);
+    expect(output.cost).toBeCloseTo(outputPrice);
+  });
+
+  it.each([
+    [272_000, 100_000, 0.54849],
+    [272_001, 1_000_000, 10.9697],
+  ])(
+    'uses the gpt-5.6-sol cache-write meter at %i total input tokens',
+    (inputTokenCount, writeTokens, expectedCost) => {
+      const result = calculateTransactionCost({
+        model: 'gpt-5.6-sol',
+        tokenType: 'prompt',
+        writeTokens: -writeTokens,
+        inputTokenCount,
+      });
+
+      expect(result.cost).toBeCloseTo(expectedCost);
+    },
+  );
 
   it('uses the conservative fallback when Azure reports only the router alias', () => {
     const input = calculateTransactionCost({
@@ -107,7 +179,7 @@ describe('knauf costs', () => {
       rawAmount: -1_000_000,
     });
 
-    expect(input.cost).toBeCloseTo(EUR_RATES['gpt-5.5'].inputPerMillion);
+    expect(input.cost).toBeCloseTo(8.7758 + 0.1229);
     expect(output.cost).toBeCloseTo(EUR_RATES['gpt-5.5'].outputPerMillion);
     expect(input).toMatchObject({
       isEstimated: true,
@@ -130,7 +202,7 @@ describe('knauf costs', () => {
       {
         model: 'gpt-54',
         tokenType: 'prompt',
-        rawAmount: -1_000_000,
+        rawAmount: -100_000,
         messageId: 'm1',
       },
       {
@@ -142,8 +214,47 @@ describe('knauf costs', () => {
     ]);
 
     expect(result.currency).toBe('EUR');
-    expect(result.conversation.cost).toBeCloseTo(15.3576);
-    expect(result.messages.m1.cost).toBeCloseTo(15.3576);
+    expect(result.source).toBe(RATE_SOURCE_LABEL);
+    expect(result.conversation.cost).toBeCloseTo(13.38309);
+    expect(result.messages.m1.cost).toBeCloseTo(13.38309);
+    expect(result.conversation.models).toEqual([
+      expect.objectContaining({
+        returnedModel: 'gpt-54',
+        requestedModel: null,
+        pricingModel: 'gpt-5.4',
+        cost: result.conversation.cost,
+        inputTokens: 100_000,
+        outputTokens: 1_000_000,
+      }),
+    ]);
+  });
+
+  it('separates requested and returned models in the cost breakdown', () => {
+    const result = aggregateConversationCosts([
+      {
+        model: 'gpt-5.4-mini-2026-03-17',
+        knauf_requestedModel: 'model-router-chat',
+        tokenType: 'prompt',
+        rawAmount: -1_000_000,
+        messageId: 'm1',
+      },
+      {
+        model: 'gpt-5.4-mini-2026-03-17',
+        knauf_requestedModel: 'model-router-chat',
+        tokenType: 'completion',
+        rawAmount: -1_000_000,
+        messageId: 'm1',
+      },
+    ]);
+
+    expect(result.messages.m1.models).toEqual([
+      expect.objectContaining({
+        returnedModel: 'gpt-5.4-mini-2026-03-17',
+        requestedModel: 'model-router-chat',
+        pricingModel: 'gpt-5.4-mini',
+        cost: 0.6582 + 0.1229 + 3.9491,
+      }),
+    ]);
   });
 
   it.each([
@@ -242,7 +353,7 @@ describe('knauf costs', () => {
       user: 'user-1',
       conversationId: 'conversation-1',
     });
-    expect(result.conversation.cost).toBeCloseTo(2.1939);
+    expect(result.conversation.cost).toBeCloseTo(4.3879);
     expect(cache.set).toHaveBeenCalledWith(
       expect.stringContaining('conversation-1'),
       expect.objectContaining({

@@ -39,7 +39,7 @@ export function postAutogeneratePrompt(
   return request.post(endpoints.autogeneratePrompt(), body);
 }
 
-export interface ConversationCostSummary {
+export interface CostSummary {
   cost: number;
   inputTokens: number;
   outputTokens: number;
@@ -50,6 +50,16 @@ export interface ConversationCostSummary {
   hasUnsupported: boolean;
   isEstimated?: boolean;
   estimateReason?: string | null;
+}
+
+export interface ModelCostSummary extends CostSummary {
+  returnedModel: string;
+  requestedModel: string | null;
+  pricingModel: string;
+}
+
+export interface ConversationCostSummary extends CostSummary {
+  models?: ModelCostSummary[];
 }
 
 export type MessageCostSummary = ConversationCostSummary;
@@ -86,4 +96,32 @@ export interface PromptTemplatesResponse {
 
 export function getPromptTemplates(): Promise<PromptTemplatesResponse> {
   return request.get(endpoints.promptTemplates());
+}
+
+// KK20-195 WP5 — async file-indexing status + retry (plan §6.3/§6.4).
+import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
+
+export interface FileIndexStatusResponse {
+  file_id: string;
+  indexing: KnaufFileIndexing;
+}
+
+export interface BatchIndexStatusResponse {
+  batch_id: string;
+  total: number;
+  terminal: boolean;
+  counts: Record<'uploading' | 'queued' | 'processing' | 'ready' | 'failed', number>;
+  failures: Array<{ file_id: string; error_code: string | null; retryable: boolean }>;
+}
+
+export function getFileIndexStatus(fileId: string): Promise<FileIndexStatusResponse> {
+  return request.get(endpoints.fileIndexStatus(fileId));
+}
+
+export function getBatchIndexStatus(batchId: string): Promise<BatchIndexStatusResponse> {
+  return request.get(endpoints.batchIndexStatus(batchId));
+}
+
+export function postRetryFileIndex(fileId: string): Promise<FileIndexStatusResponse> {
+  return request.post(endpoints.retryFileIndex(fileId), {});
 }

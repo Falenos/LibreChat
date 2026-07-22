@@ -44,6 +44,24 @@ const {
   deleteFilesWithDedupAwareness,
 } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
 // End [knauf]
+// [knauf] KK20-195 WP3a — client-file_id adoption + replay/conflict decisions.
+const {
+  isValidClientFileId,
+  classifyUploadReplay,
+} = require('~/server/services/Files/knauf/uploadIdempotency');
+// End [knauf]
+// [knauf] KK20-195 WP3c — async-indexing status projections (per-file, batch,
+// list attachment) and the failed→queued retry decision.
+const {
+  projectFileIndexing,
+  attachIndexingCore,
+  attachIndexingToFiles,
+  buildBatchIndexStatus,
+  retryFileIndexing,
+} = require('~/server/services/Files/knauf/indexStatus');
+// KK20-195 review R6 — ownership/agent-EDIT gate for the mutating retry.
+const { knaufFileIndexRetryAuth } = require('~/server/middleware/knaufFileIndexRetryAuth');
+// End [knauf]
 const { cleanFileName, getContentDisposition } = require('~/server/utils/files');
 const { getLogStores } = require('~/cache');
 const { Readable } = require('stream');
@@ -88,7 +106,10 @@ router.get('/', async (req, res) => {
         );
       }
     }
-    res.status(200).send(files);
+    // [knauf] KK20-195 WP3c — one batched asset load projects `indexing` onto
+    // every row that carries an asset pointer (plan §6.3: no per-row polling).
+    res.status(200).send(await attachIndexingToFiles({ db, files }));
+    // End [knauf]
   } catch (error) {
     logger.error('[/files] Error getting files:', error);
     res.status(400).json({ message: 'Error in request', error: error.message });
@@ -146,12 +167,81 @@ router.get('/agent/:agent_id', async (req, res) => {
       text: 0,
     });
 
-    res.status(200).json(files);
+    // [knauf] KK20-195 WP3c — same batched `indexing` projection as GET /files
+    // so agent knowledge lists render pending/failed states without polling
+    // per row (plan §6.3/§6.5: failed knowledge stays visible after reload).
+    res.status(200).json(await attachIndexingToFiles({ db, files }));
+    // End [knauf]
   } catch (error) {
     logger.error('[/files/agent/:agent_id] Error fetching agent files:', error);
     res.status(500).json({ error: 'Failed to fetch agent files' });
   }
 });
+
+// [knauf] KK20-195 WP3c — async-indexing read/retry surface (plan §6.3/§6.4).
+/**
+ * Aggregate indexing status for one client upload batch (multi-file UX).
+ * The batch id is a client-generated grouping key, NEVER authorization —
+ * the query is hard-scoped to the authenticated owner, so foreign batch ids
+ * simply return an empty batch.
+ *
+ * @route GET /files/index-status?batch_id=<id>
+ */
+router.get('/index-status', async (req, res) => {
+  try {
+    const batchId = req.query.batch_id;
+    if (typeof batchId !== 'string' || batchId.length === 0 || batchId.length > 64) {
+      return res.status(400).json({ error: 'batch_id_required' });
+    }
+    const summary = await buildBatchIndexStatus({ db, userId: req.user.id, batchId });
+    return res.status(200).json(summary);
+  } catch (error) {
+    logger.error('[/files/index-status] Error building batch status:', error);
+    return res.status(500).json({ error: 'Failed to fetch batch indexing status' });
+  }
+});
+
+/**
+ * Indexing status for one logical file. `fileAccess` gives the same ACL as
+ * download/preview; the projection is derived from the physical asset when
+ * one exists, else from the legacy `embedded` flag.
+ *
+ * @route GET /files/:file_id/index-status
+ */
+router.get('/:file_id/index-status', fileAccess, async (req, res) => {
+  try {
+    const file = req.fileAccess.file;
+    const asset = file.knauf_asset_id ? await db.getAssetByAssetId(file.knauf_asset_id) : null;
+    return res
+      .status(200)
+      .json({ file_id: file.file_id, indexing: projectFileIndexing(file, asset) });
+  } catch (error) {
+    logger.error('[/files/:file_id/index-status] Error fetching indexing status:', error);
+    return res.status(500).json({ error: 'Failed to fetch indexing status' });
+  }
+});
+
+/**
+ * Authorized retry of a failed indexing run: CASes only failed → queued on
+ * the physical asset (idempotent when another reference already retried);
+ * assets without durable blob metadata answer `file_reupload_required`.
+ *
+ * KK20-195 review R6 — retry MUTATES a shared asset (requeue + OCR/embedding
+ * capacity), so VIEW-level `fileAccess` alone is not enough: ownership or
+ * agent EDIT is enforced by `knaufFileIndexRetryAuth` on top of it.
+ *
+ * @route POST /files/:file_id/index/retry
+ */
+router.post('/:file_id/index/retry', fileAccess, knaufFileIndexRetryAuth, async (req, res) => {
+  try {
+    const { httpStatus, body } = await retryFileIndexing({ db, file: req.fileAccess.file });
+    return res.status(httpStatus).json(body);
+  } catch (error) {
+    logger.error('[/files/:file_id/index/retry] Error retrying indexing:', error);
+    return res.status(500).json({ error: 'Failed to retry indexing' });
+  }
+});
+// End [knauf]
 
 router.get('/config', async (req, res) => {
   try {
@@ -696,8 +786,136 @@ router.post('/', async (req, res) => {
     }
     // End [knauf]
 
-    metadata.temp_file_id = metadata.file_id;
-    metadata.file_id = req.file_id;
+    // [knauf] KK20-195 WP3a — upload idempotency (plan §6.1 steps 3+5).
+    // Adopt the CLIENT-generated file_id as THE logical id when it is a valid
+    // UUID; multer's server-minted req.file_id stays as the fallback (body
+    // fields aren't reliably parsed inside multer's filename callback, so
+    // adoption happens here, not there). temp_file_id keeps carrying the
+    // client id either way — the client reconciles its row by temp_file_id.
+    const knaufClientFileId = metadata.file_id;
+    const knaufAdopted = isValidClientFileId(knaufClientFileId);
+    metadata.temp_file_id = knaufClientFileId ?? req.file_id;
+    metadata.file_id = knaufAdopted ? knaufClientFileId : req.file_id;
+
+    if (knaufAdopted && !isAssistantsEndpoint(metadata.endpoint)) {
+      // §6.1 step 5 — an exact retry with the same (owner, file_id) returns
+      // the original row; the same id with different content or a different
+      // owner is a hard 409. Unscoped lookup on purpose: the cross-user case
+      // must be detected, not silently duplicated.
+      const [existing] = await db.getFiles({ file_id: metadata.file_id }, null, { text: 0 });
+      // KK20-195 review R3 — when the stored row carries a content hash,
+      // compare hashes, not just byte length (same-size different content
+      // must conflict, never replay). Hashing only happens on the rare
+      // same-id path, and only when the row has a hash to compare against.
+      let knaufIncomingHash;
+      if (existing?.knauf_content_hash != null && req.file?.path != null) {
+        const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
+        knaufIncomingHash = await computeContentHash(req.file.path).catch(() => undefined);
+      }
+      const verdict = classifyUploadReplay({
+        existing,
+        userId: req.user.id,
+        incomingBytes: req.file?.size,
+        incomingHash: knaufIncomingHash,
+      });
+      if (verdict.outcome === 'replay') {
+        logger.info(`[/files] idempotent replay for file_id ${metadata.file_id}`);
+        // KK20-195 review R3/F4 — carry the `indexing` projection (and batch id)
+        // so a replayed async-accepted upload isn't mistaken for ready by the
+        // client, which would open the send gate and then 409 on send.
+        // F4 (re-review): use the STRICT projection (attachIndexingCore). If the
+        // asset load throws, readiness is UNKNOWN — return 503 rather than a
+        // resilient plain row the client would read as "ready" (false readiness).
+        let projected;
+        try {
+          [projected] = await attachIndexingCore({ db, files: [existing] });
+        } catch (indexingError) {
+          logger.warn(
+            `[/files] replay readiness unestablishable for ${metadata.file_id}: ${indexingError?.message}`,
+          );
+          return res.status(503).json({
+            error: 'indexing_status_unavailable',
+            file_id: metadata.file_id,
+          });
+        }
+        // R3 — same status semantics as the fresh path: pending work replays
+        // as 202, never a 200 the client could read as "ready".
+        const knaufReplayPending = projected?.indexing != null && !projected.indexing.ready;
+        let recoverStaleSyncReplay = false;
+        let recoverIncompleteFinalization = false;
+        if (existing.knauf_asset_id) {
+          let asset;
+          try {
+            asset = await db.getAssetByAssetId(existing.knauf_asset_id);
+          } catch (indexingError) {
+            logger.warn(
+              `[/files] replay asset reload failed for ${metadata.file_id}: ${indexingError?.message}`,
+            );
+            return res.status(503).json({
+              error: 'indexing_status_unavailable',
+              file_id: metadata.file_id,
+            });
+          }
+          const {
+            shouldRecoverStaleSyncReplay,
+            shouldRecoverIncompleteFinalization,
+          } = require('~/server/services/Files/knauf/fileSearchAssetLifecycle');
+          recoverIncompleteFinalization = shouldRecoverIncompleteFinalization({
+            asset,
+            file: existing,
+          });
+          if (knaufReplayPending) {
+            const {
+              isAsyncAcceptedForUser,
+              isIndexingWorkerEnabled,
+            } = require('~/server/services/Files/knauf/asyncIndexingConfig');
+            recoverStaleSyncReplay = shouldRecoverStaleSyncReplay({
+              asset,
+              asyncAccepted: isAsyncAcceptedForUser(req.user),
+              workerEnabled: isIndexingWorkerEnabled(),
+            });
+          }
+        }
+        if (!recoverStaleSyncReplay && !recoverIncompleteFinalization) {
+          return res.status(knaufReplayPending ? 202 : 200).json({
+            message: knaufReplayPending
+              ? 'File accepted; indexing in progress'
+              : 'File already processed',
+            ...(projected ?? existing),
+            ...(existing.knauf_upload_batch_id ? { batch_id: existing.knauf_upload_batch_id } : {}),
+          });
+        }
+        if (recoverStaleSyncReplay || recoverIncompleteFinalization) {
+          // Server-only handoff. Agent-library uploads have no content dedup
+          // key, so processAgentFileUpload must reuse this exact physical asset
+          // for stale execution recovery or final metadata repair.
+          req.knaufRecoverAssetId = existing.knauf_asset_id;
+        }
+        logger.warn(`[/files] replay ${metadata.file_id} will re-enter lifecycle recovery`);
+      }
+      if (verdict.outcome === 'conflict') {
+        return res.status(409).json({
+          error: 'upload_idempotency_conflict',
+          reason: verdict.reason,
+          file_id: metadata.file_id,
+        });
+      }
+      if (verdict.outcome === 'indeterminate') {
+        // KK20-195 review F4 (re-review) — the stored row is hash-identified but
+        // the incoming bytes could not be hashed, so replay-vs-different-content
+        // is UNVERIFIABLE. Fail closed with a retryable 503 — never a byte-length
+        // guess that could replay a same-size different file onto the original.
+        logger.warn(
+          `[/files] upload replay indeterminate for ${metadata.file_id}: ${verdict.reason}`,
+        );
+        return res.status(503).json({
+          error: 'upload_idempotency_indeterminate',
+          reason: verdict.reason,
+          file_id: metadata.file_id,
+        });
+      }
+    }
+    // End [knauf]
 
     if (isAssistantsEndpoint(metadata.endpoint)) {
       return await processFileUpload({ req, res, metadata });

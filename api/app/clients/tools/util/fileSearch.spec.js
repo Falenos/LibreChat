@@ -4,13 +4,13 @@
 jest.mock('axios');
 jest.mock('@librechat/api', () => ({ generateShortLivedToken: jest.fn(() => 'jwt-token') }));
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { debug: jest.fn(), error: jest.fn(), warn: jest.fn() },
+  logger: { debug: jest.fn(), info: jest.fn(), error: jest.fn(), warn: jest.fn() },
 }));
 jest.mock('~/server/services/Files/permissions', () => ({ filterFilesByAgentAccess: jest.fn() }));
-jest.mock('~/models', () => ({ getFiles: jest.fn() }));
+jest.mock('~/models', () => ({ getFiles: jest.fn(), getAssetsByAssetIds: jest.fn() }));
 
 const axios = require('axios');
-const { createFileSearchTool } = require('./fileSearch');
+const { createFileSearchTool, primeFiles } = require('./fileSearch');
 
 describe('dual-backend file search', () => {
   const originalUrl = process.env.RAG_API_URL;
@@ -41,13 +41,27 @@ describe('dual-backend file search', () => {
       userId: 'u1',
       entity_id: 'agent-1',
       files: [
-        { file_id: 'reuse-1', filename: 'chat.pdf', knauf_asset_id: 'asset-1' },
-        { file_id: 'reuse-2', filename: 'chat-copy.pdf', knauf_asset_id: 'asset-1' },
+        {
+          file_id: 'reuse-1',
+          filename: 'chat.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
+        {
+          file_id: 'reuse-2',
+          filename: 'chat-copy.pdf',
+          knauf_asset_id: 'asset-1',
+          knauf_active_generation: 4,
+          knauf_vector_backend: 'pgvector',
+        },
         {
           file_id: 'agent-1',
           filename: 'knowledge.pdf',
           context: 'agents',
           fromAgent: true,
+          knauf_active_generation: 2,
+          knauf_vector_backend: 'azure_search',
         },
         { file_id: 'agent-like', filename: 'upload.pdf', context: 'agents' },
       ],
@@ -58,12 +72,24 @@ describe('dual-backend file search', () => {
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/query_multiple',
-      { query: 'hello', file_ids: ['agent-like', 'asset-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-like', 'asset-1'],
+        generations: { 'agent-like': 0, 'asset-1': 4 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
     expect(axios.post).toHaveBeenCalledWith(
       'http://rag.test/agent/query-multiple',
-      { query: 'hello', file_ids: ['agent-1'], k: 10, entity_id: 'agent-1' },
+      {
+        query: 'hello',
+        file_ids: ['agent-1'],
+        generations: { 'agent-1': 2 },
+        k: 10,
+        entity_id: 'agent-1',
+      },
       expect.any(Object),
     );
   });
@@ -356,6 +382,84 @@ describe('dual-backend file search', () => {
     expect(content).not.toContain('refine your query');
     expect(artifact).toBeUndefined();
     expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-195 WP3c — seam test: primeFiles drops files whose physical
+// asset is not queryable (no active generation, or delete-tombstoned) as
+// defense in depth behind the request-layer 409; legacy files without an
+// asset row pass through, and a status-read failure keeps upstream behavior.
+describe('primeFiles readiness filter (KK20-195 WP3c)', () => {
+  const { getFiles, getAssetsByAssetIds } = require('~/models');
+
+  const rows = [
+    { file_id: 'ready-1', filename: 'ready.pdf', knauf_asset_id: 'ready-1' },
+    { file_id: 'pending-1', filename: 'pending.pdf', knauf_asset_id: 'pending-1' },
+    { file_id: 'legacy-1', filename: 'legacy.pdf' }, // pre-FileAsset row
+  ];
+  const toolResources = {
+    file_search: { file_ids: rows.map((r) => r.file_id) },
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    getFiles.mockResolvedValue(rows);
+  });
+
+  test('drops non-ready assets, keeps ready assets and legacy rows', async () => {
+    getAssetsByAssetIds.mockResolvedValue([
+      {
+        asset_id: 'ready-1',
+        active_generation: 1,
+        vector_backend: 'pgvector',
+        delete_requested_at: null,
+      },
+      { asset_id: 'pending-1', active_generation: null, delete_requested_at: null },
+    ]);
+
+    const { files } = await primeFiles({ tool_resources: toolResources });
+
+    expect(getAssetsByAssetIds).toHaveBeenCalledWith(['ready-1', 'pending-1']);
+    expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'ready-1']);
+    expect(files.find((f) => f.file_id === 'ready-1')).toMatchObject({
+      knauf_active_generation: 1,
+      knauf_vector_backend: 'pgvector',
+    });
+    expect(files.find((f) => f.file_id === 'legacy-1')).toMatchObject({
+      knauf_active_generation: 0,
+    });
+  });
+
+  test('drops delete-tombstoned assets even with an active generation', async () => {
+    getAssetsByAssetIds.mockResolvedValue([
+      { asset_id: 'ready-1', active_generation: 1, delete_requested_at: new Date() },
+      { asset_id: 'pending-1', active_generation: 2, delete_requested_at: null },
+    ]);
+
+    const { files } = await primeFiles({ tool_resources: toolResources });
+
+    expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'pending-1']);
+  });
+
+  // KK20-195 review R5 — hydration fails CLOSED for asset-backed files.
+  test('a status-read failure drops ALL asset-backed files, keeps legacy rows', async () => {
+    getAssetsByAssetIds.mockRejectedValue(new Error('mongo down'));
+
+    const { files } = await primeFiles({ tool_resources: toolResources });
+
+    expect(files.map((f) => f.file_id)).toEqual(['legacy-1']);
+  });
+
+  test('a file whose asset is MISSING from the lookup is dropped (dangling pointer)', async () => {
+    getAssetsByAssetIds.mockResolvedValue([
+      { asset_id: 'ready-1', active_generation: 1, delete_requested_at: null },
+      // pending-1 absent — deleted or corrupt pointer
+    ]);
+
+    const { files } = await primeFiles({ tool_resources: toolResources });
+
+    expect(files.map((f) => f.file_id).sort()).toEqual(['legacy-1', 'ready-1']);
   });
 });
 // End [knauf]
