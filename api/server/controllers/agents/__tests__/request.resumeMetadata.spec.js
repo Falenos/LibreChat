@@ -269,6 +269,95 @@ describe('ResumableAgentController resume metadata', () => {
     );
   });
 
+  // [knauf] Reject accidental second roots while allowing an idempotent root retry.
+  it('rejects a new root for a conversation that already has a different root', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([
+      {
+        messageId: 'existing-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        isCreatedByUser: true,
+      },
+    ]);
+    const initializeClient = jest.fn();
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Accidental second root',
+        messageId: 'new-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        conversationId,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(mockGetMessages).toHaveBeenCalledWith(
+      { user: 'user-123', conversationId },
+      'messageId parentMessageId isCreatedByUser',
+      { limit: 1 },
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      code: 'conversation_root_conflict',
+      error: 'Conversation history changed. Reload the conversation and try again.',
+    });
+    expect(mockCheckAndIncrementPendingRequest).not.toHaveBeenCalled();
+    expect(mockGenerationJobManager.createJob).not.toHaveBeenCalled();
+    expect(initializeClient).not.toHaveBeenCalled();
+  });
+
+  it('allows retrying the existing root with the same message ID', async () => {
+    const conversationId = 'conversation-123';
+    mockGetMessages.mockResolvedValue([
+      {
+        messageId: 'existing-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        isCreatedByUser: true,
+      },
+    ]);
+    const initializeClient = jest.fn().mockRejectedValue(new Error('stop after root guard'));
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Retry existing root',
+        messageId: 'existing-root',
+        parentMessageId: '00000000-0000-0000-0000-000000000000',
+        conversationId,
+        endpointOption: {
+          endpoint: 'agents',
+          modelOptions: { model: 'gpt-3.5-turbo' },
+        },
+      },
+      config: {},
+    };
+    const res = {
+      headersSent: true,
+      json: jest.fn(),
+      status: jest.fn(() => res),
+    };
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(res.status).not.toHaveBeenCalledWith(409);
+    expect(mockCheckAndIncrementPendingRequest).toHaveBeenCalledWith('user-123');
+    expect(mockGenerationJobManager.createJob).toHaveBeenCalledWith(
+      conversationId,
+      'user-123',
+      conversationId,
+    );
+  });
+  // End [knauf]
+
   it('stores the in-flight turn before MCP initialization can emit OAuth', async () => {
     const conversationId = 'conversation-123';
     const initializeClient = jest.fn().mockRejectedValue(new Error('stop before tool loading'));

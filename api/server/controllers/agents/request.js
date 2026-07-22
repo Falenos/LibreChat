@@ -168,6 +168,47 @@ function rejectPreliminaryParentMessageId(res) {
   });
 }
 
+// [knauf] A populated conversation cannot accept a different ordinary root message.
+async function hasConversationRootConflict({
+  userId,
+  conversationId,
+  messageId,
+  parentMessageId,
+  isRegenerate,
+  isContinued,
+  editedContent,
+}) {
+  if (
+    !conversationId ||
+    conversationId === Constants.NEW_CONVO ||
+    parentMessageId !== Constants.NO_PARENT ||
+    isRegenerate ||
+    isContinued ||
+    editedContent != null
+  ) {
+    return false;
+  }
+
+  const [existingRoot] = await getMessages(
+    { user: userId, conversationId },
+    'messageId parentMessageId isCreatedByUser',
+    { limit: 1 },
+  );
+  if (!existingRoot) {
+    return false;
+  }
+
+  return existingRoot.messageId !== messageId || existingRoot.isCreatedByUser !== true;
+}
+
+function rejectConversationRootConflict(res) {
+  return res.status(409).json({
+    code: 'conversation_root_conflict',
+    error: 'Conversation history changed. Reload the conversation and try again.',
+  });
+}
+// End [knauf]
+
 /**
  * Resumable Agent Controller - Generation runs independently of HTTP connection.
  * Returns streamId immediately, client subscribes separately via SSE.
@@ -175,6 +216,7 @@ function rejectPreliminaryParentMessageId(res) {
 const ResumableAgentController = async (req, res, next, initializeClient, addTitle) => {
   const {
     text,
+    messageId,
     isRegenerate,
     endpointOption,
     conversationId: reqConversationId,
@@ -186,6 +228,22 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } = req.body;
 
   const userId = req.user.id;
+
+  // [knauf] Server backstop for a client that submitted before history hydration.
+  if (
+    await hasConversationRootConflict({
+      userId,
+      conversationId: reqConversationId,
+      messageId,
+      parentMessageId,
+      isRegenerate,
+      isContinued,
+      editedContent,
+    })
+  ) {
+    return rejectConversationRootConflict(res);
+  }
+  // End [knauf]
 
   if (
     await isUnpersistedPreliminaryParent({

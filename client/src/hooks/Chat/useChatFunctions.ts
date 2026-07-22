@@ -313,6 +313,21 @@ export default function useChatFunctions({
       return;
     }
 
+    // [knauf] Never infer a root for an existing chat before its history is hydrated.
+    if (
+      conversationId != null &&
+      conversationId !== Constants.NEW_CONVO &&
+      parentMessageId == null &&
+      !isRegenerate &&
+      !isContinued &&
+      !isEdited &&
+      queryClient.getQueryState([QueryKeys.messages, conversationId])?.status !== 'success'
+    ) {
+      logger.warn('[useChatFunctions] Refusing to submit before conversation history is loaded');
+      return false;
+    }
+    // End [knauf]
+
     if (isContinued && !latestMessage) {
       console.error('cannot continue AI message without latestMessage!');
       return;
@@ -389,10 +404,30 @@ export default function useChatFunctions({
 
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
-    const intermediateId = overrideUserMessageId ?? v4();
+    // [knauf] A start-failure retry replaces the failed optimistic turn in place.
+    const failedStartResponse =
+      parentMessageId == null &&
+      !isRegenerate &&
+      !isContinued &&
+      !isEdited &&
+      hasStreamStartFailed(latestMessage)
+        ? latestMessage
+        : null;
+    const failedStartUser = failedStartResponse
+      ? currentMessages.find(
+          (message) =>
+            message.messageId === failedStartResponse.parentMessageId &&
+            message.isCreatedByUser === true,
+        )
+      : undefined;
+    const isFailedStartRetry = failedStartUser != null;
+    const intermediateId = overrideUserMessageId ?? failedStartUser?.messageId ?? v4();
     if (parentMessageId == null) {
-      parentMessageId = getAppendParentMessageId({ latestMessage, currentMessages });
+      parentMessageId = isFailedStartRetry
+        ? (failedStartUser.parentMessageId ?? Constants.NO_PARENT)
+        : getAppendParentMessageId({ latestMessage, currentMessages });
     }
+    // End [knauf]
 
     logChatRequest({
       index,
@@ -524,6 +559,9 @@ export default function useChatFunctions({
 
     const responseMessageId =
       editedMessageId ??
+      // [knauf] Reuse the failed assistant placeholder ID with the failed user ID.
+      (isFailedStartRetry ? failedStartResponse?.messageId : null) ??
+      // End [knauf]
       (isRegenerate
         ? getPreliminaryRegenerateResponseMessageId(
             targetResponseMessage?.messageId ?? targetResponseMessageId,
@@ -606,13 +644,22 @@ export default function useChatFunctions({
       currentMessages = currentMessages.filter((msg) => msg.messageId !== responseMessageId);
     }
 
+    // [knauf] Replace, rather than duplicate, the failed optimistic turn.
+    const appendMessages = isFailedStartRetry
+      ? currentMessages.filter(
+          (message) =>
+            message.messageId !== failedStartUser.messageId &&
+            message.messageId !== failedStartResponse?.messageId,
+        )
+      : currentMessages;
     const submissionMessages = isRegenerate
       ? getRegenerateSubmissionMessages({
           messages: currentMessages,
           targetResponseMessage,
           initialResponseId: initialResponse.messageId,
         })
-      : currentMessages;
+      : appendMessages;
+    // End [knauf]
     const regenerateMessages = isRegenerate ? [...currentMessages] : undefined;
 
     logger.log('message_state', initialResponse);
