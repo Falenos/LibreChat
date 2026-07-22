@@ -70,6 +70,7 @@ Designs under discussion — not approved, not implemented.
 |---|---|
 | [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md) | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored) |
 | [proposals/pii-masking-and-anonymization.md](proposals/pii-masking-and-anonymization.md) | PII masking & data anonymization strategy (KK20-207) — data-classification, per-category handling matrix, LibreChat-OOTB verdict, engine options (Presidio / Azure AI Language), phased roadmap + follow-up tickets; includes an [interactive demo](proposals/assets/pii-masking-demo.html) |
+| [proposals/code-interpreter-backend-options.md](proposals/code-interpreter-backend-options.md) | Code Interpreter backend decision (KK20-108) — self-hosted ClickHouse sandbox vs Azure Container Apps dynamic sessions vs (retired) Azure OpenAI Assistants; the LibreChat Code API integration seam, the Tier-3 adapter ACA would need, a comparison matrix, and why artifacts isn't a backend choice |
 
 ## Future work
 
