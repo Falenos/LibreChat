@@ -1,0 +1,259 @@
+name: Deploy to Stage
+
+run-name: Deploy ${{ inputs.version || 'latest dev' }} to AGK stage
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy to stage (e.g. v0.130.0). Defaults to the current AGK dev GitOps tag.'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.repository }}-stage-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-stage:
+    name: Deploy to AGK stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_ACR_NAME: acragkhubnonprod001
+      AGK_DEV_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_STAGE_IMAGE_REPOSITORY: agentic-karl-stage/agentic-karl
+      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
+      AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
+      AGK_ARGOCD_APP: agentic-karl-stage-agentic-karl
+      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
+      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get release support secrets
+        run: |
+          set -euo pipefail
+          GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
+
+      - name: Determine version to deploy
+        id: version
+        run: |
+          set -euo pipefail
+
+          INPUT_VERSION="${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            git clone --depth 1 "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-dc-version
+            VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
+              "agk-dc-version/$AGK_DEV_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
+            rm -rf agk-dc-version
+          fi
+
+          if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$VERSION"; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          echo "Version to deploy to stage: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Stage deployment"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Source image | \`$AGK_ACR_NAME.azurecr.io/$AGK_DEV_IMAGE_REPOSITORY:$VERSION\` |"
+            echo "| Target image | \`$AGK_ACR_NAME.azurecr.io/$AGK_STAGE_IMAGE_REPOSITORY:$VERSION\` |"
+            echo "| ArgoCD app | \`$AGK_ARGOCD_APP\` on \`$AGK_ARGOCD_DOMAIN\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate source image exists in dev ACR
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          az acr repository show-tags \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --repository "$AGK_DEV_IMAGE_REPOSITORY" \
+            --query "[?@=='$VERSION']" \
+            -o tsv | grep -Fx "$VERSION"
+
+      - name: Import image into AGK stage ACR namespace
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          SOURCE_REGISTRY_ID=$(az acr show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --query id -o tsv)
+
+          az acr import \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --registry "$SOURCE_REGISTRY_ID" \
+            --source "$AGK_DEV_IMAGE_REPOSITORY:$VERSION" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
+            --force
+
+      - name: Verify stage image tag
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          az acr repository show-tags \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --repository "$AGK_STAGE_IMAGE_REPOSITORY" \
+            --query "[?@=='$VERSION']" \
+            -o tsv | grep -Fx "$VERSION"
+
+      - name: Update AGK stage deployment config values
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+          cd agk-deployment-configs
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git pull --ff-only origin main
+
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+
+          if git diff --quiet -- "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"; then
+            echo "AGK stage deployment config already points at $VERSION"
+            echo "| Stage deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          BRANCH="release/agk-stage-$VERSION"
+          git checkout -b "$BRANCH"
+          git add "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          git commit -m "Update agentic-karl stage to $VERSION"
+          git push --force origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main --head "$BRANCH" \
+              --title "Update agentic-karl stage to $VERSION" \
+              --body "Automated stage GitOps version bump from the agentic-karl deploy-stage pipeline (run ${{ github.run_id }}). Bumps \`$AGK_STAGE_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
+          fi
+          echo "Stage deployment config PR: $PR_URL"
+
+          gh pr merge "$PR_URL" --auto --squash --delete-branch \
+            || gh pr merge "$PR_URL" --squash --delete-branch \
+            || true
+
+          STATE=""
+          for attempt in {1..90}; do
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
+            echo "Attempt $attempt: PR state=$STATE"
+            if [ "$STATE" = "MERGED" ]; then break; fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "Stage deployment config PR was closed without merging"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "Stage deployment config PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled — check $PR_URL."
+            exit 1
+          fi
+
+          {
+            echo "| Stage deployment config PR | $PR_URL (merged) |"
+            echo "| Stage deployment config file | \`$AGK_CONFIG_REPOSITORY/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refresh AGK stage ArgoCD application
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          echo "Waiting for AGK ArgoCD app $AGK_ARGOCD_APP to report Synced/Healthy on image $EXPECTED_IMAGE"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          curl -fsS \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" \
+            -H "Accept: application/json" \
+            > /dev/null 2>&1 || true
+
+          for attempt in {1..60}; do
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" 2>/dev/null || true)
+
+            if [ -z "$APP_JSON" ]; then
+              echo "Attempt $attempt: API blip — retrying"
+              sleep 10
+              continue
+            fi
+
+            SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
+            HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
+            CURRENT_IMAGES=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | tr '\n' ',' | sed 's/,$//')
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | grep -F "$EXPECTED_IMAGE" || true)
+
+            echo "Attempt $attempt: sync=$SYNC_STATUS health=$HEALTH_STATUS expected_image=${IMAGE_MATCH:-missing} current_images=${CURRENT_IMAGES:-none}"
+
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              {
+                echo "| Stage ArgoCD sync | \`$SYNC_STATUS\` |"
+                echo "| Stage ArgoCD health | \`$HEALTH_STATUS\` |"
+                echo "| Stage ArgoCD images | \`${CURRENT_IMAGES:-none}\` |"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" \
+              > /dev/null 2>&1 || true
+            sleep 10
+          done
+
+          echo "AGK stage ArgoCD did not report $VERSION as Synced/Healthy in time"
+          {
+            echo "| Stage ArgoCD sync | \`${SYNC_STATUS:-unknown}\` |"
+            echo "| Stage ArgoCD health | \`${HEALTH_STATUS:-unknown}\` |"
+            echo "| Stage ArgoCD images | \`${CURRENT_IMAGES:-none}\` |"
+            echo "| Failure | AGK stage ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
