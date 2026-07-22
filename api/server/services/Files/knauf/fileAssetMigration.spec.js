@@ -86,6 +86,36 @@ describe('migrateFileAssetsBatch (KK20-195 WP2)', () => {
     expect(asset.dedup_key).toBe(buildDedupKey({ user: String(user), contentHash: 'h1' }));
   });
 
+  test('preserves distinct assets from a legacy double-embed without duplicating the dedup key', async () => {
+    const user = new mongoose.Types.ObjectId('64a000000000000000000001');
+    await seedFile({
+      user,
+      file_id: 'duplicate-a',
+      knauf_asset_id: 'duplicate-a',
+      knauf_content_hash: 'same-hash',
+      context: 'message_attachment',
+    });
+    await seedFile({
+      user,
+      file_id: 'duplicate-b',
+      knauf_asset_id: 'duplicate-b',
+      knauf_content_hash: 'same-hash',
+      context: 'message_attachment',
+    });
+
+    const result = await migrateFileAssetsBatch({ mongoose, legacyProfile: 'legacy-v0' });
+
+    expect(result.assetsCreated).toBe(2);
+    const assets = await KnaufFileAsset.find({}).sort({ asset_id: 1 }).lean();
+    expect(assets.map(({ asset_id, dedup_key }) => ({ asset_id, dedup_key }))).toEqual([
+      {
+        asset_id: 'duplicate-a',
+        dedup_key: buildDedupKey({ user: String(user), contentHash: 'same-hash' }),
+      },
+      { asset_id: 'duplicate-b', dedup_key: undefined },
+    ]);
+  });
+
   test('agent rows: asset_id = file_id, agent scope resolved via tool_resources, pointer backfilled', async () => {
     await Agent.create({
       id: 'agent-77',

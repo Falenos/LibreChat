@@ -157,11 +157,30 @@ async function migrateFileAssetsBatch({
     }
 
     if (!dryRun) {
-      const result = await KnaufFileAsset.updateOne(
-        { asset_id: assetId },
-        { $setOnInsert: assetDoc },
-        { upsert: true },
-      );
+      let result;
+      try {
+        result = await KnaufFileAsset.updateOne(
+          { asset_id: assetId },
+          { $setOnInsert: assetDoc },
+          { upsert: true },
+        );
+      } catch (error) {
+        const isDedupCollision =
+          error?.code === 11000 &&
+          (error?.keyPattern?.dedup_key === 1 ||
+            error?.message?.includes('tenantId_1_dedup_key_1'));
+        if (!assetDoc.dedup_key || !isDedupCollision) {
+          throw error;
+        }
+        // A legacy concurrent-upload race can leave two valid physical assets
+        // for one hash. Preserve both, but only the first owns the dedup slot.
+        delete assetDoc.dedup_key;
+        result = await KnaufFileAsset.updateOne(
+          { asset_id: assetId },
+          { $setOnInsert: assetDoc },
+          { upsert: true },
+        );
+      }
       if (result.upsertedCount === 1) {
         counts.assetsCreated += 1;
       } else {
