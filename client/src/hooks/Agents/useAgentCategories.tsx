@@ -8,6 +8,9 @@ import { EMPTY_AGENT_CATEGORY } from '~/constants/agentCategories';
 export interface ProcessedAgentCategory {
   label: string; // Translated label
   value: string; // Category value
+  // [knauf] Preserve server ownership metadata for admin-only group deletion.
+  custom?: boolean;
+  // End [knauf]
   className?: string;
   icon?: string;
 }
@@ -34,6 +37,9 @@ const useAgentCategories = () => {
       .map((category) => ({
         label: category.label || category.value,
         value: category.value,
+        // [knauf] Keep custom groups distinguishable after display normalization.
+        custom: category.custom,
+        // End [knauf]
         className: 'w-full',
       }));
   }, [categoriesQuery.data]);

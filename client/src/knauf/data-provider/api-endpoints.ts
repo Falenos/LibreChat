@@ -10,6 +10,9 @@ import { apiBaseUrl } from 'librechat-data-provider';
 const knaufBase = `${apiBaseUrl()}/api/knauf`;
 
 export const autogeneratePrompt = () => `${knaufBase}/autogenerate-prompt`;
+export const agentCategories = () => `${knaufBase}/agent-categories`;
+export const agentCategory = (value: string) =>
+  `${knaufBase}/agent-categories/${encodeURIComponent(value)}`;
 export const conversationCosts = (conversationId: string) =>
   `${knaufBase}/costs/conversations/${encodeURIComponent(conversationId)}`;
 export const promptTemplates = () => `${knaufBase}/prompt-templates`;

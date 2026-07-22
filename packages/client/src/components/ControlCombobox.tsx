@@ -1,7 +1,9 @@
 import { useMemo, useState, useRef, memo, useEffect, MemoExoticComponent } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { matchSorter } from 'match-sorter';
-import { Search, ChevronDown } from 'lucide-react';
+// [knauf] Plus icon for the persistent custom-group creation action.
+import { Search, ChevronDown, Plus } from 'lucide-react';
+// End [knauf]
 import { SelectRenderer } from '@ariakit/react-core/select/select-renderer';
 import type { OptionWithIcon } from '~/common';
 import './AnimatePopover.css';
@@ -26,6 +28,12 @@ interface ControlComboboxProps {
   iconSide?: 'left' | 'right';
   selectId?: string;
   placement?: Ariakit.SelectStoreProps['placement'];
+  // [knauf] Optional searched-value action for creatable selectors.
+  createPromptLabel?: string;
+  createInputPlaceholder?: string;
+  createSaveLabel?: string;
+  getCreateLabel?: (value: string) => string;
+  // End [knauf]
 }
 
 const ROW_HEIGHT = 36;
@@ -48,13 +56,26 @@ function ControlCombobox({
   iconSide = 'left',
   selectId,
   placement,
+  // [knauf] Read the optional creatable-selector label callback.
+  createPromptLabel,
+  createInputPlaceholder,
+  createSaveLabel,
+  getCreateLabel,
+  // End [knauf]
 }: ControlComboboxProps): JSX.Element {
   const [searchValue, setSearchValue] = useState('');
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // [knauf] Inline custom-group form state and focus target.
+  const [isCreating, setIsCreating] = useState(false);
+  const [createValue, setCreateValue] = useState('');
+  const createInputRef = useRef<HTMLInputElement>(null);
+  // End [knauf]
   const [buttonWidth, setButtonWidth] = useState<number | null>(null);
 
   const getItem = (option: OptionWithIcon) => ({
-    id: `item-${option.value}`,
+    // [knauf] Custom group labels may contain spaces or punctuation; keep DOM ids valid.
+    id: `item-${encodeURIComponent(String(option.value ?? ''))}`,
+    // End [knauf]
     value: option.value as string | undefined,
     label: option.label,
     icon: option.icon,
@@ -75,13 +96,45 @@ function ControlCombobox({
     placement,
   });
 
+  // [knauf] Persist the inline form value through the selector's existing create path.
+  useEffect(() => {
+    if (isCreating) {
+      createInputRef.current?.focus();
+    }
+  }, [isCreating]);
+
+  const saveCreateValue = () => {
+    const value = createValue.trim();
+    if (!value) {
+      return;
+    }
+    setValue(value);
+    select.hide();
+    setIsCreating(false);
+    setCreateValue('');
+  };
+  // End [knauf]
+
   const matches = useMemo(() => {
     const filteredItems = matchSorter(items, searchValue, {
       keys: ['value', 'label'],
       baseSort: (a, b) => (a.index < b.index ? -1 : 1),
     });
+
+    // [knauf] Offer the current search as a new value when no exact option exists.
+    const createValue = searchValue.trim();
+    const normalizedCreateValue = createValue.toLocaleLowerCase('en');
+    const hasExactItem = items.some(
+      (item) =>
+        String(item.value ?? '').toLocaleLowerCase('en') === normalizedCreateValue ||
+        (item.label ?? '').toLocaleLowerCase('en') === normalizedCreateValue,
+    );
+    if (getCreateLabel && createValue && !hasExactItem) {
+      filteredItems.push({ value: createValue, label: getCreateLabel(createValue) });
+    }
     return filteredItems.map(getItem);
-  }, [searchValue, items]);
+  }, [getCreateLabel, searchValue, items]);
+  // End [knauf]
 
   useEffect(() => {
     const button = buttonRef.current;
@@ -200,6 +253,48 @@ function ControlCombobox({
             </SelectRenderer>
           </Ariakit.ComboboxList>
         </div>
+        {/* [knauf] Keep custom-group creation discoverable before users start typing. */}
+        {createPromptLabel && createInputPlaceholder && createSaveLabel && !searchValue.trim() && (
+          <div className="border-t border-border-light p-1.5">
+            {isCreating ? (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={createInputRef}
+                  type="text"
+                  aria-label={createInputPlaceholder}
+                  placeholder={createInputPlaceholder}
+                  value={createValue}
+                  onChange={(event) => setCreateValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      saveCreateValue();
+                    }
+                  }}
+                  className="h-8 min-w-0 flex-1 rounded-md border border-border-light bg-transparent px-2 text-sm text-text-primary focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={!createValue.trim()}
+                  onClick={saveCreateValue}
+                  className="h-8 rounded-md bg-primary px-3 text-sm text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {createSaveLabel}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsCreating(true)}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-text-primary hover:bg-surface-tertiary"
+              >
+                <Plus aria-hidden="true" className="h-4 w-4" />
+                <span>{createPromptLabel}</span>
+              </button>
+            )}
+          </div>
+        )}
+        {/* End [knauf] */}
       </Ariakit.SelectPopover>
     </div>
   );
