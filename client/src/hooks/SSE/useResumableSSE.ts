@@ -49,13 +49,18 @@ type ChatHelpers = Pick<
   'setMessages' | 'getMessages' | 'setConversation' | 'setIsSubmitting' | 'newConversation'
 >;
 
-const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResData =>
-  ({
-    text: errorData
-      ? JSON.stringify(errorData)
-      : 'Error connecting to server, try refreshing the page.',
+// [knauf] surface structured stream-start errors as readable messages instead of raw JSON
+const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResData => {
+  let text = 'Error connecting to server, try refreshing the page.';
+  if (errorData) {
+    text = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData);
+  }
+  return {
+    text,
     metadata: markStreamStartFailedMetadata(),
-  }) as unknown as TResData;
+  } as unknown as TResData;
+};
+// End [knauf]
 
 const MAX_RETRIES = 5;
 const START_GENERATION_NETWORK_RETRIES = 3;

@@ -523,6 +523,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-provider/specs/create-payload.knauf.spec.ts` | `createPayload` edit transport regression | 1–28 | Proves an agent-chat edit retains `isEdited: true` in the HTTP payload | Self | NO-TICKET |
 | `api/server/controllers/agents/request.js` | conversation root/parent conflict guards in `ResumableAgentController` | 171–260, 266–324 | Rejects accidental second roots, missing parents, and stale-parent sibling sends before job creation while allowing same-ID retries and explicit edit/regenerate/continue flows | `api/server/controllers/agents/__tests__/request.resumeMetadata.spec.js` | NO-TICKET |
 | `api/server/controllers/agents/__tests__/request.resumeMetadata.spec.js` | linear-history conflict and retry cases | 179–562 | Proves exact-root lookup, explicit root edits, stale-child rejection, missing-parent rejection, idempotent child retry, and preliminary-parent ordering | Self | NO-TICKET |
+| `client/src/components/Prompts/buttons/CreatePromptButton.tsx` | `CreatePromptButton` | 13–42 | Keeps the prompt-create control discoverable but non-actionable when role policy denies creation, without weakening server authorization | `client/src/knauf/components/Prompts/CreatePromptButton.knauf.spec.tsx` | NO-TICKET |
+| `client/src/hooks/SSE/useResumableSSE.ts` | `getStreamStartFailureData` | 52–63 | Renders a structured server error as its readable message while retaining JSON fallback for unknown payloads | `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | NO-TICKET |
+| `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | structured stream-start error regression | 1009–1038 | Proves a linear-history conflict reaches the user as actionable text rather than serialized response JSON | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -758,6 +761,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/indexingReconciler.spec.js` | Subject under test; mongodb-memory-server raw lock collection plus real File/FileAsset models | Low — proves one winner across five replicas, expiry takeover, losing-replica skip, and bounded legacy-alert output without losing counts | Self | KK20-195 |
 | `api/server/services/Files/knauf/fileAssetMigration.js` | `mongoose.models.{File,KnaufFileAsset}` via injected mongoose | Medium — preserves valid legacy double-embed assets while assigning the unique future dedup slot to only one physical asset | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | KK20-195 |
 | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | Subject under test; real FileAsset unique index from `@librechat/data-schemas`; mongodb-memory-server | Low — reproduces the production dedup-index collision and proves both physical assets survive | Self | KK20-195 |
+| `client/src/knauf/components/Prompts/CreatePromptButton.knauf.spec.tsx` | `~/components/Prompts/buttons/CreatePromptButton`; React Testing Library and `MemoryRouter` | Low — test-only; mocks access and localization hooks to pin restricted and authorized render contracts | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

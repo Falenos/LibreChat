@@ -318,7 +318,10 @@ describe('useResumableSSE - 404 error path', () => {
 
   // [knauf] KK20-227 — temporary drafts are tab-scoped in sessionStorage.
   it('clears both session drafts for new-convo when conversationId is absent', async () => {
-    sessionStorage.setItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`, 'unsent message');
+    sessionStorage.setItem(
+      `${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`,
+      'unsent message',
+    );
     sessionStorage.setItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`, '[]');
 
     const submission = buildSubmission({ conversation: {} });
@@ -335,7 +338,9 @@ describe('useResumableSSE - 404 error path', () => {
       sse._emit('error', { responseCode: 404 });
     });
 
-    expect(sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`)).toBeNull();
+    expect(
+      sessionStorage.getItem(`${LocalStorageKeys.TEXT_DRAFT}${Constants.NEW_CONVO}`),
+    ).toBeNull();
     expect(
       sessionStorage.getItem(`${LocalStorageKeys.FILES_DRAFT}${Constants.NEW_CONVO}`),
     ).toBeNull();
@@ -1000,6 +1005,37 @@ describe('useResumableSSE - 404 error path', () => {
     expect(mockSetShowStopButton).toHaveBeenCalledWith(false);
     unmount();
   });
+
+  // [knauf] keep linear-history conflicts actionable without exposing response JSON
+  it('shows a structured server error without exposing the raw JSON payload', async () => {
+    (request.post as jest.Mock).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          code: 'conversation_history_conflict',
+          error: 'Conversation history changed. Reload the conversation and try again.',
+        },
+      },
+    });
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await waitFor(() => {
+      expect(mockErrorHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            text: 'Conversation history changed. Reload the conversation and try again.',
+            metadata: { streamStartFailed: true },
+          },
+          submission,
+        }),
+      );
+    });
+    unmount();
+  });
+  // End [knauf]
 
   it('replays title events from resume state sync', async () => {
     const submission = buildSubmission();
