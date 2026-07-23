@@ -7,7 +7,9 @@ description: >-
   deciding whether content belongs in an artifact or in plain chat markdown.
   Covers picking the right artifact type, the fixed React library allowlist and
   the top preview-breaking mistakes, embedding data instead of fetching it, and
-  iterating on an existing artifact instead of spawning duplicates.
+  iterating on an existing artifact instead of spawning duplicates. Also carries
+  the Knauf brand palette and ready-to-adapt templates for reports, slide decks,
+  and dashboards under references/.
 argument-hint: "[what to build or change]"
 user-invocable: true
 version: "1.0.0"
@@ -69,6 +71,38 @@ Tailwind note: utilities are auto-injected only for `application/vnd.react` prev
 - Ensure text/background contrast; never encode chart meaning by color alone — add labels or a legend.
 - The preview follows the user's light/dark preference — don't hardcode near-white text/backgrounds that only work in one mode.
 - Default to a clean neutral layout: page padding (`p-6`), constrained width (`max-w-4xl mx-auto`), a consistent spacing scale. shadcn/ui `Card`, `Tabs`, `Table`, `Badge` give a professional look for almost no effort.
+
+## Knauf brand theme
+
+Brand deliverables (reports, decks, dashboards) should look like Knauf. Use this
+palette — it is the official brand blue family plus a chart palette validated for
+color-blind separation and contrast:
+
+- **Brand** — Cerulean `#0099DE` (primary), Regal Blue `#003778` (headings / structural bars), Shakespeare `#55B7DA` (soft accent / fills).
+- **Ink** — `#0F1A2A` body, `#5B6770` muted/captions. **Surface** — `#FFFFFF` card, `#F4F8FB` page tint, `#DCE6EE` border.
+- **Charts (categorical, fixed order)** — `#0099DE`, `#E86D1F`, `#009E86`, `#7A4FB5`, `#D64550`, `#C98A00`, `#C43A8B`.
+- **Sequential (magnitude, cerulean ramp)** — `#E5F3FB → #B3DCF3 → #66BCE8 → #0099DE → #0077B0 → #00527A`.
+- **Status (reserved — never a data series)** — success `#1F883D`, warning `#C98A00`, serious `#E8792A`, critical `#D64550`.
+
+**Applying it under the artifact constraints:** Tailwind here has **no arbitrary
+values**, so you cannot write `bg-[#0099DE]`. Put the palette in a `const KNAUF = {…}`
+object and apply exact colors via **inline `style={{}}`** and **recharts
+`fill`/`stroke` props**; use Tailwind classes only for layout/spacing/type scale.
+The Knauf logo is an image and images are blocked — render the brand as a **text
+wordmark** ("KARL" bold + "by Knauf" muted) inside a colored top bar, never an `<img>`.
+Charts keep the categorical order fixed and always carry a legend or direct labels.
+
+## Situation templates — read before building a branded deliverable
+
+Copy-paste, constraint-checked skeletons live in this skill's `references/`. Load
+the matching one with the `read_file` tool before you build:
+
+- `skills/karl-artifacts/references/knauf-theme.md` — the full `KNAUF` token object + how to apply it (start here).
+- `skills/karl-artifacts/references/report.md` — data/analysis report (brand header, exec summary, KPI tiles, chart, findings table).
+- `skills/karl-artifacts/references/slides.md` — navigable slide deck (title / section / bullets / chart layouts).
+- `skills/karl-artifacts/references/dashboard.md` — KPI dashboard (filter row, stat tiles, trend/breakdown/share charts, light+dark).
+
+Adapt the skeleton to the user's data — don't ship the sample data verbatim.
 
 ## When NOT to use an artifact
 
