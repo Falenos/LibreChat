@@ -1,9 +1,9 @@
 /**
- * Knauf seam test — agent FileSearch uploads use the configured agents cap.
+ * Knauf seam test — agent FileSearch uploads use the configured agents policy.
  *
  * Pins the `[knauf]` block inside `client/src/hooks/Files/useFileHandling.ts`:
  * agent-scoped `file_search` uploads pass validation with the agents endpoint
- * limit from config instead of overriding it in the client.
+ * limits from config instead of overriding them in the client.
  */
 import { act, renderHook } from '@testing-library/react';
 import { EModelEndpoint, EToolResources } from 'librechat-data-provider';
@@ -47,9 +47,9 @@ jest.mock('~/data-provider', () => ({
     data: {
       endpoints: {
         agents: {
-          fileLimit: 35,
+          fileLimit: 0,
           fileSizeLimit: 50,
-          totalSizeLimit: 100,
+          totalSizeLimit: 0,
         },
       },
     },
@@ -108,12 +108,12 @@ jest.mock('~/utils', () => ({
 
 const mockValidateFiles = jest.requireMock('~/utils').validateFiles as jest.Mock;
 
-describe('useFileHandling — Knauf FileSearch configured count limit', () => {
+describe('useFileHandling — Knauf FileSearch configured upload policy', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  async function runValidation(toolResource: EToolResources) {
+  async function runValidation(toolResource: EToolResources, fileCount = 1) {
     const { useFileHandlingNoChatContext } = await import('~/hooks/Files/useFileHandling');
     const files = new Map();
     const setFiles = jest.fn();
@@ -136,26 +136,33 @@ describe('useFileHandling — Knauf FileSearch configured count limit', () => {
     );
 
     await act(async () => {
-      await result.current.handleFiles([
-        new File(['hello'], 'knowledge.txt', { type: 'text/plain' }),
-      ]);
+      await result.current.handleFiles(
+        Array.from(
+          { length: fileCount },
+          (_, index) => new File(['hello'], `knowledge-${index}.txt`, { type: 'text/plain' }),
+        ),
+      );
     });
 
-    return mockValidateFiles.mock.calls[0][0].endpointFileConfig;
+    return mockValidateFiles.mock.calls[0][0];
   }
 
-  it('uses the agents file count limit for agent FileSearch uploads', async () => {
-    const endpointFileConfig = await runValidation(EToolResources.file_search);
+  it('keeps agent FileSearch count and aggregate limits disabled for large batches', async () => {
+    const validation = await runValidation(EToolResources.file_search, 12);
+    const { endpointFileConfig, fileList } = validation;
 
-    expect(endpointFileConfig.fileLimit).toBe(35);
+    expect(endpointFileConfig.fileLimit).toBe(0);
+    expect(endpointFileConfig.totalSizeLimit).toBe(0);
     expect(endpointFileConfig.disabled).toBe(false);
     expect(endpointFileConfig.fileSizeLimit).toBeGreaterThan(0);
     expect(endpointFileConfig.supportedMimeTypes.length).toBeGreaterThan(0);
+    expect(fileList).toHaveLength(12);
   });
 
-  it('keeps the file count limit for non-FileSearch agent uploads', async () => {
-    const endpointFileConfig = await runValidation(EToolResources.context);
+  it('keeps the same unlimited count policy for non-FileSearch agent uploads', async () => {
+    const { endpointFileConfig } = await runValidation(EToolResources.context);
 
-    expect(endpointFileConfig.fileLimit).toBe(35);
+    expect(endpointFileConfig.fileLimit).toBe(0);
+    expect(endpointFileConfig.totalSizeLimit).toBe(0);
   });
 });

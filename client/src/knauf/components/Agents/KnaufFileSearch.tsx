@@ -116,7 +116,7 @@ function KnaufFileSearch({
 
   const { data: startupConfig } = useGetStartupConfig();
   // [knauf] Agent knowledge uploads always follow the AGENTS upload policy (allow-list
-  // + per-category caps + 20-file / 100 MB limits), independent of the agent's model
+  // + per-category caps; count and aggregate limits are disabled), independent of the agent's model
   // provider. Upstream `useAgentFileConfig` resolves the file config from the agent's
   // PROVIDER endpoint (LibreChat #12117), which for a Knauf Azure-backed agent yields
   // the CHAT policy (5 files / 50 MB) — wrong for agent knowledge — and skips the Knauf

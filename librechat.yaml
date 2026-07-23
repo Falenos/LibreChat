@@ -426,7 +426,7 @@ fileConfig:
     # tighter PER-CATEGORY caps — documents 25 / data 50 / images 20 MB — are
     # enforced on top of it by `knaufCategorySizeLimit` in
     # packages/data-provider/src/file-config.ts (client validateFiles + server
-    # filterFile). `totalSizeLimit` caps a single multi-file send (50 MB chat;
+    # filterFile). `totalSizeLimit` caps a single multi-file send (100 MB chat;
     # 0 disables the aggregate agent cap); `fileLimit` caps the file count per
     # send (5 chat; 0 means unlimited for agents).
     azureOpenAI:                        # chat composer (default Karl spec)
@@ -440,7 +440,7 @@ fileConfig:
         - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
       fileLimit: 5
       fileSizeLimit: 50
-      totalSizeLimit: 50
+      totalSizeLimit: 100
     agents:                             # agent + chat-time File Search
       supportedMimeTypes: *knauf_allowed_mime
       fileLimit: 0

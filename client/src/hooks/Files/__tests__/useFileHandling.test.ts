@@ -162,8 +162,8 @@ describe('useFileHandling', () => {
 
   const loadHook = async () => (await import('../useFileHandling')).default;
 
-  // [knauf] KK20-227 — reserve all slots before asynchronous upload work so
-  // overlapping picker/paste/drop actions cannot collectively exceed the cap.
+  // [knauf] Reserve all slots before asynchronous upload work and verify partial
+  // acceptance for count and aggregate-size limits. KK20-227 / NO-TICKET.
   describe('overlapping file-limit enforcement', () => {
     beforeEach(() => {
       mockFileConfig = { endpoints: { default: { fileLimit: 5 } } };
@@ -216,6 +216,38 @@ describe('useFileHandling', () => {
 
       expect(mockAddFile).not.toHaveBeenCalled();
       expect(mockShowToast).not.toHaveBeenCalled();
+    });
+
+    it('uploads files that fit the aggregate limit and reports the skipped remainder', async () => {
+      const mb = 1024 * 1024;
+      mockFileConfig = {
+        endpoints: { default: { fileLimit: 5, totalSizeLimit: 100 * mb } },
+      };
+      const files = ['first.xlsx', 'second.xlsx', 'third.xlsx'].map((name) => {
+        const file = new File(['x'], name, {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        });
+        Object.defineProperty(file, 'size', { value: 40 * mb });
+        return file;
+      });
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+
+      await act(async () => {
+        await result.current.handleFiles(files);
+      });
+
+      expect(mockAddFile).toHaveBeenCalledTimes(2);
+      expect(mockLocalize).toHaveBeenCalledWith('com_knauf_total_size_partial', {
+        0: '2',
+        1: '1',
+        2: '100',
+      });
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'com_knauf_total_size_partial',
+        status: 'warning',
+        duration: 10_000,
+      });
     });
   });
   // End [knauf]

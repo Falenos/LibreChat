@@ -8,6 +8,7 @@ import {
   QueryKeys,
   Constants,
   EToolResources,
+  megabyte,
   inferMimeType,
   mergeFileConfig,
   isAssistantsEndpoint,
@@ -140,6 +141,30 @@ export function limitIncomingFiles(
     accepted: fileList.slice(0, available),
     rejected: Math.max(fileList.length - available, 0),
   };
+}
+// End [knauf]
+
+// [knauf] Accept files that fit the aggregate message limit and report the rest.
+// This keeps a large selection useful instead of rejecting the entire batch. NO-TICKET.
+const KNAUF_PARTIAL_LIMIT_TOAST_MS = 10_000;
+export function limitIncomingFilesByTotalSize(
+  fileList: File[],
+  currentTotalSize: number,
+  totalSizeLimit?: number,
+): { accepted: File[]; rejected: number } {
+  if (!totalSizeLimit) {
+    return { accepted: fileList, rejected: 0 };
+  }
+  const accepted: File[] = [];
+  let totalSize = currentTotalSize;
+  for (const file of fileList) {
+    if (totalSize + file.size > totalSizeLimit) {
+      continue;
+    }
+    accepted.push(file);
+    totalSize += file.size;
+  }
+  return { accepted, rejected: fileList.length - accepted.length };
 }
 // End [knauf]
 
@@ -550,8 +575,36 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               2: String(endpointFileConfig.fileLimit),
             }),
             status: 'warning',
+            duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
           });
         }
+        setFilesLoading(false);
+        return;
+      }
+      // End [knauf]
+
+      // [knauf] Keep files that fit the aggregate message limit and surface an
+      // exact, long-lived partial-acceptance warning for the rest. NO-TICKET.
+      const currentTotalSize = Array.from(files.values()).reduce(
+        (total, file) => total + (file.size ?? 0),
+        0,
+      );
+      const sizeLimitedFiles = limitIncomingFilesByTotalSize(
+        fileList,
+        currentTotalSize,
+        endpointFileConfig.totalSizeLimit,
+      );
+      fileList = sizeLimitedFiles.accepted;
+      if (fileList.length === 0) {
+        showToast({
+          message: localize('com_knauf_total_size_partial', {
+            0: '0',
+            1: String(sizeLimitedFiles.rejected),
+            2: String((endpointFileConfig.totalSizeLimit ?? 0) / megabyte),
+          }),
+          status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
+        });
         setFilesLoading(false);
         return;
       }
@@ -578,8 +631,23 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
             2: String(endpointFileConfig.fileLimit),
           }),
           status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
         });
       }
+      // [knauf] Report aggregate-size overflow only after the retained files
+      // pass all other validation, so the toast never claims invalid files were added. NO-TICKET.
+      if (filesAreValid && sizeLimitedFiles.rejected > 0) {
+        showToast({
+          message: localize('com_knauf_total_size_partial', {
+            0: String(fileList.length),
+            1: String(sizeLimitedFiles.rejected),
+            2: String((endpointFileConfig.totalSizeLimit ?? 0) / megabyte),
+          }),
+          status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
+        });
+      }
+      // End [knauf]
     } catch (error) {
       console.error('file validation error', error);
       setError('com_error_files_validation');
