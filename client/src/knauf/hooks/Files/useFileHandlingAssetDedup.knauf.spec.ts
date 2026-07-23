@@ -7,7 +7,11 @@
  * file Map so an identical re-attachment appears — and sends — only once. This
  * spec fails if that collapse breaks or if knauf_asset_id stops being honoured.
  */
-import { dedupeFilesByAsset, limitIncomingFiles } from '~/hooks/Files/useFileHandling';
+import {
+  dedupeFilesByAsset,
+  limitIncomingFiles,
+  limitIncomingFilesByTotalSize,
+} from '~/hooks/Files/useFileHandling';
 import type { ExtendedFile } from '~/common';
 
 const mk = (file_id: string, knauf_asset_id?: string): ExtendedFile =>
@@ -65,5 +69,45 @@ describe('limitIncomingFiles (KK20-227)', () => {
 
   it('rejects all incoming files when the message is already at the limit', () => {
     expect(limitIncomingFiles(files, 5, 5)).toEqual({ accepted: [], rejected: 3 });
+  });
+});
+
+describe('limitIncomingFilesByTotalSize', () => {
+  const mb = 1024 * 1024;
+  const sizedFile = (name: string, size: number) => {
+    const file = new File(['x'], name);
+    Object.defineProperty(file, 'size', { value: size });
+    return file;
+  };
+
+  it('keeps considering smaller files after one file does not fit', () => {
+    const files = [
+      sizedFile('60.pdf', 60 * mb),
+      sizedFile('50.pdf', 50 * mb),
+      sizedFile('40.pdf', 40 * mb),
+    ];
+
+    expect(limitIncomingFilesByTotalSize(files, 0, 100 * mb)).toEqual({
+      accepted: [files[0], files[2]],
+      rejected: 1,
+    });
+  });
+
+  it('includes a file that reaches the aggregate limit exactly', () => {
+    const files = [sizedFile('20.pdf', 20 * mb), sizedFile('10.pdf', 10 * mb)];
+
+    expect(limitIncomingFilesByTotalSize(files, 90 * mb, 100 * mb)).toEqual({
+      accepted: [files[1]],
+      rejected: 1,
+    });
+  });
+
+  it('accepts every file when the aggregate limit is disabled', () => {
+    const files = [sizedFile('a.pdf', 60 * mb), sizedFile('b.pdf', 50 * mb)];
+
+    expect(limitIncomingFilesByTotalSize(files, 0, 0)).toEqual({
+      accepted: files,
+      rejected: 0,
+    });
   });
 });

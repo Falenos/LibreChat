@@ -509,6 +509,7 @@
   "com_knauf_prompt_undo_revert": "Undo — revert to previous version",
 
   "com_knauf_terms_and_privacy": "Terms and privacy",
+  "com_knauf_total_size_partial": "Added {{0}} file(s). {{1}} file(s) were not added because attachments in one message are limited to {{2}} MB.",
   "com_knauf_upload_formats_cap": "up to {{mb}} MB",
   "com_knauf_upload_formats_data_items": "Excel (.xlsx) · CSV (.csv)",
   "com_knauf_upload_formats_data_label": "Spreadsheets & data",
@@ -522,7 +523,7 @@
   "com_knauf_upload_formats_legacy_ppt": ".ppt → open in PowerPoint → File → Save As → PowerPoint Presentation (.pptx)",
   "com_knauf_upload_formats_legacy_title": "Legacy Office files aren't supported",
   "com_knauf_upload_formats_legacy_xls": ".xls → open in Excel → File → Save As → Excel Workbook (.xlsx)",
-  "com_knauf_upload_formats_limits": "Up to 5 files per message",
+  "com_knauf_upload_formats_limits": "Up to 5 files and 100 MB per message",
   "com_knauf_upload_formats_title": "Supported file types",
   "com_nav_2fa": "Two-Factor Authentication (2FA)",
   "com_nav_about_branch": "Branch",

@@ -505,6 +505,7 @@
   "com_knauf_prompt_undo_revert": "Rückgängig — zur vorherigen Version zurückkehren",
 
   "com_knauf_terms_and_privacy": "Nutzungsbedingungen und Datenschutz",
+  "com_knauf_total_size_partial": "{{0}} Datei(en) hinzugefügt. {{1}} Datei(en) wurden nicht hinzugefügt, da Anhänge pro Nachricht auf {{2}} MB begrenzt sind.",
   "com_knauf_upload_formats_cap": "bis zu {{mb}} MB",
   "com_knauf_upload_formats_data_items": "Excel (.xlsx) · CSV (.csv)",
   "com_knauf_upload_formats_data_label": "Tabellen & Daten",
@@ -518,7 +519,7 @@
   "com_knauf_upload_formats_legacy_ppt": ".ppt → in PowerPoint öffnen → Datei → Speichern unter → PowerPoint-Präsentation (.pptx)",
   "com_knauf_upload_formats_legacy_title": "Alte Office-Dateien werden nicht unterstützt",
   "com_knauf_upload_formats_legacy_xls": ".xls → in Excel öffnen → Datei → Speichern unter → Excel-Arbeitsmappe (.xlsx)",
-  "com_knauf_upload_formats_limits": "Bis zu 5 Dateien pro Nachricht",
+  "com_knauf_upload_formats_limits": "Bis zu 5 Dateien und 100 MB pro Nachricht",
   "com_knauf_upload_formats_title": "Unterstützte Dateitypen",
   "com_nav_2fa": "Zwei-Faktor-Authentifizierung (2FA)",
   "com_nav_about_branch": "Branch",
