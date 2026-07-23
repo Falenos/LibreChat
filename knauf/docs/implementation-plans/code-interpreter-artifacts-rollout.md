@@ -91,7 +91,7 @@ The local-vs-committed split relies on the loader: [`api/server/services/Config/
 2. **Deploy the sandbox service** in `Knauf-Group/agk-deployment-configs` via the upstream `helm/codeapi` chart (single-source service; `services-local` ApplicationSet + exclude from multi-source `services`, per the Langfuse precedent). Internal-only ingress or ClusterIP — LibreChat is the only client.
 3. **Provision JWT trust.** Generate an EdDSA keypair; private key → `kv-agntkarl-nonprod-001` → ExternalSecret → LibreChat env; public key → codeapi values. Set matching `issuer`/`audience`/`kid`/`alg` on both sides. `LOCAL_MODE=false`; strong `CODEAPI_INTERNAL_SERVICE_TOKEN` from Key Vault (never the `localdev-…` default).
 4. **Wire LibreChat env** in the AGK values: `LIBRECHAT_CODE_BASEURL=http://<codeapi-svc>.<ns>.svc.cluster.local:3112/v1`, `CODEAPI_AUTH_PROVIDER=librechat-jwt`, and the `CODEAPI_JWT_*` set.
-5. **Flip the capability** in the committed `librechat.yaml` (`execute_code`, `artifacts`) — ships via the release pipeline **after** the sandbox exists in dev.
+5. **Flip the capability** in the committed `librechat.yaml` (`execute_code`, `artifacts`, and — if the deployment skills in `skill/` should be live in prod — `skills`) — ships via the release pipeline **after** the sandbox exists in dev. Note `skills` needs no backend (see the setup guide's Skills section), so it can be flipped independently of the sandbox.
 6. **Artifacts egress decision** — self-host the Sandpack bundler (`SANDPACK_BUNDLER_URL`) or accept CodeSandbox + Tailwind CDN egress from user browsers.
 7. **USER-role decision** — see [Open questions](#open-questions).
 
