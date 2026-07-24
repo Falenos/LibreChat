@@ -121,11 +121,11 @@ Hand-rolling a sandbox on ACI/AKS re-implements exactly what ClickHouse already 
 
 The Assistants API's built-in code interpreter would only plug into LibreChat's **assistants endpoint** (§1b), not the agents `execute_code` path KARL uses. More decisively: **Microsoft retires the Azure OpenAI Assistants API on 2026‑08‑26.** Its successor, the **Foundry Agent Service** code interpreter tool ($0.03/session US base), is a *different* API that LibreChat's `execute_code` does not target. Building toward a service that retires in ~a month is a non-starter. Rejected.
 
-> **Deep dive on the successor:** [`azure-foundry-code-interpreter.md`](azure-foundry-code-interpreter.md) analyses the
-> Foundry Agent Service Code Interpreter in full (July 2026, fact-checked): no deterministic exec endpoint exists — code
-> runs only via the agent's own LLM, its sandbox is ACA dynamic sessions underneath (i.e. Option B's engine), the
-> Responses-API `code_interpreter` tool is real on Azure but unwired in LibreChat (Tier-5), and artifacts are unaffected
-> by any backend choice. Verdict: rejected as a LibreChat backend; ACA-direct (Option B) remains the Azure shape.
+> **Its successor is also not a fit** (researched + fact-checked July 2026): the Foundry Agent Service Code Interpreter
+> exposes **no deterministic "execute this code" endpoint** — code runs only when the Foundry *agent's own LLM* authors
+> and invokes it (non-verbatim, Python-only, no stderr/exit-code model, double token cost + $0.03/session). Its sandbox
+> is ACA dynamic sessions underneath — i.e. Option B's engine. If Azure-managed execution is wanted, integrate ACA
+> directly. Concrete build-out for both finalists: [`code-interpreter-implementation-designs.md`](code-interpreter-implementation-designs.md).
 
 ---
 
