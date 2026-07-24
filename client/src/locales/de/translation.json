@@ -521,6 +521,7 @@
   "com_knauf_upload_formats_legacy_xls": ".xls → in Excel öffnen → Datei → Speichern unter → Excel-Arbeitsmappe (.xlsx)",
   "com_knauf_upload_formats_limits": "Bis zu 5 Dateien und 100 MB pro Nachricht",
   "com_knauf_upload_formats_title": "Unterstützte Dateitypen",
+  "com_knauf_upload_rate_limited": "Viele Dateien werden hochgeladen. KARL wartet und versucht es automatisch erneut.",
   "com_nav_2fa": "Zwei-Faktor-Authentifizierung (2FA)",
   "com_nav_about_branch": "Branch",
   "com_nav_about_build_date": "Erstellt",

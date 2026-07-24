@@ -1,6 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import {
   Constants,
+  DynamicQueryKeys,
   EModelEndpoint,
   EToolResources,
   getEndpointFileConfig,
@@ -37,7 +38,9 @@ const mockMutate = jest.fn((_formData: FormData) => Promise.resolve());
 const mockAddFile = jest.fn();
 const mockUpdateFileById = jest.fn();
 const mockDeleteFileById = jest.fn();
+const mockRefetchQueries = jest.fn();
 let mockUploadOptions: {
+  onSuccess?: (data: Record<string, unknown>, body: FormData) => void;
   onError?: (error: unknown, body: FormData) => void;
 } = {};
 const mockProcessFileForUpload = jest.fn(
@@ -82,7 +85,7 @@ jest.mock('~/store', () => ({
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: jest.fn(() => ({
     getQueryData: jest.fn(),
-    refetchQueries: jest.fn(),
+    refetchQueries: mockRefetchQueries,
   })),
 }));
 
@@ -578,6 +581,37 @@ describe('useFileHandling', () => {
       expect(formData.get('isTemporary')).toBeNull();
     });
 
+    it('starts agent-file status polling after an upload is accepted', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() =>
+        useFileHandling({
+          endpointOverride: EModelEndpoint.agents,
+          additionalMetadata: {
+            agent_id: 'agent-123',
+            tool_resource: EToolResources.file_search,
+          },
+        }),
+      );
+      const file = new File(['hello'], 'test.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([file]);
+      });
+
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      act(() => {
+        mockUploadOptions.onSuccess?.(
+          {
+            temp_file_id: formData.get('file_id'),
+            file_id: 'accepted-file',
+          },
+          formData,
+        );
+      });
+
+      expect(mockRefetchQueries).toHaveBeenCalledWith(DynamicQueryKeys.agentFiles('agent-123'));
+    });
+
     it('awaits HEIC conversion before uploading the converted file', async () => {
       const convertedFile = new File(['jpeg data'], 'photo.jpg', { type: 'image/jpeg' });
       mockProcessFileForUpload.mockImplementationOnce(
@@ -698,7 +732,7 @@ describe('useFileHandling', () => {
   // silent OCR-less fallback. Removing the `await mutateAsync` reverts to
   // fire-and-forget and this test fails (both files dispatch immediately).
   describe('KK20-227 sequential multi-file upload', () => {
-    // KK20-227: transient transport failures retry once; final failures
+    // KK20-227: transient transport failures retry up to three times; final failures
     // remain visible instead of silently disappearing from the attachment list.
     it('retries one transient document upload failure', async () => {
       jest.useFakeTimers();
@@ -722,6 +756,95 @@ describe('useFileHandling', () => {
         await upload;
       });
       expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('waits for Retry-After before retrying a rate-limited document upload', async () => {
+      jest.useFakeTimers();
+      const rateLimitedError = {
+        response: { status: 429, headers: { 'retry-after': '3' } },
+      };
+      mockMutate.mockRejectedValueOnce(rateLimitedError).mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'rate-limited.pdf', {
+        type: 'application/pdf',
+      });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'com_knauf_upload_rate_limited',
+        status: 'warning',
+        duration: 10_000,
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2999);
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+        await upload;
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
+    it('uses exponential backoff for three retries before succeeding', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 503 } };
+      mockMutate
+        .mockRejectedValueOnce(transientError)
+        .mockRejectedValueOnce(transientError)
+        .mockRejectedValueOnce(transientError)
+        .mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'backoff.pdf', {
+        type: 'application/pdf',
+      });
+      let upload!: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      for (const [delay, expectedCalls] of [
+        [1000, 2],
+        [2000, 3],
+        [4000, 4],
+      ] as const) {
+        await act(async () => {
+          jest.advanceTimersByTime(delay - 1);
+          await Promise.resolve();
+        });
+        expect(mockMutate).toHaveBeenCalledTimes(expectedCalls - 1);
+
+        await act(async () => {
+          jest.advanceTimersByTime(1);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(mockMutate).toHaveBeenCalledTimes(expectedCalls);
+      }
+      await upload;
 
       jest.useRealTimers();
       mockMutate.mockImplementation(() => Promise.resolve());
@@ -753,7 +876,7 @@ describe('useFileHandling', () => {
       const useFileHandling = await loadHook();
       const { result } = renderHook(() => useFileHandling());
       const file = new File([new ArrayBuffer(8)], 'failed.pdf', { type: 'application/pdf' });
-      let upload: Promise<void>;
+      let upload!: Promise<void>;
 
       await act(async () => {
         upload = result.current.handleFiles([file]);
@@ -762,11 +885,16 @@ describe('useFileHandling', () => {
       });
       expect(mockDeleteFileById).not.toHaveBeenCalled();
 
-      await act(async () => {
-        jest.advanceTimersByTime(1000);
-        await upload;
-      });
+      for (const delay of [1000, 2000, 4000]) {
+        await act(async () => {
+          jest.advanceTimersByTime(delay);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      await upload;
 
+      expect(mockMutate).toHaveBeenCalledTimes(4);
       expect(mockUpdateFileById).toHaveBeenCalledWith(expect.any(String), { progress: -1 });
       expect(mockDeleteFileById).not.toHaveBeenCalled();
 

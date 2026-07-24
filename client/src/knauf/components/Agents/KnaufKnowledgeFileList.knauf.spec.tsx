@@ -142,4 +142,31 @@ describe('KnaufKnowledgeFileList — KK20-227 in-session re-index', () => {
 
     expect(screen.queryByLabelText('com_knauf_knowledge_reindex')).not.toBeInTheDocument();
   });
+
+  it('retries a failed upload without issuing a server delete', async () => {
+    const blob = new File([new ArrayBuffer(8)], 'failed.pdf', { type: 'application/pdf' });
+    const onReupload = jest.fn();
+    const failedFile = {
+      ...savedFile,
+      file_id: 'failed',
+      filename: 'failed.pdf',
+      file: blob,
+      progress: -1,
+      filepath: undefined,
+    } as unknown as ExtendedFile;
+
+    render(
+      <KnaufKnowledgeFileList
+        {...baseProps}
+        files={new Map([['failed', failedFile]])}
+        getReindexFile={() => blob}
+        onReupload={onReupload}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('com_knauf_knowledge_retry'));
+
+    await waitFor(() => expect(onReupload).toHaveBeenCalledWith(blob));
+    expect(mockDeleteMutateAsync).not.toHaveBeenCalled();
+  });
 });

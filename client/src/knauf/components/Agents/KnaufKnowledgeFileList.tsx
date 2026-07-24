@@ -164,20 +164,32 @@ const SavedFileRow = memo(function SavedFileRow({
   // local entry (useFileHandling.ts onSuccess). Fall back to the File's name so
   // the row shows the name throughout the upload instead of going blank. KK20-188
   const displayName = file.filename || file.file?.name || '';
-  // A still-uploading entry (progress < 1) shows a spinner + name, no size/delete
-  // — mirrors the pending-row treatment and the upstream FilePreview spinner.
-  const uploading = (file.progress ?? 1) < 1;
+  // A still-uploading entry (0 <= progress < 1) shows a spinner + name, no
+  // size/delete — negative progress is the retained failed-upload state.
+  const failedUpload = (file.progress ?? 1) < 0;
+  const uploading = !failedUpload && (file.progress ?? 1) < 1;
+  const retryLabel = failedUpload
+    ? localize('com_knauf_knowledge_retry')
+    : localize('com_knauf_knowledge_reindex');
   return (
-    <FileRowShell filename={displayName} type={file.type} uploading={uploading} dimmed={deleting}>
+    <FileRowShell
+      filename={displayName}
+      type={file.type}
+      uploading={uploading}
+      error={failedUpload}
+      dimmed={deleting}
+    >
       {!uploading && (
         <>
           {/* KK20-195 WP5b — real server indexing state (pending spinner /
               failed + retry); renders nothing for ready + legacy rows. */}
-          <KnaufFileIndexingStatus
-            indexing={file.indexing}
-            retrying={retryingIndex}
-            onRetry={onRetryIndexing != null ? handleRetryIndexing : undefined}
-          />
+          {!failedUpload && (
+            <KnaufFileIndexingStatus
+              indexing={file.indexing}
+              retrying={retryingIndex}
+              onRetry={onRetryIndexing != null ? handleRetryIndexing : undefined}
+            />
+          )}
           {typeof file.size === 'number' && (
             <span className="shrink-0 text-xs tabular-nums text-text-secondary">
               {formatFileSize(file.size)}
@@ -199,11 +211,12 @@ const SavedFileRow = memo(function SavedFileRow({
                 <button
                   type="button"
                   onClick={handleReindex}
-                  aria-label={localize('com_knauf_knowledge_reindex')}
-                  title={localize('com_knauf_knowledge_reindex')}
+                  aria-label={retryLabel}
+                  title={retryLabel}
                   className={cn(
                     ACTION_CLASS,
-                    'opacity-0 hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100',
+                    !failedUpload &&
+                      'opacity-0 hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100',
                   )}
                 >
                   <RefreshCw className="size-4" aria-hidden="true" />
@@ -216,7 +229,9 @@ const SavedFileRow = memo(function SavedFileRow({
                 aria-label={localize('com_ui_attach_remove')}
                 className={cn(
                   ACTION_CLASS,
-                  'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+                  !failedUpload &&
+                    'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+                  'hover:text-red-500',
                 )}
               >
                 <Trash2 className="size-4" aria-hidden="true" />
@@ -358,6 +373,15 @@ function KnaufKnowledgeFileList({
     // and re-uploading identical content would dedup-hit it without re-OCRing.
     async (file: ExtendedFile): Promise<boolean> => {
       const id = file.file_id;
+      if (file.progress < 0) {
+        deletePreview(id);
+        setFiles((prev) => {
+          const next = new Map(prev);
+          next.delete(id);
+          return next;
+        });
+        return true;
+      }
       if (inFlightDeletesRef.current.has(id)) {
         return false;
       }
