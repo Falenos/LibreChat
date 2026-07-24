@@ -7,6 +7,7 @@ import { useRecoilValue, useSetRecoilState } from 'recoil';
 import {
   QueryKeys,
   Constants,
+  DynamicQueryKeys,
   EToolResources,
   megabyte,
   inferMimeType,
@@ -55,10 +56,11 @@ export type FileHandlingState = {
 
 const noop = () => {};
 
-// [knauf] KK20-227 — retry one transient document-upload transport failure.
+// [knauf] KK20-227 — retry transient document-upload transport failures.
 const FAILED_UPLOAD_PROGRESS = -1;
 const UPLOAD_RETRY_DELAY_MS = 1000;
 const RATE_LIMIT_RETRY_DELAY_MS = 30_000;
+const MAX_UPLOAD_RETRIES = 3;
 type UploadError = TError & {
   response?: TError['response'] & {
     headers?: Record<string, string | number | string[] | undefined>;
@@ -74,15 +76,18 @@ const isTransientUploadError = (error: unknown) => {
     [429, 502, 503, 504].includes(response?.status ?? 0)
   );
 };
-const getUploadRetryDelay = (error: unknown) => {
+const getUploadRetryDelay = (error: unknown, retryNumber: number) => {
+  const backoffDelay = UPLOAD_RETRY_DELAY_MS * 2 ** (retryNumber - 1);
   if (!isRateLimitedUploadError(error)) {
-    return UPLOAD_RETRY_DELAY_MS;
+    return backoffDelay;
   }
   const headers = (error as UploadError).response?.headers;
   const rawValue = headers?.['retry-after'] ?? headers?.['Retry-After'];
   const retryAfter = Array.isArray(rawValue) ? rawValue[0] : rawValue;
   const seconds = Number(retryAfter);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RATE_LIMIT_RETRY_DELAY_MS;
+  const serverDelay =
+    Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RATE_LIMIT_RETRY_DELAY_MS;
+  return Math.max(backoffDelay, serverDelay);
 };
 // End [knauf]
 
@@ -220,7 +225,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   const { showToast } = useToastContext();
   const [errors, setErrors] = useState<string[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
-  // [knauf] KK20-227 — lets onError suppress cleanup only for the first retryable attempt.
+  // [knauf] KK20-227 — lets onError suppress cleanup during retryable attempts.
   const documentUploadAttemptsRef = useRef(new Map<string, number>());
   // End [knauf]
   const { startUploadTimer, clearUploadTimer } = useDelayedUploadToast();
@@ -306,6 +311,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         console.log('upload success', data);
         if (agent_id) {
           queryClient.refetchQueries([QueryKeys.agent, agent_id]);
+          // [knauf] The agent-files query owns live indexing projections. Refetch
+          // it after each 202 so its pending data enables the 5s poll loop; an
+          // agent refetch alone updates membership but leaves row spinners stale.
+          queryClient.refetchQueries(DynamicQueryKeys.agentFiles(agent_id));
+          // End [knauf]
           return;
         }
         updateFileById(
@@ -365,9 +375,13 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         const file_id = body.get('file_id');
         const tool_resource = body.get('tool_resource');
         // [knauf] KK20-227 — mutateAsync invokes onError before rejecting. Keep the
-        // pending chip intact while startUpload performs its one transient retry.
+        // pending chip intact while startUpload performs its transient retries.
         const uploadAttempt = documentUploadAttemptsRef.current.get(file_id as string);
-        if (uploadAttempt === 1 && isTransientUploadError(error)) {
+        if (
+          uploadAttempt != null &&
+          uploadAttempt <= MAX_UPLOAD_RETRIES &&
+          isTransientUploadError(error)
+        ) {
           return;
         }
         const isDocumentUpload = uploadAttempt != null;
@@ -483,25 +497,34 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       // the loadImage/onload path and are unaffected — they don't hit OCR.)
       await enqueueDocumentUpload(async () => {
         const retryDocument = !extendedFile.type?.startsWith('image/');
-        if (retryDocument) {
-          documentUploadAttemptsRef.current.set(extendedFile.file_id, 1);
-        }
-        try {
-          await uploadFile.mutateAsync(formData);
-        } catch (error) {
-          if (!retryDocument || !isTransientUploadError(error)) {
-            throw error;
+        let uploadAttempt = 1;
+        while (true) {
+          if (retryDocument) {
+            documentUploadAttemptsRef.current.set(extendedFile.file_id, uploadAttempt);
           }
-          documentUploadAttemptsRef.current.set(extendedFile.file_id, 2);
-          if (isRateLimitedUploadError(error)) {
-            showToast({
-              message: localize('com_knauf_upload_rate_limited'),
-              status: 'warning',
-              duration: 10_000,
-            });
+          try {
+            await uploadFile.mutateAsync(formData);
+            return;
+          } catch (error) {
+            if (
+              !retryDocument ||
+              !isTransientUploadError(error) ||
+              uploadAttempt > MAX_UPLOAD_RETRIES
+            ) {
+              throw error;
+            }
+            if (isRateLimitedUploadError(error)) {
+              showToast({
+                message: localize('com_knauf_upload_rate_limited'),
+                status: 'warning',
+                duration: 10_000,
+              });
+            }
+            await new Promise((resolve) =>
+              setTimeout(resolve, getUploadRetryDelay(error, uploadAttempt)),
+            );
+            uploadAttempt += 1;
           }
-          await new Promise((resolve) => setTimeout(resolve, getUploadRetryDelay(error)));
-          await uploadFile.mutateAsync(formData);
         }
       }).catch(() => {});
       return;
