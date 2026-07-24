@@ -58,13 +58,31 @@ const noop = () => {};
 // [knauf] KK20-227 — retry one transient document-upload transport failure.
 const FAILED_UPLOAD_PROGRESS = -1;
 const UPLOAD_RETRY_DELAY_MS = 1000;
+const RATE_LIMIT_RETRY_DELAY_MS = 30_000;
+type UploadError = TError & {
+  response?: TError['response'] & {
+    headers?: Record<string, string | number | string[] | undefined>;
+  };
+};
+const isRateLimitedUploadError = (error: unknown) =>
+  (error as UploadError | undefined)?.response?.status === 429;
 const isTransientUploadError = (error: unknown) => {
   const { code, response } = (error ?? {}) as TError;
   return (
     code === 'ERR_NETWORK' ||
     code === 'ECONNABORTED' ||
-    [502, 503, 504].includes(response?.status ?? 0)
+    [429, 502, 503, 504].includes(response?.status ?? 0)
   );
+};
+const getUploadRetryDelay = (error: unknown) => {
+  if (!isRateLimitedUploadError(error)) {
+    return UPLOAD_RETRY_DELAY_MS;
+  }
+  const headers = (error as UploadError).response?.headers;
+  const rawValue = headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const retryAfter = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  const seconds = Number(retryAfter);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RATE_LIMIT_RETRY_DELAY_MS;
 };
 // End [knauf]
 
@@ -222,7 +240,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   // (progress < 1), matching the send-button gate in FileRow. Prevents the
   // "refresh stranded my upload → file looks done but OCR missing" path.
   const hasPendingUploads = useMemo(
-    () => Array.from(files.values()).some((file) => file.progress < 1),
+    () => Array.from(files.values()).some((file) => file.progress >= 0 && file.progress < 1),
     [files],
   );
   useUploadBeforeUnloadGuard(hasPendingUploads);
@@ -475,7 +493,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
             throw error;
           }
           documentUploadAttemptsRef.current.set(extendedFile.file_id, 2);
-          await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
+          if (isRateLimitedUploadError(error)) {
+            showToast({
+              message: localize('com_knauf_upload_rate_limited'),
+              status: 'warning',
+              duration: 10_000,
+            });
+          }
+          await new Promise((resolve) => setTimeout(resolve, getUploadRetryDelay(error)));
           await uploadFile.mutateAsync(formData);
         }
       }).catch(() => {});

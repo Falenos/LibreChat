@@ -727,6 +727,48 @@ describe('useFileHandling', () => {
       mockMutate.mockImplementation(() => Promise.resolve());
     });
 
+    it('waits for Retry-After before retrying a rate-limited document upload', async () => {
+      jest.useFakeTimers();
+      const rateLimitedError = {
+        response: { status: 429, headers: { 'retry-after': '3' } },
+      };
+      mockMutate.mockRejectedValueOnce(rateLimitedError).mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'rate-limited.pdf', {
+        type: 'application/pdf',
+      });
+      let upload: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'com_knauf_upload_rate_limited',
+        status: 'warning',
+        duration: 10_000,
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2999);
+        await Promise.resolve();
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+        await upload;
+      });
+      expect(mockMutate).toHaveBeenCalledTimes(2);
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
     it('does not retry a non-transient document upload failure', async () => {
       mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
 

@@ -67,14 +67,17 @@ export default function FileRow({
       return;
     }
 
-    if (files.some((file) => file.progress < 1)) {
+    // [knauf] A retained upload failure uses negative progress; it is terminal,
+    // not an upload that should keep the composer blocked forever. NO-TICKET.
+    if (files.some((file) => file.progress >= 0 && file.progress < 1)) {
       setFilesLoading(true);
       return;
     }
 
-    if (files.every((file) => file.progress === 1)) {
+    if (files.every((file) => file.progress < 0 || file.progress === 1)) {
       setFilesLoading(false);
     }
+    // End [knauf]
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
 

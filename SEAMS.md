@@ -530,6 +530,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | aggregate-size partial-acceptance regression | 165–253 | Proves a 120 MB spreadsheet selection under the 100 MB chat aggregate uploads the two files that fit and reports the skipped file with the configured limit | Self | NO-TICKET |
 | `api/server/services/Files/Azure/crud.js` | `ensureAzureContainer` | 284–307 | Checks Blob container existence once per process before attempting creation, eliminating expected steady-state `ContainerAlreadyExists` 409 APM error spans while retaining coalescing and retry-on-real-failure behavior | `api/test/server/services/Files/Azure/crud.test.js` (`container readiness`) | NO-TICKET |
 | `api/test/server/services/Files/Azure/crud.test.js` | `container readiness` | 206–316 | Proves existing containers skip creation, missing-container initialization is coalesced and cached, and failed initialization remains retryable | Self | NO-TICKET |
+| `client/src/hooks/Files/useFileHandling.ts` | `isRateLimitedUploadError`, `getUploadRetryDelay`, document-upload retry branch | 58–87, 239–247, 484–508 | Treats HTTP 429 as transient, pauses the existing serialized document queue for the server-provided `Retry-After`, warns the user, retries once, and excludes terminal failed rows from the page-exit guard | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` (`KK20-227 sequential multi-file upload`) | NO-TICKET |
+| `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | `waits for Retry-After before retrying` | 730–770 | Proves a rate-limited document stays serialized, surfaces the wait message, and does not retry before the server delay expires | Self | NO-TICKET |
+| `client/src/components/Chat/Input/Files/FileRow.tsx` | upload-loading effect | 70–80 | Treats a retained negative-progress upload failure as terminal so it does not leave the composer loading state stuck | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -570,6 +573,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Cost audit labels — localizes the requested-to-returned model route and exact per-model cost shown in Knauf cost tooltips |
 | `librechat.yaml` | Chat uploads keep the 5-file message cap but raise the aggregate payload ceiling from 50 MB to 100 MB. Existing per-category caps remain authoritative (documents 25 MB, data 50 MB, images 20 MB); agent knowledge count and aggregate limits remain deliberately disabled. |
 | `client/src/locales/{en,de}/translation.json` | Localizes the exact aggregate-size partial-acceptance warning and keeps the supported-upload dialog synchronized with the 5-file / 100 MB chat policy. |
+| `client/src/locales/{en,de}/translation.json` | Localizes the upload-rate-limit wait message shown while the serialized client queue honors `Retry-After` and retries. |
 
 ## Net-New Files
 
@@ -771,6 +775,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Agents/KnaufFileSearch.tsx` | `~/{hooks,components}/*` | Medium — keeps the agent-knowledge policy comment aligned with the runtime configuration: per-category caps remain, count and aggregate limits are disabled | `client/src/knauf/hooks/Files/useFileHandlingFileSearchLimit.knauf.spec.ts` | NO-TICKET |
 | `client/src/knauf/hooks/Files/useFileHandlingAssetDedup.knauf.spec.ts` | Subject under test (`~/hooks/Files/useFileHandling` pure selection helpers) | Low — extends the existing test-only seam with aggregate-size partial-selection coverage, including smaller-file backfill and disabled-limit behavior | Self | NO-TICKET |
 | `client/src/knauf/hooks/Files/useFileHandlingFileSearchLimit.knauf.spec.ts` | `~/hooks/Files/useFileHandling`; upstream data-provider, file utils, toast, Recoil, and upload hooks mocked | Low — test-only; pins the production agent policy by validating a 12-file File Search selection with count and aggregate limits disabled | Self | NO-TICKET |
+| `client/src/knauf/components/Agents/KnaufKnowledgeFileList*.tsx` | `@librechat/client`, `~/data-provider`, `~/{hooks,utils}` | Medium — turns retained failed agent-upload rows into visible Retry/Remove actions while keeping server deletion limited to persisted files | `client/src/knauf/components/Agents/KnaufKnowledgeFileList.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
