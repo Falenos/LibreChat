@@ -7,8 +7,9 @@
 // agent. Rejections are HTTP 429 with the stable code
 // `file_indexing_backlog_full`.
 //
-// Defaults are the §17 assumption-ledger values (20 queued files / 500 MB),
-// env-tunable and read at call time like the other async-indexing knobs.
+// The default admits a normal bulk agent build (50 files) while the 500 MB
+// byte cap still bounds memory/storage pressure. Both remain env-tunable and
+// are read at call time like the other async-indexing knobs.
 
 /** @param {string | undefined} raw @param {number} fallback @returns {number} */
 const envInt = (raw, fallback) => {
@@ -18,7 +19,7 @@ const envInt = (raw, fallback) => {
 
 /** @returns {{ maxQueuedFiles: number, maxQueuedBytes: number }} */
 const getAdmissionLimits = () => ({
-  maxQueuedFiles: envInt(process.env.KNAUF_INDEX_MAX_QUEUED_FILES, 20),
+  maxQueuedFiles: envInt(process.env.KNAUF_INDEX_MAX_QUEUED_FILES, 50),
   maxQueuedBytes: envInt(process.env.KNAUF_INDEX_MAX_QUEUED_BYTES, 500 * 1024 * 1024),
 });
 
