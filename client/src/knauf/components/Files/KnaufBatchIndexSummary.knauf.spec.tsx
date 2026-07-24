@@ -1,28 +1,21 @@
-// [knauf] KK20-195 WP5b — seam test: the §6.3 batch summary polls the batch
-// endpoint while a multi-file selection is still indexing, renders
-// "ready/total" (+ failed count), and renders nothing / stops polling once
-// the batch is terminal or no pending batch exists.
-import { act, render, screen } from '@testing-library/react';
+// [knauf] Agent-wide knowledge summary: explicit nonzero ready/processing/failed
+// counts from the rows visible in the builder; no batch switching or polling.
+import { render, screen } from '@testing-library/react';
 import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
 import type { ExtendedFile } from '~/common';
-import { KNAUF_INDEX_POLL_MS } from '~/knauf/hooks/Files/useKnaufIndexStatus';
-import { getBatchIndexStatus } from '~/knauf/data-provider/data-service';
 import KnaufBatchIndexSummary from './KnaufBatchIndexSummary';
 
-jest.mock('~/knauf/data-provider/data-service', () => ({
-  getBatchIndexStatus: jest.fn(),
-}));
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, values?: Record<number, string>) =>
     (
       ({
-        com_knauf_file_indexing_batch_summary: '{{0}} of {{1}} files ready',
-        com_knauf_file_indexing_batch_failed: '{{0}} failed',
+        com_knauf_file_indexing_files_total: 'Files: {{0}}',
+        com_knauf_file_indexing_ready_count: 'Ready: {{0}}',
+        com_knauf_file_indexing_processing_count: 'Processing: {{0}}',
+        com_knauf_file_indexing_failed_count: 'Failed: {{0}}',
       }) as Record<string, string>
     )[key]?.replace(/{{(\d+)}}/g, (_, i) => values?.[Number(i)] ?? '') ?? key,
 }));
-
-const mockedGet = getBatchIndexStatus as jest.MockedFunction<typeof getBatchIndexStatus>;
 
 const indexing = (overrides: Partial<KnaufFileIndexing> = {}): KnaufFileIndexing => ({
   status: 'queued',
@@ -33,87 +26,59 @@ const indexing = (overrides: Partial<KnaufFileIndexing> = {}): KnaufFileIndexing
   ...overrides,
 });
 
-const file = (id: string, batchId?: string, ix?: KnaufFileIndexing): ExtendedFile =>
+const file = (id: string, progress = 1, ix?: KnaufFileIndexing): ExtendedFile =>
   ({
     file_id: id,
     size: 1,
-    progress: 1,
-    knauf_upload_batch_id: batchId,
+    progress,
     indexing: ix,
   }) as ExtendedFile;
 
-const summary = (overrides: Record<string, unknown> = {}) => ({
-  batch_id: 'b1',
-  total: 4,
-  terminal: false,
-  counts: { uploading: 0, queued: 1, processing: 1, ready: 1, failed: 1 },
-  failures: [],
-  ...overrides,
-});
-
-beforeEach(() => {
-  jest.useFakeTimers();
-  jest.clearAllMocks();
-});
-afterEach(() => {
-  jest.useRealTimers();
-});
-
-const flush = async () => {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-};
-
-test('renders ready/total + failed count while the batch is non-terminal', async () => {
-  mockedGet.mockResolvedValue(summary());
+test('renders agent-wide nonzero ready, processing, and failed counts', () => {
   render(
     <KnaufBatchIndexSummary
       files={
         new Map([
-          ['f1', file('f1', 'b1', indexing())],
-          ['f2', file('f2', 'b1', indexing())],
+          ['ready', file('ready', 1, indexing({ status: 'ready', ready: true }))],
+          ['indexing', file('indexing', 1, indexing({ status: 'processing' }))],
+          ['upload-failed', file('upload-failed', -1)],
+          ['index-failed', file('index-failed', 1, indexing({ status: 'failed' }))],
+        ])
+      }
+      pendingFiles={
+        new Map([
+          ['queued', { status: 'queued' }],
+          ['pending-failed', { status: 'error' }],
         ])
       }
     />,
   );
-  await flush();
-  expect(mockedGet).toHaveBeenCalledWith('b1');
-  expect(screen.getByText(/1 of 4 files ready/)).toBeInTheDocument();
-  expect(screen.getByText(/1 failed/)).toBeInTheDocument();
+  expect(screen.getByText('Files: 6')).toBeInTheDocument();
+  expect(screen.getByText(/Ready: 1/)).toBeInTheDocument();
+  expect(screen.getByText(/Processing: 2/)).toBeInTheDocument();
+  expect(screen.getByText(/Failed: 3/)).toBeInTheDocument();
 });
 
-test('stops polling and renders nothing once the batch is terminal', async () => {
-  mockedGet.mockResolvedValue(
-    summary({
-      terminal: true,
-      counts: { uploading: 0, queued: 0, processing: 0, ready: 4, failed: 0 },
-    }),
+test('omits zero-value states', () => {
+  render(
+    <KnaufBatchIndexSummary
+      files={
+        new Map([
+          ['f1', file('f1')],
+          ['f2', file('f2', 1, indexing({ status: 'ready', ready: true }))],
+        ])
+      }
+      pendingFiles={new Map()}
+    />,
   );
-  render(<KnaufBatchIndexSummary files={new Map([['f1', file('f1', 'b1', indexing())]])} />);
-  await flush();
+  expect(screen.getByText('Files: 2')).toBeInTheDocument();
+  expect(screen.getByText(/Ready: 2/)).toBeInTheDocument();
+  expect(screen.queryByText(/Processing:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Failed:/)).not.toBeInTheDocument();
+});
+
+test('renders nothing for an empty agent library', () => {
+  render(<KnaufBatchIndexSummary files={new Map()} pendingFiles={new Map()} />);
   expect(screen.queryByTestId('knauf-batch-index-summary')).not.toBeInTheDocument();
-  const callsAfterFirst = mockedGet.mock.calls.length;
-  await act(async () => {
-    jest.advanceTimersByTime(KNAUF_INDEX_POLL_MS * 3);
-    await Promise.resolve();
-  });
-  expect(mockedGet.mock.calls.length).toBe(callsAfterFirst); // interval cleared
-});
-
-test('no pending batch (single files / all settled) → no request at all', async () => {
-  render(
-    <KnaufBatchIndexSummary
-      files={
-        new Map([
-          ['single', file('single', undefined, indexing())], // no batch id
-          ['done', file('done', 'b2', indexing({ status: 'ready', ready: true }))],
-        ])
-      }
-    />,
-  );
-  await flush();
-  expect(mockedGet).not.toHaveBeenCalled();
 });
 // End [knauf]

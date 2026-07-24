@@ -535,6 +535,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Input/Files/FileRow.tsx` | upload-loading effect | 70–80 | Treats a retained negative-progress upload failure as terminal so it does not leave the composer loading state stuck | `client/src/components/Chat/Input/Files/__tests__/FileRow.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Files/useFileHandling.ts` | `MAX_UPLOAD_RETRIES`, `getUploadRetryDelay`, agent upload `onSuccess`, document-upload retry loop | 59–91, 306–319, 372–404, 488–529 | Extends serialized transient recovery to three exponential retries while respecting a longer server `Retry-After`, and refetches the agent-files projection after acceptance so row polling starts and terminal batch/row states converge | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | NO-TICKET |
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | agent-file status refresh and three-retry backoff regressions | 584–613, 730–903 | Proves accepted agent uploads arm the indexing query, transient uploads use 1s/2s/4s delays, and final failure occurs only after the initial attempt plus three retries | Self | NO-TICKET |
+| `client/src/hooks/Files/useFileHandling.ts` | `getUploadRetryDelay`, upload `onError`, `startUpload` retry loop | 59–99, 404–420, 497–544 | Distinguishes an agent indexing-backlog rejection from generic HTTP throttling, waits 30s/60s/120s between its three retries, and retains a terminal failed row with retry-later guidance | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | NO-TICKET |
+| `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | `KK20-227 sequential multi-file upload` backlog case | 730–1037 | Pins the backlog-specific warning and 30s/60s/120s retry schedule while preserving the existing serialized upload contract | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -576,6 +578,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | Chat uploads keep the 5-file message cap but raise the aggregate payload ceiling from 50 MB to 100 MB. Existing per-category caps remain authoritative (documents 25 MB, data 50 MB, images 20 MB); agent knowledge count and aggregate limits remain deliberately disabled. |
 | `client/src/locales/{en,de}/translation.json` | Localizes the exact aggregate-size partial-acceptance warning and keeps the supported-upload dialog synchronized with the 5-file / 100 MB chat policy. |
 | `client/src/locales/{en,de}/translation.json` | Localizes the upload-rate-limit wait message shown while the serialized client queue honors `Retry-After` and retries. |
+| `.env.example` | Raises the documented per-scope async-indexing backlog default from 20 to 50 files while retaining the independent 500 MB byte ceiling. |
+| `client/src/locales/{en,de}/translation.json` | Localizes agent-wide ready/processing/failed counts and distinct backlog-wait versus manual-retry guidance. |
 
 ## Net-New Files
 
@@ -778,6 +782,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/hooks/Files/useFileHandlingAssetDedup.knauf.spec.ts` | Subject under test (`~/hooks/Files/useFileHandling` pure selection helpers) | Low — extends the existing test-only seam with aggregate-size partial-selection coverage, including smaller-file backfill and disabled-limit behavior | Self | NO-TICKET |
 | `client/src/knauf/hooks/Files/useFileHandlingFileSearchLimit.knauf.spec.ts` | `~/hooks/Files/useFileHandling`; upstream data-provider, file utils, toast, Recoil, and upload hooks mocked | Low — test-only; pins the production agent policy by validating a 12-file File Search selection with count and aggregate limits disabled | Self | NO-TICKET |
 | `client/src/knauf/components/Agents/KnaufKnowledgeFileList*.tsx` | `@librechat/client`, `~/data-provider`, `~/{hooks,utils}` | Medium — turns retained failed agent-upload rows into visible Retry/Remove actions while keeping server deletion limited to persisted files | `client/src/knauf/components/Agents/KnaufKnowledgeFileList.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Agents/KnaufFileSearch.tsx` | `~/hooks/Files/useFileHandling`, Recoil pending-file queue | Medium — exposes the original File only for a failed local upload; ready knowledge files no longer retain or offer destructive re-indexing | `client/src/knauf/components/Agents/KnaufKnowledgeFileList.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Agents/KnaufKnowledgeFileList*.tsx` | `@librechat/client`, `~/data-provider`, `~/{hooks,utils}` | Medium — shows Retry only for failed local uploads and server-marked retryable indexing failures, never for healthy saved files | `client/src/knauf/components/Agents/KnaufKnowledgeFileList.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Files/KnaufBatchIndexSummary*.tsx` | `~/common`, `~/knauf/common/fileIndexing`, `~/hooks` | Low — replaces the mutable single-batch ready fraction with agent-wide nonzero ready/processing/failed counts derived from the rows already on screen | `client/src/knauf/components/Files/KnaufBatchIndexSummary.knauf.spec.tsx` | NO-TICKET |
+| `api/server/services/Files/knauf/indexAdmission.js` | None; FileAsset method surface injected by caller | Low — raises the bounded default to 50 active files per authorization scope while preserving the 500 MB byte cap and env overrides | `api/server/services/Files/knauf/indexStatus.spec.js` | NO-TICKET |
+| `api/server/services/Files/knauf/indexStatus.spec.js` | Real FileAsset methods and mongodb-memory-server | Low — pins the 50-file / 500 MB admission defaults alongside existing concurrency and byte-cap behavior | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

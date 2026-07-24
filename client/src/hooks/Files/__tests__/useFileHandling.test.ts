@@ -803,6 +803,59 @@ describe('useFileHandling', () => {
       mockMutate.mockImplementation(() => Promise.resolve());
     });
 
+    it('backs off for 30s, 60s, and 120s when the agent indexing backlog is full', async () => {
+      jest.useFakeTimers();
+      const backlogError = {
+        response: { status: 429, data: { error: 'file_indexing_backlog_full' } },
+      };
+      mockMutate
+        .mockRejectedValueOnce(backlogError)
+        .mockRejectedValueOnce(backlogError)
+        .mockRejectedValueOnce(backlogError)
+        .mockResolvedValueOnce(undefined);
+
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(8)], 'backlog.pdf', {
+        type: 'application/pdf',
+      });
+      let upload!: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file]);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'com_knauf_upload_backlog_full',
+        status: 'warning',
+        duration: 10_000,
+      });
+
+      for (const [delay, expectedCalls] of [
+        [30_000, 2],
+        [60_000, 3],
+        [120_000, 4],
+      ] as const) {
+        await act(async () => {
+          jest.advanceTimersByTime(delay - 1);
+          await Promise.resolve();
+        });
+        expect(mockMutate).toHaveBeenCalledTimes(expectedCalls - 1);
+
+        await act(async () => {
+          jest.advanceTimersByTime(1);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(mockMutate).toHaveBeenCalledTimes(expectedCalls);
+      }
+      await upload;
+
+      jest.useRealTimers();
+      mockMutate.mockImplementation(() => Promise.resolve());
+    });
+
     it('uses exponential backoff for three retries before succeeding', async () => {
       jest.useFakeTimers();
       const transientError = { response: { status: 503 } };

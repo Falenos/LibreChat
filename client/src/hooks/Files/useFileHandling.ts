@@ -60,14 +60,18 @@ const noop = () => {};
 const FAILED_UPLOAD_PROGRESS = -1;
 const UPLOAD_RETRY_DELAY_MS = 1000;
 const RATE_LIMIT_RETRY_DELAY_MS = 30_000;
+const BACKLOG_RETRY_DELAY_MS = 30_000;
 const MAX_UPLOAD_RETRIES = 3;
 type UploadError = TError & {
   response?: TError['response'] & {
     headers?: Record<string, string | number | string[] | undefined>;
+    data?: { error?: string; message?: string };
   };
 };
 const isRateLimitedUploadError = (error: unknown) =>
   (error as UploadError | undefined)?.response?.status === 429;
+const isBacklogFullUploadError = (error: unknown) =>
+  (error as UploadError | undefined)?.response?.data?.error === 'file_indexing_backlog_full';
 const isTransientUploadError = (error: unknown) => {
   const { code, response } = (error ?? {}) as TError;
   return (
@@ -78,8 +82,11 @@ const isTransientUploadError = (error: unknown) => {
 };
 const getUploadRetryDelay = (error: unknown, retryNumber: number) => {
   const backoffDelay = UPLOAD_RETRY_DELAY_MS * 2 ** (retryNumber - 1);
+  const retryDelay = isBacklogFullUploadError(error)
+    ? BACKLOG_RETRY_DELAY_MS * 2 ** (retryNumber - 1)
+    : backoffDelay;
   if (!isRateLimitedUploadError(error)) {
-    return backoffDelay;
+    return retryDelay;
   }
   const headers = (error as UploadError).response?.headers;
   const rawValue = headers?.['retry-after'] ?? headers?.['Retry-After'];
@@ -87,7 +94,7 @@ const getUploadRetryDelay = (error: unknown, retryNumber: number) => {
   const seconds = Number(retryAfter);
   const serverDelay =
     Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RATE_LIMIT_RETRY_DELAY_MS;
-  return Math.max(backoffDelay, serverDelay);
+  return Math.max(retryDelay, serverDelay);
 };
 // End [knauf]
 
@@ -394,19 +401,21 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           }));
         }
         clearUploadTimer(file_id as string);
-        // [knauf] KK20-227 — retain a failed document chip so the failure is visible
-        // and removable; non-document uploads keep their upstream cleanup behaviour.
+        // [knauf] Retain a failed document chip and give backlog exhaustion an
+        // actionable retry-later message. Non-document uploads keep upstream cleanup.
         if (isDocumentUpload) {
           updateFileById(file_id as string, { progress: FAILED_UPLOAD_PROGRESS });
         } else {
           deleteFileById(file_id as string);
         }
-        // End [knauf]
 
         let errorMessage = 'com_error_files_upload';
 
         if (error?.code === 'ERR_CANCELED') {
           errorMessage = 'com_error_files_upload_canceled';
+        } else if (isBacklogFullUploadError(error)) {
+          errorMessage = 'com_knauf_upload_backlog_retry_later';
+          // End [knauf]
         } else if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
@@ -515,7 +524,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
             }
             if (isRateLimitedUploadError(error)) {
               showToast({
-                message: localize('com_knauf_upload_rate_limited'),
+                message: localize(
+                  isBacklogFullUploadError(error)
+                    ? 'com_knauf_upload_backlog_full'
+                    : 'com_knauf_upload_rate_limited',
+                ),
                 status: 'warning',
                 duration: 10_000,
               });
