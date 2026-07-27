@@ -19,6 +19,10 @@
 // Safe to re-run: creates the role if missing; replaces the entire permissions
 // block if the role already exists, so every run converges to the target state.
 
+// mongosh globals. `print` is already a known global in the shared eslint env,
+// so declaring it here would trip no-redeclare — these two are not.
+/* global db, printjson */
+
 'use strict';
 
 const ROLE_NAME = 'AGENT_BUILDER';
@@ -26,6 +30,7 @@ const DESCRIPTION = 'AI Champions — can create and share agents/prompts. No ad
 
 // Permission set — sourced from admin panel screenshots (2026-06-11).
 // Keys match the PermissionTypes / Permissions enums in librechat-data-provider.
+// prettier-ignore
 const PERMISSIONS = {
   BOOKMARKS:      { USE: true },
   PROMPTS:        { USE: true, CREATE: true, SHARE: true, SHARE_PUBLIC: false },
@@ -43,7 +48,6 @@ const PERMISSIONS = {
   REMOTE_AGENTS:  { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
   SKILLS:         { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
 };
-
 
 // ---------- main ----------
 
@@ -71,10 +75,9 @@ if (existing.length === 0) {
     print(`- ${tenant}: ${value}`);
   }
 
-  const result = roles.updateMany(
-    filter,
-    { $set: { permissions: PERMISSIONS, description: DESCRIPTION, updatedAt: new Date() } },
-  );
+  const result = roles.updateMany(filter, {
+    $set: { permissions: PERMISSIONS, description: DESCRIPTION, updatedAt: new Date() },
+  });
 
   print('\nUpdate result:');
   print(`  Matched: ${result.matchedCount}`);
@@ -82,10 +85,11 @@ if (existing.length === 0) {
 }
 
 // Confirm final state for every matching document.
-const finalDocs = roles.find(filter, { name: 1, tenantId: 1, permissions: 1, description: 1 }).toArray();
+const finalDocs = roles
+  .find(filter, { name: 1, tenantId: 1, permissions: 1, description: 1 })
+  .toArray();
 print('\nFinal role document(s):');
 for (const doc of finalDocs) {
   print(`\n_id=${doc._id}, tenantId=${doc.tenantId ?? '<no-tenant>'}`);
   printjson(doc.permissions);
 }
-
