@@ -83,7 +83,7 @@ export default function KnaufCodeExportActions({
     }
 
     const normalizedLang = lang.toLowerCase();
-    const file = Object.prototype.hasOwnProperty.call(CODE_FILES, normalizedLang)
+    const file = Object.hasOwn(CODE_FILES, normalizedLang)
       ? CODE_FILES[normalizedLang]
       : FALLBACK_FILE;
     const url = URL.createObjectURL(new Blob([code], { type: `${file.mime};charset=utf-8` }));
