@@ -25,7 +25,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/processing.md](architecture/files/processing.md) | Which formats each upload mode accepts (MIME allow-lists) and how each is processed — image transforms, document parser, OCR, speech-to-text, RAG embedding; plus what's active vs dormant today |
 | [architecture/files/async-indexing.md](architecture/files/async-indexing.md) | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md) | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
-| [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How Code Interpreter (self-hosted ClickHouse sandbox) + Artifacts work and how to enable/run them locally — the two capability gates, `librechat.local.yaml` + `CONFIG_PATH` wiring, where `KVM_ENABLED` lives, the sandbox service topology, and whether to launch it from KARL's compose |
+| [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How Artifacts, Skills and Code Interpreter work — the per-capability gate stacks, which are live (artifacts + skills, KK20-243) vs dark (`execute_code`), the deployment-skill layout and authoring traps, Sandpack/CDN egress, and the local ClickHouse sandbox setup (`librechat.local.yaml` + `CONFIG_PATH`, where `KVM_ENABLED` lives, service topology) |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 
@@ -51,7 +51,7 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
 | [implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md](implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md) | Correct dual-backend retrieval, deduplication, LangGraph compaction/finalization, and Langfuse verification |
-| [implementation-plans/code-interpreter-artifacts-rollout.md](implementation-plans/code-interpreter-artifacts-rollout.md) | Enable Code Interpreter (self-hosted ClickHouse sandbox) + Artifacts — the two capability gates, local eval record, and the AGK prod rollout (new GitOps service, JWT trust, KVM node pool) — KK20-108 |
+| [implementation-plans/code-interpreter-artifacts-rollout.md](implementation-plans/code-interpreter-artifacts-rollout.md) | Artifacts + Skills + Code Interpreter rollout — the three capability gate stacks, what KK20-243 landed (config, RBAC, the agent-builder rows, the brand skill) with its mandatory post-deploy mongosh step and known surprises, plus the remaining AGK sandbox work (GitOps service, JWT trust, KVM node pool) — KK20-108 / KK20-243 |
 
 ## Upstream releases
 

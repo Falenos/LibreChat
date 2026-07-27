@@ -1,32 +1,34 @@
-# Code Interpreter + Artifacts on AGK — rollout
+# Artifacts, Skills + Code Interpreter on AGK — rollout
 
 > **Hands-on local setup guide** (how to run the sandbox + enable both features on a dev machine): [`../architecture/code-interpreter-and-artifacts.md`](../architecture/code-interpreter-and-artifacts.md). This doc is the *production rollout plan*.
 >
 > **Backend choice** (why the self-hosted ClickHouse sandbox vs an Azure managed service like Container Apps dynamic sessions): [`../proposals/code-interpreter-backend-options.md`](../proposals/code-interpreter-backend-options.md). This plan assumes the ClickHouse self-host; that proposal is where the alternative is weighed.
 
-> **TL;DR** — Two upstream LibreChat features are fully present in the fork but deliberately **dark** on KARL: **Code Interpreter** (sandboxed code execution) and **Artifacts** (React/HTML/Mermaid preview in a side panel). Both are gated off by one line in [`librechat.yaml`](../../../librechat.yaml) — `endpoints.agents.capabilities` lists only `file_search` and `tools`. Neither needs a code change to turn on. **Code Interpreter also needs a backend**: upstream no longer calls a paid API — it targets the self-hosted, Apache-2.0 **[ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter)** sandbox, which we would run as a new AGK GitOps service (mirroring the Langfuse / rag-api pattern). **Artifacts needs no backend** — rendering is browser-side via Sandpack — but has a CDN-egress decision. **Status: local evaluation done; prod not started.** This doc is the evaluation record + the prod rollout plan. Ticket: **KK20-108**.
+> **TL;DR** — Three upstream LibreChat capabilities live on one gate in [`librechat.yaml`](../../../librechat.yaml), `endpoints.agents.capabilities`. **Artifacts** (React/HTML/Mermaid/SVG preview panel) and **Skills** (markdown context injection, carrying the Knauf brand tokens) are **now enabled** — KK20-243 — because neither needs a backend. **Code Interpreter** (sandboxed execution) is still **dark**: upstream no longer calls a paid API, it targets the self-hosted, Apache-2.0 **[ClickHouse/code-interpreter](https://github.com/ClickHouse/code-interpreter)** sandbox, which we would run as a new AGK GitOps service (mirroring the Langfuse / rag-api pattern). Artifacts has no service to deploy but does carry a CDN-egress decision. **Status: artifacts + skills shipped; code interpreter prod not started.** Tickets: **KK20-108**, **KK20-243**.
 
 ## Tickets
 
-- **KK20-108** — enable Code Interpreter + Artifacts (evaluation + rollout).
-- Follow-ups to file when prod work starts (see [Open questions](#open-questions)): the AKS nested-virtualization (`/dev/kvm`) node-pool spike, and the end-user exposure decision for the simplified Knauf agent builder.
+- **KK20-108** — enable Code Interpreter + Artifacts (evaluation + rollout). Still open for `execute_code`.
+- **KK20-243** — Artifacts + Skills activation and the Knauf brand-theme skill. **Landed** — see [Landed in KK20-243](#landed-in-kk20-243).
+- Follow-ups to file (see [Open questions](#open-questions)): the AKS nested-virtualization (`/dev/kvm`) node-pool spike; the artifact CDN-egress pre-flight; and whether the composer Skills chip should be made a working off-switch on spec-driven chats.
 
 ---
 
 ## Architecture / mental model
 
-### Two independent gates (do not conflate)
+### Three capabilities, three different gate stacks (do not conflate)
 
-Enabling code execution is governed by **two** switches that live in different places and control different UX:
+All three appear in the same `endpoints.agents.capabilities` list, but what *else* has to be true differs per capability. Conflating them is the main source of confusion here.
 
-| Gate | Where | Controls |
+| Capability | Gates that must all pass | Notes |
 |---|---|---|
-| `interface.runCode` | [`librechat.yaml:369`](../../../librechat.yaml) — already `true` | The **manual "Run" button** on a code block + the composer "Run Code" badge toggle. Backed by the `RUN_CODE` role permission. |
-| `execute_code` in `endpoints.agents.capabilities` | [`librechat.yaml:469-471`](../../../librechat.yaml) — currently **excluded** | Whether an **agent auto-runs code** as a tool during a run (`codeEnvAvailable`). |
+| **`artifacts`** | 1. the capability list<br>2. a non-empty `artifacts` mode on the conversation or agent | **No RBAC permission exists at all.** The `karl` modelSpec sets `artifacts: 'default'`, which is what makes it on-by-default for new chats; without that key `applyModelSpecEphemeralAgent` writes `''` and forces it off. Server-side there is *no* capability check either — `initialize.ts` appends the prompt for any non-empty string — so this flag is a UI/UX gate, not enforcement. |
+| **`skills`** | 1. the capability list<br>2. the `SKILLS` RBAC permission (`interface.skills` for USER/ADMIN, `seed-agent-builder-role.js` for AGENT_BUILDER)<br>3. per-agent opt-in: `skills_enabled` on a persisted agent, or the modelSpec `skills` field | Enforced server-side at `initialize.js` and `skillDeps.js`. The `karl` spec sets `skills: true`. Skills need no backend — `read_file` on a skill reference is served from the in-process deployment registry. |
+| **`execute_code`** | 1. the capability list — **currently excluded**<br>2. a reachable sandbox at `LIBRECHAT_CODE_BASEURL`<br>3. for the *manual* Run button only: the `RUN_CODE` permission | `interface.runCode` (already `true`) gates only the manual Run button on a code block, **not** agent auto-run. Note the asymmetry: `KNAUF_RESTRICT_USER_PERMISSIONS` forces `RUN_CODE.USE` false for the built-in USER role in every environment, but agent auto-run is not gated by `RUN_CODE` — so a shared agent with this capability would execute code for USERs regardless. |
 
-Artifacts is a **single** capability gate — `artifacts` in the same `capabilities` list (no dedicated RBAC permission). Adding `artifacts` there surfaces the per-chat Artifacts toggle; the model is then prompted to emit the `:::artifact` directive that the Sandpack side panel renders.
+One correction worth recording, because the earlier version of this doc and the yaml comment both got it wrong: **this list is not "the agent builder" list.** It gates *every* chat, including default-spec KARL chats on the `azureOpenAI` endpoint — all sends route through [`api/server/routes/agents/chat.js`](../../../api/server/routes/agents/chat.js), and `skipAgentCheck` exists precisely to let non-agents endpoints through that router.
 
-Upstream ships `defaultAgentCapabilities` **including** both `execute_code` and `artifacts`; KARL overrides the list down to `[file_search, tools]` on purpose (comment block at [`librechat.yaml:452-461`](../../../librechat.yaml)). So the whole rollout on the LibreChat side is: **add two strings to that list** in the committed yaml (which is baked into the image at build — [`Dockerfile:37-38`](../../../Dockerfile) — so it ships via the normal release pipeline).
+Upstream's `defaultAgentCapabilities` includes all three; KARL overrides the list explicitly, so that default never applies. The committed yaml is baked into the image at build ([`Dockerfile`](../../../Dockerfile)) and stage/prod are `az acr import` re-tags of the dev image, so **the same config ships to all three environments byte-identically** — there is no per-environment yaml mechanism. Per-env divergence is env vars only.
 
 ### Sandbox trust model (Code Interpreter only)
 
@@ -85,15 +87,57 @@ The local-vs-committed split relies on the loader: [`api/server/services/Config/
 
 ---
 
+## Landed in KK20-243
+
+Artifacts and Skills are **on**. `execute_code` is untouched. The whole activation is config plus one client registry:
+
+| Change | File | Why |
+|---|---|---|
+| `artifacts` + `skills` in the capability list; the stale "agent builder" comment rewritten | [`librechat.yaml`](../../../librechat.yaml) | The single gate. Verified with `configSchema.safeParse`. |
+| `interface.skills: { use: true, create: false, share: false, public: false }` | [`librechat.yaml`](../../../librechat.yaml) | Without an explicit block, `hasExplicitConfig` never rewrites the role docs, so USER/ADMIN `SKILLS` freeze at first-create and environments drift. `create: false` keeps authoring with platform engineering — the schema default is `true`. |
+| `artifacts: 'default'` + `skills: true` on the `karl` spec | [`librechat.yaml`](../../../librechat.yaml) | `applyModelSpecEphemeralAgent` is authoritative for new spec-driven chats and writes `artifacts: ''` when the key is absent — without it the feature ships dark. `interface.defaultPinnedTools` is **not** a substitute: the pin default is beaten by the eagerly-persisted localStorage value in every existing browser. |
+| `SKILLS: { USE: true, … }` for AGENT_BUILDER | [`knauf/scripts/seed-agent-builder-role.js`](../../scripts/seed-agent-builder-role.js) | The role hard-set all-false, so AI Champions would have stayed locked out. **Requires a manual run per environment — see the post-deploy step below.** |
+| Two rows appended to the capability registry | [`client/src/knauf/components/Agents/capabilities.ts`](../../../client/src/knauf/components/Agents/capabilities.ts) | `KnaufAgentConfig` held only `browseInternet`, so artifacts/skills toggles were ADMIN-only and AI Champions could not enable them on agents they publish. Needs no schema work — the fields already exist and already round-trip. |
+| `skill/karl-brand/` (new) + `karl-artifacts` rewritten; `knauf-theme.md` deleted | [`skill/`](../../../skill) | One token source instead of four uncontrolled copies in three incompatible object shapes. Backed by the official kit in [`knauf/brand/`](../../brand). |
+| `skill/_disabled/karl-data-analysis/` | [`skill/_disabled`](../../../skill/_disabled) | Its catalog entry advertises `bash_tool` and `/mnt/data`, which do not exist while `execute_code` is off — shipping it invites the model to promise work it cannot do. One `git mv` to re-enable. |
+| Guard spec over the real `skill/` tree | [`packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts`](../../../packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts) | Nothing covered the shipped skills. A frontmatter typo there fails **server boot**; a typo'd reference path was undetectable until runtime. |
+| The brand kit | [`knauf/brand/`](../../brand) | 17 files, ~26 MB. Excluded from the Docker build context by `.dockerignore`. |
+
+### Post-deploy step — do not skip
+
+`knauf/scripts/seed-agent-builder-role.js` is **not** a job, **not** a migration, and **not** run by the app: `updateInterfacePermissions` only iterates USER and ADMIN, and AGENT_BUILDER exists only because a human ran mongosh. **Deploying the image does not grant AI Champions skills access.** After each environment's release lands:
+
+```bash
+mongosh "<agk-dev-mongo-uri>"   knauf/scripts/seed-agent-builder-role.js
+mongosh "<agk-stage-mongo-uri>" knauf/scripts/seed-agent-builder-role.js
+mongosh "<agk-prod-mongo-uri>"  knauf/scripts/seed-agent-builder-role.js
+```
+
+The script prints every matching role doc's final permissions — capture that as evidence. It is idempotent and converges every tenant-scoped copy. **Hazard:** it `$set`s the whole `permissions` object, so running an *older* checkout afterwards silently reverts `SKILLS` to false.
+
+### Known behaviour that will generate questions
+
+- **The composer Skills chip cannot turn skills off on a spec-driven chat.** `skills: true` on the modelSpec makes `skills_enabled` unconditional, which short-circuits `isAgentSkillsEnabledForRun` before it consults the chip. Accepted because the alternative is skills off by default everywhere. A working off-switch is a follow-up.
+- **A new Skills section appears in the left sidebar** for every user (`useSideNavLinks` adds it whenever the capability and permission are on). With `create: false` it is read-only — a catalog of the two deployment skills. Harmless but visible; worth product sign-off on the copy.
+- **Artifacts adds ~2.9k input tokens per turn** on every KARL conversation (the artifacts prompt is ~11.4 KB). Capture a Langfuse baseline before and after promotion.
+- **Artifacts previews depend on CDN egress from the user's browser.** See the pre-flight in [Verification recipes](#verification-recipes).
+
+---
+
 ## Still pending (prod worklist, dependency-ordered)
+
+**Artifacts and Skills are done** — items 5–7 of the original list are resolved (see [Landed in KK20-243](#landed-in-kk20-243)), except the artifact egress pre-flight, which is item 5 below. What remains is Code Interpreter.
 
 1. **[Spike] AKS nested-virtualization node pool.** Standard AKS nodes do not expose `/dev/kvm`. Decide: dedicated nested-virt VM-size node pool (e.g. `Dsv3`/`Esv3`+ families) with a device-exposure mechanism + taints/tolerations for microVM isolation, **or** accept `KVM_ENABLED=false` (NsJail, shared node kernel) for an internal-only, authenticated deployment. This is the single biggest unknown — resolve before committing to a deploy shape.
 2. **Deploy the sandbox service** in `Knauf-Group/agk-deployment-configs` via the upstream `helm/codeapi` chart (single-source service; `services-local` ApplicationSet + exclude from multi-source `services`, per the Langfuse precedent). Internal-only ingress or ClusterIP — LibreChat is the only client.
 3. **Provision JWT trust.** Generate an EdDSA keypair; private key → `kv-agntkarl-nonprod-001` → ExternalSecret → LibreChat env; public key → codeapi values. Set matching `issuer`/`audience`/`kid`/`alg` on both sides. `LOCAL_MODE=false`; strong `CODEAPI_INTERNAL_SERVICE_TOKEN` from Key Vault (never the `localdev-…` default).
 4. **Wire LibreChat env** in the AGK values: `LIBRECHAT_CODE_BASEURL=http://<codeapi-svc>.<ns>.svc.cluster.local:3112/v1`, `CODEAPI_AUTH_PROVIDER=librechat-jwt`, and the `CODEAPI_JWT_*` set.
-5. **Flip the capability** in the committed `librechat.yaml` (`execute_code`, `artifacts`, and — if the deployment skills in `skill/` should be live in prod — `skills`) — ships via the release pipeline **after** the sandbox exists in dev. Note `skills` needs no backend (see the setup guide's Skills section), so it can be flipped independently of the sandbox.
-6. **Artifacts egress decision** — self-host the Sandpack bundler (`SANDPACK_BUNDLER_URL`) or accept CodeSandbox + Tailwind CDN egress from user browsers.
-7. **USER-role decision** — see [Open questions](#open-questions).
+5. **Flip `execute_code`** in the committed `librechat.yaml` — ships via the release pipeline **after** the sandbox exists in dev. `artifacts` and `skills` are already in that list (KK20-243); this adds the third string.
+6. **USER-role decision for code execution** — see [Open questions](#open-questions). Unchanged by KK20-243, since artifacts has no RBAC permission and skills is not in the restricted set.
+
+**Independent of the sandbox — do this now, not with code interpreter:**
+
+7. **Artifacts CDN egress pre-flight.** Artifacts are live, so this is no longer a decision to defer: confirm from a managed browser on the corporate network that `cdn.tailwindcss.com/3.4.17`, `*-sandpack.codesandbox.io` and `preview.sandpack-static-server.codesandbox.io` are reachable. If the bundler is blocked, `SANDPACK_BUNDLER_URL` / `SANDPACK_STATIC_BUNDLER_URL` are per-environment env vars and need no rebuild. If **Tailwind** is blocked, React previews render unstyled and there is no env override — that needs a code change (self-hosting the Tailwind build), so find out before promoting to prod.
 
 ---
 

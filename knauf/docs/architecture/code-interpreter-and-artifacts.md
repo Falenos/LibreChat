@@ -2,23 +2,24 @@
 
 A hands-on guide to turning on **Code Interpreter** (sandboxed code execution) and **Artifacts** (React/HTML/Mermaid preview) on a local KARL, plus how the sandbox works under the hood. For the **production** rollout (deploying the sandbox on AGK, JWT trust, the `/dev/kvm` decision) see the companion plan: [`../implementation-plans/code-interpreter-artifacts-rollout.md`](../implementation-plans/code-interpreter-artifacts-rollout.md).
 
-> Both features ship with upstream LibreChat and are fully wired in the fork — they are **dark on KARL by config**, not missing code. Enabling them locally is config-only; the committed `librechat.yaml` is never touched.
+> **Status (KK20-243):** **Artifacts and Skills are enabled** in the committed `librechat.yaml` and ship to every environment. **Code Interpreter is still dark** — `execute_code` is excluded, because the sandbox is not deployed on AGK. So the local-setup half of this guide is now only about Code Interpreter; artifacts and skills work out of the box.
 
 ---
 
-## The two gates (mental model)
-
-Enabling is controlled by two independent switches:
+## The gates (mental model)
 
 | Switch | Where | Turns on |
 |---|---|---|
-| `interface.runCode` | `librechat.yaml` — already `true` | The manual **Run** button on code blocks + the composer "Run Code" badge. (Permission: `RUN_CODE`.) |
-| `execute_code` / `artifacts` in `endpoints.agents.capabilities` | `librechat.yaml` — currently `[file_search, tools]` | Agent **auto-run** of code, and whether **Artifacts** is offered at all. |
+| `artifacts` in `endpoints.agents.capabilities` | `librechat.yaml` — **enabled** | Whether Artifacts is offered at all. No RBAC permission exists. The `karl` spec's `artifacts: 'default'` is what makes it on for new chats. |
+| `skills` in `endpoints.agents.capabilities` | `librechat.yaml` — **enabled** | The deployment skills in `skill/`. Additionally needs the `SKILLS` permission and per-agent opt-in (`skills_enabled`, or the spec's `skills` field). |
+| `execute_code` in `endpoints.agents.capabilities` | `librechat.yaml` — **excluded** | Agent **auto-run** of code. Also needs a reachable sandbox. |
+| `interface.runCode` | `librechat.yaml` — already `true` | Only the manual **Run** button on code blocks + the composer "Run Code" badge. (Permission: `RUN_CODE`.) Not agent auto-run. |
 
 - **Code Interpreter** additionally needs a running **sandbox backend** (below).
 - **Artifacts** needs **no backend** — it renders in the browser via Sandpack; only an egress decision.
+- **Skills** needs **no backend** — a skill is markdown injected into context, and `read_file` on a skill reference is served from the in-process deployment registry.
 
-We enable both locally by adding `execute_code` + `artifacts` to the capabilities list in a **local-only** `librechat.local.yaml`, loaded via `CONFIG_PATH`, so the committed file stays canonical.
+To evaluate **Code Interpreter** locally, add `execute_code` to the capabilities list in a **local-only** `librechat.local.yaml` loaded via `CONFIG_PATH`, so the committed file stays canonical. That file is gitignored. You no longer need it for artifacts or skills.
 
 ---
 
@@ -77,11 +78,12 @@ The loader honours a `CONFIG_PATH` override ([`api/server/services/Config/loadCu
 ```bash
 cd ~/repos/knauf/agentic-karl-v2
 
-# 1. Create the local config = a full copy of the canonical file + two capabilities.
+# 1. Create the local config = a full copy of the canonical file + one capability.
 cp librechat.yaml librechat.local.yaml
 ```
 
-Then add two lines to the `endpoints.agents.capabilities` list in `librechat.local.yaml`:
+Then add **one** line to the `endpoints.agents.capabilities` list in `librechat.local.yaml`
+(`artifacts` and `skills` are already there in the committed file since KK20-243):
 
 ```yaml
   agents:
@@ -89,9 +91,10 @@ Then add two lines to the `endpoints.agents.capabilities` list in `librechat.loc
     capabilities:
       - file_search
       - tools
+      - artifacts
+      - skills
       # [knauf-local KK20-108] evaluation only — NOT in committed librechat.yaml.
       - execute_code
-      - artifacts
 ```
 
 In your (gitignored) `.env`:
@@ -119,7 +122,7 @@ No `CODEAPI_JWT_*` is needed locally: the sandbox runs `LOCAL_MODE=true` (auth b
 
 ## Part C — Artifacts
 
-Artifacts needs **no backend**. Once `artifacts` is in the capabilities list (Part B), the composer offers it. Rendering happens in a Sandpack iframe **in the browser**:
+Artifacts needs **no backend**, and `artifacts` is already in the committed capabilities list (KK20-243), so the composer offers it out of the box. The `karl` spec additionally sets `artifacts: 'default'`, which is what makes it on for new chats — without that key `applyModelSpecEphemeralAgent` writes `''` and forces it off on every new conversation. Rendering happens in a Sandpack iframe **in the browser**:
 
 - Unset `SANDPACK_BUNDLER_URL` → the public CodeSandbox bundler (browser must reach `*.codesandbox.io`).
 - Tailwind is pulled from `cdn.tailwindcss.com/3.4.17` (hardcoded in [`client/src/utils/artifacts.ts`](../../../client/src/utils/artifacts.ts)), so present even with a self-hosted bundler.
@@ -132,7 +135,9 @@ On a locked-down corporate network, preflight by loading both URLs in a browser;
 
 **Skills** are reusable instruction bundles (`SKILL.md` files) the model can pull into context on demand — the natural companion to Code Interpreter + Artifacts, since a skill can encode *how* to use them well. This is a **built-in LibreChat feature** (v0.8.7); enabling it is config + markdown, no application code.
 
-**It's a third capability on the same gate.** Add `skills` to `endpoints.agents.capabilities` (alongside `execute_code`, `artifacts` in `librechat.local.yaml`) — that single switch turns the whole subsystem on (`skillsCapabilityEnabled`, [`api/server/services/Endpoints/agents/initialize.js`](../../../api/server/services/Endpoints/agents/initialize.js)). Interface permissions default to `use: true` / `create: true`, so no role changes are needed.
+**It's a third capability on the same gate, and it is already on** — `skills` is in the committed `endpoints.agents.capabilities` (KK20-243). That switch turns the subsystem on (`skillsCapabilityEnabled`, [`api/server/services/Endpoints/agents/initialize.js`](../../../api/server/services/Endpoints/agents/initialize.js)).
+
+Two RBAC details that are easy to get wrong: the schema defaults are `use: true` / `create: true`, but the committed `interface.skills` block sets **`create: false`** on purpose — authoring stays with platform engineering. And that block has to exist at all, because `hasExplicitConfig` only rewrites a role document when the matching `interface.*` key is present; without it the role docs freeze at whatever was written when they were first created. The `AGENT_BUILDER` role is separate again and needs [`knauf/scripts/seed-agent-builder-role.js`](../../scripts/seed-agent-builder-role.js) run manually per environment.
 
 **Skills do NOT need the code sandbox.** A `SKILL.md` body is injected into the model's context as a primed message; bundled `references/*` files are read **host-side** via the `read_file` tool. Only `scripts/*` execution (via `bash_tool`) needs the sandbox — optional. So skills work even with `execute_code` off.
 
@@ -141,13 +146,20 @@ On a locked-down corporate network, preflight by loading both URLs in a browser;
 - **User-created** — authored/uploaded in the Skills UI (Mongo-backed, live-editable).
 - **GitHub sync** — mirrored via `skillSync.github` in the yaml.
 
-**Frontmatter** is strictly validated ([`packages/data-schemas/src/methods/skill.ts`](../../../packages/data-schemas/src/methods/skill.ts)): required `name` (kebab-case ≤64) + `description` (≤1024 — this is the model-invocation trigger, make it specific); useful optionals `argument-hint`, `user-invocable`, `disable-model-invocation`, `always-apply`, `allowed-tools`. Unknown keys are rejected.
+**Frontmatter** is strictly validated ([`packages/data-schemas/src/methods/skill.ts`](../../../packages/data-schemas/src/methods/skill.ts)): required `name` (kebab-case ≤64) + `description`; useful optionals `argument-hint`, `user-invocable`, `disable-model-invocation`, `always-apply`, `allowed-tools`. Unknown keys are rejected — which aborts boot for a deployment skill.
 
-**Invocation:** the model picks from an injected catalog (name + description only — cheap), the user types `$` for a manual popover, or `always-apply` primes every turn. Per agent: the builder's **Skills** toggle (`skills_enabled`) + an optional allowlist.
+**The description cap that matters is 250, not 1024.** `formatSkillCatalog` truncates every catalog entry at 250 chars, so any trigger word past that point never reaches the model. 1024 is only the storage limit. See [`skill/README.md`](../../../skill/README.md) for the full authoring rules.
 
-**Two deployment skills ship in `skill/`** (inert until the capability is on): `karl-artifacts` (type selection, the react allowlist + top preview-breaking mistakes, update-in-place discipline) and `karl-data-analysis` (sandbox workflow, `/mnt/data` persistence, the ~64 KB stdout cap, headless matplotlib, no-network). They deliberately **layer on** the prompts LibreChat already injects — they restate no directive syntax.
+**Invocation:** the model picks from an injected catalog (name + description only — cheap), the user types `$` for a manual popover, or `always-apply` primes every turn. Per agent: the builder's **Skills** toggle (`skills_enabled`) + an optional allowlist. Note the modelSpec `skills: true` on the `karl` spec makes `skills_enabled` unconditional for default-spec chats, which short-circuits the composer chip.
 
-To activate locally: add `- skills` to the capabilities list in `librechat.local.yaml` and restart `backend:dev`.
+**Two deployment skills ship in `skill/`:**
+
+- **`karl-brand`** — the single source of truth for Knauf brand tokens: the official colour system, a chart palette validated for CVD separation and contrast in both light and dark, ink/surface tokens, and the real KNAUF wordmark as an inline SVG path. Other skills read it via `read_file skills/karl-brand/SKILL.md`; it must stay model-invocable for that to work.
+- **`karl-artifacts`** — artifact type selection, the react import allowlist, the top preview-breaking mistakes, update-in-place discipline, and branded report / slides / dashboard templates that consume `karl-brand`.
+
+A third, `karl-data-analysis`, is parked at `skill/_disabled/` — its body describes `bash_tool` and `/mnt/data`, so it stays out of the catalog until `execute_code` is on. One `git mv` re-enables it.
+
+They deliberately **layer on** the prompts LibreChat already injects — they restate no directive syntax. `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` guards the shipped tree; run it after editing any skill.
 
 ---
 
@@ -157,7 +169,7 @@ To activate locally: add `- skills` to the capabilities list in `librechat.local
 - **Agent auto-run** — composer **"+"** → toggle **Run Code**, then e.g. "compute Fibonacci(20) by running Python"; or enable Code Interpreter on an agent in the builder (admins get the detailed builder by default).
 - **Files** — attach a **CSV** to a code-interpreter agent → "load with pandas, print describe()" → "plot a chart"; the PNG returns inline. `.py`/`.zip` are blocked by the KK20-190 MIME allow-list — relax `supportedMimeTypes` in `librechat.local.yaml` only if needed.
 - **Artifacts** — composer **"+"** → toggle **Artifacts** → "React counter with Tailwind" or "Mermaid flowchart of a login flow" → renders in the side panel.
-- **Skills** — type `$` in the composer → popover lists `karl-artifacts` + `karl-data-analysis`; pick one, or let the model invoke it from its catalog (watch for a `skill(...)` call in the run). On an agent, flip **Skills** in the builder.
+- **Skills** — type `$` in the composer → popover lists `karl-artifacts` + `karl-brand`; pick one, or let the model invoke it from its catalog (watch for a `skill(...)` call in the run, then a `read_file` on `skills/karl-brand/SKILL.md`). On an agent, flip **Use Knauf skills** in the builder. A good end-to-end prompt: *"build a Knauf-branded status report"* — it should exercise the skill call, the cross-skill token read, and the report template.
 
 ---
 
