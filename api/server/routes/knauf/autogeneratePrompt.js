@@ -47,7 +47,7 @@ const autogeneratePromptSchema = z.object({
     tools: z.array(z.string().max(120)).max(20).default([]),
     mcpServers: z.array(z.string().max(80)).max(10).default([]),
   }),
-  currentDraft: z.string().max(4000).default(''),
+  currentDraft: z.string().default(''),
   sourceTemplate: z.string().max(4000).optional(),
 });
 
@@ -128,7 +128,7 @@ function buildUserMessage(input) {
 const router = express.Router();
 router.use(requireJwtAuth);
 
-router.post('/', express.json({ limit: '32kb' }), async (req, res) => {
+router.post('/', async (req, res) => {
   const parseResult = autogeneratePromptSchema.safeParse(req.body);
   if (!parseResult.success) {
     return res.status(400).json({

@@ -135,49 +135,57 @@ const SavedFileRow = memo(function SavedFileRow({
   file,
   localize,
   deleting,
-  reindexable,
+  retryableUpload,
   onDelete,
-  // KK20-195 WP5b — failed-indexing retry; KK20-227 — in-session re-index.
+  // KK20-195 WP5b — failed-indexing retry; KK20-227 — failed-upload retry.
   retryingIndex = false,
   onRetryIndexing,
-  onReindex,
+  onRetryUpload,
 }: Readonly<{
   file: ExtendedFile;
   localize: Localize;
   deleting: boolean;
-  // [knauf] KK20-227 — true when an in-session blob is retained for this file,
-  // so it can be re-indexed (delete + re-upload) without a re-pick.
-  reindexable: boolean;
+  // [knauf] KK20-227 — true only for a failed local upload whose File is retained.
+  retryableUpload: boolean;
   onDelete: (file: ExtendedFile) => void;
   // KK20-195 WP5b — failed-indexing retry (server CAS failed → queued).
   retryingIndex?: boolean;
   onRetryIndexing?: (file: ExtendedFile) => void;
-  onReindex: (file: ExtendedFile) => void;
+  onRetryUpload: (file: ExtendedFile) => void;
 }>) {
   const handleDelete = useCallback(() => onDelete(file), [file, onDelete]);
   // KK20-195 WP5b — stable callback for the indexing retry action.
   const handleRetryIndexing = useCallback(() => onRetryIndexing?.(file), [file, onRetryIndexing]);
-  const handleReindex = useCallback(() => onReindex(file), [file, onReindex]);
+  const handleRetryUpload = useCallback(() => onRetryUpload(file), [file, onRetryUpload]);
   // During an agent upload the in-progress entry carries the native File but no
   // `filename` yet — useFileHandling sets `filename` only after the server
   // round-trip, and for agent uploads it refetches rather than updating the
   // local entry (useFileHandling.ts onSuccess). Fall back to the File's name so
   // the row shows the name throughout the upload instead of going blank. KK20-188
   const displayName = file.filename || file.file?.name || '';
-  // A still-uploading entry (progress < 1) shows a spinner + name, no size/delete
-  // — mirrors the pending-row treatment and the upstream FilePreview spinner.
-  const uploading = (file.progress ?? 1) < 1;
+  // A still-uploading entry (0 <= progress < 1) shows a spinner + name, no
+  // size/delete — negative progress is the retained failed-upload state.
+  const failedUpload = (file.progress ?? 1) < 0;
+  const uploading = !failedUpload && (file.progress ?? 1) < 1;
   return (
-    <FileRowShell filename={displayName} type={file.type} uploading={uploading} dimmed={deleting}>
+    <FileRowShell
+      filename={displayName}
+      type={file.type}
+      uploading={uploading}
+      error={failedUpload}
+      dimmed={deleting}
+    >
       {!uploading && (
         <>
           {/* KK20-195 WP5b — real server indexing state (pending spinner /
               failed + retry); renders nothing for ready + legacy rows. */}
-          <KnaufFileIndexingStatus
-            indexing={file.indexing}
-            retrying={retryingIndex}
-            onRetry={onRetryIndexing != null ? handleRetryIndexing : undefined}
-          />
+          {!failedUpload && (
+            <KnaufFileIndexingStatus
+              indexing={file.indexing}
+              retrying={retryingIndex}
+              onRetry={onRetryIndexing != null ? handleRetryIndexing : undefined}
+            />
+          )}
           {typeof file.size === 'number' && (
             <span className="shrink-0 text-xs tabular-nums text-text-secondary">
               {formatFileSize(file.size)}
@@ -192,19 +200,15 @@ const SavedFileRow = memo(function SavedFileRow({
             </span>
           ) : (
             <>
-              {/* [knauf] KK20-227 — re-index (delete + re-upload) a saved file
-                  when its session blob is retained, forcing a fresh RAG/OCR pass
-                  so a silently OCR-less file can be fixed without re-picking. */}
-              {reindexable && (
+              {/* [knauf] KK20-227 — retry only terminal failed uploads. Ready
+                  files must not expose a destructive delete-and-re-upload action. */}
+              {failedUpload && retryableUpload && (
                 <button
                   type="button"
-                  onClick={handleReindex}
-                  aria-label={localize('com_knauf_knowledge_reindex')}
-                  title={localize('com_knauf_knowledge_reindex')}
-                  className={cn(
-                    ACTION_CLASS,
-                    'opacity-0 hover:text-text-primary focus-visible:opacity-100 group-hover:opacity-100',
-                  )}
+                  onClick={handleRetryUpload}
+                  aria-label={localize('com_knauf_knowledge_retry')}
+                  title={localize('com_knauf_knowledge_retry')}
+                  className={cn(ACTION_CLASS, 'hover:text-text-primary')}
                 >
                   <RefreshCw className="size-4" aria-hidden="true" />
                 </button>
@@ -216,7 +220,9 @@ const SavedFileRow = memo(function SavedFileRow({
                 aria-label={localize('com_ui_attach_remove')}
                 className={cn(
                   ACTION_CLASS,
-                  'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+                  !failedUpload &&
+                    'opacity-0 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100',
+                  'hover:text-red-500',
                 )}
               >
                 <Trash2 className="size-4" aria-hidden="true" />
@@ -304,8 +310,8 @@ function KnaufKnowledgeFileList({
   pendingFiles,
   onRemovePending,
   onRetryPending,
-  getReindexFile,
-  onReupload,
+  getRetryFile,
+  onRetryUpload,
 }: Readonly<{
   files: Map<string, ExtendedFile>;
   setFiles: Dispatch<SetStateAction<Map<string, ExtendedFile>>>;
@@ -314,9 +320,9 @@ function KnaufKnowledgeFileList({
   pendingFiles: Map<string, PendingEntry>;
   onRemovePending: (tempId: string) => void;
   onRetryPending: (tempId: string) => void;
-  // [knauf] KK20-227 — in-session re-index: retained-blob lookup + re-upload.
-  getReindexFile?: (file: ExtendedFile) => File | undefined;
-  onReupload?: (blob: File) => void;
+  // [knauf] KK20-227 — failed-upload File lookup + requeue.
+  getRetryFile?: (file: ExtendedFile) => File | undefined;
+  onRetryUpload?: (blob: File) => void;
 }>) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
@@ -338,14 +344,14 @@ function KnaufKnowledgeFileList({
   // upstream every render) so the memo'd rows don't re-render on every keystroke.
   const removePendingRef = useRef(onRemovePending);
   const retryPendingRef = useRef(onRetryPending);
-  // [knauf] KK20-227 — same stabilization for the re-index callbacks.
-  const getReindexFileRef = useRef(getReindexFile);
-  const onReuploadRef = useRef(onReupload);
+  // [knauf] KK20-227 — same stabilization for the failed-upload retry callbacks.
+  const getRetryFileRef = useRef(getRetryFile);
+  const onRetryUploadRef = useRef(onRetryUpload);
   useEffect(() => {
     removePendingRef.current = onRemovePending;
     retryPendingRef.current = onRetryPending;
-    getReindexFileRef.current = getReindexFile;
-    onReuploadRef.current = onReupload;
+    getRetryFileRef.current = getRetryFile;
+    onRetryUploadRef.current = onRetryUpload;
   });
 
   // Server-confirmed delete (KK20-188): mark the row deleting (spinner), await
@@ -358,6 +364,15 @@ function KnaufKnowledgeFileList({
     // and re-uploading identical content would dedup-hit it without re-OCRing.
     async (file: ExtendedFile): Promise<boolean> => {
       const id = file.file_id;
+      if (file.progress < 0) {
+        deletePreview(id);
+        setFiles((prev) => {
+          const next = new Map(prev);
+          next.delete(id);
+          return next;
+        });
+        return true;
+      }
       if (inFlightDeletesRef.current.has(id)) {
         return false;
       }
@@ -440,24 +455,19 @@ function KnaufKnowledgeFileList({
     [agent_id, queryClient, showToast, localize],
   );
 
-  // [knauf] KK20-227 — re-index a saved file: capture its retained session blob,
-  // run the server-confirmed delete (clears vectors + the dedup asset so the
-  // re-embed is a fresh MISS), then re-upload the blob for a fresh RAG/OCR pass.
-  // No-op when no blob is retained (post-reload / SharePoint rows show no
-  // re-index action), so it only ever automates the in-session workaround.
-  const handleReindexSaved = useCallback(
+  // [knauf] KK20-227 — remove a terminal local placeholder, then enqueue its
+  // retained File again. handleDeleteSaved does no server delete for progress < 0.
+  const handleRetryFailedUpload = useCallback(
     async (file: ExtendedFile) => {
-      const blob = getReindexFileRef.current?.(file);
+      const blob = getRetryFileRef.current?.(file);
       if (!blob) {
         return;
       }
-      // Only re-upload once the delete is server-confirmed — otherwise the old
-      // (bad) asset survives and the re-upload dedup-hits it without re-OCRing.
-      const deleted = await handleDeleteSaved(file);
-      if (!deleted) {
+      const removed = await handleDeleteSaved(file);
+      if (!removed) {
         return;
       }
-      onReuploadRef.current?.(blob);
+      onRetryUploadRef.current?.(blob);
     },
     [handleDeleteSaved],
   );
@@ -592,19 +602,17 @@ function KnaufKnowledgeFileList({
               file={file}
               localize={localize}
               deleting={deletingIds.has(file.file_id)}
-              reindexable={getReindexFile?.(file) != null}
+              retryableUpload={getRetryFile?.(file) != null}
               onDelete={handleDeleteSaved}
               retryingIndex={retryingIndexIds.has(file.file_id)}
               onRetryIndexing={handleRetryIndexing}
-              onReindex={handleReindexSaved}
+              onRetryUpload={handleRetryFailedUpload}
             />
           ))}
         </div>
       )}
 
-      {/* KK20-195 WP5b — §6.3 aggregate summary for a still-indexing
-          multi-file selection; renders nothing once the batch is terminal. */}
-      <KnaufBatchIndexSummary files={files} />
+      <KnaufBatchIndexSummary files={files} pendingFiles={pendingFiles} />
 
       {q !== '' && visibleCount > 0 && (
         <div className="px-1 text-xs text-text-secondary">

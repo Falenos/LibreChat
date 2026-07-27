@@ -12,7 +12,7 @@ const {
   buildBatchIndexStatus,
   retryFileIndexing,
 } = require('./indexStatus');
-const { checkIndexAdmission } = require('./indexAdmission');
+const { getAdmissionLimits, checkIndexAdmission } = require('./indexAdmission');
 
 let mongoServer;
 let KnaufFileAsset;
@@ -310,6 +310,13 @@ describe('checkIndexAdmission (§9.3)', () => {
   afterEach(() => {
     delete process.env.KNAUF_INDEX_MAX_QUEUED_FILES;
     delete process.env.KNAUF_INDEX_MAX_QUEUED_BYTES;
+  });
+
+  test('defaults to a 50-file / 500 MB bounded agent-build backlog', () => {
+    expect(getAdmissionLimits()).toEqual({
+      maxQueuedFiles: 50,
+      maxQueuedBytes: 500 * 1024 * 1024,
+    });
   });
 
   test('admits under the caps; terminal assets do not count', async () => {

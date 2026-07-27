@@ -281,7 +281,8 @@ async function getSignedAzureURL({ blobPath, containerName = AZURE_CONTAINER_NAM
 }
 // End [knauf]
 
-// [knauf] KK20-227 — coalesce concurrent container readiness checks to avoid repeated Azure 409s.
+// [knauf] Avoid expected Azure container-exists 409 spans while retaining one
+// coalesced readiness check per process and retrying real initialization failures. NO-TICKET.
 const containerReadiness = new Map();
 async function ensureAzureContainer(containerClient, containerName) {
   const access = isPublicAccess() ? 'blob' : undefined;
@@ -289,7 +290,12 @@ async function ensureAzureContainer(containerClient, containerName) {
   let readiness = containerReadiness.get(key);
   if (!readiness) {
     readiness = Promise.resolve()
-      .then(() => containerClient.createIfNotExists({ access }))
+      .then(async () => {
+        if (await containerClient.exists()) {
+          return;
+        }
+        await containerClient.createIfNotExists({ access });
+      })
       .catch((error) => {
         containerReadiness.delete(key);
         throw error;

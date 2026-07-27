@@ -7,7 +7,9 @@ import { useRecoilValue, useSetRecoilState } from 'recoil';
 import {
   QueryKeys,
   Constants,
+  DynamicQueryKeys,
   EToolResources,
+  megabyte,
   inferMimeType,
   mergeFileConfig,
   isAssistantsEndpoint,
@@ -54,16 +56,45 @@ export type FileHandlingState = {
 
 const noop = () => {};
 
-// [knauf] KK20-227 — retry one transient document-upload transport failure.
+// [knauf] KK20-227 — retry transient document-upload transport failures.
 const FAILED_UPLOAD_PROGRESS = -1;
 const UPLOAD_RETRY_DELAY_MS = 1000;
+const RATE_LIMIT_RETRY_DELAY_MS = 30_000;
+const BACKLOG_RETRY_DELAY_MS = 30_000;
+const MAX_UPLOAD_RETRIES = 3;
+type UploadError = TError & {
+  response?: TError['response'] & {
+    headers?: Record<string, string | number | string[] | undefined>;
+    data?: { error?: string; message?: string };
+  };
+};
+const isRateLimitedUploadError = (error: unknown) =>
+  (error as UploadError | undefined)?.response?.status === 429;
+const isBacklogFullUploadError = (error: unknown) =>
+  (error as UploadError | undefined)?.response?.data?.error === 'file_indexing_backlog_full';
 const isTransientUploadError = (error: unknown) => {
   const { code, response } = (error ?? {}) as TError;
   return (
     code === 'ERR_NETWORK' ||
     code === 'ECONNABORTED' ||
-    [502, 503, 504].includes(response?.status ?? 0)
+    [429, 502, 503, 504].includes(response?.status ?? 0)
   );
+};
+const getUploadRetryDelay = (error: unknown, retryNumber: number) => {
+  const backoffDelay = UPLOAD_RETRY_DELAY_MS * 2 ** (retryNumber - 1);
+  const retryDelay = isBacklogFullUploadError(error)
+    ? BACKLOG_RETRY_DELAY_MS * 2 ** (retryNumber - 1)
+    : backoffDelay;
+  if (!isRateLimitedUploadError(error)) {
+    return retryDelay;
+  }
+  const headers = (error as UploadError).response?.headers;
+  const rawValue = headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const retryAfter = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+  const seconds = Number(retryAfter);
+  const serverDelay =
+    Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RATE_LIMIT_RETRY_DELAY_MS;
+  return Math.max(retryDelay, serverDelay);
 };
 // End [knauf]
 
@@ -143,6 +174,30 @@ export function limitIncomingFiles(
 }
 // End [knauf]
 
+// [knauf] Accept files that fit the aggregate message limit and report the rest.
+// This keeps a large selection useful instead of rejecting the entire batch. NO-TICKET.
+const KNAUF_PARTIAL_LIMIT_TOAST_MS = 10_000;
+export function limitIncomingFilesByTotalSize(
+  fileList: File[],
+  currentTotalSize: number,
+  totalSizeLimit?: number,
+): { accepted: File[]; rejected: number } {
+  if (!totalSizeLimit) {
+    return { accepted: fileList, rejected: 0 };
+  }
+  const accepted: File[] = [];
+  let totalSize = currentTotalSize;
+  for (const file of fileList) {
+    if (totalSize + file.size > totalSizeLimit) {
+      continue;
+    }
+    accepted.push(file);
+    totalSize += file.size;
+  }
+  return { accepted, rejected: fileList.length - accepted.length };
+}
+// End [knauf]
+
 // [knauf] KK20-195 — discard duplicates individually so one repeated file cannot
 // reject every unique file selected alongside it. Identity deliberately mirrors
 // validateFiles: name + byte size + top-level MIME family.
@@ -177,7 +232,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   const { showToast } = useToastContext();
   const [errors, setErrors] = useState<string[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
-  // [knauf] KK20-227 — lets onError suppress cleanup only for the first retryable attempt.
+  // [knauf] KK20-227 — lets onError suppress cleanup during retryable attempts.
   const documentUploadAttemptsRef = useRef(new Map<string, number>());
   // End [knauf]
   const { startUploadTimer, clearUploadTimer } = useDelayedUploadToast();
@@ -197,7 +252,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   // (progress < 1), matching the send-button gate in FileRow. Prevents the
   // "refresh stranded my upload → file looks done but OCR missing" path.
   const hasPendingUploads = useMemo(
-    () => Array.from(files.values()).some((file) => file.progress < 1),
+    () => Array.from(files.values()).some((file) => file.progress >= 0 && file.progress < 1),
     [files],
   );
   useUploadBeforeUnloadGuard(hasPendingUploads);
@@ -263,6 +318,11 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         console.log('upload success', data);
         if (agent_id) {
           queryClient.refetchQueries([QueryKeys.agent, agent_id]);
+          // [knauf] The agent-files query owns live indexing projections. Refetch
+          // it after each 202 so its pending data enables the 5s poll loop; an
+          // agent refetch alone updates membership but leaves row spinners stale.
+          queryClient.refetchQueries(DynamicQueryKeys.agentFiles(agent_id));
+          // End [knauf]
           return;
         }
         updateFileById(
@@ -322,9 +382,13 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         const file_id = body.get('file_id');
         const tool_resource = body.get('tool_resource');
         // [knauf] KK20-227 — mutateAsync invokes onError before rejecting. Keep the
-        // pending chip intact while startUpload performs its one transient retry.
+        // pending chip intact while startUpload performs its transient retries.
         const uploadAttempt = documentUploadAttemptsRef.current.get(file_id as string);
-        if (uploadAttempt === 1 && isTransientUploadError(error)) {
+        if (
+          uploadAttempt != null &&
+          uploadAttempt <= MAX_UPLOAD_RETRIES &&
+          isTransientUploadError(error)
+        ) {
           return;
         }
         const isDocumentUpload = uploadAttempt != null;
@@ -337,19 +401,21 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           }));
         }
         clearUploadTimer(file_id as string);
-        // [knauf] KK20-227 — retain a failed document chip so the failure is visible
-        // and removable; non-document uploads keep their upstream cleanup behaviour.
+        // [knauf] Retain a failed document chip and give backlog exhaustion an
+        // actionable retry-later message. Non-document uploads keep upstream cleanup.
         if (isDocumentUpload) {
           updateFileById(file_id as string, { progress: FAILED_UPLOAD_PROGRESS });
         } else {
           deleteFileById(file_id as string);
         }
-        // End [knauf]
 
         let errorMessage = 'com_error_files_upload';
 
         if (error?.code === 'ERR_CANCELED') {
           errorMessage = 'com_error_files_upload_canceled';
+        } else if (isBacklogFullUploadError(error)) {
+          errorMessage = 'com_knauf_upload_backlog_retry_later';
+          // End [knauf]
         } else if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
@@ -440,18 +506,38 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       // the loadImage/onload path and are unaffected — they don't hit OCR.)
       await enqueueDocumentUpload(async () => {
         const retryDocument = !extendedFile.type?.startsWith('image/');
-        if (retryDocument) {
-          documentUploadAttemptsRef.current.set(extendedFile.file_id, 1);
-        }
-        try {
-          await uploadFile.mutateAsync(formData);
-        } catch (error) {
-          if (!retryDocument || !isTransientUploadError(error)) {
-            throw error;
+        let uploadAttempt = 1;
+        while (true) {
+          if (retryDocument) {
+            documentUploadAttemptsRef.current.set(extendedFile.file_id, uploadAttempt);
           }
-          documentUploadAttemptsRef.current.set(extendedFile.file_id, 2);
-          await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
-          await uploadFile.mutateAsync(formData);
+          try {
+            await uploadFile.mutateAsync(formData);
+            return;
+          } catch (error) {
+            if (
+              !retryDocument ||
+              !isTransientUploadError(error) ||
+              uploadAttempt > MAX_UPLOAD_RETRIES
+            ) {
+              throw error;
+            }
+            if (isRateLimitedUploadError(error)) {
+              showToast({
+                message: localize(
+                  isBacklogFullUploadError(error)
+                    ? 'com_knauf_upload_backlog_full'
+                    : 'com_knauf_upload_rate_limited',
+                ),
+                status: 'warning',
+                duration: 10_000,
+              });
+            }
+            await new Promise((resolve) =>
+              setTimeout(resolve, getUploadRetryDelay(error, uploadAttempt)),
+            );
+            uploadAttempt += 1;
+          }
         }
       }).catch(() => {});
       return;
@@ -550,8 +636,36 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
               2: String(endpointFileConfig.fileLimit),
             }),
             status: 'warning',
+            duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
           });
         }
+        setFilesLoading(false);
+        return;
+      }
+      // End [knauf]
+
+      // [knauf] Keep files that fit the aggregate message limit and surface an
+      // exact, long-lived partial-acceptance warning for the rest. NO-TICKET.
+      const currentTotalSize = Array.from(files.values()).reduce(
+        (total, file) => total + (file.size ?? 0),
+        0,
+      );
+      const sizeLimitedFiles = limitIncomingFilesByTotalSize(
+        fileList,
+        currentTotalSize,
+        endpointFileConfig.totalSizeLimit,
+      );
+      fileList = sizeLimitedFiles.accepted;
+      if (fileList.length === 0) {
+        showToast({
+          message: localize('com_knauf_total_size_partial', {
+            0: '0',
+            1: String(sizeLimitedFiles.rejected),
+            2: String((endpointFileConfig.totalSizeLimit ?? 0) / megabyte),
+          }),
+          status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
+        });
         setFilesLoading(false);
         return;
       }
@@ -578,8 +692,23 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
             2: String(endpointFileConfig.fileLimit),
           }),
           status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
         });
       }
+      // [knauf] Report aggregate-size overflow only after the retained files
+      // pass all other validation, so the toast never claims invalid files were added. NO-TICKET.
+      if (filesAreValid && sizeLimitedFiles.rejected > 0) {
+        showToast({
+          message: localize('com_knauf_total_size_partial', {
+            0: String(fileList.length),
+            1: String(sizeLimitedFiles.rejected),
+            2: String((endpointFileConfig.totalSizeLimit ?? 0) / megabyte),
+          }),
+          status: 'warning',
+          duration: KNAUF_PARTIAL_LIMIT_TOAST_MS,
+        });
+      }
+      // End [knauf]
     } catch (error) {
       console.error('file validation error', error);
       setError('com_error_files_validation');

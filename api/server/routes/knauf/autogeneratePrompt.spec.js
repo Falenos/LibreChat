@@ -47,6 +47,7 @@ const router = require('./autogeneratePrompt');
 const { buildUserMessage } = require('./autogeneratePrompt');
 
 const app = express();
+app.use(express.json({ limit: '3mb' }));
 app.use('/', router);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -218,6 +219,21 @@ describe('POST /', () => {
         }),
       }),
     );
+  });
+
+  it('accepts an existing draft longer than 4,000 characters for polishing', async () => {
+    getAppConfig.mockResolvedValue(makeConfig());
+    getProviderConfig.mockReturnValue({ getOptions: makeGetOptions() });
+    initializeModel.mockReturnValue({
+      invoke: jest.fn().mockResolvedValue({ content: 'Polished instructions.' }),
+    });
+
+    const res = await request(app)
+      .post('/')
+      .send({ agent: {}, currentDraft: 'a'.repeat(5_000) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.text).toBe('Polished instructions.');
   });
 
   it('switches provider from azureOpenAI to openAI when useResponsesApi is active', async () => {

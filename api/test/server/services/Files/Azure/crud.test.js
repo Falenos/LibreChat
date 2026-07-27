@@ -203,14 +203,41 @@ describe('Azure crud.js - URL refresh tests', () => {
     });
   });
 
-  // [knauf] KK20-227 — concurrent uploads share one container readiness call.
+  // [knauf] Container readiness avoids expected existing-container 409s while
+  // coalescing concurrent checks and retaining retry behavior. NO-TICKET.
   describe('container readiness', () => {
+    it('does not create a container that already exists', async () => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
+      const uploadData = jest.fn().mockResolvedValue(undefined);
+      const exists = jest.fn().mockResolvedValue(true);
+      const createIfNotExists = jest.fn();
+      const containerClient = {
+        url: 'https://test.blob.core.windows.net/readiness-existing-test',
+        exists,
+        createIfNotExists,
+        getBlockBlobClient: jest.fn((blobPath) => ({
+          url: `https://test.blob.core.windows.net/readiness-existing-test/${blobPath}`,
+          uploadData,
+        })),
+      };
+      getAzureContainerClient.mockResolvedValue(containerClient);
+
+      await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('a'), fileName: 'a.txt' });
+      await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' });
+
+      expect(exists).toHaveBeenCalledTimes(1);
+      expect(createIfNotExists).not.toHaveBeenCalled();
+      expect(uploadData).toHaveBeenCalledTimes(2);
+    });
+
     it('runs one createIfNotExists call for concurrent uploads to the same container', async () => {
       process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
       const uploadData = jest.fn().mockResolvedValue(undefined);
+      const exists = jest.fn().mockResolvedValue(false);
       const createIfNotExists = jest.fn().mockResolvedValue({ succeeded: true });
       const containerClient = {
         url: 'https://test.blob.core.windows.net/readiness-test',
+        exists,
         createIfNotExists,
         getBlockBlobClient: jest.fn((blobPath) => ({
           url: `https://test.blob.core.windows.net/readiness-test/${blobPath}`,
@@ -224,6 +251,7 @@ describe('Azure crud.js - URL refresh tests', () => {
         saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' }),
       ]);
 
+      expect(exists).toHaveBeenCalledTimes(1);
       expect(createIfNotExists).toHaveBeenCalledTimes(1);
       expect(uploadData).toHaveBeenCalledTimes(2);
     });
@@ -231,9 +259,11 @@ describe('Azure crud.js - URL refresh tests', () => {
     it('reuses readiness for a warm second upload', async () => {
       process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
       const uploadData = jest.fn().mockResolvedValue(undefined);
+      const exists = jest.fn().mockResolvedValue(false);
       const createIfNotExists = jest.fn().mockResolvedValue({ succeeded: true });
       const containerClient = {
         url: 'https://test.blob.core.windows.net/readiness-warm-test',
+        exists,
         createIfNotExists,
         getBlockBlobClient: jest.fn((blobPath) => ({
           url: `https://test.blob.core.windows.net/readiness-warm-test/${blobPath}`,
@@ -245,6 +275,7 @@ describe('Azure crud.js - URL refresh tests', () => {
       await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('a'), fileName: 'a.txt' });
       await saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' });
 
+      expect(exists).toHaveBeenCalledTimes(1);
       expect(createIfNotExists).toHaveBeenCalledTimes(1);
       expect(uploadData).toHaveBeenCalledTimes(2);
     });
@@ -253,12 +284,14 @@ describe('Azure crud.js - URL refresh tests', () => {
       process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'true';
       const initializationError = new Error('container initialization failed');
       const uploadData = jest.fn().mockResolvedValue(undefined);
+      const exists = jest.fn().mockResolvedValue(false);
       const createIfNotExists = jest
         .fn()
         .mockRejectedValueOnce(initializationError)
         .mockResolvedValueOnce({ succeeded: true });
       const containerClient = {
         url: 'https://test.blob.core.windows.net/readiness-retry-test',
+        exists,
         createIfNotExists,
         getBlockBlobClient: jest.fn((blobPath) => ({
           url: `https://test.blob.core.windows.net/readiness-retry-test/${blobPath}`,
@@ -275,6 +308,7 @@ describe('Azure crud.js - URL refresh tests', () => {
       await expect(
         saveBufferToAzure({ userId: 'u', buffer: Buffer.from('b'), fileName: 'b.txt' }),
       ).resolves.toBe('https://test.blob.core.windows.net/readiness-retry-test/images/u/b.txt');
+      expect(exists).toHaveBeenCalledTimes(2);
       expect(createIfNotExists).toHaveBeenCalledTimes(2);
       expect(uploadData).toHaveBeenCalledTimes(1);
     });
