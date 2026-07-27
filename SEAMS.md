@@ -539,6 +539,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | `KK20-227 sequential multi-file upload` backlog case | 730–1037 | Pins the backlog-specific warning and 30s/60s/120s retry schedule while preserving the existing serialized upload contract | Self | NO-TICKET |
 | `client/src/components/Messages/Content/CodeBar.tsx` | `CodeBar` export actions | 9–11, 33–35 | Mounts the Knauf code export controls beside Copy in the standard generated-code toolbar | `client/src/knauf/components/Chat/KnaufCodeExportActions.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Messages/Content/FloatingCodeBar.tsx` | `FloatingCodeBar` export actions | 8–10, 34–41 | Mirrors download and HTML preview controls in the off-screen floating toolbar | `client/src/knauf/components/Chat/KnaufCodeExportActions.knauf.spec.tsx` | NO-TICKET |
+| `client/src/components/UnifiedSidebar/ConversationsSection.tsx` | `useConversationsInfiniteQuery` project filter | 47–49 | Keeps project-linked conversations out of general Chats history while leaving active message search global | `client/src/knauf/components/Conversations/ConversationsSectionProjectFilter.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -790,6 +791,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/indexAdmission.js` | None; FileAsset method surface injected by caller | Low — raises the bounded default to 50 active files per authorization scope while preserving the 500 MB byte cap and env overrides | `api/server/services/Files/knauf/indexStatus.spec.js` | NO-TICKET |
 | `api/server/services/Files/knauf/indexStatus.spec.js` | Real FileAsset methods and mongodb-memory-server | Low — pins the 50-file / 500 MB admission defaults alongside existing concurrency and byte-cap behavior | Self | NO-TICKET |
 | `client/src/knauf/components/Chat/KnaufCodeExportActions*.tsx` | `lucide-react`, `~/hooks`, `~/utils/downloadFile`, upstream code toolbars in the seam test | Low — browser-native code download plus opaque-origin sandboxed HTML preview, mounted through two small upstream seams | `client/src/knauf/components/Chat/KnaufCodeExportActions.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Conversations/ConversationsSectionProjectFilter.knauf.spec.tsx` | `~/components/UnifiedSidebar/ConversationsSection`; sidebar query and UI dependencies mocked at public contracts | Low — test-only regression for unassigned history and global message search | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
