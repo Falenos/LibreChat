@@ -2,39 +2,71 @@
 
 ## When to use this template
 
-Use this when the user wants a **static analytical deliverable** — a findings report, a monthly/quarterly review, an executive summary with a few KPIs, one chart, and a findings table. It is a *deliverable*, not an interactive dashboard: it commits to the Knauf **light** brand look (white surface, print-friendly) and does not need a dark mode. If the user wants filters, tabs, live data, or drill-down, reach for the dashboard template instead.
+Use this when the user wants a **static analytical deliverable** — a findings report,
+a monthly/quarterly review, an executive summary with a few KPIs, one chart, and a
+findings table. It is a *deliverable*, not an interactive dashboard. It defaults to
+light (white surface, print-friendly) but routes every colour through the theme, so
+it does not break if the user asks for dark. If the user wants filters, tabs, live
+data, or drill-down, reach for the dashboard template instead.
 
-Adapt it by swapping `DATA`, the KPI tiles, the chart type (bar↔line), and the table rows. Keep the top-to-bottom order: **brand bar → executive summary → KPI row → one chart → findings table → footer.**
+Adapt it by swapping `DATA`, the KPI tiles, the chart type (bar↔line), and the table
+rows. Keep the top-to-bottom order: **brand bar → title → executive summary → KPI
+row → one chart → findings table → footer.**
+
+## Before you write
+
+Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
+into the artifact as the first block. Read
+`skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
+path. **The code below assumes all three exist and declares no colours of its own.**
+
+## Tokens this layout uses
+
+| Token | Styles |
+|---|---|
+| `KNAUF.brand.accessibleBlue` | the top brand bar field |
+| `theme.heading` | h1, card titles, table headers, KPI values |
+| `theme.text` / `theme.muted` | body copy / captions, axis labels, footer |
+| `theme.card` / `theme.page` / `theme.border` | card fill / page fill / hairlines |
+| `theme.palette[i]` | chart series, by index |
+| `theme.grid` | gridlines, axis strokes |
+| `KNAUF.ink.accentOnBrand` | the eyebrow label on the brand bar |
+| `KNAUF.status[tone]` | KPI delta text, status chip ring + dot |
 
 ## Brand + layout guidance
 
-- Declare every exact hex in the single `const KNAUF = {…}` object at the top and reference it from `style={{}}` (for DOM) or recharts `fill`/`stroke`/`color` props (for the chart). Tailwind classes handle only layout, spacing, and the typography scale — **never** color and **never** bracket values.
-- The brand mark is a **text wordmark** in a Regal-Blue top bar (`KNAUF` heavy + `KARL` in Cerulean) — external logo images are blocked.
-- Headings/structural bars use Regal Blue `#003778`; primary accents and the first chart series use Cerulean `#0099DE`; body text is ink `#0F1A2A`, secondary text muted `#5B6770`, hairlines `#DCE6EE`.
-- KPI deltas carry a lucide arrow **and** a status color (success/serious/critical) so meaning never rests on color alone.
-- The chart assigns `KNAUF.categoricalLight` in **fixed index order** (series 0 → palette[0]), always ships a `<Legend>`, axis labels, and a `<Tooltip>`, and its `<ResponsiveContainer>` lives inside an `h-80 w-full` parent. Status colors are reserved for KPI deltas, never used as a data series.
-- Surfaces stay light and print-friendly; use `border` + subtle `lightAlt` fills rather than shadows for structure.
+- The brand mark is `<KnaufWordmark fill="#FFFFFF" />` in the `accessibleBlue` bar,
+  with the report kind as a **separate** eyebrow label on the right. Never fuse
+  naming into the mark; never use an `<img>`.
+- Headings and structural type read from `theme.heading`, never from
+  `KNAUF.brand.accessibleBlue` directly — that hex is 1.56:1 on a dark surface.
+- KPI deltas carry a lucide arrow **and** a status colour, so meaning never rests on
+  colour alone.
+- Status chips are **ink on a light fill with a status-coloured ring and dot**. Do not
+  put white text on a status fill: white-on-warning is 2.95:1 and white-on-serious
+  2.92:1, both failing AA.
+- The chart assigns `theme.palette` in **fixed index order** (series 0 → `palette[0]`),
+  always ships a `<Legend>`, axis labels and a `<Tooltip>`, and its
+  `<ResponsiveContainer>` lives inside an `h-80 w-full` parent. Status colours are
+  never a data series.
+- Use `border` + subtle `page` fills rather than shadows for structure — it prints.
 
 ```tsx
+// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
+import { useMemo } from 'react';
 import { format } from 'date-fns';
-import { ArrowUpRight, ArrowDownRight, FileBarChart2, ShieldCheck } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, ShieldCheck } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '/components/ui/table';
-import { Badge } from '/components/ui/badge';
 import { Separator } from '/components/ui/separator';
 
-const KNAUF = {
-  cerulean: '#0099DE', regalBlue: '#003778', shakespeare: '#55B7DA',
-  ink: '#0F1A2A', inkSecondary: '#3A4A5C', muted: '#5B6770',
-  surface: '#FFFFFF', surfaceAlt: '#F4F8FB', border: '#DCE6EE', onDark: '#E6EEF5',
-  categoricalLight: ['#0099DE', '#E86D1F', '#009E86', '#7A4FB5', '#D64550', '#C98A00', '#C43A8B'],
-  status: { success: '#1F883D', warning: '#C98A00', serious: '#E8792A', critical: '#D64550' },
-};
+// Light by default. Flip to true (or drive from a prop) for a dark rendering.
+const DARK = false;
 
-// Chart series in FIXED palette order. Swap keys/values for your report.
+// Chart series in FIXED palette order. Swap keys/labels for your report.
 const SERIES = [
   { key: 'onboarded', label: 'Users onboarded' },
   { key: 'activated', label: 'Active users' },
@@ -60,19 +92,39 @@ const FINDINGS = [
   { area: 'Reliability', detail: 'One MCP visibility reset traced to config persistence gap.', status: 'Action needed', tone: 'serious' },
 ];
 
-export default function KnaufReport() {
-  const generatedOn = format(new Date(), 'MMMM d, yyyy');
+/** Ink on a tint, with a status ring + dot — never colour alone, never white on fill. */
+function StatusChip({ tone, children, theme }) {
   return (
-    <div className="min-h-full w-full" style={{ backgroundColor: KNAUF.surfaceAlt, color: KNAUF.ink }}>
-      <header className="w-full px-6 py-5 md:px-10" style={{ backgroundColor: KNAUF.regalBlue, color: KNAUF.onDark }}>
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium"
+      style={{ color: theme.text, backgroundColor: theme.card, borderColor: KNAUF.status[tone] }}
+    >
+      <span
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: KNAUF.status[tone] }}
+        aria-hidden="true"
+      />
+      {children}
+    </span>
+  );
+}
+
+export default function KnaufReport() {
+  const theme = useKnaufTheme(DARK);
+  const generatedOn = format(new Date(), 'MMMM d, yyyy');
+
+  return (
+    <div className="min-h-full w-full" style={{ backgroundColor: theme.page, color: theme.text }}>
+      <header
+        className="w-full px-6 py-5 md:px-10"
+        style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
+      >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <FileBarChart2 size={26} color={KNAUF.shakespeare} />
-            <span className="text-xl font-extrabold tracking-tight">
-              KNAUF <span style={{ color: KNAUF.cerulean }}>KARL</span>
-            </span>
-          </div>
-          <span className="text-xs font-medium uppercase tracking-widest" style={{ color: KNAUF.shakespeare }}>
+          <KnaufWordmark height={26} fill="#FFFFFF" />
+          <span
+            className="text-xs font-medium uppercase tracking-widest"
+            style={{ color: KNAUF.ink.accentOnBrand }}
+          >
             Analytics Report
           </span>
         </div>
@@ -80,24 +132,25 @@ export default function KnaufReport() {
 
       <main className="mx-auto max-w-5xl space-y-6 px-6 py-8 md:px-10">
         <div>
-          <h1 className="text-2xl font-bold md:text-3xl" style={{ color: KNAUF.regalBlue }}>
+          <h1 className="text-2xl font-bold md:text-3xl" style={{ color: theme.heading }}>
             KARL Adoption Report — H1 2026
           </h1>
-          <p className="mt-1 text-sm" style={{ color: KNAUF.muted }}>Generated {generatedOn}</p>
+          <p className="mt-1 text-sm" style={{ color: theme.muted }}>Generated {generatedOn}</p>
         </div>
 
-        <Card style={{ backgroundColor: KNAUF.surface, borderColor: KNAUF.border }}>
+        <Card style={{ backgroundColor: theme.card, borderColor: theme.border }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-semibold" style={{ color: KNAUF.regalBlue }}>
+            <CardTitle className="text-base font-semibold" style={{ color: theme.heading }}>
               Executive summary
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm leading-relaxed" style={{ color: KNAUF.inkSecondary }}>
-              KARL adoption accelerated through the first half of 2026, with cumulative onboarding up 18% and active usage
-              growing faster still as teams moved from pilots into daily workflows. Engagement quality improved alongside
-              volume, and support load fell despite the larger user base. Two areas need attention: document ingestion
-              reliability for CSV files and configuration persistence for MCP visibility across deployments.
+            <p className="text-sm leading-relaxed" style={{ color: theme.text }}>
+              KARL adoption accelerated through the first half of 2026, with cumulative onboarding up
+              18% and active usage growing faster still as teams moved from pilots into daily
+              workflows. Engagement quality improved alongside volume, and support load fell despite
+              the larger user base. Two areas need attention: document ingestion reliability for CSV
+              files and configuration persistence for MCP visibility across deployments.
             </p>
           </CardContent>
         </Card>
@@ -105,23 +158,28 @@ export default function KnaufReport() {
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {KPIS.map((k) => {
             const Arrow = k.dir === 'up' ? ArrowUpRight : ArrowDownRight;
-            const c = KNAUF.status[k.tone];
+            const tone = KNAUF.status[k.tone];
             return (
-              <div key={k.label} className="rounded-lg border p-4"
-                style={{ backgroundColor: KNAUF.surface, borderColor: KNAUF.border }}>
-                <p className="text-xs font-medium uppercase tracking-wide" style={{ color: KNAUF.muted }}>{k.label}</p>
-                <p className="mt-1 text-2xl font-bold" style={{ color: KNAUF.regalBlue }}>{k.value}</p>
-                <p className="mt-1 flex items-center gap-1 text-sm font-semibold" style={{ color: c }}>
-                  <Arrow size={16} color={c} />{k.delta}
+              <div
+                key={k.label}
+                className="rounded-lg border p-4"
+                style={{ backgroundColor: theme.card, borderColor: theme.border }}
+              >
+                <p className="text-xs font-medium uppercase tracking-wide" style={{ color: theme.muted }}>
+                  {k.label}
+                </p>
+                <p className="mt-1 text-2xl font-bold" style={{ color: theme.heading }}>{k.value}</p>
+                <p className="mt-1 flex items-center gap-1 text-sm font-semibold" style={{ color: tone }}>
+                  <Arrow size={16} color={tone} aria-hidden="true" />{k.delta}
                 </p>
               </div>
             );
           })}
         </div>
 
-        <Card style={{ backgroundColor: KNAUF.surface, borderColor: KNAUF.border }}>
+        <Card style={{ backgroundColor: theme.card, borderColor: theme.border }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-semibold" style={{ color: KNAUF.regalBlue }}>
+            <CardTitle className="text-base font-semibold" style={{ color: theme.heading }}>
               Onboarding vs. active users
             </CardTitle>
           </CardHeader>
@@ -129,16 +187,34 @@ export default function KnaufReport() {
             <div className="h-80 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={DATA} margin={{ top: 8, right: 12, left: 0, bottom: 18 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={KNAUF.border} vertical={false} />
-                  <XAxis dataKey="month" tick={{ fill: KNAUF.muted, fontSize: 12 }} stroke={KNAUF.border}
-                    label={{ value: 'Month', position: 'insideBottom', offset: -8, fill: KNAUF.muted, fontSize: 12 }} />
-                  <YAxis tick={{ fill: KNAUF.muted, fontSize: 12 }} stroke={KNAUF.border}
-                    label={{ value: 'Users', angle: -90, position: 'insideLeft', fill: KNAUF.muted, fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: KNAUF.surface, border: `1px solid ${KNAUF.border}`, color: KNAUF.ink }} />
-                  <Legend wrapperStyle={{ fontSize: 12, color: KNAUF.inkSecondary }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fill: theme.muted, fontSize: 12 }}
+                    stroke={theme.grid}
+                    label={{ value: 'Month', position: 'insideBottom', offset: -8, fill: theme.muted, fontSize: 12 }}
+                  />
+                  <YAxis
+                    tick={{ fill: theme.muted, fontSize: 12 }}
+                    stroke={theme.grid}
+                    label={{ value: 'Users', angle: -90, position: 'insideLeft', fill: theme.muted, fontSize: 12 }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: theme.card,
+                      border: `1px solid ${theme.border}`,
+                      color: theme.text,
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, color: theme.text }} />
                   {SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={s.key} name={s.label}
-                      fill={KNAUF.categoricalLight[i]} radius={[3, 3, 0, 0]} />
+                    <Bar
+                      key={s.key}
+                      dataKey={s.key}
+                      name={s.label}
+                      fill={theme.palette[i]}
+                      radius={[3, 3, 0, 0]}
+                    />
                   ))}
                 </BarChart>
               </ResponsiveContainer>
@@ -146,9 +222,9 @@ export default function KnaufReport() {
           </CardContent>
         </Card>
 
-        <Card style={{ backgroundColor: KNAUF.surface, borderColor: KNAUF.border }}>
+        <Card style={{ backgroundColor: theme.card, borderColor: theme.border }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base font-semibold" style={{ color: KNAUF.regalBlue }}>
+            <CardTitle className="text-base font-semibold" style={{ color: theme.heading }}>
               Key findings
             </CardTitle>
           </CardHeader>
@@ -156,18 +232,18 @@ export default function KnaufReport() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead style={{ color: KNAUF.regalBlue }}>Area</TableHead>
-                  <TableHead style={{ color: KNAUF.regalBlue }}>Detail</TableHead>
-                  <TableHead style={{ color: KNAUF.regalBlue }}>Status</TableHead>
+                  <TableHead style={{ color: theme.heading }}>Area</TableHead>
+                  <TableHead style={{ color: theme.heading }}>Detail</TableHead>
+                  <TableHead style={{ color: theme.heading }}>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {FINDINGS.map((f) => (
                   <TableRow key={f.area}>
-                    <TableCell className="font-medium" style={{ color: KNAUF.ink }}>{f.area}</TableCell>
-                    <TableCell style={{ color: KNAUF.inkSecondary }}>{f.detail}</TableCell>
+                    <TableCell className="font-medium" style={{ color: theme.text }}>{f.area}</TableCell>
+                    <TableCell style={{ color: theme.muted }}>{f.detail}</TableCell>
                     <TableCell>
-                      <Badge style={{ backgroundColor: KNAUF.status[f.tone], color: '#FFFFFF' }}>{f.status}</Badge>
+                      <StatusChip tone={f.tone} theme={theme}>{f.status}</StatusChip>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -176,9 +252,9 @@ export default function KnaufReport() {
           </CardContent>
         </Card>
 
-        <Separator style={{ backgroundColor: KNAUF.border }} />
-        <footer className="flex items-center gap-2 pb-4 text-xs" style={{ color: KNAUF.muted }}>
-          <ShieldCheck size={14} color={KNAUF.muted} />
+        <Separator style={{ backgroundColor: theme.border }} />
+        <footer className="flex items-center gap-2 pb-4 text-xs" style={{ color: theme.muted }}>
+          <ShieldCheck size={14} color={theme.muted} aria-hidden="true" />
           <span>Source: KARL platform telemetry. Knauf internal — confidential. Do not distribute externally.</span>
         </footer>
       </main>

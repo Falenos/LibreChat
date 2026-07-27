@@ -2,40 +2,65 @@
 
 ## When to use this template
 
-Reach for this when the artifact is a **presentation**: a linear sequence of full-bleed 16:9 slides the viewer clicks through — a quarterly review, a rollout plan, a pitch. It is a brand *deliverable*, so it commits to the Knauf **light** look (white surfaces, no dark-mode swap). If the ask is an interactive dashboard, a single report page, or a form, use a different template.
+Reach for this when the artifact is a **presentation**: a linear sequence of
+full-bleed 16:9 slides the viewer clicks through — a quarterly review, a rollout
+plan, a pitch. It defaults to the Knauf light look but routes colour through the
+theme, so a dark rendering costs nothing. If the ask is an interactive dashboard, a
+single report page, or a form, use a different template.
 
-The deck is driven by one `const SLIDES = [...]` array. Each entry has a `type` that picks a layout — `'title'`, `'section'`, `'bullets'`, `'chart'`. Add or reorder slides by editing that array only; the renderer, navigation, and footer adapt automatically.
+The deck is driven by one `const SLIDES = [...]` array. Each entry has a `type` that
+picks a layout — `'title'`, `'section'`, `'bullets'`, `'chart'`. Add or reorder slides
+by editing that array only; the renderer, navigation and footer adapt automatically.
+
+## Before you write
+
+Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
+into the artifact as the first block. Read
+`skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
+path. **The code below assumes all three exist and declares no colours of its own.**
+
+## Tokens this layout uses
+
+| Token | Styles |
+|---|---|
+| `KNAUF.brand.accessibleBlue` | title-slide field, top-bar mark background |
+| `KNAUF.brand.cyanBlue` | section rule, bullet markers, the Next button |
+| `KNAUF.ink.accentOnBrand` | title-slide subtitle on the blue field |
+| `theme.heading` / `theme.text` / `theme.muted` | slide headings / body / captions |
+| `theme.card` / `theme.page` / `theme.border` | slide surface / stage surround / hairlines |
+| `theme.palette[i]` | chart series, by index |
+| `theme.grid` | gridlines, axis strokes |
 
 ## Brand & layout guidance
 
-- **Wordmark, not logo.** External images are blocked. Render the brand as styled text (`KARL` in Regal Blue + a Cerulean dot) in the top bar and footer. Never an `<img>` logo.
-- **Colors come from one `KNAUF` object** applied via `style={{}}` (surfaces, text, bars) or recharts props (chart fills). Tailwind is for **layout/spacing/typography only** — no bracket/arbitrary values ever.
-- **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage (the allowed 16:9 class). Slide content is absolutely positioned to fill it, so every slide is the same size.
-- **Type scale.** Title slides use `text-5xl`; section dividers `text-4xl`; slide headings `text-3xl`; body `text-lg`/`text-base`; footer `text-sm`. All Tailwind scale classes — never pixel values.
-- **Navigation.** Prev/Next buttons (lucide `ChevronLeft`/`ChevronRight`) plus `ArrowLeft`/`ArrowRight` keys via a `keydown` `useEffect`. A `"3 / 8"` counter and a slide-number footer orient the viewer.
-- **Charts.** Assign `categoricalLight` in **fixed index order** (series 0 → `[0]`, series 1 → `[1]`), never rank- or value-driven. Always include a `<Legend />` — identity is never by color alone. The `<ResponsiveContainer>` sits in a parent with an explicit `h-72 w-full`. Keep status colors (good/warn/serious/critical) out of the data palette.
+- **The real wordmark, not typed text.** `<KnaufWordmark />` in the top bar and in the
+  slide footer. On the `accessibleBlue` field it takes `#FFFFFF`; on a light surface
+  it takes `KNAUF.brand.logoCyan`. Deck naming is separate text beside it.
+- **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage. Slide content is
+  absolutely positioned to fill it, so every slide is the same size.
+- **Type scale.** Title slides `text-5xl`; section dividers `text-4xl`; slide headings
+  `text-3xl`; body `text-lg`/`text-base`; footer `text-sm`. Tailwind scale classes
+  only — never bracket values.
+- **Navigation.** Prev/Next buttons (lucide `ChevronLeft`/`ChevronRight`) plus
+  `ArrowLeft`/`ArrowRight` keys via a `keydown` `useEffect`. A `"3 / 5"` counter and a
+  slide-number footer orient the viewer.
+- **A cyan button takes ink text, not white.** White on `#0099DE` is 3.18:1, which
+  fails AA for a `text-sm` label; ink on cyan is 5.50:1.
+- **Charts.** Assign `theme.palette` in **fixed index order**, never rank- or
+  value-driven. Always include a `<Legend />`. The `<ResponsiveContainer>` sits in a
+  parent with an explicit `h-72 w-full`. Status colours never enter the data palette.
 
 ```tsx
-import React, { useState, useEffect, useCallback } from 'react';
+// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 
-// Single source of brand truth — every color below is applied inline or via recharts props.
-const KNAUF = {
-  cerulean: '#0099DE',
-  regalBlue: '#003778',
-  shakespeare: '#55B7DA',
-  ink: '#0F1A2A',
-  muted: '#5B6770',
-  surface: '#FFFFFF',
-  surfaceAlt: '#F4F8FB',
-  border: '#DCE6EE',
-  onDark: '#E6EEF5',
-  categoricalLight: ['#0099DE', '#E86D1F', '#009E86', '#7A4FB5', '#D64550', '#C98A00', '#C43A8B'],
-};
+// Light by default. Flip to true for a dark rendering.
+const DARK = false;
 
 const REVENUE = [
   { region: 'DACH', prior: 42, current: 51 },
@@ -44,8 +69,9 @@ const REVENUE = [
   { region: 'Benelux', prior: 23, current: 24 },
 ];
 
+// `field: 'brand'` renders a full-bleed accessibleBlue title slide.
 const SLIDES = [
-  { type: 'title', title: 'KARL Platform Review', subtitle: 'Q2 2026 · Knauf Digital', bg: KNAUF.regalBlue },
+  { type: 'title', title: 'KARL Platform Review', subtitle: 'Q2 2026 · Knauf Digital', field: 'brand' },
   { type: 'section', title: '01 — Adoption', subtitle: 'Where the rollout stands today' },
   { type: 'bullets', title: 'Highlights this quarter', items: [
     'Active users up 38% across DACH and Iberia business units',
@@ -55,44 +81,43 @@ const SLIDES = [
   ] },
   { type: 'chart', title: 'Revenue by region', unit: '€M',
     keys: [{ k: 'prior', label: 'FY2023' }, { k: 'current', label: 'FY2024' }] },
-  { type: 'title', title: 'Thank you', subtitle: 'Questions & discussion', bg: KNAUF.cerulean },
+  { type: 'title', title: 'Thank you', subtitle: 'Questions & discussion', field: 'brand' },
 ];
 
-function Wordmark({ dark }) {
-  return (
-    <span className="font-bold tracking-tight" style={{ color: dark ? KNAUF.onDark : KNAUF.regalBlue }}>
-      KARL<span style={{ color: KNAUF.cerulean }}>.</span>
-    </span>
-  );
-}
-
-function Slide({ slide }) {
+function Slide({ slide, theme }) {
   if (slide.type === 'title') {
     return (
-      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: slide.bg }}>
+      <div
+        className="absolute inset-0 flex flex-col justify-center px-16"
+        style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
+      >
         <h1 className="text-5xl font-bold leading-tight" style={{ color: '#FFFFFF' }}>{slide.title}</h1>
-        <p className="mt-4 text-xl" style={{ color: KNAUF.onDark }}>{slide.subtitle}</p>
+        <p className="mt-4 text-xl" style={{ color: KNAUF.ink.accentOnBrand }}>{slide.subtitle}</p>
       </div>
     );
   }
   if (slide.type === 'section') {
     return (
-      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: KNAUF.surfaceAlt }}>
-        <div className="mb-5 h-1.5 w-24 rounded-full" style={{ backgroundColor: KNAUF.cerulean }} />
-        <h2 className="text-4xl font-semibold" style={{ color: KNAUF.regalBlue }}>{slide.title}</h2>
-        <p className="mt-3 text-lg" style={{ color: KNAUF.muted }}>{slide.subtitle}</p>
+      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: theme.page }}>
+        <div className="mb-5 h-1.5 w-24 rounded-full" style={{ backgroundColor: KNAUF.brand.cyanBlue }} />
+        <h2 className="text-4xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
+        <p className="mt-3 text-lg" style={{ color: theme.muted }}>{slide.subtitle}</p>
       </div>
     );
   }
   if (slide.type === 'bullets') {
     return (
-      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: KNAUF.surface }}>
-        <h2 className="mb-8 text-3xl font-semibold" style={{ color: KNAUF.regalBlue }}>{slide.title}</h2>
+      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: theme.card }}>
+        <h2 className="mb-8 text-3xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
         <ul className="space-y-5">
           {slide.items.map((item, i) => (
             <li key={i} className="flex items-start gap-4">
-              <span className="mt-2 inline-block h-3 w-3 flex-shrink-0 rounded-sm" style={{ backgroundColor: KNAUF.cerulean }} />
-              <span className="text-lg leading-snug" style={{ color: KNAUF.ink }}>{item}</span>
+              <span
+                className="mt-2 inline-block h-3 w-3 flex-shrink-0 rounded-sm"
+                style={{ backgroundColor: KNAUF.brand.cyanBlue }}
+                aria-hidden="true"
+              />
+              <span className="text-lg leading-snug" style={{ color: theme.text }}>{item}</span>
             </li>
           ))}
         </ul>
@@ -101,19 +126,26 @@ function Slide({ slide }) {
   }
   // 'chart'
   return (
-    <div className="absolute inset-0 flex flex-col px-16 py-12" style={{ backgroundColor: KNAUF.surface }}>
-      <h2 className="mb-1 text-3xl font-semibold" style={{ color: KNAUF.regalBlue }}>{slide.title}</h2>
-      <p className="mb-4 text-sm" style={{ color: KNAUF.muted }}>Figures in {slide.unit}</p>
+    <div className="absolute inset-0 flex flex-col px-16 py-12" style={{ backgroundColor: theme.card }}>
+      <h2 className="mb-1 text-3xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
+      <p className="mb-4 text-sm" style={{ color: theme.muted }}>Figures in {slide.unit}</p>
       <div className="h-72 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={REVENUE} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={KNAUF.border} vertical={false} />
-            <XAxis dataKey="region" tick={{ fill: KNAUF.muted, fontSize: 13 }} stroke={KNAUF.border} />
-            <YAxis tick={{ fill: KNAUF.muted, fontSize: 13 }} stroke={KNAUF.border} />
-            <Tooltip contentStyle={{ borderColor: KNAUF.border, borderRadius: 8, color: KNAUF.ink }} />
-            <Legend wrapperStyle={{ color: KNAUF.ink, fontSize: 13 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
+            <XAxis dataKey="region" tick={{ fill: theme.muted, fontSize: 13 }} stroke={theme.grid} />
+            <YAxis tick={{ fill: theme.muted, fontSize: 13 }} stroke={theme.grid} />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: theme.card,
+                border: `1px solid ${theme.border}`,
+                borderRadius: 8,
+                color: theme.text,
+              }}
+            />
+            <Legend wrapperStyle={{ color: theme.text, fontSize: 13 }} />
             {slide.keys.map((s, i) => (
-              <Bar key={s.k} dataKey={s.k} name={s.label} fill={KNAUF.categoricalLight[i]} radius={[3, 3, 0, 0]} />
+              <Bar key={s.k} dataKey={s.k} name={s.label} fill={theme.palette[i]} radius={[3, 3, 0, 0]} />
             ))}
           </BarChart>
         </ResponsiveContainer>
@@ -123,6 +155,7 @@ function Slide({ slide }) {
 }
 
 export default function KarlSlideDeck() {
+  const theme = useKnaufTheme(DARK);
   const [index, setIndex] = useState(0);
   const total = SLIDES.length;
 
@@ -142,33 +175,49 @@ export default function KarlSlideDeck() {
   const slide = SLIDES[index];
 
   return (
-    <div className="min-h-screen w-full px-4 py-8" style={{ backgroundColor: KNAUF.surfaceAlt }}>
+    <div className="min-h-screen w-full px-4 py-8" style={{ backgroundColor: theme.page }}>
       <div className="mx-auto max-w-5xl">
-        <div className="mb-3 flex items-center justify-between rounded-t-lg px-5 py-3" style={{ backgroundColor: KNAUF.surface, borderColor: KNAUF.border, borderWidth: 1 }}>
-          <Wordmark />
-          <span className="text-sm font-medium" style={{ color: KNAUF.muted }}>Knauf Digital · Confidential</span>
+        <div
+          className="mb-3 flex items-center justify-between rounded-t-lg border px-5 py-3"
+          style={{ backgroundColor: KNAUF.brand.accessibleBlue, borderColor: theme.border }}
+        >
+          <KnaufWordmark height={22} fill="#FFFFFF" />
+          <span className="text-sm font-medium" style={{ color: KNAUF.ink.accentOnBrand }}>
+            Knauf Digital · Confidential
+          </span>
         </div>
 
-        <div className="relative aspect-video w-full overflow-hidden rounded-lg" style={{ borderColor: KNAUF.border, borderWidth: 1 }}>
-          <Slide slide={slide} />
-          <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-6 py-2"
-            style={{ borderTopColor: KNAUF.border, borderTopWidth: 1, backgroundColor: 'rgba(255,255,255,0.85)' }}>
-            <Wordmark />
-            <span className="text-sm" style={{ color: KNAUF.muted }}>Slide {index + 1}</span>
+        <div
+          className="relative aspect-video w-full overflow-hidden rounded-lg border"
+          style={{ borderColor: theme.border }}
+        >
+          <Slide slide={slide} theme={theme} />
+          <div
+            className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-2"
+            style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
+          >
+            <KnaufWordmark height={14} fill={KNAUF.brand.logoCyan} />
+            <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
           </div>
         </div>
 
         <div className="mt-4 flex items-center justify-between">
-          <button onClick={() => go(-1)} disabled={index === 0}
-            className="flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-40"
-            style={{ backgroundColor: KNAUF.surface, color: KNAUF.regalBlue, borderColor: KNAUF.border, borderWidth: 1 }}>
-            <ChevronLeft size={18} /> Prev
+          <button
+            onClick={() => go(-1)}
+            disabled={index === 0}
+            className="flex items-center gap-1 rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-40"
+            style={{ backgroundColor: theme.card, color: theme.heading, borderColor: theme.border }}
+          >
+            <ChevronLeft size={18} aria-hidden="true" /> Prev
           </button>
-          <span className="text-sm font-semibold" style={{ color: KNAUF.ink }}>{index + 1} / {total}</span>
-          <button onClick={() => go(1)} disabled={index === total - 1}
+          <span className="text-sm font-semibold" style={{ color: theme.text }}>{index + 1} / {total}</span>
+          <button
+            onClick={() => go(1)}
+            disabled={index === total - 1}
             className="flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-40"
-            style={{ backgroundColor: KNAUF.cerulean, color: '#FFFFFF' }}>
-            Next <ChevronRight size={18} />
+            style={{ backgroundColor: KNAUF.brand.cyanBlue, color: KNAUF.ink.primary }}
+          >
+            Next <ChevronRight size={18} aria-hidden="true" />
           </button>
         </div>
       </div>
