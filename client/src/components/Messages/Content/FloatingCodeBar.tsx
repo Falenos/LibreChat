@@ -5,6 +5,9 @@ import useCopyCode from '~/components/Messages/Content/useCopyCode';
 import CopyButton from '~/components/Messages/Content/CopyButton';
 import RunCode from '~/components/Messages/Content/RunCode';
 import cn from '~/utils/cn';
+// [knauf] Mirror generated-code export actions in the floating toolbar.
+import KnaufCodeExportActions from '~/knauf/components/Chat/KnaufCodeExportActions';
+// End [knauf]
 
 interface FloatingCodeBarProps extends CodeBarProps {
   isVisible: boolean;
@@ -28,6 +31,14 @@ const FloatingCodeBar: React.FC<FloatingCodeBarProps> = React.memo(
             {allowExecution === true && (
               <RunCode lang={lang} codeRef={codeRef} blockIndex={blockIndex} iconOnly />
             )}
+            {/* [knauf] Preserve export access when the standard toolbar is off-screen. */}
+            <KnaufCodeExportActions
+              lang={lang}
+              codeRef={codeRef}
+              iconOnly
+              tabIndex={isVisible ? 0 : -1}
+            />
+            {/* End [knauf] */}
             <CopyButton
               ref={buttonRef}
               isCopied={isCopied}
