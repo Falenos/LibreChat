@@ -53,7 +53,7 @@ path. **The code below assumes all three exist and declares no colours of its ow
 
 ```tsx
 // ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import { useMemo } from 'react';
+import { useMemo } from 'react'; // used by the pasted useKnaufTheme
 import { format } from 'date-fns';
 import { ArrowUpRight, ArrowDownRight, ShieldCheck } from 'lucide-react';
 import {

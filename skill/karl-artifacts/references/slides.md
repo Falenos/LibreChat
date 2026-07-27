@@ -52,7 +52,7 @@ path. **The code below assumes all three exist and declares no colours of its ow
 
 ```tsx
 // ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react'; // useMemo: pasted useKnaufTheme
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,

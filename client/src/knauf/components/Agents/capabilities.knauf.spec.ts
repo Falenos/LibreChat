@@ -12,6 +12,8 @@
  * string.
  */
 import { AgentCapabilities, ArtifactModes } from 'librechat-data-provider';
+import deTranslation from '~/locales/de/translation.json';
+import enTranslation from '~/locales/en/translation.json';
 import { KNAUF_CAPABILITIES } from './capabilities';
 
 function capabilityById(id: string) {
@@ -137,5 +139,51 @@ describe('[knauf] KNAUF_CAPABILITIES registry', () => {
       expect(entry.description.length).toBeGreaterThan(0);
       expect(entry.icon).toBeDefined();
     }
+  });
+
+  describe('localization', () => {
+    // KnaufAgentConfig renders localize(labelKey) when the key is present. A key
+    // that is missing from a locale file renders as the raw key string, which is
+    // why both files are asserted rather than just en.
+    const locales: Record<string, Record<string, string>> = {
+      en: enTranslation as Record<string, string>,
+      de: deTranslation as Record<string, string>,
+    };
+
+    it('resolves every declared i18n key in both shipped locales', () => {
+      const missing: string[] = [];
+      for (const entry of KNAUF_CAPABILITIES) {
+        for (const key of [entry.labelKey, entry.descriptionKey]) {
+          if (key == null) {
+            continue;
+          }
+          for (const [locale, table] of Object.entries(locales)) {
+            if (!table[key]) {
+              missing.push(`${locale}: ${key}`);
+            }
+          }
+        }
+      }
+      expect(missing).toEqual([]);
+    });
+
+    it('namespaces every declared key under com_knauf_', () => {
+      for (const entry of KNAUF_CAPABILITIES) {
+        for (const key of [entry.labelKey, entry.descriptionKey]) {
+          if (key != null) {
+            expect(key).toMatch(/^com_knauf_/);
+          }
+        }
+      }
+    });
+
+    it('localizes the KK20-243 rows, so German users do not see English', () => {
+      for (const id of ['artifacts', 'skills']) {
+        const entry = capabilityById(id);
+        expect(entry.labelKey).toBeDefined();
+        expect(entry.descriptionKey).toBeDefined();
+        expect(locales.de[entry.labelKey!]).not.toBe(locales.en[entry.labelKey!]);
+      }
+    });
   });
 });

@@ -811,6 +811,7 @@ function CapabilityRow({
 }: Readonly<{
   capability: (typeof KNAUF_CAPABILITIES)[number];
 }>) {
+  const localize = useLocalize();
   const { control, getValues, setValue } = useFormContext<AgentForm>();
   // Subscribe to the form fields the registry might inspect, so this row
   // re-renders when the underlying state changes.
@@ -820,8 +821,14 @@ function CapabilityRow({
   return (
     <CapabilitySwitch
       icon={capability.icon}
-      label={capability.label}
-      description={capability.description}
+      // [knauf] KK20-243 — prefer the i18n key; the literal is the fallback for
+      // rows authored before this panel was localized (see KnaufCapability).
+      label={capability.labelKey ? localize(capability.labelKey as never) : capability.label}
+      description={
+        capability.descriptionKey
+          ? localize(capability.descriptionKey as never)
+          : capability.description
+      }
       checked={checked}
       onChange={(next) => capability.applyToForm(next, { getValues, setValue })}
     />

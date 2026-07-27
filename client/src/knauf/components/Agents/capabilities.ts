@@ -31,10 +31,18 @@ interface FormHelpers {
 export interface KnaufCapability {
   /** Stable id for keyed render + state lookups. */
   id: string;
-  /** User-facing label shown in the row header. */
+  /**
+   * User-facing label shown in the row header. Prefer `labelKey` — this is the
+   * untranslated fallback, kept because `browseInternet` predates localization
+   * here. Migrate it to a key next time that row is touched.
+   */
   label: string;
-  /** Short description shown under the label. */
+  /** Short description shown under the label. Prefer `descriptionKey`. */
   description: string;
+  /** `com_knauf_*` i18n key for the label. Wins over `label` when set. */
+  labelKey?: string;
+  /** `com_knauf_*` i18n key for the description. Wins over `description` when set. */
+  descriptionKey?: string;
   /** Lucide icon component. */
   icon: ComponentType<LucideProps>;
   /**
@@ -117,6 +125,8 @@ const buildVisuals: KnaufCapability = {
   id: 'artifacts',
   label: 'Build visuals & documents',
   description: 'Create charts, dashboards, slide decks and branded reports in a live preview.',
+  labelKey: 'com_knauf_capability_artifacts_label',
+  descriptionKey: 'com_knauf_capability_artifacts_description',
   icon: LayoutTemplate,
   isEnabled: (enabled) => enabled.includes(AgentCapabilities.artifacts),
   readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.artifacts as keyof AgentForm),
@@ -145,6 +155,8 @@ const useKnaufSkills: KnaufCapability = {
   id: 'skills',
   label: 'Use Knauf skills',
   description: 'Apply Knauf brand guidance and ready-made templates when a task calls for them.',
+  labelKey: 'com_knauf_capability_skills_label',
+  descriptionKey: 'com_knauf_capability_skills_description',
   icon: ScrollText,
   isEnabled: (enabled) => enabled.includes(AgentCapabilities.skills),
   readFromForm: ({ getValues }) => !!getValues('skills_enabled'),

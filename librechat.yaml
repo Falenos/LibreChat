@@ -403,8 +403,19 @@ interface:
   # omitted key leaves a stale value rather than clearing it.
   #   use: true     -> activate skills, invoke with `$`, see the catalog.
   #   create: false -> authoring stays with platform engineering; deployment
-  #                    skills ship in the image under `skill/`. The default is
-  #                    `true`, which would open a skill-authoring UI to everyone.
+  #                    skills ship in the image under `skill/`. The schema default
+  #                    is `true`, which would open a skill-authoring UI company-wide.
+  #                    NOTE this applies to ADMIN as well as USER — this block is
+  #                    seeded to both roles (`updateInterfacePermissions` iterates
+  #                    exactly those two), and there is no way to differentiate
+  #                    them here. So the Skills side panel is a READ-ONLY catalog
+  #                    for everyone, with no "New skill" button for admins either.
+  #                    That is deliberate: the deployment skills in `skill/` are
+  #                    code-reviewed and version-controlled, and a Mongo-backed
+  #                    skill authored in the UI would be neither. To grant
+  #                    authoring to a specific role later, do it the way
+  #                    AGENT_BUILDER is done — a targeted seed script, not this
+  #                    block.
   #   share/public  -> nothing to share while skills are deployment-only.
   # SKILLS is deliberately NOT in KNAUF_RESTRICTED_USER_PERMISSION_TYPES
   # (packages/api/src/knauf/permissions/userRestrictions.ts), so this block is

@@ -130,6 +130,35 @@ describe('[knauf] shipped deployment skills', () => {
     expect(broken).toEqual([]);
   });
 
+  it('keeps the wordmark path identical to the committed brand SVG', () => {
+    // `references/logo.md` transcribes the `d` attribute of
+    // knauf/brand/logos/KNAUFLogo2024sRGB.svg, twice (raw SVG + React
+    // component). 917 chars of coordinate data with no redundancy: any edit
+    // deforms the letterforms and NOTHING errors. Compare geometry rather than
+    // bytes, since the transcription drops the source's line breaks — all of
+    // which happen to fall before command letters, so no numbers fuse.
+    const tokenize = (d: string) => d.match(/[MmLlHhVvCcSsQqTtAaZz]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
+
+    const svg = fs.readFileSync(
+      path.join(REPO_ROOT, 'knauf/brand/logos/KNAUFLogo2024sRGB.svg'),
+      'utf8',
+    );
+    const sourcePath = /<path[^>]*\sd="(M[^"]+)"/.exec(svg)?.[1];
+    expect(sourcePath).toBeDefined();
+
+    const logoDoc = fs.readFileSync(path.join(SKILLS_DIR, 'karl-brand/references/logo.md'), 'utf8');
+    const transcribed = [...logoDoc.matchAll(/d="(M[^"]+)"/g)].map((m) => m[1]);
+    // Both the raw-SVG block and the React component must carry it, so neither
+    // medium needs the reader to transcribe it across sections.
+    expect(transcribed).toHaveLength(2);
+
+    const expected = tokenize(sourcePath as string);
+    expect(expected.length).toBeGreaterThan(100);
+    for (const candidate of transcribed) {
+      expect(tokenize(candidate)).toEqual(expected);
+    }
+  });
+
   it('keeps YAML frontmatter out of reference files', () => {
     // Only SKILL.md is frontmatter-parsed. A leading `---` in a reference is a
     // stray horizontal rule today and a live trap if the file is ever promoted.
