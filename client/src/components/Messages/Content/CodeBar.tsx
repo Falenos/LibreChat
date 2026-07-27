@@ -6,6 +6,9 @@ import CopyButton from '~/components/Messages/Content/CopyButton';
 import LangIcon from '~/components/Messages/Content/LangIcon';
 import RunCode from '~/components/Messages/Content/RunCode';
 import { useLocalize } from '~/hooks';
+// [knauf] Expose generated-code download and HTML preview actions in the standard toolbar.
+import KnaufCodeExportActions from '~/knauf/components/Chat/KnaufCodeExportActions';
+// End [knauf]
 
 const CodeBar: React.FC<CodeBarProps> = React.memo(
   ({ lang, error, codeRef, blockIndex, plugin = null, allowExecution = true }) => {
@@ -26,11 +29,16 @@ const CodeBar: React.FC<CodeBarProps> = React.memo(
               <RunCode lang={lang} codeRef={codeRef} blockIndex={blockIndex} />
             )}
             {error !== true && (
-              <CopyButton
-                isCopied={isCopied}
-                onClick={handleCopy}
-                label={localize('com_ui_copy_code')}
-              />
+              <>
+                {/* [knauf] Keep export actions beside the existing copy action. */}
+                <KnaufCodeExportActions lang={lang} codeRef={codeRef} />
+                {/* End [knauf] */}
+                <CopyButton
+                  isCopied={isCopied}
+                  onClick={handleCopy}
+                  label={localize('com_ui_copy_code')}
+                />
+              </>
             )}
           </div>
         )}

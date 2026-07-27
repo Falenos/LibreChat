@@ -44,6 +44,9 @@ const ConversationsSection = memo(() => {
       {
         tags: tags.length === 0 ? undefined : tags,
         search: search.debouncedQuery || undefined,
+        // [knauf] Keep project chats out of general history while preserving global search.
+        projectId: search.debouncedQuery ? undefined : 'unassigned',
+        // End [knauf]
       },
       {
         enabled: isAuthenticated,

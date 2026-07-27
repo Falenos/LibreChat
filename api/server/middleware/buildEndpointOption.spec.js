@@ -277,6 +277,7 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
         model: 'gpt-5',
         promptPrefix: 'Old Karl prompt',
         useResponsesApi: false,
+        chatProjectId: 'project-1',
       },
       {
         modelSpecs: {
@@ -310,12 +311,14 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
         promptPrefix: 'Current Karl prompt',
         useResponsesApi: true,
         iconURL: 'current-karl-icon',
+        chatProjectId: 'project-1',
       }),
       undefined,
     );
     expect(req.body.endpointOption).toMatchObject({
       endpoint: EModelEndpoint.azureOpenAI,
       model: 'current-karl-model',
+      chatProjectId: 'project-1',
     });
   });
   // End [knauf]
