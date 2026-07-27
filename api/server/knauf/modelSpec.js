@@ -109,6 +109,7 @@ function hydrateParsedBodyFromCurrentSpec({
     conversation: {
       ...modelSpec.preset,
       spec: specName,
+      chatProjectId: parsedBody.chatProjectId,
     },
     defaultParamsEndpoint: getDefaultParamsEndpoint(endpointsConfig, endpoint),
   });
