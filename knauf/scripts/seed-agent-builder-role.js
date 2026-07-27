@@ -46,7 +46,14 @@ const PERMISSIONS = {
   FILE_CITATIONS: { USE: true },
   MCP_SERVERS:    { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
   REMOTE_AGENTS:  { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
-  SKILLS:         { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+  // KK20-243 — AI Champions may USE deployment skills (the `$` popover, the
+  // composer chip, the sidebar catalog) but not author them; authoring stays
+  // with platform engineering, matching `interface.skills` in librechat.yaml.
+  // This must stay explicit: the update below does `$set: { permissions }`, a
+  // full replace, and `updateInterfacePermissions` only ever iterates USER and
+  // ADMIN — so nothing else writes SKILLS onto AGENT_BUILDER. A missing
+  // permission type reads as deny, not as default.
+  SKILLS:         { USE: true, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
 };
 
 // ---------- main ----------
