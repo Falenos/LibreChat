@@ -14,5 +14,14 @@ librechat*
 Dockerfile*
 docs
 
+# [knauf] KK20-243 — source-of-truth design assets (~26 MB of EPS, PDF and a
+# licensed font archive). Reference material only; nothing here is used at
+# runtime. Anything the app actually renders is committed under
+# client/public/assets/ instead, and the palette + wordmark that artifacts need
+# are transcribed as text into skill/karl-brand/.
+# Note `skill/` is deliberately NOT excluded — deployment skills must reach
+# /app/skill via the blanket `COPY . .` in the root Dockerfile.
+knauf/brand/
+
 # Ignore all hidden files
 .*

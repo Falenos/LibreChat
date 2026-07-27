@@ -6,3 +6,11 @@
 # without conflict markers; rewrites that delete or rewrap rows still surface as
 # regular conflicts on review. See .claude/skills/seam-manifest/SKILL.md.
 SEAMS.md merge=union
+
+# [knauf] KK20-243 — brand-kit binaries (EPS, PDF, 7z, PNG). Never text-diff or
+# EOL-normalise these; a "diff" of a 12 MB PDF is noise at best and corruption
+# at worst. The .md and .html files in that tree stay normal text.
+knauf/brand/**/*.eps -text -diff
+knauf/brand/**/*.pdf -text -diff
+knauf/brand/**/*.7z  -text -diff
+knauf/brand/**/*.png -text -diff
