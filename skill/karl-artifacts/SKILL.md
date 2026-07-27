@@ -133,13 +133,16 @@ Use this card only if that read fails, and say so in your reply.
   `skills/karl-brand/references/logo.md` — never an `<img>`, and never typed as text.
   Product naming sits beside the mark, not inside it.
 - Charts keep the categorical order fixed by series index and always carry a legend
-  or direct labels. Labels and axes wear ink tokens, never a series colour.
+  or direct labels. Labels and axes wear ink tokens, never a series colour — which
+  recharts does *not* give you for free: `<Legend>` needs a `formatter` and `<Pie>`
+  needs a `label` that returns an element. See `charts.md`.
 
 ## Situation templates — read before building a branded deliverable
 
 Copy-paste, constraint-checked skeletons live in this skill's `references/`. Each one
-assumes `KNAUF` and `useKnaufTheme` are already in the artifact and declares no
-colours of its own. Read order: **karl-brand → the layout → (charts.md if needed)**.
+assumes `KNAUF` and `useKnaufTheme` are already in the artifact and introduces no
+colour that is not already in the `KNAUF` const. Read order: **karl-brand → the
+layout → (charts.md if needed)**.
 
 - `skills/karl-artifacts/references/report.md` — data/analysis report (brand header, exec summary, KPI tiles, chart, findings table).
 - `skills/karl-artifacts/references/slides.md` — navigable slide deck (title / section / bullets / chart layouts).

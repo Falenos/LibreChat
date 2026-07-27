@@ -14,7 +14,8 @@ a visible dark toggle, initialised from the viewer's OS preference.
 Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
 into the artifact as the first block. Read
 `skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
-path. **The code below assumes all three exist and declares no colours of its own.**
+path. **The code below assumes all three exist and introduces no colour that is not
+already in the `KNAUF` const.**
 
 ## Tokens this layout uses
 
@@ -44,6 +45,12 @@ path. **The code below assumes all three exist and declares no colours of its ow
 - **Charts.** Every `<ResponsiveContainer>` sits in a parent with an explicit height
   (`h-64`/`h-72 w-full`). Assign the palette in **fixed index order** — never
   rank-driven, never cycled. Every chart has a `<Tooltip>` and a `<Legend>`.
+- **Recharts paints chart text in the series colour unless you stop it**, and
+  `wrapperStyle` is not enough — the per-item span wins. Two overrides are mandatory:
+  a `<Legend formatter>` that wraps the label in `theme.text`, and a `<Pie label>` that
+  returns a `<text fill={theme.text}>` element rather than a bare string (a string
+  inherits the slice's `<Cell>` fill). Both would otherwise put 3.2–3.9:1 text on the
+  page, which is the rule in `charts.md` broken by the library's default.
 - **The per-`Cell` bar colouring is only legitimate here** because each bar is already
   named by its axis tick — otherwise it is colour carrying no identity.
 - **Keep the donut to four or five slices** with direct labels, so identity never
@@ -54,7 +61,7 @@ path. **The code below assumes all three exist and declares no colours of its ow
 
 ```tsx
 // ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -129,6 +136,25 @@ export default function KnaufKpiDashboard() {
     color: theme.text,
   };
 
+  // Recharts paints legend label text in the series colour, and `wrapperStyle`
+  // loses to the per-item span. A formatter is the only override that holds.
+  const legendInk = useCallback(
+    (value) => <span style={{ color: theme.text }}>{value}</span>,
+    [theme.text],
+  );
+
+  // Same trap on Pie: a label function returning a bare string inherits the
+  // slice's <Cell> fill. Return an element and set `fill` explicitly.
+  const renderShareLabel = useCallback(
+    ({ name, percent, x, y, textAnchor }) => (
+      <text x={x} y={y} textAnchor={textAnchor} dominantBaseline="central"
+        fill={theme.text} fontSize={12}>
+        {`${name} ${(percent * 100).toFixed(0)}%`}
+      </text>
+    ),
+    [theme.text],
+  );
+
   return (
     <div className="min-h-screen w-full p-6" style={{ backgroundColor: theme.page, color: theme.text }}>
       <div
@@ -190,7 +216,7 @@ export default function KnaufKpiDashboard() {
                       : [`${value.toFixed(1)} (${entry.payload.orders.toLocaleString()})`, name]
                   }
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: theme.text }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendInk} />
                 <Line type="monotone" dataKey="revenueIdx" name="Revenue" stroke={theme.palette[0]} strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="ordersIdx" name="Orders" stroke={theme.palette[1]} strokeWidth={2} dot={false} />
               </LineChart>
@@ -210,7 +236,7 @@ export default function KnaufKpiDashboard() {
                 <XAxis dataKey="name" stroke={theme.grid} tick={{ fill: theme.muted, fontSize: 12 }} />
                 <YAxis stroke={theme.grid} tick={{ fill: theme.muted, fontSize: 12 }} />
                 <Tooltip contentStyle={tooltipStyle} cursor={{ fill: theme.page }} />
-                <Legend wrapperStyle={{ fontSize: 12, color: theme.text }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendInk} />
                 <Bar dataKey="value" name="Revenue (€M)" radius={[4, 4, 0, 0]}>
                   {DATA.breakdown.map((d, i) => <Cell key={d.name} fill={theme.palette[i]} />)}
                 </Bar>
@@ -228,7 +254,7 @@ export default function KnaufKpiDashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Tooltip contentStyle={tooltipStyle} />
-                <Legend wrapperStyle={{ fontSize: 12, color: theme.text }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} formatter={legendInk} />
                 <Pie
                   data={DATA.share}
                   dataKey="value"
@@ -238,7 +264,7 @@ export default function KnaufKpiDashboard() {
                   innerRadius={60}
                   outerRadius={100}
                   paddingAngle={2}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  label={renderShareLabel}
                 >
                   {DATA.share.map((d, i) => <Cell key={d.name} fill={theme.palette[i]} />)}
                 </Pie>

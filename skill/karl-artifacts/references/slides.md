@@ -4,9 +4,10 @@
 
 Reach for this when the artifact is a **presentation**: a linear sequence of
 full-bleed 16:9 slides the viewer clicks through — a quarterly review, a rollout
-plan, a pitch. It defaults to the Knauf light look but routes colour through the
-theme, so a dark rendering costs nothing. If the ask is an interactive dashboard, a
-single report page, or a form, use a different template.
+plan, a pitch. It follows the viewer's OS light/dark preference and routes every
+colour through the theme; there is no visible toggle, because the viewer is here to
+advance slides. If the ask is an interactive dashboard, a single report page, or a
+form, use a different template.
 
 The deck is driven by one `const SLIDES = [...]` array. Each entry has a `type` that
 picks a layout — `'title'`, `'section'`, `'bullets'`, `'chart'`. Add or reorder slides
@@ -17,7 +18,8 @@ by editing that array only; the renderer, navigation and footer adapt automatica
 Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
 into the artifact as the first block. Read
 `skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
-path. **The code below assumes all three exist and declares no colours of its own.**
+path. **The code below assumes all three exist and introduces no colour that is not
+already in the `KNAUF` const.**
 
 ## Tokens this layout uses
 
@@ -35,7 +37,9 @@ path. **The code below assumes all three exist and declares no colours of its ow
 
 - **The real wordmark, not typed text.** `<KnaufWordmark />` in the top bar and in the
   slide footer. On the `accessibleBlue` field it takes `#FFFFFF`; on a light surface
-  it takes `KNAUF.brand.logoCyan`. Deck naming is separate text beside it.
+  it takes `KNAUF.brand.logoCyan`. Deck naming is separate text beside it. Both
+  placements sit at or above the **20px floor** from `logo.md` — the footer mark is
+  the one that tempts you below it, and below 20px the counters close up.
 - **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage. Slide content is
   absolutely positioned to fill it, so every slide is the same size.
 - **Type scale.** Title slides `text-5xl`; section dividers `text-4xl`; slide headings
@@ -47,20 +51,19 @@ path. **The code below assumes all three exist and declares no colours of its ow
 - **A cyan button takes ink text, not white.** White on `#0099DE` is 3.18:1, which
   fails AA for a `text-sm` label; ink on cyan is 5.50:1.
 - **Charts.** Assign `theme.palette` in **fixed index order**, never rank- or
-  value-driven. Always include a `<Legend />`. The `<ResponsiveContainer>` sits in a
-  parent with an explicit `h-72 w-full`. Status colours never enter the data palette.
+  value-driven. Always include a `<Legend />`, and always give it a `formatter` —
+  recharts paints legend label text in the series colour and `wrapperStyle` does not
+  override it. The `<ResponsiveContainer>` sits in a parent with an explicit
+  `h-72 w-full`. Status colours never enter the data palette.
 
 ```tsx
 // ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import React, { useMemo, useState, useEffect, useCallback } from 'react'; // useMemo: pasted useKnaufTheme
+import React, { useMemo, useState, useEffect, useCallback } from 'react'; // useMemo: also the pasted useKnaufTheme
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend,
 } from 'recharts';
-
-// Light by default. Flip to true for a dark rendering.
-const DARK = false;
 
 const REVENUE = [
   { region: 'DACH', prior: 42, current: 51 },
@@ -143,7 +146,11 @@ function Slide({ slide, theme }) {
                 color: theme.text,
               }}
             />
-            <Legend wrapperStyle={{ color: theme.text, fontSize: 13 }} />
+            {/* formatter, not wrapperStyle: recharts colours legend text by series. */}
+            <Legend
+              wrapperStyle={{ fontSize: 13 }}
+              formatter={(value) => <span style={{ color: theme.text }}>{value}</span>}
+            />
             {slide.keys.map((s, i) => (
               <Bar key={s.k} dataKey={s.k} name={s.label} fill={theme.palette[i]} radius={[3, 3, 0, 0]} />
             ))}
@@ -155,7 +162,13 @@ function Slide({ slide, theme }) {
 }
 
 export default function KarlSlideDeck() {
-  const theme = useKnaufTheme(DARK);
+  // Follow the viewer's OS preference. No toggle: they are here to advance slides.
+  const dark = useMemo(
+    () => typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true,
+    [],
+  );
+  const theme = useKnaufTheme(dark);
   const [index, setIndex] = useState(0);
   const total = SLIDES.length;
 
@@ -196,7 +209,8 @@ export default function KarlSlideDeck() {
             className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-2"
             style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
           >
-            <KnaufWordmark height={14} fill={KNAUF.brand.logoCyan} />
+            {/* 20px is the floor from logo.md — do not shrink this to fit. */}
+            <KnaufWordmark height={20} fill={KNAUF.brand.logoCyan} />
             <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
           </div>
         </div>

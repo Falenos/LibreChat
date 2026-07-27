@@ -4,10 +4,10 @@
 
 Use this when the user wants a **static analytical deliverable** — a findings report,
 a monthly/quarterly review, an executive summary with a few KPIs, one chart, and a
-findings table. It is a *deliverable*, not an interactive dashboard. It defaults to
-light (white surface, print-friendly) but routes every colour through the theme, so
-it does not break if the user asks for dark. If the user wants filters, tabs, live
-data, or drill-down, reach for the dashboard template instead.
+findings table. It is a *deliverable*, not an interactive dashboard. It follows the
+viewer's OS light/dark preference and routes every colour through the theme; there is
+no visible toggle, because a deliverable is read, not operated. If the user wants
+filters, tabs, live data, or drill-down, reach for the dashboard template instead.
 
 Adapt it by swapping `DATA`, the KPI tiles, the chart type (bar↔line), and the table
 rows. Keep the top-to-bottom order: **brand bar → title → executive summary → KPI
@@ -18,7 +18,8 @@ row → one chart → findings table → footer.**
 Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
 into the artifact as the first block. Read
 `skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
-path. **The code below assumes all three exist and declares no colours of its own.**
+path. **The code below assumes all three exist and introduces no colour that is not
+already in the `KNAUF` const.**
 
 ## Tokens this layout uses
 
@@ -49,11 +50,14 @@ path. **The code below assumes all three exist and declares no colours of its ow
   always ships a `<Legend>`, axis labels and a `<Tooltip>`, and its
   `<ResponsiveContainer>` lives inside an `h-80 w-full` parent. Status colours are
   never a data series.
+- **The `<Legend>` needs a `formatter`.** Recharts paints legend label text in the
+  series colour by default, and `wrapperStyle` does not override it — the per-item
+  span wins. At `text-xs` that puts 3.2:1 text on the page. Force `theme.text`.
 - Use `border` + subtle `page` fills rather than shadows for structure — it prints.
 
 ```tsx
 // ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import { useMemo } from 'react'; // used by the pasted useKnaufTheme
+import { useMemo } from 'react'; // also used by the pasted useKnaufTheme
 import { format } from 'date-fns';
 import { ArrowUpRight, ArrowDownRight, ShieldCheck } from 'lucide-react';
 import {
@@ -62,9 +66,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '/components/ui/table';
 import { Separator } from '/components/ui/separator';
-
-// Light by default. Flip to true (or drive from a prop) for a dark rendering.
-const DARK = false;
 
 // Chart series in FIXED palette order. Swap keys/labels for your report.
 const SERIES = [
@@ -110,7 +111,13 @@ function StatusChip({ tone, children, theme }) {
 }
 
 export default function KnaufReport() {
-  const theme = useKnaufTheme(DARK);
+  // Follow the viewer's OS preference. No toggle: a report is read, not operated.
+  const dark = useMemo(
+    () => typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true,
+    [],
+  );
+  const theme = useKnaufTheme(dark);
   const generatedOn = format(new Date(), 'MMMM d, yyyy');
 
   return (
@@ -206,7 +213,11 @@ export default function KnaufReport() {
                       color: theme.text,
                     }}
                   />
-                  <Legend wrapperStyle={{ fontSize: 12, color: theme.text }} />
+                  {/* formatter, not wrapperStyle: recharts colours legend text by series. */}
+                  <Legend
+                    wrapperStyle={{ fontSize: 12 }}
+                    formatter={(value) => <span style={{ color: theme.text }}>{value}</span>}
+                  />
                   {SERIES.map((s, i) => (
                     <Bar
                       key={s.key}

@@ -1,15 +1,13 @@
 ---
 name: karl-data-analysis
+# 245 chars. The model-visible catalog truncates at 250 — see skill/README.md
+# rule 3. Everything this skill *covers* belongs in the body below, not here;
+# the description buys trigger words only.
 description: >-
-  Effective use of KARL's code-interpreter sandbox for data analysis and file
-  generation. Use when executing code on attached files, analyzing
-  CSV/Excel/JSON/log data, computing statistics, generating matplotlib charts,
-  transforming or converting files, or producing downloadable deliverables
-  (CSV, XLSX, PNG, PDF, reports). Covers the inspect-then-analyze workflow, the
-  stateless-execution and /mnt/data persistence model, the ~64KB stdout cap
-  (summarize in chat, write full results to files), headless matplotlib, what
-  is preinstalled (Python with numpy/pandas/matplotlib, Node, Bash), and
-  working inside the no-network sandbox (no pip install, no URL fetching).
+  KARL's code-interpreter sandbox for data analysis and file generation. Use
+  when running code on attached files, analyzing CSV/Excel/JSON/log data,
+  computing statistics, plotting with matplotlib, converting files, or building
+  downloadable output.
 argument-hint: "[analysis task or file]"
 user-invocable: true
 version: "1.0.0"

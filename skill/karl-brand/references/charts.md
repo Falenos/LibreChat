@@ -94,6 +94,19 @@ label, value, axis, tick or legend entry ever takes a series colour.**
 `#CFD7D9` is **never** a series. It is the neutral, and a neutral that also appears
 as data reads as "missing" or "other" wherever it lands.
 
+**Recharts breaks this rule by default — you have to override it.** Two places, both
+silent, both landing 12–13px text at 3.2–3.9:1:
+
+- **Legend.** The item text span carries `color: entry.color`, which beats anything
+  you put in `wrapperStyle`. Only a `formatter` wins:
+  `<Legend formatter={(v) => <span style={{ color: theme.text }}>{v}</span>} />`
+- **Pie labels.** A `label` function returning a *string* has the slice entry — its
+  `<Cell>` fill included — spread into the label's text props. Return an element and
+  set `fill` yourself: `<text x={x} y={y} textAnchor={textAnchor} fill={theme.text}>`.
+
+Axis `tick={{ fill: theme.muted }}` and `<Tooltip contentStyle>` do not have this
+problem; they take the value you give them.
+
 Other rules that hold regardless of palette:
 
 - **One axis.** Never two y-scales. Two measures of different magnitude → two charts,

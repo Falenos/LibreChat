@@ -45,7 +45,7 @@ function KnaufWordmark({ height = 28, fill = '#FFFFFF' }) {
 
 Call site: `<KnaufWordmark height={28} fill="#FFFFFF" />`
 
-Never shorten, re-type, or "clean up" the `d` string. It is 880 characters of
+Never shorten, re-type, or "clean up" the `d` string. It is 903 characters of
 coordinate data with no redundancy — any edit silently deforms the letterforms,
 and there is no error to tell you.
 
