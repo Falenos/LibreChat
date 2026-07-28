@@ -556,6 +556,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/stream/index.ts` | generation-conflict exports | 17–19 | Exposes the stable concurrent-generation conflict contract to the HTTP controller | `api/server/controllers/agents/__tests__/request.resumeMetadata.spec.js` | NO-TICKET |
 | `packages/api/src/stream/interfaces/IJobStore.ts` | generation ownership contracts | 9–25, 32–34, 450–452 | Adds the immutable owner, stable conflict, and exact tracked-generation contracts required for stale-operation fencing | `packages/api/src/knauf/stream/RedisGenerationLifecycle.stream_integration.spec.ts` | NO-TICKET |
 | `packages/api/src/types/stream.ts` | generation-aware job and resume types | 29–31, 62–65, 72–74 | Carries the immutable owner through runtime state, subscriptions, and atomic resume results | `packages/api/src/knauf/stream/RedisGenerationLifecycle.stream_integration.spec.ts` | NO-TICKET |
+| `packages/data-schemas/src/methods/message.ts` | `saveMessage` completed-response guard and duplicate-upsert recovery | 114–120, 157–180, 199–229 | Prevents late partial snapshots from downgrading completed agent responses and reapplies the intended write after a recoverable Mongo duplicate-key race | `packages/data-schemas/src/methods/message.spec.ts` (`completed response persistence`) | NO-TICKET |
+| `packages/data-schemas/src/methods/message.spec.ts` | `completed response persistence` | 130–182 | Reproduces late-partial overwrite and duplicate-upsert final-loss paths against the public message persistence contract | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -599,6 +601,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the upload-rate-limit wait message shown while the serialized client queue honors `Retry-After` and retries. |
 | `.env.example` | Raises the documented per-scope async-indexing backlog default from 20 to 50 files while retaining the independent 500 MB byte ceiling. |
 | `client/src/locales/{en,de}/translation.json` | Localizes agent-wide ready/processing/failed counts and distinct backlog-wait versus manual-retry guidance. |
+| `infrastructure/stage/values.yaml` | Temporarily renders the AGK stage app Deployment with `Recreate` so its first generation-scoped Redis release cannot mix old and new API protocols; remove after that rollout completes. |
+| `infrastructure/prod/values.yaml` | Temporarily renders the AGK prod app Deployment with `Recreate` so its first generation-scoped Redis release cannot mix old and new API protocols; remove after that rollout completes. |
 
 ## Net-New Files
 
