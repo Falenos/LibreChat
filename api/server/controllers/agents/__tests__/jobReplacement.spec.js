@@ -1,8 +1,8 @@
 /**
- * Tests for job replacement detection in ResumableAgentController
+ * Tests for stale generation detection in ResumableAgentController
  *
  * Tests the following fixes from PR #11462:
- * 1. Job creation timestamp tracking
+ * 1. Immutable generation identity tracking
  * 2. Stale job detection and event skipping
  * 3. Response message saving before final event emission
  */
@@ -56,18 +56,19 @@ jest.mock('~/models', () => ({
   saveMessage: (...args) => mockSaveMessage(...args),
 }));
 
-describe('Job Replacement Detection', () => {
+// [knauf] UUID ownership replaces collision-prone createdAt comparisons.
+describe('Generation Ownership Detection', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  describe('Job Creation Timestamp Tracking', () => {
-    it('should capture createdAt when job is created', async () => {
+  describe('Generation Identity Tracking', () => {
+    it('captures generationId when a job is created', async () => {
       const streamId = 'test-stream-123';
-      const createdAt = Date.now();
+      const generationId = 'generation-1';
 
       mockGenerationJobManager.createJob.mockResolvedValue({
-        createdAt,
+        generationId,
         readyPromise: Promise.resolve(),
         abortController: new AbortController(),
         emitter: { on: jest.fn() },
@@ -75,7 +76,7 @@ describe('Job Replacement Detection', () => {
 
       const job = await mockGenerationJobManager.createJob(streamId, 'user-123', streamId);
 
-      expect(job.createdAt).toBe(createdAt);
+      expect(job.generationId).toBe(generationId);
     });
   });
 
@@ -84,45 +85,45 @@ describe('Job Replacement Detection', () => {
      * Simulates the job replacement detection logic from request.js
      * This is extracted for unit testing since the full controller is complex
      */
-    const detectJobReplacement = async (streamId, originalCreatedAt) => {
+    const detectJobReplacement = async (streamId, originalGenerationId) => {
       const currentJob = await mockGenerationJobManager.getJob(streamId);
-      return !currentJob || currentJob.createdAt !== originalCreatedAt;
+      return !currentJob || currentJob.generationId !== originalGenerationId;
     };
 
-    it('should detect when job was replaced (different createdAt)', async () => {
+    it('detects a stale generation', async () => {
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
-      const newCreatedAt = 2000;
+      const originalGenerationId = 'generation-1';
+      const newGenerationId = 'generation-2';
 
       mockGenerationJobManager.getJob.mockResolvedValue({
-        createdAt: newCreatedAt,
+        generationId: newGenerationId,
       });
 
-      const wasReplaced = await detectJobReplacement(streamId, originalCreatedAt);
+      const wasReplaced = await detectJobReplacement(streamId, originalGenerationId);
 
       expect(wasReplaced).toBe(true);
     });
 
     it('should detect when job was deleted', async () => {
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
+      const originalGenerationId = 'generation-1';
 
       mockGenerationJobManager.getJob.mockResolvedValue(null);
 
-      const wasReplaced = await detectJobReplacement(streamId, originalCreatedAt);
+      const wasReplaced = await detectJobReplacement(streamId, originalGenerationId);
 
       expect(wasReplaced).toBe(true);
     });
 
-    it('should not detect replacement when same job (same createdAt)', async () => {
+    it('keeps the current generation authoritative', async () => {
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
+      const originalGenerationId = 'generation-1';
 
       mockGenerationJobManager.getJob.mockResolvedValue({
-        createdAt: originalCreatedAt,
+        generationId: originalGenerationId,
       });
 
-      const wasReplaced = await detectJobReplacement(streamId, originalCreatedAt);
+      const wasReplaced = await detectJobReplacement(streamId, originalGenerationId);
 
       expect(wasReplaced).toBe(false);
     });
@@ -134,42 +135,42 @@ describe('Job Replacement Detection', () => {
      */
     const emitFinalEventIfNotReplaced = async ({
       streamId,
-      originalCreatedAt,
+      originalGenerationId,
       finalEvent,
       userId,
     }) => {
       const currentJob = await mockGenerationJobManager.getJob(streamId);
-      const jobWasReplaced = !currentJob || currentJob.createdAt !== originalCreatedAt;
+      const jobWasReplaced = !currentJob || currentJob.generationId !== originalGenerationId;
 
       if (jobWasReplaced) {
         mockLogger.debug('Skipping FINAL emit - job was replaced', {
           streamId,
-          originalCreatedAt,
-          currentCreatedAt: currentJob?.createdAt,
+          originalGenerationId,
+          currentGenerationId: currentJob?.generationId,
         });
         await mockDecrementPendingRequest(userId);
         return false;
       }
 
-      mockGenerationJobManager.emitDone(streamId, finalEvent);
-      mockGenerationJobManager.completeJob(streamId);
+      await mockGenerationJobManager.emitDone(streamId, finalEvent, originalGenerationId);
+      await mockGenerationJobManager.completeJob(streamId, undefined, originalGenerationId);
       await mockDecrementPendingRequest(userId);
       return true;
     };
 
     it('should skip emitting when job was replaced', async () => {
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
-      const newCreatedAt = 2000;
+      const originalGenerationId = 'generation-1';
+      const newGenerationId = 'generation-2';
       const userId = 'user-123';
 
       mockGenerationJobManager.getJob.mockResolvedValue({
-        createdAt: newCreatedAt,
+        generationId: newGenerationId,
       });
 
       const emitted = await emitFinalEventIfNotReplaced({
         streamId,
-        originalCreatedAt,
+        originalGenerationId,
         finalEvent: { final: true },
         userId,
       });
@@ -182,32 +183,40 @@ describe('Job Replacement Detection', () => {
         'Skipping FINAL emit - job was replaced',
         expect.objectContaining({
           streamId,
-          originalCreatedAt,
-          currentCreatedAt: newCreatedAt,
+          originalGenerationId,
+          currentGenerationId: newGenerationId,
         }),
       );
     });
 
     it('should emit when job was not replaced', async () => {
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
+      const originalGenerationId = 'generation-1';
       const userId = 'user-123';
       const finalEvent = { final: true, conversation: { conversationId: streamId } };
 
       mockGenerationJobManager.getJob.mockResolvedValue({
-        createdAt: originalCreatedAt,
+        generationId: originalGenerationId,
       });
 
       const emitted = await emitFinalEventIfNotReplaced({
         streamId,
-        originalCreatedAt,
+        originalGenerationId,
         finalEvent,
         userId,
       });
 
       expect(emitted).toBe(true);
-      expect(mockGenerationJobManager.emitDone).toHaveBeenCalledWith(streamId, finalEvent);
-      expect(mockGenerationJobManager.completeJob).toHaveBeenCalledWith(streamId);
+      expect(mockGenerationJobManager.emitDone).toHaveBeenCalledWith(
+        streamId,
+        finalEvent,
+        originalGenerationId,
+      );
+      expect(mockGenerationJobManager.completeJob).toHaveBeenCalledWith(
+        streamId,
+        undefined,
+        originalGenerationId,
+      );
       expect(mockDecrementPendingRequest).toHaveBeenCalledWith(userId);
     });
   });
@@ -230,12 +239,12 @@ describe('Job Replacement Detection', () => {
       });
 
       mockGenerationJobManager.getJob.mockResolvedValue({
-        createdAt: 1000,
+        generationId: 'generation-1',
       });
 
       // Simulate the order of operations from request.js
       const streamId = 'test-stream-123';
-      const originalCreatedAt = 1000;
+      const originalGenerationId = 'generation-1';
       const response = { messageId: 'response-123' };
       const userId = 'user-123';
 
@@ -244,11 +253,11 @@ describe('Job Replacement Detection', () => {
 
       // Step 2: Check for replacement
       const currentJob = await mockGenerationJobManager.getJob(streamId);
-      const jobWasReplaced = !currentJob || currentJob.createdAt !== originalCreatedAt;
+      const jobWasReplaced = !currentJob || currentJob.generationId !== originalGenerationId;
 
       // Step 3: Emit if not replaced
       if (!jobWasReplaced) {
-        mockGenerationJobManager.emitDone(streamId, { final: true });
+        mockGenerationJobManager.emitDone(streamId, { final: true }, originalGenerationId);
       }
 
       expect(callOrder).toEqual(['saveMessage', 'emitDone']);
@@ -288,3 +297,4 @@ describe('Job Replacement Detection', () => {
     });
   });
 });
+// End [knauf]

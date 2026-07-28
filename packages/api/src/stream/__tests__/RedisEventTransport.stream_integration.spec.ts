@@ -872,7 +872,8 @@ describe('RedisEventTransport Integration Tests', () => {
    * causing non-deterministic message counts.
    */
   describe('Cross-Replica Sequence Synchronization (#12575)', () => {
-    test('shared counter is cleaned up on stream cleanup', async () => {
+    // [knauf] Cleanup leaves generation ordering keys to TTL so stale pods cannot reset them.
+    test('generation counter survives stream cleanup with a safety TTL', async () => {
       if (!ioredisClient) {
         console.warn('Redis not available, skipping test');
         return;
@@ -884,32 +885,29 @@ describe('RedisEventTransport Integration Tests', () => {
       const transport = new RedisEventTransport(ioredisClient, subscriber);
 
       const streamId = `cross-replica-cleanup-${Date.now()}`;
+      const generationId = 'generation-1';
 
       // Publish chunks to create the Redis counter key
       for (let i = 0; i < 5; i++) {
-        await transport.emitChunk(streamId, { index: i });
+        await transport.emitChunk(streamId, { index: i }, generationId);
       }
 
       // Verify the key exists
-      const key = `stream:{${streamId}}:seq`;
+      const key = `stream:{${streamId}}:generation:${generationId}:seq`;
       const valBefore = await ioredisClient.get(key);
       expect(valBefore).toBe('5');
 
       // Cleanup the stream
-      transport.cleanup(streamId);
+      transport.cleanup(streamId, generationId);
 
-      // Poll for the fire-and-forget DEL to complete (robust under CI load)
-      const start = Date.now();
-      let valAfter: string | null = 'pending';
-      while (valAfter !== null && Date.now() - start < 2000) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        valAfter = await ioredisClient.get(key);
-      }
-      expect(valAfter).toBeNull();
+      expect(await ioredisClient.get(key)).toBe('5');
+      expect(await ioredisClient.ttl(key)).toBeGreaterThan(0);
+      await ioredisClient.del(key);
 
       transport.destroy();
       subscriber.disconnect();
     });
+    // End [knauf]
   });
 
   describe('Cleanup', () => {

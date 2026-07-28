@@ -2027,12 +2027,10 @@ describe('GenerationJobManager Integration Tests', () => {
       const streamId = `cross-live-${Date.now()}`;
       await replicaA.createJob(streamId, 'user-1');
 
-      const replicaBJobStore = new RedisJobStore(ioredisClient!);
-      await replicaBJobStore.initialize();
-      await replicaBJobStore.createJob(streamId, 'user-1');
-
+      // [knauf] Replica B lazily attaches to A's immutable generation; it must not replace it.
       const receivedOnB: unknown[] = [];
       const subB = await replicaB.subscribe(streamId, (event: unknown) => receivedOnB.push(event));
+      // End [knauf]
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -2051,7 +2049,6 @@ describe('GenerationJobManager Integration Tests', () => {
       }
 
       subB?.unsubscribe();
-      replicaBJobStore.destroy();
       await replicaA.destroy();
       await replicaB.destroy();
     });
@@ -2076,12 +2073,11 @@ describe('GenerationJobManager Integration Tests', () => {
       const streamId = `cross-seq-safe-${Date.now()}`;
 
       await replicaA.createJob(streamId, 'user-1');
-      const replicaBJobStore = new RedisJobStore(ioredisClient!);
-      await replicaBJobStore.initialize();
-      await replicaBJobStore.createJob(streamId, 'user-1');
 
+      // [knauf] Cross-replica subscription reads A's generation from Redis.
       const receivedOnB: unknown[] = [];
       const subB = await replicaB.subscribe(streamId, (event: unknown) => receivedOnB.push(event));
+      // End [knauf]
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       for (let i = 0; i < 3; i++) {
@@ -2130,7 +2126,6 @@ describe('GenerationJobManager Integration Tests', () => {
 
       subA?.unsubscribe();
       subB?.unsubscribe();
-      replicaBJobStore.destroy();
       await replicaA.destroy();
       await replicaB.destroy();
     });
@@ -2169,12 +2164,10 @@ describe('GenerationJobManager Integration Tests', () => {
       replicaB.configure(servicesB);
       replicaB.initialize();
 
-      const replicaBJobStore = new RedisJobStore(ioredisClient!);
-      await replicaBJobStore.initialize();
-      await replicaBJobStore.createJob(streamId, 'user-1');
-
+      // [knauf] A late replica subscribes to the existing owner and reconstructs its created event.
       const receivedOnB: unknown[] = [];
       const subB = await replicaB.subscribe(streamId, (event: unknown) => receivedOnB.push(event));
+      // End [knauf]
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -2194,7 +2187,6 @@ describe('GenerationJobManager Integration Tests', () => {
 
       subA?.unsubscribe();
       subB?.unsubscribe();
-      replicaBJobStore.destroy();
       await replicaA.destroy();
       await replicaB.destroy();
     });
