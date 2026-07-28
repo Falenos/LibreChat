@@ -695,16 +695,42 @@ modelSpecs:
 
     # Knauf personalities for the agent builder. Filtered client-side by the
     # `karl-personality-` name prefix in
-    # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
-    # into the new agent's `model_parameters` at create time.
+    # client/src/knauf/data-provider/Agents/usePersonalities.ts. Preset values
+    # flow into the new agent's `model_parameters` at create time.
     # Agent personalities use the environment-selected model through Responses
     # API. GitOps selects `agent-default` (direct GPT-5.6 Sol).
+    #
+    # [knauf] KK20-243 — these three are ALSO selectable in the chat model
+    # dropdown, not just the builder: `interface.modelSelect` is true and none of
+    # them sets `group`, so ModelSelector renders every spec in
+    # `modelSpecs.filter((spec) => !spec.group)`. A user therefore sees
+    # KARL / Precise / Balanced / Creative as peers and switches between them
+    # freely.
+    #
+    # That means every per-conversation capability has to be repeated here, or
+    # picking a personality silently turns it OFF — the spec is authoritative for
+    # a new conversation and an absent key reads as "off", not "inherit":
+    #   web_search  applyModelSpecEphemeralAgent -> `modelSpec.webSearch ?? false`
+    #   artifacts   applyModelSpecEphemeralAgent -> `modelSpec.artifacts || ''`
+    #   skills      applyModelSpecSkills early-returns without the key, so
+    #               `skills_enabled` never becomes true (packages/api/src/agents/added.ts)
+    # KK20-194 already established this for `webSearch`; KK20-243 extends the
+    # same parity rule to `artifacts` and `skills`. The rule, so nobody has to
+    # rediscover it: a capability added to the `karl` spec belongs on all three
+    # of these too, unless there is a stated reason it should not.
+    # Cost is accepted and is not new — the ~2.9k input tokens/turn that
+    # `artifacts: 'default'` adds already applies to every KARL chat, which is
+    # the large majority. A personality that is quietly cheaper than KARL is an
+    # accident, not a budget.
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
       description: 'Sticks to facts. Short and exact.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -718,6 +744,9 @@ modelSpecs:
       description: 'Thoughtful and well-rounded.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -731,6 +760,9 @@ modelSpecs:
       description: 'Explores ideas. More expressive.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'

@@ -169,10 +169,23 @@ describe('[knauf] shipped deployment skills', () => {
     // which happen to fall before command letters, so no numbers fuse.
     const tokenize = (d: string) => d.match(/[MmLlHhVvCcSsQqTtAaZz]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
 
-    const svg = fs.readFileSync(
-      path.join(REPO_ROOT, 'knauf/brand/logos/KNAUFLogo2024sRGB.svg'),
-      'utf8',
-    );
+    /**
+     * The yardstick, not the thing under test. `.dockerignore` excludes
+     * `knauf/brand/` (~26 MB of EPS/PDF/font archive, nothing runtime-reachable),
+     * so this assertion only holds on a checkout — never inside the image. Assert
+     * it exists first: without this, pruning the brand kit fails with a bare
+     * ENOENT under a title that reads as "the wordmark is broken", sending the
+     * reader into logo.md looking for damage that is not there.
+     *
+     * If this fails: restore the file, or decide deliberately that the wordmark
+     * is no longer machine-verifiable and delete this test. Do not "fix" it by
+     * comparing logo.md's two copies to each other — they would agree happily on
+     * a shared transcription error, which is the failure this test exists for.
+     */
+    const brandSvgPath = path.join(REPO_ROOT, 'knauf/brand/logos/KNAUFLogo2024sRGB.svg');
+    expect(fs.existsSync(brandSvgPath)).toBe(true);
+
+    const svg = fs.readFileSync(brandSvgPath, 'utf8');
     const sourcePath = /<path[^>]*\sd="(M[^"]+)"/.exec(svg)?.[1];
     expect(sourcePath).toBeDefined();
 
