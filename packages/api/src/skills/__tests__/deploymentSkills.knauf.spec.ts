@@ -18,8 +18,13 @@
  * These assertions are deliberately about the shipped content, not the loader.
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import yaml from 'js-yaml';
+import {
+  KNAUF_EXPECTED_DEPLOYMENT_SKILLS,
+  checkDeploymentSkills,
+} from '../../knauf/skills/deploymentSkillsCheck';
 import { loadDeploymentSkillsFromDirectory, type DeploymentSkill } from '../deployment';
 
 /** Repo root, from packages/api/src/skills/__tests__/. */
@@ -46,8 +51,14 @@ const CATALOG_ENTRY_MAX_CHARS = 250;
  * catches `skill/_disabled/` becoming discoverable — `findSkillDirectories`
  * only scans immediate children today, and an upstream change to that depth
  * would silently resurrect a skill we deliberately parked.
+ *
+ * Imported rather than re-declared: the same list drives the boot-time check in
+ * `packages/api/src/knauf/skills/deploymentSkillsCheck.ts`, which is what makes
+ * a shadowed `/app/skill` loud in production. Two copies would drift, and the
+ * copy that drifts is the one nobody reads until an environment is already
+ * missing its brand tokens.
  */
-const EXPECTED_SKILL_NAMES = ['karl-artifacts', 'karl-brand'];
+const EXPECTED_SKILL_NAMES = KNAUF_EXPECTED_DEPLOYMENT_SKILLS;
 
 /** The token source of truth. Every other skill mirrors, never authors. */
 const TOKEN_SOURCE_SKILL = 'karl-brand';
@@ -228,6 +239,48 @@ describe('[knauf] shipped deployment skills', () => {
       }
     }
     expect(overLong).toEqual([]);
+  });
+
+  /**
+   * Wiring tests for the boot-time check. The unit spec beside the module covers
+   * classification and log level against synthetic input; these two run the real
+   * loader, so they catch the case where the loader and the check disagree about
+   * what a "name" is. `checkDeploymentSkills` (pure) rather than
+   * `verifyDeploymentSkills` so the failing case does not emit an ERROR line
+   * that reads like a broken test run.
+   */
+  describe('boot-time deployment skill check', () => {
+    it('passes against the real shipped tree', () => {
+      const result = checkDeploymentSkills({
+        loadedNames: skills.map((skill) => skill.name),
+        directory: SKILLS_DIR,
+      });
+      expect(result.missing).toEqual([]);
+      expect(result.unexpected).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+
+    it('detects a directory mounted over the baked-in skills', async () => {
+      // The production failure this check exists for: a volume at /app/skill
+      // shadows the image copy. The loader treats that as a SUCCESSFUL boot and
+      // logs the zero case at `debug`, so without the check it is invisible.
+      const shadowed = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'knauf-skill-shadow-'));
+      try {
+        const registry = await loadDeploymentSkillsFromDirectory(shadowed, {
+          projectRoot: REPO_ROOT,
+        });
+        expect(registry.list()).toEqual([]);
+
+        const result = checkDeploymentSkills({
+          loadedNames: registry.list().map((skill) => skill.name),
+          directory: registry.getDirectory(),
+        });
+        expect(result.ok).toBe(false);
+        expect(result.missing).toEqual([...KNAUF_EXPECTED_DEPLOYMENT_SKILLS].sort());
+      } finally {
+        await fs.promises.rm(shadowed, { recursive: true, force: true });
+      }
+    });
   });
 
   it('keeps YAML frontmatter out of reference files', () => {

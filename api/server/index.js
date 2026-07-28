@@ -23,6 +23,9 @@ const {
   createStreamServices,
   initializeFileStorage,
   initializeDeploymentSkills,
+  // [knauf] KK20-243 — see the call site below.
+  verifyDeploymentSkills,
+  // End [knauf]
   maybeInjectQueryDevtoolsBootstrap,
   preAuthTenantMiddleware,
   setupGracefulShutdown,
@@ -125,7 +128,25 @@ const startServer = async () => {
   });
   const appConfig = await getAppConfig({ baseOnly: true });
   initializeFileStorage(appConfig);
-  await initializeDeploymentSkills({ projectRoot: path.resolve(__dirname, '../..') });
+  const deploymentSkillRegistry = await initializeDeploymentSkills({
+    projectRoot: path.resolve(__dirname, '../..'),
+  });
+  // [knauf] KK20-243 — assert the skills baked into the image actually loaded.
+  // `initializeDeploymentSkills` treats an empty directory as success and logs
+  // the zero case at `debug`, so a volume mounted over /app/skill removes the
+  // whole feature without a single visible line. Non-fatal on purpose: chat,
+  // agents and file search are unaffected, so degraded-and-noisy beats a
+  // crashloop. Wrapped because a diagnostic must never be the thing that stops
+  // a boot.
+  try {
+    verifyDeploymentSkills({
+      loadedNames: deploymentSkillRegistry.list().map((skill) => skill.name),
+      directory: deploymentSkillRegistry.getDirectory(),
+    });
+  } catch (err) {
+    logger.error('[knauf][deploymentSkills] Skill verification failed to run:', err);
+  }
+  // End [knauf]
   initializeGitHubSkillSync(appConfig);
   startExpiredFileSweep({ appConfig, loadAppConfig: getAppConfig });
   await runAsSystem(async () => {

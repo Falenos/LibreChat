@@ -44,8 +44,16 @@ Learned the hard way — each of these is a silent failure otherwise.
 4. **Reference files must not have YAML frontmatter.** Only `SKILL.md` is parsed; a leading `---`
    in a reference renders as a stray horizontal rule and wastes tokens.
 5. **References are read at runtime as `skills/<name>/<path>` — plural `skills/` at runtime,
-   singular `skill/` on disk.** `SKILL.md` is served from the skill body; anything else comes from
-   storage. Neither needs code execution.
+   singular `skill/` on disk.** Neither needs code execution, and neither touches object
+   storage. `SKILL.md` is served from the skill body. Every other file is read into memory at
+   boot (`readCachedFileContent`, text under 512 KB) and `read_file` returns that cached copy;
+   all of ours are 3–13 KB, so the cache always hits. Only an uncached or binary file falls
+   through to a stream, and even then `getSkillStrategyFunctions` intercepts the `deployment`
+   source and serves it from the local filesystem via `fs.createReadStream` — never from Azure
+   Blob, whatever `fileStrategy` says. Two consequences: keep text references under **256 KB**
+   (`MAX_READABLE_BYTES`; between that and the 512 KB cache ceiling is a dead band where a file
+   is too big to cache and too big to read), and expect no help from the storage emulator when
+   debugging skills locally, because storage is not in the path.
 6. **Cross-skill reads work, but the target must stay model-invocable.** A skill whose files other
    skills read must not set `disable-model-invocation: true`, or those reads are rejected. Note
    also that a user who toggles the target skill off breaks the read — give the consumer a stated
