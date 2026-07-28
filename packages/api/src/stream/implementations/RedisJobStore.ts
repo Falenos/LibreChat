@@ -1,13 +1,18 @@
+// [knauf] Generate immutable turn ownership without adding a dependency.
+import { randomUUID } from 'node:crypto';
+// End [knauf]
 import { logger } from '@librechat/data-schemas';
 import { createContentAggregator } from '@librechat/agents';
 import type { StandardGraph } from '@librechat/agents';
 import type { Agents } from 'librechat-data-provider';
 import type { Redis, Cluster } from 'ioredis';
-import type {
-  SerializableJobData,
-  UsageMetadata,
-  IJobStore,
-  JobStatus,
+import {
+  GenerationConflictError,
+  type GenerationRef,
+  type SerializableJobData,
+  type UsageMetadata,
+  type IJobStore,
+  type JobStatus,
 } from '~/stream/interfaces/IJobStore';
 
 /**
@@ -23,16 +28,117 @@ import type {
 const KEYS = {
   /** Job metadata: stream:{streamId}:job */
   job: (streamId: string) => `stream:{${streamId}}:job`,
-  /** Chunk stream (Redis Streams): stream:{streamId}:chunks */
-  chunks: (streamId: string) => `stream:{${streamId}}:chunks`,
-  /** Run steps: stream:{streamId}:runsteps */
-  runSteps: (streamId: string) => `stream:{${streamId}}:runsteps`,
+  // [knauf] Volatile content is isolated per generation; omitted IDs retain legacy keys.
+  chunks: (streamId: string, generationId?: string) =>
+    generationId == null
+      ? `stream:{${streamId}}:chunks`
+      : `stream:{${streamId}}:generation:${generationId}:chunks`,
+  runSteps: (streamId: string, generationId?: string) =>
+    generationId == null
+      ? `stream:{${streamId}}:runsteps`
+      : `stream:{${streamId}}:generation:${generationId}:runsteps`,
+  // End [knauf]
   /** Running jobs set for cleanup (global set - single slot) */
   runningJobs: 'stream:running',
   /** User's active jobs set, tenant-qualified when tenantId is available */
   userJobs: (userId: string, tenantId?: string) =>
     tenantId ? `stream:user:{${tenantId}:${userId}}:jobs` : `stream:user:{${userId}}:jobs`,
 };
+
+// [knauf] Atomic owner claims/CAS and generation-aware active-set members.
+const CREATE_JOB_SCRIPT = `
+local status = redis.call('HGET', KEYS[1], 'status')
+if status == 'running' then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+redis.call('HSET', KEYS[1], unpack(ARGV, 2))
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+return 1
+`;
+
+const UPDATE_JOB_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+redis.call('HSET', KEYS[1], unpack(ARGV, 4))
+local terminal_ttl = tonumber(ARGV[3])
+if terminal_ttl >= 0 then
+  redis.call('EXPIRE', KEYS[1], terminal_ttl)
+end
+return 1
+`;
+
+const DELETE_JOB_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
+return 1
+`;
+
+const APPEND_CHUNK_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+redis.call('XADD', KEYS[2], '*', 'event', ARGV[4])
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
+return 1
+`;
+
+const SAVE_RUN_STEPS_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+redis.call('SET', KEYS[2], ARGV[4], 'EX', tonumber(ARGV[3]))
+return 1
+`;
+
+function generationKey(streamId: string, generationId?: string): string {
+  return generationId == null ? streamId : JSON.stringify([streamId, generationId]);
+}
+
+function parseGenerationKey(value: string): GenerationRef {
+  if (!value.startsWith('[')) {
+    return { streamId: value };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === 'string' &&
+      typeof parsed[1] === 'string'
+    ) {
+      return { streamId: parsed[0], generationId: parsed[1] };
+    }
+  } catch {
+    // Fall through: pre-generation stream IDs remain valid opaque values.
+  }
+
+  return { streamId: value };
+}
+
+function exactlyOwnsGeneration(
+  job: SerializableJobData | null,
+  generationId?: string,
+): job is SerializableJobData {
+  return job != null && job.generationId === generationId;
+}
+// End [knauf]
 
 /**
  * Default TTL values in seconds.
@@ -107,8 +213,32 @@ export class RedisJobStore implements IJobStore {
    */
   private localCollectedUsageCache = new Map<string, UsageMetadata[]>();
 
+  // [knauf] Lets synchronous local-cache APIs resolve legacy omitted owner arguments.
+  private currentGenerationCache = new Map<string, string | null>();
+  // End [knauf]
+
   /** Cleanup interval in ms (1 minute) */
   private cleanupIntervalMs = 60000;
+
+  // [knauf] Resolve old call sites to the last observed current generation.
+  private cachedGenerationId(streamId: string, generationId?: string): string | undefined {
+    if (generationId != null) {
+      return generationId;
+    }
+    return this.currentGenerationCache.get(streamId) ?? undefined;
+  }
+
+  private cacheKey(streamId: string, generationId?: string): string {
+    return generationKey(streamId, this.cachedGenerationId(streamId, generationId));
+  }
+
+  private cacheMatchesOwner(streamId: string, generationId?: string): boolean {
+    if (generationId == null || !this.currentGenerationCache.has(streamId)) {
+      return true;
+    }
+    return this.currentGenerationCache.get(streamId) === generationId;
+  }
+  // End [knauf]
 
   constructor(redis: Redis | Cluster, options?: RedisJobStoreOptions) {
     this.redis = redis;
@@ -147,9 +277,12 @@ export class RedisJobStore implements IJobStore {
     userId: string,
     conversationId?: string,
     tenantId?: string,
+    generationId: string = randomUUID(),
   ): Promise<SerializableJobData> {
+    // [knauf] Redis atomically rejects active owners and clears every stale terminal field.
     const job: SerializableJobData = {
       streamId,
+      generationId,
       userId,
       ...(tenantId && { tenantId }),
       status: 'running',
@@ -160,28 +293,50 @@ export class RedisJobStore implements IJobStore {
 
     const key = KEYS.job(streamId);
     const userJobsKey = KEYS.userJobs(userId, tenantId);
+    const trackingMember = generationKey(streamId, generationId);
+    const fields = Object.entries(this.serializeJob(job)).flat();
+    const created = await this.redis.eval(
+      CREATE_JOB_SCRIPT,
+      1,
+      key,
+      String(this.ttl.running),
+      ...fields,
+    );
+
+    if (Number(created) === 0) {
+      throw new GenerationConflictError(streamId);
+    }
+
+    const previousGenerationId = this.currentGenerationCache.get(streamId) ?? undefined;
+    if (previousGenerationId !== generationId) {
+      this.localGraphCache.delete(generationKey(streamId, previousGenerationId));
+      this.localCollectedUsageCache.delete(generationKey(streamId, previousGenerationId));
+    }
+    this.currentGenerationCache.set(streamId, generationId);
 
     // For cluster mode, we can't pipeline keys on different slots
     // The job key uses hash tag {streamId}, runningJobs and userJobs are on different slots
-    if (this.isCluster) {
-      await this.redis.hset(key, this.serializeJob(job));
-      await this.redis.expire(key, this.ttl.running);
-      await this.redis.sadd(KEYS.runningJobs, streamId);
-      await this.redis.sadd(userJobsKey, streamId);
-      if (this.ttl.userJobsSet > 0) {
-        await this.redis.expire(userJobsKey, this.ttl.userJobsSet);
+    try {
+      if (this.isCluster) {
+        await this.redis.sadd(KEYS.runningJobs, trackingMember);
+        await this.redis.sadd(userJobsKey, trackingMember);
+        if (this.ttl.userJobsSet > 0) {
+          await this.redis.expire(userJobsKey, this.ttl.userJobsSet);
+        }
+      } else {
+        const pipeline = this.redis.pipeline();
+        pipeline.sadd(KEYS.runningJobs, trackingMember);
+        pipeline.sadd(userJobsKey, trackingMember);
+        if (this.ttl.userJobsSet > 0) {
+          pipeline.expire(userJobsKey, this.ttl.userJobsSet);
+        }
+        await pipeline.exec();
       }
-    } else {
-      const pipeline = this.redis.pipeline();
-      pipeline.hset(key, this.serializeJob(job));
-      pipeline.expire(key, this.ttl.running);
-      pipeline.sadd(KEYS.runningJobs, streamId);
-      pipeline.sadd(userJobsKey, streamId);
-      if (this.ttl.userJobsSet > 0) {
-        pipeline.expire(userJobsKey, this.ttl.userJobsSet);
-      }
-      await pipeline.exec();
+    } catch (error) {
+      await this.deleteJob(streamId, generationId).catch(() => undefined);
+      throw error;
     }
+    // End [knauf]
 
     logger.debug(`[RedisJobStore] Created job: ${streamId}`);
     return job;
@@ -190,163 +345,214 @@ export class RedisJobStore implements IJobStore {
   async getJob(streamId: string): Promise<SerializableJobData | null> {
     const data = await this.redis.hgetall(KEYS.job(streamId));
     if (!data || Object.keys(data).length === 0) {
+      // [knauf] Cache absence too, so legacy synchronous calls do not reuse an old owner.
+      this.currentGenerationCache.delete(streamId);
+      // End [knauf]
       return null;
     }
-    return this.deserializeJob(data);
+    // [knauf] Remember the observed owner for synchronous graph/usage APIs.
+    const job = this.deserializeJob(data);
+    this.currentGenerationCache.set(streamId, job.generationId ?? null);
+    return job;
+    // End [knauf]
   }
 
-  async updateJob(streamId: string, updates: Partial<SerializableJobData>): Promise<void> {
+  async updateJob(
+    streamId: string,
+    updates: Partial<SerializableJobData>,
+    generationId?: string,
+  ): Promise<void> {
+    // [knauf] Read the owner before CAS so post-terminal cleanup cannot target a replacement.
     const key = KEYS.job(streamId);
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return;
+    }
+    const resolvedGenerationId = job.generationId;
 
-    const serialized = this.serializeJob(updates as SerializableJobData);
+    const safeUpdates = { ...updates };
+    delete safeUpdates.generationId;
+    const serialized = this.serializeJob(safeUpdates as SerializableJobData);
     if (Object.keys(serialized).length === 0) {
       return;
     }
 
     const fields = Object.entries(serialized).flat();
+    const terminal =
+      safeUpdates.status != null && ['complete', 'error', 'aborted'].includes(safeUpdates.status);
     const updated = await this.redis.eval(
-      'if redis.call("EXISTS", KEYS[1]) == 1 then redis.call("HSET", KEYS[1], unpack(ARGV)) return 1 else return 0 end',
+      UPDATE_JOB_SCRIPT,
       1,
       key,
+      '1',
+      resolvedGenerationId ?? '',
+      terminal ? String(this.ttl.completed) : '-1',
       ...fields,
     );
 
-    if (updated === 0) {
+    if (Number(updated) === 0) {
       return;
     }
 
-    if (updates.status && ['complete', 'error', 'aborted'].includes(updates.status)) {
-      // Proactively remove from user's job set (requires reading userId from the job hash)
-      const job = await this.getJob(streamId);
+    if (terminal) {
       const userJobsKey = job?.userId ? KEYS.userJobs(job.userId, job.tenantId) : null;
+      const trackingMember = generationKey(streamId, resolvedGenerationId);
+      const chunksKey = KEYS.chunks(streamId, resolvedGenerationId);
+      const runStepsKey = KEYS.runSteps(streamId, resolvedGenerationId);
+      this.localGraphCache.delete(trackingMember);
+      this.localCollectedUsageCache.delete(trackingMember);
 
       if (this.isCluster) {
-        await this.redis.expire(key, this.ttl.completed);
-        await this.redis.srem(KEYS.runningJobs, streamId);
+        await this.redis.srem(KEYS.runningJobs, trackingMember);
 
         if (this.ttl.chunksAfterComplete === 0) {
-          await this.redis.del(KEYS.chunks(streamId));
+          await this.redis.del(chunksKey);
         } else {
-          await this.redis.expire(KEYS.chunks(streamId), this.ttl.chunksAfterComplete);
+          await this.redis.expire(chunksKey, this.ttl.chunksAfterComplete);
         }
 
         if (this.ttl.runStepsAfterComplete === 0) {
-          await this.redis.del(KEYS.runSteps(streamId));
+          await this.redis.del(runStepsKey);
         } else {
-          await this.redis.expire(KEYS.runSteps(streamId), this.ttl.runStepsAfterComplete);
+          await this.redis.expire(runStepsKey, this.ttl.runStepsAfterComplete);
         }
 
         if (userJobsKey) {
-          await this.redis.srem(userJobsKey, streamId);
+          await this.redis.srem(userJobsKey, trackingMember);
         }
       } else {
         const pipeline = this.redis.pipeline();
-        pipeline.expire(key, this.ttl.completed);
-        pipeline.srem(KEYS.runningJobs, streamId);
+        pipeline.srem(KEYS.runningJobs, trackingMember);
 
         if (this.ttl.chunksAfterComplete === 0) {
-          pipeline.del(KEYS.chunks(streamId));
+          pipeline.del(chunksKey);
         } else {
-          pipeline.expire(KEYS.chunks(streamId), this.ttl.chunksAfterComplete);
+          pipeline.expire(chunksKey, this.ttl.chunksAfterComplete);
         }
 
         if (this.ttl.runStepsAfterComplete === 0) {
-          pipeline.del(KEYS.runSteps(streamId));
+          pipeline.del(runStepsKey);
         } else {
-          pipeline.expire(KEYS.runSteps(streamId), this.ttl.runStepsAfterComplete);
+          pipeline.expire(runStepsKey, this.ttl.runStepsAfterComplete);
         }
 
         if (userJobsKey) {
-          pipeline.srem(userJobsKey, streamId);
+          pipeline.srem(userJobsKey, trackingMember);
         }
 
         await pipeline.exec();
       }
     }
+    // End [knauf]
   }
 
-  async deleteJob(streamId: string): Promise<void> {
-    this.localGraphCache.delete(streamId);
-    this.localCollectedUsageCache.delete(streamId);
+  async deleteJob(streamId: string, generationId?: string): Promise<void> {
+    // [knauf] Capture the observed owner; deletion is atomically fenced to it.
     const job = await this.getJob(streamId);
-    const userJobsKey = job?.userId ? KEYS.userJobs(job.userId, job.tenantId) : null;
-    return this.deleteJobInternal(streamId, userJobsKey);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return;
+    }
+    return this.deleteJobInternal(job);
+    // End [knauf]
   }
 
-  private async deleteJobInternal(streamId: string, userJobsKey: string | null): Promise<void> {
-    this.localGraphCache.delete(streamId);
-    this.localCollectedUsageCache.delete(streamId);
+  private async deleteJobInternal(job: SerializableJobData): Promise<void> {
+    // [knauf] Job/content keys share a Redis slot; tracking members are owner-scoped cross-slot.
+    const { streamId, generationId } = job;
+    const trackingMember = generationKey(streamId, generationId);
+    const deleted = await this.redis.eval(
+      DELETE_JOB_SCRIPT,
+      3,
+      KEYS.job(streamId),
+      KEYS.chunks(streamId, generationId),
+      KEYS.runSteps(streamId, generationId),
+      '1',
+      generationId ?? '',
+    );
+    if (Number(deleted) === 0) {
+      return;
+    }
+
+    this.localGraphCache.delete(trackingMember);
+    this.localCollectedUsageCache.delete(trackingMember);
+    if (this.currentGenerationCache.get(streamId) === (generationId ?? null)) {
+      this.currentGenerationCache.delete(streamId);
+    }
+    const userJobsKey = job.userId ? KEYS.userJobs(job.userId, job.tenantId) : null;
 
     if (this.isCluster) {
-      const pipeline = this.redis.pipeline();
-      pipeline.del(KEYS.job(streamId));
-      pipeline.del(KEYS.chunks(streamId));
-      pipeline.del(KEYS.runSteps(streamId));
-      await pipeline.exec();
-      await this.redis.srem(KEYS.runningJobs, streamId);
+      await this.redis.srem(KEYS.runningJobs, trackingMember);
       if (userJobsKey) {
-        await this.redis.srem(userJobsKey, streamId);
+        await this.redis.srem(userJobsKey, trackingMember);
       }
     } else {
       const pipeline = this.redis.pipeline();
-      pipeline.del(KEYS.job(streamId));
-      pipeline.del(KEYS.chunks(streamId));
-      pipeline.del(KEYS.runSteps(streamId));
-      pipeline.srem(KEYS.runningJobs, streamId);
+      pipeline.srem(KEYS.runningJobs, trackingMember);
       if (userJobsKey) {
-        pipeline.srem(userJobsKey, streamId);
+        pipeline.srem(userJobsKey, trackingMember);
       }
       await pipeline.exec();
     }
+    // End [knauf]
     logger.debug(`[RedisJobStore] Deleted job: ${streamId}`);
   }
 
-  async hasJob(streamId: string): Promise<boolean> {
-    const exists = await this.redis.exists(KEYS.job(streamId));
-    return exists === 1;
+  async hasJob(streamId: string, generationId?: string): Promise<boolean> {
+    // [knauf] Preserve legacy existence checks; explicit owners require an exact match.
+    if (generationId == null) {
+      const exists = await this.redis.exists(KEYS.job(streamId));
+      return exists === 1;
+    }
+    return (await this.redis.hget(KEYS.job(streamId), 'generationId')) === generationId;
+    // End [knauf]
   }
 
   async getRunningJobs(): Promise<SerializableJobData[]> {
-    const streamIds = await this.redis.smembers(KEYS.runningJobs);
-    if (streamIds.length === 0) {
+    // [knauf] Running-set members identify an exact generation, with legacy bare-ID support.
+    const trackedMembers = await this.redis.smembers(KEYS.runningJobs);
+    if (trackedMembers.length === 0) {
       return [];
     }
 
     const jobs: SerializableJobData[] = [];
-    for (const streamId of streamIds) {
-      const job = await this.getJob(streamId);
-      if (job && job.status === 'running') {
+    for (const trackedMember of trackedMembers) {
+      const ref = parseGenerationKey(trackedMember);
+      const job = await this.getJob(ref.streamId);
+      if (exactlyOwnsGeneration(job, ref.generationId) && job.status === 'running') {
         jobs.push(job);
       }
     }
     return jobs;
+    // End [knauf]
   }
 
   async cleanup(): Promise<number> {
     const now = Date.now();
-    const streamIds = await this.redis.smembers(KEYS.runningJobs);
+    // [knauf] Cleanup carries exact owners so stale set members cannot reap replacements.
+    const trackedMembers = await this.redis.smembers(KEYS.runningJobs);
     let cleaned = 0;
 
     // Clean up stale local graph cache entries (WeakRefs that were collected)
-    for (const [streamId, graphRef] of this.localGraphCache) {
+    for (const [cacheKey, graphRef] of this.localGraphCache) {
       if (!graphRef.deref()) {
-        this.localGraphCache.delete(streamId);
+        this.localGraphCache.delete(cacheKey);
       }
     }
 
     // Process in batches of 50 to avoid sequential per-job round-trips
     const BATCH_SIZE = 50;
-    for (let i = 0; i < streamIds.length; i += BATCH_SIZE) {
-      const batch = streamIds.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < trackedMembers.length; i += BATCH_SIZE) {
+      const batch = trackedMembers.slice(i, i + BATCH_SIZE);
       const results = await Promise.allSettled(
-        batch.map(async (streamId) => {
-          const job = await this.getJob(streamId);
+        batch.map(async (trackedMember) => {
+          const ref = parseGenerationKey(trackedMember);
+          const job = await this.getJob(ref.streamId);
 
-          // Job no longer exists (TTL expired) - remove from set
-          if (!job) {
-            await this.redis.srem(KEYS.runningJobs, streamId);
-            this.localGraphCache.delete(streamId);
-            this.localCollectedUsageCache.delete(streamId);
+          // Job no longer exists or this member belongs to an older generation.
+          if (!exactlyOwnsGeneration(job, ref.generationId)) {
+            await this.redis.srem(KEYS.runningJobs, trackedMember);
+            this.localGraphCache.delete(trackedMember);
+            this.localCollectedUsageCache.delete(trackedMember);
             return 1;
           }
 
@@ -354,20 +560,19 @@ export class RedisJobStore implements IJobStore {
           // Only remove from tracking sets — do NOT delete the job hash, which has
           // its own completedTtl so clients can still poll for final status.
           if (job.status !== 'running') {
-            await this.redis.srem(KEYS.runningJobs, streamId);
+            await this.redis.srem(KEYS.runningJobs, trackedMember);
             if (job.userId) {
-              await this.redis.srem(KEYS.userJobs(job.userId, job.tenantId), streamId);
+              await this.redis.srem(KEYS.userJobs(job.userId, job.tenantId), trackedMember);
             }
-            this.localGraphCache.delete(streamId);
-            this.localCollectedUsageCache.delete(streamId);
+            this.localGraphCache.delete(trackedMember);
+            this.localCollectedUsageCache.delete(trackedMember);
             return 1;
           }
 
           // Stale running job (failsafe - running for > configured TTL)
           if (now - job.createdAt > this.ttl.running * 1000) {
-            logger.warn(`[RedisJobStore] Cleaning up stale job: ${streamId}`);
-            const userJobsKey = job.userId ? KEYS.userJobs(job.userId, job.tenantId) : null;
-            await this.deleteJobInternal(streamId, userJobsKey);
+            logger.warn(`[RedisJobStore] Cleaning up stale job: ${ref.streamId}`);
+            await this.deleteJobInternal(job);
             return 1;
           }
 
@@ -382,6 +587,7 @@ export class RedisJobStore implements IJobStore {
         }
       }
     }
+    // End [knauf]
 
     if (cleaned > 0) {
       logger.debug(`[RedisJobStore] Cleaned up ${cleaned} jobs`);
@@ -423,17 +629,19 @@ export class RedisJobStore implements IJobStore {
       return [];
     }
 
-    const activeIds: string[] = [];
+    // [knauf] Return current generations once and self-heal exact stale members.
+    const activeIds = new Set<string>();
     const staleIds: string[] = [];
 
-    for (const streamId of trackedIds) {
-      const job = await this.getJob(streamId);
+    for (const trackedId of trackedIds) {
+      const ref = parseGenerationKey(trackedId);
+      const job = await this.getJob(ref.streamId);
       // Only include if job exists AND is still running
-      if (job && job.status === 'running') {
-        activeIds.push(streamId);
+      if (exactlyOwnsGeneration(job, ref.generationId) && job.status === 'running') {
+        activeIds.add(ref.streamId);
       } else {
         // Self-healing: job completed/deleted but mapping wasn't cleaned - mark for removal
-        staleIds.push(streamId);
+        staleIds.push(trackedId);
       }
     }
 
@@ -444,7 +652,8 @@ export class RedisJobStore implements IJobStore {
       );
     }
 
-    return activeIds;
+    return Array.from(activeIds);
+    // End [knauf]
   }
 
   async destroy(): Promise<void> {
@@ -455,6 +664,9 @@ export class RedisJobStore implements IJobStore {
     // Clear local caches
     this.localGraphCache.clear();
     this.localCollectedUsageCache.clear();
+    // [knauf] Drop observed generation owners with the local caches.
+    this.currentGenerationCache.clear();
+    // End [knauf]
     // Don't close the Redis connection - it's shared
     logger.info('[RedisJobStore] Destroyed');
   }
@@ -471,15 +683,24 @@ export class RedisJobStore implements IJobStore {
    * @param streamId - The stream identifier
    * @param graph - The graph instance (stored as WeakRef)
    */
-  setGraph(streamId: string, graph: StandardGraph): void {
-    this.localGraphCache.set(streamId, new WeakRef(graph));
+  setGraph(streamId: string, graph: StandardGraph, generationId?: string): void {
+    // [knauf] A stale explicit owner cannot replace the current generation's graph cache.
+    if (!this.cacheMatchesOwner(streamId, generationId)) {
+      return;
+    }
+    this.localGraphCache.set(this.cacheKey(streamId, generationId), new WeakRef(graph));
+    // End [knauf]
   }
 
   /**
    * No-op for Redis - content parts are reconstructed from chunks.
    * Metadata (agentId, groupId) is embedded directly on content parts by the agent runtime.
    */
-  setContentParts(): void {
+  setContentParts(
+    _streamId: string,
+    _contentParts: Agents.MessageContentComplex[],
+    _generationId?: string,
+  ): void {
     // Content parts are reconstructed from chunks during getContentParts
     // No separate storage needed
   }
@@ -489,16 +710,30 @@ export class RedisJobStore implements IJobStore {
    * This is used for abort handling to spend tokens for all models.
    * Note: Only available on the generating instance; cross-replica abort uses fallback.
    */
-  setCollectedUsage(streamId: string, collectedUsage: UsageMetadata[]): void {
-    this.localCollectedUsageCache.set(streamId, collectedUsage);
+  setCollectedUsage(
+    streamId: string,
+    collectedUsage: UsageMetadata[],
+    generationId?: string,
+  ): void {
+    // [knauf] Usage caches are generation-scoped and stale explicit owners are ignored.
+    if (!this.cacheMatchesOwner(streamId, generationId)) {
+      return;
+    }
+    this.localCollectedUsageCache.set(this.cacheKey(streamId, generationId), collectedUsage);
+    // End [knauf]
   }
 
   /**
    * Get collected usage for a job.
    * Only available if this is the generating instance.
    */
-  getCollectedUsage(streamId: string): UsageMetadata[] {
-    return this.localCollectedUsageCache.get(streamId) ?? [];
+  getCollectedUsage(streamId: string, generationId?: string): UsageMetadata[] {
+    // [knauf] Read only the requested/current generation cache.
+    if (!this.cacheMatchesOwner(streamId, generationId)) {
+      return [];
+    }
+    return this.localCollectedUsageCache.get(this.cacheKey(streamId, generationId)) ?? [];
+    // End [knauf]
   }
 
   /**
@@ -511,11 +746,21 @@ export class RedisJobStore implements IJobStore {
    * @param streamId - The stream identifier
    * @returns Content parts array or null if not found
    */
-  async getContentParts(streamId: string): Promise<{
+  async getContentParts(
+    streamId: string,
+    generationId?: string,
+  ): Promise<{
     content: Agents.MessageContentComplex[];
   } | null> {
+    // [knauf] Resolve legacy callers to current content and reject stale explicit owners.
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return null;
+    }
+    const resolvedGenerationId = job.generationId;
+    const localCacheKey = generationKey(streamId, resolvedGenerationId);
     // 1. Try local graph cache first (fast path for same-instance reconnect)
-    const graphRef = this.localGraphCache.get(streamId);
+    const graphRef = this.localGraphCache.get(localCacheKey);
     if (graphRef) {
       const graph = graphRef.deref();
       if (graph) {
@@ -527,12 +772,12 @@ export class RedisJobStore implements IJobStore {
         }
       } else {
         // WeakRef was collected, remove from cache
-        this.localGraphCache.delete(streamId);
+        this.localGraphCache.delete(localCacheKey);
       }
     }
 
     // 2. Fall back to Redis chunk reconstruction (cross-instance reconnect)
-    const chunks = await this.getChunks(streamId);
+    const chunks = await this.getChunks(streamId, resolvedGenerationId);
     if (chunks.length === 0) {
       return null;
     }
@@ -572,6 +817,7 @@ export class RedisJobStore implements IJobStore {
     return {
       content: filtered,
     };
+    // End [knauf]
   }
 
   /**
@@ -583,9 +829,16 @@ export class RedisJobStore implements IJobStore {
    * @param streamId - The stream identifier
    * @returns Run steps array
    */
-  async getRunSteps(streamId: string): Promise<Agents.RunStep[]> {
+  async getRunSteps(streamId: string, generationId?: string): Promise<Agents.RunStep[]> {
+    // [knauf] Resolve legacy callers to current steps and reject stale explicit owners.
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return [];
+    }
+    const resolvedGenerationId = job.generationId;
+    const localCacheKey = generationKey(streamId, resolvedGenerationId);
     // 1. Try local graph cache first (fast path for same-instance reconnect)
-    const graphRef = this.localGraphCache.get(streamId);
+    const graphRef = this.localGraphCache.get(localCacheKey);
     if (graphRef) {
       const graph = graphRef.deref();
       if (graph) {
@@ -599,7 +852,7 @@ export class RedisJobStore implements IJobStore {
     }
 
     // 2. Fall back to Redis (cross-instance reconnect)
-    const key = KEYS.runSteps(streamId);
+    const key = KEYS.runSteps(streamId, resolvedGenerationId);
     const data = await this.redis.get(key);
     if (!data) {
       return [];
@@ -609,30 +862,38 @@ export class RedisJobStore implements IJobStore {
     } catch {
       return [];
     }
+    // End [knauf]
   }
 
   /**
    * Clear content state for a job.
    * Removes both local cache and Redis data.
    */
-  clearContentState(streamId: string): void {
+  clearContentState(streamId: string, generationId?: string): void {
+    // [knauf] Clear only the captured/current generation, never a replacement's keys.
+    if (!this.cacheMatchesOwner(streamId, generationId)) {
+      return;
+    }
+    const resolvedGenerationId = this.cachedGenerationId(streamId, generationId);
+    const localCacheKey = generationKey(streamId, resolvedGenerationId);
     // Clear local caches immediately
-    this.localGraphCache.delete(streamId);
-    this.localCollectedUsageCache.delete(streamId);
+    this.localGraphCache.delete(localCacheKey);
+    this.localCollectedUsageCache.delete(localCacheKey);
 
     // Fire and forget - async cleanup for Redis
-    this.clearContentStateAsync(streamId).catch((err) => {
+    this.clearContentStateAsync(streamId, resolvedGenerationId).catch((err) => {
       logger.error(`[RedisJobStore] Failed to clear content state for ${streamId}:`, err);
     });
+    // End [knauf]
   }
 
   /**
    * Clear content state async.
    */
-  private async clearContentStateAsync(streamId: string): Promise<void> {
+  private async clearContentStateAsync(streamId: string, generationId?: string): Promise<void> {
     const pipeline = this.redis.pipeline();
-    pipeline.del(KEYS.chunks(streamId));
-    pipeline.del(KEYS.runSteps(streamId));
+    pipeline.del(KEYS.chunks(streamId, generationId));
+    pipeline.del(KEYS.runSteps(streamId, generationId));
     await pipeline.exec();
   }
 
@@ -641,23 +902,31 @@ export class RedisJobStore implements IJobStore {
    * Uses XADD for efficient append-only storage.
    * Sets TTL on first chunk to ensure cleanup if job crashes.
    */
-  async appendChunk(streamId: string, event: unknown): Promise<void> {
-    const key = KEYS.chunks(streamId);
-    // Pipeline XADD + EXPIRE in a single round-trip.
-    // EXPIRE is O(1) and idempotent — refreshing TTL on every chunk is better than
-    // only setting it once, since the original approach could let the TTL expire
-    // during long-running streams.
-    const pipeline = this.redis.pipeline();
-    pipeline.xadd(key, '*', 'event', JSON.stringify(event));
-    pipeline.expire(key, this.ttl.running);
-    await pipeline.exec();
+  async appendChunk(streamId: string, event: unknown, generationId?: string): Promise<void> {
+    // [knauf] Append and refresh TTL atomically only while this generation owns the job.
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return;
+    }
+    const resolvedGenerationId = job.generationId;
+    await this.redis.eval(
+      APPEND_CHUNK_SCRIPT,
+      2,
+      KEYS.job(streamId),
+      KEYS.chunks(streamId, resolvedGenerationId),
+      '1',
+      resolvedGenerationId ?? '',
+      String(this.ttl.running),
+      JSON.stringify(event),
+    );
+    // End [knauf]
   }
 
   /**
    * Get all chunks from Redis Stream.
    */
-  private async getChunks(streamId: string): Promise<unknown[]> {
-    const key = KEYS.chunks(streamId);
+  private async getChunks(streamId: string, generationId?: string): Promise<unknown[]> {
+    const key = KEYS.chunks(streamId, generationId);
     const entries = await this.redis.xrange(key, '-', '+');
 
     return entries
@@ -678,9 +947,28 @@ export class RedisJobStore implements IJobStore {
   /**
    * Save run steps for resume state.
    */
-  async saveRunSteps(streamId: string, runSteps: Agents.RunStep[]): Promise<void> {
-    const key = KEYS.runSteps(streamId);
-    await this.redis.set(key, JSON.stringify(runSteps), 'EX', this.ttl.running);
+  async saveRunSteps(
+    streamId: string,
+    runSteps: Agents.RunStep[],
+    generationId?: string,
+  ): Promise<void> {
+    // [knauf] Save steps only while this generation owns the job.
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return;
+    }
+    const resolvedGenerationId = job.generationId;
+    await this.redis.eval(
+      SAVE_RUN_STEPS_SCRIPT,
+      2,
+      KEYS.job(streamId),
+      KEYS.runSteps(streamId, resolvedGenerationId),
+      '1',
+      resolvedGenerationId ?? '',
+      String(this.ttl.running),
+      JSON.stringify(runSteps),
+    );
+    // End [knauf]
   }
 
   // ===== Consumer Group Methods =====
@@ -699,8 +987,11 @@ export class RedisJobStore implements IJobStore {
     streamId: string,
     groupName: string,
     startFrom: '0' | '$' = '0',
+    generationId?: string,
   ): Promise<void> {
-    const key = KEYS.chunks(streamId);
+    // [knauf] Consumer groups follow the generation-scoped chunk stream.
+    const key = KEYS.chunks(streamId, this.cachedGenerationId(streamId, generationId));
+    // End [knauf]
     try {
       await this.redis.xgroup('CREATE', key, groupName, startFrom, 'MKSTREAM');
       logger.debug(`[RedisJobStore] Created consumer group ${groupName} for ${streamId}`);
@@ -728,8 +1019,11 @@ export class RedisJobStore implements IJobStore {
     groupName: string,
     consumerName: string = 'consumer-1',
     count?: number,
+    generationId?: string,
   ): Promise<Array<{ id: string; event: unknown }>> {
-    const key = KEYS.chunks(streamId);
+    // [knauf] Consumer groups follow the generation-scoped chunk stream.
+    const key = KEYS.chunks(streamId, this.cachedGenerationId(streamId, generationId));
+    // End [knauf]
 
     try {
       // XREADGROUP GROUP groupName consumerName [COUNT count] STREAMS key >
@@ -795,12 +1089,15 @@ export class RedisJobStore implements IJobStore {
     streamId: string,
     groupName: string,
     messageIds: string[],
+    generationId?: string,
   ): Promise<void> {
     if (messageIds.length === 0) {
       return;
     }
 
-    const key = KEYS.chunks(streamId);
+    // [knauf] Consumer groups follow the generation-scoped chunk stream.
+    const key = KEYS.chunks(streamId, this.cachedGenerationId(streamId, generationId));
+    // End [knauf]
     await this.redis.xack(key, groupName, ...messageIds);
   }
 
@@ -811,8 +1108,14 @@ export class RedisJobStore implements IJobStore {
    * @param streamId - The stream identifier
    * @param groupName - Consumer group name to delete
    */
-  async deleteConsumerGroup(streamId: string, groupName: string): Promise<void> {
-    const key = KEYS.chunks(streamId);
+  async deleteConsumerGroup(
+    streamId: string,
+    groupName: string,
+    generationId?: string,
+  ): Promise<void> {
+    // [knauf] Consumer groups follow the generation-scoped chunk stream.
+    const key = KEYS.chunks(streamId, this.cachedGenerationId(streamId, generationId));
+    // End [knauf]
     try {
       await this.redis.xgroup('DESTROY', key, groupName);
       logger.debug(`[RedisJobStore] Deleted consumer group ${groupName} for ${streamId}`);
@@ -833,8 +1136,11 @@ export class RedisJobStore implements IJobStore {
     streamId: string,
     groupName: string,
     consumerName: string = 'consumer-1',
+    generationId?: string,
   ): Promise<Array<{ id: string; event: unknown }>> {
-    const key = KEYS.chunks(streamId);
+    // [knauf] Consumer groups follow the generation-scoped chunk stream.
+    const key = KEYS.chunks(streamId, this.cachedGenerationId(streamId, generationId));
+    // End [knauf]
 
     try {
       // Read pending messages (delivered but not acked) by using '0' instead of '>'
@@ -904,6 +1210,9 @@ export class RedisJobStore implements IJobStore {
   private deserializeJob(data: Record<string, string>): SerializableJobData {
     return {
       streamId: data.streamId,
+      // [knauf] Legacy Redis hashes deserialize without an owner token.
+      generationId: data.generationId || undefined,
+      // End [knauf]
       userId: data.userId,
       tenantId: data.tenantId || undefined,
       status: data.status as JobStatus,
