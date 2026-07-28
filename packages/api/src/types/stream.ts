@@ -26,6 +26,9 @@ export type GenerationJobStatus = 'running' | 'complete' | 'error' | 'aborted';
 
 export interface GenerationJob {
   streamId: string;
+  // [knauf] Immutable owner token; unlike createdAt it cannot collide across replacements.
+  generationId?: string;
+  // End [knauf]
   emitter: EventEmitter;
   status: GenerationJobStatus;
   createdAt: number;
@@ -56,12 +59,19 @@ export interface SubscribeOptions {
    * Use for resume connections after a sync event has been sent.
    */
   skipBufferReplay?: boolean;
+  // [knauf] Internal owner fence used by atomic resume; omitted for normal current-stream joins.
+  generationId?: string;
+  requireGenerationMatch?: boolean;
+  // End [knauf]
 }
 
 /** Result of an atomic subscribe-with-resume operation */
 export interface SubscribeWithResumeResult {
   subscription: { unsubscribe: UnsubscribeFn } | null;
   resumeState: ResumeState | null;
+  // [knauf] Exact owner whose resume snapshot and subscription were returned.
+  generationId?: string;
+  // End [knauf]
   /**
    * Events that arrived between the resume snapshot and the subscribe call.
    * In-memory mode: drained from earlyEventBuffer (only place they exist).

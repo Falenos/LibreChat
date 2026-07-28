@@ -13,6 +13,9 @@ const mockGenerationJobManager = {
   completeJob: jest.fn(),
   getResumeState: jest.fn(),
   updateMetadata: jest.fn(),
+  // [knauf] Preserve the captured generation context in controller tests.
+  runWithGeneration: jest.fn((_streamId, _generationId, callback) => callback()),
+  // End [knauf]
 };
 
 const mockCheckAndIncrementPendingRequest = jest.fn();
@@ -81,6 +84,9 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  // [knauf] Exercise the stable conflict response without loading the real package.
+  GENERATION_CONFLICT_CODE: 'generation_already_running',
+  // End [knauf]
   sendEvent: jest.fn(),
   getViolationInfo: jest.fn(),
   buildMessageFiles: jest.fn(() => []),
@@ -190,6 +196,7 @@ describe('ResumableAgentController resume metadata', () => {
       return Promise.resolve([]);
     });
     mockGenerationJobManager.createJob.mockResolvedValue({
+      generationId: 'generation-1',
       createdAt: 1000,
       readyPromise: Promise.resolve(),
       abortController: new AbortController(),
@@ -604,11 +611,45 @@ describe('ResumableAgentController resume metadata', () => {
           text: 'Check Google Workspace availability.',
         },
       }),
+      'generation-1',
     );
     expect(mockGenerationJobManager.updateMetadata.mock.invocationCallOrder[0]).toBeLessThan(
       initializeClient.mock.invocationCallOrder[0],
     );
   });
+
+  // [knauf] A rejected overlapping request must not terminate the existing owner.
+  it('returns 409 without completing the generation that already owns the conversation', async () => {
+    const conflict = Object.assign(new Error('A generation is already running'), {
+      code: 'generation_already_running',
+    });
+    mockGenerationJobManager.createJob.mockRejectedValue(conflict);
+    const initializeClient = jest.fn();
+    const conversationId = 'conversation-123';
+    const req = {
+      user: { id: 'user-123' },
+      body: {
+        text: 'Overlapping turn',
+        messageId: 'overlapping-user-message',
+        parentMessageId: 'original-response',
+        conversationId,
+        endpointOption: { endpoint: 'agents' },
+      },
+      config: {},
+    };
+    const res = createResumableResponse();
+
+    await AgentController(req, res, jest.fn(), initializeClient, null);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      code: 'generation_already_running',
+      error: 'A generation is already running',
+    });
+    expect(mockGenerationJobManager.completeJob).not.toHaveBeenCalled();
+    expect(initializeClient).not.toHaveBeenCalled();
+  });
+  // End [knauf]
 
   it('keeps request-scoped MCP connections until resumable initialization finishes', async () => {
     const conversationId = 'conversation-123';
@@ -698,6 +739,7 @@ describe('ResumableAgentController resume metadata', () => {
         iconURL: 'https://example.com/preset-icon.png',
         model: 'agent_resume_spec',
       }),
+      'generation-1',
     );
   });
 
@@ -746,6 +788,7 @@ describe('ResumableAgentController resume metadata', () => {
         iconURL: 'anthropic',
         model: 'gpt-4.1',
       }),
+      'generation-1',
     );
   });
 
@@ -753,6 +796,7 @@ describe('ResumableAgentController resume metadata', () => {
     const conversationId = 'conversation-123';
     let allSubscribersLeftHandler;
     mockGenerationJobManager.createJob.mockResolvedValue({
+      generationId: 'generation-1',
       createdAt: 1000,
       readyPromise: Promise.resolve(),
       abortController: new AbortController(),
@@ -833,6 +877,7 @@ describe('ResumableAgentController resume metadata', () => {
     const conversationId = 'conversation-123';
     let allSubscribersLeftHandler;
     mockGenerationJobManager.createJob.mockResolvedValue({
+      generationId: 'generation-1',
       createdAt: 1000,
       readyPromise: Promise.resolve(),
       abortController: new AbortController(),

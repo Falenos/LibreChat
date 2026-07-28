@@ -52,18 +52,23 @@ describe('InMemoryJobStore - stale running-job failsafe', () => {
     await store.destroy();
   });
 
-  it('does not reap a replacement job that reuses a stale stream id', async () => {
+  // [knauf] A terminal generation may be replaced without inheriting its stale activity.
+  it('does not reap the next job that reuses a terminal stream id', async () => {
     jest.useFakeTimers();
     try {
       const { InMemoryJobStore } = await import('../implementations/InMemoryJobStore');
       const store = new InMemoryJobStore({ ttlAfterComplete: 0, staleJobTimeout: 1000 });
       await store.initialize();
 
-      await store.createJob('s1', 'u1', 's1');
-      store.recordActivity('s1'); // old generation's activity
+      const oldJob = await store.createJob('s1', 'u1', 's1');
+      store.recordActivity('s1', oldJob.generationId); // old generation's activity
       await jest.advanceTimersByTimeAsync(5000); // ...goes stale
 
-      // Replacement reuses the same streamId (old job never terminated).
+      await store.updateJob(
+        's1',
+        { status: 'complete', completedAt: Date.now() },
+        oldJob.generationId,
+      );
       await store.createJob('s1', 'u1', 's1');
       const removed = await store.cleanup();
 
@@ -75,6 +80,7 @@ describe('InMemoryJobStore - stale running-job failsafe', () => {
       jest.useRealTimers();
     }
   });
+  // End [knauf]
 
   it('does not reap a running job within the staleJobTimeout', async () => {
     const { InMemoryJobStore } = await import('../implementations/InMemoryJobStore');

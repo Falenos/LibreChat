@@ -1,12 +1,59 @@
+// [knauf] Generate immutable turn ownership without adding a dependency.
+import { randomUUID } from 'node:crypto';
+// End [knauf]
 import { logger } from '@librechat/data-schemas';
 import type { StandardGraph } from '@librechat/agents';
 import type { Agents } from 'librechat-data-provider';
-import type {
-  SerializableJobData,
-  UsageMetadata,
-  IJobStore,
-  JobStatus,
+import {
+  GenerationConflictError,
+  type GenerationRef,
+  type SerializableJobData,
+  type UsageMetadata,
+  type IJobStore,
+  type JobStatus,
 } from '~/stream/interfaces/IJobStore';
+
+// [knauf] Encode active-set/cache members with their owner while accepting legacy bare IDs.
+function generationKey(streamId: string, generationId?: string): string {
+  return generationId == null ? streamId : JSON.stringify([streamId, generationId]);
+}
+
+function parseGenerationKey(value: string): GenerationRef {
+  if (!value.startsWith('[')) {
+    return { streamId: value };
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === 'string' &&
+      typeof parsed[1] === 'string'
+    ) {
+      return { streamId: parsed[0], generationId: parsed[1] };
+    }
+  } catch {
+    // Fall through: pre-generation stream IDs remain valid opaque values.
+  }
+
+  return { streamId: value };
+}
+
+function ownsGeneration(
+  job: SerializableJobData | undefined,
+  generationId?: string,
+): job is SerializableJobData {
+  return job != null && (generationId == null || job.generationId === generationId);
+}
+
+function exactlyOwnsGeneration(
+  job: SerializableJobData | undefined,
+  generationId?: string,
+): job is SerializableJobData {
+  return job != null && job.generationId === generationId;
+}
+// End [knauf]
 
 /**
  * Content state for a job - volatile, in-memory only.
@@ -57,6 +104,25 @@ export class InMemoryJobStore implements IJobStore {
    */
   private staleJobTimeout = 1_200_000;
 
+  // [knauf] Resolve legacy calls to the current owner and remove only exact tracking members.
+  private resolveGenerationId(streamId: string, generationId?: string): string | undefined {
+    return generationId ?? this.jobs.get(streamId)?.generationId;
+  }
+
+  private removeUserTracking(job: SerializableJobData): void {
+    const userKey = job.tenantId ? `${job.tenantId}:${job.userId}` : job.userId;
+    const userJobs = this.userJobMap.get(userKey);
+    if (!userJobs) {
+      return;
+    }
+
+    userJobs.delete(generationKey(job.streamId, job.generationId));
+    if (userJobs.size === 0) {
+      this.userJobMap.delete(userKey);
+    }
+  }
+  // End [knauf]
+
   constructor(options?: { ttlAfterComplete?: number; maxJobs?: number; staleJobTimeout?: number }) {
     if (options?.ttlAfterComplete) {
       this.ttlAfterComplete = options.ttlAfterComplete;
@@ -90,13 +156,27 @@ export class InMemoryJobStore implements IJobStore {
     userId: string,
     conversationId?: string,
     tenantId?: string,
+    generationId: string = randomUUID(),
   ): Promise<SerializableJobData> {
-    if (this.jobs.size >= this.maxJobs) {
+    // [knauf] A conversation has one active owner; terminal/legacy state may be replaced.
+    const existingJob = this.jobs.get(streamId);
+    if (existingJob?.status === 'running') {
+      throw new GenerationConflictError(streamId);
+    }
+
+    if (!existingJob && this.jobs.size >= this.maxJobs) {
       await this.evictOldest();
+    }
+
+    if (existingJob) {
+      this.removeUserTracking(existingJob);
+      this.contentState.delete(generationKey(streamId, existingJob.generationId));
+      this.lastActivity.delete(generationKey(streamId, existingJob.generationId));
     }
 
     const job: SerializableJobData = {
       streamId,
+      generationId,
       userId,
       ...(tenantId && { tenantId }),
       status: 'running',
@@ -106,10 +186,6 @@ export class InMemoryJobStore implements IJobStore {
     };
 
     this.jobs.set(streamId, job);
-    // Clear any prior activity timestamp so a replacement reusing this streamId
-    // (the controller handles job replacement) falls back to the fresh createdAt
-    // and isn't reaped on the previous generation's stale last-activity time.
-    this.lastActivity.delete(streamId);
 
     // Track job by userId (tenant-qualified when available) for efficient user-scoped queries
     const userKey = tenantId ? `${tenantId}:${userId}` : userId;
@@ -118,7 +194,8 @@ export class InMemoryJobStore implements IJobStore {
       userJobs = new Set();
       this.userJobMap.set(userKey, userJobs);
     }
-    userJobs.add(streamId);
+    userJobs.add(generationKey(streamId, generationId));
+    // End [knauf]
 
     logger.debug(`[InMemoryJobStore] Created job: ${streamId}`);
 
@@ -129,18 +206,39 @@ export class InMemoryJobStore implements IJobStore {
     return this.jobs.get(streamId) ?? null;
   }
 
-  async updateJob(streamId: string, updates: Partial<SerializableJobData>): Promise<void> {
+  async updateJob(
+    streamId: string,
+    updates: Partial<SerializableJobData>,
+    generationId?: string,
+  ): Promise<void> {
     const job = this.jobs.get(streamId);
-    if (!job) {
+    // [knauf] Stale owners cannot mutate the current job or its immutable owner token.
+    if (!ownsGeneration(job, generationId)) {
       return;
     }
-    Object.assign(job, updates);
+
+    const safeUpdates = { ...updates };
+    delete safeUpdates.generationId;
+    Object.assign(job, safeUpdates);
+    if (safeUpdates.status && ['complete', 'error', 'aborted'].includes(safeUpdates.status)) {
+      this.removeUserTracking(job);
+    }
+    // End [knauf]
   }
 
-  async deleteJob(streamId: string): Promise<void> {
+  async deleteJob(streamId: string, generationId?: string): Promise<void> {
+    // [knauf] Delete only the owner captured by the caller.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return;
+    }
+
+    const stateKey = generationKey(streamId, job.generationId);
+    this.removeUserTracking(job);
     this.jobs.delete(streamId);
-    this.contentState.delete(streamId);
-    this.lastActivity.delete(streamId);
+    this.contentState.delete(stateKey);
+    this.lastActivity.delete(stateKey);
+    // End [knauf]
     logger.debug(`[InMemoryJobStore] Deleted job: ${streamId}`);
   }
 
@@ -149,14 +247,19 @@ export class InMemoryJobStore implements IJobStore {
    * stale-job failsafe in cleanup() reaps on inactivity rather than total age,
    * mirroring RedisJobStore refreshing the running TTL on each appendChunk.
    */
-  recordActivity(streamId: string): void {
-    if (this.jobs.has(streamId)) {
-      this.lastActivity.set(streamId, Date.now());
+  recordActivity(streamId: string, generationId?: string): void {
+    // [knauf] Refresh activity only for the generation that still owns the job.
+    const job = this.jobs.get(streamId);
+    if (ownsGeneration(job, generationId)) {
+      this.lastActivity.set(generationKey(streamId, job.generationId), Date.now());
     }
+    // End [knauf]
   }
 
-  async hasJob(streamId: string): Promise<boolean> {
-    return this.jobs.has(streamId);
+  async hasJob(streamId: string, generationId?: string): Promise<boolean> {
+    // [knauf] Optional owner check preserves the legacy existence-only API.
+    return ownsGeneration(this.jobs.get(streamId), generationId);
+    // End [knauf]
   }
 
   async getRunningJobs(): Promise<SerializableJobData[]> {
@@ -171,7 +274,8 @@ export class InMemoryJobStore implements IJobStore {
 
   async cleanup(): Promise<number> {
     const now = Date.now();
-    const toDelete: string[] = [];
+    // [knauf] Cleanup carries the observed owner through deletion.
+    const toDelete: GenerationRef[] = [];
     let staleRunning = 0;
 
     for (const [streamId, job] of this.jobs) {
@@ -179,7 +283,7 @@ export class InMemoryJobStore implements IJobStore {
       if (isFinished && job.completedAt) {
         // TTL of 0 means immediate cleanup, otherwise wait for TTL to expire
         if (this.ttlAfterComplete === 0 || now - job.completedAt > this.ttlAfterComplete) {
-          toDelete.push(streamId);
+          toDelete.push({ streamId, generationId: job.generationId });
         }
       } else if (this.staleJobTimeout > 0 && job.status === 'running') {
         // Failsafe: reap jobs stuck in "running" with no generation activity for
@@ -188,28 +292,19 @@ export class InMemoryJobStore implements IJobStore {
         // content state in memory until the process OOMs. Reaping keys off last
         // activity (not creation time) so a long but live stream is never reaped,
         // mirroring RedisJobStore refreshing the running TTL on each chunk.
-        const lastActive = this.lastActivity.get(streamId) ?? job.createdAt;
+        const lastActive =
+          this.lastActivity.get(generationKey(streamId, job.generationId)) ?? job.createdAt;
         if (now - lastActive > this.staleJobTimeout) {
-          toDelete.push(streamId);
+          toDelete.push({ streamId, generationId: job.generationId });
           staleRunning++;
         }
       }
     }
 
-    for (const id of toDelete) {
-      const job = this.jobs.get(id);
-      if (job) {
-        const userKey = job.tenantId ? `${job.tenantId}:${job.userId}` : job.userId;
-        const userJobs = this.userJobMap.get(userKey);
-        if (userJobs) {
-          userJobs.delete(id);
-          if (userJobs.size === 0) {
-            this.userJobMap.delete(userKey);
-          }
-        }
-      }
-      await this.deleteJob(id);
+    for (const ref of toDelete) {
+      await this.deleteJob(ref.streamId, ref.generationId);
     }
+    // End [knauf]
 
     if (staleRunning > 0) {
       logger.warn(
@@ -225,31 +320,22 @@ export class InMemoryJobStore implements IJobStore {
   }
 
   private async evictOldest(): Promise<void> {
-    let oldestId: string | null = null;
+    // [knauf] Eviction deletes the owner that was selected, not a later replacement.
+    let oldestRef: GenerationRef | null = null;
     let oldestTime = Infinity;
 
     for (const [streamId, job] of this.jobs) {
       if (job.createdAt < oldestTime) {
         oldestTime = job.createdAt;
-        oldestId = streamId;
+        oldestRef = { streamId, generationId: job.generationId };
       }
     }
 
-    if (oldestId) {
-      logger.warn(`[InMemoryJobStore] Evicting oldest job: ${oldestId}`);
-      const job = this.jobs.get(oldestId);
-      if (job) {
-        const userKey = job.tenantId ? `${job.tenantId}:${job.userId}` : job.userId;
-        const userJobs = this.userJobMap.get(userKey);
-        if (userJobs) {
-          userJobs.delete(oldestId);
-          if (userJobs.size === 0) {
-            this.userJobMap.delete(userKey);
-          }
-        }
-      }
-      await this.deleteJob(oldestId);
+    if (oldestRef) {
+      logger.warn(`[InMemoryJobStore] Evicting oldest job: ${oldestRef.streamId}`);
+      await this.deleteJob(oldestRef.streamId, oldestRef.generationId);
     }
+    // End [knauf]
   }
 
   /** Get job count (for monitoring) */
@@ -276,6 +362,9 @@ export class InMemoryJobStore implements IJobStore {
     this.jobs.clear();
     this.contentState.clear();
     this.userJobMap.clear();
+    // [knauf] Activity is generation-scoped state too.
+    this.lastActivity.clear();
+    // End [knauf]
     logger.debug('[InMemoryJobStore] Destroyed');
   }
 
@@ -291,16 +380,18 @@ export class InMemoryJobStore implements IJobStore {
       return [];
     }
 
-    const activeIds: string[] = [];
+    // [knauf] Ignore stale members from prior generations and return each conversation once.
+    const activeIds = new Set<string>();
 
-    for (const streamId of trackedIds) {
-      const job = this.jobs.get(streamId);
+    for (const trackedId of trackedIds) {
+      const ref = parseGenerationKey(trackedId);
+      const job = this.jobs.get(ref.streamId);
       // Only include if job exists AND is still running
-      if (job && job.status === 'running') {
-        activeIds.push(streamId);
+      if (exactlyOwnsGeneration(job, ref.generationId) && job.status === 'running') {
+        activeIds.add(ref.streamId);
       } else {
         // Self-healing: job completed/deleted but mapping wasn't cleaned - fix it now
-        trackedIds.delete(streamId);
+        trackedIds.delete(trackedId);
       }
     }
 
@@ -309,7 +400,8 @@ export class InMemoryJobStore implements IJobStore {
       this.userJobMap.delete(userKey);
     }
 
-    return activeIds;
+    return Array.from(activeIds);
+    // End [knauf]
   }
 
   // ===== Content State Methods =====
@@ -318,73 +410,128 @@ export class InMemoryJobStore implements IJobStore {
    * Set the graph reference for a job.
    * Uses WeakRef to allow garbage collection when graph is no longer needed.
    */
-  setGraph(streamId: string, graph: StandardGraph): void {
-    const existing = this.contentState.get(streamId);
+  setGraph(streamId: string, graph: StandardGraph, generationId?: string): void {
+    // [knauf] Content state belongs to the current generation only.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return;
+    }
+    const stateKey = generationKey(streamId, job.generationId);
+    const existing = this.contentState.get(stateKey);
     if (existing) {
       existing.graphRef = new WeakRef(graph);
     } else {
-      this.contentState.set(streamId, {
+      this.contentState.set(stateKey, {
         contentParts: [],
         graphRef: new WeakRef(graph),
         collectedUsage: [],
       });
     }
+    // End [knauf]
   }
 
   /**
    * Set content parts reference for a job.
    */
-  setContentParts(streamId: string, contentParts: Agents.MessageContentComplex[]): void {
-    const existing = this.contentState.get(streamId);
+  setContentParts(
+    streamId: string,
+    contentParts: Agents.MessageContentComplex[],
+    generationId?: string,
+  ): void {
+    // [knauf] Content state belongs to the current generation only.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return;
+    }
+    const stateKey = generationKey(streamId, job.generationId);
+    const existing = this.contentState.get(stateKey);
     if (existing) {
       existing.contentParts = contentParts;
     } else {
-      this.contentState.set(streamId, { contentParts, graphRef: null, collectedUsage: [] });
+      this.contentState.set(stateKey, { contentParts, graphRef: null, collectedUsage: [] });
     }
+    // End [knauf]
   }
 
   /**
    * Set collected usage reference for a job.
    */
-  setCollectedUsage(streamId: string, collectedUsage: UsageMetadata[]): void {
-    const existing = this.contentState.get(streamId);
+  setCollectedUsage(
+    streamId: string,
+    collectedUsage: UsageMetadata[],
+    generationId?: string,
+  ): void {
+    // [knauf] Usage belongs to the current generation only.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return;
+    }
+    const stateKey = generationKey(streamId, job.generationId);
+    const existing = this.contentState.get(stateKey);
     if (existing) {
       existing.collectedUsage = collectedUsage;
     } else {
-      this.contentState.set(streamId, { contentParts: [], graphRef: null, collectedUsage });
+      this.contentState.set(stateKey, { contentParts: [], graphRef: null, collectedUsage });
     }
+    // End [knauf]
   }
 
   /**
    * Get collected usage for a job.
    */
-  getCollectedUsage(streamId: string): UsageMetadata[] {
-    const state = this.contentState.get(streamId);
+  getCollectedUsage(streamId: string, generationId?: string): UsageMetadata[] {
+    // [knauf] Reject stale reads and resolve legacy callers to the current owner.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return [];
+    }
+    const state = this.contentState.get(
+      generationKey(streamId, this.resolveGenerationId(streamId, generationId)),
+    );
     return state?.collectedUsage ?? [];
+    // End [knauf]
   }
 
   /**
    * Get content parts for a job.
    * Returns live content from stored reference.
    */
-  async getContentParts(streamId: string): Promise<{
+  async getContentParts(
+    streamId: string,
+    generationId?: string,
+  ): Promise<{
     content: Agents.MessageContentComplex[];
   } | null> {
-    const state = this.contentState.get(streamId);
+    // [knauf] Reject stale reads and resolve legacy callers to the current owner.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return null;
+    }
+    const state = this.contentState.get(
+      generationKey(streamId, this.resolveGenerationId(streamId, generationId)),
+    );
     if (!state?.contentParts) {
       return null;
     }
     return {
       content: state.contentParts,
     };
+    // End [knauf]
   }
 
   /**
    * Get run steps for a job from graph.contentData.
    * Uses WeakRef - may return empty if graph has been GC'd.
    */
-  async getRunSteps(streamId: string): Promise<Agents.RunStep[]> {
-    const state = this.contentState.get(streamId);
+  async getRunSteps(streamId: string, generationId?: string): Promise<Agents.RunStep[]> {
+    // [knauf] Reject stale reads and resolve legacy callers to the current owner.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return [];
+    }
+    const state = this.contentState.get(
+      generationKey(streamId, this.resolveGenerationId(streamId, generationId)),
+    );
     if (!state?.graphRef) {
       return [];
     }
@@ -392,19 +539,28 @@ export class InMemoryJobStore implements IJobStore {
     // Dereference WeakRef - may return undefined if GC'd
     const graph = state.graphRef.deref();
     return graph?.contentData ?? [];
+    // End [knauf]
   }
 
   /**
    * No-op for in-memory - content available via graph reference.
    */
-  async appendChunk(): Promise<void> {
+  async appendChunk(_streamId: string, _event: unknown, _generationId?: string): Promise<void> {
     // No-op: content available via graph reference
   }
 
   /**
    * Clear content state for a job.
    */
-  clearContentState(streamId: string): void {
-    this.contentState.delete(streamId);
+  clearContentState(streamId: string, generationId?: string): void {
+    // [knauf] Clear only the captured generation; omitted IDs retain legacy current behavior.
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId)) {
+      return;
+    }
+    this.contentState.delete(
+      generationKey(streamId, this.resolveGenerationId(streamId, generationId)),
+    );
+    // End [knauf]
   }
 }
