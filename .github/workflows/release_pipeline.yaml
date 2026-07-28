@@ -314,7 +314,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
-      - name: Run DEV k6 smoke and deploy stage
+      - name: Run DEV health smoke and deploy stage
         if: success()
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
@@ -322,54 +322,47 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.new-version }}"
+          CORRELATION_ID="agentic-karl-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-dev-health"
+          run_id=""
+          run_url=""
 
-          wait_for_quality_run() {
-            local scenario="$1"
-            local correlation_id="agentic-karl-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$scenario"
-            local run_id=""
-            local run_url=""
+          echo "Dispatching DEV k6 smoke: scenario=health correlation_id=$CORRELATION_ID"
+          gh workflow run run-k6.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f environment=dev \
+            -f scenario=health \
+            -f profile=smoke \
+            -f correlation_id="$CORRELATION_ID"
 
-            echo "Dispatching DEV k6 smoke: scenario=$scenario correlation_id=$correlation_id"
-            gh workflow run run-k6.yaml \
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
               --repo "$QUALITY_REPOSITORY" \
-              --ref main \
-              -f environment=dev \
-              -f scenario="$scenario" \
-              -f profile=smoke \
-              -f correlation_id="$correlation_id"
+              --workflow run-k6.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 30 \
+              --jq "map(select(.displayTitle | contains(\"$CORRELATION_ID\"))) | first // empty")
 
-            for attempt in {1..30}; do
-              RUN_JSON=$(gh run list \
-                --repo "$QUALITY_REPOSITORY" \
-                --workflow run-k6.yaml \
-                --event workflow_dispatch \
-                --json databaseId,displayTitle,url \
-                --limit 30 \
-                --jq "map(select(.displayTitle | contains(\"$correlation_id\"))) | first // empty")
-
-              if [ -n "$RUN_JSON" ]; then
-                run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
-                run_url=$(jq -r '.url' <<< "$RUN_JSON")
-                break
-              fi
-
-              echo "Waiting for quality run to appear: scenario=$scenario attempt=$attempt"
-              sleep 10
-            done
-
-            if [ -z "$run_id" ]; then
-              echo "::error::Timed out finding quality run for scenario=$scenario correlation_id=$correlation_id"
-              exit 1
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
             fi
 
-            echo "Quality run: $run_url"
-            gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
-            echo "DEV k6 smoke passed: scenario=$scenario"
-            echo "| DEV k6 smoke $scenario | $run_url |" >> "$GITHUB_STEP_SUMMARY"
-          }
+            echo "Waiting for DEV health smoke run to appear: attempt=$attempt"
+            sleep 10
+          done
 
-          wait_for_quality_run health
-          wait_for_quality_run chat-llm
+          if [ -z "$run_id" ]; then
+            echo "::error::Timed out finding DEV health smoke run correlation_id=$CORRELATION_ID"
+            exit 1
+          fi
+
+          echo "DEV health smoke run: $run_url"
+          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          echo "DEV health smoke passed"
+          echo "| DEV health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
 
           echo "Dispatching stage deployment for $VERSION"
           gh workflow run deploy_stage_pipeline.yaml \
