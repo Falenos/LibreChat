@@ -7,6 +7,10 @@ const {
   MAX_SUBAGENT_DEPTH,
   MAX_SUBAGENT_GRAPH_NODES,
   Constants,
+  // [knauf] KK20-243 — for the SKILLS.USE chat-path gate regression test.
+  Permissions,
+  PermissionTypes,
+  // End [knauf]
 } = require('librechat-data-provider');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
@@ -71,7 +75,9 @@ jest.mock('~/cache', () => ({
 const { initializeClient } = require('./initialize');
 const { getSkillToolDeps } = require('./skillDeps');
 const { logger } = require('@librechat/data-schemas');
-const { User, AclEntry } = require('~/db/models');
+// [knauf] KK20-243 — `Role` for the SKILLS.USE chat-path gate regression test.
+const { User, AclEntry, Role } = require('~/db/models');
+// End [knauf]
 const { createAgent, createSkill } = require('~/models');
 
 jest.spyOn(logger, 'warn').mockImplementation(() => {});
@@ -278,6 +284,106 @@ describe('initializeClient — processAgent ACL gate', () => {
     expect(initializeParams.accessibleSkillIds.map(String)).toContain(skill._id.toString());
     expect(initializeParams.skillAuthoringAvailable).toBe(false);
   });
+
+  // [knauf] KK20-243 — SKILLS.USE must gate the CHAT path, not only the REST routes.
+  /**
+   * Before this, `skillsCapabilityEnabled` came from `endpoints.agents.capabilities`
+   * alone. `accessibleSkillIds` was then built from resource ACLs — a different
+   * authorization axis — and `withDeploymentSkillIds` appended every deployment
+   * skill unconditionally. So a role with `SKILLS.USE: false` still received the
+   * catalog and could invoke `karl-brand` / `karl-artifacts` in a default KARL
+   * chat. AGENT_BUILDER is exactly that role until a human runs
+   * `knauf/scripts/seed-agent-builder-role.js`.
+   *
+   * Two role names rather than one document toggled twice, because
+   * `getRoleByName` memoises per name and a flipped document can be served stale.
+   * Neither is a system role, so `getRoleByName` will not auto-create it from
+   * `roleDefaults` (where SKILLS.USE is true) and mask the assertion.
+   */
+  const seedRole = (name, skillsUse) =>
+    Role.create({
+      name,
+      permissions: {
+        [PermissionTypes.SKILLS]: {
+          [Permissions.USE]: skillsUse,
+          [Permissions.CREATE]: false,
+          [Permissions.SHARE]: false,
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+      },
+    });
+
+  /** A skill the user holds a VIEW ACL on — so only the permission can deny it. */
+  const grantViewOnNewSkill = async (name) => {
+    const { skill } = await createSkill({
+      name,
+      description: 'Use for the SKILLS.USE gate regression test.',
+      body: '# Gate test skill\n',
+      author: new mongoose.Types.ObjectId(),
+      authorName: 'Skill Owner',
+    });
+    await AclEntry.create({
+      principalType: PrincipalType.USER,
+      principalId: testUser._id,
+      principalModel: PrincipalModel.USER,
+      resourceType: ResourceType.SKILL,
+      resourceId: skill._id,
+      permBits: PermissionBits.VIEW,
+      grantedBy: testUser._id,
+    });
+    return skill;
+  };
+
+  const initializeWithRole = async (role) => {
+    const endpointOption = makeEndpointOption();
+    endpointOption.agent = Promise.resolve({
+      id: PRIMARY_ID,
+      name: 'Primary',
+      provider: 'openai',
+      model: 'gpt-4',
+      tools: [],
+      skills_enabled: true,
+    });
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+    const req = makeReq();
+    req.user.role = role;
+    req.config.endpoints.agents = { capabilities: ['skills'] };
+
+    await initializeClient({
+      req,
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption,
+    });
+
+    return mockInitializeAgent.mock.calls[0][0];
+  };
+
+  it('withholds every skill from a chat when the role denies SKILLS.USE', async () => {
+    await seedRole('KNAUF_GATE_DENIED', false);
+    const skill = await grantViewOnNewSkill('gate-denied-skill');
+
+    const initializeParams = await initializeWithRole('KNAUF_GATE_DENIED');
+
+    // Empty, not merely missing the ACL skill: `[]` is what the gated ternary
+    // produces, which is also what stops the unconditional deployment merge.
+    expect(initializeParams.accessibleSkillIds).toEqual([]);
+    expect(initializeParams.accessibleSkillIds.map(String)).not.toContain(skill._id.toString());
+    expect(initializeParams.skillAuthoringAvailable).toBe(false);
+  });
+
+  it('admits skills for the same shape of role once SKILLS.USE is granted', async () => {
+    // The control. Without this, the test above could pass for an unrelated
+    // reason — a non-system role failing some other lookup, say — and we would
+    // believe the gate worked when nothing was being gated.
+    await seedRole('KNAUF_GATE_ALLOWED', true);
+    const skill = await grantViewOnNewSkill('gate-allowed-skill');
+
+    const initializeParams = await initializeWithRole('KNAUF_GATE_ALLOWED');
+
+    expect(initializeParams.accessibleSkillIds.map(String)).toContain(skill._id.toString());
+  });
+  // End [knauf]
 
   it('enables skill authoring when model specs enable skills for an ephemeral agent', async () => {
     const endpointOption = makeEndpointOption();

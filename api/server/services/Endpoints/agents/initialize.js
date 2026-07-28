@@ -35,6 +35,9 @@ const {
   getSkillToolDeps,
   getSkillDbMethods,
   canAuthorSkillFiles,
+  // [knauf] KK20-243 — SKILLS.USE gate for the chat path; see the call site.
+  canUseSkills,
+  // End [knauf]
   withDeploymentSkillIds,
   buildAgentToolContext,
   enrichLoadedToolsWithAgentContext,
@@ -143,7 +146,22 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
    *      `agent.skills` allowlist narrows the catalog; empty/undefined
    *      allowlist with the toggle on = full accessible catalog. */
   const enabledCapabilities = new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities);
-  const skillsCapabilityEnabled = enabledCapabilities.has(AgentCapabilities.skills);
+  // [knauf] KK20-243 — AND the SKILLS.USE role permission into the capability
+  // flag. Upstream derived this from YAML alone, so a role with
+  // `SKILLS.USE: false` still got the deployment catalog: the ids below come
+  // from resource ACLs (a different axis) and `withDeploymentSkillIds` appends
+  // every deployment skill unconditionally. Gating here rather than at each use
+  // is deliberate — this one value is threaded into `resolveAgentScopedSkillIds`
+  // and `canAuthorSkillFiles` at seven call sites, and `false` collapses
+  // accessibleSkillIds/editableSkillIds to `[]`, skillCreateAllowed to false,
+  // and `isAgentSkillsEnabledForRun` to false, so there is no path left open.
+  // The name keeps upstream's spelling so those seven shorthand passes stay
+  // untouched; it now means "skills usable by THIS user in THIS run".
+  // The identical block in api/server/controllers/agents/openai.js is gated the
+  // same way — both are registered in SEAMS.md so a merge cannot drop one.
+  const skillsCapabilityEnabled =
+    enabledCapabilities.has(AgentCapabilities.skills) && (await canUseSkills({ req }));
+  // End [knauf]
   const codeEnvAvailable = enabledCapabilities.has(AgentCapabilities.execute_code);
   const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
   const skillDbMethods = getSkillDbMethods();

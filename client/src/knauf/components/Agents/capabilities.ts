@@ -46,6 +46,26 @@ export interface KnaufCapability {
   /** Lucide icon component. */
   icon: ComponentType<LucideProps>;
   /**
+   * Form fields `readFromForm` inspects, declared so `CapabilityRow` can
+   * subscribe to exactly them.
+   *
+   * This is load-bearing, not metadata. `CapabilitySwitch` is a *controlled*
+   * component: it renders the `checked` prop, and `checked` is recomputed only
+   * when the row re-renders. `setValue` does not re-render a subscriber on its
+   * own, so a row that writes a field it does not watch updates the form and
+   * then displays the stale value — clicking it appears to do nothing, and every
+   * later click re-requests the same transition.
+   *
+   * `browseInternet` escaped this only by accident: it also writes
+   * `model_parameters`, which happened to be the one field the row watched.
+   * The two KK20-243 rows write a single top-level field each and had no such
+   * accident, so they were dead on arrival until this existed.
+   *
+   * Must stay a stable module-level array — `useWatch` receives it directly, and
+   * a fresh literal per render would churn the subscription.
+   */
+  watchFields: readonly string[];
+  /**
    * Returns true when the capability should appear, given the agent
    * endpoint's enabled-capabilities list from librechat.yaml. Capabilities
    * that are model-level (not gated by `endpoints.agents.capabilities`)
@@ -73,6 +93,10 @@ const browseInternet: KnaufCapability = {
   label: 'Browse the internet',
   description: 'Search the web and read pages for fresh information.',
   icon: Globe,
+  // Reads `web_search`; also writes `model_parameters`. Both are listed because
+  // watching only `model_parameters` (the historical behaviour) was accidental —
+  // it worked solely because `applyToForm` happens to write it too.
+  watchFields: [AgentCapabilities.web_search, 'model_parameters'],
   isEnabled: () => true,
   readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.web_search as keyof AgentForm),
   applyToForm: (next, { getValues, setValue }) => {
@@ -128,6 +152,7 @@ const buildVisuals: KnaufCapability = {
   labelKey: 'com_knauf_capability_artifacts_label',
   descriptionKey: 'com_knauf_capability_artifacts_description',
   icon: LayoutTemplate,
+  watchFields: [AgentCapabilities.artifacts],
   isEnabled: (enabled) => enabled.includes(AgentCapabilities.artifacts),
   readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.artifacts as keyof AgentForm),
   applyToForm: (next, { setValue }) => {
@@ -158,6 +183,7 @@ const useKnaufSkills: KnaufCapability = {
   labelKey: 'com_knauf_capability_skills_label',
   descriptionKey: 'com_knauf_capability_skills_description',
   icon: ScrollText,
+  watchFields: ['skills_enabled'],
   isEnabled: (enabled) => enabled.includes(AgentCapabilities.skills),
   readFromForm: ({ getValues }) => !!getValues('skills_enabled'),
   applyToForm: (next, { setValue }) => {
@@ -180,6 +206,7 @@ const useKnaufSkills: KnaufCapability = {
  *     label: 'Analyze data, charts & diagrams',
  *     description: 'Turn numbers and files into visuals and insights.',
  *     icon: Layers,
+ *     watchFields: [AgentCapabilities.execute_code],
  *     isEnabled: (enabled) => enabled.includes(AgentCapabilities.execute_code),
  *     readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.execute_code),
  *     applyToForm: (next, { setValue }) =>

@@ -512,9 +512,19 @@ endpoints:
   #                carry the Knauf brand tokens and artifact templates. Strict
   #                per-agent opt-in sits on top of this flag: persisted agents
   #                need `skills_enabled`, default-spec chats use the modelSpec
-  #                `skills` field. Also gated by the SKILLS RBAC permission —
+  #                `skills` field. Also gated by the SKILLS.USE RBAC permission —
   #                see `interface.skills` above, and
   #                knauf/scripts/seed-agent-builder-role.js for AGENT_BUILDER.
+  #                NOTE that RBAC gate is a [knauf] addition (KK20-243, PR review):
+  #                upstream enforced SKILLS.USE only on the skills REST routes,
+  #                so this capability alone used to hand the deployment catalog
+  #                to every role. `canUseSkills` in
+  #                api/server/services/Endpoints/agents/skillDeps.js is now
+  #                AND-ed into the capability flag in BOTH agent-init paths
+  #                (Endpoints/agents/initialize.js and
+  #                controllers/agents/openai.js). Without it, the AGENT_BUILDER
+  #                seed script would be decorative and a denied role would still
+  #                get skills.
   #
   # Excluded on purpose:
   #   web_search   -> [knauf] KK20-194: deliberately NOT a capability. The

@@ -9,6 +9,10 @@ const {
 } = require('~/server/services/Files/Code/process');
 const {
   checkAccess,
+  // [knauf] KK20-243 — request-cached variant for the per-run SKILLS.USE gate;
+  // see `canUseSkills`. The plain `checkAccess` below stays for `canCreateSkill`.
+  checkAccessWithRequestCache,
+  // End [knauf]
   getStorageMetadata,
   resolveRequestTenantId,
   enrichWithSkillConfigurable,
@@ -144,6 +148,45 @@ function canCreateSkill({ req }) {
     getRoleByName: db.getRoleByName,
   });
 }
+
+// [knauf] KK20-243 — SKILLS.USE gate for the chat execution path.
+/**
+ * The SKILLS.USE role permission, checked while building a run.
+ *
+ * Upstream enforces `SKILLS.USE` only on the skills REST surface
+ * (`api/server/routes/skills.js`, via `checkSkillAccess`) and inside
+ * `canCreateSkill`, which gates authoring. Nothing checked it while building a
+ * run: `accessibleSkillIds` came from `findAccessibleResources` — resource ACLs,
+ * a different axis entirely — and `mergeDeploymentSkillIds` then appends every
+ * deployment skill id unconditionally, by design, since deployment skills carry
+ * no ACL rows. The result was that a role with `SKILLS.USE: false` still
+ * received the deployment catalog and could invoke `karl-brand` /
+ * `karl-artifacts` in a default KARL chat.
+ *
+ * That mattered concretely rather than theoretically: AGENT_BUILDER has
+ * `SKILLS.USE: false` until a human runs `knauf/scripts/seed-agent-builder-role.js`,
+ * so the window between deploying the image and running mongosh granted exactly
+ * what the seed script exists to grant. It also made the "three gates" claim in
+ * `librechat.yaml` and the rollout plan untrue, and left us no way to deny skills
+ * to a role later.
+ *
+ * Fails closed: `checkAccessWithRequestCache` returns `false` for a missing user,
+ * a missing role document, or an absent permission block — it never throws.
+ *
+ * Cached per request because both agent init paths call this once per run and
+ * `canCreateSkill` hits the same role document; without the cache this would add
+ * a `getRoleByName` round trip to every send.
+ */
+function canUseSkills({ req }) {
+  return checkAccessWithRequestCache({
+    req,
+    user: req.user,
+    permissionType: PermissionTypes.SKILLS,
+    permissions: [Permissions.USE],
+    getRoleByName: db.getRoleByName,
+  });
+}
+// End [knauf]
 
 function canEditSkill({ req, skillId }) {
   return checkPermission({
@@ -366,6 +409,12 @@ function getSkillToolDeps() {
 
 module.exports = {
   getSkillToolDeps,
+  // [knauf] KK20-243 — exported so BOTH agent-init paths gate on it. See the
+  // SEAMS rows: initialize.js and controllers/agents/openai.js carry duplicate
+  // scope-resolution blocks upstream, and an upstream merge that touches one
+  // must not silently drop the gate from the other.
+  canUseSkills,
+  // End [knauf]
   canAuthorSkillFiles,
   isAgentSkillsEnabledForRun,
   getSkillDbMethods,
