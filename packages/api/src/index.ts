@@ -80,6 +80,11 @@ export * from './rum/proxy';
 // agents/initialize.ts (agent instructions), so the LLM never has to guess a
 // user's location.
 export * from './knauf/context/locationContext';
+// [knauf] KK20-243 — boot-time assertion that the deployment skills baked into
+// the image actually loaded. Consumed by api/server/index.js immediately after
+// `initializeDeploymentSkills`, because that loader treats an empty skill
+// directory as success and logs the zero case at `debug`.
+export * from './knauf/skills/deploymentSkillsCheck';
 // End [knauf]
 /* types */
 export type * from './mcp/types';

@@ -79,4 +79,12 @@ Full index with per-doc summaries: **[docs/README.md](docs/README.md)**. Docs ar
 | [docs/implementation-plans/](docs/implementation-plans/) | Time-bound, multi-PR workstreams in flight |
 | [docs/proposals/](docs/proposals/) | Designs still being decided |
 
+Sibling directories under `knauf/` that are not documentation:
+
+| Folder | Purpose |
+|---|---|
+| [brand/](brand/) | The official Knauf brand kit as delivered (KK20-243) — logos, the authoritative colour system, visual-identity guidelines, licensed fonts. **Reference only**: excluded from the Docker build context, so nothing there is available at runtime. The palette and wordmark that agent-authored artifacts use are transcribed as text into [`skill/karl-brand/`](../skill/karl-brand/); if the two disagree, `brand/colours/` wins. See [brand/README.md](brand/README.md) for the licence constraints — the fonts are **not** free to embed. |
+| [scripts/](scripts/) | Fork tooling — the `seams.js` manifest checker, the migration allowlist, and the AGENT_BUILDER role seed script (run manually per environment, not by the app) |
+| [parser-eval/](parser-eval/) | Standalone Python harness for evaluating document parsers |
+
 ---

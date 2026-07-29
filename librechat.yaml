@@ -390,6 +390,43 @@ interface:
     create: true
     share: true
     public: true
+  # [knauf] KK20-243 — Skills RBAC, set explicitly so role seeding is
+  # deterministic. `hasExplicitConfig` (packages/api/src/app/permissions.ts)
+  # only rewrites an existing Mongo role document when the matching
+  # `interface.*` key is present. With this block absent, the built-in
+  # USER/ADMIN SKILLS permissions freeze at whatever was written when each role
+  # document was first created and never converge again — so dev, stage and
+  # prod can silently disagree.
+  # All four keys are spelled out deliberately: the conditional spreads in
+  # permissions.ts only emit SHARE/SHARE_PUBLIC when `share` or `public` is
+  # present, and updateAccessPermissions merges rather than replaces, so an
+  # omitted key leaves a stale value rather than clearing it.
+  #   use: true     -> activate skills, invoke with `$`, see the catalog.
+  #   create: false -> authoring stays with platform engineering; deployment
+  #                    skills ship in the image under `skill/`. The schema default
+  #                    is `true`, which would open a skill-authoring UI company-wide.
+  #                    NOTE this applies to ADMIN as well as USER — this block is
+  #                    seeded to both roles (`updateInterfacePermissions` iterates
+  #                    exactly those two), and there is no way to differentiate
+  #                    them here. So the Skills side panel is a READ-ONLY catalog
+  #                    for everyone, with no "New skill" button for admins either.
+  #                    That is deliberate: the deployment skills in `skill/` are
+  #                    code-reviewed and version-controlled, and a Mongo-backed
+  #                    skill authored in the UI would be neither. To grant
+  #                    authoring to a specific role later, do it the way
+  #                    AGENT_BUILDER is done — a targeted seed script, not this
+  #                    block.
+  #   share/public  -> nothing to share while skills are deployment-only.
+  # SKILLS is deliberately NOT in KNAUF_RESTRICTED_USER_PERMISSION_TYPES
+  # (packages/api/src/knauf/permissions/userRestrictions.ts), so this block is
+  # the only thing governing the built-in USER role. AGENT_BUILDER is separate
+  # and manual — see knauf/scripts/seed-agent-builder-role.js.
+  skills:
+    use: true
+    create: false
+    share: false
+    public: false
+  # End [knauf]
 
 registration:
   socialLogins: ['openid']
@@ -450,16 +487,60 @@ fileConfig:
 
 endpoints:
 
-  # Restrict the agent builder to the simple, platform-managed capabilities.
-  # - file_search uses the platform RAG service (RAG_API_URL); no user keys.
-  # - tools allows curated built-in tools to be added later.
+  # Enabled capabilities for the agents endpoint. This list is authoritative and
+  # it is NOT builder-only — the earlier wording here was wrong. Because
+  # `capabilities` is set explicitly, upstream's `defaultAgentCapabilities`
+  # (packages/data-provider/src/config.ts) never applies, and EVERY chat is
+  # gated by this list, including default-spec KARL chats on the azureOpenAI
+  # endpoint: all sends route through api/server/routes/agents/chat.js, and
+  # api/server/services/Endpoints/agents/initialize.js reads this list to decide
+  # what an ephemeral agent may do.
+  #
+  # - file_search  platform RAG service (RAG_API_URL); no user keys.
+  # - tools        curated built-in tools can be added later.
+  # - artifacts    KK20-243 — the live preview panel (React / HTML / Mermaid /
+  #                SVG / Markdown). Rendering is entirely browser-side via
+  #                Sandpack, so there is no backend to deploy. There is also NO
+  #                RBAC permission for artifacts: this list, the per-conversation
+  #                chip, and the per-agent `artifacts` field are the only gates.
+  #                Previews need egress to *.codesandbox.io and
+  #                cdn.tailwindcss.com. The bundler is overridable per
+  #                environment via SANDPACK_BUNDLER_URL /
+  #                SANDPACK_STATIC_BUNDLER_URL; the Tailwind CDN is not.
+  # - skills       KK20-243 — deployment skills load read-only at boot from
+  #                <repoRoot>/skill/<name>/SKILL.md (one level deep only). They
+  #                carry the Knauf brand tokens and artifact templates. Strict
+  #                per-agent opt-in sits on top of this flag: persisted agents
+  #                need `skills_enabled`, default-spec chats use the modelSpec
+  #                `skills` field. Also gated by the SKILLS.USE RBAC permission —
+  #                see `interface.skills` above, and
+  #                knauf/scripts/seed-agent-builder-role.js for AGENT_BUILDER.
+  #                NOTE that RBAC gate is a [knauf] addition (KK20-243, PR review):
+  #                upstream enforced SKILLS.USE only on the skills REST routes,
+  #                so this capability alone used to hand the deployment catalog
+  #                to every role. `canUseSkills` in
+  #                api/server/services/Endpoints/agents/skillDeps.js is now
+  #                AND-ed into the capability flag in BOTH agent-init paths
+  #                (Endpoints/agents/initialize.js and
+  #                controllers/agents/openai.js). Without it, the AGENT_BUILDER
+  #                seed script would be decorative and a denied role would still
+  #                get skills.
+  #
   # Excluded on purpose:
-  #   web_search  -> [knauf] KK20-194: deliberately NOT a builder capability.
-  #                  The "Browse the internet" switch enables Azure-hosted
-  #                  web_search through model parameters. Adding it here would
-  #                  surface the provider-less LangChain/BYOK tool instead.
-  #   execute_code, actions, artifacts, ocr, context, deferred_tools, chain
-  #                  -> hidden from end users to reduce configuration burden.
+  #   web_search   -> [knauf] KK20-194: deliberately NOT a capability. The
+  #                   "Browse the internet" switch enables Azure-hosted
+  #                   web_search through model parameters. Adding it here would
+  #                   surface the provider-less LangChain/BYOK tool instead.
+  #   execute_code -> [knauf] KK20-108 / KK20-243: the self-hosted sandbox is
+  #                   not deployed on AGK. Enabling it without a reachable
+  #                   LIBRECHAT_CODE_BASEURL ships a tool that always fails.
+  #                   Note the built-in USER role additionally has RUN_CODE.USE
+  #                   forced false by KNAUF_RESTRICT_USER_PERMISSIONS
+  #                   (packages/api/src/knauf/permissions/userRestrictions.ts),
+  #                   but that gates the manual Run button, not agent auto-run.
+  #   actions, ocr, context, deferred_tools, chain, subagents,
+  #   programmatic_tools, end_after_tools, hide_sequential_outputs
+  #                -> hidden from end users to reduce configuration burden.
   agents:
     # [knauf] NO-TICKET — recursionLimit is an emergency graph-step fuse, not a
     # finalizer. The query budget below caps backend retrieval work; the graph fuse
@@ -476,6 +557,10 @@ endpoints:
     capabilities:
       - file_search
       - tools
+      # [knauf] KK20-243 — see the block above. `execute_code` stays excluded.
+      - artifacts
+      - skills
+      # End [knauf]
 
   azureOpenAI:
     titleModel: 'model-router-chat'
@@ -547,6 +632,32 @@ modelSpecs:
       # which packages/api/src/agents/initialize.ts translates into Azure's
       # hosted Responses API web_search tool.
       webSearch: true
+      # [knauf] KK20-243 — artifacts default-ON for the default spec. This is
+      # not cosmetic: on a spec-driven chat, BadgeRowContext skips its
+      # localStorage init and `applyModelSpecEphemeralAgent`
+      # (client/src/utils/endpoints.ts) is authoritative for new conversations.
+      # With this key absent it writes `artifacts: ''`, which forces artifacts
+      # OFF on every new KARL chat regardless of what the user last chose — so
+      # the feature would ship dark. `interface.defaultPinnedTools` is not an
+      # alternative: useLocalStorageAlt eagerly persists the pin default on
+      # first load, and useToolToggle's stored-pin guard then beats any admin
+      # default, so it only ever fires in a browser that has never loaded KARL.
+      # Cost: generateArtifactsPrompt adds ~11.4 KB (~2.9k tokens) per turn
+      # (packages/api/src/agents/initialize.ts). Deliberately 'default' and not
+      # 'shadcnui', which stacks a second prompt on top.
+      artifacts: 'default'
+      # [knauf] KK20-243 — deployment skills available on KARL. Cheap by
+      # comparison: only name + description per skill lands in the prompt
+      # (truncated to 250 chars each by formatSkillCatalog); the model pulls the
+      # full SKILL.md on demand. Known trade-off: this sets `skills_enabled`
+      # unconditionally, which short-circuits `isAgentSkillsEnabledForRun`
+      # (api/server/services/Endpoints/agents/skillDeps.js) before it consults
+      # the composer Skills chip — so on spec-driven chats that chip cannot turn
+      # skills off. Accepted because the alternative is skills off by default
+      # everywhere. Do not pin the chip; a visible control that does nothing is
+      # worse than no control.
+      skills: true
+      # End [knauf]
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
       # product-facing. KK20-159.
@@ -594,16 +705,42 @@ modelSpecs:
 
     # Knauf personalities for the agent builder. Filtered client-side by the
     # `karl-personality-` name prefix in
-    # client/src/custom/knauf/agents/usePersonalities.ts. Preset values flow
-    # into the new agent's `model_parameters` at create time.
+    # client/src/knauf/data-provider/Agents/usePersonalities.ts. Preset values
+    # flow into the new agent's `model_parameters` at create time.
     # Agent personalities use the environment-selected model through Responses
     # API. GitOps selects `agent-default` (direct GPT-5.6 Sol).
+    #
+    # [knauf] KK20-243 — these three are ALSO selectable in the chat model
+    # dropdown, not just the builder: `interface.modelSelect` is true and none of
+    # them sets `group`, so ModelSelector renders every spec in
+    # `modelSpecs.filter((spec) => !spec.group)`. A user therefore sees
+    # KARL / Precise / Balanced / Creative as peers and switches between them
+    # freely.
+    #
+    # That means every per-conversation capability has to be repeated here, or
+    # picking a personality silently turns it OFF — the spec is authoritative for
+    # a new conversation and an absent key reads as "off", not "inherit":
+    #   web_search  applyModelSpecEphemeralAgent -> `modelSpec.webSearch ?? false`
+    #   artifacts   applyModelSpecEphemeralAgent -> `modelSpec.artifacts || ''`
+    #   skills      applyModelSpecSkills early-returns without the key, so
+    #               `skills_enabled` never becomes true (packages/api/src/agents/added.ts)
+    # KK20-194 already established this for `webSearch`; KK20-243 extends the
+    # same parity rule to `artifacts` and `skills`. The rule, so nobody has to
+    # rediscover it: a capability added to the `karl` spec belongs on all three
+    # of these too, unless there is a stated reason it should not.
+    # Cost is accepted and is not new — the ~2.9k input tokens/turn that
+    # `artifacts: 'default'` adds already applies to every KARL chat, which is
+    # the large majority. A personality that is quietly cheaper than KARL is an
+    # accident, not a budget.
     - name: 'karl-personality-precise'
       label: 'Precise'
       default: false
       description: 'Sticks to facts. Short and exact.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -617,6 +754,9 @@ modelSpecs:
       description: 'Thoughtful and well-rounded.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -630,6 +770,9 @@ modelSpecs:
       description: 'Explores ideas. More expressive.'
       # [knauf] KK20-194 — browse-default-on parity with KARL (see `karl` spec).
       webSearch: true
+      # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
+      artifacts: 'default'
+      skills: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'

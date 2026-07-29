@@ -52,6 +52,9 @@ const {
   getSkillToolDeps,
   getSkillDbMethods,
   canAuthorSkillFiles,
+  // [knauf] KK20-243 — SKILLS.USE gate for the chat path; see the call site.
+  canUseSkills,
+  // End [knauf]
   withDeploymentSkillIds,
   buildAgentToolContext,
   enrichLoadedToolsWithAgentContext,
@@ -269,7 +272,15 @@ const OpenAIChatCompletionController = async (req, res) => {
     };
 
     const enabledCapabilities = new Set(agentsEConfig?.capabilities);
-    const skillsCapabilityEnabled = enabledCapabilities.has(AgentCapabilities.skills);
+    // [knauf] KK20-243 — AND the SKILLS.USE role permission into the capability
+    // flag, exactly as in api/server/services/Endpoints/agents/initialize.js.
+    // This block is a duplicate of that one upstream, so BOTH need the gate:
+    // fixing only the other file would leave this path granting the deployment
+    // catalog to a role with `SKILLS.USE: false`. Both are registered in
+    // SEAMS.md; if an upstream merge rewrites either block, re-apply to both.
+    const skillsCapabilityEnabled =
+      enabledCapabilities.has(AgentCapabilities.skills) && (await canUseSkills({ req }));
+    // End [knauf]
     const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
     const accessibleSkillIds = skillsCapabilityEnabled
       ? withDeploymentSkillIds(
