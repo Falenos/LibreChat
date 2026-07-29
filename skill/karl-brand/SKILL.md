@@ -187,14 +187,11 @@ Two values you may find in older material. Both are deliberately absent above.
 | `#0F1A2A` | `#FFD25C` | 12.17 | why yellow is an excellent highlight fill |
 | `#0F1A2A` | `#87C15F` | 8.18 | why light green is a good accent fill |
 
-## Invariant — do not change without reading this
+## If this reference is unavailable
 
-- **This skill must stay model-invocable.** Do not set `disable-model-invocation:
-  true`. When another skill reads this one's files, that read is rejected if the
-  target has model invocation disabled and was not primed the same turn — which
-  would silently break every branded artifact.
-- **Do not rename it.** The id is derived from the name, so a rename mints a new
-  skill and drops every user's per-skill active-state.
-- A user who switches this skill off will make those cross-skill reads fail.
-  `karl-artifacts` carries a labelled quick-card mirror for exactly that case, and
-  is instructed to say so when it falls back.
+`karl-artifacts` carries a labelled quick-card mirror of the values above for the
+case where a cross-skill read of this file fails. When falling back to it, say so
+in the reply rather than presenting the mirror as authoritative.
+
+Maintainer constraints for this skill — the frontmatter it must keep, why it must
+not be renamed — live in `skill/README.md`, not here.

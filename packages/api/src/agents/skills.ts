@@ -8,6 +8,10 @@ import type { Agent } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { InitializeAgentDbMethods } from './initialize';
 import { registerCodeExecutionTools } from './tools';
+// [knauf] KK20-252 — strip YAML frontmatter before a skill body is injected as a
+// user message; see the two call sites below.
+import { prepareSkillBodyForInjection } from '~/knauf/skills/skillPrimeBody';
+// End [knauf]
 import { logAxiosError } from '~/utils';
 
 const SKILL_CATALOG_LIMIT = 100;
@@ -595,7 +599,12 @@ export async function injectSkillCatalog(
 export function buildSkillPrimeMessage(skill: { name: string; body: string }): InjectedMessage {
   return {
     role: 'user',
-    content: skill.body,
+    // [knauf] KK20-252 — the body lands as a USER message, so its YAML
+    // frontmatter would arrive as a user turn declaring a name/description/
+    // invocation flags before issuing instructions: injection-shaped, and
+    // observed causing hard refusals on Azure. See knauf/skills/skillPrimeBody.
+    content: prepareSkillBodyForInjection(skill.body),
+    // End [knauf]
     isMeta: true,
     source: SKILL_MESSAGE_SOURCE,
     skillName: skill.name,
@@ -1225,7 +1234,10 @@ export function injectSkillPrimes(params: InjectSkillPrimesParams): InjectSkillP
 
   const buildPrime = (p: { name: string; body: string }, trigger: SkillTrigger): HumanMessage =>
     new HumanMessage({
-      content: p.body,
+      // [knauf] KK20-252 — same frontmatter strip as `buildSkillPrimeMessage`;
+      // the manual `$` popover and `always-apply` paths inject the same way.
+      content: prepareSkillBodyForInjection(p.body),
+      // End [knauf]
       additional_kwargs: {
         isMeta: true,
         source: SKILL_MESSAGE_SOURCE,

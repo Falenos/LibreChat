@@ -12,10 +12,11 @@ version: "2.0.0"
 
 # KARL Artifacts: choosing well and building previews that render
 
-Your system instructions already define the artifact directive syntax, the allowed
-types, and the library allowlist — follow them exactly and never restate or wrap
-them. This skill adds what they leave out: how to choose a type, what breaks
-previews, how to iterate, and how to make it look like Knauf.
+Reference material for building artifacts in KARL. The artifact directive syntax,
+the allowed types and the library allowlist are already defined in the system
+instructions and are not repeated here. What follows is what those leave out:
+choosing a type, what breaks previews, how to iterate, and how to make it look
+like Knauf.
 
 ## Choose the right type
 

@@ -6,6 +6,32 @@ version: 1.3.13
 
 cache: true
 
+# [knauf] KK20-252 — state summarization explicitly. This block previously did
+# not exist, which did NOT mean "off": `resolveSummarizationConfig`
+# (packages/api/src/agents/run.ts:652-666) tests `config?.enabled !== false`, and
+# with no block `config` is `undefined`, so `undefined !== false` evaluated true
+# and summarization was **on by accident**. It stays on — summarizing the dropped
+# tail is strictly better for recall than the alternative, which is hard
+# truncation silently discarding the oldest turns (prune.ts drops them and
+# re-prepends only the system message).
+#
+# Behaviour is unchanged by writing it down; the point is that it is now
+# discoverable instead of an emergent property of a `!== false` comparison.
+#
+# Deliberately still defaulted, and worth revisiting together:
+#   provider/model  inherited from the agent, so on the default KARL spec the
+#                   summarizer runs through Azure Model Router and picks a
+#                   different model per call.
+#   trigger         absent, so the SDK summarizes on ANY overflow
+#                   (@librechat/agents summarization/index.ts:79-82). With the
+#                   context window now pinned to 128k rather than falling back to
+#                   32k, overflow should be rare enough that this matters much
+#                   less than it did.
+#   prompt          the SDK default; not tuned for KARL's tone or for German.
+summarization:
+  enabled: true
+# End [knauf]
+
 # Route all file uploads (avatars, images, attachments, file_search) to
 # Azure Blob Storage with SAS-signed URLs. Behavior of `azure_blob` here
 # depends on the Knauf overlay (KK20-167) that adds short-lived signed
@@ -672,6 +698,23 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'model-router-chat'
+        # [knauf] KK20-252 — pin the context window explicitly. Without this,
+        # `getModelMaxTokens` cannot resolve `model-router-chat` (it is a Knauf
+        # alias and will never be in packages/api/src/utils/tokens.ts), returns
+        # `undefined`, and packages/api/src/agents/initialize.ts:1042-1050 falls
+        # back to DEFAULT_MAX_CONTEXT_TOKENS = 32000. After the 0.95 reserve
+        # there and the SDK's own 5% in prune.ts, that left a ~28.9k pruning
+        # budget minus ~5k of instructions — so KARL was silently truncating and
+        # summarising far earlier than anyone expected, and the skill catalog was
+        # budgeted at 1% of 32k (1,280 chars) instead of the intended headroom.
+        #
+        # This value must be the FLOOR of Azure Model Router's candidate pool,
+        # not the ceiling: the router picks a different underlying model per
+        # request, and declaring more than the smallest candidate would overflow
+        # it. 128k is a deliberately conservative floor pending infra
+        # confirmation of the pool — still 4x the old effective budget. Raise it
+        # once the pool is confirmed; do not raise it by guessing.
+        maxContextTokens: 128000
         useResponsesApi: true
         web_search: true
         greeting: |
@@ -699,7 +742,9 @@ modelSpecs:
 
           Attached files: A file listed in the file_search context is attached and available for semantic search. After file_search returns excerpts, answer from them. Never claim that the file was not received or ask the user to upload it again. If the excerpts do not cover the full document, say that clearly and provide the answer supported by the available evidence.
 
-          Files: Do not suggest or offer to create, export, or generate any files other than images (including PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP/archives, audio, and video). Do not ask the user whether they want you to generate a file. If a user requests a non-image file, explain that file generation is not supported and provide the content inline in chat or concise steps for creating it using common tools. Only generate images when explicitly requested, using the available image tool; otherwise, respond as text within the chat.
+          Artifacts: You can build artifacts — React components, standalone HTML pages, Mermaid diagrams, SVG, and Markdown documents — which render in a preview panel beside the chat. When artifact instructions are present in your context, follow them exactly. An artifact is not a downloadable file, so nothing in the next paragraph restricts it: building a dashboard, report, or slide deck as an artifact is expected and welcome when the request calls for one.
+
+          Files: What you cannot produce is a downloadable binary or document file — PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP or other archives, audio, and video. Do not offer, suggest, or promise one, and do not ask the user whether they would like one. If a user asks for such a file, say plainly that you cannot generate that format, then deliver the content the best way available to you: as an artifact when the content suits one, otherwise inline in chat, or as concise steps for producing the file with common tools. Only generate images when explicitly requested, using the available image tool.
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
 
@@ -744,6 +789,12 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
+        # [knauf] KK20-252 — see the `karl` spec for why this is pinned rather
+        # than resolved. `agent-default` is equally unresolvable, and it points at
+        # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
+        # floor has to hold for whatever that deployment becomes, not for the
+        # model it happens to be today.
+        maxContextTokens: 128000
         reasoning_effort: high
         useResponsesApi: true
         web_search: true
@@ -760,6 +811,12 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
+        # [knauf] KK20-252 — see the `karl` spec for why this is pinned rather
+        # than resolved. `agent-default` is equally unresolvable, and it points at
+        # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
+        # floor has to hold for whatever that deployment becomes, not for the
+        # model it happens to be today.
+        maxContextTokens: 128000
         reasoning_effort: medium
         useResponsesApi: true
         web_search: true
@@ -776,6 +833,12 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
+        # [knauf] KK20-252 — see the `karl` spec for why this is pinned rather
+        # than resolved. `agent-default` is equally unresolvable, and it points at
+        # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
+        # floor has to hold for whatever that deployment becomes, not for the
+        # model it happens to be today.
+        maxContextTokens: 128000
         reasoning_effort: low
         useResponsesApi: true
         web_search: true
@@ -796,6 +859,12 @@ modelSpecs:
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
+        # [knauf] KK20-252 — see the `karl` spec for why this is pinned rather
+        # than resolved. `agent-default` is equally unresolvable, and it points at
+        # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
+        # floor has to hold for whatever that deployment becomes, not for the
+        # model it happens to be today.
+        maxContextTokens: 128000
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions
