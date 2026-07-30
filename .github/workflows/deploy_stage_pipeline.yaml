@@ -276,7 +276,7 @@ jobs:
             for attempt in {1..30}; do
               RUN_JSON=$(gh run list \
                 --repo "$QUALITY_REPOSITORY" \
-                --workflow run-k6.yaml \
+                --workflow k6-stage-performance.yaml \
                 --event workflow_dispatch \
                 --json databaseId,displayTitle,url \
                 --limit 50 \
@@ -305,10 +305,9 @@ jobs:
           for profile in load stress spike; do
             CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$profile"
             echo "Dispatching STAGE k6: scenario=chat-llm profile=$profile correlation_id=$CORRELATION_ID"
-            gh workflow run run-k6.yaml \
+            gh workflow run k6-stage-performance.yaml \
               --repo "$QUALITY_REPOSITORY" \
               --ref main \
-              -f environment=stage \
               -f scenario=chat-llm \
               -f profile="$profile" \
               -f correlation_id="$CORRELATION_ID"
