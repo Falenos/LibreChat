@@ -50,6 +50,7 @@ interface LibreChatYaml {
   summarization?: { enabled?: boolean };
   modelSpecs?: { list?: ModelSpec[] };
   endpoints?: { agents?: { capabilities?: string[] } };
+  interface?: { runCode?: boolean };
 }
 
 let config: LibreChatYaml;
@@ -188,6 +189,24 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
       expect(spec.preset!.promptPrefix!).toMatch(/PDF/);
       expect(spec.preset!.promptPrefix!).toMatch(/XLS/);
     }
+  });
+});
+
+describe('[knauf] librechat.yaml — Run Code stays off', () => {
+  /**
+   * KK20-252. The self-hosted code sandbox is not deployed on AGK, so every path
+   * that grants Run Code ships a button backed by nothing. Three switches control
+   * it and they have to agree — the pair below plus `RUN_CODE: { USE: false }` in
+   * `knauf/scripts/seed-agent-builder-role.js`, which this file cannot see
+   * (it is a mongosh script, not config) but which is the one a reviewer is most
+   * likely to miss: `updateInterfacePermissions` only re-seeds USER and ADMIN.
+   */
+  it('does not grant RUN_CODE through interface.runCode', () => {
+    expect(config.interface?.runCode).toBe(false);
+  });
+
+  it('does not list execute_code as an agent capability', () => {
+    expect(config.endpoints?.agents?.capabilities ?? []).not.toContain('execute_code');
   });
 });
 

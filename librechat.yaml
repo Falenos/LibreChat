@@ -392,7 +392,19 @@ interface:
   # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
   # Custom roles remain Admin UI controlled.
   webSearch: true
-  runCode: true
+  # [knauf] KK20-252 — Run Code is off. It was the last switch still handing out
+  # RUN_CODE.USE: `execute_code` is already excluded from
+  # `endpoints.agents.capabilities` below (KK20-108/KK20-243 — the self-hosted
+  # sandbox is not deployed on AGK, so the tool always fails), and the built-in
+  # USER role already had it forced false by KNAUF_RESTRICT_USER_PERMISSIONS.
+  # That left ADMIN seeded with a manual Run button backed by nothing. Turning it
+  # off here removes the code-interpreter chip and its tools-menu entry for every
+  # built-in role, via the permission rather than a UI hide. The AGENT_BUILDER
+  # custom role is NOT re-seeded from this file (permissions.ts:125 iterates only
+  # USER and ADMIN), so it is set false in knauf/scripts/seed-agent-builder-role.js
+  # as well — both have to move together. Flip back to `true` only once
+  # LIBRECHAT_CODE_BASEURL points at a reachable sandbox.
+  runCode: false
   fileSearch: true
   agents:
     use: true
