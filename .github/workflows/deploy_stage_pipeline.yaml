@@ -22,7 +22,7 @@ jobs:
   deploy-stage:
     name: Deploy to AGK stage
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_ACR_NAME: acragkhubnonprod001
@@ -257,3 +257,61 @@ jobs:
             echo "| Failure | AGK stage ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      - name: Run STAGE k6 performance tests
+        if: success()
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          wait_for_quality_run() {
+            local profile="$1"
+            local correlation_id="$2"
+            local run_id=""
+            local run_url=""
+
+            for attempt in {1..30}; do
+              RUN_JSON=$(gh run list \
+                --repo "$QUALITY_REPOSITORY" \
+                --workflow run-k6.yaml \
+                --event workflow_dispatch \
+                --json databaseId,displayTitle,url \
+                --limit 50 \
+                --jq "map(select(.displayTitle | contains(\"$correlation_id\"))) | first // empty")
+
+              if [ -n "$RUN_JSON" ]; then
+                run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+                run_url=$(jq -r '.url' <<< "$RUN_JSON")
+                break
+              fi
+
+              echo "Waiting for STAGE $profile k6 run to appear: attempt=$attempt"
+              sleep 10
+            done
+
+            if [ -z "$run_id" ]; then
+              echo "::error::Timed out finding STAGE $profile k6 run correlation_id=$correlation_id"
+              exit 1
+            fi
+
+            echo "STAGE $profile k6 run: $run_url"
+            gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+            echo "| STAGE k6 $profile | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          for profile in load stress spike; do
+            CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$profile"
+            echo "Dispatching STAGE k6: scenario=chat-llm profile=$profile correlation_id=$CORRELATION_ID"
+            gh workflow run run-k6.yaml \
+              --repo "$QUALITY_REPOSITORY" \
+              --ref main \
+              -f environment=stage \
+              -f scenario=chat-llm \
+              -f profile="$profile" \
+              -f correlation_id="$CORRELATION_ID"
+
+            wait_for_quality_run "$profile" "$CORRELATION_ID"
+          done
