@@ -209,6 +209,29 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     }
   });
 
+  it('pins the artifact emission syntax in the anchor itself', () => {
+    /**
+     * Observed failure: KARL emitted `<artifact identifier=... type=...>` — the
+     * XML shape it is trained on — instead of the `:::artifact{...}` remark
+     * directive this UI parses, so a whole React component rendered as raw text
+     * in the chat.
+     *
+     * Root cause was a sentence here that said the appended artifacts prompt was
+     * "written for a general assistant, this one is written for KARL" while
+     * claiming precedence. That devalued the only text carrying the syntax. The
+     * fix is to state the syntax in the anchor, which is always present and
+     * highest-authority, so the format no longer depends on how much weight the
+     * model gives the appended prompt.
+     */
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toContain(':::artifact{identifier=');
+      expect(prompt).toMatch(/never use an xml-style `<artifact>` tag/i);
+      // The devaluing clause must not come back.
+      expect(prompt).not.toMatch(/written for a general assistant/i);
+    }
+  });
+
   it('keeps skill internals out of user-facing replies', () => {
     // Observed failure: "The slides follow the structure outlined in
     // references/slides.md, with branding ... driven by the KNAUF token set".
