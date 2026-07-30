@@ -53,6 +53,10 @@ const {
   appendYouTubeVideoParts,
   resolveYouTubeInjectionConfig,
 } = require('@librechat/api');
+// [knauf] NO-TICKET — retry Model Router's zero-usage generic refusal at the
+// current model boundary and remove its streamed placeholder before persist.
+const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
+// End [knauf]
 const {
   Callback,
   Providers,
@@ -1459,11 +1463,26 @@ class AgentClient extends BaseClient {
 
         /** @deprecated Agent Chain */
         config.configurable.last_agent_id = agents[agents.length - 1].id;
-        await run.processStream({ messages }, config, {
-          callbacks: {
-            [Callback.TOOL_ERROR]: logToolError,
-          },
+        // [knauf] NO-TICKET — `raiseError` hands the narrow refusal signal to
+        // the SDK's fallback loop; completed tools are not executed again.
+        const refusalRetry = createZeroUsageRefusalRetryHandler({
+          userId: this.user ?? this.options.req.user?.id,
+          messageId: this.responseMessageId,
+          conversationId: this.conversationId,
         });
+        config.callbacks = [...(config.callbacks ?? []), refusalRetry.handler];
+        try {
+          await run.processStream({ messages }, config, {
+            callbacks: {
+              [Callback.TOOL_ERROR]: logToolError,
+            },
+          });
+        } finally {
+          if (refusalRetry.state.refusalCount > 0) {
+            this.contentParts = stripRetriedGenericRefusal(this.contentParts);
+          }
+        }
+        // End [knauf]
 
         config.signal = null;
       };

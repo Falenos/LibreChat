@@ -1054,6 +1054,20 @@ export async function createRun({
       llmConfig.usage = true;
     }
 
+    // [knauf] NO-TICKET — provide one same-provider fallback. A host callback
+    // turns Model Router's zero-usage generic refusal into an error, and the
+    // SDK retries only that model call without repeating completed tools.
+    if (!Array.isArray(llmConfig.fallbacks) || llmConfig.fallbacks.length === 0) {
+      const { provider: _provider, fallbacks: _fallbacks, ...retryClientOptions } = llmConfig;
+      llmConfig.fallbacks = [
+        {
+          provider,
+          clientOptions: retryClientOptions,
+        },
+      ];
+    }
+    // End [knauf]
+
     /**
      * Override defer_loading for tools that were discovered in previous
      * turns. This prevents the LLM from having to re-discover tools via
