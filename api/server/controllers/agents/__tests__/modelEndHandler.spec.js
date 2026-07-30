@@ -3,6 +3,7 @@ jest.mock('@librechat/data-schemas', () => ({
   // it in this exhaustive mock, `logger.warn` is undefined and the handler throws
   // instead of logging.
   logger: { error: jest.fn(), debug: jest.fn(), warn: jest.fn() },
+  // End [knauf]
 }));
 jest.mock('@librechat/api', () => ({
   sendEvent: jest.fn(),
@@ -320,3 +321,4 @@ describe('[knauf] ModelEndHandler — Azure content filter', () => {
     expect(collectedUsage[0]).toMatchObject({ input_tokens: 10, output_tokens: 5 });
   });
 });
+// End [knauf]

@@ -130,6 +130,30 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     expect(artifactsEnabled()).toBe(true);
   });
 
+  it('selects exactly the four user-facing KARL specs', () => {
+    /**
+     * Without this, every assertion below is one copy-edit from silent.
+     * `karlChatSpecs()` filters on the prompt text it is about to assert over, and
+     * the remaining cases all read `expect(<derived from that filter>).toEqual([])`
+     * — which passes trivially on an empty array. Verified: rewording the identity
+     * line alone takes this block from "2 failed" to "all green" with the KK20-243
+     * contradiction fully reinstated in `librechat.yaml`.
+     *
+     * Pinning the names means a reword fails HERE, loudly and with an obvious fix,
+     * instead of disarming the guard for the defect this whole file exists to catch.
+     */
+    expect(
+      karlChatSpecs()
+        .map((spec) => spec.name)
+        .sort(),
+    ).toEqual([
+      'karl',
+      'karl-personality-balanced',
+      'karl-personality-creative',
+      'karl-personality-precise',
+    ]);
+  });
+
   it('never tells the model that file generation is unsupported full stop', () => {
     // The exact sentence that produced the refusal. If a future edit reinstates
     // it while artifacts are on, the model is being handed a contradiction again.
