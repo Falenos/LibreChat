@@ -91,6 +91,15 @@ export function createSharedLink(
   });
 }
 
+// [knauf] Create one immutable artifact-only SharedLink snapshot. (NO-TICKET)
+export function createArtifactSharedLink(
+  payload: t.TCreateArtifactShareRequest,
+): Promise<t.TSharedLinkResponse> {
+  const { conversationId, ...body } = payload;
+  return request.post(endpoints.createArtifactSharedLink(conversationId), body);
+}
+// End [knauf]
+
 export function updateSharedLink(
   shareId: string,
   targetMessageId?: string,

@@ -1,6 +1,15 @@
 import type { Types } from 'mongoose';
 import type { IMessage } from './message';
 
+// [knauf] Persist the exact generated-artifact version behind an artifact-only share. (NO-TICKET)
+export interface SharedArtifactSnapshot {
+  title: string;
+  type: string;
+  content: string;
+  language?: string;
+}
+// End [knauf]
+
 /**
  * Immutable snapshot of a file referenced by a shared chat snapshot. Captured at
  * share create/update so shared-link viewers can preview/download the file through
@@ -49,6 +58,9 @@ export interface ISharedLink {
   snapshotFiles?: boolean;
   /** Per-share file snapshot referenced by the share-scoped file routes. */
   fileSnapshots?: SharedFileSnapshot[];
+  // [knauf] Fork-only persisted artifact snapshot; field is prefixed to avoid upstream collisions. (NO-TICKET)
+  knauf_artifact?: SharedArtifactSnapshot;
+  // End [knauf]
 }
 
 export interface ShareServiceError extends Error {
@@ -110,6 +122,10 @@ export interface SharedMessagesResult {
   title?: string;
   createdAt?: Date;
   updatedAt?: Date;
+  // [knauf] Artifact shares reuse the shared-link access seam but never expose source messages. (NO-TICKET)
+  kind?: 'conversation' | 'artifact';
+  artifact?: SharedArtifactSnapshot;
+  // End [knauf]
 }
 
 export interface CreateShareResult {

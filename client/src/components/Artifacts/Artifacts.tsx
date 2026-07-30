@@ -6,7 +6,9 @@ import { useSetRecoilState, useResetRecoilState } from 'recoil';
 import { Button, Spinner, useMediaQuery, Radio } from '@librechat/client';
 import type { SandpackPreviewRef } from '@codesandbox/sandpack-react';
 import CopyButton from '~/components/Messages/Content/CopyButton';
-import { useShareContext, useMutationState } from '~/Providers';
+// [knauf] Artifact sharing needs the owning conversation id already exposed by the panel provider. (NO-TICKET)
+import { useArtifactsContext, useShareContext, useMutationState } from '~/Providers';
+// End [knauf]
 import useArtifacts from '~/hooks/Artifacts/useArtifacts';
 import DownloadArtifact from './DownloadArtifact';
 import ArtifactVersion from './ArtifactVersion';
@@ -16,6 +18,9 @@ import { displayFilename } from '~/components/Chat/Messages/Content/Parts/attach
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 import store from '~/store';
+// [knauf] Artifact-only share action lives in a fork-isolated component. (NO-TICKET)
+import ShareArtifactButton from '~/knauf/components/Artifacts/ShareArtifactButton';
+// End [knauf]
 
 const MAX_BLUR_AMOUNT = 32;
 const MAX_BACKDROP_OPACITY = 0.3;
@@ -24,6 +29,9 @@ export default function Artifacts() {
   const localize = useLocalize();
   const { isMutating } = useMutationState();
   const { isSharedConvo } = useShareContext();
+  // [knauf] The authenticated source conversation is required for server-side artifact resolution. (NO-TICKET)
+  const { conversationId } = useArtifactsContext();
+  // End [knauf]
   const isMobile = useMediaQuery('(max-width: 868px)');
   const previewRef = useRef<SandpackPreviewRef>();
   const [isVisible, setIsVisible] = useState(false);
@@ -330,6 +338,11 @@ export default function Artifacts() {
               )}
               <CopyButton isCopied={isCopied} iconOnly onClick={handleCopyArtifact} />
               <DownloadArtifact artifact={currentArtifact} />
+              {/* [knauf] Shared recipients get a read-only view; owners can create an artifact-only link. (NO-TICKET) */}
+              {!isSharedConvo && conversationId && (
+                <ShareArtifactButton artifact={currentArtifact} conversationId={conversationId} />
+              )}
+              {/* End [knauf] */}
               <Button
                 size="icon"
                 variant="ghost"

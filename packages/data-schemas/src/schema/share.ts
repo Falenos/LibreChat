@@ -1,5 +1,7 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
-import type { SharedFileSnapshot } from '~/types';
+// [knauf] Persist the fork-only artifact payload beside upstream file snapshots. (NO-TICKET)
+import type { SharedArtifactSnapshot, SharedFileSnapshot } from '~/types';
+// End [knauf]
 
 export interface ISharedLink extends Document {
   conversationId: string;
@@ -14,6 +16,9 @@ export interface ISharedLink extends Document {
   tenantId?: string;
   snapshotFiles?: boolean;
   fileSnapshots?: SharedFileSnapshot[];
+  // [knauf] Fork-only artifact snapshot backing artifact-only shared links. (NO-TICKET)
+  knauf_artifact?: SharedArtifactSnapshot;
+  // End [knauf]
 }
 
 /**
@@ -39,6 +44,18 @@ const fileSnapshotSchema = new Schema<SharedFileSnapshot>(
   },
   { _id: false },
 );
+
+// [knauf] Immutable generated-artifact payload; active content remains sandboxed by the client renderer. (NO-TICKET)
+const sharedArtifactSchema = new Schema<SharedArtifactSnapshot>(
+  {
+    title: { type: String, required: true },
+    type: { type: String, required: true },
+    content: { type: String, required: true },
+    language: { type: String },
+  },
+  { _id: false },
+);
+// End [knauf]
 
 const shareSchema: Schema<ISharedLink> = new Schema(
   {
@@ -78,6 +95,12 @@ const shareSchema: Schema<ISharedLink> = new Schema(
       type: [fileSnapshotSchema],
       default: undefined,
     },
+    // [knauf] Artifact-only share discriminator and immutable payload. (NO-TICKET)
+    knauf_artifact: {
+      type: sharedArtifactSchema,
+      required: false,
+    },
+    // End [knauf]
   },
   { timestamps: true },
 );

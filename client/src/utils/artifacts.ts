@@ -894,6 +894,9 @@ export function fileToArtifact(
     language,
     messageId: attachment.messageId ?? undefined,
     lastUpdateTime: toLastUpdate(attachment),
+    // [knauf] Preserve the server file locator used by artifact-only sharing. (NO-TICKET)
+    sourceFileId: attachment.file_id ?? undefined,
+    // End [knauf]
   };
 }
 
