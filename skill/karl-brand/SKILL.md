@@ -86,7 +86,11 @@ section `text-lg`/`text-xl`, card title `text-base font-semibold`, captions
 
 ## Tokens
 
-Transcribe this block verbatim. It is the only place these values are authored.
+In React artifacts these are prebuilt at `/knauf/brand`, which exports `KNAUF`,
+`useKnaufTheme` and `KnaufWordmark` — import them, never re-declare them. Every other
+medium (HTML and SVG artifacts, documents, decks, email, spreadsheets) has no module
+system, so transcribe the values from the block below. It is the only place they are
+authored.
 
 ```ts
 // ── KNAUF tokens — canonical. Never invent a hex; copy from here. ────────────

@@ -45,6 +45,8 @@ Rules of thumb:
    allowlist for `application/vnd.react` is: `react` (incl. hooks), `lucide-react`,
    `recharts`, `three`, `date-fns`, `react-day-picker`, and shadcn/ui imported from
    `/components/ui/<name>` — never `/components/<name>` or `@/components/ui/<name>`.
+   Knauf brand tokens and the wordmark are prebuilt too: `/knauf/brand`, exporting
+   `KNAUF`, `useKnaufTheme` and `KnaufWordmark`.
    Anything else (zod, axios, lodash, d3, framer-motion, styled-components,
    react-hook-form, …) will not resolve. If the idea needs a missing library:
    implement the small piece by hand, switch to `text/html` + a cdnjs script, or say
@@ -82,7 +84,9 @@ that file somewhere that injects nothing.
 
 ## Sizing and complexity
 
-- One file only: no multi-file apps, no importing your own modules. If the request is
+- One file only: no multi-file apps, and no authoring extra files of your own — the
+  prebuilt modules (`/components/ui/*`, `/knauf/brand`) are the only imports beyond the
+  library allowlist above. If the request is
   app-sized, build the single highest-value screen and offer follow-ups rather than
   emitting a truncated monolith.
 - Keep embedded datasets small (dozens of rows). For big data, aggregate first and
@@ -111,8 +115,10 @@ read_file  skills/karl-brand/SKILL.md
 ```
 
 It carries the official colour system with provenance, the ink/surface tokens, the
-dark-mode pairs, and the validated chart palette. Copy its `KNAUF` const and
-`useKnaufTheme` into the artifact verbatim, as the first block. Then, if the chart is
+dark-mode pairs, and the validated chart palette. In a React artifact you do not copy
+any of it: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';` — the
+module is always mounted in the preview, and re-declaring those names wastes tokens and
+risks drift. Then, if the chart is
 anything beyond a plain bar or line, also read
 `skills/karl-brand/references/charts.md`; for the wordmark, read
 `skills/karl-brand/references/logo.md`.
@@ -136,7 +142,8 @@ and no skill.
   and type scale only.
 - Read heading colour from the theme, never `KNAUF.brand.accessibleBlue` directly —
   `#003778` on a dark surface is 1.56:1.
-- The wordmark is the **real inline SVG** from
+- The wordmark in a React artifact is `<KnaufWordmark />` from `/knauf/brand`; in an
+  HTML or SVG artifact it is the real inline SVG from
   `skills/karl-brand/references/logo.md` — never an `<img>`, and never typed as text.
   Product naming sits beside the mark, not inside it.
 - Charts keep the categorical order fixed by series index and always carry a legend
@@ -147,9 +154,9 @@ and no skill.
 ## Situation templates — read before building a branded deliverable
 
 Copy-paste, constraint-checked skeletons live in this skill's `references/`. Each one
-assumes `KNAUF` and `useKnaufTheme` are already in the artifact and introduces no
-colour that is not already in the `KNAUF` const. Read order: **karl-brand → the
-layout → (charts.md if needed)**.
+assumes the artifact imports `KNAUF` and `useKnaufTheme` from `/knauf/brand` and
+introduces no colour that is not already in the `KNAUF` const. Read order: **karl-brand →
+the layout → (charts.md if needed)**.
 
 - `skills/karl-artifacts/references/report.md` — data/analysis report (brand header, exec summary, KPI tiles, chart, findings table).
 - `skills/karl-artifacts/references/slides.md` — navigable slide deck (title / section / bullets / chart layouts).
