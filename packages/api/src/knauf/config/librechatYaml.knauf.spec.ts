@@ -254,6 +254,19 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     }
   });
 
+  it('routes presentations to React, not Markdown', () => {
+    // Observed: asked for a presentation, KARL built a `text/markdown` artifact.
+    // It followed karl-artifacts' type table correctly — that table never
+    // mentioned decks and filed "report" under markdown, while the skill ships
+    // tsx templates for both. The table is fixed; this pins the always-present
+    // half so the routing does not depend on the skill having been loaded.
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset!.promptPrefix!).toMatch(
+        /presentation, deck or branded report is always a React artifact/i,
+      );
+    }
+  });
+
   it('does not let the library-disclosure ban reach the import statements', () => {
     // The ban exists because upstream orders the model to announce shadcn/ui.
     // Scoped too widely it forbids `import { Card } from '/components/ui/card'`

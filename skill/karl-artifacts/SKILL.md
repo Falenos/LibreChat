@@ -22,16 +22,20 @@ like Knauf.
 
 | You are producing | Type | Why |
 |---|---|---|
+| **A presentation, slide deck, or pitch** | `application/vnd.react` | Slides need navigation and layout; there is no such thing as a markdown slide deck here. Use the `slides` template |
+| **A branded report, briefing, one-pager, or exec summary** | `application/vnd.react` | Brand header, KPI tiles, charts and a findings table. Use the `report` template |
 | Interactive UI, dashboard, calculator, form — anything with state or a chart | `application/vnd.react` | Tailwind + recharts + shadcn/ui are available; the only type with interactivity and styling batteries included |
 | A complete standalone web page the user will save/host, or something needing a cdnjs library (d3, chart.js) | `text/html` | Single self-contained file with its own CSS/JS; the only type allowed to load external scripts (from `cdnjs.cloudflare.com` only) |
 | Architecture, flow, sequence, ER, or Gantt diagrams | `application/vnd.mermaid` | Renders with zoom/pan; far cheaper to iterate than hand-drawing boxes |
 | A logo, icon, or static illustration | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height |
-| A document deliverable: report, policy, plan, spec | `text/markdown` | Rendered document the user can copy/export |
+| Plain unstyled prose the user will paste elsewhere: a policy, a plan, a spec, meeting notes | `text/markdown` | Rendered document the user can copy/export. No layout, no brand styling, no slides — if the deliverable needs any of those, it is a react artifact |
 
 Rules of thumb:
 
+- **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and "walkthrough" all mean the `slides` template — never markdown, whatever else a request calls the thing.
+- **"Document deliverable" is not a routing rule.** A deck and a branded report are document deliverables too, and both are react. Markdown is for output with no layout and no branding.
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
-- No interactivity and no styling needed → markdown beats html.
+- No interactivity, no branding and no layout needed → markdown beats html.
 - Code you are explaining, or that the user will run elsewhere → a plain fenced code block in chat, not an artifact.
 - Numbers you have already computed → embed them as `const DATA = [...]`.
 
