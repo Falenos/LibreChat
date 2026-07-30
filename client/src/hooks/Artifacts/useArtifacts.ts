@@ -1,8 +1,8 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Constants } from 'librechat-data-provider';
 import { useRecoilState, useRecoilValue, useResetRecoilState } from 'recoil';
-import { useArtifactsContext } from '~/Providers';
 import { isCodeOnlyArtifact } from '~/utils/artifacts';
+import { useArtifactsContext } from '~/Providers';
 import { logger } from '~/utils';
 import store from '~/store';
 
@@ -10,6 +10,32 @@ export default function useArtifacts() {
   const [activeTab, setActiveTab] = useState('preview');
   const { isSubmitting, latestMessageId, latestMessageText, conversationId } =
     useArtifactsContext();
+
+  // [knauf] KK20-252 — remember whether the tab was chosen by the user.
+  //
+  // The panel auto-switches to `code` while an artifact streams so the user can
+  // watch it type, and is meant to switch back to `preview` when it closes. The
+  // switch-back is a regex over the raw message text, gated on `isSubmitting`,
+  // so it never runs again once the turn ends: a directive that the regex cannot
+  // match — truncated mid-emission, prose between the directive line and the
+  // fence, two fences, or a `}` inside a title attribute — leaves the panel
+  // pinned to `code` for the rest of the turn. The user then sees source where
+  // they expected a render, with no way to tell whether the artifact is broken.
+  //
+  // The reconciliation below fixes that unconditionally at end of turn. This ref
+  // is what keeps it from overriding a deliberate choice: `selectActiveTab` is
+  // returned as `setActiveTab`, so it is what the Code/Preview control calls, and
+  // anything arriving through it is treated as the user's decision and is never
+  // undone. Effects inside this hook keep using the raw setter, so automatic
+  // switches stay automatic. It resets per message, alongside the other
+  // run-scoped refs, so a manual pick on one turn does not suppress
+  // reconciliation on the next.
+  const userSelectedTabRef = useRef<boolean>(false);
+  const selectActiveTab = useCallback((tab: string) => {
+    userSelectedTabRef.current = true;
+    setActiveTab(tab);
+  }, []);
+  // End [knauf]
 
   const artifacts = useRecoilValue(store.artifactsState);
   const resetArtifacts = useResetRecoilState(store.artifactsState);
@@ -118,6 +144,26 @@ export default function useArtifacts() {
         hasAutoSwitchedToCodeRef.current = true;
       }
     }
+
+    // [knauf] KK20-252 — the switch back to `preview`, guaranteed.
+    //
+    // The enclosure watcher below is the only other route out of `code`, and it
+    // is gated on `isSubmitting`, so it cannot fire once the turn is over. This
+    // runs exactly on the streaming→idle transition and does not care why the
+    // watcher missed: whatever the emission looked like, if we put the user on
+    // `code` and they did not ask for it, the artifact they clicked is now
+    // complete and they should be looking at it.
+    //
+    // Deliberately not conditioned on the artifact parsing cleanly. A broken
+    // artifact showing an empty pane or a Sandpack error is a legible failure;
+    // source code sitting where a render belongs is not — that is what made this
+    // look like the model had emitted the wrong thing.
+    if (justFinishedSubmitting && hasAutoSwitchedToCodeRef.current && !userSelectedTabRef.current) {
+      logger.log('artifacts', 'Generation finished; returning to preview tab');
+      setActiveTab('preview');
+      hasAutoSwitchedToCodeRef.current = false;
+    }
+    // End [knauf]
   }, [
     artifacts,
     isSubmitting,
@@ -154,6 +200,10 @@ export default function useArtifacts() {
       lastRunMessageIdRef.current = latestMessageId;
       hasEnclosedArtifactRef.current = false;
       hasAutoSwitchedToCodeRef.current = false;
+      // [knauf] KK20-252 — a manual tab choice is scoped to the run it was made
+      // in, so the next artifact still reconciles to preview.
+      userSelectedTabRef.current = false;
+      // End [knauf]
     }
   }, [latestMessageId]);
 
@@ -163,7 +213,10 @@ export default function useArtifacts() {
 
   return {
     activeTab,
-    setActiveTab,
+    // [knauf] KK20-252 — the wrapper, so a tab the user picked is recorded as
+    // theirs and survives the reconciliation above.
+    setActiveTab: selectActiveTab,
+    // End [knauf]
     currentIndex,
     currentArtifact,
     orderedArtifactIds,
