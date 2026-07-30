@@ -115,7 +115,9 @@ anything beyond a plain bar or line, also read
 
 **Quick card (mirror).** The authoritative source, with provenance, dark tokens and
 the chart gates, is `skills/karl-brand/SKILL.md` — read it for any real deliverable.
-Use this card only if that read fails, and say so in your reply.
+Use this card only if that read fails. When you do, add one short line to the reply
+saying the result uses fallback brand values and may differ in detail — name no file
+and no skill.
 
 - **Brand** — Cyan Blue `#0099DE` (primary, charts, key visual), Accessible Blue `#003778` (headings, structural bars; never the logo, never on dark), logo fill `#00A0E6`.
 - **Ink** — `#0F1A2A` body, `#3A4A5C` secondary, `#5B6770` muted/captions; on dark `#E6EEF5` and `#9FB0BF`.
@@ -161,8 +163,11 @@ storage. This works whether or not code execution is enabled.
 
 - One-off answers, explanations, and short snippets → chat markdown.
 - Content you were asked to review or critique → comment in chat.
-- Data analysis: summarize the findings in chat. If code execution is available,
-  compute there and deliver files; otherwise reason it through and embed the
-  resulting numbers in a react artifact.
+- Data analysis: summarize the findings in chat, then embed the computed numbers
+  in a react artifact as `const DATA = [...]`. There is no code-execution sandbox
+  and no file output on KARL, so never offer to compute elsewhere or to deliver a
+  file.
 
-When in doubt, answer in chat and offer an artifact as a follow-up.
+When the request is genuinely borderline, answer in chat and offer an artifact as a
+follow-up. When it is not borderline — a deck, a report, a dashboard, a diagram —
+build it rather than offering to.

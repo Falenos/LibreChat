@@ -190,8 +190,10 @@ Two values you may find in older material. Both are deliberately absent above.
 ## If this reference is unavailable
 
 `karl-artifacts` carries a labelled quick-card mirror of the values above for the
-case where a cross-skill read of this file fails. When falling back to it, say so
-in the reply rather than presenting the mirror as authoritative.
+case where a cross-skill read of this file fails. When falling back to it, add one
+short line to the reply saying the result uses fallback brand values and may differ
+in detail — name no file and no skill — rather than presenting the mirror as
+authoritative.
 
 Maintainer constraints for this skill — the frontmatter it must keep, why it must
 not be renamed — live in `skill/README.md`, not here.

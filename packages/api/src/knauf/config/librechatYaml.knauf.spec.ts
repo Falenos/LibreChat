@@ -190,6 +190,34 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
       expect(spec.preset!.promptPrefix!).toMatch(/XLS/);
     }
   });
+
+  it('requires the artifact to be emitted, not just announced', () => {
+    /**
+     * Observed failure: KARL replied "You'll find it open in the preview panel
+     * now" and described the deck, having emitted nothing. The text it was
+     * following — "say in a single short line that it is open in the preview
+     * panel, and do not restate its contents" — scripted the narration and never
+     * required the emission, so the model did the narration and stopped.
+     *
+     * Both halves have to survive: telling it to emit, and forbidding the claim
+     * without the emission. A future edit that trims either one reopens it.
+     */
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toMatch(/a description of an artifact is not an artifact/i);
+      expect(prompt).toMatch(/unless you have actually emitted it/i);
+    }
+  });
+
+  it('keeps skill internals out of user-facing replies', () => {
+    // Observed failure: "The slides follow the structure outlined in
+    // references/slides.md, with branding ... driven by the KNAUF token set".
+    // Skill bodies are written as second-person working instructions naming
+    // internal paths, and nothing told the model those are private.
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset!.promptPrefix!).toMatch(/working material, not the user's/i);
+    }
+  });
 });
 
 describe('[knauf] librechat.yaml — Run Code stays off', () => {
