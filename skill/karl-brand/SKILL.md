@@ -121,7 +121,7 @@ const KNAUF = {
   },
   // Chart series, fixed order, assigned by series index. Validated in BOTH
   // modes with ONE set of steps — there is no dark variant.
-  // Derivation and measurements: references/charts.md
+  // Derivation and measurements are recorded with the palette.
   categorical: ['#0099DE','#D96400','#009184','#7A4FB5','#5A9A32','#C43A8B','#B8860B'],
   // Scatter / bubble / choropleth / small multiples: max 3 series, THESE three.
   categoricalAllPairs: ['#0099DE','#D96400','#7A4FB5'],
@@ -130,7 +130,7 @@ const KNAUF = {
   // SEQUENTIAL — continuous magnitude only (heatmap, choropleth). NOT ordinal.
   sequentialCerulean: ['#E5F3FB','#B3DCF3','#66BCE8','#0099DE','#0077B0','#00527A'],
   // EXTENSION — functional state. NEVER a data series. Always paired with an
-  // icon or a label. Never white text on these fills — see references/charts.md.
+  // icon or a label. Never white text on these fills.
   status: { success: '#1F883D', warning: '#C98A00', serious: '#E8792A', critical: '#D64550' },
 };
 

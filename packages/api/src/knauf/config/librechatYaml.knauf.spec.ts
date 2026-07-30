@@ -232,6 +232,46 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     }
   });
 
+  it('constrains the artifact body without breaking markdown or code comments', () => {
+    /**
+     * Observed failure: the artifact body carried trailing prose, an HTML comment
+     * (`<!-- Tabs and Cards come from shadcn/ui ... -->`, which threw at 97:0 in
+     * Sandpack) and mangled backtick fences after the component's closing brace.
+     *
+     * The first attempt at this rule banned "prose" and "annotations" outright,
+     * which would have broken `text/markdown` artifacts — prose is their entire
+     * content — and could have suppressed the comments inside the `KNAUF` block
+     * that karl-brand orders transcribed verbatim. Both carve-outs are asserted
+     * here so a future tightening cannot quietly drop them.
+     */
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toMatch(/inside the fence is the file, and nothing but the file/i);
+      expect(prompt).toMatch(/ordinary code comments are welcome/i);
+      expect(prompt).toMatch(/for `text\/markdown` the file is the document/i);
+      // The ban must be about audience, not syntax — otherwise it just relocates.
+      expect(prompt).toMatch(/whether or not it compiles/i);
+    }
+  });
+
+  it('does not let the library-disclosure ban reach the import statements', () => {
+    // The ban exists because upstream orders the model to announce shadcn/ui.
+    // Scoped too widely it forbids `import { Card } from '/components/ui/card'`
+    // itself, and the model hand-rolls primitives out of raw divs instead.
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset!.promptPrefix!).toMatch(/code is not a disclosure/i);
+    }
+  });
+
+  it('pins the artifact directive to column 0', () => {
+    // The upstream format example is indented 6 spaces inside its template
+    // literal. At 4+ spaces CommonMark takes the block as indented code, the
+    // directive never parses, and the deck lands in chat with no error at all.
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset!.promptPrefix!).toMatch(/start at the left margin, in column 0/i);
+    }
+  });
+
   it('keeps skill internals out of user-facing replies', () => {
     // Observed failure: "The slides follow the structure outlined in
     // references/slides.md, with branding ... driven by the KNAUF token set".

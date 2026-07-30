@@ -56,7 +56,7 @@ already in the `KNAUF` const.**
 - Use `border` + subtle `page` fills rather than shadows for structure — it prints.
 
 ```tsx
-// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
+// ── assumes KNAUF, useKnaufTheme and KnaufWordmark are defined above ─────────
 import { useMemo } from 'react'; // also used by the pasted useKnaufTheme
 import { format } from 'date-fns';
 import { ArrowUpRight, ArrowDownRight, ShieldCheck } from 'lucide-react';

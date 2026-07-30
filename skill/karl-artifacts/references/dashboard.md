@@ -60,7 +60,7 @@ already in the `KNAUF` const.**
 - Status colours are reserved for state, never a data series.
 
 ```tsx
-// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
+// ── assumes KNAUF, useKnaufTheme and KnaufWordmark are defined above ─────────
 import { useState, useMemo, useCallback } from 'react';
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
