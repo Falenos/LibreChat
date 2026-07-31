@@ -6,11 +6,32 @@ import type { Agents } from 'librechat-data-provider';
  */
 export type JobStatus = 'running' | 'complete' | 'error' | 'aborted';
 
+// [knauf] Generation ownership prevents stale pods from mutating a later turn.
+export interface GenerationRef {
+  streamId: string;
+  generationId?: string;
+}
+
+export const GENERATION_CONFLICT_CODE = 'generation_already_running';
+
+export class GenerationConflictError extends Error {
+  readonly code: typeof GENERATION_CONFLICT_CODE = GENERATION_CONFLICT_CODE;
+
+  constructor(readonly streamId: string) {
+    super(`A generation is already running for stream ${streamId}`);
+    this.name = 'GenerationConflictError';
+  }
+}
+// End [knauf]
+
 /**
  * Serializable job data - no object references, suitable for Redis/external storage
  */
 export interface SerializableJobData {
   streamId: string;
+  // [knauf] Immutable owner token for this conversation turn.
+  generationId?: string;
+  // End [knauf]
   userId: string;
   tenantId?: string;
   status: JobStatus;
@@ -196,19 +217,24 @@ export interface IJobStore {
     userId: string,
     conversationId?: string,
     tenantId?: string,
+    generationId?: string,
   ): Promise<SerializableJobData>;
 
   /** Get a job by streamId (streamId === conversationId) */
   getJob(streamId: string): Promise<SerializableJobData | null>;
 
   /** Update job data */
-  updateJob(streamId: string, updates: Partial<SerializableJobData>): Promise<void>;
+  updateJob(
+    streamId: string,
+    updates: Partial<SerializableJobData>,
+    generationId?: string,
+  ): Promise<void>;
 
   /** Delete a job */
-  deleteJob(streamId: string): Promise<void>;
+  deleteJob(streamId: string, generationId?: string): Promise<void>;
 
   /** Check if job exists */
-  hasJob(streamId: string): Promise<boolean>;
+  hasJob(streamId: string, generationId?: string): Promise<boolean>;
 
   /** Get all running jobs (for cleanup) */
   getRunningJobs(): Promise<SerializableJobData[]>;
@@ -226,7 +252,7 @@ export interface IJobStore {
    *
    * @param streamId - The stream identifier
    */
-  recordActivity?(streamId: string): void;
+  recordActivity?(streamId: string, generationId?: string): void;
 
   /** Get total job count */
   getJobCount(): Promise<number>;
@@ -262,7 +288,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param graph - The StandardGraph instance
    */
-  setGraph(streamId: string, graph: StandardGraph): void;
+  setGraph(streamId: string, graph: StandardGraph, generationId?: string): void;
 
   /**
    * Set content parts reference for a job.
@@ -273,7 +299,11 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param contentParts - The content parts array
    */
-  setContentParts(streamId: string, contentParts: Agents.MessageContentComplex[]): void;
+  setContentParts(
+    streamId: string,
+    contentParts: Agents.MessageContentComplex[],
+    generationId?: string,
+  ): void;
 
   /**
    * Get aggregated content for a job.
@@ -284,7 +314,10 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @returns Content parts or null if not available
    */
-  getContentParts(streamId: string): Promise<{
+  getContentParts(
+    streamId: string,
+    generationId?: string,
+  ): Promise<{
     content: Agents.MessageContentComplex[];
   } | null>;
 
@@ -297,7 +330,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @returns Run steps or empty array
    */
-  getRunSteps(streamId: string): Promise<Agents.RunStep[]>;
+  getRunSteps(streamId: string, generationId?: string): Promise<Agents.RunStep[]>;
 
   /**
    * Append a streaming chunk for later reconstruction.
@@ -308,7 +341,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param event - The SSE event to append
    */
-  appendChunk(streamId: string, event: unknown): Promise<void>;
+  appendChunk(streamId: string, event: unknown, generationId?: string): Promise<void>;
 
   /**
    * Clear all content state for a job.
@@ -316,7 +349,7 @@ export interface IJobStore {
    *
    * @param streamId - The stream identifier
    */
-  clearContentState(streamId: string): void;
+  clearContentState(streamId: string, generationId?: string): void;
 
   /**
    * Save run steps to persistent storage.
@@ -326,7 +359,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param runSteps - Run steps to save
    */
-  saveRunSteps?(streamId: string, runSteps: Agents.RunStep[]): Promise<void>;
+  saveRunSteps?(streamId: string, runSteps: Agents.RunStep[], generationId?: string): Promise<void>;
 
   /**
    * Set collected usage reference for a job.
@@ -335,7 +368,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param collectedUsage - Array of usage metadata from all models
    */
-  setCollectedUsage(streamId: string, collectedUsage: UsageMetadata[]): void;
+  setCollectedUsage(streamId: string, collectedUsage: UsageMetadata[], generationId?: string): void;
 
   /**
    * Get collected usage for a job.
@@ -343,7 +376,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @returns Array of usage metadata or empty array
    */
-  getCollectedUsage(streamId: string): UsageMetadata[];
+  getCollectedUsage(streamId: string, generationId?: string): UsageMetadata[];
 }
 
 /**
@@ -359,16 +392,17 @@ export interface IEventTransport {
       onDone?: (event: unknown) => void;
       onError?: (error: string) => void;
     },
+    generationId?: string,
   ): { unsubscribe: () => void; ready?: Promise<void> };
 
   /** Publish a chunk event - returns Promise in Redis mode for ordered delivery */
-  emitChunk(streamId: string, event: unknown): void | Promise<void>;
+  emitChunk(streamId: string, event: unknown, generationId?: string): void | Promise<void>;
 
   /** Publish a done event - returns Promise in Redis mode for ordered delivery */
-  emitDone(streamId: string, event: unknown): void | Promise<void>;
+  emitDone(streamId: string, event: unknown, generationId?: string): void | Promise<void>;
 
   /** Publish an error event - returns Promise in Redis mode for ordered delivery */
-  emitError(streamId: string, error: string): void | Promise<void>;
+  emitError(streamId: string, error: string, generationId?: string): void | Promise<void>;
 
   /**
    * Publish an abort signal to all replicas (Redis mode).
@@ -376,23 +410,23 @@ export interface IEventTransport {
    * generating Replica A receives signal and stops.
    * Optional - only implemented in Redis transport.
    */
-  emitAbort?(streamId: string): void;
+  emitAbort?(streamId: string, generationId?: string): void;
 
   /**
    * Register callback for abort signals from any replica (Redis mode).
    * Called when abort is triggered from any replica.
    * Optional - only implemented in Redis transport.
    */
-  onAbort?(streamId: string, callback: () => void): void;
+  onAbort?(streamId: string, callback: () => void, generationId?: string): void;
 
   /** Get subscriber count for a stream */
-  getSubscriberCount(streamId: string): number;
+  getSubscriberCount(streamId: string, generationId?: string): number;
 
   /** Check if this is the first subscriber (for ready signaling) */
-  isFirstSubscriber(streamId: string): boolean;
+  isFirstSubscriber(streamId: string, generationId?: string): boolean;
 
   /** Listen for all subscribers leaving */
-  onAllSubscribersLeft(streamId: string, callback: () => void): void;
+  onAllSubscribersLeft(streamId: string, callback: () => void, generationId?: string): void;
 
   /**
    * Advance subscriber reorder buffer to match publisher sequence (cross-replica safe).
@@ -401,13 +435,21 @@ export interface IEventTransport {
    *   above are live chunks that arrived during the async GET window and are preserved.
    *   When 0/undefined (cross-replica), all pending entries are treated as live.
    */
-  syncReorderBuffer?(streamId: string, earlyReplayCount?: number): void | Promise<void>;
+  syncReorderBuffer?(
+    streamId: string,
+    earlyReplayCount?: number,
+    generationId?: string,
+  ): void | Promise<void>;
 
   /** Cleanup transport resources for a specific stream */
-  cleanup(streamId: string): void;
+  cleanup(streamId: string, generationId?: string): void;
 
   /** Get all tracked stream IDs (for orphan cleanup) */
   getTrackedStreamIds(): string[];
+
+  // [knauf] Lets cleanup fence resources to the generation that owns them.
+  getTrackedGenerations?(): GenerationRef[];
+  // End [knauf]
 
   /** Destroy all transport resources */
   destroy(): void;

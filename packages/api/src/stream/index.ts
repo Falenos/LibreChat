@@ -9,9 +9,14 @@ export type {
   IEventTransport,
   UsageMetadata,
   AbortResult,
+  GenerationRef,
   JobStatus,
   IJobStore,
 } from './interfaces/IJobStore';
+
+// [knauf] Stable conflict contract for concurrent generation requests.
+export { GENERATION_CONFLICT_CODE, GenerationConflictError } from './interfaces/IJobStore';
+// End [knauf]
 
 export { createStreamServices } from './createStreamServices';
 export type { StreamServicesConfig, StreamServices } from './createStreamServices';

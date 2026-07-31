@@ -5,6 +5,8 @@ const mockGetFileStrategy = jest.fn();
 const mockGetStorageMetadata = jest.fn();
 const mockResolveRequestTenantId = jest.fn();
 const mockCreateDeploymentSkillMethods = jest.fn((methods) => methods);
+// [knauf] KK20-243 — see the '@librechat/api' mock below.
+const mockCheckAccessWithRequestCache = jest.fn();
 
 jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: (...args) => mockGetStrategyFunctions(...args),
@@ -23,6 +25,12 @@ jest.mock('~/server/services/Files/Code/process', () => ({
 
 jest.mock('@librechat/api', () => ({
   checkAccess: jest.fn(),
+  // [knauf] KK20-243 — the SKILLS.USE gate (`canUseSkills`) uses the
+  // request-cached checker. This mock is exhaustive, so omitting it leaves the
+  // import `undefined` and the gate throws at call time rather than failing a
+  // clear assertion.
+  checkAccessWithRequestCache: (...args) => mockCheckAccessWithRequestCache(...args),
+  // End [knauf]
   createDeploymentSkillMethods: (...args) => mockCreateDeploymentSkillMethods(...args),
   enrichWithSkillConfigurable: jest.fn(),
   getDeploymentSkillDownloadStream: jest.fn(),
@@ -59,7 +67,53 @@ const mockDb = {
 
 jest.mock('~/models', () => mockDb);
 
-const { getSkillToolDeps } = require('./skillDeps');
+const { getSkillToolDeps, canUseSkills } = require('./skillDeps');
+
+/**
+ * [knauf] KK20-243 — the SKILLS.USE gate for the chat execution path.
+ *
+ * Upstream checked this permission only on the skills REST routes and inside
+ * `canCreateSkill` (authoring). Nothing checked it while building a run, so a
+ * role with `SKILLS.USE: false` still received the deployment-skill catalog and
+ * could invoke `karl-brand` / `karl-artifacts` in a default KARL chat. That
+ * window was real, not hypothetical: AGENT_BUILDER carries `SKILLS.USE: false`
+ * until a human runs `knauf/scripts/seed-agent-builder-role.js`.
+ */
+describe('[knauf] canUseSkills', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('asks for exactly SKILLS.USE — not CREATE, which would be a different gate', async () => {
+    mockCheckAccessWithRequestCache.mockResolvedValue(true);
+    const req = { user: { id: 'user-1', role: 'USER' } };
+
+    await expect(canUseSkills({ req })).resolves.toBe(true);
+    expect(mockCheckAccessWithRequestCache).toHaveBeenCalledWith(
+      expect.objectContaining({
+        req,
+        user: req.user,
+        permissionType: 'SKILLS',
+        permissions: ['USE'],
+      }),
+    );
+  });
+
+  it('returns false when the role denies SKILLS.USE', async () => {
+    mockCheckAccessWithRequestCache.mockResolvedValue(false);
+    await expect(canUseSkills({ req: { user: { id: 'u', role: 'AGENT_BUILDER' } } })).resolves.toBe(
+      false,
+    );
+  });
+
+  it('uses the request-cached checker, so a send does not add a role round trip', () => {
+    // `canCreateSkill` reads the same role document in the same request; the
+    // cached variant is what keeps this off the hot path.
+    mockCheckAccessWithRequestCache.mockResolvedValue(true);
+    canUseSkills({ req: { user: { id: 'u', role: 'USER' } } });
+    expect(mockCheckAccessWithRequestCache).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('skillDeps saveSkillFileContent', () => {
   beforeEach(() => {

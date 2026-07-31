@@ -111,13 +111,16 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
       return;
     }
 
+    // [knauf] retain the intended write so a duplicate-upsert race can reapply it safely
+    const update: Record<string, unknown> = {
+      ...params,
+      user: userId,
+      messageId: params.newMessageId || params.messageId,
+    };
+    // End [knauf]
+
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
-      const update: Record<string, unknown> = {
-        ...params,
-        user: userId,
-        messageId: params.newMessageId || params.messageId,
-      };
 
       if (interfaceConfig?.retentionMode === RetentionMode.ALL) {
         if (typeof isTemporary === 'boolean') {
@@ -151,11 +154,30 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
         logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
         update.tokenCount = 0;
       }
-      const message = await Message.findOneAndUpdate(
-        { messageId: params.messageId, user: userId },
-        update,
-        { upsert: true, new: true },
-      );
+      // [knauf] a late disconnect snapshot must never downgrade a completed agent response
+      const filter: FilterQuery<IMessage> = { messageId: params.messageId, user: userId };
+      const isUnfinishedSnapshot = params.unfinished === true;
+      if (isUnfinishedSnapshot) {
+        filter.unfinished = { $ne: false };
+      }
+      let message = await Message.findOneAndUpdate(filter, update, {
+        upsert: !isUnfinishedSnapshot,
+        new: true,
+      });
+      if (!message && isUnfinishedSnapshot) {
+        const completedMessage = await Message.findOne({
+          messageId: params.messageId,
+          user: userId,
+        });
+        if (completedMessage) {
+          return completedMessage.toObject();
+        }
+        message = await Message.findOneAndUpdate(filter, update, { upsert: true, new: true });
+      }
+      if (!message) {
+        return undefined;
+      }
+      // End [knauf]
 
       if (
         interfaceConfig?.retentionMode === RetentionMode.ALL &&
@@ -172,33 +194,43 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
 
       return message.toObject();
     } catch (err: unknown) {
-      logger.error('Error saving message:', err);
-      logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
-
       const mongoErr = err as { code?: number; message?: string };
       if (mongoErr.code === 11000 && mongoErr.message?.includes('duplicate key error')) {
-        logger.warn(`Duplicate messageId detected: ${params.messageId}. Continuing execution.`);
+        // [knauf] recover expected concurrent upserts without losing the final response
+        const targetMessageId = update.messageId as string | undefined;
+        logger.warn(`Duplicate messageId detected: ${targetMessageId}. Retrying update.`);
 
         try {
           const Message = mongoose.models.Message as Model<IMessage>;
+          const recoveryFilter: FilterQuery<IMessage> = {
+            messageId: targetMessageId,
+            user: userId,
+          };
+          if (params.unfinished === true) {
+            recoveryFilter.unfinished = { $ne: false };
+          }
+          const recoveredMessage = await Message.findOneAndUpdate(recoveryFilter, update, {
+            upsert: false,
+            new: true,
+          });
+          if (recoveredMessage) {
+            return recoveredMessage.toObject();
+          }
           const existingMessage = await Message.findOne({
-            messageId: params.messageId,
+            messageId: targetMessageId,
             user: userId,
           });
-
-          if (existingMessage) {
-            return existingMessage.toObject();
-          }
-
-          return undefined;
-        } catch (findError) {
-          logger.warn(
-            `Could not retrieve existing message with ID ${params.messageId}: ${(findError as Error).message}`,
-          );
-          return undefined;
+          return existingMessage?.toObject();
+        } catch (recoveryError) {
+          logger.error(`Could not recover message write for ID ${targetMessageId}:`, recoveryError);
+          logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
+          throw recoveryError;
         }
+        // End [knauf]
       }
 
+      logger.error('Error saving message:', err);
+      logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
       throw err;
     }
   }

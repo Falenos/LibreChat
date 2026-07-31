@@ -126,6 +126,60 @@ describe('Message Operations', () => {
       );
       expect(logger.info).not.toHaveBeenCalled();
     });
+
+    // [knauf] completed agent responses must dominate late partial-response persistence
+    describe('completed response persistence', () => {
+      it('does not let a late unfinished save replace a completed response', async () => {
+        const conversationId = uuidv4();
+        const messageId = 'completed-response';
+
+        await saveMessage(mockCtx, {
+          messageId,
+          conversationId,
+          text: 'Complete answer',
+          unfinished: false,
+        });
+
+        expect(
+          await Message.findOne({ messageId, user: mockCtx.userId, unfinished: { $ne: false } }),
+        ).toBeNull();
+
+        const result = await saveMessage(mockCtx, {
+          messageId,
+          conversationId,
+          text: 'Partial answer',
+          unfinished: true,
+        });
+
+        expect(result).toMatchObject({ text: 'Complete answer', unfinished: false });
+      });
+
+      it('applies a completed save after a duplicate-key upsert collision', async () => {
+        await Message.syncIndexes();
+        const conversationId = uuidv4();
+        const messageId = 'duplicate-target';
+
+        await saveMessage(mockCtx, {
+          messageId,
+          conversationId,
+          text: 'Partial answer',
+          unfinished: true,
+        });
+        jest.clearAllMocks();
+
+        const result = await saveMessage(mockCtx, {
+          messageId: 'stale-source-id',
+          newMessageId: messageId,
+          conversationId,
+          text: 'Complete answer',
+          unfinished: false,
+        });
+
+        expect(result).toMatchObject({ messageId, text: 'Complete answer', unfinished: false });
+        expect(logger.error).not.toHaveBeenCalled();
+      });
+    });
+    // End [knauf]
   });
 
   describe('updateMessageText', () => {

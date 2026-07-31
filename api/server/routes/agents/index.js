@@ -124,13 +124,14 @@ router.get('/chat/stream/:streamId', async (req, res) => {
   let result;
 
   if (isResume) {
-    const { subscription, resumeState, pendingEvents } =
+    // [knauf] Mark sync on the exact generation returned by the atomic resume operation.
+    const { subscription, resumeState, pendingEvents, generationId } =
       await GenerationJobManager.subscribeWithResume(streamId, writeEvent, onDone, onError);
 
     if (!res.writableEnded) {
       if (resumeState) {
         writeEvent({ sync: true, resumeState, pendingEvents });
-        GenerationJobManager.markSyncSent(streamId);
+        GenerationJobManager.markSyncSent(streamId, generationId);
         logger.debug(
           `[AgentStream] Sent sync event for ${streamId} with ${resumeState.runSteps.length} run steps, ${pendingEvents.length} pending events`,
         );
@@ -145,6 +146,7 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     }
 
     result = subscription;
+    // End [knauf]
   } else {
     result = await GenerationJobManager.subscribe(streamId, writeEvent, onDone, onError);
   }

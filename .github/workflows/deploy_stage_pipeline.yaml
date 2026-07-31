@@ -22,7 +22,7 @@ jobs:
   deploy-stage:
     name: Deploy to AGK stage
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_ACR_NAME: acragkhubnonprod001
@@ -257,3 +257,180 @@ jobs:
             echo "| Failure | AGK stage ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      - name: Run STAGE E2E tests
+        if: success()
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-e2e"
+          run_id=""
+          run_url=""
+
+          echo "Dispatching STAGE E2E correlation_id=$CORRELATION_ID"
+          gh workflow run stage-e2e.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f correlation_id="$CORRELATION_ID"
+
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
+              --repo "$QUALITY_REPOSITORY" \
+              --workflow stage-e2e.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 50 \
+              --jq "map(select(.displayTitle | contains(\"$CORRELATION_ID\"))) | first // empty")
+
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
+            fi
+
+            echo "Waiting for STAGE E2E run to appear: attempt=$attempt"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::Timed out finding STAGE E2E run correlation_id=$CORRELATION_ID"
+            exit 1
+          fi
+
+          echo "STAGE E2E run: $run_url"
+          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          echo "| STAGE E2E | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve STAGE quality gate labels
+        id: stage-gates
+        if: success()
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          REF_JSON=$(gh api "/repos/${{ github.repository }}/git/ref/tags/$VERSION")
+          OBJECT_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
+          OBJECT_SHA=$(jq -r '.object.sha' <<< "$REF_JSON")
+
+          if [ "$OBJECT_TYPE" = "tag" ]; then
+            COMMIT_SHA=$(gh api "/repos/${{ github.repository }}/git/tags/$OBJECT_SHA" --jq '.object.sha')
+          else
+            COMMIT_SHA="$OBJECT_SHA"
+          fi
+
+          PRS_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/commits/$COMMIT_SHA/pulls" \
+            2>/dev/null || echo '[]')
+
+          PR_NUMBER=$(jq -r 'sort_by(.number) | last? | .number // empty' <<< "$PRS_JSON")
+          LABELS=""
+
+          echo "Resolved version $VERSION to commit $COMMIT_SHA"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Resolved source PR #$PR_NUMBER"
+            LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' || true)
+          else
+            echo "No source PR found for $COMMIT_SHA; k6 profiles will be skipped."
+          fi
+
+          profiles=()
+          has_label() {
+            local wanted="$1"
+            grep -Fxq "$wanted" <<< "$LABELS"
+          }
+
+          if has_label "k6:all"; then
+            profiles=(smoke load stress spike)
+          else
+            for profile in smoke load stress spike; do
+              if has_label "k6:$profile"; then
+                profiles+=("$profile")
+              fi
+            done
+          fi
+
+          K6_PROFILES="${profiles[*]}"
+          LABEL_SUMMARY=$(tr '\n' ',' <<< "$LABELS" | sed 's/,$//')
+          {
+            echo "source_pr=$PR_NUMBER"
+            echo "source_commit=$COMMIT_SHA"
+            echo "k6_profiles=$K6_PROFILES"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "| Source PR | ${PR_NUMBER:+#$PR_NUMBER} |"
+            echo "| Source commit | \`$COMMIT_SHA\` |"
+            echo "| STAGE E2E | always |"
+            echo "| STAGE k6 labels | \`${LABEL_SUMMARY:-none}\` |"
+            echo "| STAGE k6 profiles | \`${K6_PROFILES:-none}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run labeled STAGE k6 profiles
+        if: success() && steps.stage-gates.outputs.k6_profiles != ''
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+          K6_PROFILES: ${{ steps.stage-gates.outputs.k6_profiles }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          wait_for_quality_run() {
+            local profile="$1"
+            local correlation_id="$2"
+            local run_id=""
+            local run_url=""
+
+            for attempt in {1..30}; do
+              RUN_JSON=$(gh run list \
+                --repo "$QUALITY_REPOSITORY" \
+                --workflow k6-stage-performance.yaml \
+                --event workflow_dispatch \
+                --json databaseId,displayTitle,url \
+                --limit 50 \
+                --jq "map(select(.displayTitle | contains(\"$correlation_id\"))) | first // empty")
+
+              if [ -n "$RUN_JSON" ]; then
+                run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+                run_url=$(jq -r '.url' <<< "$RUN_JSON")
+                break
+              fi
+
+              echo "Waiting for STAGE $profile k6 run to appear: attempt=$attempt"
+              sleep 10
+            done
+
+            if [ -z "$run_id" ]; then
+              echo "::error::Timed out finding STAGE $profile k6 run correlation_id=$correlation_id"
+              exit 1
+            fi
+
+            echo "STAGE $profile k6 run: $run_url"
+            gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+            echo "| STAGE k6 $profile | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          for profile in $K6_PROFILES; do
+            CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$profile"
+            echo "Dispatching STAGE k6: scenario=chat-llm profile=$profile correlation_id=$CORRELATION_ID"
+            gh workflow run k6-stage-performance.yaml \
+              --repo "$QUALITY_REPOSITORY" \
+              --ref main \
+              -f scenario=chat-llm \
+              -f profile="$profile" \
+              -f correlation_id="$CORRELATION_ID"
+
+            wait_for_quality_run "$profile" "$CORRELATION_ID"
+          done
+
+      - name: Skip STAGE k6 profiles
+        if: success() && steps.stage-gates.outputs.k6_profiles == ''
+        run: |
+          echo "No k6:* label found on the source PR; skipping STAGE k6 profiles."
+          echo "| STAGE k6 profiles | skipped — no k6 label |" >> "$GITHUB_STEP_SUMMARY"

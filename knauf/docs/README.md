@@ -25,6 +25,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/processing.md](architecture/files/processing.md) | Which formats each upload mode accepts (MIME allow-lists) and how each is processed — image transforms, document parser, OCR, speech-to-text, RAG embedding; plus what's active vs dormant today |
 | [architecture/files/async-indexing.md](architecture/files/async-indexing.md) | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md) | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map |
+| [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How Artifacts, Skills and Code Interpreter work — the per-capability gate stacks, which are live (artifacts + skills, KK20-243) vs dark (`execute_code`), the deployment-skill layout and authoring traps, Sandpack/CDN egress, and the local ClickHouse sandbox setup (`librechat.local.yaml` + `CONFIG_PATH`, where `KVM_ENABLED` lives, service topology) |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 
@@ -50,6 +51,7 @@ Time-bound, multi-PR workstreams being executed. See [implementation-plans/READM
 | [implementation-plans/admin-panel-dev-deployment-plan.md](implementation-plans/admin-panel-dev-deployment-plan.md) | Deploy the LibreChat Admin Panel as a pinned AGK dev service |
 | [implementation-plans/adobe-analytics-onetrust.md](implementation-plans/adobe-analytics-onetrust.md) | Adobe Analytics + OneTrust consent integration |
 | [implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md](implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md) | Correct dual-backend retrieval, deduplication, LangGraph compaction/finalization, and Langfuse verification |
+| [implementation-plans/code-interpreter-artifacts-rollout.md](implementation-plans/code-interpreter-artifacts-rollout.md) | Artifacts + Skills + Code Interpreter rollout — the three capability gate stacks, what KK20-243 landed (config, RBAC, the agent-builder rows, the brand skill) with its mandatory post-deploy mongosh step and known surprises, plus the remaining AGK sandbox work (GitOps service, JWT trust, KVM node pool) — KK20-108 / KK20-243 |
 
 ## Upstream releases
 
@@ -68,6 +70,8 @@ Designs under discussion — not approved, not implemented.
 |---|---|
 | [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md) | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored) |
 | [proposals/pii-masking-and-anonymization.md](proposals/pii-masking-and-anonymization.md) | PII masking & data anonymization strategy (KK20-207) — data-classification, per-category handling matrix, LibreChat-OOTB verdict, engine options (Presidio / Azure AI Language), phased roadmap + follow-up tickets; includes an [interactive demo](proposals/assets/pii-masking-demo.html) |
+| [proposals/code-interpreter-backend-options.md](proposals/code-interpreter-backend-options.md) | Code Interpreter backend decision (KK20-108) — self-hosted ClickHouse sandbox vs Azure Container Apps dynamic sessions vs (retired) Azure OpenAI Assistants; the LibreChat Code API integration seam, the Tier-3 adapter ACA would need, a comparison matrix, and why artifacts isn't a backend choice |
+| [proposals/code-interpreter-implementation-designs.md](proposals/code-interpreter-implementation-designs.md) | Implementation designs (KK20-108): the two finalist code-exec backends built out concretely against AGK's real GitOps patterns — self-hosted ClickHouse on AKS (images→ACR, chart consumption, values/ESO, NsJail posture) vs ACA dynamic sessions + Tier-3 adapter (session pool, workload-identity chain, contract mapping) — with red-team findings and the deep comparison |
 
 ## Future work
 

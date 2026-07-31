@@ -41,12 +41,15 @@ import { KNAUF_INDEX_POLL_MS } from '~/knauf/hooks/Files/useKnaufIndexStatus';
 import { useAgentPanelContext, useFileMapContext } from '~/Providers';
 import AgentAvatar from '~/components/SidePanel/Agents/AgentAvatar';
 import InstructionsEditorOverlay from './InstructionsEditorOverlay';
+// [knauf] KK20-243 — extracted from this file so the row can be rendered in
+// isolation; the stale-`checked` defect it fixes is only visible in a render.
+import CapabilityRow from './CapabilityRow';
+// End [knauf]
 import AgentTool from '~/components/SidePanel/Agents/AgentTool';
 import { isEphemeralAgent, type AgentForm } from '~/common';
 import InstructionsField from './InstructionsField';
 import { KNAUF_CAPABILITIES } from './capabilities';
 import { useGetAgentFiles } from '~/data-provider';
-import CapabilitySwitch from './CapabilitySwitch';
 import PersonalityPills from './PersonalityPills';
 import KnaufFileSearch from './KnaufFileSearch';
 import KnaufInfoBadge from './KnaufInfoBadge';
@@ -806,28 +809,6 @@ export default function KnaufAgentConfig() {
  * model_parameters — the canonical hook into form reactivity for our
  * capability writes).
  */
-function CapabilityRow({
-  capability,
-}: Readonly<{
-  capability: (typeof KNAUF_CAPABILITIES)[number];
-}>) {
-  const { control, getValues, setValue } = useFormContext<AgentForm>();
-  // Subscribe to the form fields the registry might inspect, so this row
-  // re-renders when the underlying state changes.
-  useWatch({ control, name: 'model_parameters' });
-  const checked = capability.readFromForm({ getValues, setValue });
-
-  return (
-    <CapabilitySwitch
-      icon={capability.icon}
-      label={capability.label}
-      description={capability.description}
-      checked={checked}
-      onChange={(next) => capability.applyToForm(next, { getValues, setValue })}
-    />
-  );
-}
-
 /**
  * Slim header toggle for a `model_parameters` boolean flag. Lives in the
  * KnaufSection `action` slot: no row, no border, no visible label — just an

@@ -6,6 +6,22 @@ import { StandardGraph } from '@librechat/agents';
 /** Suppress winston Console transport output (survives jest.resetModules) */
 jest.spyOn(console, 'log').mockImplementation();
 
+// [knauf] Redis content and active-set entries are owned by one immutable generation.
+function generationMember(streamId: string, generationId?: string): string {
+  return generationId == null ? streamId : JSON.stringify([streamId, generationId]);
+}
+
+function generationContentKey(
+  streamId: string,
+  generationId: string | undefined,
+  suffix: 'chunks' | 'runsteps',
+): string {
+  return generationId == null
+    ? `stream:{${streamId}}:${suffix}`
+    : `stream:{${streamId}}:generation:${generationId}:${suffix}`;
+}
+// End [knauf]
+
 /**
  * Integration tests for RedisJobStore.
  *
@@ -565,7 +581,7 @@ describe('RedisJobStore Integration Tests', () => {
       await store.initialize();
 
       const streamId = `ttl-test-${Date.now()}`;
-      await store.createJob(streamId, 'user-1', streamId);
+      const job = await store.createJob(streamId, 'user-1', streamId);
 
       await store.appendChunk(streamId, {
         event: 'on_message_delta',
@@ -575,7 +591,9 @@ describe('RedisJobStore Integration Tests', () => {
       // Check that TTL was set on the stream key
       // Note: ioredis client has keyPrefix, so we use the key WITHOUT the prefix
       // Key uses hash tag format: stream:{streamId}:chunks
-      const ttl = await ioredisClient.ttl(`stream:{${streamId}}:chunks`);
+      const ttl = await ioredisClient.ttl(
+        generationContentKey(streamId, job.generationId, 'chunks'),
+      );
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(60);
 
@@ -761,7 +779,8 @@ describe('RedisJobStore Integration Tests', () => {
       const staleStreamId = `stale-stream-${Date.now()}`;
 
       // Create a real job
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
+      const member = generationMember(streamId, job.generationId);
 
       // Manually add a stale entry to the user's job set (simulating orphaned data)
       const userJobsKey = `stream:user:{${userId}}:jobs`;
@@ -769,7 +788,7 @@ describe('RedisJobStore Integration Tests', () => {
 
       // Verify both entries exist in the set
       const beforeCleanup = await ioredisClient.smembers(userJobsKey);
-      expect(beforeCleanup).toContain(streamId);
+      expect(beforeCleanup).toContain(member);
       expect(beforeCleanup).toContain(staleStreamId);
 
       // Get active jobs - should trigger self-healing
@@ -781,7 +800,7 @@ describe('RedisJobStore Integration Tests', () => {
 
       // Verify stale entry was removed
       const afterCleanup = await ioredisClient.smembers(userJobsKey);
-      expect(afterCleanup).toContain(streamId);
+      expect(afterCleanup).toContain(member);
       expect(afterCleanup).not.toContain(staleStreamId);
 
       await store.destroy();
@@ -943,7 +962,7 @@ describe('RedisJobStore Integration Tests', () => {
       const userId = `no-ttl-user-${Date.now()}`;
       const streamId = `no-ttl-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
 
       const userKey = `stream:user:{${userId}}:jobs`;
       // -1 means key exists but has no TTL
@@ -952,7 +971,7 @@ describe('RedisJobStore Integration Tests', () => {
 
       // Verify the set itself still exists and contains the streamId
       const members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(generationMember(streamId, job.generationId));
 
       await store.destroy();
     });
@@ -1001,19 +1020,20 @@ describe('RedisJobStore Integration Tests', () => {
       const userId = `proactive-srem-user-${Date.now()}`;
       const streamId = `proactive-srem-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
+      const member = generationMember(streamId, job.generationId);
 
       const userKey = `stream:user:{${userId}}:jobs`;
 
       // Verify the entry exists before update
       let members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(member);
 
       await store.updateJob(streamId, { status: 'complete', completedAt: Date.now() });
 
       // Directly check the Redis set — without calling getActiveJobIdsByUser (which self-heals)
       members = await ioredisClient.smembers(userKey);
-      expect(members).not.toContain(streamId);
+      expect(members).not.toContain(member);
 
       await store.destroy();
     });
@@ -1030,16 +1050,17 @@ describe('RedisJobStore Integration Tests', () => {
       const userId = `srem-aborted-user-${Date.now()}`;
       const streamId = `srem-aborted-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
+      const member = generationMember(streamId, job.generationId);
 
       const userKey = `stream:user:{${userId}}:jobs`;
       let members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(member);
 
       await store.updateJob(streamId, { status: 'aborted', completedAt: Date.now() });
 
       members = await ioredisClient.smembers(userKey);
-      expect(members).not.toContain(streamId);
+      expect(members).not.toContain(member);
 
       await store.destroy();
     });
@@ -1056,11 +1077,12 @@ describe('RedisJobStore Integration Tests', () => {
       const userId = `srem-error-user-${Date.now()}`;
       const streamId = `srem-error-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
+      const member = generationMember(streamId, job.generationId);
 
       const userKey = `stream:user:{${userId}}:jobs`;
       let members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(member);
 
       await store.updateJob(streamId, {
         status: 'error',
@@ -1069,7 +1091,7 @@ describe('RedisJobStore Integration Tests', () => {
       });
 
       members = await ioredisClient.smembers(userKey);
-      expect(members).not.toContain(streamId);
+      expect(members).not.toContain(member);
 
       await store.destroy();
     });
@@ -1086,19 +1108,20 @@ describe('RedisJobStore Integration Tests', () => {
       const userId = `delete-srem-user-${Date.now()}`;
       const streamId = `delete-srem-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId);
+      const job = await store.createJob(streamId, userId, streamId);
+      const member = generationMember(streamId, job.generationId);
 
       const userKey = `stream:user:{${userId}}:jobs`;
 
       // Verify entry exists
       let members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(member);
 
       await store.deleteJob(streamId);
 
       // Directly check the Redis set
       members = await ioredisClient.smembers(userKey);
-      expect(members).not.toContain(streamId);
+      expect(members).not.toContain(member);
 
       await store.destroy();
     });
@@ -1116,11 +1139,12 @@ describe('RedisJobStore Integration Tests', () => {
       const tenantId = `tenant-${Date.now()}`;
       const streamId = `tenant-stream-${Date.now()}`;
 
-      await store.createJob(streamId, userId, streamId, tenantId);
+      const job = await store.createJob(streamId, userId, streamId, tenantId);
+      const member = generationMember(streamId, job.generationId);
 
       const userKey = `stream:user:{${tenantId}:${userId}}:jobs`;
       const members = await ioredisClient.smembers(userKey);
-      expect(members).toContain(streamId);
+      expect(members).toContain(member);
 
       const ttl = await ioredisClient.ttl(userKey);
       expect(ttl).toBeGreaterThan(0);
@@ -1129,7 +1153,7 @@ describe('RedisJobStore Integration Tests', () => {
       // Non-tenant key should NOT contain this entry
       const wrongKey = `stream:user:{${userId}}:jobs`;
       const wrongMembers = await ioredisClient.smembers(wrongKey);
-      expect(wrongMembers).not.toContain(streamId);
+      expect(wrongMembers).not.toContain(member);
 
       await store.destroy();
     });
@@ -1375,14 +1399,14 @@ describe('RedisJobStore Integration Tests', () => {
       await store.initialize();
 
       const streamId = `append-ttl-${Date.now()}`;
-      await store.createJob(streamId, 'user-1', streamId);
+      const job = await store.createJob(streamId, 'user-1', streamId);
 
       await store.appendChunk(streamId, {
         event: 'on_message_delta',
         data: { id: 'step-1', type: 'text', text: 'first' },
       });
 
-      const chunkKey = `stream:{${streamId}}:chunks`;
+      const chunkKey = generationContentKey(streamId, job.generationId, 'chunks');
       const ttl = await ioredisClient.ttl(chunkKey);
       expect(ttl).toBeGreaterThan(0);
       expect(ttl).toBeLessThanOrEqual(120);
@@ -1400,7 +1424,7 @@ describe('RedisJobStore Integration Tests', () => {
       await store.initialize();
 
       const streamId = `append-refresh-${Date.now()}`;
-      await store.createJob(streamId, 'user-1', streamId);
+      const job = await store.createJob(streamId, 'user-1', streamId);
 
       // Append first chunk
       await store.appendChunk(streamId, {
@@ -1408,7 +1432,7 @@ describe('RedisJobStore Integration Tests', () => {
         data: { id: 'step-1', type: 'text', text: 'first' },
       });
 
-      const chunkKey = `stream:{${streamId}}:chunks`;
+      const chunkKey = generationContentKey(streamId, job.generationId, 'chunks');
       const ttl1 = await ioredisClient.ttl(chunkKey);
       expect(ttl1).toBeGreaterThan(0);
 
@@ -1441,7 +1465,7 @@ describe('RedisJobStore Integration Tests', () => {
       await store.initialize();
 
       const streamId = `append-pipeline-${Date.now()}`;
-      await store.createJob(streamId, 'user-1', streamId);
+      const job = await store.createJob(streamId, 'user-1', streamId);
 
       const chunks = [
         {
@@ -1468,7 +1492,7 @@ describe('RedisJobStore Integration Tests', () => {
       }
 
       // Verify all chunks were stored
-      const chunkKey = `stream:{${streamId}}:chunks`;
+      const chunkKey = generationContentKey(streamId, job.generationId, 'chunks');
       const len = await ioredisClient.xlen(chunkKey);
       expect(len).toBe(3);
 

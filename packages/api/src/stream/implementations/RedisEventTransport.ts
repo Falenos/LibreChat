@@ -1,6 +1,6 @@
 import type { Redis, Cluster } from 'ioredis';
 import { logger } from '@librechat/data-schemas';
-import type { IEventTransport } from '~/stream/interfaces/IJobStore';
+import type { GenerationRef, IEventTransport } from '~/stream/interfaces/IJobStore';
 
 /**
  * Redis key prefixes for pub/sub channels
@@ -14,8 +14,12 @@ const CHANNELS = {
  * Redis keys for shared state (hash-tagged for cluster slot compatibility)
  */
 const KEYS = {
-  /** Atomic sequence counter: shared across all replicas for a given stream */
-  sequence: (streamId: string) => `stream:{${streamId}}:seq`,
+  // [knauf] Sequence ownership follows an immutable generation while legacy jobs keep their key.
+  sequence: (streamId: string, generationId?: string) =>
+    generationId != null
+      ? `stream:{${streamId}}:generation:${generationId}:seq`
+      : `stream:{${streamId}}:seq`,
+  // End [knauf]
 };
 
 /**
@@ -30,6 +34,9 @@ const EventTypes = {
 
 interface PubSubMessage {
   type: (typeof EventTypes)[keyof typeof EventTypes];
+  // [knauf] Additive wire field; old pods ignore it and legacy jobs omit it.
+  generationId?: string;
+  // End [knauf]
   /** Sequence number for ordering (critical for Redis Cluster) */
   seq?: number;
   data?: unknown;
@@ -58,6 +65,10 @@ const MAX_BUFFER_SIZE = 100;
  * Subscriber state for a stream
  */
 interface StreamSubscribers {
+  // [knauf] State belongs to one generation even though generations share the Redis channel.
+  streamId: string;
+  generationId?: string;
+  // End [knauf]
   count: number;
   handlers: Map<
     string,
@@ -98,8 +109,10 @@ export class RedisEventTransport implements IEventTransport {
   private publisher: Redis | Cluster;
   /** Redis client for subscribing to events (separate connection required) */
   private subscriber: Redis | Cluster;
-  /** Track subscribers per stream */
-  private streams = new Map<string, StreamSubscribers>();
+  // [knauf] Per-generation state prevents overlapping turns on one conversation from crossing.
+  private generations = new Map<string, StreamSubscribers>();
+  private streamGenerations = new Map<string, Set<string>>();
+  // End [knauf]
   /** Track channel subscription state: resolved promise = active, pending = in-flight */
   private channelSubscriptions = new Map<string, Promise<void>>();
   /** Counter for generating unique subscriber IDs */
@@ -124,15 +137,109 @@ export class RedisEventTransport implements IEventTransport {
   /** Safety-net TTL (seconds) set once on first INCR. Not refreshed — prevents mid-stream resets. */
   private static readonly SEQUENCE_TTL_SECONDS = 86400;
 
+  // [knauf] Keep lifecycle and subscription state generation-scoped on the shared channel.
+  private generationKey(streamId: string, generationId?: string): string {
+    return JSON.stringify([streamId, generationId ?? null]);
+  }
+
+  private getGeneration(streamId: string, generationId?: string): StreamSubscribers | undefined {
+    return this.generations.get(this.generationKey(streamId, generationId));
+  }
+
+  private getOrCreateGeneration(streamId: string, generationId?: string): StreamSubscribers {
+    const key = this.generationKey(streamId, generationId);
+    let state = this.generations.get(key);
+    if (state) {
+      return state;
+    }
+
+    state = {
+      streamId,
+      generationId,
+      count: 0,
+      handlers: new Map(),
+      allSubscribersLeftCallbacks: [],
+      abortCallbacks: [],
+      reorderBuffer: {
+        nextSeq: 0,
+        pending: new Map(),
+        flushTimeout: null,
+      },
+    };
+    this.generations.set(key, state);
+
+    let keys = this.streamGenerations.get(streamId);
+    if (!keys) {
+      keys = new Set();
+      this.streamGenerations.set(streamId, keys);
+    }
+    keys.add(key);
+    return state;
+  }
+
+  private deleteGeneration(streamId: string, generationId?: string): void {
+    const key = this.generationKey(streamId, generationId);
+    this.generations.delete(key);
+    const keys = this.streamGenerations.get(streamId);
+    keys?.delete(key);
+    if (keys?.size === 0) {
+      this.streamGenerations.delete(streamId);
+    }
+  }
+
+  private streamNeedsSubscription(streamId: string): boolean {
+    const keys = this.streamGenerations.get(streamId);
+    if (!keys) {
+      return false;
+    }
+    for (const key of keys) {
+      const state = this.generations.get(key);
+      if (state && (state.count > 0 || state.abortCallbacks.length > 0)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private ensureChannelSubscription(streamId: string): Promise<void> {
+    const channel = CHANNELS.events(streamId);
+    let ready = this.channelSubscriptions.get(channel);
+    if (!ready) {
+      ready = this.subscriber
+        .subscribe(channel)
+        .then(() => {
+          logger.debug(`[RedisEventTransport] Subscription active for channel ${channel}`);
+        })
+        .catch((err) => {
+          this.channelSubscriptions.delete(channel);
+          logger.error(`[RedisEventTransport] Failed to subscribe to ${channel}:`, err);
+        });
+      this.channelSubscriptions.set(channel, ready);
+    }
+    return ready;
+  }
+
+  private unsubscribeChannelIfUnused(streamId: string): void {
+    const channel = CHANNELS.events(streamId);
+    if (this.streamNeedsSubscription(streamId) || !this.channelSubscriptions.has(channel)) {
+      return;
+    }
+    this.subscriber.unsubscribe(channel).catch((err) => {
+      logger.error(`[RedisEventTransport] Failed to unsubscribe from ${channel}:`, err);
+    });
+    this.channelSubscriptions.delete(channel);
+  }
+  // End [knauf]
+
   /**
    * Get next sequence number for a stream (0-indexed, backed by Redis INCR).
    * A 24-hour TTL is set on the first INCR only (val === 1) as a safety net
    * for orphaned keys from crashed processes. It is never refreshed, so an
    * active stream cannot have its counter reset mid-generation.
-   * Keys are also deleted explicitly by cleanup() on normal stream teardown.
+   * Generation-scoped counters expire by TTL; cleanup never deletes shared ordering state.
    */
-  private async getNextSequence(streamId: string): Promise<number> {
-    const key = KEYS.sequence(streamId);
+  private async getNextSequence(streamId: string, generationId?: string): Promise<number> {
+    const key = KEYS.sequence(streamId, generationId);
     const val = await this.publisher.incr(key);
     if (val === 1) {
       this.publisher.expire(key, RedisEventTransport.SEQUENCE_TTL_SECONDS).catch((err) => {
@@ -143,8 +250,8 @@ export class RedisEventTransport implements IEventTransport {
   }
 
   /** Reset subscriber reorder buffer state to initial values */
-  private resetReorderBuffer(streamId: string): void {
-    const state = this.streams.get(streamId);
+  private resetReorderBuffer(streamId: string, generationId?: string): void {
+    const state = this.getGeneration(streamId, generationId);
     if (state) {
       if (state.reorderBuffer.flushTimeout) {
         clearTimeout(state.reorderBuffer.flushTimeout);
@@ -166,12 +273,17 @@ export class RedisEventTransport implements IEventTransport {
    *   a safe proxy for "already delivered via earlyEventBuffer."
    *   When 0/undefined (cross-replica), all pending entries are treated as live and preserved.
    */
-  async syncReorderBuffer(streamId: string, earlyReplayCount = 0): Promise<void> {
-    const key = KEYS.sequence(streamId);
+  // [knauf] Sync only the generation that owns this subscriber and Redis counter.
+  async syncReorderBuffer(
+    streamId: string,
+    earlyReplayCount = 0,
+    generationId?: string,
+  ): Promise<void> {
+    const key = KEYS.sequence(streamId, generationId);
     const rawStr = await this.publisher.get(key);
     const parsed = rawStr != null ? parseInt(rawStr, 10) : 0;
     const currentSeq = Number.isNaN(parsed) ? 0 : parsed;
-    const state = this.streams.get(streamId);
+    const state = this.getGeneration(streamId, generationId);
     if (state) {
       if (state.reorderBuffer.flushTimeout) {
         clearTimeout(state.reorderBuffer.flushTimeout);
@@ -214,6 +326,7 @@ export class RedisEventTransport implements IEventTransport {
       }
     }
   }
+  // End [knauf]
 
   /**
    * Handle incoming pub/sub message with reordering support for Redis Cluster
@@ -225,16 +338,30 @@ export class RedisEventTransport implements IEventTransport {
     }
     const streamId = match[1];
 
-    const streamState = this.streams.get(streamId);
-    if (!streamState) {
-      return;
-    }
-
     try {
       const parsed = JSON.parse(message) as PubSubMessage;
 
-      // [knauf] Abort-only listeners must not accumulate another pod's stream ordering state.
+      // [knauf] Route shared-channel messages only to their owning generation.
+      let streamState = this.getGeneration(streamId, parsed.generationId);
+      if (!streamState && parsed.type === EventTypes.ABORT && parsed.generationId == null) {
+        /** A rolling old pod cannot include the new generation field. If there is
+         * exactly one generation abort listener, it is the only safe target. */
+        const abortTargets = [...(this.streamGenerations.get(streamId) ?? [])]
+          .map((key) => this.generations.get(key))
+          .filter((state): state is StreamSubscribers => !!state?.abortCallbacks.length);
+        if (abortTargets.length === 1) {
+          streamState = abortTargets[0];
+        }
+      }
+      if (!streamState) {
+        return;
+      }
+
+      // Abort-only listeners must not accumulate another pod's stream ordering state.
       if (streamState.handlers.size === 0 && parsed.type !== EventTypes.ABORT) {
+        if (parsed.type === EventTypes.DONE || parsed.type === EventTypes.ERROR) {
+          this.cleanup(streamId, streamState.generationId);
+        }
         return;
       }
       // End [knauf]
@@ -410,6 +537,12 @@ export class RedisEventTransport implements IEventTransport {
         }
       }
     }
+
+    // [knauf] A persisted final can recreate state on reconnect; terminal listeners cannot.
+    if (message.type === EventTypes.DONE || message.type === EventTypes.ERROR) {
+      this.cleanup(streamState.streamId, streamState.generationId);
+    }
+    // End [knauf]
   }
 
   /**
@@ -425,62 +558,34 @@ export class RedisEventTransport implements IEventTransport {
       onDone?: (event: unknown) => void;
       onError?: (error: string) => void;
     },
+    generationId?: string,
   ): { unsubscribe: () => void; ready?: Promise<void> } {
-    const channel = CHANNELS.events(streamId);
     const subscriberId = `sub_${++this.subscriberIdCounter}`;
 
-    // Initialize stream state if needed
-    if (!this.streams.has(streamId)) {
-      this.streams.set(streamId, {
-        count: 0,
-        handlers: new Map(),
-        allSubscribersLeftCallbacks: [],
-        abortCallbacks: [],
-        reorderBuffer: {
-          nextSeq: 0,
-          pending: new Map(),
-          flushTimeout: null,
-        },
-      });
-    }
-
-    const streamState = this.streams.get(streamId)!;
+    // [knauf] Attach this SSE handler to its immutable generation on the shared channel.
+    const streamState = this.getOrCreateGeneration(streamId, generationId);
     // Internal listeners (for example cross-replica abort) can leave ordering
     // state behind with no real SSE subscribers. A new subscriber is a fresh
     // attachment and must not inherit that prior generation's expected seq.
     if (streamState.count === 0) {
-      this.resetReorderBuffer(streamId);
+      this.resetReorderBuffer(streamId, generationId);
     }
     streamState.count++;
     streamState.handlers.set(subscriberId, handlers);
-
-    let readyPromise = this.channelSubscriptions.get(channel);
-
-    if (!readyPromise) {
-      readyPromise = this.subscriber
-        .subscribe(channel)
-        .then(() => {
-          logger.debug(`[RedisEventTransport] Subscription active for channel ${channel}`);
-        })
-        .catch((err) => {
-          this.channelSubscriptions.delete(channel);
-          logger.error(`[RedisEventTransport] Failed to subscribe to ${channel}:`, err);
-        });
-      this.channelSubscriptions.set(channel, readyPromise);
-    }
+    const readyPromise = this.ensureChannelSubscription(streamId);
+    // End [knauf]
 
     return {
       ready: readyPromise,
       unsubscribe: () => {
-        const state = this.streams.get(streamId);
-        if (!state) {
+        const state = this.getGeneration(streamId, generationId);
+        if (!state || !state.handlers.delete(subscriberId)) {
           return;
         }
 
-        state.handlers.delete(subscriberId);
         state.count--;
 
-        // [knauf] Keep abort-only Redis subscriptions active across SSE disconnects.
+        // [knauf] Reset and notify only this generation; retain the channel for any peer generation.
         if (state.count === 0) {
           /**
            * Preserve callbacks for reconnect, but drop ordering state from the
@@ -488,15 +593,8 @@ export class RedisEventTransport implements IEventTransport {
            * keeping nextSeq here only risks poisoning a later generation when
            * the shared Redis sequence key has already been reset elsewhere.
            */
-          this.resetReorderBuffer(streamId);
-
-          if (state.abortCallbacks.length === 0) {
-            this.subscriber.unsubscribe(channel).catch((err) => {
-              logger.error(`[RedisEventTransport] Failed to unsubscribe from ${channel}:`, err);
-            });
-            this.channelSubscriptions.delete(channel);
-          }
-          // End [knauf]
+          this.resetReorderBuffer(streamId, generationId);
+          this.unsubscribeChannelIfUnused(streamId);
 
           // Call all-subscribers-left callbacks
           for (const callback of state.allSubscribersLeftCallbacks) {
@@ -516,6 +614,7 @@ export class RedisEventTransport implements IEventTransport {
            *  State is fully cleaned up by cleanup() when the job completes.
            */
         }
+        // End [knauf]
       },
     };
   }
@@ -527,11 +626,17 @@ export class RedisEventTransport implements IEventTransport {
    * Performance: each emit requires two sequential Redis round-trips (INCR + PUBLISH).
    * This is the unavoidable cost of cross-replica sequence coordination.
    */
-  async emitChunk(streamId: string, event: unknown): Promise<void> {
+  // [knauf] Publish every ordered event with its generation token and isolated counter.
+  async emitChunk(streamId: string, event: unknown, generationId?: string): Promise<void> {
     try {
       const channel = CHANNELS.events(streamId);
-      const seq = await this.getNextSequence(streamId);
-      const message: PubSubMessage = { type: EventTypes.CHUNK, seq, data: event };
+      const seq = await this.getNextSequence(streamId, generationId);
+      const message: PubSubMessage = {
+        type: EventTypes.CHUNK,
+        generationId,
+        seq,
+        data: event,
+      };
       await this.publisher.publish(channel, JSON.stringify(message));
     } catch (err) {
       logger.error(`[RedisEventTransport] Failed to publish chunk:`, err);
@@ -542,10 +647,10 @@ export class RedisEventTransport implements IEventTransport {
    * Publish a done event to all subscribers.
    * Includes sequence number to ensure delivery after all chunks.
    */
-  async emitDone(streamId: string, event: unknown): Promise<void> {
+  async emitDone(streamId: string, event: unknown, generationId?: string): Promise<void> {
     const channel = CHANNELS.events(streamId);
-    const seq = await this.getNextSequence(streamId);
-    const message: PubSubMessage = { type: EventTypes.DONE, seq, data: event };
+    const seq = await this.getNextSequence(streamId, generationId);
+    const message: PubSubMessage = { type: EventTypes.DONE, generationId, seq, data: event };
 
     try {
       await this.publisher.publish(channel, JSON.stringify(message));
@@ -559,10 +664,10 @@ export class RedisEventTransport implements IEventTransport {
    * Publish an error event to all subscribers.
    * Includes sequence number to ensure delivery after all chunks.
    */
-  async emitError(streamId: string, error: string): Promise<void> {
+  async emitError(streamId: string, error: string, generationId?: string): Promise<void> {
     const channel = CHANNELS.events(streamId);
-    const seq = await this.getNextSequence(streamId);
-    const message: PubSubMessage = { type: EventTypes.ERROR, seq, error };
+    const seq = await this.getNextSequence(streamId, generationId);
+    const message: PubSubMessage = { type: EventTypes.ERROR, generationId, seq, error };
 
     try {
       await this.publisher.publish(channel, JSON.stringify(message));
@@ -571,6 +676,7 @@ export class RedisEventTransport implements IEventTransport {
       throw err;
     }
   }
+  // End [knauf]
 
   /**
    * Get subscriber count for a stream (local instance only).
@@ -578,48 +684,35 @@ export class RedisEventTransport implements IEventTransport {
    * Note: In a multi-instance setup, this only returns local subscriber count.
    * For global count, would need to track in Redis (e.g., with a counter key).
    */
-  getSubscriberCount(streamId: string): number {
-    return this.streams.get(streamId)?.count ?? 0;
+  // [knauf] Subscriber and callback queries are fenced to one generation.
+  getSubscriberCount(streamId: string, generationId?: string): number {
+    return this.getGeneration(streamId, generationId)?.count ?? 0;
   }
 
   /**
    * Check if this is the first subscriber (local instance only).
    */
-  isFirstSubscriber(streamId: string): boolean {
-    return this.getSubscriberCount(streamId) === 1;
+  isFirstSubscriber(streamId: string, generationId?: string): boolean {
+    return this.getSubscriberCount(streamId, generationId) === 1;
   }
 
   /**
    * Register callback for when all subscribers leave.
    */
-  onAllSubscribersLeft(streamId: string, callback: () => void): void {
-    const state = this.streams.get(streamId);
-    if (state) {
-      state.allSubscribersLeftCallbacks.push(callback);
-    } else {
-      // Create state just for the callback
-      this.streams.set(streamId, {
-        count: 0,
-        handlers: new Map(),
-        allSubscribersLeftCallbacks: [callback],
-        abortCallbacks: [],
-        reorderBuffer: {
-          nextSeq: 0,
-          pending: new Map(),
-          flushTimeout: null,
-        },
-      });
-    }
+  onAllSubscribersLeft(streamId: string, callback: () => void, generationId?: string): void {
+    this.getOrCreateGeneration(streamId, generationId).allSubscribersLeftCallbacks.push(callback);
   }
+  // End [knauf]
 
   /**
    * Publish an abort signal to all replicas.
    * This enables cross-replica abort: when a user aborts on Replica B,
    * the generating Replica A receives the signal and stops.
    */
-  emitAbort(streamId: string): void {
+  // [knauf] Abort only the generation named on the shared Redis channel.
+  emitAbort(streamId: string, generationId?: string): void {
     const channel = CHANNELS.events(streamId);
-    const message: PubSubMessage = { type: EventTypes.ABORT };
+    const message: PubSubMessage = { type: EventTypes.ABORT, generationId };
 
     this.publisher.publish(channel, JSON.stringify(message)).catch((err) => {
       logger.error(`[RedisEventTransport] Failed to publish abort:`, err);
@@ -633,52 +726,34 @@ export class RedisEventTransport implements IEventTransport {
    * @param streamId - The stream identifier
    * @param callback - Called when abort signal is received
    */
-  onAbort(streamId: string, callback: () => void): void {
-    const channel = CHANNELS.events(streamId);
-    let state = this.streams.get(streamId);
-
-    if (!state) {
-      state = {
-        count: 0,
-        handlers: new Map(),
-        allSubscribersLeftCallbacks: [],
-        abortCallbacks: [],
-        reorderBuffer: {
-          nextSeq: 0,
-          pending: new Map(),
-          flushTimeout: null,
-        },
-      };
-      this.streams.set(streamId, state);
-    }
-
-    state.abortCallbacks.push(callback);
-
-    if (!this.channelSubscriptions.has(channel)) {
-      const ready = this.subscriber
-        .subscribe(channel)
-        .then(() => {})
-        .catch((err) => {
-          this.channelSubscriptions.delete(channel);
-          logger.error(`[RedisEventTransport] Failed to subscribe to ${channel}:`, err);
-        });
-      this.channelSubscriptions.set(channel, ready);
-    }
+  onAbort(streamId: string, callback: () => void, generationId?: string): void {
+    this.getOrCreateGeneration(streamId, generationId).abortCallbacks.push(callback);
+    this.ensureChannelSubscription(streamId);
   }
+  // End [knauf]
 
   /**
    * Get all tracked stream IDs (for orphan cleanup)
    */
   getTrackedStreamIds(): string[] {
-    return Array.from(this.streams.keys());
+    return Array.from(this.streamGenerations.keys());
   }
+
+  // [knauf] Expose exact owners so manager cleanup cannot target a replacement turn.
+  getTrackedGenerations(): GenerationRef[] {
+    return Array.from(this.generations.values(), ({ streamId, generationId }) => ({
+      streamId,
+      generationId,
+    }));
+  }
+  // End [knauf]
 
   /**
    * Cleanup resources for a specific stream.
    */
-  cleanup(streamId: string): void {
-    const channel = CHANNELS.events(streamId);
-    const state = this.streams.get(streamId);
+  // [knauf] Cleanup one generation only; sequence keys expire instead of racing a newer turn.
+  cleanup(streamId: string, generationId?: string): void {
+    const state = this.getGeneration(streamId, generationId);
 
     if (state) {
       state.handlers.clear();
@@ -686,35 +761,20 @@ export class RedisEventTransport implements IEventTransport {
       state.abortCallbacks = [];
     }
 
-    this.resetReorderBuffer(streamId);
-
-    // Delete the shared sequence key — safe because cleanup() is only called
-    // when the stream's job is complete (no more publishes will happen).
-    const seqKey = KEYS.sequence(streamId);
-    this.publisher.del(seqKey).catch((err) => {
-      logger.error(`[RedisEventTransport] Failed to delete sequence key ${seqKey}:`, err);
-    });
-
-    if (this.channelSubscriptions.has(channel)) {
-      this.subscriber.unsubscribe(channel).catch((err) => {
-        logger.error(`[RedisEventTransport] Failed to cleanup ${channel}:`, err);
-      });
-      this.channelSubscriptions.delete(channel);
-    }
-
-    this.streams.delete(streamId);
+    this.resetReorderBuffer(streamId, generationId);
+    this.deleteGeneration(streamId, generationId);
+    this.unsubscribeChannelIfUnused(streamId);
   }
+  // End [knauf]
 
   /**
    * Destroy all resources.
    */
   destroy(): void {
     // Clear all flush timeouts and buffered messages.
-    // Sequence keys are NOT deleted here — they are shared across replicas.
-    // A shutting-down replica must not nuke the counter for active publishers.
-    // cleanup() deletes keys on normal teardown; a 24h safety-net TTL (set once
-    // at first INCR, never refreshed) caps orphan lifetime on abnormal shutdown.
-    for (const [, state] of this.streams) {
+    // Sequence keys are NOT deleted here — they are shared across replicas and
+    // generation-scoped counters expire via their 24h safety-net TTL.
+    for (const [, state] of this.generations) {
       if (state.reorderBuffer.flushTimeout) {
         clearTimeout(state.reorderBuffer.flushTimeout);
         state.reorderBuffer.flushTimeout = null;
@@ -727,7 +787,8 @@ export class RedisEventTransport implements IEventTransport {
     }
 
     this.channelSubscriptions.clear();
-    this.streams.clear();
+    this.generations.clear();
+    this.streamGenerations.clear();
 
     try {
       this.subscriber.disconnect();
