@@ -48,6 +48,9 @@ const optionalJwtAuth = require('~/server/middleware/optionalJwtAuth');
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const configMiddleware = require('~/server/middleware/config/app');
 const { getAppConfig } = require('~/server/services/Config/app');
+// [knauf] Artifact-only shares resolve and snapshot one owned artifact server-side. (NO-TICKET)
+const { createArtifactShare } = require('~/server/services/Artifacts/knauf/share');
+// End [knauf]
 const router = express.Router();
 
 const checkSharedLinksAccess = generateCheckAccess({
@@ -55,6 +58,14 @@ const checkSharedLinksAccess = generateCheckAccess({
   permissions: [Permissions.CREATE],
   getRoleByName,
 });
+
+// [knauf] Artifact sharing is link-only, so creation must always include public view access. (NO-TICKET)
+const checkPublicSharedLinksAccess = generateCheckAccess({
+  permissionType: PermissionTypes.SHARED_LINKS,
+  permissions: [Permissions.CREATE, Permissions.SHARE_PUBLIC],
+  getRoleByName,
+});
+// End [knauf]
 
 const resolveSharedLinkExpiration = (req, conversationId) =>
   getSharedLinkExpiration(
@@ -420,6 +431,41 @@ router.get('/link/:conversationId', requireJwtAuth, async (req, res) => {
     res.status(500).json({ message: 'Error getting shared link' });
   }
 });
+
+// [knauf] Create a revocable, public, view-only artifact link without recipient assignment. (NO-TICKET)
+router.post(
+  '/:conversationId/artifact',
+  requireJwtAuth,
+  configMiddleware,
+  checkPublicSharedLinksAccess,
+  async (req, res) => {
+    try {
+      const expiredAt = await resolveSharedLinkExpiration(req, req.params.conversationId);
+      if (expiredAt != null && !isActiveExpirationDate(expiredAt)) {
+        return res.status(404).end();
+      }
+
+      const created = await createArtifactShare({
+        mongoose,
+        user: req.user.id,
+        conversationId: req.params.conversationId,
+        messageId: req.body?.messageId,
+        locator: req.body?.locator,
+        expiredAt,
+      });
+
+      await grantCreationPermissions(created._id, req.user.id, true, expiredAt);
+      return res.status(200).json(created);
+    } catch (error) {
+      const status = Number.isInteger(error?.status) ? error.status : 500;
+      logger.error('[createArtifactShare] Error creating artifact share:', error);
+      return res.status(status).json({
+        message: status === 500 ? 'Error creating artifact share' : error.message,
+      });
+    }
+  },
+);
+// End [knauf]
 
 router.post(
   '/:conversationId',

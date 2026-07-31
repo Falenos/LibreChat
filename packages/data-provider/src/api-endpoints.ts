@@ -84,6 +84,10 @@ export const getSharedLinks = (
     search ? `&search=${search}` : ''
   }${cursor ? `&cursor=${cursor}` : ''}`;
 export const createSharedLink = (conversationId: string) => `${shareRoot}/${conversationId}`;
+// [knauf] Artifact-only shared-link creation endpoint. (NO-TICKET)
+export const createArtifactSharedLink = (conversationId: string) =>
+  `${createSharedLink(conversationId)}/artifact`;
+// End [knauf]
 export const updateSharedLink = (shareId: string) => `${shareRoot}/${shareId}`;
 /** Share-scoped file routes: serve snapshotted files via shared-link permission. */
 export const sharedFile = (shareId: string, fileId: string) =>

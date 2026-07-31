@@ -370,8 +370,31 @@ export type TPinConversationRequest = {
 
 export type TPinConversationResponse = TConversation;
 
+// [knauf] Artifact-only shared-link payload and server-resolved source locator. (NO-TICKET)
+export type TSharedArtifact = {
+  title: string;
+  type: string;
+  content: string;
+  language?: string;
+};
+
+export type TArtifactShareLocator =
+  | { kind: 'directive'; index: number }
+  | { kind: 'file'; fileId: string; type: string; language?: string };
+
+export type TCreateArtifactShareRequest = {
+  conversationId: string;
+  messageId: string;
+  locator: TArtifactShareLocator;
+};
+// End [knauf]
+
 export type TSharedMessagesResponse = Omit<TSharedLink, 'messages'> & {
   messages: TMessage[];
+  // [knauf] Discriminates the existing conversation projection from an artifact-only snapshot. (NO-TICKET)
+  kind?: 'conversation' | 'artifact';
+  artifact?: TSharedArtifact;
+  // End [knauf]
 };
 
 export type TCreateShareLinkRequest = Pick<TConversation, 'conversationId'>;

@@ -210,6 +210,17 @@ export const useCreateSharedLinkMutation = (
   );
 };
 
+// [knauf] Artifact panel mutation; separate from the conversation-link cache by design. (NO-TICKET)
+export const useCreateArtifactSharedLinkMutation = (
+  options?: t.MutationOptions<t.TSharedLinkResponse, t.TCreateArtifactShareRequest>,
+): UseMutationResult<t.TSharedLinkResponse, unknown, t.TCreateArtifactShareRequest, unknown> => {
+  return useMutation(
+    (payload: t.TCreateArtifactShareRequest) => dataService.createArtifactSharedLink(payload),
+    options,
+  );
+};
+// End [knauf]
+
 export const useUpdateSharedLinkMutation = (
   options?: t.MutationOptions<
     t.TUpdateShareLinkRequest,
