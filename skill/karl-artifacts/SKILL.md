@@ -27,6 +27,12 @@ previews, how to iterate, and how to make it look like Knauf.
 | A logo, icon, or static illustration | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height |
 | A document deliverable: report, policy, plan, spec | `text/markdown` | Rendered document the user can copy/export |
 
+Before emitting `application/vnd.mermaid`, load and follow:
+
+```
+read_file  skills/karl-mermaid/SKILL.md
+```
+
 Rules of thumb:
 
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
@@ -55,9 +61,8 @@ Rules of thumb:
    Tailwind CDN fails to load.
 4. **Recharts without a sized parent.** Wrap `<ResponsiveContainer>` in an element
    with an explicit height (`className="h-72 w-full"`), or set width/height props.
-5. **Mermaid parse errors from special characters.** Quote labels containing
-   `()[]{}:;` as `A["Label (detail)"]`; stick to well-supported diagram types
-   (flowchart, sequenceDiagram, classDiagram, erDiagram, gantt, pie).
+5. **Mermaid syntax errors.** Follow `karl-mermaid`, loaded above; it owns the
+   version-specific syntax and repair rules.
 6. **Missing default export or required props** on the react root component.
 7. **Renaming the identifier on an edit** (see next section).
 

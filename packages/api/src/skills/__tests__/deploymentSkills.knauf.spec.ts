@@ -62,6 +62,7 @@ const EXPECTED_SKILL_NAMES = KNAUF_EXPECTED_DEPLOYMENT_SKILLS;
 
 /** The token source of truth. Every other skill mirrors, never authors. */
 const TOKEN_SOURCE_SKILL = 'karl-brand';
+const MERMAID_SKILL = 'karl-mermaid';
 
 const HEX_PATTERN = /#[0-9a-fA-F]{6}\b/g;
 /** `read_file` reference paths: `skills/<skill-name>/<relative/path>`. */
@@ -106,6 +107,15 @@ describe('[knauf] shipped deployment skills', () => {
     // false` would additionally drop it from the `$` popover.
     expect(source?.disableModelInvocation).not.toBe(true);
     expect(source?.userInvocable).not.toBe(false);
+  });
+
+  it('ships model-invocable Mermaid generation and repair guidance', () => {
+    const mermaid = byName.get(MERMAID_SKILL);
+    expect(mermaid).toBeDefined();
+    expect(mermaid?.disableModelInvocation).not.toBe(true);
+    expect(mermaid?.description).toContain('whenever generating Mermaid');
+    expect(mermaid?.description).toContain('render error');
+    expect(mermaid?.body).toContain('Mermaid **11.15.0**');
   });
 
   it('never authors a hex outside the token source', () => {
