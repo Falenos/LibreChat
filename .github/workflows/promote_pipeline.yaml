@@ -28,7 +28,7 @@ jobs:
     name: Promote AGK stage to prod
     if: ${{ inputs.source-and-destination-environment == 'AGK stage -> AGK prod' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: production
       url: https://agentic-karl.knauf.com
@@ -53,6 +53,7 @@ jobs:
       AGK_ARGOCD_APP: agentic-karl-prod-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-prod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
+      QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -310,3 +311,50 @@ jobs:
 
           echo "AGK prod ArgoCD did not report app $VERSION as Synced/Healthy in time"
           exit 1
+
+      - name: Run PROD health smoke
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          CORRELATION_ID="agentic-karl-prod-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-health"
+          run_id=""
+          run_url=""
+
+          echo "Dispatching PROD k6 health smoke: correlation_id=$CORRELATION_ID"
+          gh workflow run k6-dev-prod-health.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f environment=prod \
+            -f correlation_id="$CORRELATION_ID"
+
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
+              --repo "$QUALITY_REPOSITORY" \
+              --workflow k6-dev-prod-health.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 30 \
+              --jq "map(select(.displayTitle | contains(\"$CORRELATION_ID\"))) | first // empty")
+
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
+            fi
+
+            echo "Waiting for PROD health smoke run to appear: attempt=$attempt"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::Timed out finding PROD health smoke run correlation_id=$CORRELATION_ID"
+            exit 1
+          fi
+
+          echo "PROD health smoke run: $run_url"
+          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          echo "PROD health smoke passed"
+          echo "| PROD health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
