@@ -1,14 +1,18 @@
-import { useContext, useMemo, useState } from 'react';
+import { useContext, useMemo } from 'react';
 import useSWR from 'swr';
 import { Md5 } from 'ts-md5';
 import { ThemeContext, isDark } from '@librechat/client';
 import type { MermaidConfig } from 'mermaid';
 import { inlineFlowchartConfig, sanitizeMermaidSvg } from '~/utils/mermaid';
+// [knauf] Classify deterministic Mermaid failures so only transient library loads retry. (NO-TICKET)
+import { KnaufMermaidError, shouldRetryKnaufMermaidError } from '~/knauf/common/mermaid';
+// End [knauf]
 
 // Constants
 const MD5_LENGTH_THRESHOLD = 10_000;
 const DEFAULT_ID_PREFIX = 'mermaid-diagram';
 
+// [knauf] Reset a rejected lazy import so a transient chunk-load failure can recover. (NO-TICKET)
 // Lazy load mermaid library (~2MB)
 let mermaidPromise: Promise<typeof import('mermaid').default> | null = null;
 
@@ -18,11 +22,17 @@ const loadMermaid = () => {
   }
 
   if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((mod) => mod.default);
+    mermaidPromise = import('mermaid')
+      .then((mod) => mod.default)
+      .catch((error) => {
+        mermaidPromise = null;
+        throw new KnaufMermaidError('load', error);
+      });
   }
 
   return mermaidPromise;
 };
+// End [knauf]
 
 interface UseMermaidOptions {
   /** Mermaid diagram content */
@@ -55,9 +65,6 @@ export const useMermaid = ({
   const { theme } = useContext(ThemeContext);
   const isDarkMode = isDark(theme);
 
-  // Store last valid SVG for fallback on errors
-  const [validContent, setValidContent] = useState<string>('');
-
   // Generate cache key based on content, theme, and ID
   const cacheKey = useMemo((): string => {
     // For large diagrams, use MD5 hash instead of full content
@@ -87,6 +94,9 @@ export const useMermaid = ({
       theme: (customTheme as MermaidConfig['theme']) || defaultTheme,
       ...config,
       flowchart: { ...inlineFlowchartConfig, ...config?.flowchart, htmlLabels: false },
+      // [knauf] Prevent Mermaid's fallback error SVG from leaking into document.body. (NO-TICKET)
+      suppressErrorRendering: true,
+      // End [knauf]
       // Security hardening: MUST come after ...config spread to prevent override
       securityLevel: 'strict',
       maxTextSize: config?.maxTextSize ?? 50000,
@@ -94,6 +104,7 @@ export const useMermaid = ({
     };
   }, [customTheme, isDarkMode, config]);
 
+  // [knauf] Surface source errors exactly once; retrying unchanged invalid Mermaid cannot help. (NO-TICKET)
   // Fetch/render function
   const fetchSvg = async (): Promise<string> => {
     // SSR guard
@@ -102,49 +113,26 @@ export const useMermaid = ({
     }
 
     try {
-      // Load mermaid library (cached after first load)
       const mermaidInstance = await loadMermaid();
 
       if (!mermaidInstance) {
-        throw new Error('Failed to load mermaid library');
+        throw new KnaufMermaidError('load', 'Failed to load mermaid library');
       }
 
-      // Validate syntax first and capture detailed error
       try {
         await mermaidInstance.parse(content);
-      } catch (parseError) {
-        // Extract meaningful error message from mermaid's parse error
-        let errorMessage = 'Invalid mermaid syntax';
-        if (parseError instanceof Error) {
-          errorMessage = parseError.message;
-        } else if (typeof parseError === 'string') {
-          errorMessage = parseError;
-        }
-
-        throw new Error(errorMessage);
+      } catch (error) {
+        throw new KnaufMermaidError('syntax', error);
       }
 
-      // Initialize with config
       mermaidInstance.initialize(mermaidConfig);
-
-      // Render to SVG
       const { svg } = await mermaidInstance.render(diagramId, content);
-
-      const sanitizedSvg = sanitizeMermaidSvg(svg);
-
-      // Store as last valid content
-      setValidContent(sanitizedSvg);
-
-      return sanitizedSvg;
+      return sanitizeMermaidSvg(svg);
     } catch (error) {
-      console.error('Mermaid rendering error:', error);
-
-      // Return last valid content if available (graceful degradation)
-      if (validContent) {
-        return validContent;
+      if (error instanceof KnaufMermaidError) {
+        throw error;
       }
-
-      throw error;
+      throw new KnaufMermaidError('render', error);
     }
   };
 
@@ -155,8 +143,9 @@ export const useMermaid = ({
     dedupingInterval: 3000,
     errorRetryCount: 2,
     errorRetryInterval: 1000,
-    shouldRetryOnError: true,
+    shouldRetryOnError: shouldRetryKnaufMermaidError,
   });
+  // End [knauf]
 
   return {
     svg: data,

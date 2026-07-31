@@ -33,7 +33,11 @@ beforeEach(() => {
 
 describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
   it('lists the skills this image ships', () => {
-    expect([...KNAUF_EXPECTED_DEPLOYMENT_SKILLS].sort()).toEqual(['karl-artifacts', 'karl-brand']);
+    expect([...KNAUF_EXPECTED_DEPLOYMENT_SKILLS].sort()).toEqual([
+      'karl-artifacts',
+      'karl-brand',
+      'karl-mermaid',
+    ]);
   });
 
   it('is frozen, so a caller cannot mutate the expected set at runtime', () => {
@@ -44,14 +48,14 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
 describe('[knauf] checkDeploymentSkills', () => {
   it('passes when exactly the expected skills loaded', () => {
     const result = checkDeploymentSkills({
-      loadedNames: ['karl-brand', 'karl-artifacts'],
+      loadedNames: ['karl-brand', 'karl-artifacts', 'karl-mermaid'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(true);
     expect(result.missing).toEqual([]);
     expect(result.unexpected).toEqual([]);
     // Sorted, so the log line is stable across load order.
-    expect(result.loaded).toEqual(['karl-artifacts', 'karl-brand']);
+    expect(result.loaded).toEqual(['karl-artifacts', 'karl-brand', 'karl-mermaid']);
     expect(result.directory).toBe(DIRECTORY);
   });
 
@@ -59,13 +63,13 @@ describe('[knauf] checkDeploymentSkills', () => {
     // The shadowed-volume case: boot succeeds, registry is empty.
     const result = checkDeploymentSkills({ loadedNames: [], directory: DIRECTORY });
     expect(result.ok).toBe(false);
-    expect(result.missing).toEqual(['karl-artifacts', 'karl-brand']);
+    expect(result.missing).toEqual(['karl-artifacts', 'karl-brand', 'karl-mermaid']);
     expect(result.loaded).toEqual([]);
   });
 
   it('reports a partial load', () => {
     const result = checkDeploymentSkills({
-      loadedNames: ['karl-artifacts'],
+      loadedNames: ['karl-artifacts', 'karl-mermaid'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(false);
@@ -77,7 +81,7 @@ describe('[knauf] checkDeploymentSkills', () => {
     // Re-enabling karl-data-analysis before updating the constant must not
     // page anyone — CI already forces the constant to be updated.
     const result = checkDeploymentSkills({
-      loadedNames: ['karl-artifacts', 'karl-brand', 'karl-data-analysis'],
+      loadedNames: ['karl-artifacts', 'karl-brand', 'karl-mermaid', 'karl-data-analysis'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(true);
@@ -89,7 +93,7 @@ describe('[knauf] checkDeploymentSkills', () => {
     // A rename mints a new skill id and drops per-user active state, so surfacing
     // both halves is what makes the log actionable.
     const result = checkDeploymentSkills({
-      loadedNames: ['karl-artifacts', 'karl-branding'],
+      loadedNames: ['karl-artifacts', 'karl-branding', 'karl-mermaid'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(false);
@@ -99,11 +103,11 @@ describe('[knauf] checkDeploymentSkills', () => {
 
   it('de-duplicates loaded names rather than reporting a false miss', () => {
     const result = checkDeploymentSkills({
-      loadedNames: ['karl-brand', 'karl-brand', 'karl-artifacts'],
+      loadedNames: ['karl-brand', 'karl-brand', 'karl-artifacts', 'karl-mermaid'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(true);
-    expect(result.loaded).toEqual(['karl-artifacts', 'karl-brand']);
+    expect(result.loaded).toEqual(['karl-artifacts', 'karl-brand', 'karl-mermaid']);
   });
 
   it('honours an explicit expected set', () => {
@@ -138,7 +142,7 @@ describe('[knauf] reportDeploymentSkillCheck', () => {
     // distinguish "loaded fine" from "check never ran".
     reportDeploymentSkillCheck(
       checkDeploymentSkills({
-        loadedNames: ['karl-artifacts', 'karl-brand'],
+        loadedNames: ['karl-artifacts', 'karl-brand', 'karl-mermaid'],
         directory: DIRECTORY,
       }),
     );
@@ -147,7 +151,7 @@ describe('[knauf] reportDeploymentSkillCheck', () => {
     const [message] = mockLogger.info.mock.calls[0];
     expect(message).toContain('OK');
     expect(message).toContain(DIRECTORY);
-    expect(message).toContain('karl-artifacts, karl-brand');
+    expect(message).toContain('karl-artifacts, karl-brand, karl-mermaid');
   });
 
   it('logs at ERROR — not warn or info — when skills are missing', () => {
@@ -167,6 +171,7 @@ describe('[knauf] reportDeploymentSkillCheck', () => {
     expect(message).toContain('DEPLOYMENT_SKILLS_DIR');
     // Must say the app still works, so nobody escalates this to an outage.
     expect(message).toContain('Artifacts still work');
+    expect(message).toContain('Mermaid guidance');
   });
 
   it('points at the directory rather than the mount on a partial load', () => {
@@ -182,7 +187,7 @@ describe('[knauf] reportDeploymentSkillCheck', () => {
   it('logs unexpected skills as info even when the check passes', () => {
     reportDeploymentSkillCheck(
       checkDeploymentSkills({
-        loadedNames: ['karl-artifacts', 'karl-brand', 'extra-skill'],
+        loadedNames: ['karl-artifacts', 'karl-brand', 'karl-mermaid', 'extra-skill'],
         directory: DIRECTORY,
       }),
     );
@@ -195,7 +200,7 @@ describe('[knauf] reportDeploymentSkillCheck', () => {
 describe('[knauf] verifyDeploymentSkills', () => {
   it('compares, logs and returns the result', () => {
     const result = verifyDeploymentSkills({
-      loadedNames: ['karl-artifacts', 'karl-brand'],
+      loadedNames: ['karl-artifacts', 'karl-brand', 'karl-mermaid'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(true);
