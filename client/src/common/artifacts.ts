@@ -14,6 +14,9 @@ export interface Artifact {
   content?: string;
   title?: string;
   type?: string;
+  // [knauf] Server-owned locator for generated file artifacts; content is never trusted from the client. (NO-TICKET)
+  sourceFileId?: string;
+  // End [knauf]
 }
 
 export type ArtifactFiles =

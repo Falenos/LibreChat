@@ -452,6 +452,21 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
         return null;
       }
 
+      // [knauf] Return an artifact-only projection; never leak the source message payload. (NO-TICKET)
+      if (share.knauf_artifact) {
+        return {
+          kind: 'artifact',
+          shareId: share.shareId || shareId,
+          title: share.title,
+          createdAt: share.createdAt,
+          updatedAt: share.updatedAt,
+          conversationId: anonymizeConvoId(share.conversationId),
+          messages: [],
+          artifact: share.knauf_artifact,
+        };
+      }
+      // End [knauf]
+
       /** Filtered messages based on targetMessageId if present (branch-specific sharing) */
       let messagesToShare: t.IMessage[] = share.messages;
       if (share.targetMessageId) {
@@ -675,6 +690,9 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
           user,
           ...activeExpirationFilter<t.ISharedLink>(),
           ...(targetMessageId && { targetMessageId }),
+          // [knauf] Artifact links are independent snapshots, not the conversation's reusable link. (NO-TICKET)
+          knauf_artifact: { $exists: false },
+          // End [knauf]
         })
           .select('-_id -__v -user')
           .lean() as Promise<t.ISharedLink | null>,
@@ -765,6 +783,9 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
         conversationId,
         user,
         ...activeExpirationFilter<t.ISharedLink>(),
+        // [knauf] Keep artifact-only links out of the conversation-share dialog. (NO-TICKET)
+        knauf_artifact: { $exists: false },
+        // End [knauf]
       })
         .select('shareId targetMessageId snapshotFiles _id')
         .sort({ updatedAt: -1 })
@@ -820,6 +841,11 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
       if (!share) {
         throw new ShareServiceError('Share not found', 'SHARE_NOT_FOUND');
       }
+      // [knauf] Artifact snapshots are immutable and cannot be refreshed into conversation links. (NO-TICKET)
+      if (share.knauf_artifact) {
+        throw new ShareServiceError('Artifact shares cannot be updated', 'SHARE_UPDATE_ERROR');
+      }
+      // End [knauf]
 
       const updatedMessages = await Message.find({ conversationId: share.conversationId, user })
         .sort({ createdAt: 1 })

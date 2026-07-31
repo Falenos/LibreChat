@@ -580,6 +580,9 @@ describe('fileToArtifact', () => {
     expect(artifact!.title).toBe('index.html');
     expect(artifact!.content).toBe('<h1>hi</h1>');
     expect(artifact!.messageId).toBe('msg-1');
+    // [knauf] Artifact-only sharing uses the stable server file locator, never client content. (NO-TICKET)
+    expect(artifact!.sourceFileId).toBe('fid-1');
+    // End [knauf]
     expect(artifact!.lastUpdateTime).toBe(new Date(baseFile.updatedAt).getTime());
   });
 
