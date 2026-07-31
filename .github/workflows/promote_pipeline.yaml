@@ -7,11 +7,11 @@ on:
         type: choice
         description: 'Source and destination environments for promotion'
         required: true
-        default: 'AGK dev -> AGK prod'
+        default: 'AGK stage -> AGK prod'
         options:
-          - 'AGK dev -> AGK prod'
+          - 'AGK stage -> AGK prod'
       version:
-        description: 'Version to promote, for example v0.54.0. Defaults to the current AGK dev GitOps tag.'
+        description: 'Version to promote, for example v0.54.0. Defaults to the current AGK stage GitOps tag.'
         type: string
         required: false
 
@@ -24,24 +24,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote-agk-dev-to-prod:
-    name: Promote AGK dev to prod
-    if: ${{ inputs.source-and-destination-environment == 'AGK dev -> AGK prod' }}
+  promote-agk-stage-to-prod:
+    name: Promote AGK stage to prod
+    if: ${{ inputs.source-and-destination-environment == 'AGK stage -> AGK prod' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: production
       url: https://agentic-karl.knauf.com
     env:
       CT_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
-      AGK_DEV_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_STAGE_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_PROD_SUBSCRIPTION_ID: e0515a24-7205-481b-b657-944901020e32
-      AGK_DEV_ACR_NAME: acragkhubnonprod001
+      AGK_STAGE_ACR_NAME: acragkhubnonprod001
       AGK_PROD_ACR_NAME: acragkhubprod001
-      AGK_DEV_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_STAGE_IMAGE_REPOSITORY: agentic-karl-stage/agentic-karl
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
-      AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
       # [knauf] KK20-195 — prod worker values, bumped in lock-step with the app.
@@ -53,6 +53,7 @@ jobs:
       AGK_ARGOCD_APP: agentic-karl-prod-agentic-karl
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-prod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
+      QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -92,7 +93,7 @@ jobs:
             VERSION="$INPUT_VERSION"
           else
             VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
-              "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
+              "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
           fi
 
           if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$VERSION"; then
@@ -109,11 +110,11 @@ jobs:
 
           VERSION="${{ steps.version.outputs.version }}"
 
-          test -f "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
+          test -f "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
-          grep -F "repository: $AGK_DEV_ACR_NAME.azurecr.io/$AGK_DEV_IMAGE_REPOSITORY" \
-            "agk-deployment-configs/$AGK_DEV_CONFIG_DIRECTORY/values.yaml"
+          grep -F "repository: $AGK_STAGE_ACR_NAME.azurecr.io/$AGK_STAGE_IMAGE_REPOSITORY" \
+            "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_PROD_ACR_NAME.azurecr.io/$AGK_PROD_IMAGE_REPOSITORY" \
             "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           grep -F "DOMAIN_SERVER: \"$AGK_PROD_DOMAIN\"" \
@@ -124,9 +125,9 @@ jobs:
             "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
 
           az acr repository show-tags \
-            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
-            --name "$AGK_DEV_ACR_NAME" \
-            --repository "$AGK_DEV_IMAGE_REPOSITORY" \
+            --subscription "$AGK_STAGE_SUBSCRIPTION_ID" \
+            --name "$AGK_STAGE_ACR_NAME" \
+            --repository "$AGK_STAGE_IMAGE_REPOSITORY" \
             --query "[?@=='$VERSION']" \
             -o tsv | grep -Fx "$VERSION"
 
@@ -136,8 +137,8 @@ jobs:
 
           VERSION="${{ steps.version.outputs.version }}"
           SOURCE_REGISTRY_ID=$(az acr show \
-            --subscription "$AGK_DEV_SUBSCRIPTION_ID" \
-            --name "$AGK_DEV_ACR_NAME" \
+            --subscription "$AGK_STAGE_SUBSCRIPTION_ID" \
+            --name "$AGK_STAGE_ACR_NAME" \
             --query id \
             -o tsv)
 
@@ -145,7 +146,7 @@ jobs:
             --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
             --name "$AGK_PROD_ACR_NAME" \
             --registry "$SOURCE_REGISTRY_ID" \
-            --source "$AGK_DEV_IMAGE_REPOSITORY:$VERSION" \
+            --source "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
             --image "$AGK_PROD_IMAGE_REPOSITORY:$VERSION" \
             --force
 
@@ -214,7 +215,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl prod to $VERSION" \
-              --body "Automated prod GitOps promotion from the agentic-karl promote pipeline (run ${{ github.run_id }}). Bumps prod app values to \`$VERSION\`.")
+              --body "Automated prod GitOps promotion from the agentic-karl promote pipeline (run ${{ github.run_id }}). Promotes the latest validated stage version \`$VERSION\` to prod.")
           fi
           echo "Prod deployment config PR: $PR_URL"
 
@@ -310,3 +311,50 @@ jobs:
 
           echo "AGK prod ArgoCD did not report app $VERSION as Synced/Healthy in time"
           exit 1
+
+      - name: Run PROD health smoke
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          CORRELATION_ID="agentic-karl-prod-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-health"
+          run_id=""
+          run_url=""
+
+          echo "Dispatching PROD k6 health smoke: correlation_id=$CORRELATION_ID"
+          gh workflow run k6-dev-prod-health.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f environment=prod \
+            -f correlation_id="$CORRELATION_ID"
+
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
+              --repo "$QUALITY_REPOSITORY" \
+              --workflow k6-dev-prod-health.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 30 \
+              --jq "map(select(.displayTitle | contains(\"$CORRELATION_ID\"))) | first // empty")
+
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
+            fi
+
+            echo "Waiting for PROD health smoke run to appear: attempt=$attempt"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::Timed out finding PROD health smoke run correlation_id=$CORRELATION_ID"
+            exit 1
+          fi
+
+          echo "PROD health smoke run: $run_url"
+          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          echo "PROD health smoke passed"
+          echo "| PROD health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"

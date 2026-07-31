@@ -24,7 +24,7 @@ cache: true
 #                   different model per call.
 #   trigger         absent, so the SDK summarizes on ANY overflow
 #                   (@librechat/agents summarization/index.ts:79-82). With the
-#                   context window now pinned to 128k rather than falling back to
+#                   context window now pinned to 256k rather than falling back to
 #                   32k, overflow should be rare enough that this matters much
 #                   less than it did.
 #   prompt          the SDK default; not tuned for KARL's tone or for German.
@@ -681,8 +681,29 @@ modelSpecs:
       # first load, and useToolToggle's stored-pin guard then beats any admin
       # default, so it only ever fires in a browser that has never loaded KARL.
       # Cost: generateArtifactsPrompt adds ~11.4 KB (~2.9k tokens) per turn
-      # (packages/api/src/agents/initialize.ts). Deliberately 'default' and not
-      # 'shadcnui', which stacks a second prompt on top.
+      # (packages/api/src/agents/initialize.ts).
+      #
+      # Deliberately 'default' and not 'shadcnui'. 'shadcnui' adds
+      # `generateShadcnPrompt` (packages/api/src/prompts/artifacts/generate.ts),
+      # which carries the whole components.ts manifest — every component's import
+      # statement and usage example, ~2.9k extra tokens on every turn. We use four
+      # components; paying for a 711-line catalogue of all of them is the wrong
+      # trade.
+      #
+      # NO-TICKET — that choice is only safe because the SKILL now carries the
+      # import lines for the components it recommends. It did not, and that was
+      # the real defect: `skill/karl-artifacts/SKILL.md` named `Card`, `Tabs`,
+      # `Table` and `Badge` as the components to reach for, while an import
+      # example existed only for Card and Table (in the report/dashboard
+      # templates). On 'default' there is no manifest to fall back on, so the
+      # model extrapolated from the `/components/ui/<name>` pattern and produced
+      # `import { Card, Tabs, TabList } from '/components/ui'` — a barrel that is
+      # not mounted, and an export name that does not exist. The preview died with
+      # ModuleNotFoundError.
+      #
+      # If a future change recommends a component the skill has no import line
+      # for, this breaks again — `deploymentSkills.knauf.spec.ts` pins that
+      # invariant so it fails in CI instead of in a preview.
       artifacts: 'default'
       # [knauf] KK20-243 — deployment skills available on KARL. Cheap by
       # comparison: only name + description per skill lands in the prompt
@@ -720,13 +741,12 @@ modelSpecs:
         # summarising far earlier than anyone expected, and the skill catalog was
         # budgeted at 1% of 32k (1,280 chars) instead of the intended headroom.
         #
-        # This value must be the FLOOR of Azure Model Router's candidate pool,
-        # not the ceiling: the router picks a different underlying model per
-        # request, and declaring more than the smallest candidate would overflow
-        # it. 128k is a deliberately conservative floor pending infra
-        # confirmation of the pool — still 4x the old effective budget. Raise it
-        # once the pool is confirmed; do not raise it by guessing.
-        maxContextTokens: 128000
+        # This value must stay below the smallest Azure Model Router candidate's
+        # input limit. Both AGK environments declare the same Quality subset in
+        # agk-infrastructure: gpt-5.4-nano/mini (272k input) plus gpt-5.4/5.5
+        # (922k input). 256k is therefore a verified common budget with 16k of
+        # headroom on the smallest candidates, rather than a guessed model cap.
+        maxContextTokens: 256000
         useResponsesApi: true
         web_search: true
         greeting: |
@@ -780,6 +800,8 @@ modelSpecs:
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
 
+          Mermaid: Before generating or repairing Mermaid, invoke the karl-mermaid skill and follow it. Before emitting a mermaid code block, ensure its syntax is compatible with Mermaid 11.15.0. In sequence-diagram messages and notes, escape literal semicolons as #59;, use <br/> for visible line breaks, use simple participant IDs with "as" aliases, and close alt, opt, and loop blocks with end.
+
     # Knauf personalities for the agent builder. Filtered client-side by the
     # `karl-personality-` name prefix in
     # client/src/knauf/data-provider/Agents/usePersonalities.ts. Preset values
@@ -826,7 +848,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: high
         useResponsesApi: true
         web_search: true
@@ -848,7 +870,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: medium
         useResponsesApi: true
         web_search: true
@@ -870,7 +892,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: low
         useResponsesApi: true
         web_search: true
@@ -896,7 +918,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions

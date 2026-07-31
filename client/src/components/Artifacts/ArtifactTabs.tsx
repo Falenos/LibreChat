@@ -57,6 +57,10 @@ export default function ArtifactTabs({
         tabIndex={-1}
       >
         <ArtifactPreview
+          // [knauf] Supply repair targeting and read-only state to the Sandpack preview. (NO-TICKET)
+          artifact={artifact}
+          isSharedConvo={isSharedConvo}
+          // End [knauf]
           files={files}
           fileKey={fileKey}
           template={template}

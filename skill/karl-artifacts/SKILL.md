@@ -30,6 +30,12 @@ like Knauf.
 | A logo, icon, or static illustration | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height |
 | Plain unstyled prose the user will paste elsewhere: a policy, a plan, a spec, meeting notes | `text/markdown` | Rendered document the user can copy/export. No layout, no brand styling, no slides — if the deliverable needs any of those, it is a react artifact |
 
+Before emitting `application/vnd.mermaid`, load and follow:
+
+```
+read_file  skills/karl-mermaid/SKILL.md
+```
+
 Rules of thumb:
 
 - **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and "walkthrough" all mean the `slides` template — never markdown, whatever else a request calls the thing.
@@ -62,9 +68,8 @@ Rules of thumb:
    Tailwind CDN fails to load.
 4. **Recharts without a sized parent.** Wrap `<ResponsiveContainer>` in an element
    with an explicit height (`className="h-72 w-full"`), or set width/height props.
-5. **Mermaid parse errors from special characters.** Quote labels containing
-   `()[]{}:;` as `A["Label (detail)"]`; stick to well-supported diagram types
-   (flowchart, sequenceDiagram, classDiagram, erDiagram, gantt, pie).
+5. **Mermaid syntax errors.** Follow `karl-mermaid`, loaded above; it owns the
+   version-specific syntax and repair rules.
 6. **Missing default export or required props** on the react root component.
 7. **Renaming the identifier on an edit** (see next section).
 
@@ -104,7 +109,22 @@ that file somewhere that injects nothing.
   text/backgrounds that only work in one mode.
 - Default to a clean layout: page padding (`p-6`), constrained width
   (`max-w-4xl mx-auto`), a consistent spacing scale. shadcn/ui `Card`, `Tabs`,
-  `Table`, `Badge` give a professional look for almost no effort.
+  `Table` and `Badge` give a professional look for almost no effort. Each lives in
+  its own file — there is no barrel, so `from '/components/ui'` does not resolve and
+  the preview will not load. These four are the whole set worth reaching for, and
+  these are their exact imports and export names:
+
+  ```tsx
+  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '/components/ui/card';
+  import { Tabs, TabsList, TabsTrigger, TabsContent } from '/components/ui/tabs';
+  import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from '/components/ui/table';
+  import { Badge } from '/components/ui/badge';
+  ```
+
+  Note `TabsList`, not `TabList`. Import only what you use. For anything outside
+  these four, build it from plain elements and Tailwind rather than guessing at a
+  path — an import that does not resolve takes the whole artifact down, while a
+  hand-built component merely looks plainer.
 
 ## Knauf brand — read karl-brand first
 

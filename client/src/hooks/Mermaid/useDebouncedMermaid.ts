@@ -1,5 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useMermaid } from './useMermaid';
+// [knauf] Deterministic Mermaid source failures do not need three identical attempts. (NO-TICKET)
+import { isKnaufMermaidSourceError } from '~/knauf/common/mermaid';
+// End [knauf]
 
 /**
  * Detect if mermaid content is likely incomplete (still streaming)
@@ -192,7 +195,12 @@ export const useDebouncedMermaid = ({
   }, [result.error, result.svg]);
 
   // Show error after multiple failures OR if forced render (retry) with error
-  const shouldShowError = shouldRender && result.error && (errorCount > 2 || forceRender);
+  // [knauf] Show syntax/render errors immediately; retain the transient-load threshold. (NO-TICKET)
+  const shouldShowError =
+    shouldRender &&
+    result.error &&
+    (isKnaufMermaidSourceError(result.error) || errorCount > 2 || forceRender);
+  // End [knauf]
 
   return {
     ...result,
