@@ -24,6 +24,10 @@ const {
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage, getMessages, getConvo } = require('~/models');
+// [knauf] NO-TICKET — provider failures are logged and persisted only as safe,
+// bounded operational classifications.
+const { summarizeProviderError } = require('./knauf/providerError');
+// End [knauf]
 
 function createCloseHandler(abortController) {
   return function (manual) {
@@ -837,13 +841,13 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           logger.debug(`[ResumableAgentController] Generation aborted for ${streamId}`);
           // abortJob already handled emitDone and completeJob
         } else {
-          logger.error(`[ResumableAgentController] Generation error for ${streamId}:`, error);
-          await GenerationJobManager.emitError(
-            streamId,
-            error.message || 'Generation failed',
-            jobGenerationId,
-          );
-          await GenerationJobManager.completeJob(streamId, error.message, jobGenerationId);
+          // Never serialize the provider Error: it can carry
+          // request inputs, base64 images, filenames, paths, and user fields.
+          const errorSummary = summarizeProviderError(error, 'agent_generation');
+          const publicError = errorSummary.code ?? 'provider_request_failed';
+          logger.error('[ResumableAgentController] Generation failed', errorSummary);
+          await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
+          await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         }
 
         await finishResumableRequest(req, userId);
@@ -867,31 +871,36 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // Start generation and handle any unhandled errors
     GenerationJobManager.runWithGeneration(streamId, jobGenerationId, () =>
       startGeneration().catch(async (err) => {
-        logger.error(
-          `[ResumableAgentController] Unhandled error in background generation: ${err.message}`,
-        );
-        await GenerationJobManager.completeJob(streamId, err.message, jobGenerationId);
+        // Same safe terminal shape for failures outside the
+        // normal generation catch.
+        const errorSummary = summarizeProviderError(err, 'agent_generation_background');
+        const publicError = errorSummary.code ?? 'provider_request_failed';
+        logger.error('[ResumableAgentController] Background generation failed', errorSummary);
+        await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         await finishResumableRequest(req, userId);
       }),
     );
   } catch (error) {
-    logger.error('[ResumableAgentController] Initialization error:', error);
+    // Initialization can fail inside provider setup too;
+    // preserve the known local conflict while sanitizing all other failures.
+    const isGenerationConflict = error.code === GENERATION_CONFLICT_CODE;
+    const errorSummary = summarizeProviderError(error, 'agent_generation_initialization');
+    const publicError = isGenerationConflict
+      ? error.message
+      : (errorSummary.code ?? 'provider_request_failed');
+    logger.error('[ResumableAgentController] Initialization failed', errorSummary);
     if (!res.headersSent) {
-      const status = error.code === GENERATION_CONFLICT_CODE ? 409 : 500;
+      const status = isGenerationConflict ? 409 : 500;
       res.status(status).json({
-        ...(error.code && { code: error.code }),
-        error: error.message || 'Failed to start generation',
+        ...(isGenerationConflict && { code: GENERATION_CONFLICT_CODE }),
+        error: publicError,
       });
     } else {
       // JSON already sent, emit error to stream so client can receive it
-      await GenerationJobManager.emitError(
-        streamId,
-        error.message || 'Failed to start generation',
-        jobGenerationId,
-      );
+      await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
     }
     if (jobGenerationId) {
-      await GenerationJobManager.completeJob(streamId, error.message, jobGenerationId);
+      await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
     }
     await finishResumableRequest(req, userId);
     if (client) {

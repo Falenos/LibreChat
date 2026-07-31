@@ -29,7 +29,6 @@ const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getOpenAIClient } = require('~/server/controllers/assistants/helpers');
 const { hasCapability } = require('~/server/middleware/roles/capabilities');
 const { checkPermission } = require('~/server/services/PermissionService');
-const { loadAuthValues } = require('~/server/services/Tools/credentials');
 // [knauf] KK20-167 — SAS-signed Azure Blob refresh chain and the shared
 // half-TTL refresh-cache helper. Pairs with fileUrlRefreshBySource below.
 const { refreshAzureFileUrls } = require('~/server/services/Files/Azure/crud');
@@ -944,25 +943,43 @@ router.post('/', async (req, res) => {
     return await processAgentFileUpload({ req, res, metadata });
   } catch (error) {
     const message = resolveUploadErrorMessage(error);
-    logger.error('[/files] Error processing file:', error);
+    // [knauf] NO-TICKET — encrypted/password-protected content is an expected,
+    // unprocessable client input, not an operational 5xx. Logs retain only a
+    // stable code/type and never the upload name, path, bytes, or user identity.
+    const isEncryptedFile = message === 'com_knauf_error_file_encrypted';
+    const logMetadata = {
+      operation: 'file_upload',
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+      ...(isEncryptedFile && { code: message }),
+    };
+    logger[isEncryptedFile ? 'info' : 'error'](
+      isEncryptedFile ? '[/files] Rejected encrypted file' : '[/files] File processing failed',
+      logMetadata,
+    );
 
     try {
       await fs.unlink(req.file.path);
       cleanup = false;
-    } catch (error) {
-      logger.error('[/files] Error deleting file:', error);
+    } catch (_error) {
+      logger.error('[/files] Upload cleanup failed', { operation: 'file_upload_cleanup' });
     }
-    res.status(500).json({ message });
+    // 422 keeps expected rejection out of HTTP 5xx metrics
+    // and exposes a stable localization code to the client.
+    res.status(isEncryptedFile ? 422 : 500).json({
+      message,
+      ...(isEncryptedFile && { code: message }),
+    });
   } finally {
     if (cleanup) {
       try {
         await fs.unlink(req.file.path);
-      } catch (error) {
-        logger.error('[/files] Error deleting file after file processing:', error);
+      } catch (_error) {
+        logger.error('[/files] Upload cleanup failed', { operation: 'file_upload_cleanup' });
       }
     } else {
       logger.debug('[/files] File processing completed without cleanup');
     }
+    // End [knauf]
   }
 });
 

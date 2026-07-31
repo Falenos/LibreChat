@@ -111,8 +111,10 @@ describe('redactFormat', () => {
     const metadata = {
       apiKey: 'secretvalue',
       authorization: 'secretvalue',
+      tenantId: 'tenant-1',
       nested: { token: 'secretvalue' },
       safe: 'secretvalue',
+      userId: 'user-1',
       'x-api-key': 'secretvalue',
     };
     const info = runRedactFormat({
@@ -124,7 +126,9 @@ describe('redactFormat', () => {
 
     expect(splat[0].apiKey).toBe('[REDACTED]');
     expect(splat[0].authorization).toBe('[REDACTED]');
+    expect(splat[0].tenantId).toBe('[REDACTED]');
     expect(splat[0].nested.token).toBe('[REDACTED]');
+    expect(splat[0].userId).toBe('[REDACTED]');
     expect(splat[0]['x-api-key']).toBe('[REDACTED]');
     expect(splat[0].safe).toBe('secretvalue');
     expect(metadata.apiKey).toBe('secretvalue');
@@ -176,6 +180,26 @@ describe('redactFormat', () => {
     expect(info.message).toBe(`payload [REDACTED Buffer ${buffer.length} bytes]`);
     expect(info.message).not.toContain('sk-abc123def');
   });
+
+  // [knauf] NO-TICKET — regression for Foundry invalid_payload logs carrying
+  // complete image inputs and Azure SAS signatures.
+  it('removes image bytes and signed URL secrets before interpolation', () => {
+    const imageBytes = Buffer.alloc(20_000, 'a').toString('base64');
+    const info = runRedactSplatFormat({
+      level: 'error',
+      message: 'provider %s %s',
+      [SPLAT_SYMBOL]: [
+        `data:image/png;base64,${imageBytes}`,
+        'https://storage.example.test/image.png?sp=r&sig=private-signature',
+      ],
+    });
+
+    expect(info.message).toContain('[REDACTED image data URI]');
+    expect(info.message).toContain('sig=[REDACTED]');
+    expect(info.message).not.toContain(imageBytes.substring(0, 32));
+    expect(info.message).not.toContain('private-signature');
+  });
+  // End [knauf]
 
   it('bounds large object and array redaction work', () => {
     const metadata: Record<string, unknown> = {};
@@ -240,6 +264,22 @@ describe('redactFormat', () => {
     expect(error.stack).toContain('Bearer secretvalue');
   });
 
+  // [knauf] NO-TICKET — keep giant provider stack/payload wrappers bounded.
+  it('bounds error messages and stacks', () => {
+    const error = new Error('m'.repeat(5000));
+    error.stack = `Error: ${'s'.repeat(10_000)}`;
+    const info = runRedactFormat({
+      level: 'error',
+      message: 'provider failed',
+      [SPLAT_SYMBOL]: [error],
+    });
+    const redacted = (info[SPLAT_SYMBOL] as Error[])[0];
+
+    expect(redacted.message.length).toBeLessThan(1100);
+    expect(redacted.stack?.length).toBeLessThan(2150);
+  });
+  // End [knauf]
+
   it('preserves contextual messages when redacting error splat arguments', () => {
     const error = new Error('Bearer secretvalue');
 
@@ -278,7 +318,8 @@ describe('redactFormat', () => {
 });
 
 describe('debugTraverse request context', () => {
-  it('appends request context metadata for non-debug lines', () => {
+  // [knauf] NO-TICKET — only requestId is safe operational correlation.
+  it('appends request correlation without user or tenant identifiers', () => {
     const out = runFormatter(
       buildInfo('info', {
         tenantId: 'tenant-1',
@@ -287,8 +328,8 @@ describe('debugTraverse request context', () => {
       }),
     );
 
-    expect(out).toContain('"tenantId":"tenant-1"');
-    expect(out).toContain('"userId":"user-1"');
+    expect(out).not.toContain('tenant-1');
+    expect(out).not.toContain('user-1');
     expect(out).toContain('"requestId":"req-1"');
   });
 
@@ -303,7 +344,7 @@ describe('debugTraverse request context', () => {
 
     expect(out).not.toContain('__SYSTEM__');
     expect(out).not.toContain('"tenantId"');
-    expect(out).toContain('"userId":"user-1"');
+    expect(out).not.toContain('user-1');
     expect(out).toContain('"requestId":"req-1"');
   });
 
@@ -317,6 +358,7 @@ describe('debugTraverse request context', () => {
 
     expect(out).not.toContain('__SYSTEM__');
     expect(out).not.toMatch(/tenantId:/);
-    expect(out).toContain('userId');
+    expect(out).not.toContain('userId');
   });
+  // End [knauf]
 });

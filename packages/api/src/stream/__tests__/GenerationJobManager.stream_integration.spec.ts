@@ -1826,6 +1826,34 @@ describe('GenerationJobManager Integration Tests', () => {
       await GenerationJobManager.destroy();
     });
 
+    // [knauf] NO-TICKET — provider failure, disconnect, and background catch can
+    // converge on terminal completion concurrently; only one path may persist it.
+    test('records concurrent error completion once', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const updateJob = jest.spyOn(jobStore, 'updateJob');
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: true,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `error-idempotent-${Date.now()}`;
+      await GenerationJobManager.createJob(streamId, 'user-1');
+      updateJob.mockClear();
+
+      await Promise.all([
+        GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
+        GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
+      ]);
+
+      expect(updateJob).toHaveBeenCalledTimes(1);
+      expect((await GenerationJobManager.getJob(streamId))?.status).toBe('error');
+      await GenerationJobManager.destroy();
+    });
+    // End [knauf]
+
     test('should send stored error to late-connecting subscriber', async () => {
       GenerationJobManager.configure({
         jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),

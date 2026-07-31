@@ -149,6 +149,7 @@ interface RuntimeJobState {
   // [knauf] Bind every local callback and terminal action to one immutable turn.
   generationId?: string;
   terminal: boolean;
+  completionRecorded: boolean;
   // End [knauf]
   abortController: AbortController;
   readyPromise: Promise<void>;
@@ -392,6 +393,7 @@ class GenerationJobManagerClass {
     const runtime: RuntimeJobState = {
       generationId: jobData.generationId,
       terminal: false,
+      completionRecorded: false,
       abortController: new AbortController(),
       readyPromise,
       resolveReady: resolveReady!,
@@ -632,6 +634,7 @@ class GenerationJobManagerClass {
     const runtime: RuntimeJobState = {
       generationId: jobData.generationId,
       terminal: jobData.status !== 'running',
+      completionRecorded: jobData.status !== 'running',
       abortController: new AbortController(),
       readyPromise,
       resolveReady: resolveReady!,
@@ -760,6 +763,12 @@ class GenerationJobManagerClass {
     const runtime = this.getRuntimeState(streamId, ownerGenerationId);
     const ownerKey = this.generationKey(streamId, ownerGenerationId);
     if (runtime) {
+      // Concurrent terminal paths share this synchronous claim so persistence,
+      // logs, and generation result metrics are emitted once.
+      if (runtime.completionRecorded) {
+        return;
+      }
+      runtime.completionRecorded = true;
       runtime.terminal = true;
     }
     // End [knauf]
