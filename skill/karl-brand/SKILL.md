@@ -7,7 +7,6 @@ description: >-
   KNAUF logo.
 argument-hint: "[what to brand]"
 user-invocable: true
-always-apply: true
 version: "1.0.0"
 ---
 
