@@ -44,6 +44,9 @@ interface SpecPreset {
 }
 interface ModelSpec {
   name: string;
+  /** Spec-level capability keys — siblings of `preset`, not fields inside it. */
+  artifacts?: string;
+  skills?: boolean;
   preset?: SpecPreset;
 }
 interface LibreChatYaml {
@@ -129,6 +132,27 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
 
   it('has artifacts enabled (otherwise the rest of this block is moot)', () => {
     expect(artifactsEnabled()).toBe(true);
+  });
+
+  it('keeps every user-facing spec on the artifacts mode the skill is written for', () => {
+    /**
+     * NO-TICKET. `'default'` omits `generateShadcnPrompt` and therefore the whole
+     * components.ts manifest, so the model has no per-component import path and
+     * relies entirely on what `karl-artifacts` shows it. That is a deliberate
+     * trade — the manifest costs ~2.9k tokens per turn for a catalogue of 37
+     * components when the skill recommends four.
+     *
+     * It is only safe while the skill carries those four import lines, which
+     * `deploymentSkills.knauf.spec.ts` pins. Flipping this to `'shadcnui'` is a
+     * valid choice; flipping it and dropping the skill's import block is not, and
+     * the two specs together are what make that visible.
+     */
+    const wrong = specs
+      .filter((spec) => spec.artifacts != null && spec.artifacts !== 'default')
+      .map((spec) => `${spec.name} (artifacts: ${String(spec.artifacts)})`);
+    expect(wrong).toEqual([]);
+    // An absent key reads as "off", not "inherit" — so assert it is actually set.
+    expect(karlChatSpecs().every((spec) => spec.artifacts === 'default')).toBe(true);
   });
 
   it('selects exactly the four user-facing KARL specs', () => {

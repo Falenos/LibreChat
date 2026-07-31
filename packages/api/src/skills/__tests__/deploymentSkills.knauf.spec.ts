@@ -181,6 +181,85 @@ describe('[knauf] shipped deployment skills', () => {
     expect(broken).toEqual([]);
   });
 
+  it('shows an import path for every shadcn component it recommends', () => {
+    /**
+     * NO-TICKET. `karl-artifacts` recommended `Card`, `Tabs`, `Table` and `Badge`
+     * by name but carried an import example for only Card and Table (in the
+     * report and dashboard templates). The specs run `artifacts: 'default'`,
+     * which omits `generateShadcnPrompt` and therefore the whole components.ts
+     * manifest — so for `Tabs` and `Badge` the model had a recommendation, the
+     * bare pattern `/components/ui/<name>`, and nothing else. It extrapolated:
+     *
+     *     import { Card, Tabs, TabList } from '/components/ui';
+     *
+     * A barrel that is not mounted, and `TabList` is not an export — shadcn's is
+     * `TabsList`. The preview died with ModuleNotFoundError.
+     *
+     * Recommending a component the skill cannot show you how to import is the
+     * defect. This pins the invariant rather than the current four names, so it
+     * still holds when someone adds a fifth.
+     */
+    /**
+     * The recommendation is a prose list that wraps across lines — "shadcn/ui
+     * `Card`, `Tabs`, `Table` and `Badge` give a professional look". Anchoring on
+     * `shadcn/ui` and taking only the next backticked name would check `Card` and
+     * silently skip the rest, which is exactly the gap that shipped: `Card` had an
+     * import example, `Tabs` did not. So take the whole paragraph mentioning
+     * shadcn/ui and collect every capitalised backticked name in it.
+     */
+    const namedComponents = (body: string): Set<string> => {
+      const found = new Set<string>();
+      for (const paragraph of body.split(/\n\s*\n/)) {
+        if (!paragraph.includes('shadcn/ui')) {
+          continue;
+        }
+        // Stop at the fenced example, so the imports we are checking FOR are not
+        // themselves mistaken for further recommendations.
+        const prose = paragraph.split('```')[0];
+        for (const [, name] of prose.matchAll(/`([A-Z][A-Za-z]*)`/g)) {
+          found.add(name);
+        }
+      }
+      return found;
+    };
+
+    const missing: string[] = [];
+    for (const skill of skills) {
+      const corpus = [skill.body, ...skill.files.map((file) => file.content ?? '')].join('\n');
+      const named = namedComponents(skill.body);
+      // A recommendation only counts as usable if the same skill shows the name
+      // being imported from a concrete prebuilt path. Both mounted modules count:
+      // the paragraph that recommends shadcn components also names the brand
+      // module's exports, and those legitimately come from `/knauf/brand`.
+      for (const component of named) {
+        const imported = new RegExp(
+          `import \\{[^}]*\\b${component}\\b[^}]*\\} from '(?:/components/ui/[a-z-]+|/knauf/brand)'`,
+        ).test(corpus);
+        if (!imported) {
+          missing.push(`${skill.name} recommends ${component} with no import example`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('never points an artifact at a shadcn barrel', () => {
+    // `sharedFiles` mounts individual files and no `index`, so the directory
+    // specifier resolves to nothing and takes the whole preview down.
+    const offenders: string[] = [];
+    for (const skill of skills) {
+      const corpus = [skill.body, ...skill.files.map((file) => file.content ?? '')].join('\n');
+      for (const [line] of corpus.matchAll(/^.*from '\/components\/ui'.*$/gm)) {
+        // The prose warning that the barrel does NOT resolve is the one allowed
+        // mention; an actual import statement is not.
+        if (/^\s*import\b/.test(line)) {
+          offenders.push(`${skill.name}: ${line.trim()}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('keeps the wordmark path identical to the committed brand SVG', () => {
     // `references/logo.md` transcribes the `d` attribute of
     // knauf/brand/logos/KNAUFLogo2024sRGB.svg, twice (raw SVG + React

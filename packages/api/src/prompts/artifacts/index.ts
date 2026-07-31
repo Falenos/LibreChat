@@ -199,18 +199,30 @@ Here are some examples of correct usage of artifacts:
 // `client/src/utils/artifacts.ts` mounts `/knauf/brand.tsx` into every artifact
 // sandbox via `sharedFiles`, so the import resolves. The model still has to be told
 // it exists: the `NO OTHER LIBRARIES ... ABLE TO BE IMPORTED` line further down would
-// otherwise forbid it, and the KARL system prompt defers to these instructions for
-// "the available libraries".
+// otherwise forbid it.
 //
-// Interpolated rather than written inline because the surrounding text is one
-// `dedent` template literal — a comment cannot sit on the changed line, so the marker
-// lives here and the conflict surface at the insertion point is a single `${...}`.
+// This lives here rather than in the `&karl_prompt` anchor because
+// `generateArtifactsPrompt` is injected only when `agent.artifacts` is a non-empty
+// string (`packages/api/src/agents/initialize.ts`), so it costs nothing on turns where
+// artifacts are off, and it sits beside the upstream import rules it extends.
+//
+// A sibling rule banning the shadcn barrel (`from '/components/ui'`) was added here
+// and then removed: the real cause was `artifacts: 'default'`, which omits
+// `generateShadcnPrompt` and therefore the whole `components.ts` manifest — so the
+// model had no per-component import path and guessed a barrel. Switching the specs to
+// `artifacts: 'shadcnui'` gives it every exact import statement, which is the native
+// LibreChat fix and makes a hand-written ban redundant. If that mode is ever switched
+// back to 'default', the ban has to come back with it.
+//
+// Interpolated rather than written inline because the surrounding text is one `dedent`
+// template literal — a comment cannot sit on the changed line, so the marker lives here
+// and the conflict surface at the insertion point is a single `${...}`.
 //
 // OpenAI variant only. All four KARL specs are `azureOpenAI`, and
 // `generateArtifactsPrompt` serves this variant to every non-Anthropic endpoint. If
-// KARL is ever moved to an Anthropic endpoint this permission silently disappears and
-// the sibling `artifactsPrompt` above needs the same line.
-const knaufBrandImportLine =
+// KARL is ever moved to an Anthropic endpoint this line silently disappears and the
+// sibling `artifactsPrompt` above needs it.
+const knaufArtifactImportLines =
   "      - Knauf brand tokens and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them; never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.";
 // End [knauf]
 
@@ -296,7 +308,7 @@ Artifacts are for substantial, self-contained content that users might modify or
       - The react-day-picker library is available to be imported, e.g. \`import { DayPicker } from "react-day-picker";\`
       - The assistant can use prebuilt components from the \`shadcn/ui\` library after it is imported: \`import { Alert, AlertDescription, AlertTitle, AlertDialog, AlertDialogAction } from '/components/ui/alert';\`. If using components from the shadcn/ui library, the assistant mentions this to the user and offers to help them install the components if necessary.
       - Components MUST be imported from \`/components/ui/name\` and NOT from \`/components/name\` or \`@/components/ui/name\`.
-${knaufBrandImportLine}
+${knaufArtifactImportLines}
       - NO OTHER LIBRARIES (e.g. zod, hookform) ARE INSTALLED OR ABLE TO BE IMPORTED.
       - Images from the web are not allowed, but you can use placeholder images by specifying the width and height like so \`<img src="/api/placeholder/400/320" alt="placeholder" />\`
       - When iterating on code, ensure that the code is complete and functional without any snippets, placeholders, or ellipses.
