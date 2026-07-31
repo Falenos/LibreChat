@@ -6,6 +6,10 @@ import type {
 } from '@codesandbox/sandpack-react';
 import type { TStartupConfig, TAttachment, TFile } from 'librechat-data-provider';
 import type { Artifact } from '~/common';
+// [knauf] KK20-252 — brand module mounted into every artifact sandbox; see the
+// `/knauf/brand.tsx` entry in `sharedFiles` below.
+import { knaufBrandModule } from '~/knauf/sandbox/brandModule';
+// End [knauf]
 
 const artifactFilename = {
   'application/vnd.react': 'App.tsx',
@@ -936,6 +940,16 @@ export const sharedFiles = {
   '/components/ui/toggle.tsx': shadcnComponents.toggle,
   '/components/ui/tooltip.tsx': shadcnComponents.tooltip,
   '/components/ui/use-toast.tsx': shadcnComponents.useToast,
+  // [knauf] KK20-252 — mount the Knauf brand as a module the artifact can import,
+  // instead of asking the model to retype ~60 lines of tokens and a 903-character
+  // SVG path into every branded deliverable. Resolves the same way the shadcn
+  // entries above do: extension-less and root-absolute, so the artifact writes
+  // `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand'`. Spread
+  // last in ArtifactPreview, so an artifact that also declares these names locally
+  // cannot shadow the file. The matching permission is in the artifacts system
+  // prompt — without it, `NO OTHER LIBRARIES ... ABLE TO BE IMPORTED` forbids this.
+  '/knauf/brand.tsx': knaufBrandModule,
+  // End [knauf]
   '/public/index.html': dedent`
     <!DOCTYPE html>
     <html lang="en">

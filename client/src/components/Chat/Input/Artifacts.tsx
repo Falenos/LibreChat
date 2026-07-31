@@ -77,6 +77,20 @@ function Artifacts() {
     }
   }, [isCustomEnabled, debouncedChange]);
 
+  // [knauf] Hide the artifacts chip on the Knauf chat. Every user-facing KARL
+  // spec sets `artifacts: 'default'`, so the capability is always on and the chip
+  // renders permanently checked — a switch whose only reachable action is to turn
+  // artifacts OFF. Hidden in the UI here — NOT via the capability or the spec — so
+  // `artifacts: 'default'` keeps flowing through and the agent builder's artifacts
+  // row is unaffected. Mirrors the KK20-190 file-search chip hide; the matching
+  // tools-menu gate is in ToolsDropdown.tsx. `as boolean` keeps the upstream body
+  // reachable for clean merges.
+  const KNAUF_HIDE_ARTIFACTS_CHIP = true as boolean;
+  if (KNAUF_HIDE_ARTIFACTS_CHIP) {
+    return null;
+  }
+  // End [knauf]
+
   if (!artifactsEnabled) {
     return null;
   }

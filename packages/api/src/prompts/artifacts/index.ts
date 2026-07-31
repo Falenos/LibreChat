@@ -194,6 +194,26 @@ Here are some examples of correct usage of artifacts:
   </example>
 </examples>`;
 
+// [knauf] KK20-252 — declare the Knauf brand module to the model.
+//
+// `client/src/utils/artifacts.ts` mounts `/knauf/brand.tsx` into every artifact
+// sandbox via `sharedFiles`, so the import resolves. The model still has to be told
+// it exists: the `NO OTHER LIBRARIES ... ABLE TO BE IMPORTED` line further down would
+// otherwise forbid it, and the KARL system prompt defers to these instructions for
+// "the available libraries".
+//
+// Interpolated rather than written inline because the surrounding text is one
+// `dedent` template literal — a comment cannot sit on the changed line, so the marker
+// lives here and the conflict surface at the insertion point is a single `${...}`.
+//
+// OpenAI variant only. All four KARL specs are `azureOpenAI`, and
+// `generateArtifactsPrompt` serves this variant to every non-Anthropic endpoint. If
+// KARL is ever moved to an Anthropic endpoint this permission silently disappears and
+// the sibling `artifactsPrompt` above needs the same line.
+const knaufBrandImportLine =
+  "      - Knauf brand tokens and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them; never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.";
+// End [knauf]
+
 const artifactsOpenAIPrompt = dedent`The assistant can create and reference artifacts during conversations.
   
 Artifacts are for substantial, self-contained content that users might modify or reuse, displayed in a separate UI window for clarity.
@@ -276,6 +296,7 @@ Artifacts are for substantial, self-contained content that users might modify or
       - The react-day-picker library is available to be imported, e.g. \`import { DayPicker } from "react-day-picker";\`
       - The assistant can use prebuilt components from the \`shadcn/ui\` library after it is imported: \`import { Alert, AlertDescription, AlertTitle, AlertDialog, AlertDialogAction } from '/components/ui/alert';\`. If using components from the shadcn/ui library, the assistant mentions this to the user and offers to help them install the components if necessary.
       - Components MUST be imported from \`/components/ui/name\` and NOT from \`/components/name\` or \`@/components/ui/name\`.
+${knaufBrandImportLine}
       - NO OTHER LIBRARIES (e.g. zod, hookform) ARE INSTALLED OR ABLE TO BE IMPORTED.
       - Images from the web are not allowed, but you can use placeholder images by specifying the width and height like so \`<img src="/api/placeholder/400/320" alt="placeholder" />\`
       - When iterating on code, ensure that the code is complete and functional without any snippets, placeholders, or ellipses.
