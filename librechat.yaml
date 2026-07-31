@@ -24,7 +24,7 @@ cache: true
 #                   different model per call.
 #   trigger         absent, so the SDK summarizes on ANY overflow
 #                   (@librechat/agents summarization/index.ts:79-82). With the
-#                   context window now pinned to 128k rather than falling back to
+#                   context window now pinned to 256k rather than falling back to
 #                   32k, overflow should be rare enough that this matters much
 #                   less than it did.
 #   prompt          the SDK default; not tuned for KARL's tone or for German.
@@ -741,13 +741,12 @@ modelSpecs:
         # summarising far earlier than anyone expected, and the skill catalog was
         # budgeted at 1% of 32k (1,280 chars) instead of the intended headroom.
         #
-        # This value must be the FLOOR of Azure Model Router's candidate pool,
-        # not the ceiling: the router picks a different underlying model per
-        # request, and declaring more than the smallest candidate would overflow
-        # it. 128k is a deliberately conservative floor pending infra
-        # confirmation of the pool — still 4x the old effective budget. Raise it
-        # once the pool is confirmed; do not raise it by guessing.
-        maxContextTokens: 128000
+        # This value must stay below the smallest Azure Model Router candidate's
+        # input limit. Both AGK environments declare the same Quality subset in
+        # agk-infrastructure: gpt-5.4-nano/mini (272k input) plus gpt-5.4/5.5
+        # (922k input). 256k is therefore a verified common budget with 16k of
+        # headroom on the smallest candidates, rather than a guessed model cap.
+        maxContextTokens: 256000
         useResponsesApi: true
         web_search: true
         greeting: |
@@ -849,7 +848,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: high
         useResponsesApi: true
         web_search: true
@@ -871,7 +870,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: medium
         useResponsesApi: true
         web_search: true
@@ -893,7 +892,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         reasoning_effort: low
         useResponsesApi: true
         web_search: true
@@ -919,7 +918,7 @@ modelSpecs:
         # ${AZURE_FOUNDRY_AGENT_DEPLOYMENT}, which GitOps re-targets — so the
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
-        maxContextTokens: 128000
+        maxContextTokens: 256000
         max_completion_tokens: 1500
         promptPrefix: |
           You are helping a non-technical user write the system instructions
