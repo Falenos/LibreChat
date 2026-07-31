@@ -3,9 +3,9 @@
  *
  * ## Why
  *
- * Every branded artifact needs the same ~60-line `KNAUF` token const, the
+ * Every branded artifact needs the same `KNAUF` token const, KnaufScreen fonts, the
  * `useKnaufTheme` hook, and a wordmark whose `d` attribute is 903 characters of
- * coordinate data. Until now the skills told the model to retype all of it into every
+ * coordinate data. Until now the skills told the model to retype most of it into every
  * artifact, and `skill/karl-brand/references/logo.md` says of that path:
  *
  *   "It is 903 characters of coordinate data with no redundancy — any edit silently
@@ -22,7 +22,7 @@
  * Sandpack mounts a virtual filesystem per artifact. `sharedFiles` in
  * `client/src/utils/artifacts.ts` already injects ~38 shadcn sources into every sandbox,
  * and `ArtifactPreview` spreads it last so these entries win on key collision. Adding
- * `/knauf/brand.tsx` there makes
+ * `/knauf/brand.tsx` and `/knauf/fonts.css` there makes
  *
  *     import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
  *
@@ -45,6 +45,7 @@
  * signatures that already run in previews today.
  */
 export const knaufBrandModule = `import { useMemo } from 'react';
+import '/knauf/fonts.css';
 
 // ── KNAUF tokens — canonical. Never invent a hex; copy from here. ────────────
 const KNAUF = {
@@ -76,6 +77,10 @@ const KNAUF = {
     pageDark:'#0F1720', cardDark: '#16212E', borderDark: '#26333F',
     neutral: '#CFD7D9', // = brand.grey, by role: table header/zebra, gridlines
   },
+  typography: {
+    body: '"Knauf Screen", Arial, Helvetica, sans-serif',
+    heading: '"Knauf Screen Head", "Knauf Screen", Arial, Helvetica, sans-serif',
+  },
   // Chart series, fixed order, assigned by series index. Validated in BOTH
   // modes with ONE set of steps — there is no dark variant.
   // Derivation and measurements are recorded with the palette.
@@ -105,7 +110,7 @@ function useKnaufTheme(dark) {
   }), [dark]);
 }
 
-function KnaufWordmark({ height = 28, fill = '#FFFFFF' }) {
+function KnaufWordmark({ height = 28, fill = KNAUF.brand.logoCyan }) {
   return (
     <svg
       viewBox="0 0 283.4646 143.4898"

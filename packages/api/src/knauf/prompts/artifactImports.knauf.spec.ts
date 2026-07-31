@@ -37,9 +37,9 @@ const karlPrompt = () => promptFor(KARL_ARTIFACT_MODE);
 
 describe('[knauf] artifacts prompt — sandbox import rules', () => {
   it('tells the model the brand module exists', () => {
-    expect(karlPrompt()).toContain(
-      "import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';",
-    );
+    const prompt = karlPrompt();
+    expect(prompt).toContain("import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';");
+    expect(prompt).toContain('loads Knauf Screen and Knauf Screen Head automatically');
   });
 
   it('does NOT carry the shadcn manifest — the skill supplies those paths', () => {

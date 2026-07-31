@@ -43,7 +43,8 @@ the `KNAUF` const.**
   slide footer. On the `accessibleBlue` field it takes `#FFFFFF`; on a light surface
   it takes `KNAUF.brand.logoCyan`. Deck naming is separate text beside it. Both
   placements sit at or above the **20px floor** from `logo.md` — the footer mark is
-  the one that tempts you below it, and below 20px the counters close up.
+  the one that tempts you below it, and below 20px the counters close up. Padding
+  around each placement is at least the mark height.
 - **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage. Slide content is
   absolutely positioned to fill it, so every slide is the same size.
 - **Type scale.** Title slides `text-5xl`; section dividers `text-4xl`; slide headings
@@ -195,7 +196,7 @@ export default function KarlSlideDeck() {
     <div className="min-h-screen w-full px-4 py-8" style={{ backgroundColor: theme.page }}>
       <div className="mx-auto max-w-5xl">
         <div
-          className="mb-3 flex items-center justify-between rounded-t-lg border px-5 py-3"
+          className="mb-3 flex items-center justify-between rounded-t-lg border px-6 py-6"
           style={{ backgroundColor: KNAUF.brand.accessibleBlue, borderColor: theme.border }}
         >
           <KnaufWordmark height={22} fill="#FFFFFF" />
@@ -210,11 +211,11 @@ export default function KarlSlideDeck() {
         >
           <Slide slide={slide} theme={theme} />
           <div
-            className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-2"
+            className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-5"
             style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
           >
             {/* 20px is the wordmark floor — do not shrink this to fit. */}
-            <KnaufWordmark height={20} fill={KNAUF.brand.logoCyan} />
+            <KnaufWordmark height={20} fill={dark ? '#FFFFFF' : KNAUF.brand.logoCyan} />
             <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
           </div>
         </div>

@@ -206,6 +206,17 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     expect(silent).toEqual([]);
   });
 
+  it('requires official Knauf branding for visual deliverables and generated images', () => {
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toMatch(/every user-facing visual deliverable/i);
+      expect(prompt).toMatch(/load and follow the karl-brand skill/i);
+      expect(prompt).toMatch(/Knauf Screen for body copy, Knauf Screen Head for headings/i);
+      expect(prompt).toMatch(/exact official SVG wordmark with its required clear space/i);
+      expect(prompt).toMatch(/never type, redraw or ask an image model to generate the logo/i);
+    }
+  });
+
   it('still forbids the binary formats we genuinely cannot produce', () => {
     // The original rule existed for a real reason: no code interpreter means no
     // PDF/XLSX. Relaxing the contradiction must not relax that.

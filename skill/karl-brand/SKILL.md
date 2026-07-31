@@ -7,6 +7,7 @@ description: >-
   KNAUF logo.
 argument-hint: "[what to brand]"
 user-invocable: true
+always-apply: true
 version: "1.0.0"
 ---
 
@@ -69,20 +70,28 @@ which is `#00A0E6`. The resolution, so nobody reopens it:
 
 ## Typography
 
-The official brand sheet sets its own type in `Arial, Helvetica, sans-serif` at
-weights 400/600/700. **A system-UI/Arial stack is therefore brand-compliant** —
-this is a positive permission, not a compromise.
+The official typefaces are **Knauf Screen** for body copy and **Knauf Screen Head**
+for headings and display type. React artifacts load the supplied Digital+Web WOFF2
+files automatically when they import `/knauf/brand`; do not add another webfont or
+replace them with a system-UI stack. Standalone HTML artifacts use the prebuilt
+`/knauf/fonts.css` stylesheet. Arial and Helvetica are fallbacks only for formats
+that cannot embed or load the supplied fonts, especially email.
 
-Recommended stack: `system-ui, -apple-system, "Segoe UI", Arial, Helvetica, sans-serif`
-
-The brand kit does ship licensed font files, but a sandboxed artifact cannot load
-a local font, and the licence does not cover web embedding. So: **no `@font-face`,
-no webfont import, no CDN font.** Reserve `font-variant-numeric: tabular-nums` for
-columns that must align vertically (table rows, axis ticks).
+Use weights 400 and 700, matching the supplied regular and bold webfont files.
+Reserve `font-variant-numeric: tabular-nums` for columns that must align vertically
+(table rows, axis ticks).
 
 Type scale is layout, so it comes from Tailwind classes: page title `text-2xl`,
-section `text-lg`/`text-xl`, card title `text-base font-semibold`, captions
-`text-sm`/`text-xs`. Headings sit at weight 600–700 in `ink.heading`.
+section `text-lg`/`text-xl`, card title `text-base font-bold`, captions
+`text-sm`/`text-xs`. Headings use the supplied 700 weight in `ink.heading`.
+
+## Generated imagery
+
+Generated images that represent Knauf or KARL use the Knauf palette and leave a
+quiet clear-space area for the real wordmark. Never ask an image model to draw,
+spell or reinterpret the KNAUF logo: generate the imagery without a mark, then add
+the exact SVG wordmark in the artifact or layout stage. If the output medium cannot
+preserve that SVG exactly, omit the logo rather than ship a synthetic one.
 
 ## Tokens
 
@@ -122,6 +131,10 @@ const KNAUF = {
     page:    '#F4F8FB', card:     '#FFFFFF', border:     '#DCE6EE',
     pageDark:'#0F1720', cardDark: '#16212E', borderDark: '#26333F',
     neutral: '#CFD7D9', // = brand.grey, by role: table header/zebra, gridlines
+  },
+  typography: {
+    body: '"Knauf Screen", Arial, Helvetica, sans-serif',
+    heading: '"Knauf Screen Head", "Knauf Screen", Arial, Helvetica, sans-serif',
   },
   // Chart series, fixed order, assigned by series index. Validated in BOTH
   // modes with ONE set of steps — there is no dark variant.

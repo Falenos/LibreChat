@@ -9,6 +9,7 @@ import type { Artifact } from '~/common';
 // [knauf] KK20-252 — brand module mounted into every artifact sandbox; see the
 // `/knauf/brand.tsx` entry in `sharedFiles` below.
 import { knaufBrandModule } from '~/knauf/sandbox/brandModule';
+import { knaufFontCss } from '~/knauf/sandbox/brandFonts';
 // End [knauf]
 
 const artifactFilename = {
@@ -952,6 +953,10 @@ export const sharedFiles = {
   // cannot shadow the file. The matching permission is in the artifacts system
   // prompt — without it, `NO OTHER LIBRARIES ... ABLE TO BE IMPORTED` forbids this.
   '/knauf/brand.tsx': knaufBrandModule,
+  // The brand module imports this virtual stylesheet. Data URLs inside it keep
+  // the official webfonts offline and avoid cross-origin font requests from the
+  // Sandpack iframe. Standalone HTML artifacts can link `/knauf/fonts.css` too.
+  '/knauf/fonts.css': knaufFontCss,
   // End [knauf]
   '/public/index.html': dedent`
     <!DOCTYPE html>

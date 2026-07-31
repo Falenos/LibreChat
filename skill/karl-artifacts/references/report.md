@@ -36,17 +36,18 @@ the `KNAUF` const.**
 | `theme.palette[i]` | chart series, by index |
 | `theme.grid` | gridlines, axis strokes |
 | `KNAUF.ink.accentOnBrand` | the eyebrow label on the brand bar |
-| `KNAUF.status[tone]` | KPI delta text, status chip ring + dot |
+| `KNAUF.status[tone]` | KPI delta icon, status chip ring + dot; text stays ink |
 
 ## Brand + layout guidance
 
 - The brand mark is `<KnaufWordmark fill="#FFFFFF" />` in the `accessibleBlue` bar,
   with the report kind as a **separate** eyebrow label on the right. Never fuse
-  naming into the mark; never use an `<img>`.
+  naming into the mark; never use an `<img>`. Bar padding and the gap to other
+  content are at least the 26px mark height.
 - Headings and structural type read from `theme.heading`, never from
   `KNAUF.brand.accessibleBlue` directly — that hex is 1.56:1 on a dark surface.
-- KPI deltas carry a lucide arrow **and** a status colour, so meaning never rests on
-  colour alone.
+- KPI deltas keep their text in `theme.text`; the lucide arrow carries the status
+  colour, so small text stays readable in both modes and meaning never rests on colour.
 - Status chips are **ink on a light fill with a status-coloured ring and dot**. Do not
   put white text on a status fill: white-on-warning is 2.95:1 and white-on-serious
   2.92:1, both failing AA.
@@ -127,10 +128,10 @@ export default function KnaufReport() {
   return (
     <div className="min-h-full w-full" style={{ backgroundColor: theme.page, color: theme.text }}>
       <header
-        className="w-full px-6 py-5 md:px-10"
+        className="w-full px-7 py-7 md:px-10"
         style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
       >
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-7">
           <KnaufWordmark height={26} fill="#FFFFFF" />
           <span
             className="text-xs font-medium uppercase tracking-widest"
@@ -180,7 +181,7 @@ export default function KnaufReport() {
                   {k.label}
                 </p>
                 <p className="mt-1 text-2xl font-bold" style={{ color: theme.heading }}>{k.value}</p>
-                <p className="mt-1 flex items-center gap-1 text-sm font-semibold" style={{ color: tone }}>
+                <p className="mt-1 flex items-center gap-1 text-sm font-semibold" style={{ color: theme.text }}>
                   <Arrow size={16} color={tone} aria-hidden="true" />{k.delta}
                 </p>
               </div>
