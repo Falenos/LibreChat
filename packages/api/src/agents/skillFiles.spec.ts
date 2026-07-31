@@ -69,6 +69,35 @@ describe('primeInvokedSkills — execute_code capability gate', () => {
     expect(deps.listSkillFiles).toHaveBeenCalledWith(SKILL_ID);
   });
 
+  // [knauf] KK20-252 — binds the frontmatter strip to the history-reconstruction
+  // path. `makeDeps` ships a frontmatter-free body ('skill body') so that the
+  // surrounding cases assert on something readable; this one supplies its own so
+  // that reverting `skills.set(..., r.value.body)` fails here rather than nowhere.
+  //
+  // The `skills` map is what `formatAgentMessages` re-injects as a user message on
+  // every later turn, so it is the map — not the resolved skill object — that has
+  // to arrive stripped. (`resolvedSkills` deliberately keeps the byte-faithful body
+  // for the sandbox upload, but it is internal to `primeInvokedSkills` and not
+  // observable from the return value, so it is not asserted here.)
+  it('strips frontmatter from the body handed to formatAgentMessages', async () => {
+    const raw = '---\nname: brand-guidelines\nuser-invocable: true\n---\n\n# Brand\n\nUse blue.';
+    const deps = makeDeps({
+      codeEnvAvailable: false,
+      getSkillByName: jest.fn().mockResolvedValue({
+        _id: SKILL_ID,
+        name: 'brand-guidelines',
+        body: raw,
+        version: SKILL_VERSION,
+        fileCount: 0,
+      }),
+    });
+
+    const result = await primeInvokedSkills(deps);
+
+    expect(result.skills?.get('brand-guidelines')).toBe('# Brand\n\nUse blue.');
+  });
+  // End [knauf]
+
   it('calls batchUploadCodeEnvFiles without an apiKey when files are returned', async () => {
     const fileRecords = [
       {

@@ -15,11 +15,15 @@ by editing that array only; the renderer, navigation and footer adapt automatica
 
 ## Before you write
 
-Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
-into the artifact as the first block. Read
-`skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
-path. **The code below assumes all three exist and introduces no colour that is not
-already in the `KNAUF` const.**
+Read `skills/karl-brand/SKILL.md` for what the tokens mean, then start the artifact
+with the import below — the module is mounted in every preview, so nothing is pasted:
+
+```tsx
+import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
+```
+
+**The code below assumes that import and introduces no colour that is not already in
+the `KNAUF` const.**
 
 ## Tokens this layout uses
 
@@ -57,8 +61,8 @@ already in the `KNAUF` const.**
   `h-72 w-full`. Status colours never enter the data palette.
 
 ```tsx
-// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import React, { useMemo, useState, useEffect, useCallback } from 'react'; // useMemo: also the pasted useKnaufTheme
+import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
@@ -209,7 +213,7 @@ export default function KarlSlideDeck() {
             className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-2"
             style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
           >
-            {/* 20px is the floor from logo.md — do not shrink this to fit. */}
+            {/* 20px is the wordmark floor — do not shrink this to fit. */}
             <KnaufWordmark height={20} fill={KNAUF.brand.logoCyan} />
             <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
           </div>

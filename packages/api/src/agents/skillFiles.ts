@@ -6,6 +6,10 @@ import type { CodeEnvRef } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { ServerRequest } from '~/types';
 import { extractInvokedSkillsFromPayload } from './run';
+// [knauf] KK20-252 — frontmatter strip for the history-reconstruction path; see
+// the `skills.set(...)` call below.
+import { prepareSkillBodyForInjection } from '~/knauf/skills/skillPrimeBody';
+// End [knauf]
 import { logAxiosError } from '~/utils';
 
 export interface SkillFileRecord {
@@ -380,7 +384,13 @@ export async function primeInvokedSkills(
   }> = [];
   for (const r of resolveResults) {
     if (r.status === 'fulfilled' && r.value) {
-      skills.set(r.value.name, r.value.body);
+      // [knauf] KK20-252 — this map is what `formatAgentMessages` (in
+      // @librechat/agents, so not editable here) re-injects as a user message on
+      // every later turn. Strip the frontmatter at the source so the history path
+      // matches the two injection paths in agents/skills.ts. `resolvedSkills`
+      // keeps the faithful body — it feeds the sandbox file upload, not the model.
+      skills.set(r.value.name, prepareSkillBodyForInjection(r.value.body));
+      // End [knauf]
       resolvedSkills.push(r.value);
     } else if (r.status === 'rejected') {
       logger.warn('[primeInvokedSkills] Skill resolution failed:', r.reason);

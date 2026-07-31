@@ -38,7 +38,13 @@ const PERMISSIONS = {
   AGENTS:         { USE: true, CREATE: true, SHARE: false, SHARE_PUBLIC: false },
   MULTI_CONVO:    { USE: true },
   TEMPORARY_CHAT: { USE: true },
-  RUN_CODE:       { USE: true },
+  // KK20-252 — Run Code is off platform-wide. `interface.runCode: false` in
+  // librechat.yaml only re-seeds USER and ADMIN (permissions.ts:125), so leaving
+  // this true would have left AI Champions as the one role still holding
+  // RUN_CODE.USE — backed by a sandbox that is not deployed on AGK, so the Run
+  // button would fail every time. Explicit false rather than deleted: the update
+  // below is a full `$set` replace, and the next reader should see the intent.
+  RUN_CODE:       { USE: false },
   WEB_SEARCH:     { USE: true },
   PEOPLE_PICKER:  { VIEW_USERS: false, VIEW_GROUPS: false, VIEW_ROLES: false },
   MARKETPLACE:    { USE: true },
