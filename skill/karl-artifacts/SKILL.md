@@ -51,8 +51,9 @@ Rules of thumb:
    allowlist for `application/vnd.react` is: `react` (incl. hooks), `lucide-react`,
    `recharts`, `three`, `date-fns`, `react-day-picker`, and shadcn/ui imported from
    `/components/ui/<name>` — never `/components/<name>` or `@/components/ui/<name>`.
-   Knauf brand tokens and the wordmark are prebuilt too: `/knauf/brand`, exporting
-   `KNAUF`, `useKnaufTheme` and `KnaufWordmark`.
+   Knauf brand tokens, fonts and the wordmark are prebuilt too: `/knauf/brand`,
+   exporting `KNAUF`, `useKnaufTheme` and `KnaufWordmark`. Importing it also loads
+   Knauf Screen and Knauf Screen Head.
    Anything else (zod, axios, lodash, d3, framer-motion, styled-components,
    react-hook-form, …) will not resolve. If the idea needs a missing library:
    implement the small piece by hand, switch to `text/html` + a cdnjs script, or say
@@ -74,8 +75,10 @@ Rules of thumb:
 7. **Renaming the identifier on an edit** (see next section).
 
 Tailwind note: utilities are injected for **both** the react and the standalone-HTML
-preview. For `text/html` prefer inline `<style>` anyway — the user will save and host
-that file somewhere that injects nothing.
+preview. For `text/html` prefer inline `<style>` anyway and add
+`<link rel="stylesheet" href="/knauf/fonts.css">` for Knauf typography in the KARL
+preview. A separately hosted export must serve the supplied font files and equivalent
+`@font-face` rules itself.
 
 ## Iterating: update in place, don't spawn siblings
 
@@ -134,11 +137,12 @@ that file somewhere that injects nothing.
 read_file  skills/karl-brand/SKILL.md
 ```
 
-It carries the official colour system with provenance, the ink/surface tokens, the
-dark-mode pairs, and the validated chart palette. In a React artifact you do not copy
-any of it: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';` — the
-module is always mounted in the preview, and re-declaring those names wastes tokens and
-risks drift. Then, if the chart is
+It carries the official colour system with provenance, Knauf typography, the
+ink/surface tokens, the dark-mode pairs, and the validated chart palette. In a React
+artifact you do not copy any of it:
+`import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';` — the module is
+always mounted in the preview, loads the official webfonts, and re-declaring those
+names wastes tokens and risks drift. Then, if the chart is
 anything beyond a plain bar or line, also read
 `skills/karl-brand/references/charts.md`; for the wordmark, read
 `skills/karl-brand/references/logo.md`.
@@ -160,12 +164,15 @@ and no skill.
 - Tailwind here has no arbitrary values, so exact colours arrive via inline
   `style={{}}` and recharts `fill`/`stroke` props. Tailwind covers layout, spacing
   and type scale only.
+- React artifacts inherit Knauf Screen for body copy and Knauf Screen Head for
+  headings from `/knauf/brand`. Do not set `font-sans` or import another webfont.
 - Read heading colour from the theme, never `KNAUF.brand.accessibleBlue` directly —
   `#003778` on a dark surface is 1.56:1.
 - The wordmark in a React artifact is `<KnaufWordmark />` from `/knauf/brand`; in an
   HTML or SVG artifact it is the real inline SVG from
   `skills/karl-brand/references/logo.md` — never an `<img>`, and never typed as text.
-  Product naming sits beside the mark, not inside it.
+  Product naming sits beside the mark, not inside it; clear space on every side is at
+  least the mark's height.
 - Charts keep the categorical order fixed by series index and always carry a legend
   or direct labels. Labels and axes wear ink tokens, never a series colour — which
   recharts does *not* give you for free: `<Legend>` needs a `formatter` and `<Pie>`

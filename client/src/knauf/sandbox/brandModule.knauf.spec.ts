@@ -12,9 +12,11 @@
  * the committed brand SVG the same way `deploymentSkills.knauf.spec.ts` does. When you
  * edit the skill, re-copy into the module; this fails until you do.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { knaufBrandModule } from './brandModule';
+import { knaufFontCss } from './brandFonts';
 import { sharedFiles } from '~/utils/artifacts';
 
 /** Repo root, from client/src/knauf/sandbox/. */
@@ -34,12 +36,37 @@ describe('[knauf] knauf brand sandbox module', () => {
     );
     // useKnaufTheme calls useMemo; as a standalone module it must import it itself.
     expect(knaufBrandModule).toMatch(/import \{ useMemo \} from 'react';/);
+    expect(knaufBrandModule).toContain("import '/knauf/fonts.css';");
   });
 
-  it('is actually mounted in the sandbox', () => {
+  it('mounts the brand module and official fonts in the sandbox', () => {
     // Without this the module can be perfect and still never reach a preview —
     // the failure mode would be a ModuleNotFoundError identical to having no module.
     expect(sharedFiles['/knauf/brand.tsx']).toBe(knaufBrandModule);
+    expect(sharedFiles['/knauf/fonts.css']).toBe(knaufFontCss);
+  });
+
+  it('embeds the four supplied KnaufScreen webfonts without alteration', () => {
+    const payloads = [...knaufFontCss.matchAll(/base64,([A-Za-z0-9+/=]+)/g)].map((m) => m[1]);
+    expect(payloads).toHaveLength(4);
+    expect(
+      payloads.map((payload) =>
+        crypto.createHash('sha256').update(Buffer.from(payload, 'base64')).digest('hex'),
+      ),
+    ).toEqual([
+      '350d7086f6684c6585a0c2ad642f788960a5ef5fb0969326f8cc50ec02b59408',
+      'c2abae7bf0e6499e0420fb9997f4745639c41a9ba81c849a8f1abde04dcce00b',
+      'e209129d45f03a24a9d47e609493c316998bc1ce6b4fcdb63f27c0d472d1b14d',
+      '5f1338f80b05779346cd1e69ff3c8e713aebf37fc95d30238d94ebe299f91df0',
+    ]);
+    expect(knaufFontCss).toContain('font-family:"Knauf Screen"');
+    expect(knaufFontCss).toContain('font-family:"Knauf Screen Head"');
+  });
+
+  it('defaults the wordmark to logo cyan for light surfaces', () => {
+    expect(knaufBrandModule).toContain(
+      'function KnaufWordmark({ height = 28, fill = KNAUF.brand.logoCyan })',
+    );
   });
 
   it('carries the committed wordmark path, unaltered', () => {

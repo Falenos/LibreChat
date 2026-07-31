@@ -28,9 +28,10 @@ Applies to `text/markdown` artifacts and to `.docx` / `.odt` deliverables.
   `#0F1A2A` text (11.96:1) wherever the format supports fills.
 - Close with a footer line: document owner, date, and confidentiality if relevant.
 
-Office previews render through a sanitised static HTML pipeline
-(`packages/api/src/files/documents/html.ts`), so token hexes survive as inline CSS —
-but the licensed Knauf fonts do not travel. Keep the Arial/system stack.
+Use Knauf Screen for body copy and Knauf Screen Head for headings whenever the
+document format can embed the supplied font. Office previews render through a
+sanitised static HTML pipeline (`packages/api/src/files/documents/html.ts`), so a
+preview may fall back to Arial even when the source document embeds Knauf Screen.
 
 ## Decks outside the slide artifact
 
@@ -40,6 +41,8 @@ Same grammar as the slide template: title → section divider → bullets → ch
   `#66BCE8` for the subtitle (5.46:1 on that field).
 - Content slides: white or `surface.page` `#F4F8FB`, headings in `ink.heading`.
 - One idea per slide. If a slide needs a second idea, it needs to be two slides.
+- Knauf Screen Head for slide titles; Knauf Screen for body copy. Embed the supplied
+  font files in the deck rather than substituting another display face.
 - The wordmark appears once on the title slide and small in the footer — see
   `skills/karl-brand/references/logo.md`.
 
@@ -54,6 +57,8 @@ Same grammar as the slide template: title → section divider → bullets → ch
 
 ## Spreadsheets
 
+- Knauf Screen for cells and Knauf Screen Head for titles wherever the workbook
+  format supports embedded fonts; otherwise use Arial as the explicit fallback.
 - Header row: `#CFD7D9` fill, `#0F1A2A` text, bold.
 - Primary series `#0099DE`; further series follow `KNAUF.categorical` in order.
 - Conditional formatting uses `KNAUF.status`, always with an icon or a text column

@@ -1,4 +1,4 @@
 interface:
   display_name: "Web Research"
-  short_description: "Research current information with clear sources"
-  default_prompt: "Use $web-research to investigate this question with current, directly linked sources."
+  short_description: "Search the public web and cite direct sources"
+  default_prompt: "Use $web-research to investigate this question with model-native search and directly linked sources."

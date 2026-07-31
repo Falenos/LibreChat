@@ -16,7 +16,7 @@ Last verified from the application repository: 2026-07-31. Visible sections depe
 
 The simplified builder currently exposes three capability switches:
 
-- **Browse the internet**: enabled by default. Uses Azure-hosted model search for discovery and `open_url` for an exact HTTPS URL in the user's current message.
+- **Browse the internet**: enabled by default. Uses the model's native web search for public-web research and `open_url` only for an exact HTTPS URL in the user's current message.
 - **Build visuals & documents**: off by default for new agents. Enables the artifact preview for React, HTML, Mermaid, SVG, and Markdown deliverables.
 - **Use Knauf skills**: enabled by default for new agents. With no per-skill allow-list in the simplified builder, the agent receives every skill currently accessible to the user, including future public deployment skills. Existing agents keep their saved setting.
 

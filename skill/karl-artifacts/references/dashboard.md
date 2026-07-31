@@ -32,12 +32,13 @@ the `KNAUF` const.**
 | `theme.card` / `theme.page` / `theme.border` | tile + panel fill / page / hairlines |
 | `theme.palette[i]` | chart series, by index |
 | `theme.grid` | gridlines |
-| `KNAUF.status.success` | KPI delta |
+| `KNAUF.status.success` | KPI delta dot; delta text stays readable ink |
 
 ## Brand + layout guidance
 
 - **The real wordmark** — `<KnaufWordmark fill="#FFFFFF" />` on the `accessibleBlue`
-  header, with "Performance Dashboard" as separate text beside it.
+  header, with "Performance Dashboard" as separate text beside it. Padding and the
+  gap to that label are at least the 24px mark height.
 - **One palette, both modes.** The chart steps are validated on the light *and* dark
   surface, so there is no palette swap — only surfaces and ink change. Everything
   routes through `useKnaufTheme(dark)`.
@@ -61,7 +62,8 @@ the `KNAUF` const.**
   rests on colour.
 - **Grid.** `grid-cols-1 md:grid-cols-2 lg:grid-cols-4` — KPI tiles span single cells;
   charts span 2 or 4 columns via `md:col-span-2` / `lg:col-span-2`.
-- Status colours are reserved for state, never a data series.
+- Status colours are reserved for state, never a data series or small-text colour.
+  KPI delta text uses `theme.text`; a status-coloured dot carries the accent.
 
 ```tsx
 import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
@@ -162,10 +164,10 @@ export default function KnaufKpiDashboard() {
   return (
     <div className="min-h-screen w-full p-6" style={{ backgroundColor: theme.page, color: theme.text }}>
       <div
-        className="mb-5 flex items-center justify-between rounded-lg px-5 py-3"
+        className="mb-5 flex items-center justify-between rounded-lg px-6 py-6"
         style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-6">
           <KnaufWordmark height={24} fill="#FFFFFF" />
           <span className="text-sm font-medium" style={{ color: KNAUF.ink.accentOnBrand }}>
             Performance Dashboard
@@ -194,7 +196,10 @@ export default function KnaufKpiDashboard() {
               <Icon size={18} style={{ color: KNAUF.brand.cyanBlue }} aria-hidden="true" />
             </div>
             <div className="mt-2 text-2xl font-bold" style={{ color: theme.text }}>{value}</div>
-            <div className="mt-1 text-xs font-medium" style={{ color: KNAUF.status.success }}>{delta}</div>
+            <div className="mt-1 flex items-center gap-1.5 text-xs font-medium" style={{ color: theme.text }}>
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: KNAUF.status.success }} aria-hidden="true" />
+              {delta} vs prior period
+            </div>
           </Card>
         ))}
 

@@ -159,7 +159,7 @@ Two RBAC details that are easy to get wrong: the schema defaults are `use: true`
 - **`karl-artifacts`** — artifact type selection, the react import allowlist, the top preview-breaking mistakes, update-in-place discipline, and branded report / slides / dashboard templates that consume `karl-brand`.
 - **`karl-guide`** — user-facing product guidance for Karl capabilities, navigation, role/group access, settings, limits, and troubleshooting.
 - **`karl-mermaid`** — Mermaid 11.15.0 generation and repair rules. Its catalog description triggers for every Mermaid request, and `karl-artifacts` reads it explicitly before emitting a Mermaid artifact.
-- **`web-research`** — routing and source discipline for Azure-hosted model search, exact-page `open_url`, File Search, and stable answers that need no browsing.
+- **`web-research`** — source discipline for model-native public-web search and request-scoped `open_url` fetching of an exact HTTPS link pasted in the current message. Uploaded files and Agent Knowledge remain outside this skill.
 
 A seventh candidate, `karl-data-analysis`, is parked at `skill/_disabled/` — its body describes `bash_tool` and `/mnt/data`, so it stays out of the catalog until `execute_code` is on. One `git mv` re-enables it.
 

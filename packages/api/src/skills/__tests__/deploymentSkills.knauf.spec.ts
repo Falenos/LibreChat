@@ -107,6 +107,7 @@ describe('[knauf] shipped deployment skills', () => {
     // false` would additionally drop it from the `$` popover.
     expect(source?.disableModelInvocation).not.toBe(true);
     expect(source?.userInvocable).not.toBe(false);
+    expect(source?.alwaysApply).toBe(true);
   });
 
   it('ships model-invocable Mermaid generation and repair guidance', () => {

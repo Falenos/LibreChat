@@ -223,7 +223,7 @@ Here are some examples of correct usage of artifacts:
 // KARL is ever moved to an Anthropic endpoint this line silently disappears and the
 // sibling `artifactsPrompt` above needs it.
 const knaufArtifactImportLines =
-  "      - Knauf brand tokens and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them; never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.";
+  "      - Knauf brand tokens, official fonts and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them once; it loads Knauf Screen and Knauf Screen Head automatically. Never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.";
 // End [knauf]
 
 const artifactsOpenAIPrompt = dedent`The assistant can create and reference artifacts during conversations.

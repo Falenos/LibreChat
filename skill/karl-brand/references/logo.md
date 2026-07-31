@@ -28,8 +28,10 @@ Prebuilt. A React artifact imports it and never carries the path data:
 import { KnaufWordmark } from '/knauf/brand';
 ```
 
-Call site: `<KnaufWordmark height={28} fill="#FFFFFF" />` — props are `height`
-(default 28) and `fill` (default `#FFFFFF`); width follows from the aspect ratio.
+Call site on a brand-blue bar: `<KnaufWordmark height={28} fill="#FFFFFF" />` — props
+are `height` (default 28) and `fill` (default `KNAUF.brand.logoCyan`, safe on a light
+surface); width follows from the aspect ratio. Always pass white explicitly on the
+`#003778` brand bar.
 
 Never re-type the `d` string into an artifact. It is 903 characters of coordinate
 data with no redundancy — any edit silently deforms the letterforms, and there is no
@@ -55,6 +57,7 @@ and `height` so the mark scales to its container.
 |---|---|---|
 | The `#003778` brand bar | `#FFFFFF` | 11.55 |
 | White or a light surface | `#00A0E6` | 2.93 — logotype exemption |
+| A clean dark surface | `#FFFFFF` | use the inverse mark; never logo cyan on dark |
 
 **Never `#003778`** — the brand book states Accessible Blue is never used for the
 logo. The 2.93:1 figure is deliberate and legal: WCAG 1.4.11 exempts logotypes from

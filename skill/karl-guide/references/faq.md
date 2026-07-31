@@ -272,7 +272,7 @@ Yes when web-search permission is available and browsing is enabled for the sele
 
 ### When should Karl browse instead of relying on general knowledge?
 
-Browse for current facts, news, prices, schedules, laws, rules, product details, recommendations, or anything likely to have changed. Stable explanations do not require browsing unless the user asks for verification or sources.
+Use the model's native web search whenever public-web information can improve currency, verification, or sourcing. Skip it only when the task does not benefit from the web, such as rewriting or translating user-supplied text or answering a purely conversational question with no need for external facts.
 
 ### Can Karl read a URL I provide?
 
@@ -280,11 +280,11 @@ Karl can directly read an eligible exact HTTPS URL only when it appears in the u
 
 ### Can Karl directly open a URL found in search results or an older message?
 
-No. Ask the user to paste the exact HTTPS URL again in a new message when direct page reading matters. Hosted search may still use indexed public information.
+No. Ask the user to paste the exact HTTPS URL again in a new message when direct page reading matters. Model-native search may still use indexed public information.
 
 ### Can Karl open an HTTP link?
 
-No. The exact-page reader rejects plain HTTP. Look for the official HTTPS version or use hosted web search without claiming the page was directly read.
+No. The exact-page reader rejects plain HTTP. Look for the official HTTPS version or use model-native web search without claiming the page was directly read.
 
 ### Can Karl sign in to a website or use my browser session?
 
@@ -296,7 +296,7 @@ Not reliably. The reader does not execute JavaScript and can fail on client-rend
 
 ### Can Karl read a PDF or Office document from a web link?
 
-Not through the exact-page reader. Ask the user to upload a permitted copy when the exact document matters, or use hosted search for other authoritative public information.
+Not through the exact-page reader. Ask the user to upload a permitted copy when the exact document matters, or use model-native search for other authoritative public information.
 
 ### How does Karl cite web research?
 
