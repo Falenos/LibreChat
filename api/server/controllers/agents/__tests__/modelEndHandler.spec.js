@@ -22,7 +22,12 @@ jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
 }));
 
-const { ModelEndHandler } = require('../callbacks');
+const {
+  ModelEndHandler,
+  createZeroUsageRefusalRetryHandler,
+  isZeroUsageGenericRefusal,
+  stripRetriedGenericRefusal,
+} = require('../callbacks');
 
 const buildGraph = () => ({
   getAgentContext: () => ({
@@ -242,6 +247,57 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
     expect(() => new ModelEndHandler(null)).toThrow('collectedUsage must be an array');
   });
 });
+
+// [knauf] NO-TICKET — regression coverage for Model Router's successful-looking refusal.
+describe('zero-usage generic refusal recovery', () => {
+  const refusalResult = {
+    generations: [
+      [
+        {
+          text: "I'm sorry, but I cannot assist with that request.",
+          message: {
+            content: "I'm sorry, but I cannot assist with that request.",
+            usage_metadata: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+          },
+        },
+      ],
+    ],
+  };
+
+  it('raises a retry signal only for the exact zero-usage refusal', () => {
+    expect(isZeroUsageGenericRefusal(refusalResult)).toBe(true);
+    expect(
+      isZeroUsageGenericRefusal({
+        generations: [
+          [
+            {
+              ...refusalResult.generations[0][0],
+              message: {
+                ...refusalResult.generations[0][0].message,
+                usage_metadata: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+              },
+            },
+          ],
+        ],
+      }),
+    ).toBe(false);
+
+    const { handler, state } = createZeroUsageRefusalRetryHandler({ messageId: 'm1' });
+    expect(() => handler.handleLLMEnd(refusalResult)).toThrow('zero_usage_generic_refusal');
+    expect(state.refusalCount).toBe(1);
+    expect(handler.raiseError).toBe(true);
+  });
+
+  it('removes the failed streamed refusal while preserving fallback text', () => {
+    expect(
+      stripRetriedGenericRefusal([
+        { type: 'text', text: "I'm sorry, but I cannot assist with that request." },
+        { type: 'text', text: 'Here is the requested chart.' },
+      ]),
+    ).toEqual([{ type: 'text', text: 'Here is the requested chart.' }]);
+  });
+});
+// End [knauf]
 
 // [knauf] KK20-252 — Azure content-filter surfacing.
 //

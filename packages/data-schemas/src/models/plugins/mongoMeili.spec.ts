@@ -427,6 +427,27 @@ describe('Meilisearch Mongoose plugin', () => {
     expect(storedDoc?._meiliIndex).toBe(false);
   });
 
+  // [knauf] guard unmatched updates used by partial-message persistence
+  test('findOneAndUpdate with no matching document skips Meili post-processing', async () => {
+    const modelName = `DynamicMeiliMissingUpdate${new mongoose.Types.ObjectId().toString()}`;
+    const dynamicModel = createDynamicMeiliModel(modelName);
+
+    try {
+      await expect(
+        dynamicModel.findOneAndUpdate(
+          { docId: 'missing' },
+          { $set: { title: 'Never updated' } },
+          { new: true, upsert: false },
+        ),
+      ).resolves.toBeNull();
+      expect(mockUpdateDocuments).not.toHaveBeenCalled();
+    } finally {
+      await dynamicModel.deleteMany({});
+      mongoose.deleteModel(modelName);
+    }
+  });
+  // End [knauf]
+
   test('sync w/ meili excludes legacy temporary messages without isTemporary', async () => {
     const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
     await messageModel.deleteMany({});
