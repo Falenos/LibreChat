@@ -947,6 +947,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/{architecture/code-interpreter-and-artifacts.md,implementation-plans/code-interpreter-artifacts-rollout.md,contributing/roles-and-access.md}` | None (Markdown) | Low — reconciles skill inventory, runtime defaults, current feature gates, and seeded role permissions with code | Docs only | NO-TICKET |
 | `knauf/scripts/seed-agent-builder-role.js` | Existing role seeder and permission constants | Low — corrects the operator-facing role description to match the unchanged private-agent and prompt-sharing permissions | Existing role seeder verification path | NO-TICKET |
 | `packages/api/src/knauf/skills/deploymentSkillsCheck{,.spec}.ts` | `@librechat/data-schemas` logger; real expected deployment-skill set | Low — expands the boot-time exact set from three to six and reduces fixture drift by reusing the exported expected list | `packages/api/src/knauf/skills/deploymentSkillsCheck.spec.ts`; deployment skill-tree spec | NO-TICKET |
+| `skill/web-research/**` | None (Markdown/YAML deployment skill loaded by the registry) | Medium — correction to the earlier NO-TICKET row: routes only model-native public-web search and request-scoped `open_url` fetching of an exact HTTPS link in the current message; uploaded files and Agent Knowledge are explicitly out of scope | `quick_validate.py`; `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts`; existing `open_url` tests | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

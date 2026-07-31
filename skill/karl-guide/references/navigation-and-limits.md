@@ -48,7 +48,7 @@ The exact-page reader:
 - Cannot fetch a URL discovered by search or found in an older message unless the user supplies it again in the current message.
 - Can fail on bot protection, client-rendered applications, timeouts, redirects, private-network targets, PDF, Office, image, audio, or video URLs.
 
-Use hosted web search as the fallback. Ask for an uploaded permitted copy when the exact inaccessible document matters.
+Use model-native web search as the fallback. Ask for an uploaded permitted copy when the exact inaccessible document matters.
 
 ## Troubleshooting patterns
 
@@ -74,4 +74,4 @@ The answer may not have used File Search, the relevant content may not have been
 
 ### Webpage cannot be read
 
-State the limitation, try hosted search for an alternative authoritative source, or ask for an uploaded copy. Never summarise a challenge page or empty result as if it were the requested content.
+State the limitation, try model-native search for an alternative authoritative source, or ask for an uploaded copy. Never summarise a challenge page or empty result as if it were the requested content.

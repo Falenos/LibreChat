@@ -10,7 +10,7 @@ Karl can answer questions, explain concepts, draft and rewrite text, summarise, 
 
 “Browse the internet” combines two mechanisms behind one user-facing capability:
 
-- Azure-hosted model web search discovers current public information and returns web citations.
+- The model's native web search researches public information and returns web citations.
 - The exact-page `open_url` tool reads a specific HTTPS link included in the user's current message.
 
 The exact-page reader is not an interactive browser and rejects plain HTTP. Availability also depends on the user's web-search permission. See `navigation-and-limits.md` for failure cases.

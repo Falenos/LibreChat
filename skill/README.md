@@ -23,7 +23,7 @@ are not persisted as Skill documents in MongoDB.
 | `karl-artifacts` | Choosing an artifact type, avoiding preview breakage, and the branded report / slides / dashboard templates. | model-invocable + `$karl-artifacts` | skill gates |
 | `karl-guide` | Product guidance for Karl capabilities, navigation, roles, groups, settings, limits, and troubleshooting. | model-invocable + `$karl-guide` | skill gates |
 | `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | skill gates |
-| `web-research` | Routes current-information requests between hosted model search, exact-page HTTPS fetch, File Search, and no browsing; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
+| `web-research` | Uses model-native public-web search by default and the request-scoped `open_url` fetch only for an exact HTTPS link pasted in the current message; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
 | `_disabled/karl-data-analysis` | **Not loaded.** Sandbox workflow guidance (`bash_tool`, `/mnt/data`, matplotlib). Its body describes tools that do not exist while code execution is off, and its catalog entry would invite the model to promise work it cannot do. Re-enable with `git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis` once `execute_code` is in `endpoints.agents.capabilities` **and** a sandbox is reachable at `LIBRECHAT_CODE_BASEURL`. | — | needs `execute_code` |
 
 `skill/_disabled/` is not scanned: discovery only looks at `skill/SKILL.md` and the immediate
