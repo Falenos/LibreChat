@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { logger } = require('@librechat/data-schemas');
-const { logAxiosError, validateImage } = require('@librechat/api');
+const { validateImage } = require('@librechat/api');
 const {
   FileSources,
   VisionModes,
@@ -9,6 +9,7 @@ const {
   EModelEndpoint,
   mergeFileConfig,
   getEndpointFileConfig,
+  knaufCategorySizeLimit,
 } = require('librechat-data-provider');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 
@@ -66,9 +67,14 @@ async function fetchImageToBase64(url) {
     const base64Data = Buffer.from(response.data).toString('base64');
     response.data = null;
     return base64Data;
-  } catch (error) {
-    const message = 'Error fetching image to convert to base64';
-    throw new Error(logAxiosError({ message, error }));
+  } catch (_error) {
+    // [knauf] NO-TICKET — signed blob URLs and transport errors must not leak
+    // through the base64-only provider compatibility path.
+    logger.error('Image fetch for normalization failed', {
+      operation: 'image_normalization_fetch',
+    });
+    throw new Error('Image normalization failed');
+    // End [knauf]
   }
 }
 
@@ -86,6 +92,11 @@ const blobStorageSources = new Set([
   FileSources.firebase,
   FileSources.cloudfront,
 ]);
+
+// [knauf] NO-TICKET — keep stored image metadata inside the same type/size
+// boundary as upload before handing a signed URL or bytes to a model provider.
+const knaufImageEndpoints = new Set([EModelEndpoint.agents, EModelEndpoint.azureOpenAI]);
+// End [knauf]
 
 /**
  * Encodes and formats the given files.
@@ -113,6 +124,13 @@ async function encodeAndFormat(req, files, params, mode) {
     return result;
   }
 
+  // [knauf] NO-TICKET — outbound validation is defense in depth for historical
+  // or tampered Mongo rows that did not pass today's upload boundary.
+  const fileConfig = mergeFileConfig(req.config?.fileConfig);
+  const endpointConfig = getEndpointFileConfig({ fileConfig, endpoint: effectiveEndpoint });
+  const configuredFileSizeLimit = endpointConfig?.fileSizeLimit;
+  // End [knauf]
+
   for (let file of files) {
     /** @type {FileSources} */
     const source = file.source ?? FileSources.local;
@@ -121,6 +139,20 @@ async function encodeAndFormat(req, files, params, mode) {
       promises.push([file, null]);
       continue;
     }
+
+    // [knauf] NO-TICKET — never send an unapproved or unbounded stored image to
+    // Foundry. Error text deliberately excludes filenames, paths, and user data.
+    if (!fileConfig.checkType(file.type, endpointConfig?.supportedMimeTypes)) {
+      throw new Error('Unsupported image type');
+    }
+    const categoryLimit = knaufImageEndpoints.has(effectiveEndpoint)
+      ? knaufCategorySizeLimit(file.type)
+      : undefined;
+    const sizeLimit = Math.min(configuredFileSizeLimit ?? Infinity, categoryLimit ?? Infinity);
+    if (!Number.isSafeInteger(file.bytes) || file.bytes <= 0 || file.bytes > sizeLimit) {
+      throw new Error('Invalid image size');
+    }
+    // End [knauf]
 
     if (!encodingMethods[source]) {
       const { prepareImagePayload, getDownloadStream } = getStrategyFunctions(source);
@@ -132,8 +164,10 @@ async function encodeAndFormat(req, files, params, mode) {
     }
 
     const preparePayload = encodingMethods[source].prepareImagePayload;
-    /* We need to fetch the image and convert it to base64 if we are using S3/Azure Blob/Firebase storage. */
-    if (blobStorageSources.has(source)) {
+    /* Base64-only providers still need blob bytes; URL-capable providers keep the signed URL. */
+    // [knauf] NO-TICKET — Foundry accepts the already-authorized SAS URL. Avoid
+    // expanding a bounded blob into a large data URI in the request and OTEL span.
+    if (blobStorageSources.has(source) && base64Only.has(effectiveEndpoint)) {
       try {
         const downloadStream = encodingMethods[source].getDownloadStream;
         let stream = await downloadStream(req, file.filepath);
@@ -142,8 +176,12 @@ async function encodeAndFormat(req, files, params, mode) {
         promises.push([file, base64Data]);
         base64Data = null;
         continue;
-      } catch (error) {
-        logger.error('Error processing image from blob storage:', error);
+      } catch (_error) {
+        logger.error('Image normalization failed', {
+          operation: 'image_normalization',
+          storageSource: source,
+        });
+        throw new Error('Image normalization failed');
       }
     } else if (source !== FileSources.local && base64Only.has(effectiveEndpoint)) {
       const [_file, imageURL] = await preparePayload(req, file);
@@ -151,6 +189,7 @@ async function encodeAndFormat(req, files, params, mode) {
       continue;
     }
     promises.push(preparePayload(req, file));
+    // End [knauf]
   }
 
   const detail = req.body.imageDetail ?? ImageDetail.auto;
@@ -158,17 +197,6 @@ async function encodeAndFormat(req, files, params, mode) {
   /** @type {Array<[MongoFile, string]>} */
   const formattedImages = await Promise.all(promises);
   promises.length = 0;
-
-  /** Extract configured file size limit from fileConfig for this endpoint */
-  let configuredFileSizeLimit;
-  if (req.config?.fileConfig) {
-    const fileConfig = mergeFileConfig(req.config.fileConfig);
-    const endpointConfig = getEndpointFileConfig({
-      fileConfig,
-      endpoint: effectiveEndpoint,
-    });
-    configuredFileSizeLimit = endpointConfig?.fileSizeLimit;
-  }
 
   for (const [file, imageContent] of formattedImages) {
     const fileMetadata = {
@@ -205,7 +233,10 @@ async function encodeAndFormat(req, files, params, mode) {
         );
 
         if (!validation.isValid) {
-          throw new Error(`Image validation failed for ${file.filename}: ${validation.error}`);
+          // [knauf] NO-TICKET — provider/application errors must not disclose
+          // filenames or parser internals through logs or terminal job errors.
+          throw new Error('Image validation failed');
+          // End [knauf]
         }
       }
     }

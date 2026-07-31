@@ -806,7 +806,11 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
       .post('/files')
       .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
 
+    // Expected input rejection must not count as an
+    // operational server failure.
+    expect(response.status).toBe(422);
     expect(response.body.message).toBe('com_knauf_error_file_encrypted');
+    expect(response.body.code).toBe('com_knauf_error_file_encrypted');
     expect(processAgentFileUpload).not.toHaveBeenCalled();
   });
 

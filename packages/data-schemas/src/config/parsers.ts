@@ -1,7 +1,6 @@
 import { klona } from 'klona';
 import winston from 'winston';
 import type { TraverseContext } from '../utils/object-traverse';
-import { SYSTEM_TENANT_ID } from './tenantContext';
 import traverse from '../utils/object-traverse';
 
 const SPLAT_SYMBOL = Symbol.for('splat');
@@ -9,12 +8,19 @@ const MESSAGE_SYMBOL = Symbol.for('message');
 const CONSOLE_JSON_STRING_LENGTH: number =
   parseInt(process.env.CONSOLE_JSON_STRING_LENGTH || '', 10) || 255;
 const DEBUG_MESSAGE_LENGTH: number = parseInt(process.env.DEBUG_MESSAGE_LENGTH || '', 10) || 150;
-const LOG_CONTEXT_KEYS = ['tenantId', 'userId', 'requestId'] as const;
+// [knauf] NO-TICKET — request IDs retain correlation without emitting user or
+// tenant identifiers into application logs.
+const LOG_CONTEXT_KEYS = ['requestId'] as const;
+// End [knauf]
 const REDACTED_VALUE = '[REDACTED]';
 const REDACTION_TRUNCATED_KEY = '__redaction_truncated__';
 const MAX_REDACTION_DEPTH = 8;
 const MAX_REDACTION_ENTRIES = 50;
 const DEFAULT_REDACTION_STRING_LENGTH = 8192;
+// [knauf] NO-TICKET — stack/message ceilings keep provider failures concise.
+const MAX_ERROR_MESSAGE_LENGTH = 1024;
+const MAX_ERROR_STACK_LENGTH = 2048;
+// End [knauf]
 const MAX_REDACTION_STRING_LENGTH = Math.max(
   CONSOLE_JSON_STRING_LENGTH,
   DEFAULT_REDACTION_STRING_LENGTH,
@@ -27,10 +33,13 @@ const sensitiveKeys: RegExp[] = [
   /\b(api-key:? )[^\s"']+/gi, // Header: API key pattern
   /\b(api_key=)[^\s"'&]+/gi, // URL query param: API key pattern
   /\b(key=)[^\s"'&]+/g, // URL query param: sensitive key pattern
+  // [knauf] NO-TICKET — Azure SAS signature query parameter.
+  /\b(sig=)[^\s"'&]+/gi,
+  // End [knauf]
 ];
 
 const sensitiveMetadataKey =
-  /^(authorization|proxy-authorization|x-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password)$/i;
+  /^(authorization|proxy-authorization|x-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|user[-_]?id|tenant[-_]?id)$/i;
 const errorStringProperties = new Set(['name', 'message', 'stack']);
 
 /**
@@ -44,9 +53,15 @@ function redactMessage(str: string, trimLength?: number): string {
     return '';
   }
 
+  // [knauf] NO-TICKET — remove the entire base64 tail before any bounding so
+  // even the first bytes of an image can never reach a log transport.
+  const imageDataIndex = str.search(/data:image\/[a-zA-Z0-9.+-]+;base64,/i);
+  const withoutImageData =
+    imageDataIndex === -1 ? str : `${str.substring(0, imageDataIndex)}[REDACTED image data URI]`;
+  // End [knauf]
   const redacted = sensitiveKeys.reduce(
     (currentMessage, pattern) => currentMessage.replace(pattern, '$1[REDACTED]'),
-    str,
+    withoutImageData,
   );
 
   if (trimLength !== undefined && redacted.length > trimLength) {
@@ -56,13 +71,13 @@ function redactMessage(str: string, trimLength?: number): string {
   return redacted;
 }
 
-function redactLogString(str: string): string {
-  if (str.length <= MAX_REDACTION_STRING_LENGTH) {
+function redactLogString(str: string, maxLength = MAX_REDACTION_STRING_LENGTH): string {
+  if (str.length <= maxLength) {
     return redactMessage(str);
   }
 
-  const redacted = redactMessage(str.substring(0, MAX_REDACTION_STRING_LENGTH));
-  return `${redacted}... [truncated ${str.length - MAX_REDACTION_STRING_LENGTH} chars]`;
+  const redacted = redactMessage(str.substring(0, maxLength));
+  return `${redacted}... [truncated ${str.length - maxLength} chars]`;
 }
 
 function isPlainRecord(value: object): value is Record<string, unknown> {
@@ -92,8 +107,17 @@ function defineRedactedErrorProperty(
     return;
   }
 
+  const maxLength = {
+    name: 128,
+    message: MAX_ERROR_MESSAGE_LENGTH,
+    stack: MAX_ERROR_STACK_LENGTH,
+  }[key];
+
   Object.defineProperty(error, key, {
-    value: redactLogString(value),
+    // [knauf] NO-TICKET — provider stacks are bounded more tightly than generic
+    // strings; names stay small and useful for classification.
+    value: redactLogString(value, maxLength),
+    // End [knauf]
     writable: true,
     enumerable: false,
     configurable: true,
@@ -383,9 +407,6 @@ function formatRequestContext(metadata: Record<string, unknown>): string {
   const context: Partial<Record<(typeof LOG_CONTEXT_KEYS)[number], string>> = {};
   LOG_CONTEXT_KEYS.forEach((key) => {
     const value = metadata[key];
-    if (key === 'tenantId' && value === SYSTEM_TENANT_ID) {
-      return;
-    }
     if (typeof value === 'string' && value) {
       context[key] = value;
     }
@@ -454,9 +475,11 @@ const debugTraverse: winston.Logform.Format = winston.format.printf(
       msgParts.push('\n{');
 
       const copy = klona(metadata);
-      if (copy.tenantId === SYSTEM_TENANT_ID) {
-        delete copy.tenantId;
-      }
+      // [knauf] NO-TICKET — debug formatting bypasses request-context shaping,
+      // so explicitly remove identity metadata before traversing it.
+      delete copy.tenantId;
+      delete copy.userId;
+      // End [knauf]
       try {
         const traversal = traverse(copy);
         traversal.forEach(function (this: TraverseContext, value: unknown) {
