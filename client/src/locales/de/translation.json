@@ -410,6 +410,7 @@
   "com_hide_examples": "Beispiele ausblenden",
   "com_info_heic_converting": "HEIC-Bild wird in JPEG konventiert...",
   "com_knauf_agent_id": "Agent-ID",
+  "com_knauf_artifact_fix": "Artefakt reparieren",
   "com_knauf_artifact_share_error": "Der Artefakt-Link konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",
   "com_knauf_artifact_share_loading": "Artefakt-Link wird erstellt",
   "com_knauf_artifact_share_title": "Artefakt teilen",
