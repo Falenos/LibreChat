@@ -152,13 +152,16 @@ Two RBAC details that are easy to get wrong: the schema defaults are `use: true`
 
 **Invocation:** the model picks from an injected catalog (name + description only — cheap), the user types `$` for a manual popover, or `always-apply` primes every turn. Per agent: the builder's **Skills** toggle (`skills_enabled`) + an optional allowlist. Note the modelSpec `skills: true` on the `karl` spec makes `skills_enabled` unconditional for default-spec chats, which short-circuits the composer chip.
 
-**Three deployment skills ship in `skill/`:**
+**Six deployment skills ship in `skill/`:**
 
+- **`agent-builder-coach`** — grounded guidance for designing, configuring, testing, and preparing governed custom agents for admin-controlled publication.
 - **`karl-brand`** — the single source of truth for Knauf brand tokens: the official colour system, a chart palette validated for CVD separation and contrast in both light and dark, ink/surface tokens, and the real KNAUF wordmark as an inline SVG path. Other skills read it via `read_file skills/karl-brand/SKILL.md`; it must stay model-invocable for that to work.
 - **`karl-artifacts`** — artifact type selection, the react import allowlist, the top preview-breaking mistakes, update-in-place discipline, and branded report / slides / dashboard templates that consume `karl-brand`.
+- **`karl-guide`** — user-facing product guidance for Karl capabilities, navigation, role/group access, settings, limits, and troubleshooting.
 - **`karl-mermaid`** — Mermaid 11.15.0 generation and repair rules. Its catalog description triggers for every Mermaid request, and `karl-artifacts` reads it explicitly before emitting a Mermaid artifact.
+- **`web-research`** — routing and source discipline for Azure-hosted model search, exact-page `open_url`, File Search, and stable answers that need no browsing.
 
-A fourth, `karl-data-analysis`, is parked at `skill/_disabled/` — its body describes `bash_tool` and `/mnt/data`, so it stays out of the catalog until `execute_code` is on. One `git mv` re-enables it.
+A seventh candidate, `karl-data-analysis`, is parked at `skill/_disabled/` — its body describes `bash_tool` and `/mnt/data`, so it stays out of the catalog until `execute_code` is on. One `git mv` re-enables it.
 
 They deliberately **layer on** the prompts LibreChat already injects — they restate no directive syntax. `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` guards the shipped tree; run it after editing any skill.
 
@@ -170,7 +173,7 @@ They deliberately **layer on** the prompts LibreChat already injects — they re
 - **Agent auto-run** — composer **"+"** → toggle **Run Code**, then e.g. "compute Fibonacci(20) by running Python"; or enable Code Interpreter on an agent in the builder (admins get the detailed builder by default).
 - **Files** — attach a **CSV** to a code-interpreter agent → "load with pandas, print describe()" → "plot a chart"; the PNG returns inline. `.py`/`.zip` are blocked by the KK20-190 MIME allow-list — relax `supportedMimeTypes` in `librechat.local.yaml` only if needed.
 - **Artifacts** — composer **"+"** → toggle **Artifacts** → "React counter with Tailwind" or "Mermaid flowchart of a login flow" → renders in the side panel.
-- **Skills** — type `$` in the composer → popover lists `karl-artifacts`, `karl-brand`, and `karl-mermaid`; pick one, or let the model invoke it from its catalog (watch for a `skill(...)` call in the run, then a `read_file` on the relevant `skills/<name>/SKILL.md`). On an agent, flip **Use Knauf skills** in the builder. Good end-to-end prompts: *"build a Knauf-branded status report"* and *"draw a sequence diagram of this flow"*.
+- **Skills** — type `$` in the composer → the popover lists all six skills above; pick one, or let the model invoke it from its catalog (watch for a `skill(...)` call in the run, then a `read_file` on the relevant `skills/<name>/SKILL.md`). New agents start with **Use Knauf skills** enabled; existing agents retain their saved setting. Good end-to-end prompts: *"build a Knauf-branded status report"*, *"draw a sequence diagram of this flow"*, *"what can Karl do?"*, and *"help me test this agent"*.
 
 ---
 

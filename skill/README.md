@@ -18,15 +18,21 @@ are not persisted as Skill documents in MongoDB.
 
 | Skill | Purpose | Invocation | Gate |
 |---|---|---|---|
-| `karl-brand` | Single source of truth for Knauf brand tokens: official colours, validated chart palette, ink/surface tokens, the real KNAUF wordmark SVG. Read by `karl-artifacts` and usable for non-artifact deliverables. | model-invocable + `$karl-brand` | none |
-| `karl-artifacts` | Choosing an artifact type, avoiding preview breakage, and the branded report / slides / dashboard templates. | model-invocable + `$karl-artifacts` | none |
-| `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | none |
+| `agent-builder-coach` | Designs, configures, tests, and prepares governed custom agents for admin-controlled publication. | model-invocable + `$agent-builder-coach` | skill gates |
+| `karl-brand` | Single source of truth for Knauf brand tokens: official colours, validated chart palette, ink/surface tokens, the real KNAUF wordmark SVG. Read by `karl-artifacts` and usable for non-artifact deliverables. | model-invocable + `$karl-brand` | skill gates |
+| `karl-artifacts` | Choosing an artifact type, avoiding preview breakage, and the branded report / slides / dashboard templates. | model-invocable + `$karl-artifacts` | skill gates |
+| `karl-guide` | Product guidance for Karl capabilities, navigation, roles, groups, settings, limits, and troubleshooting. | model-invocable + `$karl-guide` | skill gates |
+| `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | skill gates |
+| `web-research` | Routes current-information requests between hosted model search, exact-page HTTPS fetch, File Search, and no browsing; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
 | `_disabled/karl-data-analysis` | **Not loaded.** Sandbox workflow guidance (`bash_tool`, `/mnt/data`, matplotlib). Its body describes tools that do not exist while code execution is off, and its catalog entry would invite the model to promise work it cannot do. Re-enable with `git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis` once `execute_code` is in `endpoints.agents.capabilities` **and** a sandbox is reachable at `LIBRECHAT_CODE_BASEURL`. | — | needs `execute_code` |
 
 `skill/_disabled/` is not scanned: discovery only looks at `skill/SKILL.md` and the immediate
 children of `skill/`, so a skill two levels down is invisible to the loader. The guard spec at
 `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` asserts the loaded set exactly,
 so this stays true even if discovery depth changes upstream.
+
+Skill gates are the endpoint `skills` capability, the user's `SKILLS.USE` permission, and skills
+being enabled for the current chat or persisted agent.
 
 ## Per-skill maintainer constraints
 
@@ -80,9 +86,11 @@ Learned the hard way — each of these is a silent failure otherwise.
    never link.
 8. **Do not rename a shipped skill.** The id is derived from the name, so a rename mints a new
    skill and drops every user's per-skill active-state.
-9. **Deployment skills are active by default for every user** and are read-only over the API. A
-   description that advertises a capability the deployment does not have is a promise the model
-   will make and fail to keep.
+9. **Deployment skills are public and read-only, but execution still has gates.** The user needs
+   `SKILLS.USE`, the endpoint needs the `skills` capability, and the current chat or persisted agent
+   must have skills enabled. New agents default to enabled with no allow-list; existing agents keep
+   their saved state. A description that advertises a capability the deployment does not have is a
+   promise the model will make and fail to keep.
 10. **A SKILL.md body is injected as a `user` message, and it is written in a voice the model
     reads as instructions to itself.** `buildSkillPrimeMessage` sets `role: 'user'` and the SDK
     converts it to a `HumanMessage` — providers reject mid-conversation system messages, so there

@@ -52,9 +52,12 @@ import { logger } from '@librechat/data-schemas';
  * user's per-skill active state.
  */
 export const KNAUF_EXPECTED_DEPLOYMENT_SKILLS: readonly string[] = Object.freeze([
+  'agent-builder-coach',
   'karl-artifacts',
   'karl-brand',
+  'karl-guide',
   'karl-mermaid',
+  'web-research',
 ]);
 
 export interface DeploymentSkillCheckResult {

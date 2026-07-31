@@ -340,6 +340,9 @@ export function createAgentMethods(
         agentData.skills_enabled = false;
       }
     }
+    // [knauf] New agents inherit every accessible deployment/public skill unless the caller explicitly opts out.
+    agentData.skills_enabled ??= true;
+    // End [knauf]
     const { author: _author, ...versionData } = agentData;
     const timestamp = new Date();
     const initialAgentData = {

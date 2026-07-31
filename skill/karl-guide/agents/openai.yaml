@@ -1,0 +1,4 @@
+interface:
+  display_name: "Karl Guide"
+  short_description: "Explain Karl features, access, and limitations"
+  default_prompt: "Use $karl-guide to explain what Karl can do and what is available to me."

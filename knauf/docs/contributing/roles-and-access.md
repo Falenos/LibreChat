@@ -1,14 +1,17 @@
 # Roles and access
 
-> `USER` = chat only. `AGENT_BUILDER` = create/share agents, no admin panel. `ADMIN` = everything including admin panel.
+> `USER` = restricted chat and assigned agents. `AGENT_BUILDER` = create private agents, no agent publishing or admin panel. `ADMIN` = platform administration.
 
 ## Role matrix
 
 | Permission | USER | AGENT_BUILDER | ADMIN |
 |---|---|---|---|
-| Use chat | ✅ | ✅ | ✅ |
-| Create & share agents/prompts | ❌ | ✅ | ✅ |
-| All chat features | ❌ | ✅ | ✅ |
+| Use standard chat | ✅ | ✅ | ✅ |
+| Use shipped read-only skills | ✅ | ✅ | ✅ |
+| Use web and document search | ❌ when USER lockdown is enabled | ✅ | ✅ |
+| Create private agents | ❌ | ✅ | ✅ |
+| Share or publish agents | ❌ | ❌ | ✅ |
+| Create and share prompts | ❌ | ✅ | ✅ |
 | Admin panel & admin API | ❌ | ❌ | ✅ |
 
 `USER` restrictions require `KNAUF_RESTRICT_USER_PERMISSIONS=true` in env.
@@ -36,8 +39,10 @@ Safe to re-run: creates the role if missing; if it already exists, it replaces t
 
 Target `AGENT_BUILDER` permission profile:
 
-- ON: `BOOKMARKS.USE`, `PROMPTS.USE/CREATE/SHARE`, `AGENTS.USE/CREATE`, `MULTI_CONVO.USE`, `TEMPORARY_CHAT.USE`, `RUN_CODE.USE`, `WEB_SEARCH.USE`, `MARKETPLACE.USE`, `FILE_SEARCH.USE`, `FILE_CITATIONS.USE`
-- OFF: `PROMPTS.SHARE_PUBLIC`, `AGENTS.SHARE/SHARE_PUBLIC`, all `MEMORIES.*`, all `PEOPLE_PICKER.*`, all `MCP_SERVERS.*`, all `REMOTE_AGENTS.*`, all `SKILLS.*`
+- ON: `BOOKMARKS.USE`, `PROMPTS.USE/CREATE/SHARE`, `AGENTS.USE/CREATE`, `MULTI_CONVO.USE`, `TEMPORARY_CHAT.USE`, `WEB_SEARCH.USE`, `MARKETPLACE.USE`, `FILE_SEARCH.USE`, `FILE_CITATIONS.USE`, `SKILLS.USE`
+- OFF: `PROMPTS.SHARE_PUBLIC`, `AGENTS.SHARE/SHARE_PUBLIC`, `RUN_CODE.USE`, all `MEMORIES.*`, all `PEOPLE_PICKER.*`, all `MCP_SERVERS.*`, all `REMOTE_AGENTS.*`, and `SKILLS.CREATE/SHARE/SHARE_PUBLIC`
+
+The shipped `librechat.yaml` also sets `SKILLS.USE=true` and skill authoring/sharing false for built-in USER and ADMIN roles. Deployment skills are therefore a read-only catalogue. Re-run the role seed script after a release so existing `AGENT_BUILDER` role documents converge to this profile.
 
 **Option B — admin panel (one-time manual):**
 1. Log in as ADMIN → Admin Panel → Roles → **Create role**

@@ -522,6 +522,33 @@ describe('Agent Methods', () => {
       expect(retrievedAgent!.description).toBe('Test description');
     });
 
+    // [knauf] New agents get the dynamic full public/deployment skill catalog while preserving explicit opt-out.
+    test('should enable skills by default and preserve an explicit opt-out', async () => {
+      const defaultIds = createTestIds();
+      const defaultAgent = await createAgent({
+        id: defaultIds.agentId,
+        name: 'Default Skills Agent',
+        provider: 'test',
+        model: 'test-model',
+        author: defaultIds.authorId,
+      });
+      const optOutIds = createTestIds();
+      const optedOutAgent = await createAgent({
+        id: optOutIds.agentId,
+        name: 'No Skills Agent',
+        provider: 'test',
+        model: 'test-model',
+        author: optOutIds.authorId,
+        skills_enabled: false,
+      });
+
+      expect(defaultAgent.skills_enabled).toBe(true);
+      expect(defaultAgent.skills).toBeUndefined();
+      expect(defaultAgent.versions?.[0].skills_enabled).toBe(true);
+      expect(optedOutAgent.skills_enabled).toBe(false);
+    });
+    // End [knauf]
+
     test('should derive mcpServerNames only from MCP tools on create', async () => {
       const { agentId, authorId } = createTestIds();
       const actionTool = `sync${Constants.mcp_delimiter}state${actionDelimiter}api---example---com`;
