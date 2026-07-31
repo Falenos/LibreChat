@@ -12,6 +12,7 @@ import {
   KnaufMermaidCanvasExports,
   KnaufMermaidErrorAction,
 } from '~/knauf/components/Mermaid/KnaufMermaidControls';
+import { useMessageContext } from '~/Providers';
 // End [knauf]
 
 interface MermaidProps {
@@ -47,14 +48,19 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
     calculatedHeight,
   } = useSvgProcessing({ content: children, id, theme, retryCount, containerRef });
 
+  // [knauf] A parser-valid partial diagram may still fail rendering while the model streams. (NO-TICKET)
+  const { isSubmitting } = useMessageContext();
+  const isRendering = isLoading || Boolean(error && isSubmitting);
+  // End [knauf]
+
   const { zoom, pan, isPanning, handleZoomIn, handleZoomOut, handleResetZoom, handleMouseDown } =
     useMermaidZoom({ containerRef, wheelDep: blobUrl });
 
   useEffect(() => {
-    if (isLoading && streamingCodeRef.current) {
+    if (isRendering && streamingCodeRef.current) {
       streamingCodeRef.current.scrollTop = streamingCodeRef.current.scrollHeight;
     }
-  }, [children, isLoading]);
+  }, [children, isRendering]);
 
   const handleToggleCode = useCallback(() => setShowCode((prev) => !prev), []);
   const handleRetry = useCallback(() => setRetryCount((prev) => prev + 1), []);
@@ -93,7 +99,7 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
     height: svgDimensions ? `${svgDimensions.height * initialScale}px` : 'auto',
   };
 
-  if (isLoading) {
+  if (isRendering) {
     if (lastValidSvgRef.current && blobUrl) {
       return (
         <div

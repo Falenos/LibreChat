@@ -543,6 +543,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Messages/Content/Mermaid/Mermaid.tsx` | `KnaufMermaidErrorAction`, `KnaufMermaidCanvasExports` | 10–15, 186–188, 280–286 | Replaces ineffective source retries with a constrained repair follow-up and exposes SVG/PNG export on successful diagrams | `client/src/knauf/components/Mermaid/KnaufMermaidControls.knauf.spec.tsx`, `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Mermaid/useMermaid.ts` | `KnaufMermaidError`, `shouldRetryOnError` | 7–9, 15–35, 104–145 | Classifies load, syntax, and render failures; retries only transient lazy-load failures and no longer masks invalid updated source with stale SVG | `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | NO-TICKET |
 | `client/src/hooks/Mermaid/useDebouncedMermaid.ts` | `shouldShowError` source-error branch | 3–5, 198–203 | Surfaces deterministic syntax/render failures after one attempt while preserving the existing transient-load threshold | `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | NO-TICKET |
+| `client/src/components/Messages/Content/Mermaid/Mermaid.tsx` | `isRendering` streaming-error gate | 51–54, 60–63, 102 | Keeps parser-valid/render-incomplete diagrams in the loading state while the model is still generating, then exposes repair if the completed response remains invalid | `client/src/knauf/components/Mermaid/MermaidStreamingError.knauf.spec.tsx` | NO-TICKET |
+| `client/src/hooks/Mermaid/useMermaid.ts` | `mermaidConfig.suppressErrorRendering` | 97–99 | Uses Mermaid's native cleanup path so renderer failures cannot leave its fallback bomb SVG attached to the application body | `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -798,6 +800,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/common/mermaid.ts` | None | Low — Knauf-owned error type and retry/source predicates keep Mermaid policy out of upstream hooks | `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | NO-TICKET |
 | `client/src/knauf/components/Mermaid/*` | `@librechat/client`, `lucide-react`, `~/{hooks,Providers,utils}`, `~/knauf/common/mermaid` | Low — browser-native sanitised SVG download, bounded PNG rasterisation, and one-shot model repair controls; no new dependency or server path | `client/src/knauf/components/Mermaid/KnaufMermaidControls.knauf.spec.tsx` | NO-TICKET |
 | `client/src/knauf/hooks/Mermaid/useMermaid.knauf.spec.tsx` | `~/hooks/Mermaid/{useMermaid,useDebouncedMermaid}`; Mermaid renderer mocked at its public API | Low — focused regression for failure classification, single-attempt deterministic errors, and debounce-layer visibility | Self | NO-TICKET |
+| `client/src/knauf/components/Mermaid/MermaidStreamingError.knauf.spec.tsx` | `~/components/Messages/Content/Mermaid/Mermaid`; upstream renderer hooks and Knauf controls mocked at their public contracts | Low — focused regression for parser-valid/render-incomplete XY charts during and after model submission | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

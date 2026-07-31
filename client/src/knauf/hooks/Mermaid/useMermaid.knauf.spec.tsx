@@ -7,11 +7,12 @@ import { KnaufMermaidError, shouldRetryKnaufMermaidError } from '~/knauf/common/
 
 const mockParse = jest.fn();
 const mockRender = jest.fn();
+const mockInitialize = jest.fn();
 
 jest.mock('mermaid', () => ({
   __esModule: true,
   default: {
-    initialize: jest.fn(),
+    initialize: (...args: unknown[]) => mockInitialize(...args),
     parse: (...args: unknown[]) => mockParse(...args),
     render: (...args: unknown[]) => mockRender(...args),
   },
@@ -70,6 +71,9 @@ describe('[knauf] useMermaid error handling', () => {
     });
     expect(mockParse).toHaveBeenCalledTimes(1);
     expect(mockRender).toHaveBeenCalledTimes(1);
+    expect(mockInitialize).toHaveBeenCalledWith(
+      expect.objectContaining({ suppressErrorRendering: true }),
+    );
   });
 
   it('surfaces a source error through the debounce layer after one attempt', async () => {

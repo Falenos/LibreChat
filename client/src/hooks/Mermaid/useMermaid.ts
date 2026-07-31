@@ -94,6 +94,9 @@ export const useMermaid = ({
       theme: (customTheme as MermaidConfig['theme']) || defaultTheme,
       ...config,
       flowchart: { ...inlineFlowchartConfig, ...config?.flowchart, htmlLabels: false },
+      // [knauf] Prevent Mermaid's fallback error SVG from leaking into document.body. (NO-TICKET)
+      suppressErrorRendering: true,
+      // End [knauf]
       // Security hardening: MUST come after ...config spread to prevent override
       securityLevel: 'strict',
       maxTextSize: config?.maxTextSize ?? 50000,
