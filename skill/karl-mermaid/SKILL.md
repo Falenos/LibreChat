@@ -11,11 +11,18 @@ description: >-
 Target Mermaid **11.15.0**. Produce complete source that preserves the user's
 meaning and renders without relying on undocumented parser recovery.
 
+Before choosing a diagram type or repairing type-specific syntax, read:
+
+```
+read_file  skills/karl-mermaid/references/diagram-patterns.md
+```
+
 ## Generate
 
 1. Pick the simplest supported diagram type. Prefer `flowchart`,
-   `sequenceDiagram`, `classDiagram`, `erDiagram`, `gantt`, `pie`, or
-   `xychart-beta`.
+   `sequenceDiagram`, `classDiagram`, `erDiagram`, `stateDiagram-v2`, `gantt`,
+   `pie`, or `xychart-beta`. Use the reference's selection table rather than
+   forcing every relationship into a flowchart.
 2. Use short ASCII identifiers. Put human-readable text in quoted labels or
    `as` aliases.
 3. Close every `alt`, `opt`, `loop`, `par`, `rect`, and `critical` block with
@@ -23,6 +30,8 @@ meaning and renders without relying on undocumented parser recovery.
 4. Emit the complete diagram. Never use ellipses or “rest unchanged”.
 5. Use the surrounding Mermaid fence or artifact format required by the system
    instructions. Put only Mermaid source inside it.
+6. Keep the first render readable. If it needs more than roughly 25 nodes or
+   participants, group or split it instead of shrinking labels into illegibility.
 
 ## Syntax guardrails
 
