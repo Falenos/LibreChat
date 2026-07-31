@@ -314,7 +314,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
-      - name: Run DEV health smoke and deploy stage
+      - name: Run DEV health smoke
         if: success()
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
@@ -361,13 +361,7 @@ jobs:
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
           echo "DEV health smoke passed"
           echo "| DEV health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
-
-          echo "Dispatching stage deployment for $VERSION"
-          gh workflow run deploy_stage_pipeline.yaml \
-            --repo "${{ github.repository }}" \
-            --ref main \
-            -f version="$VERSION"
-          echo "| Stage deployment | dispatched for \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Stage promotion | manual from \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
 
       # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
       # Best-effort visibility only: the app deploy above is the release's success
