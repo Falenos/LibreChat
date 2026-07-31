@@ -1149,6 +1149,23 @@ describe('buildSkillPrimeMessage', () => {
     expect(msg.content).toBe('');
     expect(msg.isMeta).toBe(true);
   });
+
+  // [knauf] KK20-252 — binds the frontmatter strip to this call site.
+  //
+  // Every other fixture in this file is frontmatter-free, so
+  // `prepareSkillBodyForInjection` is the identity on all of them: without a
+  // frontmatter-bearing body, reverting `skills.ts` to `content: skill.body`
+  // leaves this suite green. That is exactly what an upstream sync conflict
+  // resolved in upstream's favour would do.
+  it('strips YAML frontmatter — the body lands as a USER message', () => {
+    const msg = buildSkillPrimeMessage({
+      name: 'karl-artifacts',
+      body: '---\nname: karl-artifacts\nuser-invocable: true\n---\n\n# KARL Artifacts\n\nbody text',
+    });
+    expect(msg.content).toBe('# KARL Artifacts\n\nbody text');
+    expect(msg.content).not.toContain('user-invocable');
+  });
+  // End [knauf]
 });
 
 describe('resolveManualSkills', () => {
@@ -2106,6 +2123,25 @@ describe('injectSkillPrimes', () => {
     expect(messages[1].content).toBe('brand-body');
     expect(messages[2]).toBe(userMsg);
   });
+
+  // [knauf] KK20-252 — binds the frontmatter strip to the manual `$` popover and
+  // always-apply paths. Same reasoning as the `buildSkillPrimeMessage` case above:
+  // the other fixtures here (`brand-body`, `m1`, `a1`) carry no frontmatter, so
+  // only this one fails if `buildPrime` is reverted to `content: p.body`.
+  it('strips YAML frontmatter from both trigger paths', () => {
+    const withFrontmatter = (heading: string) =>
+      `---\nname: x\nuser-invocable: true\n---\n\n# ${heading}\n`;
+    const messages = [new HumanMessage('go')];
+    injectSkillPrimes({
+      initialMessages: messages,
+      indexTokenCountMap: undefined,
+      manualSkillPrimes: [manual('brand', withFrontmatter('Brand'))],
+      alwaysApplySkillPrimes: [always('legal', withFrontmatter('Legal'))],
+    });
+    expect(messages[0].content).toBe('# Legal\n');
+    expect(messages[1].content).toBe('# Brand\n');
+  });
+  // End [knauf]
 
   it('tags triggers distinctly on each primed HumanMessage', () => {
     const messages = [new HumanMessage('hello')];

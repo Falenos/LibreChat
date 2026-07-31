@@ -15,11 +15,15 @@ row → one chart → findings table → footer.**
 
 ## Before you write
 
-Read `skills/karl-brand/SKILL.md` and paste its `KNAUF` const and `useKnaufTheme`
-into the artifact as the first block. Read
-`skills/karl-brand/references/logo.md` for the `KnaufWordmark` component and its `d`
-path. **The code below assumes all three exist and introduces no colour that is not
-already in the `KNAUF` const.**
+Read `skills/karl-brand/SKILL.md` for what the tokens mean, then start the artifact
+with the import below — the module is mounted in every preview, so nothing is pasted:
+
+```tsx
+import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
+```
+
+**The code below assumes that import and introduces no colour that is not already in
+the `KNAUF` const.**
 
 ## Tokens this layout uses
 
@@ -56,8 +60,8 @@ already in the `KNAUF` const.**
 - Use `border` + subtle `page` fills rather than shadows for structure — it prints.
 
 ```tsx
-// ── assumes KNAUF, useKnaufTheme and KnaufWordmark from karl-brand ───────────
-import { useMemo } from 'react'; // also used by the pasted useKnaufTheme
+import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
+import { useMemo } from 'react';
 import { format } from 'date-fns';
 import { ArrowUpRight, ArrowDownRight, ShieldCheck } from 'lucide-react';
 import {
