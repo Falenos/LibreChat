@@ -55,6 +55,40 @@ After`,
     );
   });
 
+  test('stores only fenced source for a compiled inline artifact', async () => {
+    const message = {
+      _id: 'message-object-id',
+      messageId: 'message-1',
+      text: `:::artifact{identifier="page" type="application/vnd.react" title="Status page"}
+\`\`\`tsx
+export default function App() {
+  return <div>Ready</div>;
+}
+\`\`\`
+A clean, branded summary with citations that must not compile.
+:::`,
+    };
+    const { mongoose, create } = buildMongoose(message);
+
+    await createArtifactShare({
+      mongoose,
+      user: 'user-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      locator: { kind: 'directive', index: 0 },
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        knauf_artifact: expect.objectContaining({
+          content: `export default function App() {
+  return <div>Ready</div>;
+}`,
+        }),
+      }),
+    );
+  });
+
   test('uses stored file text instead of accepting artifact content from the client', async () => {
     const message = {
       _id: 'message-object-id',

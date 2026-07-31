@@ -65,6 +65,8 @@ const SINGLE_FILE_ARTIFACT_TYPES = new Set([
   'image/svg+xml',
   'application/vnd.mermaid',
 ]);
+const FENCED_SOURCE_PATTERN =
+  /(?:^|\r?\n)[ \t]*(`{3,}|~{3,})[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*(?=\r?\n|$)/;
 
 /** A fenced code block renders as `<pre><code>`; `pre` has no custom component in
  *  `getMarkdownComponents()`, so it stays the intrinsic string tag. */
@@ -90,4 +92,12 @@ export function extractArtifactBody(
     return extractContent(children);
   }
   return extractContent(codeBlock);
+}
+
+/** Cleans snapshots created before shared links normalized compiled directive bodies. */
+export function extractSharedArtifactBody(content: string, type: string | undefined): string {
+  if (type == null || !SINGLE_FILE_ARTIFACT_TYPES.has(type)) {
+    return content;
+  }
+  return content.match(FENCED_SOURCE_PATTERN)?.[2] ?? content;
 }

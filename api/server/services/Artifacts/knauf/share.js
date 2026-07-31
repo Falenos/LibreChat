@@ -3,6 +3,15 @@ const { findAllArtifacts } = require('@librechat/api');
 
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 240;
+const SINGLE_FILE_ARTIFACT_TYPES = new Set([
+  'application/vnd.react',
+  'application/vnd.ant.react',
+  'text/html',
+  'application/vnd.code-html',
+  'application/vnd.mermaid',
+]);
+const FENCED_SOURCE_PATTERN =
+  /(?:^|\r?\n)[ \t]*(`{3,}|~{3,})[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*(?=\r?\n|$)/;
 
 const ALLOWED_ARTIFACT_TYPES = new Set([
   'text/html',
@@ -38,6 +47,13 @@ const readDirectiveAttributes = (openingLine) => {
   return attributes;
 };
 
+const extractDirectiveContent = (content, type) => {
+  if (!SINGLE_FILE_ARTIFACT_TYPES.has(type)) {
+    return content;
+  }
+  return content.match(FENCED_SOURCE_PATTERN)?.[2] ?? content;
+};
+
 const extractDirectiveSnapshot = (message, index) => {
   if (!Number.isInteger(index) || index < 0) {
     throw new ArtifactShareError('Artifact index must be a non-negative integer');
@@ -59,7 +75,10 @@ const extractDirectiveSnapshot = (message, index) => {
   const hasClosingMarker =
     closingLineStart >= openingLineEnd && raw.slice(closingLineStart + 1).trim() === ':::';
   const contentEnd = hasClosingMarker ? closingLineStart : raw.length;
-  const content = raw.slice(openingLineEnd + 1, contentEnd).replace(/\n$/, '');
+  const content = extractDirectiveContent(
+    raw.slice(openingLineEnd + 1, contentEnd).replace(/\n$/, ''),
+    attributes.type,
+  );
 
   return {
     title: attributes.title || 'Generated artifact',

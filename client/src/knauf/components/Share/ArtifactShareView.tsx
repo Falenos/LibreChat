@@ -1,14 +1,15 @@
 import { useMemo, useRef, useState } from 'react';
-import * as Tabs from '@radix-ui/react-tabs';
 import { Code, Play } from 'lucide-react';
 import { Radio } from '@librechat/client';
+import * as Tabs from '@radix-ui/react-tabs';
 import type { SandpackPreviewRef } from '@codesandbox/sandpack-react/unstyled';
 import type { TSharedArtifact } from 'librechat-data-provider';
 import type { Artifact } from '~/common';
-import ArtifactTabs from '~/components/Artifacts/ArtifactTabs';
-import DownloadArtifact from '~/components/Artifacts/DownloadArtifact';
-import { EditorProvider } from '~/Providers';
 import { isCodeOnlyArtifact, isPreviewOnlyArtifact } from '~/utils/artifacts';
+import DownloadArtifact from '~/components/Artifacts/DownloadArtifact';
+import { extractSharedArtifactBody } from '~/knauf/utils/artifactBody';
+import ArtifactTabs from '~/components/Artifacts/ArtifactTabs';
+import { EditorProvider } from '~/Providers';
 import { useLocalize } from '~/hooks';
 
 export default function ArtifactShareView({
@@ -25,7 +26,7 @@ export default function ArtifactShareView({
       id: `shared-artifact-${shareId}`,
       title: snapshot.title,
       type: snapshot.type,
-      content: snapshot.content,
+      content: extractSharedArtifactBody(snapshot.content, snapshot.type),
       language: snapshot.language,
       lastUpdateTime: 0,
     }),
