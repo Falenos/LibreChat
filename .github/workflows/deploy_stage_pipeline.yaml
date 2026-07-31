@@ -9,6 +9,11 @@ on:
         description: 'Version to deploy to stage (e.g. v0.130.0). Defaults to the current AGK dev GitOps tag.'
         type: string
         required: false
+      k6_profiles:
+        description: 'Optional k6 profiles after E2E: none, smoke, load, stress, spike, all, or comma-separated values.'
+        type: string
+        required: false
+        default: 'none'
 
 permissions:
   contents: read
@@ -304,74 +309,40 @@ jobs:
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
           echo "| STAGE E2E | $run_url |" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Resolve STAGE quality gate labels
+      - name: Resolve manual STAGE k6 profiles
         id: stage-gates
         if: success()
         env:
-          GH_TOKEN: ${{ env.GITHUB_PAT }}
-          VERSION: ${{ steps.version.outputs.version }}
+          RAW_K6_PROFILES: ${{ inputs.k6_profiles }}
         run: |
           set -euo pipefail
 
-          REF_JSON=$(gh api "/repos/${{ github.repository }}/git/ref/tags/$VERSION")
-          OBJECT_TYPE=$(jq -r '.object.type' <<< "$REF_JSON")
-          OBJECT_SHA=$(jq -r '.object.sha' <<< "$REF_JSON")
+          K6_PROFILES=$(node -e '
+            const valid = ["smoke", "load", "stress", "spike"];
+            const raw = process.env.RAW_K6_PROFILES || "none";
+            const requested = raw.split(/[\s,]+/).map((p) => p.trim()).filter(Boolean);
+            const normalized = requested.length ? requested : ["none"];
+            if (normalized.includes("none")) {
+              if (normalized.length > 1) {
+                console.error("k6_profiles cannot combine none with other profiles.");
+                process.exit(1);
+              }
+              process.exit(0);
+            }
+            const expanded = normalized.includes("all") ? valid : normalized;
+            const unknown = expanded.filter((p) => !valid.includes(p));
+            if (unknown.length) {
+              console.error(`Unknown k6 profile(s): ${unknown.join(", ")}. Valid: none, ${valid.join(", ")}, all`);
+              process.exit(1);
+            }
+            console.log([...new Set(expanded)].join(" "));
+          ')
 
-          if [ "$OBJECT_TYPE" = "tag" ]; then
-            COMMIT_SHA=$(gh api "/repos/${{ github.repository }}/git/tags/$OBJECT_SHA" --jq '.object.sha')
-          else
-            COMMIT_SHA="$OBJECT_SHA"
-          fi
+          echo "k6_profiles=$K6_PROFILES" >> "$GITHUB_OUTPUT"
+          echo "| STAGE E2E | always |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| STAGE k6 profiles | \`${K6_PROFILES:-none}\` |" >> "$GITHUB_STEP_SUMMARY"
 
-          PRS_JSON=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "/repos/${{ github.repository }}/commits/$COMMIT_SHA/pulls" \
-            2>/dev/null || echo '[]')
-
-          PR_NUMBER=$(jq -r 'sort_by(.number) | last? | .number // empty' <<< "$PRS_JSON")
-          LABELS=""
-
-          echo "Resolved version $VERSION to commit $COMMIT_SHA"
-          if [ -n "$PR_NUMBER" ]; then
-            echo "Resolved source PR #$PR_NUMBER"
-            LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' || true)
-          else
-            echo "No source PR found for $COMMIT_SHA; k6 profiles will be skipped."
-          fi
-
-          profiles=()
-          has_label() {
-            local wanted="$1"
-            grep -Fxq "$wanted" <<< "$LABELS"
-          }
-
-          if has_label "k6:all"; then
-            profiles=(smoke load stress spike)
-          else
-            for profile in smoke load stress spike; do
-              if has_label "k6:$profile"; then
-                profiles+=("$profile")
-              fi
-            done
-          fi
-
-          K6_PROFILES="${profiles[*]}"
-          LABEL_SUMMARY=$(tr '\n' ',' <<< "$LABELS" | sed 's/,$//')
-          {
-            echo "source_pr=$PR_NUMBER"
-            echo "source_commit=$COMMIT_SHA"
-            echo "k6_profiles=$K6_PROFILES"
-          } >> "$GITHUB_OUTPUT"
-
-          {
-            echo "| Source PR | ${PR_NUMBER:+#$PR_NUMBER} |"
-            echo "| Source commit | \`$COMMIT_SHA\` |"
-            echo "| STAGE E2E | always |"
-            echo "| STAGE k6 labels | \`${LABEL_SUMMARY:-none}\` |"
-            echo "| STAGE k6 profiles | \`${K6_PROFILES:-none}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run labeled STAGE k6 profiles
+      - name: Run selected STAGE k6 profiles
         if: success() && steps.stage-gates.outputs.k6_profiles != ''
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
@@ -432,5 +403,5 @@ jobs:
       - name: Skip STAGE k6 profiles
         if: success() && steps.stage-gates.outputs.k6_profiles == ''
         run: |
-          echo "No k6:* label found on the source PR; skipping STAGE k6 profiles."
-          echo "| STAGE k6 profiles | skipped — no k6 label |" >> "$GITHUB_STEP_SUMMARY"
+          echo "No manual STAGE k6 profiles selected; skipping STAGE k6 profiles."
+          echo "| STAGE k6 profiles | skipped — none selected |" >> "$GITHUB_STEP_SUMMARY"
