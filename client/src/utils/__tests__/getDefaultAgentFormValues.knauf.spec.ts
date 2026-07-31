@@ -25,3 +25,13 @@ describe('[knauf] getDefaultAgentFormValues — browse-default-on', () => {
     expect(params.useResponsesApi).toBe(true);
   });
 });
+
+// [knauf] New-agent forms opt into the dynamic full catalog of accessible deployment/public skills.
+describe('[knauf] getDefaultAgentFormValues — skills-default-on', () => {
+  it('enables all accessible skills by default without freezing an allowlist', () => {
+    const values = getDefaultAgentFormValues();
+    expect(values.skills_enabled).toBe(true);
+    expect(values.skills).toBeUndefined();
+  });
+});
+// End [knauf]

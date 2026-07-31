@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Builder Coach"
+  short_description: "Build, test, and prepare governed Karl agents"
+  default_prompt: "Use $agent-builder-coach to help me create and prepare a Karl agent for publication."

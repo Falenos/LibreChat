@@ -5,9 +5,10 @@
 // Idempotent mongosh script: creates the AGENT_BUILDER custom role if it does
 // not already exist, then ensures all required permissions are set.
 //
-// AGENT_BUILDER: AI Champions who can create/share agents and use all chat
-// features, but have NO admin panel access (access:admin capability is only
-// granted to ADMIN via systemgrants — this script does not touch systemgrants).
+// AGENT_BUILDER: AI Champions who can create private agents, share prompts,
+// and use the approved chat features, but have NO admin panel access
+// (access:admin capability is only granted to ADMIN via systemgrants — this
+// script does not touch systemgrants).
 //
 // Usage:
 //   # Local dev
@@ -26,7 +27,8 @@
 'use strict';
 
 const ROLE_NAME = 'AGENT_BUILDER';
-const DESCRIPTION = 'AI Champions — can create and share agents/prompts. No admin panel access.';
+const DESCRIPTION =
+  'AI Champions — can create private agents and share prompts. No agent publishing or admin panel access.';
 
 // Permission set — sourced from admin panel screenshots (2026-06-11).
 // Keys match the PermissionTypes / Permissions enums in librechat-data-provider.

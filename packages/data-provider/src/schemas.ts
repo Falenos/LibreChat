@@ -336,13 +336,14 @@ export const defaultAgentFormValues = {
   /** Optional allowlist. Only applies when `skills_enabled === true`.
    *  Empty/undefined + enabled = full catalog; non-empty + enabled = narrow to ids. */
   skills: undefined as string[] | undefined,
+  // [knauf] New agents automatically receive all accessible deployment/public skills; users may still opt out explicitly.
   /** Master toggle for skill use on this agent. `true` activates skills
-   *  (full catalog unless `skills` narrows it). Anything else = inactive. */
-  skills_enabled: undefined as boolean | undefined,
+   *  (full catalog unless `skills` narrows it). */
+  skills_enabled: true as boolean | undefined,
+  // End [knauf]
   /** `undefined` = feature disabled by default (no subagent tool injected). */
   subagents: undefined as
-    | { enabled?: boolean; allowSelf?: boolean; agent_ids?: string[] }
-    | undefined,
+    { enabled?: boolean; allowSelf?: boolean; agent_ids?: string[] } | undefined,
 };
 
 export const ImageVisionTool: FunctionTool = {
@@ -876,12 +877,7 @@ export const coerceNumber = z.union([z.number(), z.string()]).transform((val) =>
 });
 
 type DocumentTypeValue =
-  | null
-  | boolean
-  | number
-  | string
-  | DocumentTypeValue[]
-  | { [key: string]: DocumentTypeValue };
+  null | boolean | number | string | DocumentTypeValue[] | { [key: string]: DocumentTypeValue };
 
 const DocumentType: z.ZodType<DocumentTypeValue> = z.lazy(() =>
   z.union([
