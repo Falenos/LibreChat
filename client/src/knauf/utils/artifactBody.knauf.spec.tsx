@@ -17,7 +17,7 @@
  * raw HTML arrives as sibling strings.
  */
 import React from 'react';
-import { extractArtifactBody } from './artifactBody';
+import { extractArtifactBody, extractSharedArtifactBody } from './artifactBody';
 
 const CODE = 'export default function App() {\n  return <div>Knauf</div>;\n}';
 
@@ -91,5 +91,16 @@ describe('[knauf] extractArtifactBody', () => {
     // Upstream and the KARL prompt both define an artifact as exactly one fence.
     const children = [codeBlock(), codeBlock('const stray = true;')];
     expect(extractArtifactBody(children, 'application/vnd.react')).toBe(CODE);
+  });
+});
+
+describe('[knauf] extractSharedArtifactBody', () => {
+  it('returns only source from a persisted fenced React snapshot', () => {
+    const persisted = `\`\`\`tsx
+${CODE}
+\`\`\`
+A clean, branded summary with citations that must not compile.`;
+
+    expect(extractSharedArtifactBody(persisted, 'application/vnd.react')).toBe(CODE);
   });
 });
