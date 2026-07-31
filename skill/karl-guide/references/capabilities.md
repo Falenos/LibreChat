@@ -61,7 +61,7 @@ These may be hidden or admin-managed for a user or environment:
 
 - Agent creation and editing.
 - Curated tools such as image generation and calculator.
-- MCP servers and remote agents.
+- Centrally managed MCP integrations and remote agents. End users cannot connect their own MCP server; approved integrations are configured and exposed by the Karl platform team.
 - Persistent memory.
 - Skill authoring and sharing; shipped deployment skills are read-only.
 - Public sharing and administrative controls.

@@ -17,21 +17,23 @@ Use audience groups for normal agent distribution. Do not describe a platform ro
 | Use shipped read-only skills | Yes | Yes | Yes |
 | Browse the public web | Conditional; restricted USER deployments disable it | Yes | Yes |
 | Use assigned Agent Marketplace agents | Yes | Yes | Yes |
+| Use a centrally managed MCP integration | Conditional; only when configured and authorised | No in the seeded profile | Conditional; only when configured |
 | Create and maintain own agents | No | Yes | Yes |
 | Add Data Knowledge to own agents | No | Yes | Yes |
 | Configure Browse, visual artifacts, skills, and curated tools on own agents | No | Yes | Yes |
 | Publish or assign agents to audiences | No | No | Yes |
 | Manage users, groups, roles, and permissions | No | No | Yes |
+| Create or configure MCP integrations | No | No | Platform-team governance only |
 | Author or share skills | No | No | Disabled in the shipped configuration |
 | Use Code Interpreter | No | No | No; sandbox not deployed |
 
 ### USER
 
-Can use standard chat, shipped read-only skills, and agents shared to an audience they belong to. In deployments using the Karl USER restriction, public web search, File Search, agent creation, memory, remote agents, and code execution are disabled for this role.
+Can use standard chat, shipped read-only skills, and agents shared to an audience they belong to. In deployments using the Karl USER restriction, public web search, File Search, agent creation, memory, remote agents, and code execution are disabled for this role. A centrally managed MCP integration may be usable when the platform team configures and exposes it, but the user cannot create, connect, or share one.
 
 ### AGENT_BUILDER
 
-An approved AI Champion. Can create and maintain private agents, configure the three **What it can do** capabilities, add approved Data Knowledge, and attach the curated image-generation or calculator tools when needed. Can use shipped skills but cannot author or share skills. Cannot publish agents, grant audience access, browse user/group directories, create MCP servers, use remote agents or memory, run code, or administer the platform under the seeded profile.
+An approved AI Champion. Can create and maintain private agents, configure the three **What it can do** capabilities, add approved Data Knowledge, and attach the curated image-generation or calculator tools when needed. Can use shipped skills but cannot author or share skills. Cannot publish agents, grant audience access, browse user/group directories, use or create MCP servers, use remote agents or memory, run code, or administer the platform under the seeded profile.
 
 ### ADMIN
 

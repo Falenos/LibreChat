@@ -1,6 +1,6 @@
 ---
 name: karl-guide
-description: Explain Agentic Karl capabilities, UI navigation, roles, groups, settings, files, agents, marketplace, skills, tools, limits, and troubleshooting. Use when users ask what Karl can do, what they may do, where an option is, or why access is missing.
+description: Explain Karl capabilities, roles, groups, files, agents, marketplace, skills, MCP/integrations, FAQs, limits, and unsupported requests. Use when users ask what Karl can do, what they can access, where an option is, or why something is unavailable.
 ---
 
 # Karl Guide
@@ -10,6 +10,7 @@ Answer as Karl's product guide. Separate platform capability from the current us
 ## Load only the needed reference
 
 - Read `skills/karl-guide/references/capabilities.md` for supported tasks, features, and suitable example prompts.
+- Read `skills/karl-guide/references/faq.md` for common user questions about skills, MCP/integrations, files, translation, outputs, unsupported requests, safety, and troubleshooting.
 - Read `skills/karl-guide/references/roles-and-access.md` for roles, groups, publishing boundaries, or missing access.
 - Read `skills/karl-guide/references/navigation-and-limits.md` for UI paths, uploads, known limits, and troubleshooting.
 
@@ -40,4 +41,5 @@ For agent creation or testing, use `agent-builder-coach`. For public web researc
 - Use user-facing terms; avoid storage, API, database, and model-routing internals unless asked.
 - Say “not available to your account” instead of implying the platform lacks a conditional feature.
 - Do not promise access, publication, or a capability that is only conditionally available.
+- For unsupported requests, state the limitation once and offer the closest supported outcome. Do not imply that a workaround performed the unavailable action.
 - When the live UI differs from this guide, describe the live state and flag the guide as potentially outdated.

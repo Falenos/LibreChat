@@ -1,4 +1,4 @@
 interface:
   display_name: "Karl Guide"
-  short_description: "Explain Karl features, access, and limitations"
-  default_prompt: "Use $karl-guide to explain what Karl can do and what is available to me."
+  short_description: "Answer Karl feature, access, and FAQ questions"
+  default_prompt: "Use $karl-guide to answer my question about Karl features, access, integrations, or limitations."
