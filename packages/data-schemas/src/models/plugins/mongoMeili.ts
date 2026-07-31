@@ -792,14 +792,16 @@ export default function mongoMeili(schema: Schema, options: MongoMeiliOptions): 
   });
 
   // Post-findOneAndUpdate hook
-  schema.post('findOneAndUpdate', async function (doc: DocumentWithMeiliIndex, next) {
+  // [knauf] unmatched guarded updates return null and require no Meili work
+  schema.post('findOneAndUpdate', async function (doc: DocumentWithMeiliIndex | null, next) {
     if (!meiliEnabled) {
       return next();
     }
 
-    if (doc.unfinished) {
+    if (!doc || doc.unfinished) {
       return next();
     }
+    // End [knauf]
 
     let meiliDoc: Record<string, unknown> | undefined;
     if (doc.messages) {

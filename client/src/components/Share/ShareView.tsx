@@ -26,6 +26,9 @@ import MessagesView from './MessagesView';
 import Footer from '../Chat/Footer';
 import { cn } from '~/utils';
 import store from '~/store';
+// [knauf] Artifact-only shared links use a dedicated read-only landing page. (NO-TICKET)
+import ArtifactShareView from '~/knauf/components/Share/ArtifactShareView';
+// End [knauf]
 
 function SharedView() {
   const localize = useLocalize();
@@ -85,6 +88,16 @@ function SharedView() {
     },
     [setLangcode],
   );
+
+  // [knauf] Do not mount MessagesView for artifact shares: the response intentionally contains no messages. (NO-TICKET)
+  if (data?.kind === 'artifact' && data.artifact && shareId) {
+    return (
+      <ShareContext.Provider value={{ isSharedConvo: true, shareId }}>
+        <ArtifactShareView artifact={data.artifact} shareId={shareId} />
+      </ShareContext.Provider>
+    );
+  }
+  // End [knauf]
 
   let content: JSX.Element;
   if (isLoading) {

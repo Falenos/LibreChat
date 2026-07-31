@@ -10,6 +10,9 @@ const mockBuildSharedLinkStartupPayload = jest.fn();
 const mockCanAccessSharedLink = jest.fn((_req, _res, next) => next());
 const mockGetAppConfig = jest.fn();
 const mockGetTenantId = jest.fn(() => undefined);
+// [knauf] Artifact-only share route seam dependency. (NO-TICKET)
+const mockCreateArtifactShare = jest.fn();
+// End [knauf]
 
 jest.mock('@librechat/api', () => ({
   isEnabled: jest.fn(() => true),
@@ -104,6 +107,11 @@ jest.mock('~/server/middleware/config/app', () => (_req, _res, next) => next());
 jest.mock('~/server/services/Config/app', () => ({
   getAppConfig: (...args) => mockGetAppConfig(...args),
 }));
+// [knauf] Keep route tests focused on authorization/retention and cover extraction separately. (NO-TICKET)
+jest.mock('~/server/services/Artifacts/knauf/share', () => ({
+  createArtifactShare: (...args) => mockCreateArtifactShare(...args),
+}));
+// End [knauf]
 
 const { Readable } = require('stream');
 const { RetentionMode } = require('librechat-data-provider');
@@ -260,6 +268,42 @@ describe('share routes', () => {
     );
     expect(mockSharedLinksAccess).toHaveBeenCalled();
   });
+
+  // [knauf] Artifact-only creation always grants public view access; no recipient ACL is needed. (NO-TICKET)
+  it('creates an artifact-only share and grants public view access', async () => {
+    mockGetSharedLinkExpiration.mockResolvedValue(activeExpiration);
+    mockCreateArtifactShare.mockResolvedValue({
+      _id: 'artifact-link-123',
+      shareId: 'artifact-share-123',
+      conversationId: 'convo-123',
+      targetMessageId: 'msg-123',
+    });
+
+    const response = await request(buildApp())
+      .post('/api/share/convo-123/artifact')
+      .send({
+        messageId: 'msg-123',
+        locator: { kind: 'directive', index: 0 },
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockCreateArtifactShare).toHaveBeenCalledWith({
+      mongoose,
+      user: 'user-123',
+      conversationId: 'convo-123',
+      messageId: 'msg-123',
+      locator: { kind: 'directive', index: 0 },
+      expiredAt: activeExpiration,
+    });
+    expect(mockGrantCreationPermissions).toHaveBeenCalledWith(
+      'artifact-link-123',
+      'user-123',
+      true,
+      activeExpiration,
+    );
+    expect(response.body.shareId).toBe('artifact-share-123');
+  });
+  // End [knauf]
 
   it('snapshots files by default when the user does not opt out', async () => {
     mockGetSharedLinkExpiration.mockResolvedValue(activeExpiration);

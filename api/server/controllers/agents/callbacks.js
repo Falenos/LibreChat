@@ -1,6 +1,8 @@
 const { nanoid } = require('nanoid');
 const { logger } = require('@librechat/data-schemas');
+const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
 const {
+  ContentTypes,
   Tools,
   StepTypes,
   FileContext,
@@ -25,6 +27,85 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { saveBase64Image } = require('~/server/services/Files/process');
+
+// [knauf] NO-TICKET — Model Router can occasionally return this gateway-style
+// response with zero usage instead of raising an error. Convert it into a model
+// failure so the SDK's provider fallback retries only the current model call.
+const GENERIC_ZERO_USAGE_REFUSAL = "i'm sorry, but i cannot assist with that request.";
+
+function getGenerationText(result) {
+  const generation = result?.generations?.[0]?.[0];
+  const content = generation?.message?.content ?? generation?.text;
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content.map((part) => (typeof part === 'string' ? part : (part?.text ?? ''))).join('');
+}
+
+function isZeroUsageGenericRefusal(result) {
+  const generation = result?.generations?.[0]?.[0];
+  const message = generation?.message;
+  if ((message?.tool_calls?.length ?? 0) > 0) {
+    return false;
+  }
+  const usage =
+    message?.usage_metadata ?? result?.llmOutput?.tokenUsage ?? result?.llmOutput?.usage;
+  const tokenCounts = [
+    usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens,
+    usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens,
+    usage?.total_tokens ?? usage?.totalTokens,
+  ].filter((value) => typeof value === 'number');
+  const text = getGenerationText(result).trim().replaceAll('’', "'").toLowerCase();
+  return (
+    tokenCounts.length >= 2 &&
+    tokenCounts.every((value) => value === 0) &&
+    text === GENERIC_ZERO_USAGE_REFUSAL
+  );
+}
+
+function createZeroUsageRefusalRetryHandler(metadata) {
+  const state = { refusalCount: 0 };
+  const handler = BaseCallbackHandler.fromMethods({
+    handleLLMEnd(result) {
+      if (!isZeroUsageGenericRefusal(result)) {
+        return;
+      }
+      state.refusalCount += 1;
+      logger.warn('[AgentClient] Retrying zero-usage generic refusal', {
+        ...metadata,
+        attempt: state.refusalCount,
+      });
+      throw new Error(
+        JSON.stringify({
+          type: ErrorTypes.REFUSAL,
+          info: { reason: 'zero_usage_generic_refusal', retryable: true },
+        }),
+      );
+    },
+  });
+  handler.raiseError = true;
+  handler.awaitHandlers = true;
+  return { handler, state };
+}
+
+function stripRetriedGenericRefusal(contentParts) {
+  return contentParts.flatMap((part) => {
+    if (part?.type !== ContentTypes.TEXT || typeof part.text !== 'string') {
+      return [part];
+    }
+    const normalized = part.text.trimStart().replaceAll('’', "'").toLowerCase();
+    if (!normalized.startsWith(GENERIC_ZERO_USAGE_REFUSAL)) {
+      return [part];
+    }
+    const refusalEnd = part.text.toLowerCase().indexOf('request.') + 'request.'.length;
+    const text = part.text.slice(refusalEnd).trimStart();
+    return text === '' ? [] : [{ ...part, text }];
+  });
+}
+// End [knauf]
 
 function isHostFileAuthoringArtifact(artifact) {
   return artifact?.[HOST_FILE_AUTHORING_ARTIFACT_KEY] === true;
@@ -1273,4 +1354,9 @@ module.exports = {
   getResponseModel,
   buildSummarizationHandlers,
   createResponsesToolEndCallback,
+  // [knauf] NO-TICKET — zero-usage refusal recovery helpers.
+  createZeroUsageRefusalRetryHandler,
+  isZeroUsageGenericRefusal,
+  stripRetriedGenericRefusal,
+  // End [knauf]
 };

@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useRef, useCallback, memo } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { Spinner } from '@librechat/client';
 import useSvgProcessing from './useSvgProcessing';
 import useMermaidZoom from './useMermaidZoom';
@@ -8,6 +7,13 @@ import MermaidHeader from './MermaidHeader';
 import ZoomControls from './ZoomControls';
 import { useLocalize } from '~/hooks';
 import cn from '~/utils/cn';
+// [knauf] Offer deterministic Mermaid failures to KARL instead of retrying unchanged source. (NO-TICKET)
+import {
+  KnaufMermaidCanvasExports,
+  KnaufMermaidErrorAction,
+} from '~/knauf/components/Mermaid/KnaufMermaidControls';
+import { useMessageContext } from '~/Providers';
+// End [knauf]
 
 interface MermaidProps {
   children: string;
@@ -42,14 +48,19 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
     calculatedHeight,
   } = useSvgProcessing({ content: children, id, theme, retryCount, containerRef });
 
+  // [knauf] A parser-valid partial diagram may still fail rendering while the model streams. (NO-TICKET)
+  const { isSubmitting } = useMessageContext();
+  const isRendering = isLoading || Boolean(error && isSubmitting);
+  // End [knauf]
+
   const { zoom, pan, isPanning, handleZoomIn, handleZoomOut, handleResetZoom, handleMouseDown } =
     useMermaidZoom({ containerRef, wheelDep: blobUrl });
 
   useEffect(() => {
-    if (isLoading && streamingCodeRef.current) {
+    if (isRendering && streamingCodeRef.current) {
       streamingCodeRef.current.scrollTop = streamingCodeRef.current.scrollHeight;
     }
-  }, [children, isLoading]);
+  }, [children, isRendering]);
 
   const handleToggleCode = useCallback(() => setShowCode((prev) => !prev), []);
   const handleRetry = useCallback(() => setRetryCount((prev) => prev + 1), []);
@@ -88,7 +99,7 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
     height: svgDimensions ? `${svgDimensions.height * initialScale}px` : 'auto',
   };
 
-  if (isLoading) {
+  if (isRendering) {
     if (lastValidSvgRef.current && blobUrl) {
       return (
         <div
@@ -178,14 +189,9 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
             <span className="font-semibold text-red-600 dark:text-red-400">
               {localize('com_ui_mermaid_failed')}
             </span>
-            <button
-              type="button"
-              onClick={handleRetry}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-text-secondary hover:bg-surface-hover"
-            >
-              <RefreshCw className="h-3 w-3" />
-              {localize('com_ui_retry')}
-            </button>
+            {/* [knauf] Source errors need corrected input; only transient load failures get Retry. (NO-TICKET) */}
+            <KnaufMermaidErrorAction source={children} error={error} onRetry={handleRetry} />
+            {/* End [knauf] */}
           </div>
           <pre className="overflow-auto text-xs text-red-600 dark:text-red-300">
             {error.message}
@@ -277,6 +283,13 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
               showControls ? 'opacity-100' : 'pointer-events-none opacity-0',
             )}
           />
+          {/* [knauf] Download the sanitised render as SVG or bounded PNG. (NO-TICKET) */}
+          <KnaufMermaidCanvasExports
+            blobUrl={blobUrl}
+            dimensions={svgDimensions}
+            visible={showControls}
+          />
+          {/* End [knauf] */}
         </div>
       </div>
     </>

@@ -54,6 +54,7 @@ import { logger } from '@librechat/data-schemas';
 export const KNAUF_EXPECTED_DEPLOYMENT_SKILLS: readonly string[] = Object.freeze([
   'karl-artifacts',
   'karl-brand',
+  'karl-mermaid',
 ]);
 
 export interface DeploymentSkillCheckResult {
@@ -140,8 +141,8 @@ export function reportDeploymentSkillCheck(result: DeploymentSkillCheckResult): 
 
   if (ok) {
     // "Loaded:" is labelled separately from the expected count because with an
-    // unlisted skill present the two differ, and "all 2 expected" followed by
-    // three names makes the reader do arithmetic to decide if it is healthy.
+    // unlisted skill present the two differ, and "all 3 expected" followed by
+    // four names makes the reader do arithmetic to decide if it is healthy.
     logger.info(
       `[knauf][deploymentSkills] OK — all ${KNAUF_EXPECTED_DEPLOYMENT_SKILLS.length} expected skill(s) present in ${directory}. Loaded: ${loaded.join(', ')}`,
     );
@@ -151,7 +152,7 @@ export function reportDeploymentSkillCheck(result: DeploymentSkillCheckResult): 
   if (loaded.length === 0) {
     logger.error(
       `[knauf][deploymentSkills] NO skills loaded from ${directory} — expected ${missing.join(', ')}. ` +
-        'Artifacts still work, but the Knauf brand tokens and artifact templates are unavailable and the `$` popover is empty. ' +
+        'Artifacts still work, but the Knauf brand tokens, artifact templates, and Mermaid guidance are unavailable and the `$` popover is empty. ' +
         'Most likely cause: a volume is mounted over that path, shadowing the copy baked into the image — ' +
         'check for a volumeMount at /app/skill in the Helm values. Also verify DEPLOYMENT_SKILLS_DIR is unset.',
     );

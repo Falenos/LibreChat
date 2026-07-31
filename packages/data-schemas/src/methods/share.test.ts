@@ -31,6 +31,9 @@ describe('Share Methods', () => {
         expiredAt: { type: Date },
         snapshotFiles: { type: Boolean },
         fileSnapshots: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+        // [knauf] Test-only mirror of the artifact-only persisted share field. (NO-TICKET)
+        knauf_artifact: { type: mongoose.Schema.Types.Mixed },
+        // End [knauf]
       },
       { timestamps: true },
     );
@@ -385,6 +388,47 @@ describe('Share Methods', () => {
       const result = await shareMethods.getSharedMessages('non_existent_share');
       expect(result).toBeNull();
     });
+
+    // [knauf] Artifact-only links must never expose the source message projection. (NO-TICKET)
+    test('returns only the immutable artifact snapshot for artifact shares', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const conversationId = `conv_${nanoid()}`;
+      const shareId = `share_${nanoid()}`;
+      const message = await Message.create({
+        messageId: `msg_${nanoid()}`,
+        conversationId,
+        user: userId,
+        text: 'private source conversation text',
+      });
+      await SharedLink.create({
+        shareId,
+        conversationId,
+        user: userId,
+        title: 'Shared artifact',
+        messages: [message._id],
+        knauf_artifact: {
+          title: 'Shared artifact',
+          type: 'text/markdown',
+          content: '# Public snapshot',
+        },
+      });
+
+      const result = await shareMethods.getSharedMessages(shareId);
+
+      expect(result).toMatchObject({
+        kind: 'artifact',
+        shareId,
+        title: 'Shared artifact',
+        messages: [],
+        artifact: {
+          title: 'Shared artifact',
+          type: 'text/markdown',
+          content: '# Public snapshot',
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain('private source conversation text');
+    });
+    // End [knauf]
 
     test('should return null for expired share', async () => {
       const shareId = `share_${nanoid()}`;

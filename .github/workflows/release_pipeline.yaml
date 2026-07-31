@@ -327,18 +327,16 @@ jobs:
           run_url=""
 
           echo "Dispatching DEV k6 smoke: scenario=health correlation_id=$CORRELATION_ID"
-          gh workflow run run-k6.yaml \
+          gh workflow run k6-dev-prod-health.yaml \
             --repo "$QUALITY_REPOSITORY" \
             --ref main \
             -f environment=dev \
-            -f scenario=health \
-            -f profile=smoke \
             -f correlation_id="$CORRELATION_ID"
 
           for attempt in {1..30}; do
             RUN_JSON=$(gh run list \
               --repo "$QUALITY_REPOSITORY" \
-              --workflow run-k6.yaml \
+              --workflow k6-dev-prod-health.yaml \
               --event workflow_dispatch \
               --json databaseId,displayTitle,url \
               --limit 30 \

@@ -18,6 +18,9 @@ import ToolMermaidArtifact from './ToolMermaidArtifact';
 import ToolArtifactCard from './ToolArtifactCard';
 import { useLocalize } from '~/hooks';
 import LogLink from './LogLink';
+// [knauf] Generated file artifacts retain their owned source message locator for sharing. (NO-TICKET)
+import { useMessageContext } from '~/Providers';
+// End [knauf]
 
 interface PanelEntry {
   attachment: TAttachment;
@@ -39,6 +42,9 @@ type ImageAttachment = TFile & TAttachmentMetadata;
 
 const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, attachments }) => {
   const localize = useLocalize();
+  // [knauf] The server verifies this message/file pair before creating an artifact-only link. (NO-TICKET)
+  const { messageId } = useMessageContext();
+  // End [knauf]
   const artifactPreviewPending = localize('com_ui_artifact_preview_pending');
 
   const processedContent = useMemo(() => {
@@ -103,10 +109,15 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
         return;
       }
       if (artType != null) {
-        const artifact = fileToArtifact(fileData, {
-          placeholder: artifactPreviewPending,
-          preClassifiedType: artType,
-        });
+        // [knauf] Attach the message locator; artifact content still comes from the server snapshot. (NO-TICKET)
+        const artifact = fileToArtifact(
+          { ...fileData, messageId },
+          {
+            placeholder: artifactPreviewPending,
+            preClassifiedType: artType,
+          },
+        );
+        // End [knauf]
         if (artifact) {
           panelAtts.push({ attachment, artifact });
         }
@@ -135,7 +146,14 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
       mermaidAttachments: mermaidAtts,
       nonInlineAttachments: otherAtts,
     };
-  }, [attachments, renderImages, artifactPreviewPending]);
+  }, [
+    attachments,
+    renderImages,
+    artifactPreviewPending,
+    // [knauf] Rebuild generated-file locators when their owning message changes. (NO-TICKET)
+    messageId,
+    // End [knauf]
+  ]);
 
   const renderAttachment = (file: TAttachment) => {
     const now = new Date();

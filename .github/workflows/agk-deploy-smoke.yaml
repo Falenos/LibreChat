@@ -31,10 +31,10 @@ jobs:
     env:
       AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       AGK_ACR_NAME: acragkhubnonprod001
-      AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
-      AGK_SMOKE_IMAGE_REPOSITORY: agentic-karl-dev/smoke/agentic-karl
+      AGK_IMAGE_REPOSITORY: agentic-karl-stage/agentic-karl
+      AGK_SMOKE_IMAGE_REPOSITORY: agentic-karl-stage/smoke/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
-      AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
       AGK_PROD_ACR_NAME: acragkhubprod001
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
@@ -64,27 +64,29 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Smoke version derivation from git tags
+      - name: Smoke version derivation from stage GitOps tag
         run: |
           set -euo pipefail
 
-          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-          LATEST_TAG="${LATEST_TAG:-v0.0.0}"
-          echo "Latest tag: $LATEST_TAG"
+          git clone "https://$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs-version
+          VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
+            "agk-deployment-configs-version/$AGK_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
 
-          MAJOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f1)
-          MINOR=$(echo "$LATEST_TAG" | sed 's/^v//' | cut -d. -f2)
-          NEXT_VERSION="v${MAJOR}.$((MINOR + 1)).0"
-          echo "Next version would be: $NEXT_VERSION"
+          if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$VERSION"; then
+            echo "Invalid stage GitOps version: $VERSION"
+            exit 1
+          fi
 
-          # Verify the latest tag's image exists in AGK ACR
+          echo "Stage GitOps version: $VERSION"
+          echo "SMOKE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
           az acr repository show-tags \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
             --repository "$AGK_IMAGE_REPOSITORY" \
-            --query "[?@=='$LATEST_TAG']" \
-            -o tsv | grep -Fx "$LATEST_TAG"
-          echo "Image $AGK_IMAGE_REPOSITORY:$LATEST_TAG exists in AGK ACR"
+            --query "[?@=='$VERSION']" \
+            -o tsv | grep -Fx "$VERSION"
+          echo "Image $AGK_IMAGE_REPOSITORY:$VERSION exists in AGK ACR"
 
       - name: Smoke ACR build permissions (dry build)
         run: |
@@ -97,12 +99,12 @@ jobs:
             -o tsv | grep -q "agentic-karl"
           echo "ACR access verified"
 
-      - name: Smoke promote — image import dev to prod ACR
+      - name: Smoke promote — image import stage to prod ACR
         run: |
           set -euo pipefail
 
-          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-          SMOKE_TAG="${LATEST_TAG}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          VERSION="$SMOKE_VERSION"
+          SMOKE_TAG="${VERSION}-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           SOURCE_REGISTRY_ID=$(az acr show \
             --subscription "$AGK_SUBSCRIPTION_ID" \
@@ -123,7 +125,7 @@ jobs:
             --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
             --name "$AGK_PROD_ACR_NAME" \
             --registry "$SOURCE_REGISTRY_ID" \
-            --source "$AGK_IMAGE_REPOSITORY:$LATEST_TAG" \
+            --source "$AGK_IMAGE_REPOSITORY:$VERSION" \
             --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --force
 

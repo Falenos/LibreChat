@@ -1,10 +1,14 @@
 import React from 'react';
-import { RecoilRoot } from 'recoil';
-import { render, screen } from '@testing-library/react';
+import { RecoilRoot, useRecoilValue } from 'recoil';
+import { render, screen, waitFor } from '@testing-library/react';
 import type { TAttachment } from 'librechat-data-provider';
 import type { MutableSnapshot } from 'recoil';
 import LogContent from '../LogContent';
 import store from '~/store';
+// [knauf] Regression coverage for the owned source-message locator used by artifact sharing. (NO-TICKET)
+import type { Artifact } from '~/common';
+import { MessageContext } from '~/Providers';
+// End [knauf]
 
 jest.mock('~/hooks', () => ({
   useLocalize:
@@ -77,6 +81,18 @@ const renderWith = (ui: React.ReactElement, opts: { streaming?: boolean } = {}) 
   };
   return render(<RecoilRoot initializeState={initializeState}>{ui}</RecoilRoot>);
 };
+
+// [knauf] Observe the registered artifact without coupling the test to ToolArtifactCard internals. (NO-TICKET)
+const ArtifactsObserver = ({
+  onChange,
+}: {
+  onChange: (artifacts: Record<string, Artifact | undefined> | null) => void;
+}) => {
+  const artifacts = useRecoilValue(store.artifactsState);
+  React.useEffect(() => onChange(artifacts), [artifacts, onChange]);
+  return null;
+};
+// End [knauf]
 
 describe('LogContent attachment routing', () => {
   it('routes HTML attachments through ToolArtifactCard (panel)', () => {
@@ -186,6 +202,37 @@ describe('LogContent attachment routing', () => {
     renderWith(<LogContent output="" attachments={[fresh]} />);
     expect(screen.getByRole('button', { pressed: true })).toBeInTheDocument();
   });
+
+  // [knauf] Removing the message locator would make generated-file sharing fail closed. (NO-TICKET)
+  it('retains the source message id on a registered file artifact', async () => {
+    const onChange = jest.fn();
+    const html = baseAttachment({
+      file_id: 'shareable-file',
+      filename: 'index.html',
+      text: '<h1>hi</h1>',
+    } as Partial<TAttachment>);
+
+    renderWith(
+      <MessageContext.Provider value={{ messageId: 'source-message', isExpanded: true }}>
+        <LogContent output="" attachments={[html]} />
+        <ArtifactsObserver onChange={onChange} />
+      </MessageContext.Provider>,
+    );
+
+    await waitFor(() => {
+      const snapshots = onChange.mock.calls.map(
+        ([artifacts]) => artifacts as Record<string, Artifact | undefined> | null,
+      );
+      expect(
+        snapshots.some(
+          (artifacts) =>
+            artifacts != null &&
+            Object.values(artifacts).some((artifact) => artifact?.messageId === 'source-message'),
+        ),
+      ).toBe(true);
+    });
+  });
+  // End [knauf]
 
   it('splits a mixed list into the right buckets', () => {
     const attachments = [

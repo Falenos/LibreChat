@@ -213,6 +213,23 @@ beforeEach(() => {
 // Suite: custom endpoint stream usage defaults
 // ---------------------------------------------------------------------------
 describe('custom endpoint stream usage defaults', () => {
+  // [knauf] NO-TICKET — the refusal detector relies on one model-call retry.
+  it('adds one same-provider fallback without recursive fallback config', async () => {
+    const agents = await callAndCapture();
+    const clientOptions = agents[0].clientOptions as Record<string, unknown>;
+    const fallbacks = clientOptions.fallbacks as Array<{
+      provider: string;
+      clientOptions: Record<string, unknown>;
+    }>;
+
+    expect(fallbacks).toHaveLength(1);
+    expect(fallbacks[0].provider).toBe(EModelEndpoint.openAI);
+    expect(fallbacks[0].clientOptions).toMatchObject({ model: 'gpt-4o', streaming: true });
+    expect(fallbacks[0].clientOptions).not.toHaveProperty('fallbacks');
+    expect(fallbacks[0].clientOptions).not.toHaveProperty('provider');
+  });
+  // End [knauf]
+
   it('disables streamUsage by default for OpenAI-compatible custom endpoints', async () => {
     const agents = await callAndCapture({
       agents: [makeAgent({ endpoint: 'LiteLLM' })],
