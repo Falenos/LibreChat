@@ -1,5 +1,9 @@
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { error: jest.fn(), debug: jest.fn() },
+  // [knauf] KK20-252 — `warn` is required by the content-filter branch; without
+  // it in this exhaustive mock, `logger.warn` is undefined and the handler throws
+  // instead of logging.
+  logger: { error: jest.fn(), debug: jest.fn(), warn: jest.fn() },
+  // End [knauf]
 }));
 jest.mock('@librechat/api', () => ({
   sendEvent: jest.fn(),
@@ -238,3 +242,83 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
     expect(() => new ModelEndHandler(null)).toThrow('collectedUsage must be an array');
   });
 });
+
+// [knauf] KK20-252 — Azure content-filter surfacing.
+//
+// Upstream types `finish_reason` as including 'content_filter' and then never
+// reads it, so a filtered completion looked identical to the model declining. On
+// KK20-252 that ambiguity cost real diagnosis time: the visible symptom was
+// "I'm sorry, but I cannot assist with that request.", which turned out to be a
+// genuine refusal driven by contradictory instructions — but nothing in the
+// codebase could have told us that.
+describe('[knauf] ModelEndHandler — Azure content filter', () => {
+  const { logger } = require('@librechat/data-schemas');
+
+  const handleWith = async (responseMetadata) => {
+    const collectedUsage = [];
+    const handler = new ModelEndHandler(collectedUsage);
+    await handler.handle(
+      'on_chat_model_end',
+      {
+        output: {
+          usage_metadata: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          response_metadata: responseMetadata,
+        },
+      },
+      { ls_model_name: 'model-router', run_id: 'r1', user_id: 'u1', thread_id: 'c1' },
+      buildGraph(),
+    );
+    return collectedUsage;
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('warns, with identifiers, when the completion was filtered', async () => {
+    await handleWith({
+      finish_reason: 'content_filter',
+      content_filter_results: { hate: { filtered: true, severity: 'high' } },
+    });
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [message, context] = logger.warn.mock.calls[0];
+    expect(message).toContain('content filter');
+    // The identifiers are the point — a warn nobody can trace to a conversation
+    // is no better than silence.
+    expect(context).toMatchObject({
+      userId: 'u1',
+      messageId: 'r1',
+      conversationId: 'c1',
+      model: 'model-router',
+      contentFilterResults: { hate: { filtered: true, severity: 'high' } },
+    });
+  });
+
+  it('stays silent on a normal stop', async () => {
+    await handleWith({ finish_reason: 'stop' });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when response_metadata is absent', async () => {
+    const collectedUsage = [];
+    const handler = new ModelEndHandler(collectedUsage);
+    await handler.handle(
+      'on_chat_model_end',
+      { output: { usage_metadata: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+      { ls_model_name: 'model-router', run_id: 'r1', user_id: 'u1' },
+      buildGraph(),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('still records usage — the filter is logged, never thrown', async () => {
+    // Deliberately not converted to a user-facing error: a content filter can
+    // arrive alongside partial streamed content, and throwing would discard
+    // output the user can already see. Usage must still be billed.
+    const collectedUsage = await handleWith({ finish_reason: 'content_filter' });
+    expect(collectedUsage).toHaveLength(1);
+    expect(collectedUsage[0]).toMatchObject({ input_tokens: 10, output_tokens: 5 });
+  });
+});
+// End [knauf]

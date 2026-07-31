@@ -85,6 +85,11 @@ export * from './knauf/context/locationContext';
 // `initializeDeploymentSkills`, because that loader treats an empty skill
 // directory as success and logs the zero case at `debug`.
 export * from './knauf/skills/deploymentSkillsCheck';
+// [knauf] KK20-252 — strips YAML frontmatter from a skill body before it is
+// injected as a user message. Exported for parity with the module above; the
+// in-package call sites (agents/skills.ts, agents/skillFiles.ts) import it via
+// the `~/knauf/...` path directly.
+export * from './knauf/skills/skillPrimeBody';
 // End [knauf]
 /* types */
 export type * from './mcp/types';

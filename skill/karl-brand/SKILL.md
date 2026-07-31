@@ -86,7 +86,11 @@ section `text-lg`/`text-xl`, card title `text-base font-semibold`, captions
 
 ## Tokens
 
-Transcribe this block verbatim. It is the only place these values are authored.
+In React artifacts these are prebuilt at `/knauf/brand`, which exports `KNAUF`,
+`useKnaufTheme` and `KnaufWordmark` — import them, never re-declare them. Every other
+medium (HTML and SVG artifacts, documents, decks, email, spreadsheets) has no module
+system, so transcribe the values from the block below. It is the only place they are
+authored.
 
 ```ts
 // ── KNAUF tokens — canonical. Never invent a hex; copy from here. ────────────
@@ -121,7 +125,7 @@ const KNAUF = {
   },
   // Chart series, fixed order, assigned by series index. Validated in BOTH
   // modes with ONE set of steps — there is no dark variant.
-  // Derivation and measurements: references/charts.md
+  // Derivation and measurements are recorded with the palette.
   categorical: ['#0099DE','#D96400','#009184','#7A4FB5','#5A9A32','#C43A8B','#B8860B'],
   // Scatter / bubble / choropleth / small multiples: max 3 series, THESE three.
   categoricalAllPairs: ['#0099DE','#D96400','#7A4FB5'],
@@ -130,7 +134,7 @@ const KNAUF = {
   // SEQUENTIAL — continuous magnitude only (heatmap, choropleth). NOT ordinal.
   sequentialCerulean: ['#E5F3FB','#B3DCF3','#66BCE8','#0099DE','#0077B0','#00527A'],
   // EXTENSION — functional state. NEVER a data series. Always paired with an
-  // icon or a label. Never white text on these fills — see references/charts.md.
+  // icon or a label. Never white text on these fills.
   status: { success: '#1F883D', warning: '#C98A00', serious: '#E8792A', critical: '#D64550' },
 };
 
@@ -187,14 +191,13 @@ Two values you may find in older material. Both are deliberately absent above.
 | `#0F1A2A` | `#FFD25C` | 12.17 | why yellow is an excellent highlight fill |
 | `#0F1A2A` | `#87C15F` | 8.18 | why light green is a good accent fill |
 
-## Invariant — do not change without reading this
+## If this reference is unavailable
 
-- **This skill must stay model-invocable.** Do not set `disable-model-invocation:
-  true`. When another skill reads this one's files, that read is rejected if the
-  target has model invocation disabled and was not primed the same turn — which
-  would silently break every branded artifact.
-- **Do not rename it.** The id is derived from the name, so a rename mints a new
-  skill and drops every user's per-skill active-state.
-- A user who switches this skill off will make those cross-skill reads fail.
-  `karl-artifacts` carries a labelled quick-card mirror for exactly that case, and
-  is instructed to say so when it falls back.
+`karl-artifacts` carries a labelled quick-card mirror of the values above for the
+case where a cross-skill read of this file fails. When falling back to it, add one
+short line to the reply saying the result uses fallback brand values and may differ
+in detail — name no file and no skill — rather than presenting the mirror as
+authoritative.
+
+Maintainer constraints for this skill — the frontmatter it must keep, why it must
+not be renamed — live in `skill/README.md`, not here.

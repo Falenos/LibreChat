@@ -2,7 +2,6 @@ import React, { useState, useMemo, useCallback } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { TooltipAnchor, DropdownPopup, PinIcon, VectorIcon } from '@librechat/client';
 import { Globe, ScrollText, Settings, Settings2, TerminalSquareIcon } from 'lucide-react';
-import type { MenuItemProps } from '~/common';
 import {
   AuthType,
   Permissions,
@@ -10,6 +9,7 @@ import {
   PermissionTypes,
   defaultAgentCapabilities,
 } from 'librechat-data-provider';
+import type { MenuItemProps } from '~/common';
 import { useLocalize, useHasAccess, useAgentCapabilities } from '~/hooks';
 import ArtifactsSubMenu from '~/components/Chat/Input/ArtifactsSubMenu';
 import MCPSubMenu from '~/components/Chat/Input/MCPSubMenu';
@@ -235,7 +235,13 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
     });
   }
 
-  if (canUseSkills && skillsEnabled) {
+  // [knauf] Don't surface the skills toggle in the composer tools menu. The chip
+  // itself is hidden (Skills.tsx) because every KARL spec sets `skills: true`, so
+  // this entry could only ever turn skills off. Hidden in the UI (not via the
+  // SKILLS permission) so librechat.yaml stays as-is and the `$` popover keeps
+  // working. `as boolean` keeps the body reachable. Mirrors KK20-190.
+  const KNAUF_HIDE_SKILLS_TOOL = true as boolean;
+  if (!KNAUF_HIDE_SKILLS_TOOL && canUseSkills && skillsEnabled) {
     dropdownItems.push({
       onClick: handleSkillsToggle,
       hideOnClick: false,
@@ -266,6 +272,7 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
       ),
     });
   }
+  // End [knauf]
 
   if (canRunCode && codeEnabled) {
     dropdownItems.push({
@@ -301,7 +308,14 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
     });
   }
 
-  if (artifactsEnabled && setIsArtifactsPinned != null) {
+  // [knauf] Don't surface the artifacts submenu in the composer tools menu. The
+  // chip itself is hidden (Artifacts.tsx) because every KARL spec sets
+  // `artifacts: 'default'`, so this entry could only ever turn artifacts off (or
+  // switch a mode we don't ship). Hidden in the UI (not via the capability) so
+  // `artifacts: 'default'` keeps flowing through. `as boolean` keeps the body
+  // reachable. Mirrors KK20-190.
+  const KNAUF_HIDE_ARTIFACTS_TOOL = true as boolean;
+  if (!KNAUF_HIDE_ARTIFACTS_TOOL && artifactsEnabled && setIsArtifactsPinned != null) {
     dropdownItems.push({
       hideOnClick: false,
       render: (props) => (
@@ -317,6 +331,7 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
       ),
     });
   }
+  // End [knauf]
 
   const { availableMCPServers } = mcpServerManager ?? {};
   if (canUseMcp && availableMCPServers && availableMCPServers.length > 0) {

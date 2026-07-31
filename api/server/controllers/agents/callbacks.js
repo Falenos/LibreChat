@@ -98,6 +98,29 @@ class ModelEndHandler {
         });
       }
 
+      // [knauf] KK20-252 — surface an Azure Responsible-AI completion block.
+      // Upstream types `finish_reason` as including 'content_filter'
+      // (packages/api/src/agents/openai/types.ts:105) and then never reads it, so
+      // a filtered completion was indistinguishable from the model choosing to
+      // decline — which cost real diagnosis time on KK20-252, where the visible
+      // symptom ("I'm sorry, but I cannot assist with that request.") turned out
+      // to be a genuine model refusal driven by contradictory instructions rather
+      // than a filter. Logged, not thrown: unlike the `stop_reason === 'refusal'`
+      // branch above, a content filter can arrive alongside partial streamed
+      // content, and converting it to an error would discard output the user can
+      // already see. `stop_reason` covers Anthropic; this covers Azure/OpenAI.
+      if (data?.output?.response_metadata?.finish_reason === 'content_filter') {
+        logger.warn('[ModelEndHandler] Azure content filter blocked the completion', {
+          userId: metadata.user_id,
+          messageId: metadata.run_id,
+          conversationId: metadata.thread_id,
+          model: metadata?.ls_model_name,
+          promptFilterResults: data.output.response_metadata.prompt_filter_results,
+          contentFilterResults: data.output.response_metadata.content_filter_results,
+        });
+      }
+      // End [knauf]
+
       const usage = data?.output?.usage_metadata;
       if (!usage) {
         return this.finalize(errorMessage);

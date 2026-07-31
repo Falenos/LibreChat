@@ -1,5 +1,5 @@
-import { renderHook, act } from '@testing-library/react';
 import { Constants } from 'librechat-data-provider';
+import { renderHook, act } from '@testing-library/react';
 import type { Artifact } from '~/common';
 
 /** Mock dependencies */
@@ -846,3 +846,127 @@ describe('useArtifacts', () => {
     });
   });
 });
+
+// [knauf] KK20-252 — the panel got stuck on the Code tab.
+//
+// Opening an artifact card mid-stream switches the panel to `code` so the user
+// can watch it type. The only route back is a regex over the raw message text,
+// gated on `isSubmitting` — so once the turn ends it can never fire again, and
+// any emission the regex cannot match pins the panel to `code` permanently. The
+// user then sees Monaco source where a render belongs, which reads as "the model
+// emitted the wrong thing" rather than "the tab is wrong".
+//
+// These cases populate `artifacts` for real. The pre-existing suite above leaves
+// the recoil mock at `{}`, so `orderedArtifactIds.length === 0` short-circuits
+// before any tab logic runs and every `expect(activeTab).toBe('preview')` in it
+// passes on the `useState` default whatever the hook does.
+describe('[knauf] useArtifacts — tab reconciliation after generation', () => {
+  const mockSetCurrentArtifactId = jest.fn();
+  const ARTIFACT_CONTENT = 'const KNAUF = { brand: { cyanBlue: "#0099DE" } };\nexport default App;';
+
+  const artifactsMap = (type = 'application/vnd.react') => ({
+    'artifact-1': {
+      id: 'artifact-1',
+      title: 'Knauf Deck',
+      type,
+      content: ARTIFACT_CONTENT,
+      messageId: 'msg-1',
+      lastUpdateTime: 1,
+    },
+  });
+
+  /** Streaming text that contains the artifact body but no closing `:::`. */
+  const UNTERMINATED = `Here is the deck.\n\n:::artifact{identifier="d" type="application/vnd.react" title="Knauf Deck"}\n\`\`\`tsx\n${ARTIFACT_CONTENT}`;
+
+  const setContext = (over: Record<string, unknown>) =>
+    (useArtifactsContext as jest.Mock).mockReturnValue({
+      isSubmitting: false,
+      latestMessageId: 'msg-1',
+      latestMessageText: UNTERMINATED,
+      conversationId: 'conv-1',
+      ...over,
+    });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (useRecoilValue as jest.Mock).mockReturnValue(artifactsMap());
+    (useRecoilState as jest.Mock).mockReturnValue(['artifact-1', mockSetCurrentArtifactId]);
+    (useResetRecoilState as jest.Mock).mockReturnValue(jest.fn());
+  });
+
+  it('pins to code while streaming, then returns to preview when the turn ends', () => {
+    setContext({ isSubmitting: true });
+    const { result, rerender } = renderHook(() => useArtifacts());
+    expect(result.current.activeTab).toBe('code');
+
+    setContext({ isSubmitting: false });
+    rerender();
+
+    // Before the fix this stayed on 'code' forever — the closing ':::' never
+    // arrives, so the enclosure watcher never matches, and it is gated on
+    // isSubmitting so it never runs again anyway.
+    expect(result.current.activeTab).toBe('preview');
+  });
+
+  it('reconciles when a brace in the title defeats the enclosure regex', () => {
+    // The watcher matches `:::artifact(?:\{[^}]*\})?` — `[^}]*` stops at the
+    // first `}`, so a title like `Q3 {draft}` breaks it even though the artifact
+    // is perfectly well-formed and closed. Without reconciliation the panel stays
+    // on code for a complete, renderable artifact.
+    const closed = `:::artifact{identifier="d" type="application/vnd.react" title="Q3 {draft}"}\n\`\`\`tsx\n${ARTIFACT_CONTENT}\n\`\`\`\n:::`;
+
+    setContext({ isSubmitting: true, latestMessageText: closed });
+    const { result, rerender } = renderHook(() => useArtifacts());
+    expect(result.current.activeTab).toBe('code');
+
+    setContext({ isSubmitting: false, latestMessageText: closed });
+    rerender();
+
+    expect(result.current.activeTab).toBe('preview');
+  });
+
+  it('does not override a tab the user chose', () => {
+    setContext({ isSubmitting: true });
+    const { result, rerender } = renderHook(() => useArtifacts());
+    expect(result.current.activeTab).toBe('code');
+
+    act(() => result.current.setActiveTab('code'));
+
+    setContext({ isSubmitting: false });
+    rerender();
+
+    expect(result.current.activeTab).toBe('code');
+  });
+
+  it('scopes a manual choice to its own run, so the next artifact still reconciles', () => {
+    setContext({ isSubmitting: true });
+    const { result, rerender } = renderHook(() => useArtifacts());
+    act(() => result.current.setActiveTab('code'));
+
+    setContext({ isSubmitting: false });
+    rerender();
+    expect(result.current.activeTab).toBe('code');
+
+    // New message: the manual pick must not carry over.
+    setContext({ isSubmitting: true, latestMessageId: 'msg-2' });
+    rerender();
+    setContext({ isSubmitting: false, latestMessageId: 'msg-2' });
+    rerender();
+
+    expect(result.current.activeTab).toBe('preview');
+  });
+
+  it('leaves code-only artifacts alone', () => {
+    (useRecoilValue as jest.Mock).mockReturnValue(artifactsMap('application/vnd.code'));
+    setContext({ isSubmitting: true });
+    const { result, rerender } = renderHook(() => useArtifacts());
+
+    setContext({ isSubmitting: false });
+    rerender();
+
+    // Never auto-switched to code, so there is nothing to reconcile; the
+    // constrained-tab logic in Artifacts.tsx owns this case.
+    expect(result.current.activeTab).toBe('preview');
+  });
+});
+// End [knauf]

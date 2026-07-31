@@ -12,20 +12,23 @@ version: "2.0.0"
 
 # KARL Artifacts: choosing well and building previews that render
 
-Your system instructions already define the artifact directive syntax, the allowed
-types, and the library allowlist — follow them exactly and never restate or wrap
-them. This skill adds what they leave out: how to choose a type, what breaks
-previews, how to iterate, and how to make it look like Knauf.
+Reference material for building artifacts in KARL. The artifact directive syntax,
+the allowed types and the library allowlist are already defined in the system
+instructions and are not repeated here. What follows is what those leave out:
+choosing a type, what breaks previews, how to iterate, and how to make it look
+like Knauf.
 
 ## Choose the right type
 
 | You are producing | Type | Why |
 |---|---|---|
+| **A presentation, slide deck, or pitch** | `application/vnd.react` | Slides need navigation and layout; there is no such thing as a markdown slide deck here. Use the `slides` template |
+| **A branded report, briefing, one-pager, or exec summary** | `application/vnd.react` | Brand header, KPI tiles, charts and a findings table. Use the `report` template |
 | Interactive UI, dashboard, calculator, form — anything with state or a chart | `application/vnd.react` | Tailwind + recharts + shadcn/ui are available; the only type with interactivity and styling batteries included |
 | A complete standalone web page the user will save/host, or something needing a cdnjs library (d3, chart.js) | `text/html` | Single self-contained file with its own CSS/JS; the only type allowed to load external scripts (from `cdnjs.cloudflare.com` only) |
 | Architecture, flow, sequence, ER, or Gantt diagrams | `application/vnd.mermaid` | Renders with zoom/pan; far cheaper to iterate than hand-drawing boxes |
 | A logo, icon, or static illustration | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height |
-| A document deliverable: report, policy, plan, spec | `text/markdown` | Rendered document the user can copy/export |
+| Plain unstyled prose the user will paste elsewhere: a policy, a plan, a spec, meeting notes | `text/markdown` | Rendered document the user can copy/export. No layout, no brand styling, no slides — if the deliverable needs any of those, it is a react artifact |
 
 Before emitting `application/vnd.mermaid`, load and follow:
 
@@ -35,8 +38,10 @@ read_file  skills/karl-mermaid/SKILL.md
 
 Rules of thumb:
 
+- **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and "walkthrough" all mean the `slides` template — never markdown, whatever else a request calls the thing.
+- **"Document deliverable" is not a routing rule.** A deck and a branded report are document deliverables too, and both are react. Markdown is for output with no layout and no branding.
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
-- No interactivity and no styling needed → markdown beats html.
+- No interactivity, no branding and no layout needed → markdown beats html.
 - Code you are explaining, or that the user will run elsewhere → a plain fenced code block in chat, not an artifact.
 - Numbers you have already computed → embed them as `const DATA = [...]`.
 
@@ -46,6 +51,8 @@ Rules of thumb:
    allowlist for `application/vnd.react` is: `react` (incl. hooks), `lucide-react`,
    `recharts`, `three`, `date-fns`, `react-day-picker`, and shadcn/ui imported from
    `/components/ui/<name>` — never `/components/<name>` or `@/components/ui/<name>`.
+   Knauf brand tokens and the wordmark are prebuilt too: `/knauf/brand`, exporting
+   `KNAUF`, `useKnaufTheme` and `KnaufWordmark`.
    Anything else (zod, axios, lodash, d3, framer-motion, styled-components,
    react-hook-form, …) will not resolve. If the idea needs a missing library:
    implement the small piece by hand, switch to `text/html` + a cdnjs script, or say
@@ -82,7 +89,9 @@ that file somewhere that injects nothing.
 
 ## Sizing and complexity
 
-- One file only: no multi-file apps, no importing your own modules. If the request is
+- One file only: no multi-file apps, and no authoring extra files of your own — the
+  prebuilt modules (`/components/ui/*`, `/knauf/brand`) are the only imports beyond the
+  library allowlist above. If the request is
   app-sized, build the single highest-value screen and offer follow-ups rather than
   emitting a truncated monolith.
 - Keep embedded datasets small (dozens of rows). For big data, aggregate first and
@@ -111,15 +120,19 @@ read_file  skills/karl-brand/SKILL.md
 ```
 
 It carries the official colour system with provenance, the ink/surface tokens, the
-dark-mode pairs, and the validated chart palette. Copy its `KNAUF` const and
-`useKnaufTheme` into the artifact verbatim, as the first block. Then, if the chart is
+dark-mode pairs, and the validated chart palette. In a React artifact you do not copy
+any of it: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';` — the
+module is always mounted in the preview, and re-declaring those names wastes tokens and
+risks drift. Then, if the chart is
 anything beyond a plain bar or line, also read
 `skills/karl-brand/references/charts.md`; for the wordmark, read
 `skills/karl-brand/references/logo.md`.
 
 **Quick card (mirror).** The authoritative source, with provenance, dark tokens and
 the chart gates, is `skills/karl-brand/SKILL.md` — read it for any real deliverable.
-Use this card only if that read fails, and say so in your reply.
+Use this card only if that read fails. When you do, add one short line to the reply
+saying the result uses fallback brand values and may differ in detail — name no file
+and no skill.
 
 - **Brand** — Cyan Blue `#0099DE` (primary, charts, key visual), Accessible Blue `#003778` (headings, structural bars; never the logo, never on dark), logo fill `#00A0E6`.
 - **Ink** — `#0F1A2A` body, `#3A4A5C` secondary, `#5B6770` muted/captions; on dark `#E6EEF5` and `#9FB0BF`.
@@ -134,7 +147,8 @@ Use this card only if that read fails, and say so in your reply.
   and type scale only.
 - Read heading colour from the theme, never `KNAUF.brand.accessibleBlue` directly —
   `#003778` on a dark surface is 1.56:1.
-- The wordmark is the **real inline SVG** from
+- The wordmark in a React artifact is `<KnaufWordmark />` from `/knauf/brand`; in an
+  HTML or SVG artifact it is the real inline SVG from
   `skills/karl-brand/references/logo.md` — never an `<img>`, and never typed as text.
   Product naming sits beside the mark, not inside it.
 - Charts keep the categorical order fixed by series index and always carry a legend
@@ -145,9 +159,9 @@ Use this card only if that read fails, and say so in your reply.
 ## Situation templates — read before building a branded deliverable
 
 Copy-paste, constraint-checked skeletons live in this skill's `references/`. Each one
-assumes `KNAUF` and `useKnaufTheme` are already in the artifact and introduces no
-colour that is not already in the `KNAUF` const. Read order: **karl-brand → the
-layout → (charts.md if needed)**.
+assumes the artifact imports `KNAUF` and `useKnaufTheme` from `/knauf/brand` and
+introduces no colour that is not already in the `KNAUF` const. Read order: **karl-brand →
+the layout → (charts.md if needed)**.
 
 - `skills/karl-artifacts/references/report.md` — data/analysis report (brand header, exec summary, KPI tiles, chart, findings table).
 - `skills/karl-artifacts/references/slides.md` — navigable slide deck (title / section / bullets / chart layouts).
@@ -165,8 +179,11 @@ storage. This works whether or not code execution is enabled.
 
 - One-off answers, explanations, and short snippets → chat markdown.
 - Content you were asked to review or critique → comment in chat.
-- Data analysis: summarize the findings in chat. If code execution is available,
-  compute there and deliver files; otherwise reason it through and embed the
-  resulting numbers in a react artifact.
+- Data analysis: summarize the findings in chat, then embed the computed numbers
+  in a react artifact as `const DATA = [...]`. There is no code-execution sandbox
+  and no file output on KARL, so never offer to compute elsewhere or to deliver a
+  file.
 
-When in doubt, answer in chat and offer an artifact as a follow-up.
+When the request is genuinely borderline, answer in chat and offer an artifact as a
+follow-up. When it is not borderline — a deck, a report, a dashboard, a diagram —
+build it rather than offering to.

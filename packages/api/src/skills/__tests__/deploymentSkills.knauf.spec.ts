@@ -212,9 +212,14 @@ describe('[knauf] shipped deployment skills', () => {
 
     const logoDoc = fs.readFileSync(path.join(SKILLS_DIR, 'karl-brand/references/logo.md'), 'utf8');
     const transcribed = [...logoDoc.matchAll(/d="(M[^"]+)"/g)].map((m) => m[1]);
-    // Both the raw-SVG block and the React component must carry it, so neither
-    // medium needs the reader to transcribe it across sections.
-    expect(transcribed).toHaveLength(2);
+    // One copy: the raw-SVG block, for `text/html` and `image/svg+xml` artifacts and
+    // for non-artifact media, none of which can import anything. KK20-252 removed the
+    // second copy — the React component is now shipped as a real module mounted into
+    // every artifact sandbox, so a React artifact imports `KnaufWordmark` rather than
+    // carrying 903 characters of coordinate data the model has to retype exactly. The
+    // module's own copy of this path is held to the same source of truth by
+    // `client/src/knauf/sandbox/brandModule.knauf.spec.ts`.
+    expect(transcribed).toHaveLength(1);
 
     const expected = tokenize(sourcePath as string);
     expect(expected.length).toBeGreaterThan(100);

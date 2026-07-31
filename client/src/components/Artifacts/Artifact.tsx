@@ -6,7 +6,11 @@ import { useLocation } from 'react-router-dom';
 import type { Pluggable } from 'unified';
 import type { Artifact } from '~/common';
 import { useMessageContext, useArtifactContext } from '~/Providers';
-import { logger, extractContent, isArtifactRoute } from '~/utils';
+import { logger, isArtifactRoute } from '~/utils';
+// [knauf] KK20-252 — single-file body extraction for compiled artifact types;
+// see the call site in `updateArtifact` below.
+import { extractArtifactBody } from '~/knauf/utils/artifactBody';
+// End [knauf]
 import { artifactsState } from '~/store/artifacts';
 import ArtifactButton from './ArtifactButton';
 
@@ -61,11 +65,20 @@ export function Artifact({
   );
 
   const updateArtifact = useCallback(() => {
-    const content = extractContent(props.children);
-    logger.log('artifacts', 'updateArtifact: content.length', content.length);
-
     const title = props.title ?? defaultTitle;
     const type = props.type ?? defaultType;
+
+    // [knauf] KK20-252 — for a type that gets compiled, take the fenced code block
+    // rather than every child of the directive concatenated. `extractContent` is
+    // `children.map(extractContent).join('')`, so anything the model writes after
+    // the fence — an HTML comment, a `<style>` block, a closing note — is glued
+    // onto the end of App.tsx and Sandpack throws `Unexpected token`. Observed
+    // twice on this ticket. Falls back to the upstream call for markdown artifacts
+    // and whenever no code block is present. See knauf/utils/artifactBody.
+    const content = extractArtifactBody(props.children, type);
+    // End [knauf]
+    logger.log('artifacts', 'updateArtifact: content.length', content.length);
+
     const identifier = props.identifier ?? defaultIdentifier;
     const artifactKey = `${identifier}_${type}_${title}_${messageId}`
       .replace(/\s+/g, '_')

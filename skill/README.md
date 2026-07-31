@@ -28,6 +28,23 @@ children of `skill/`, so a skill two levels down is invisible to the loader. The
 `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` asserts the loaded set exactly,
 so this stays true even if discovery depth changes upstream.
 
+## Per-skill maintainer constraints
+
+These belong here rather than in a `SKILL.md`, because a SKILL.md body is injected
+into the model's context as a **user message** — instructions to a human maintainer
+arriving there read as instructions to the model (see authoring rule 10).
+
+**`karl-brand`**
+
+- **Must stay model-invocable.** Do not set `disable-model-invocation: true`.
+  `karl-artifacts` reads this skill's files, and a cross-skill read is rejected when
+  the target has model invocation disabled and was not primed the same turn — which
+  would silently break every branded artifact.
+- **Must not be renamed.** The id derives from the name, so a rename mints a new
+  skill and drops every user's per-skill active-state.
+- A user who switches it off breaks those cross-skill reads. `karl-artifacts`
+  carries a labelled quick-card mirror for that case.
+
 ## Authoring rules
 
 Learned the hard way — each of these is a silent failure otherwise.
@@ -66,3 +83,20 @@ Learned the hard way — each of these is a silent failure otherwise.
 9. **Deployment skills are active by default for every user** and are read-only over the API. A
    description that advertises a capability the deployment does not have is a promise the model
    will make and fail to keep.
+10. **A SKILL.md body is injected as a `user` message, and it is written in a voice the model
+    reads as instructions to itself.** `buildSkillPrimeMessage` sets `role: 'user'` and the SDK
+    converts it to a `HumanMessage` — providers reject mid-conversation system messages, so there
+    is no system channel available. Consequences, in order of how much they bit us (KK20-252):
+    - **YAML frontmatter is stripped before injection** (`prepareSkillBodyForInjection`,
+      `packages/api/src/knauf/skills/skillPrimeBody.ts`). Left in, the model saw a user turn
+      opening `---\nname: …\ndescription: …\nuser-invocable: true\n---` and then several hundred
+      lines of imperatives — shaped exactly like an indirect prompt injection. It responded
+      *"I'm sorry, but I cannot assist with that request."*
+    - **Write the body as reference material, not as commands to the model.** Domain rules
+      ("never use `#FFD25C` for text") are fine — they are facts about the brand. Instructions
+      about how to treat the system prompt, or aimed at a human maintainer, are not: put those
+      in the section above.
+    - **A skill body is charged on every subsequent turn, not just the turn it is invoked.** Once
+      the model calls `skill`, `formatAgentMessages` re-injects that body for the rest of the
+      conversation. Two skills is a permanent ~4.9k-token tax. Size bodies accordingly and push
+      detail into `references/`, which is read on demand instead.
