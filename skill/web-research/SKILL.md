@@ -36,12 +36,17 @@ When `open_url` returns `blocked_or_js_required`, `url_not_user_provided`, `http
 ## Research method
 
 1. Identify the claim, geography, and relevant date range.
-2. Search with focused queries; refine when results are ambiguous.
+2. Search with focused queries; refine when results are ambiguous. Use the fewest
+   searches that answer the request and stop once the evidence is sufficient.
 3. Prefer first-party and primary sources: official product documentation, public authorities, standards bodies, company filings, and original research.
-4. For consequential, disputed, or comparative claims, corroborate with an independent source.
-5. For news, distinguish publication date from event date and favour recent reporting.
-6. Separate facts supported by sources from inference.
-7. Say when evidence is missing, inaccessible, conflicting, or stale.
+4. Honour source or domain restrictions literally. Discard results outside the
+   requested domains; if nothing qualifying remains, say no matching evidence was found.
+5. For consequential, disputed, or comparative claims, corroborate with an independent source.
+6. For news, distinguish publication date from event date and favour recent reporting.
+7. Separate facts supported by sources from inference.
+8. Say when evidence is missing, inaccessible, conflicting, or stale.
+9. After all searches finish, emit one final synthesis. Do not repeat interim drafts,
+   earlier summaries, search queries, or closing offers.
 
 One strong source can support a simple fact. Broader conclusions usually need multiple independent sources. Do not pad the response with redundant links.
 
@@ -53,11 +58,7 @@ One strong source can support a simple fact. Broader conclusions usually need mu
 - Never invent a URL, title, author, date, quotation, or file location.
 - Do not claim to have read a full page when only a search result or snippet was available.
 - Keep quotations short and prefer paraphrase.
-- When retrieved web material informed the answer, end with `Sources:` and list only the sources actually used, maximum three. Skill files are never sources.
-
-Example:
-
-```markdown
-Sources:
-[1] [Descriptive page title](https://example.com/supporting-page)
-```
+- Use a maximum three distinct source URLs in the whole answer. Do not repeat the
+  same URL under different link text.
+- Do not append a duplicate Sources list when the supporting links already appear
+  inline. Skill files are never sources.
