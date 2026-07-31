@@ -100,6 +100,7 @@ describe('[knauf] shipped deployment skills', () => {
 
   it('keeps the token-source skill readable across skills', () => {
     const source = byName.get(TOKEN_SOURCE_SKILL);
+    const readme = fs.readFileSync(path.join(SKILLS_DIR, 'README.md'), 'utf8');
     expect(source).toBeDefined();
     // Cross-skill `read_file` of `skills/karl-brand/...` is rejected at
     // packages/api/src/agents/handlers.ts when the target skill has
@@ -107,7 +108,31 @@ describe('[knauf] shipped deployment skills', () => {
     // false` would additionally drop it from the `$` popover.
     expect(source?.disableModelInvocation).not.toBe(true);
     expect(source?.userInvocable).not.toBe(false);
-    expect(source?.alwaysApply).toBe(true);
+    expect(source?.alwaysApply).not.toBe(true);
+    expect(readme).not.toMatch(/karl-brand.*always-applied/i);
+    expect(readme).not.toContain('Must stay `always-apply: true`');
+  });
+
+  it('keeps logo clearance equal to the rendered mark height in artifact templates', () => {
+    const artifacts = byName.get('karl-artifacts');
+    expect(artifacts).toBeDefined();
+
+    const dashboard = artifacts?.files.find(
+      (file) => file.relativePath === 'references/dashboard.md',
+    )?.content;
+    expect(dashboard).toContain('<KnaufWordmark height={28} fill="#FFFFFF" />');
+    expect(dashboard).toContain('rounded-lg px-7 py-7');
+    expect(dashboard).toContain('items-center gap-7');
+  });
+
+  it('bounds native web research to one synthesis with distinct inline sources', () => {
+    const research = byName.get('web-research');
+    expect(research).toBeDefined();
+    expect(research?.body).toMatch(/emit one final synthesis/i);
+    expect(research?.body).toMatch(/do not repeat interim drafts/i);
+    expect(research?.body).toMatch(/maximum three distinct source URLs/i);
+    expect(research?.body).toMatch(/do not append a duplicate sources list/i);
+    expect(research?.body).toMatch(/source or domain restrictions/i);
   });
 
   it('ships model-invocable Mermaid generation and repair guidance', () => {

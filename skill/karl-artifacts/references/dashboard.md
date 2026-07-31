@@ -38,7 +38,7 @@ the `KNAUF` const.**
 
 - **The real wordmark** — `<KnaufWordmark fill="#FFFFFF" />` on the `accessibleBlue`
   header, with "Performance Dashboard" as separate text beside it. Padding and the
-  gap to that label are at least the 24px mark height.
+  gap to that label are at least the 28px mark height.
 - **One palette, both modes.** The chart steps are validated on the light *and* dark
   surface, so there is no palette swap — only surfaces and ink change. Everything
   routes through `useKnaufTheme(dark)`.
@@ -164,11 +164,11 @@ export default function KnaufKpiDashboard() {
   return (
     <div className="min-h-screen w-full p-6" style={{ backgroundColor: theme.page, color: theme.text }}>
       <div
-        className="mb-5 flex items-center justify-between rounded-lg px-6 py-6"
+        className="mb-5 flex items-center justify-between rounded-lg px-7 py-7"
         style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
       >
-        <div className="flex items-center gap-6">
-          <KnaufWordmark height={24} fill="#FFFFFF" />
+        <div className="flex items-center gap-7">
+          <KnaufWordmark height={28} fill="#FFFFFF" />
           <span className="text-sm font-medium" style={{ color: KNAUF.ink.accentOnBrand }}>
             Performance Dashboard
           </span>

@@ -19,7 +19,7 @@ are not persisted as Skill documents in MongoDB.
 | Skill | Purpose | Invocation | Gate |
 |---|---|---|---|
 | `agent-builder-coach` | Designs, configures, tests, and prepares governed custom agents for admin-controlled publication. | model-invocable + `$agent-builder-coach` | skill gates |
-| `karl-brand` | Single source of truth for Knauf brand tokens: official colours and fonts, validated chart palette, ink/surface tokens, the real KNAUF wordmark SVG. Read by `karl-artifacts` and usable for non-artifact deliverables. | always-applied + model-invocable + `$karl-brand` | skill gates |
+| `karl-brand` | Single source of truth for Knauf brand tokens: official colours and fonts, validated chart palette, ink/surface tokens, the real KNAUF wordmark SVG. Read by `karl-artifacts` and usable for non-artifact deliverables. | model-invocable + `$karl-brand` | skill gates |
 | `karl-artifacts` | Choosing an artifact type, avoiding preview breakage, and the branded report / slides / dashboard templates. | model-invocable + `$karl-artifacts` | skill gates |
 | `karl-guide` | Product guidance for Karl capabilities, navigation, roles, groups, settings, limits, and troubleshooting. | model-invocable + `$karl-guide` | skill gates |
 | `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | skill gates |
@@ -46,9 +46,9 @@ arriving there read as instructions to the model (see authoring rule 10).
   `karl-artifacts` reads this skill's files, and a cross-skill read is rejected when
   the target has model invocation disabled and was not primed the same turn — which
   would silently break every branded artifact.
-- **Must stay `always-apply: true`.** Knauf typography and logo handling are fixed
-  parameters for Knauf/KARL visual deliverables, not optional styling discovered only
-  when a prompt happens to mention branding.
+- **Must not be always-applied.** The base KARL prompt selects it for branded visual
+  deliverables, and `karl-artifacts` explicitly reads it. Auto-applying it injects the
+  full skill and shows a permanent pin in unrelated conversations.
 - **Must not be renamed.** The id derives from the name, so a rename mints a new
   skill and drops every user's per-skill active-state.
 - A user who switches it off breaks those cross-skill reads. `karl-artifacts`
