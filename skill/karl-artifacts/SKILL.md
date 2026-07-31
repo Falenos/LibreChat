@@ -104,7 +104,22 @@ that file somewhere that injects nothing.
   text/backgrounds that only work in one mode.
 - Default to a clean layout: page padding (`p-6`), constrained width
   (`max-w-4xl mx-auto`), a consistent spacing scale. shadcn/ui `Card`, `Tabs`,
-  `Table`, `Badge` give a professional look for almost no effort.
+  `Table` and `Badge` give a professional look for almost no effort. Each lives in
+  its own file — there is no barrel, so `from '/components/ui'` does not resolve and
+  the preview will not load. These four are the whole set worth reaching for, and
+  these are their exact imports and export names:
+
+  ```tsx
+  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '/components/ui/card';
+  import { Tabs, TabsList, TabsTrigger, TabsContent } from '/components/ui/tabs';
+  import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption } from '/components/ui/table';
+  import { Badge } from '/components/ui/badge';
+  ```
+
+  Note `TabsList`, not `TabList`. Import only what you use. For anything outside
+  these four, build it from plain elements and Tailwind rather than guessing at a
+  path — an import that does not resolve takes the whole artifact down, while a
+  hand-built component merely looks plainer.
 
 ## Knauf brand — read karl-brand first
 
