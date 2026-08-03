@@ -6,6 +6,8 @@ const { ALLOWED_ARTIFACT_TYPES, MAX_ARTIFACT_BYTES, extractDirectiveContent } = 
 const EXPORT_TIMEOUT_MS = 30_000;
 const MAX_ACTIVE_EXPORTS = 2;
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
+const MAX_ARTIFACT_PAGES = 20;
+const MAX_PNG_HEIGHT = 12_000;
 const SNAPSHOT_TTL_MS = 60_000;
 const VIEWPORT = { width: 1440, height: 900 };
 const snapshots = new Map();
@@ -137,6 +139,59 @@ const configureNetworkBoundary = async (context, localOrigin) => {
   }
 };
 
+const waitForStablePreview = (previewFrame) =>
+  previewFrame.waitForFunction(
+    () => {
+      const loading =
+        /\[[123]\/3\]\s+(?:Downloading manifest|Downloaded .+ \(\d+\/\d+\)|Starting)/m;
+      const body = document.body;
+      const text = body?.innerText ?? '';
+      const markup = body?.innerHTML ?? '';
+      const now = performance.now();
+      const state = window.__knaufArtifactExportState;
+
+      if (!body?.childElementCount || loading.test(text)) {
+        window.__knaufArtifactExportState = { markup: '', since: now };
+        return false;
+      }
+      if (!state || state.markup !== markup) {
+        window.__knaufArtifactExportState = { markup, since: now };
+        return false;
+      }
+      return now - state.since >= 1500;
+    },
+    undefined,
+    { timeout: EXPORT_TIMEOUT_MS },
+  );
+
+const getPreviewPageCount = (previewFrame) =>
+  previewFrame.evaluate(() => {
+    const nextButton = [...document.querySelectorAll('button')].find((button) =>
+      /^next\b/i.test((button.getAttribute('aria-label') || button.textContent || '').trim()),
+    );
+    if (!nextButton || nextButton.disabled) {
+      return 1;
+    }
+    const counter = [...document.querySelectorAll('body *')].find(
+      (element) =>
+        element.childElementCount === 0 && /^1\s*\/\s*\d+$/.test(element.textContent?.trim() ?? ''),
+    );
+    return Number(counter?.textContent?.trim().match(/^1\s*\/\s*(\d+)$/)?.[1]) || 1;
+  });
+
+const advancePreviewPage = (previewFrame) =>
+  previewFrame.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find((candidate) =>
+      /^next\b/i.test((candidate.getAttribute('aria-label') || candidate.textContent || '').trim()),
+    );
+    if (!button || button.disabled) {
+      return false;
+    }
+    window.__knaufArtifactExportState = { markup: '', since: performance.now() };
+    button.click();
+    return true;
+  });
+
 const renderArtifact = async (input, format) => {
   const artifact = validateArtifact(input);
   if (format !== 'png' && format !== 'pdf') {
@@ -172,51 +227,58 @@ const renderArtifact = async (input, format) => {
       throw new ArtifactExportError('Artifact preview did not start', 500);
     }
     await page.waitForTimeout(5000);
-    await previewFrame.waitForFunction(
-      () => {
-        const loading =
-          /\[[123]\/3\]\s+(?:Downloading manifest|Downloaded .+ \(\d+\/\d+\)|Starting)/m;
-        const body = document.body;
-        const text = body?.innerText ?? '';
-        const markup = body?.innerHTML ?? '';
-        const now = performance.now();
-        const state = window.__knaufArtifactExportState;
-
-        if (!body?.childElementCount || loading.test(text)) {
-          window.__knaufArtifactExportState = { markup: '', since: now };
-          return false;
-        }
-        if (!state || state.markup !== markup) {
-          window.__knaufArtifactExportState = { markup, since: now };
-          return false;
-        }
-        return now - state.since >= 1500;
-      },
-      undefined,
-      { timeout: EXPORT_TIMEOUT_MS },
-    );
+    await waitForStablePreview(previewFrame);
     await previewFrame.evaluate(async () => document.fonts?.ready);
     const contentHeight = await previewFrame.evaluate(() =>
       Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
     );
-    const height = Math.min(12_000, Math.max(VIEWPORT.height, contentHeight));
+    const height = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, contentHeight));
     await page.setViewportSize({ width: VIEWPORT.width, height });
-    const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
-    if (screenshot.length > MAX_OUTPUT_BYTES) {
-      throw new ArtifactExportError('Rendered artifact is too large', 413);
+    const pageCount = await getPreviewPageCount(previewFrame);
+    if (
+      pageCount > MAX_ARTIFACT_PAGES ||
+      (format === 'png' && height * pageCount > MAX_PNG_HEIGHT)
+    ) {
+      throw new ArtifactExportError('Artifact has too many pages to export', 413);
     }
-    let output = screenshot;
-    if (format === 'pdf') {
+    const screenshots = [];
+    let screenshotBytes = 0;
+    for (let index = 0; index < pageCount; index += 1) {
+      if (index > 0) {
+        if (!(await advancePreviewPage(previewFrame))) {
+          throw new ArtifactExportError('Artifact page navigation failed', 500);
+        }
+        await waitForStablePreview(previewFrame);
+        await previewFrame.evaluate(async () => document.fonts?.ready);
+      }
+      const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
+      screenshotBytes += screenshot.length;
+      if (screenshotBytes > MAX_OUTPUT_BYTES) {
+        throw new ArtifactExportError('Rendered artifact is too large', 413);
+      }
+      screenshots.push(screenshot);
+    }
+    let output = screenshots[0];
+    if (format === 'pdf' || screenshots.length > 1) {
+      const images = screenshots
+        .map(
+          (screenshot) =>
+            `<img src="data:image/png;base64,${screenshot.toString('base64')}" alt="">`,
+        )
+        .join('');
       await page.setContent(
-        `<style>html,body{margin:0;width:${VIEWPORT.width}px;height:${height}px}img{display:block;width:100%;height:100%}</style><img src="data:image/png;base64,${screenshot.toString('base64')}" alt="">`,
+        `<style>@page{size:${VIEWPORT.width}px ${height}px;margin:0}html,body{margin:0;width:${VIEWPORT.width}px}img{display:block;width:${VIEWPORT.width}px;height:${height}px;break-after:page}img:last-child{break-after:auto}</style>${images}`,
         { waitUntil: 'load', timeout: EXPORT_TIMEOUT_MS },
       );
-      output = await page.pdf({
-        width: `${VIEWPORT.width}px`,
-        height: `${height}px`,
-        margin: { top: 0, right: 0, bottom: 0, left: 0 },
-        printBackground: true,
-      });
+      output =
+        format === 'pdf'
+          ? await page.pdf({
+              width: `${VIEWPORT.width}px`,
+              height: `${height}px`,
+              margin: { top: 0, right: 0, bottom: 0, left: 0 },
+              printBackground: true,
+            })
+          : await page.screenshot({ type: 'png', fullPage: true });
     }
     const buffer = Buffer.from(output);
     if (buffer.length > MAX_OUTPUT_BYTES) {

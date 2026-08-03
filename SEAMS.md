@@ -1004,6 +1004,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docker/chromium-wrapper.sh` | Alpine `su-exec` and Chromium binary | Low — privilege-drops the multi-stage runtime before launching Chromium and never uses `--no-sandbox` | `knauf/tests/artifactExportRuntime.spec.js` | NO-TICKET |
 | `knauf/tests/artifactExportRuntime.spec.js` | Node `test`, `assert`, `fs`, and `path`; production manifests/scripts | Low — dependency-free guard for Chromium, Playwright, wrapper copying, and sandbox-preserving privilege drop | Self | NO-TICKET |
 | `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`, Node `Buffer`, and the existing artifact-share validator | Medium — PDF export freezes the stable screen-rendered artifact as PNG before printing, preventing Chromium print media from resetting or blanking live Sandpack content | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
+| `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`, the standard `N / total` deck counter, and its `Next` control | Medium — bounded browser traversal captures every navigable slide; PDF emits one slide per page and PNG emits one vertically stacked image while ordinary artifacts remain single-page | `api/server/services/Artifacts/knauf/export.spec.js`; real-browser three-slide PDF/PNG smoke | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
