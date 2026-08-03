@@ -1,9 +1,15 @@
 const express = require('express');
 const request = require('supertest');
-const { SystemRoles, roleDefaults } = require('librechat-data-provider');
+const {
+  SystemRoles,
+  roleDefaults,
+  PermissionTypes,
+  Permissions,
+} = require('librechat-data-provider');
 
 const mockGetRoleByName = jest.fn();
 const mockHasCapability = jest.fn();
+const mockUpdateRoleByName = jest.fn();
 
 jest.mock('~/server/middleware', () => ({
   requireJwtAuth: (_req, _res, next) => next(),
@@ -16,7 +22,7 @@ jest.mock('~/server/middleware/roles/capabilities', () => ({
 
 jest.mock('~/models', () => ({
   getRoleByName: (...args) => mockGetRoleByName(...args),
-  updateRoleByName: jest.fn(),
+  updateRoleByName: (...args) => mockUpdateRoleByName(...args),
 }));
 
 const rolesRouter = require('../roles');
@@ -46,6 +52,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockHasCapability.mockResolvedValue(false);
   mockGetRoleByName.mockResolvedValue(null);
+  mockUpdateRoleByName.mockResolvedValue(null);
 });
 
 describe('GET /api/roles/:roleName — isOwnRole authorization', () => {
@@ -153,3 +160,55 @@ describe('GET /api/roles/:roleName — isOwnRole authorization', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// [knauf] Pin legacy Admin prompt writes to the protected USER policy.
+describe('PUT /api/roles/:roleName/prompts — Knauf USER policy', () => {
+  it('preserves peer sharing but forces public sharing off', async () => {
+    const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+    process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
+    const role = {
+      name: SystemRoles.USER,
+      permissions: {
+        [PermissionTypes.PROMPTS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: false,
+          [Permissions.SHARE]: false,
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+      },
+    };
+    mockGetRoleByName.mockResolvedValue(role);
+    mockUpdateRoleByName.mockResolvedValue(role);
+
+    try {
+      const app = createApp({ id: 'admin', role: SystemRoles.ADMIN });
+      const res = await request(app)
+        .put(`/api/roles/${SystemRoles.USER}/prompts`)
+        .send({
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
+        });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateRoleByName).toHaveBeenCalledWith(SystemRoles.USER, {
+        permissions: {
+          [PermissionTypes.PROMPTS]: {
+            [Permissions.USE]: true,
+            [Permissions.CREATE]: true,
+            [Permissions.SHARE]: true,
+            [Permissions.SHARE_PUBLIC]: false,
+          },
+        },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+      } else {
+        process.env.KNAUF_RESTRICT_USER_PERMISSIONS = previous;
+      }
+    }
+  });
+});
+// End [knauf]

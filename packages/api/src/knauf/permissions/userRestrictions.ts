@@ -15,7 +15,6 @@ const KNAUF_RESTRICTED_USER_PERMISSION_TYPES = new Set<PermissionTypes>([
   PermissionTypes.MULTI_CONVO,
   PermissionTypes.RUN_CODE,
   PermissionTypes.WEB_SEARCH,
-  PermissionTypes.PEOPLE_PICKER,
   PermissionTypes.FILE_SEARCH,
   PermissionTypes.MCP_SERVERS,
   PermissionTypes.REMOTE_AGENTS,
@@ -28,7 +27,10 @@ function isKnaufUserRestrictionEnabled() {
   );
 }
 
-export function shouldApplyKnaufUserRestriction(roleName: SystemRoles, permType?: PermissionTypes) {
+export function shouldApplyKnaufUserRestriction(
+  roleName: string,
+  permType?: PermissionTypes,
+): boolean {
   if (roleName !== SystemRoles.USER) {
     return false;
   }
@@ -39,8 +41,9 @@ export function shouldApplyKnaufUserRestriction(roleName: SystemRoles, permType?
 }
 
 export function applyKnaufUserRestrictions(
-  roleName: SystemRoles,
+  roleName: string,
   permissions: PermissionUpdate,
+  existingPermissions?: PermissionUpdate,
 ): PermissionUpdate {
   if (!shouldApplyKnaufUserRestriction(roleName)) {
     return permissions;
@@ -48,12 +51,12 @@ export function applyKnaufUserRestrictions(
 
   return {
     ...permissions,
-    [PermissionTypes.PROMPTS]: {
-      ...permissions[PermissionTypes.PROMPTS],
-      [Permissions.CREATE]: false,
-      [Permissions.SHARE]: false,
-      [Permissions.SHARE_PUBLIC]: false,
-    },
+    [PermissionTypes.PROMPTS]: existingPermissions?.[PermissionTypes.PROMPTS]
+      ? { [Permissions.SHARE_PUBLIC]: false }
+      : {
+          ...permissions[PermissionTypes.PROMPTS],
+          [Permissions.SHARE_PUBLIC]: false,
+        },
     [PermissionTypes.AGENTS]: {
       ...permissions[PermissionTypes.AGENTS],
       [Permissions.CREATE]: false,
@@ -79,12 +82,6 @@ export function applyKnaufUserRestrictions(
     [PermissionTypes.WEB_SEARCH]: {
       ...permissions[PermissionTypes.WEB_SEARCH],
       [Permissions.USE]: false,
-    },
-    [PermissionTypes.PEOPLE_PICKER]: {
-      ...permissions[PermissionTypes.PEOPLE_PICKER],
-      [Permissions.VIEW_USERS]: false,
-      [Permissions.VIEW_GROUPS]: false,
-      [Permissions.VIEW_ROLES]: false,
     },
     [PermissionTypes.FILE_SEARCH]: {
       ...permissions[PermissionTypes.FILE_SEARCH],

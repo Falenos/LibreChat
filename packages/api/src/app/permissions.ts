@@ -127,8 +127,7 @@ export async function updateInterfacePermissions({
 
     const existingRole = await getRoleByName(roleName);
     const existingPermissions = existingRole?.permissions as
-      | Partial<Record<PermissionTypes, Record<string, boolean | undefined>>>
-      | undefined;
+      Partial<Record<PermissionTypes, Record<string, boolean | undefined>>> | undefined;
     const permissionsToUpdate: Partial<
       Record<PermissionTypes, Record<string, boolean | undefined>>
     > = {};
@@ -177,9 +176,7 @@ export async function updateInterfacePermissions({
 
     // Helper to extract value from boolean or object config
     type PermissionConfig =
-      | boolean
-      | { use?: boolean; create?: boolean; share?: boolean; public?: boolean }
-      | undefined;
+      boolean | { use?: boolean; create?: boolean; share?: boolean; public?: boolean } | undefined;
     const getConfigUse = (config: PermissionConfig) =>
       typeof config === 'boolean' ? config : config?.use;
     const getConfigCreate = (config: PermissionConfig) =>
@@ -547,7 +544,11 @@ export async function updateInterfacePermissions({
 
     // [knauf] Apply normal-user restrictions after YAML values and role
     // defaults are resolved so ADMIN keeps the full configured surface.
-    const resolvedPermissions = applyKnaufUserRestrictions(roleName, allPermissions);
+    const resolvedPermissions = applyKnaufUserRestrictions(
+      roleName,
+      allPermissions,
+      existingPermissions,
+    );
     // End [knauf]
 
     // Check and add each permission type if needed
