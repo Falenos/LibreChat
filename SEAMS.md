@@ -638,6 +638,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `Dockerfile.multi` | Chromium package, Knauf workspace manifest, and unprivileged wrapper copy | 17–19, 33–35, 118–120 | Keeps the production-only dependency installed and launches Chromium as `node` without disabling its sandbox | `knauf/tests/artifactExportRuntime.spec.js`; real-browser PNG/PDF smoke | NO-TICKET |
 | `client/src/components/Artifacts/Artifacts.tsx` | `ArtifactDownloadMenu` toolbar mount | 20–23, 340–342 | Replaces the source-only toolbar action with the fork-isolated source/PNG/PDF menu while leaving sharing owner-only | `client/src/knauf/components/Artifacts/Artifacts.knauf.spec.tsx` | NO-TICKET |
 | `client/src/routes/index.tsx` | `loadArtifactExportPage` and `artifact-export/:token` | 57–62, 74–80 | Gives server-side Chromium a public render-only SPA route protected by a short-lived snapshot token instead of account UI | `client/src/knauf/components/Artifacts/ArtifactExportPage.spec.tsx`; frontend build; real-browser smoke | NO-TICKET |
+| `api/server/index.js` | `MIGRATION_GATE_EXEMPT` artifact render entry | 280, 295 | Lets the one-time-secret snapshot route bypass the temporary user/JWT migration gate while authenticated export creation remains protected | `api/server/index.spec.js` (`lets the one-time-secret artifact render route bypass user authentication`) | NO-TICKET |
+| `api/server/index.spec.js` | `Migration gate wiring` artifact render assertion | 125–132 | Seam test — pins the internal artifact snapshot exemption required by headless PNG/PDF rendering without exempting authenticated export creation | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration

@@ -121,6 +121,15 @@ describe('Migration gate wiring', () => {
 
     expect(exemptions).toContain("'/knauf/migration/file-assets'");
   });
+
+  it('lets the one-time-secret artifact render route bypass user authentication', () => {
+    const exemptionStart = source.indexOf('const MIGRATION_GATE_EXEMPT = [');
+    const exemptionEnd = source.indexOf('];', exemptionStart);
+    const exemptions = source.slice(exemptionStart, exemptionEnd);
+
+    expect(exemptions).toContain("'/knauf/artifact-export/render'");
+    expect(exemptions).not.toContain("'/knauf/artifact-export',");
+  });
 });
 // End [knauf]
 
