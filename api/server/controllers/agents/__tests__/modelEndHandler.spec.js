@@ -299,6 +299,53 @@ describe('zero-usage generic refusal recovery', () => {
 });
 // End [knauf]
 
+// [knauf] KK20-194 — bind final native-search phase capture to ModelEndHandler.
+describe('native web-search final output capture', () => {
+  const usage = { input_tokens: 10, output_tokens: 5, total_tokens: 15 };
+
+  it('captures final_answer and clears it on a later visible non-search call', async () => {
+    const sink = { text: '' };
+    const handler = new ModelEndHandler([], null, null, sink);
+    const metadata = { ls_model_name: 'gpt-5', user_id: 'u1', hide_sequential_outputs: false };
+
+    await handler.handle(
+      'on_chat_model_end',
+      {
+        output: {
+          usage_metadata: usage,
+          response_metadata: {
+            output: [
+              { type: 'web_search_call', id: 'ws_1' },
+              {
+                type: 'message',
+                phase: 'commentary',
+                content: [{ type: 'output_text', text: 'Draft.' }],
+              },
+              {
+                type: 'message',
+                phase: 'final_answer',
+                content: [{ type: 'output_text', text: 'Final.' }],
+              },
+            ],
+          },
+        },
+      },
+      metadata,
+      buildGraph(),
+    );
+    expect(sink.text).toBe('Final.');
+
+    await handler.handle(
+      'on_chat_model_end',
+      { output: { usage_metadata: usage, response_metadata: { output: [] } } },
+      metadata,
+      buildGraph(),
+    );
+    expect(sink.text).toBe('');
+  });
+});
+// End [knauf]
+
 // [knauf] KK20-252 — Azure content-filter surfacing.
 //
 // Upstream types `finish_reason` as including 'content_filter' and then never

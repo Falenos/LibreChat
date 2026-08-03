@@ -57,6 +57,9 @@ const {
 // current model boundary and remove its streamed placeholder before persist.
 const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
 // End [knauf]
+// [knauf] KK20-194 — replace phase-concatenated native-search text before persistence.
+const { replaceLastTextPart } = require('~/server/knauf/nativeWebSearchOutput');
+// End [knauf]
 const {
   Callback,
   Providers,
@@ -127,6 +130,9 @@ class AgentClient extends BaseClient {
       subagentAggregatorsByToolCallId,
       contextUsageSink,
       usageEmitSink,
+      // [knauf] KK20-194 — authoritative native-search output sink.
+      nativeWebSearchOutputSink,
+      // End [knauf]
       ...clientOptions
     } = options;
 
@@ -141,6 +147,9 @@ class AgentClient extends BaseClient {
      *  persisted on `metadata.usage`.
      *  @type {Array<import('librechat-data-provider').TTokenUsageEvent> | undefined} */
     this.usageEmitSink = usageEmitSink;
+    // [knauf] KK20-194 — authoritative Responses final-answer phase captured at model end.
+    this.nativeWebSearchOutputSink = nativeWebSearchOutputSink;
+    // End [knauf]
     /** @type {MessageContentComplex[]} */
     this.contentParts = contentParts;
     /** @type {Array<UsageMetadata>} */
@@ -938,6 +947,12 @@ class AgentClient extends BaseClient {
       abortController: opts.abortController,
     });
 
+    // [knauf] KK20-194 — all deltas are finished; discard concatenated commentary drafts.
+    this.contentParts = replaceLastTextPart(
+      this.contentParts,
+      this.nativeWebSearchOutputSink?.text ?? '',
+    );
+    // End [knauf]
     const completion = filterMalformedContentParts(this.contentParts);
     const metadata = this.buildResponseMetadata();
     return metadata ? { completion, metadata } : { completion };

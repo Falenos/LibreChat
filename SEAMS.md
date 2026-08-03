@@ -621,6 +621,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/images/encode.js` | — | 91–94, 122–127, 138–150, 163–187, 231–234 | NO-TICKET — keep stored image metadata inside the same type/size | — | — |
 | `packages/data-schemas/src/config/parsers.spec.ts` | — | 184–202, 267–281, 321–363 | NO-TICKET — regression for Foundry invalid_payload logs carrying | Self | — |
 | `packages/data-schemas/src/config/parsers.ts` | — | 11–14, 20–23, 36–38, 56–61, 117–120, 478–482 | NO-TICKET — request IDs retain correlation without emitting user or | — | — |
+| `api/server/controllers/agents/callbacks.js` | `ModelEndHandler`, `getDefaultHandlers` | 30–32, 139–155, 182–194, 444–446, 490–492 | Capture the authoritative `final_answer` text from completed Responses output when native `web_search_call` ran; clear stale capture on a later visible non-search model call | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `api/server/controllers/agents/client.js` | `AgentClient` constructor and `sendCompletion` | 60–62, 133–152, 950–955 | Replace phase-concatenated streamed text with the authoritative native-search answer only after every stream delta has completed | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `api/server/services/Endpoints/agents/initialize.js` | `nativeWebSearchOutputSink` request lifecycle | 135–137, 298–300, 988–990 | Share one request-scoped output sink between model-end handling and final response persistence | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `api/server/controllers/agents/__tests__/modelEndHandler.spec.js` | `native web-search final output capture` | model-end regression block | Bind final-phase capture and stale-sink clearing to `ModelEndHandler` | Self | KK20-194 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -968,6 +972,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `skill/karl-artifacts/references/dashboard.md` | `/knauf/brand` sandbox module (`KnaufWordmark`) | Low — corrects the shipped dashboard template to render the official wordmark at 28px and maintain at least the same 28px padding and adjacent-label gap | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | KK20-243 |
 | `skill/web-research/SKILL.md` | Azure model-native web search | Medium — bounds search to one final synthesis, literal domain restrictions, and at most three distinct inline sources; reduces repeated drafts and duplicate/malformed citation output without replacing the provider search implementation | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | KK20-194 |
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | Real deployment-skill tree and `skill/README.md` | Low — regression guards for the unpinned brand source, matching dashboard clearance, and bounded web-research output rules | Self | KK20-243 / KK20-194 |
+| `api/server/knauf/nativeWebSearchOutput.js` | None — pure Responses-output and content-part transforms | Low — selects the provider's `final_answer` only when a native `web_search_call` exists, then replaces one persisted text part without touching reasoning or tool parts | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `knauf/tests/nativeWebSearchOutput.spec.js` | Subject only (`api/server/knauf/nativeWebSearchOutput`) plus `node:test`/`node:assert` | Low — dependency-free regression reproducing phase-concatenated native-search drafts and proving ordinary Responses output is untouched | Self | KK20-194 |
 <!-- seams:new:end -->
 
 ## Static Assets

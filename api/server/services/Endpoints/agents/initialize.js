@@ -132,6 +132,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
    * @type {Record<string, string>}
    */
   const collectedThoughtSignatures = {};
+  // [knauf] KK20-194 — final native-search Responses text shared by handler and client.
+  const nativeWebSearchOutputSink = { text: '' };
+  // End [knauf]
   /** @type {ArtifactPromises} */
   const artifactPromises = [];
   const { contentParts, aggregateContent } = createContentAggregator();
@@ -292,6 +295,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
     usageCost,
     contextUsageSink,
     usageEmitSink,
+    // [knauf] KK20-194 — capture authoritative native-search output.
+    nativeWebSearchOutputSink,
+    // End [knauf]
   });
 
   if (!endpointOption.agent) {
@@ -979,6 +985,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
      *  them to persist the breakdown + usage rollup on the response message. */
     contextUsageSink,
     usageEmitSink,
+    // [knauf] KK20-194 — persist authoritative native-search output.
+    nativeWebSearchOutputSink,
+    // End [knauf]
   });
 
   if (streamId) {
