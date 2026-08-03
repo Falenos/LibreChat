@@ -1,10 +1,18 @@
 name: Playwright E2E Tests
 
 on:
-  # Knauf: upstream Playwright E2E on every PR. Not wired for the fork's CI yet (the fork
-  # uses `npm run e2e` / `e2e:ci`); disabled on PRs pending deliberate adoption. Manual-run
-  # only; uncomment the pull_request trigger to re-enable.
-  # pull_request:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - 'client/**'
+      - 'e2e/**'
+      - 'packages/**'
+      - 'librechat.yaml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/playwright-mock.yml'
   workflow_dispatch:
     inputs:
       reason:
@@ -16,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: playwright-mock-${{ github.ref }}
+  group: playwright-mock-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:

@@ -42,6 +42,7 @@ jobs:
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
+      AGK_STAGE_WORKER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-worker
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
       # [knauf] KK20-195 — prod worker values, bumped in lock-step with the app.
@@ -88,12 +89,24 @@ jobs:
           set -euo pipefail
 
 
+          APP_VALUES="agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          WORKER_VALUES="agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
+          test -f "$APP_VALUES"
+          test -f "$WORKER_VALUES"
+
           INPUT_VERSION="${{ inputs.version }}"
-          if [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
-              "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
+          STAGE_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$APP_VALUES" | tr -d "\"'")
+          STAGE_WORKER_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$WORKER_VALUES" | tr -d "\"'")
+          VERSION="${INPUT_VERSION:-$STAGE_VERSION}"
+
+          if [ "$STAGE_WORKER_VERSION" != "$STAGE_VERSION" ]; then
+            echo "::error::STAGE app tag $STAGE_VERSION and worker tag $STAGE_WORKER_VERSION differ"
+            exit 1
+          fi
+
+          if [ "$VERSION" != "$STAGE_VERSION" ]; then
+            echo "::error::Requested version $VERSION is not the current STAGE GitOps tag $STAGE_VERSION"
+            exit 1
           fi
 
           if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$VERSION"; then
@@ -111,6 +124,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
 
           test -f "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          test -f "agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
           grep -F "repository: $AGK_STAGE_ACR_NAME.azurecr.io/$AGK_STAGE_IMAGE_REPOSITORY" \
@@ -130,6 +144,40 @@ jobs:
             --repository "$AGK_STAGE_IMAGE_REPOSITORY" \
             --query "[?@=='$VERSION']" \
             -o tsv | grep -Fx "$VERSION"
+
+          APP_CONFIG_SHA=$(sha256sum \
+            "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | awk '{print $1}')
+          WORKER_CONFIG_SHA=$(sha256sum \
+            "agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | awk '{print $1}')
+          git -C agk-deployment-configs fetch --force origin \
+            'refs/tags/agentic-karl-stage-validated/*:refs/tags/agentic-karl-stage-validated/*'
+
+          MATCHING_MARKER=""
+          while IFS= read -r MARKER; do
+            [ -n "$MARKER" ] || continue
+            MESSAGE=$(git -C agk-deployment-configs for-each-ref --format='%(contents)' "refs/tags/$MARKER")
+            MARKER_COMMIT=$(git -C agk-deployment-configs rev-list -n1 "$MARKER")
+            if git -C agk-deployment-configs merge-base --is-ancestor "$MARKER_COMMIT" HEAD \
+              && grep -Fxq "stage-version: $VERSION" <<< "$MESSAGE" \
+              && grep -Fxq "gitops-commit: $MARKER_COMMIT" <<< "$MESSAGE" \
+              && grep -Fxq "stage-config-sha256: $APP_CONFIG_SHA" <<< "$MESSAGE" \
+              && grep -Fxq "stage-worker-config-sha256: $WORKER_CONFIG_SHA" <<< "$MESSAGE" \
+              && grep -Fxq "quality-repository: $QUALITY_REPOSITORY" <<< "$MESSAGE" \
+              && grep -Eq '^quality-run-id: [0-9]+$' <<< "$MESSAGE" \
+              && grep -Eq '^stage-deploy-run-id: [0-9]+$' <<< "$MESSAGE"; then
+              MATCHING_MARKER="$MARKER"
+              break
+            fi
+          done < <(git -C agk-deployment-configs tag -l \
+            "agentic-karl-stage-validated/$VERSION-*" --sort=-creatordate)
+
+          if [ -z "$MATCHING_MARKER" ]; then
+            echo "::error::No successful STAGE E2E marker matches $VERSION and the current app/worker GitOps config"
+            exit 1
+          fi
+
+          echo "Validated STAGE provenance: $MATCHING_MARKER"
+          echo "| STAGE validation marker | \`$MATCHING_MARKER\` |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Import image into AGK prod ACR
         run: |

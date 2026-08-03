@@ -36,8 +36,10 @@ jobs:
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
       AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
+      AGK_STAGE_WORKER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-worker
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-stage-agentic-karl
+      AGK_WORKER_ARGOCD_APP: agentic-karl-stage-agentic-karl-worker
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
     steps:
@@ -144,7 +146,17 @@ jobs:
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
 
-          if git diff --quiet -- "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"; then
+          WORKER_VALUES="$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
+          test -f "$WORKER_VALUES"
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+          grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+
+          CONFIG_FILES=(
+            "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+            "$WORKER_VALUES"
+          )
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
             echo "AGK stage deployment config already points at $VERSION"
             echo "| Stage deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -152,7 +164,7 @@ jobs:
 
           BRANCH="release/agk-stage-$VERSION"
           git checkout -b "$BRANCH"
-          git add "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          git add "${CONFIG_FILES[@]}"
           git commit -m "Update agentic-karl stage to $VERSION"
           git push --force origin "$BRANCH"
 
@@ -161,7 +173,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl stage to $VERSION" \
-              --body "Automated stage GitOps version bump from the agentic-karl deploy-stage pipeline (run ${{ github.run_id }}). Bumps \`$AGK_STAGE_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
+              --body "Automated stage GitOps version bump from the agentic-karl deploy-stage pipeline (run ${{ github.run_id }}). Bumps the app and async-indexing worker image tags, plus the app Langfuse release, to \`$VERSION\`.")
           fi
           echo "Stage deployment config PR: $PR_URL"
 
@@ -263,7 +275,55 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
+      - name: Refresh AGK stage worker ArgoCD application
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          echo "Waiting for worker ArgoCD app $AGK_WORKER_ARGOCD_APP on $EXPECTED_IMAGE"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          for attempt in {1..60}; do
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" > /dev/null 2>&1 || true
+
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" 2>/dev/null || true)
+            SYNC_STATUS=$(jq -r '.status.sync.status // "unknown"' <<< "${APP_JSON:-}")
+            HEALTH_STATUS=$(jq -r '.status.health.status // "unknown"' <<< "${APP_JSON:-}")
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "${APP_JSON:-}" | grep -F "$EXPECTED_IMAGE" || true)
+
+            echo "Attempt $attempt: worker sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+            if [ "$SYNC_STATUS" = "Synced" ] \
+              && [ "$HEALTH_STATUS" = "Healthy" ] \
+              && [ -n "$IMAGE_MATCH" ]; then
+              echo "| Stage worker | Synced/Healthy on \`$EXPECTED_IMAGE\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::Stage worker did not become Synced/Healthy on $EXPECTED_IMAGE"
+          exit 1
+
       - name: Run STAGE E2E tests
+        id: stage-e2e
         if: success()
         env:
           GH_TOKEN: ${{ env.GITHUB_PAT }}
@@ -308,6 +368,11 @@ jobs:
           echo "STAGE E2E run: $run_url"
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
           echo "| STAGE E2E | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "run-id=$run_id"
+            echo "run-url=$run_url"
+            echo "correlation-id=$CORRELATION_ID"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve manual STAGE k6 profiles
         id: stage-gates
@@ -405,3 +470,50 @@ jobs:
         run: |
           echo "No manual STAGE k6 profiles selected; skipping STAGE k6 profiles."
           echo "| STAGE k6 profiles | skipped — none selected |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record immutable STAGE validation provenance
+        if: success()
+        env:
+          QUALITY_RUN_ID: ${{ steps.stage-e2e.outputs.run-id }}
+          QUALITY_RUN_URL: ${{ steps.stage-e2e.outputs.run-url }}
+          CORRELATION_ID: ${{ steps.stage-e2e.outputs.correlation-id }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          APP_VALUES="agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          WORKER_VALUES="agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
+          APP_CONFIG_SHA=$(sha256sum "$APP_VALUES" | awk '{print $1}')
+          WORKER_CONFIG_SHA=$(sha256sum "$WORKER_VALUES" | awk '{print $1}')
+          MARKER="agentic-karl-stage-validated/$VERSION-${{ github.run_id }}-${{ github.run_attempt }}"
+          MESSAGE_FILE="$RUNNER_TEMP/stage-validation.txt"
+          git -C agk-deployment-configs fetch origin main
+          GITOPS_COMMIT=$(git -C agk-deployment-configs rev-parse origin/main)
+          MAIN_APP_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "$GITOPS_COMMIT:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          MAIN_WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "$GITOPS_COMMIT:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+
+          if [ "$APP_CONFIG_SHA" != "$MAIN_APP_CONFIG_SHA" ] \
+            || [ "$WORKER_CONFIG_SHA" != "$MAIN_WORKER_CONFIG_SHA" ]; then
+            echo "::error::STAGE GitOps values changed after deployment; rerun STAGE validation"
+            exit 1
+          fi
+
+          printf '%s\n' \
+            "stage-version: $VERSION" \
+            "gitops-commit: $GITOPS_COMMIT" \
+            "stage-config-sha256: $APP_CONFIG_SHA" \
+            "stage-worker-config-sha256: $WORKER_CONFIG_SHA" \
+            "quality-repository: Knauf-Group/agentic-karl-quality" \
+            "quality-run-id: $QUALITY_RUN_ID" \
+            "quality-run-url: $QUALITY_RUN_URL" \
+            "correlation-id: $CORRELATION_ID" \
+            "stage-deploy-run-id: ${{ github.run_id }}" \
+            "stage-deploy-run-attempt: ${{ github.run_attempt }}" \
+            > "$MESSAGE_FILE"
+
+          git -C agk-deployment-configs config user.email "github-actions[bot]@users.noreply.github.com"
+          git -C agk-deployment-configs config user.name "github-actions[bot]"
+          git -C agk-deployment-configs tag -a "$MARKER" "$GITOPS_COMMIT" -F "$MESSAGE_FILE"
+          git -C agk-deployment-configs push origin "refs/tags/$MARKER"
+          echo "| STAGE validation marker | \`$MARKER\` |" >> "$GITHUB_STEP_SUMMARY"
