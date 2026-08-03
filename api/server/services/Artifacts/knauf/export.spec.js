@@ -135,6 +135,11 @@ describe('artifact renderer', () => {
     const pdfMarkup = mockSetContent.mock.calls[0][0];
     expect(pdfMarkup.match(/data:image\/png;base64/g)).toHaveLength(3);
     expect(mockScreenshot).toHaveBeenCalledTimes(3);
+    const evaluatorSource = mockPreviewEvaluate.mock.calls
+      .map(([callback]) => callback.toString())
+      .join('\n');
+    expect(evaluatorSource).toContain('[data-knauf-export-pages]');
+    expect(evaluatorSource).toContain('[data-knauf-export-next]');
 
     jest.clearAllMocks();
     mockPdf.mockResolvedValue(Buffer.from('pdf'));

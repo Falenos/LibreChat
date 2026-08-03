@@ -166,6 +166,17 @@ const waitForStablePreview = (previewFrame) =>
 
 const getPreviewPageCount = (previewFrame) =>
   previewFrame.evaluate(() => {
+    const contract = document.querySelector('[data-knauf-export-pages]');
+    const contractButton = document.querySelector('[data-knauf-export-next]');
+    const contractPages = Number(contract?.getAttribute('data-knauf-export-pages'));
+    if (
+      Number.isInteger(contractPages) &&
+      contractPages > 1 &&
+      contractButton &&
+      !contractButton.disabled
+    ) {
+      return contractPages;
+    }
     const nextButton = [...document.querySelectorAll('button')].find((button) =>
       /^next\b/i.test((button.getAttribute('aria-label') || button.textContent || '').trim()),
     );
@@ -181,9 +192,13 @@ const getPreviewPageCount = (previewFrame) =>
 
 const advancePreviewPage = (previewFrame) =>
   previewFrame.evaluate(() => {
-    const button = [...document.querySelectorAll('button')].find((candidate) =>
-      /^next\b/i.test((candidate.getAttribute('aria-label') || candidate.textContent || '').trim()),
-    );
+    const button =
+      document.querySelector('[data-knauf-export-next]') ||
+      [...document.querySelectorAll('button')].find((candidate) =>
+        /^next\b/i.test(
+          (candidate.getAttribute('aria-label') || candidate.textContent || '').trim(),
+        ),
+      );
     if (!button || button.disabled) {
       return false;
     }

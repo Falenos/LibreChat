@@ -38,7 +38,11 @@ read_file  skills/karl-mermaid/SKILL.md
 
 Rules of thumb:
 
-- **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and "walkthrough" all mean the `slides` template — never markdown, whatever else a request calls the thing.
+- **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and
+  "walkthrough" all mean the `slides` template — never markdown, whatever else a
+  request calls the thing. Preserve its `data-knauf-export-pages` root attribute and
+  `data-knauf-export-next` navigation attribute so every slide is included in PDF/PNG
+  downloads.
 - **"Document deliverable" is not a routing rule.** A deck and a branded report are document deliverables too, and both are react. Markdown is for output with no layout and no branding.
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
 - No interactivity, no branding and no layout needed → markdown beats html.
