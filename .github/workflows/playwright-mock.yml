@@ -123,7 +123,6 @@ jobs:
         run: |
           google-chrome --version
           npx playwright install-deps chrome
-          npx playwright install ffmpeg
 
       - name: Run Karl mock-LLM Tier-1 smoke tests
         run: |
