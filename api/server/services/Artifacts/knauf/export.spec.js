@@ -1,5 +1,6 @@
 const mockScreenshot = jest.fn();
 const mockPdf = jest.fn();
+const mockSetContent = jest.fn();
 const mockGoto = jest.fn();
 const mockWaitForTimeout = jest.fn();
 const mockRoute = jest.fn();
@@ -12,6 +13,7 @@ jest.mock('playwright-core', () => ({
     launch: (...args) => mockLaunch(...args),
   },
 }));
+jest.mock('@librechat/api', () => ({ findAllArtifacts: jest.fn() }));
 
 const { ArtifactExportError, getRenderSnapshot, renderArtifact } = require('./export');
 
@@ -44,6 +46,7 @@ describe('artifact renderer', () => {
           }),
           waitForTimeout: mockWaitForTimeout.mockResolvedValue(undefined),
           setViewportSize: jest.fn().mockResolvedValue(undefined),
+          setContent: mockSetContent.mockResolvedValue(undefined),
           screenshot: mockScreenshot,
           pdf: mockPdf,
         }),
@@ -82,15 +85,19 @@ describe('artifact renderer', () => {
     expect(mockCloseBrowser).toHaveBeenCalled();
   });
 
-  it('uses Chromium PDF output for PDF downloads', async () => {
+  it('prints a static screen screenshot for PDF downloads', async () => {
     await expect(renderArtifact(artifact, 'pdf')).resolves.toEqual({
       buffer: Buffer.from('pdf'),
       mime: 'application/pdf',
       extension: 'pdf',
     });
 
+    expect(mockScreenshot).toHaveBeenCalledWith({ type: 'png', fullPage: true });
+    expect(mockSetContent).toHaveBeenCalledWith(
+      expect.stringContaining('data:image/png;base64,cG5n'),
+      expect.objectContaining({ waitUntil: 'load' }),
+    );
     expect(mockPdf).toHaveBeenCalledWith(expect.objectContaining({ printBackground: true }));
-    expect(mockScreenshot).not.toHaveBeenCalled();
   });
 
   it('removes legacy prose outside a compiled shared artifact fence', async () => {

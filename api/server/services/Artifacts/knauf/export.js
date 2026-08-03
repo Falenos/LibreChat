@@ -201,15 +201,23 @@ const renderArtifact = async (input, format) => {
     );
     const height = Math.min(12_000, Math.max(VIEWPORT.height, contentHeight));
     await page.setViewportSize({ width: VIEWPORT.width, height });
-    const output =
-      format === 'png'
-        ? await page.screenshot({ type: 'png', fullPage: true })
-        : await page.pdf({
-            width: `${VIEWPORT.width}px`,
-            height: `${height}px`,
-            margin: { top: 0, right: 0, bottom: 0, left: 0 },
-            printBackground: true,
-          });
+    const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
+    if (screenshot.length > MAX_OUTPUT_BYTES) {
+      throw new ArtifactExportError('Rendered artifact is too large', 413);
+    }
+    let output = screenshot;
+    if (format === 'pdf') {
+      await page.setContent(
+        `<style>html,body{margin:0;width:${VIEWPORT.width}px;height:${height}px}img{display:block;width:100%;height:100%}</style><img src="data:image/png;base64,${screenshot.toString('base64')}" alt="">`,
+        { waitUntil: 'load', timeout: EXPORT_TIMEOUT_MS },
+      );
+      output = await page.pdf({
+        width: `${VIEWPORT.width}px`,
+        height: `${height}px`,
+        margin: { top: 0, right: 0, bottom: 0, left: 0 },
+        printBackground: true,
+      });
+    }
     const buffer = Buffer.from(output);
     if (buffer.length > MAX_OUTPUT_BYTES) {
       throw new ArtifactExportError('Rendered artifact is too large', 413);
