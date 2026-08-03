@@ -14,6 +14,7 @@ const analyticsDiagnostics = require('./analyticsDiagnostics');
 const autogeneratePrompt = require('./autogeneratePrompt');
 const costs = require('./costs');
 const promptTemplates = require('./promptTemplates');
+const artifactExport = require('./artifactExport');
 // [knauf] Migration access gate — public endpoint queried by the frontend after Okta login.
 const migrationAccess = require('./migrationAccess');
 // End [knauf]
@@ -27,6 +28,7 @@ router.use('/analytics', analyticsDiagnostics);
 router.use('/autogenerate-prompt', autogeneratePrompt);
 router.use('/costs', costs);
 router.use('/prompt-templates', promptTemplates);
+router.use('/artifact-export', artifactExport);
 // [knauf] Mount migration access check endpoint.
 router.use('/migration/access', migrationAccess);
 // End [knauf]

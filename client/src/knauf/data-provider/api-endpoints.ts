@@ -16,6 +16,12 @@ export const agentCategory = (value: string) =>
 export const conversationCosts = (conversationId: string) =>
   `${knaufBase}/costs/conversations/${encodeURIComponent(conversationId)}`;
 export const promptTemplates = () => `${knaufBase}/prompt-templates`;
+export const artifactExport = (shareId?: string) =>
+  shareId
+    ? `${knaufBase}/artifact-export/shared/${encodeURIComponent(shareId)}`
+    : `${knaufBase}/artifact-export`;
+export const artifactExportSnapshot = (token: string) =>
+  `${knaufBase}/artifact-export/render/${encodeURIComponent(token)}`;
 
 // KK20-195 WP5 — async-indexing status/retry. These live under upstream's
 // /api/files (Knauf [knauf]-seamed routes in api/server/routes/files/files.js),

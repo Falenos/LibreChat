@@ -6,7 +6,7 @@ import type { SandpackPreviewRef } from '@codesandbox/sandpack-react/unstyled';
 import type { TSharedArtifact } from 'librechat-data-provider';
 import type { Artifact } from '~/common';
 import { isCodeOnlyArtifact, isPreviewOnlyArtifact } from '~/utils/artifacts';
-import DownloadArtifact from '~/components/Artifacts/DownloadArtifact';
+import ArtifactDownloadMenu from '~/knauf/components/Artifacts/ArtifactDownloadMenu';
 import { extractSharedArtifactBody } from '~/knauf/utils/artifactBody';
 import ArtifactTabs from '~/components/Artifacts/ArtifactTabs';
 import { EditorProvider } from '~/Providers';
@@ -72,7 +72,7 @@ export default function ArtifactShareView({
                 onChange={handleTabChange}
                 buttonClassName="h-9 px-3 gap-1.5"
               />
-              <DownloadArtifact artifact={artifact} />
+              <ArtifactDownloadMenu artifact={artifact} shareId={shareId} />
             </div>
           </header>
           <main className="min-h-0 flex-1">

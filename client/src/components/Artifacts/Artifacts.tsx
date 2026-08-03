@@ -10,7 +10,6 @@ import CopyButton from '~/components/Messages/Content/CopyButton';
 import { useArtifactsContext, useShareContext, useMutationState } from '~/Providers';
 // End [knauf]
 import useArtifacts from '~/hooks/Artifacts/useArtifacts';
-import DownloadArtifact from './DownloadArtifact';
 import ArtifactVersion from './ArtifactVersion';
 import ArtifactTabs from './ArtifactTabs';
 import { isCodeOnlyArtifact, isPreviewOnlyArtifact } from '~/utils/artifacts';
@@ -18,8 +17,9 @@ import { displayFilename } from '~/components/Chat/Messages/Content/Parts/attach
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 import store from '~/store';
-// [knauf] Artifact-only share action lives in a fork-isolated component. (NO-TICKET)
+// [knauf] Artifact share/export actions live in fork-isolated components. (NO-TICKET)
 import ShareArtifactButton from '~/knauf/components/Artifacts/ShareArtifactButton';
+import ArtifactDownloadMenu from '~/knauf/components/Artifacts/ArtifactDownloadMenu';
 // End [knauf]
 
 const MAX_BLUR_AMOUNT = 32;
@@ -337,7 +337,9 @@ export default function Artifacts() {
                 />
               )}
               <CopyButton isCopied={isCopied} iconOnly onClick={handleCopyArtifact} />
-              <DownloadArtifact artifact={currentArtifact} />
+              {/* [knauf] Source + rendered PNG/PDF exports share one menu. (NO-TICKET) */}
+              <ArtifactDownloadMenu artifact={currentArtifact} />
+              {/* End [knauf] */}
               {/* [knauf] Shared recipients get a read-only view; owners can create an artifact-only link. (NO-TICKET) */}
               {!isSharedConvo && conversationId && (
                 <ShareArtifactButton artifact={currentArtifact} conversationId={conversationId} />

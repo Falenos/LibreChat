@@ -45,9 +45,9 @@ jest.mock('~/components/Messages/Content/CopyButton', () => ({
   default: () => null,
 }));
 
-jest.mock('~/components/Artifacts/DownloadArtifact', () => ({
+jest.mock('~/knauf/components/Artifacts/ArtifactDownloadMenu', () => ({
   __esModule: true,
-  default: () => null,
+  default: () => <button data-testid="artifact-download" />,
 }));
 
 jest.mock('~/components/Artifacts/ArtifactTabs', () => ({
@@ -81,5 +81,6 @@ describe('Artifacts artifact-only share seam', () => {
     });
 
     expect(screen.getByTestId('share-artifact')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-download')).toBeInTheDocument();
   });
 });

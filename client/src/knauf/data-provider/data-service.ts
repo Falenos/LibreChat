@@ -1,8 +1,10 @@
 /**
  * Going through `request` keeps these calls on the same
  * 401-refresh interceptor, JSON content-type handling, and Authorization
- * header that upstream's dataService relies on.
+ * header that upstream's dataService relies on. Blob export uses that same
+ * Axios singleton directly because `request.post` does not accept response options.
  */
+import axios from 'axios';
 import { request, type TMarketplaceCategory } from 'librechat-data-provider';
 import * as endpoints from './api-endpoints';
 
@@ -96,6 +98,26 @@ export interface PromptTemplatesResponse {
 
 export function getPromptTemplates(): Promise<PromptTemplatesResponse> {
   return request.get(endpoints.promptTemplates());
+}
+
+export interface ArtifactExportSnapshot {
+  title: string;
+  type?: string;
+  content: string;
+  language?: string;
+}
+
+export async function postArtifactExport(
+  artifact: ArtifactExportSnapshot,
+  format: 'png' | 'pdf',
+  shareId?: string,
+): Promise<Blob> {
+  const response = await axios.post(
+    endpoints.artifactExport(shareId),
+    shareId ? { format } : { artifact, format },
+    { responseType: 'blob' },
+  );
+  return response.data;
 }
 
 // KK20-195 WP5 — async file-indexing status + retry (plan §6.3/§6.4).

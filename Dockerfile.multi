@@ -14,7 +14,9 @@ FROM node:24.16.0-alpine AS base-min
 ARG NPM_CI_TIMEOUT_SECONDS=1500
 ARG NPM_CI_ATTEMPTS=2
 RUN apk upgrade --no-cache
-RUN apk add --no-cache jemalloc
+# [knauf] Chromium plus a privilege drop for artifact PNG/PDF rendering. (NO-TICKET)
+RUN apk add --no-cache jemalloc chromium su-exec
+# End [knauf]
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 
@@ -28,6 +30,9 @@ COPY packages/data-provider/package*.json ./packages/data-provider/
 COPY packages/api/package*.json ./packages/api/
 COPY packages/data-schemas/package*.json ./packages/data-schemas/
 COPY packages/client/package*.json ./packages/client/
+# [knauf] Artifact export renderer is a production dependency of the Knauf workspace. (NO-TICKET)
+COPY packages/knauf/package*.json ./packages/knauf/
+# End [knauf]
 COPY client/package*.json ./client/
 COPY api/package*.json ./api/
 
@@ -110,6 +115,9 @@ RUN attempt=1; \
 COPY api ./api
 COPY config ./config
 COPY skill ./skill
+# [knauf] Run Chromium as the unprivileged node user while the multi-stage API remains root. (NO-TICKET)
+COPY knauf/docker/chromium-wrapper.sh ./knauf/docker/chromium-wrapper.sh
+# End [knauf]
 COPY --from=data-provider-build /app/packages/data-provider/dist ./packages/data-provider/dist
 COPY --from=data-schemas-build /app/packages/data-schemas/dist ./packages/data-schemas/dist
 COPY --from=api-package-build /app/packages/api/dist ./packages/api/dist

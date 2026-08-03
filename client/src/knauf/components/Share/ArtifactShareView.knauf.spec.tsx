@@ -18,9 +18,11 @@ jest.mock('~/components/Artifacts/ArtifactTabs', () => ({
   ),
 }));
 
-jest.mock('~/components/Artifacts/DownloadArtifact', () => ({
+jest.mock('~/knauf/components/Artifacts/ArtifactDownloadMenu', () => ({
   __esModule: true,
-  default: () => null,
+  default: ({ shareId }: Readonly<{ shareId?: string }>) => (
+    <span data-testid="artifact-download-share-id">{shareId}</span>
+  ),
 }));
 
 jest.mock('~/Providers', () => ({
@@ -59,5 +61,6 @@ A clean, branded summary with citations that must not compile.`,
     );
     expect(screen.getByTestId('compiled-source')).not.toHaveTextContent('```');
     expect(screen.getByTestId('compiled-source')).not.toHaveTextContent('branded summary');
+    expect(screen.getByTestId('artifact-download-share-id')).toHaveTextContent('share-1');
   });
 });
