@@ -6,7 +6,13 @@ jest.mock('@librechat/data-schemas', () => ({
   },
 }));
 
-import { Permissions, PermissionTypes, PrincipalType, ResourceType } from 'librechat-data-provider';
+import {
+  Permissions,
+  PermissionTypes,
+  PrincipalType,
+  ResourceType,
+  SystemRoles,
+} from 'librechat-data-provider';
 import type { NextFunction, Response } from 'express';
 import type { IRole } from '@librechat/data-schemas';
 import type { ServerRequest } from '~/types/http';
@@ -170,6 +176,45 @@ describe('createSharePolicyMiddleware', () => {
     });
     expect(next).not.toHaveBeenCalled();
   });
+
+  // [knauf] Pin the request boundary against stale USER public prompt grants.
+  it('blocks USER public prompt sharing while Knauf restrictions are enabled', async () => {
+    const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+    process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
+
+    try {
+      const { checkSharePublicAccess } = createSharePolicyMiddleware({
+        getRoleByName,
+        hasCapability,
+      });
+      getRoleByName.mockResolvedValue(
+        createRole({
+          [PermissionTypes.PROMPTS]: {
+            [Permissions.SHARE]: true,
+            [Permissions.SHARE_PUBLIC]: true,
+          },
+        }),
+      );
+      const req = createRequest({
+        user: { id: 'user123', role: SystemRoles.USER },
+        params: { resourceType: ResourceType.PROMPTGROUP },
+        body: { public: true },
+      });
+      const res = createResponse();
+
+      await checkSharePublicAccess(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+      } else {
+        process.env.KNAUF_RESTRICT_USER_PERMISSIONS = previous;
+      }
+    }
+  });
+  // End [knauf]
 
   it('requires SHARE_PUBLIC when PUBLIC is granted through updated principals', async () => {
     const { checkSharePublicAccess } = createSharePolicyMiddleware({

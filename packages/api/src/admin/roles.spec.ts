@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { PrincipalType, SystemRoles } from 'librechat-data-provider';
+import { Permissions, PermissionTypes, PrincipalType, SystemRoles } from 'librechat-data-provider';
 import type { IRole, IUser } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
@@ -856,6 +856,51 @@ describe('createAdminRolesHandlers', () => {
       expect(status).toHaveBeenCalledWith(200);
       expect(json).toHaveBeenCalledWith({ role: updatedRole });
     });
+
+    // [knauf] Pin Admin role writes to peer-only prompt sharing for USER.
+    it('forces USER public prompt sharing off while preserving peer sharing', async () => {
+      const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+      process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
+      const role = mockRole({ name: SystemRoles.USER });
+      const deps = createDeps({
+        getRoleByName: jest.fn().mockResolvedValue(role),
+      });
+      const handlers = createAdminRolesHandlers(deps);
+      const permissions = {
+        [PermissionTypes.PROMPTS]: {
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
+        },
+      };
+      const { req, res } = createReqRes({
+        params: { name: SystemRoles.USER },
+        body: { permissions },
+      });
+
+      try {
+        await handlers.updateRolePermissions(req, res);
+
+        expect(deps.updateAccessPermissions).toHaveBeenCalledWith(
+          SystemRoles.USER,
+          expect.objectContaining({
+            [PermissionTypes.PROMPTS]: {
+              [Permissions.CREATE]: true,
+              [Permissions.SHARE]: true,
+              [Permissions.SHARE_PUBLIC]: false,
+            },
+          }),
+          role,
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
+        } else {
+          process.env.KNAUF_RESTRICT_USER_PERMISSIONS = previous;
+        }
+      }
+    });
+    // End [knauf]
 
     it('returns 400 when permissions is missing', async () => {
       const deps = createDeps();

@@ -4,6 +4,9 @@ import type { NextFunction, Response } from 'express';
 import type { IRole } from '@librechat/data-schemas';
 import type { CapabilityUser, HasCapabilityFn } from './capabilities';
 import type { RequestBody, ServerRequest } from '~/types/http';
+// [knauf] Enforce deployment USER sharing policy at the request boundary.
+import { applyKnaufUserRestrictions } from '~/knauf/permissions/userRestrictions';
+// End [knauf]
 
 type ShareResourcePermissions = Partial<Record<Permissions, boolean>>;
 
@@ -129,7 +132,12 @@ export function createSharePolicyMiddleware({ getRoleByName, hasCapability }: Sh
       return null;
     }
 
-    const resourcePerms = role.permissions[permissionType] ?? {};
+    // [knauf] Stored role bits can predate startup reconciliation or be changed by Admin.
+    const resourcePerms =
+      applyKnaufUserRestrictions(user.role, {
+        [permissionType]: role.permissions[permissionType] ?? {},
+      })[permissionType] ?? {};
+    // End [knauf]
     req.sharePermissionContext = {
       cacheKey,
       resourcePerms,

@@ -2416,9 +2416,6 @@ describe('updateInterfacePermissions - permissions', () => {
 
   const expectedKnaufRestrictedUserPermissions = {
     [PermissionTypes.PROMPTS]: {
-      [Permissions.USE]: true,
-      [Permissions.CREATE]: false,
-      [Permissions.SHARE]: false,
       [Permissions.SHARE_PUBLIC]: false,
     },
     [PermissionTypes.AGENTS]: {
@@ -2443,11 +2440,6 @@ describe('updateInterfacePermissions - permissions', () => {
     [PermissionTypes.WEB_SEARCH]: {
       [Permissions.USE]: false,
     },
-    [PermissionTypes.PEOPLE_PICKER]: {
-      [Permissions.VIEW_USERS]: false,
-      [Permissions.VIEW_GROUPS]: false,
-      [Permissions.VIEW_ROLES]: false,
-    },
     [PermissionTypes.FILE_SEARCH]: {
       [Permissions.USE]: false,
     },
@@ -2469,10 +2461,9 @@ describe('updateInterfacePermissions - permissions', () => {
     enabledEnvVar: (typeof knaufUserRestrictionEnvVars)[number],
     callback: () => Promise<void>,
   ) => {
-    const previousValues = knaufUserRestrictionEnvVars.map((envVar) => [
-      envVar,
-      process.env[envVar],
-    ] as const);
+    const previousValues = knaufUserRestrictionEnvVars.map(
+      (envVar) => [envVar, process.env[envVar]] as const,
+    );
 
     try {
       for (const envVar of knaufUserRestrictionEnvVars) {
@@ -2523,6 +2514,50 @@ describe('updateInterfacePermissions - permissions', () => {
     },
   );
 
+  it('should preserve Admin prompt and people-picker choices across restart', async () => {
+    await withKnaufUserRestrictionEnv('KNAUF_RESTRICT_USER_PERMISSIONS', async () => {
+      mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
+        permissions:
+          roleName === SystemRoles.USER
+            ? {
+                ...roleDefaults[roleName].permissions,
+                [PermissionTypes.PROMPTS]: {
+                  [Permissions.USE]: true,
+                  [Permissions.CREATE]: true,
+                  [Permissions.SHARE]: true,
+                  [Permissions.SHARE_PUBLIC]: true,
+                },
+                [PermissionTypes.PEOPLE_PICKER]: {
+                  [Permissions.VIEW_USERS]: true,
+                  [Permissions.VIEW_GROUPS]: true,
+                  [Permissions.VIEW_ROLES]: true,
+                },
+              }
+            : roleDefaults[roleName].permissions,
+      }));
+
+      const config = { interface: { bookmarks: true } };
+      const configDefaults = { interface: {} } as TConfigDefaults;
+      const interfaceConfig = await loadDefaultInterface({ config, configDefaults });
+      const appConfig = { config, interfaceConfig } as unknown as AppConfig;
+
+      await updateInterfacePermissions({
+        appConfig,
+        getRoleByName: mockGetRoleByName,
+        updateAccessPermissions: mockUpdateAccessPermissions,
+      });
+
+      const userCall = mockUpdateAccessPermissions.mock.calls.find(
+        (call) => call[0] === SystemRoles.USER,
+      );
+
+      expect(userCall?.[1][PermissionTypes.PROMPTS]).toEqual({
+        [Permissions.SHARE_PUBLIC]: false,
+      });
+      expect(userCall?.[1]).not.toHaveProperty(PermissionTypes.PEOPLE_PICKER);
+    });
+  });
+
   it('should keep ADMIN permissions fully enabled from explicit YAML while restricting USER', async () => {
     await withKnaufUserRestrictionEnv('KNAUF_RESTRICT_USER_PERMISSIONS', async () => {
       mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
@@ -2560,7 +2595,14 @@ describe('updateInterfacePermissions - permissions', () => {
         (call) => call[0] === SystemRoles.ADMIN,
       );
 
-      expect(userCall?.[1]).toEqual(expectedKnaufRestrictedUserPermissions);
+      expect(userCall?.[1]).toEqual({
+        ...expectedKnaufRestrictedUserPermissions,
+        [PermissionTypes.PEOPLE_PICKER]: {
+          [Permissions.VIEW_USERS]: true,
+          [Permissions.VIEW_GROUPS]: true,
+          [Permissions.VIEW_ROLES]: true,
+        },
+      });
       expect(adminCall?.[1]).toEqual({
         [PermissionTypes.PROMPTS]: {
           [Permissions.USE]: true,

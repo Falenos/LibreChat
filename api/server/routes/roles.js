@@ -1,5 +1,8 @@
 const express = require('express');
 const { logger, SystemCapabilities } = require('@librechat/data-schemas');
+// [knauf] Apply protected USER permission bits before legacy Admin writes.
+const { applyKnaufUserRestrictions } = require('@librechat/api');
+// End [knauf]
 const {
   SystemRoles,
   roleDefaults,
@@ -82,6 +85,12 @@ const createPermissionUpdateHandler = (permissionKey) => {
 
     try {
       const parsedUpdates = config.schema.partial().parse(updates);
+      // [knauf] Admin controls peer sharing; regular USER public sharing stays disabled.
+      const effectiveUpdates =
+        applyKnaufUserRestrictions(roleName, {
+          [config.permissionType]: parsedUpdates,
+        })[config.permissionType] ?? parsedUpdates;
+      // End [knauf]
 
       const role = await getRoleByName(roleName);
       if (!role) {
@@ -96,7 +105,9 @@ const createPermissionUpdateHandler = (permissionKey) => {
           ...role.permissions,
           [config.permissionType]: {
             ...currentPermissions,
-            ...parsedUpdates,
+            // [knauf] Persist the policy-enforced update, not the raw Admin payload.
+            ...effectiveUpdates,
+            // End [knauf]
           },
         },
       };

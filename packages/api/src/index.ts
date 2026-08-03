@@ -91,6 +91,9 @@ export * from './knauf/skills/deploymentSkillsCheck';
 // the `~/knauf/...` path directly.
 export * from './knauf/skills/skillPrimeBody';
 // End [knauf]
+// [knauf] Share the USER permission policy with legacy API routes.
+export * from './knauf/permissions/userRestrictions';
+// End [knauf]
 /* types */
 export type * from './mcp/types';
 export type * from './flow/types';

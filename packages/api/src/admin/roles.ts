@@ -14,6 +14,9 @@ import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 import { parsePagination } from './pagination';
 import { buildAuditContext } from './context';
+// [knauf] Keep protected USER permission bits effective on Admin writes.
+import { applyKnaufUserRestrictions } from '~/knauf/permissions/userRestrictions';
+// End [knauf]
 
 const systemRoleValues = new Set<string>(Object.values(SystemRoles));
 
@@ -422,7 +425,9 @@ export function createAdminRolesHandlers(deps: AdminRolesDeps): {
         return res.status(404).json({ error: 'Role not found' });
       }
 
-      await updateAccessPermissions(name, permissions, existing);
+      // [knauf] Admin controls ordinary prompt sharing; USER public sharing stays disabled.
+      await updateAccessPermissions(name, applyKnaufUserRestrictions(name, permissions), existing);
+      // End [knauf]
       const updated = await getRoleByName(name);
       if (!updated) {
         return res.status(404).json({ error: 'Role not found' });

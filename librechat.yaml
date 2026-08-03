@@ -196,11 +196,7 @@ interface:
   modelSelect: true
   parameters: false
   presets: false
-  prompts:
-    use: true
-    create: true
-    share: true
-    public: true
+  prompts: true
   bookmarks: true
   memories: true
   multiConvo: true
@@ -411,10 +407,6 @@ interface:
     create: true
     share: true
     public: true
-  peoplePicker:
-    users: true
-    groups: true
-    roles: true
   marketplace:
     use: true
   fileCitations: true

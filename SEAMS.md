@@ -625,6 +625,15 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/client.js` | `AgentClient` constructor and `sendCompletion` | 60–62, 133–152, 950–955 | Replace phase-concatenated streamed text with the authoritative native-search answer only after every stream delta has completed | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
 | `api/server/services/Endpoints/agents/initialize.js` | `nativeWebSearchOutputSink` request lifecycle | 135–137, 298–300, 988–990 | Share one request-scoped output sink between model-end handling and final response persistence | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
 | `api/server/controllers/agents/__tests__/modelEndHandler.spec.js` | `native web-search final output capture` | model-end regression block | Bind final-phase capture and stale-sink clearing to `ModelEndHandler` | Self | KK20-194 |
+| `api/server/routes/roles.js` | `createPermissionUpdateHandler` | 3–5, 88–93, 108–110 | Applies the Knauf USER policy during legacy Admin permission writes so peer prompt sharing persists but public prompt sharing cannot be enabled | `api/server/routes/__tests__/roles.spec.js` | NO-TICKET |
+| `api/server/routes/__tests__/roles.spec.js` | `PUT /api/roles/:roleName/prompts — Knauf USER policy` | 164–214 | Seam test — proves the prompt Admin dialog writes create and peer-share while coercing USER public sharing off | Self | NO-TICKET |
+| `packages/api/src/admin/roles.ts` | `updateRolePermissionsHandler` | 17–19, 428–430 | Applies the same protected USER permission policy to the newer Admin roles API | `packages/api/src/admin/roles.spec.ts` | NO-TICKET |
+| `packages/api/src/admin/roles.spec.ts` | `forces USER public prompt sharing off while preserving peer sharing` | 860–903 | Seam test — pins full-role Admin updates to peer-only prompt sharing for USER | Self | NO-TICKET |
+| `packages/api/src/app/permissions.ts` | `applyKnaufUserRestrictions` call site | 548–555 | Passes persisted role permissions into startup reconciliation so Admin-selected prompt create/share bits survive restarts while public sharing is reset | `packages/api/src/app/permissions.spec.ts` | NO-TICKET |
+| `packages/api/src/app/permissions.spec.ts` | `should preserve Admin prompt and people-picker choices across restart` | 2517–2568 | Seam test — reproduces the startup overwrite and proves prompt authoring, peer sharing, and colleague discovery remain Admin-controlled | Self | NO-TICKET |
+| `packages/api/src/index.ts` | `userRestrictions` export | 84–86 | Exposes the shared Knauf USER permission policy to legacy CommonJS API routes | `api/server/routes/__tests__/roles.spec.js` | NO-TICKET |
+| `packages/api/src/middleware/share.ts` | `getResourcePerms` effective policy | 7–9, 135–140 | Re-evaluates stored role bits at the request boundary so stale or direct grants cannot publish USER prompts globally | `packages/api/src/middleware/share.spec.ts` | NO-TICKET |
+| `packages/api/src/middleware/share.spec.ts` | `blocks USER public prompt sharing while Knauf restrictions are enabled` | 180–217 | Seam test — proves the request layer denies global prompt sharing even when the stored USER role says it is allowed | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -692,6 +701,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Artifact repair copy — localizes the owner-only manual fallback action (NO-TICKET) |
 
 | `librechat.yaml` | KK20-243 branding follow-up — the shared KARL prompt now makes Knauf branding a fixed parameter for Knauf/KARL visual deliverables, requires `karl-brand` before artifacts/documents/decks/spreadsheets/generated images, pins Knauf Screen + Knauf Screen Head and the exact clear-spaced SVG wordmark, and forbids image models from redrawing the logo. A named external brand remains an explicit carve-out. |
+| `librechat.yaml` | Leaves prompt create/share and colleague discovery out of deployment-owned overrides so Admin Dashboard values persist; prompt use stays enabled and USER public sharing remains server-enforced off (NO-TICKET) |
 
 ## Net-New Files
 
@@ -974,6 +984,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | Real deployment-skill tree and `skill/README.md` | Low — regression guards for the unpinned brand source, matching dashboard clearance, and bounded web-research output rules | Self | KK20-243 / KK20-194 |
 | `api/server/knauf/nativeWebSearchOutput.js` | None — pure Responses-output and content-part transforms | Low — selects the provider's `final_answer` only when a native `web_search_call` exists, then replaces one persisted text part without touching reasoning or tool parts | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
 | `knauf/tests/nativeWebSearchOutput.spec.js` | Subject only (`api/server/knauf/nativeWebSearchOutput`) plus `node:test`/`node:assert` | Low — dependency-free regression reproducing phase-concatenated native-search drafts and proving ordinary Responses output is untouched | Self | KK20-194 |
+| `packages/api/src/knauf/permissions/userRestrictions.ts` | `librechat-data-provider` permission enums, `~/utils` env parsing | Low — pure role-policy helper; now preserves existing USER prompt authoring/peer-sharing and people-picker values while forcing prompt public sharing off | `packages/api/src/app/permissions.spec.ts`, `packages/api/src/middleware/share.spec.ts` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
