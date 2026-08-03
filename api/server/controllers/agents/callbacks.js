@@ -27,6 +27,9 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { saveBase64Image } = require('~/server/services/Files/process');
+// [knauf] KK20-194 — preserve the authoritative final Responses phase for native web search.
+const { getFinalWebSearchResponseText } = require('~/server/knauf/nativeWebSearchOutput');
+// End [knauf]
 
 // [knauf] NO-TICKET — Model Router can occasionally return this gateway-style
 // response with zero usage instead of raising an error. Convert it into a model
@@ -131,14 +134,25 @@ class ModelEndHandler {
    *   a no-op for them even when the map is provided.
    * @param {(data: Record<string, unknown>) => Promise<void> | void} [emitUsage] Optional
    *   callback to stream per-call token usage to the client.
+   * @param {{ text: string } | null} [nativeWebSearchOutputSink] Final native-search response text.
    */
-  constructor(collectedUsage, collectedThoughtSignatures = null, emitUsage = null) {
+  // [knauf] KK20-194 — accept the final native-search output sink.
+  constructor(
+    collectedUsage,
+    collectedThoughtSignatures = null,
+    emitUsage = null,
+    nativeWebSearchOutputSink = null,
+  ) {
+    // End [knauf]
     if (!Array.isArray(collectedUsage)) {
       throw new Error('collectedUsage must be an array');
     }
     this.collectedUsage = collectedUsage;
     this.collectedThoughtSignatures = collectedThoughtSignatures;
     this.emitUsage = emitUsage;
+    // [knauf] KK20-194 — filled at model end, applied after all stream deltas finish.
+    this.nativeWebSearchOutputSink = nativeWebSearchOutputSink;
+    // End [knauf]
   }
 
   finalize(errorMessage) {
@@ -165,6 +179,19 @@ class ModelEndHandler {
     let errorMessage;
     try {
       const agentContext = graph.getAgentContext(metadata);
+      // [knauf] KK20-194 — LangChain streams commentary and final-answer phases,
+      // while LibreChat's aggregator drops `phase` and concatenates them. Keep
+      // the provider's final native-search answer for post-stream persistence.
+      const finalWebSearchText = getFinalWebSearchResponseText(
+        data?.output?.response_metadata?.output,
+      );
+      const isVisibleModel =
+        !metadata.hide_sequential_outputs ||
+        checkIfLastAgent(metadata.last_agent_id, metadata.langgraph_node);
+      if (this.nativeWebSearchOutputSink && isVisibleModel) {
+        this.nativeWebSearchOutputSink.text = finalWebSearchText;
+      }
+      // End [knauf]
       if (data?.output?.additional_kwargs?.stop_reason === 'refusal') {
         const info = { ...data.output.additional_kwargs };
         errorMessage = JSON.stringify({
@@ -414,6 +441,9 @@ function getDefaultHandlers({
   usageCost = null,
   contextUsageSink = null,
   usageEmitSink = null,
+  // [knauf] KK20-194 — mutable sink for authoritative native-search text.
+  nativeWebSearchOutputSink = null,
+  // End [knauf]
 }) {
   if (!res || !aggregateContent) {
     throw new Error(
@@ -457,6 +487,9 @@ function getDefaultHandlers({
       collectedUsage,
       collectedThoughtSignatures,
       emitTokenUsage,
+      // [knauf] KK20-194 — pass the native-search output sink to model-end handling.
+      nativeWebSearchOutputSink,
+      // End [knauf]
     ),
     [GraphEvents.TOOL_END]: new ToolEndHandler(toolEndCallback, logger),
     [GraphEvents.ON_RUN_STEP]: {
