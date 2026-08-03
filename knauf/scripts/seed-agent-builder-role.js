@@ -5,8 +5,8 @@
 // Idempotent mongosh script: creates the AGENT_BUILDER custom role if it does
 // not already exist, then ensures all required permissions are set.
 //
-// AGENT_BUILDER: AI Champions who can create private agents, share prompts,
-// and use the approved chat features, but have NO admin panel access
+// AGENT_BUILDER: AI Champions who can create private agents, share prompts and
+// public artifact links, and use the approved chat features, but have NO admin panel access
 // (access:admin capability is only granted to ADMIN via systemgrants — this
 // script does not touch systemgrants).
 //
@@ -28,7 +28,7 @@
 
 const ROLE_NAME = 'AGENT_BUILDER';
 const DESCRIPTION =
-  'AI Champions — can create private agents and share prompts. No agent publishing or admin panel access.';
+  'AI Champions — can create private agents and share prompts and artifact links. No agent publishing or admin panel access.';
 
 // Permission set — sourced from admin panel screenshots (2026-06-11).
 // Keys match the PermissionTypes / Permissions enums in librechat-data-provider.
@@ -52,6 +52,7 @@ const PERMISSIONS = {
   MARKETPLACE:    { USE: true },
   FILE_SEARCH:    { USE: true },
   FILE_CITATIONS: { USE: true },
+  SHARED_LINKS:   { CREATE: true, SHARE: true, SHARE_PUBLIC: true },
   MCP_SERVERS:    { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
   REMOTE_AGENTS:  { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
   // KK20-243 — AI Champions may USE deployment skills (the `$` popover, the

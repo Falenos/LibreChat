@@ -19,3 +19,12 @@ test('production images provide a sandboxed Chromium artifact renderer', () => {
   assert.match(wrapper, /exec su-exec node/);
   assert.doesNotMatch(wrapper, /--no-sandbox/);
 });
+
+test('the slide template exposes a language-independent export contract', () => {
+  const skill = read('skill/karl-artifacts/SKILL.md');
+  const slides = read('skill/karl-artifacts/references/slides.md');
+  assert.match(skill, /data-knauf-export-pages/);
+  assert.match(skill, /data-knauf-export-next/);
+  assert.match(slides, /data-knauf-export-pages=/);
+  assert.match(slides, /data-knauf-export-next/);
+});

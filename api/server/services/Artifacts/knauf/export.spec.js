@@ -3,6 +3,7 @@ const mockPdf = jest.fn();
 const mockSetContent = jest.fn();
 const mockGoto = jest.fn();
 const mockWaitForTimeout = jest.fn();
+const mockPreviewEvaluate = jest.fn();
 const mockRoute = jest.fn();
 const mockCloseContext = jest.fn();
 const mockCloseBrowser = jest.fn();
@@ -28,9 +29,19 @@ describe('artifact renderer', () => {
     jest.clearAllMocks();
     mockScreenshot.mockResolvedValue(Buffer.from('png'));
     mockPdf.mockResolvedValue(Buffer.from('pdf'));
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 900;
+      }
+      if (source.includes("querySelectorAll('button')")) {
+        return 1;
+      }
+      return undefined;
+    });
     const previewFrame = {
       waitForFunction: jest.fn().mockResolvedValue(undefined),
-      evaluate: jest.fn().mockResolvedValue(900),
+      evaluate: mockPreviewEvaluate,
     };
     mockLaunch.mockResolvedValue({
       newContext: jest.fn().mockResolvedValue({
@@ -98,6 +109,53 @@ describe('artifact renderer', () => {
       expect.objectContaining({ waitUntil: 'load' }),
     );
     expect(mockPdf).toHaveBeenCalledWith(expect.objectContaining({ printBackground: true }));
+  });
+
+  it('captures every navigable slide for PDF and PNG downloads', async () => {
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 900;
+      }
+      if (source.includes('button.click')) {
+        return true;
+      }
+      if (source.includes("querySelectorAll('button')")) {
+        return 3;
+      }
+      return undefined;
+    });
+    mockScreenshot
+      .mockResolvedValueOnce(Buffer.from('slide-1'))
+      .mockResolvedValueOnce(Buffer.from('slide-2'))
+      .mockResolvedValueOnce(Buffer.from('slide-3'));
+
+    await renderArtifact(artifact, 'pdf');
+
+    const pdfMarkup = mockSetContent.mock.calls[0][0];
+    expect(pdfMarkup.match(/data:image\/png;base64/g)).toHaveLength(3);
+    expect(mockScreenshot).toHaveBeenCalledTimes(3);
+    const evaluatorSource = mockPreviewEvaluate.mock.calls
+      .map(([callback]) => callback.toString())
+      .join('\n');
+    expect(evaluatorSource).toContain('[data-knauf-export-pages]');
+    expect(evaluatorSource).toContain('[data-knauf-export-next]');
+
+    jest.clearAllMocks();
+    mockPdf.mockResolvedValue(Buffer.from('pdf'));
+    mockScreenshot
+      .mockResolvedValueOnce(Buffer.from('slide-1'))
+      .mockResolvedValueOnce(Buffer.from('slide-2'))
+      .mockResolvedValueOnce(Buffer.from('slide-3'))
+      .mockResolvedValueOnce(Buffer.from('stacked-png'));
+
+    await expect(renderArtifact(artifact, 'png')).resolves.toEqual({
+      buffer: Buffer.from('stacked-png'),
+      mime: 'image/png',
+      extension: 'png',
+    });
+    expect(mockSetContent.mock.calls[0][0].match(/data:image\/png;base64/g)).toHaveLength(3);
+    expect(mockScreenshot).toHaveBeenCalledTimes(4);
   });
 
   it('removes legacy prose outside a compiled shared artifact fence', async () => {
