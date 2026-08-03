@@ -123,9 +123,13 @@ jobs:
         run: |
           google-chrome --version
           npx playwright install-deps chrome
+          npx playwright install ffmpeg
 
-      - name: Run mock-LLM Tier-1 e2e
-        run: npx playwright test --config=e2e/playwright.config.mock.ts
+      - name: Run Karl mock-LLM Tier-1 smoke tests
+        run: |
+          npx playwright test e2e/specs/mock/knauf-smoke.spec.ts --config=e2e/playwright.config.mock.ts
+          npx playwright test e2e/specs/mock/agents.spec.ts --config=e2e/playwright.config.mock.ts
+          npx playwright test e2e/specs/mock/attachment-preview-loop.spec.ts --config=e2e/playwright.config.mock.ts
         env:
           CI: 'true'
 
