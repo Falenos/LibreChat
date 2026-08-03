@@ -52,7 +52,10 @@ the `KNAUF` const.**
   only — never bracket values.
 - **Navigation.** Prev/Next buttons (lucide `ChevronLeft`/`ChevronRight`) plus
   `ArrowLeft`/`ArrowRight` keys via a `keydown` `useEffect`. A `"3 / 5"` counter and a
-  slide-number footer orient the viewer.
+  slide-number footer orient the viewer. Every deck must put
+  `data-knauf-export-pages={total}` on its root and `data-knauf-export-next` on the
+  Next button. These language-independent attributes are the PDF/PNG export contract;
+  do not rename or omit them when adapting this template.
 - **A cyan button takes ink text, not white.** White on `#0099DE` is 3.18:1, which
   fails AA for a `text-sm` label; ink on cyan is 5.50:1.
 - **Charts.** Assign `theme.palette` in **fixed index order**, never rank- or
@@ -193,7 +196,11 @@ export default function KarlSlideDeck() {
   const slide = SLIDES[index];
 
   return (
-    <div className="min-h-screen w-full px-4 py-8" style={{ backgroundColor: theme.page }}>
+    <div
+      data-knauf-export-pages={total}
+      className="min-h-screen w-full px-4 py-8"
+      style={{ backgroundColor: theme.page }}
+    >
       <div className="mx-auto max-w-5xl">
         <div
           className="mb-3 flex items-center justify-between rounded-t-lg border px-6 py-6"
@@ -231,6 +238,7 @@ export default function KarlSlideDeck() {
           </button>
           <span className="text-sm font-semibold" style={{ color: theme.text }}>{index + 1} / {total}</span>
           <button
+            data-knauf-export-next
             onClick={() => go(1)}
             disabled={index === total - 1}
             className="flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-40"
