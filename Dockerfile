@@ -4,7 +4,9 @@
 FROM node:24.16.0-alpine AS node
 
 RUN apk upgrade --no-cache
-RUN apk add --no-cache jemalloc
+# [knauf] Headless Chromium renders artifact PNG/PDF downloads. (NO-TICKET)
+RUN apk add --no-cache jemalloc chromium
+# End [knauf]
 RUN apk add --no-cache python3 py3-pip uv
 
 # Set environment variable to use jemalloc

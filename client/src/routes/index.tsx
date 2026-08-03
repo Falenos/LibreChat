@@ -54,6 +54,13 @@ const loadProjectWorkspace = () =>
     Component: m.ProjectWorkspace,
   }));
 
+// [knauf] Headless Chromium uses this public, one-time-token route to render artifact exports. (NO-TICKET)
+const loadArtifactExportPage = () =>
+  import('~/knauf/components/Artifacts/ArtifactExportPage').then((m) => ({
+    Component: m.default,
+  }));
+// End [knauf]
+
 const baseEl = document.querySelector('base');
 const baseHref = baseEl?.getAttribute('href') || '/';
 
@@ -64,6 +71,13 @@ export const router = createBrowserRouter(
       element: <ShareRoute />,
       errorElement: <RouteErrorBoundary />,
     },
+    // [knauf] No account UI: the page only accepts a short-lived server snapshot token. (NO-TICKET)
+    {
+      path: 'artifact-export/:token',
+      lazy: loadArtifactExportPage,
+      errorElement: <RouteErrorBoundary />,
+    },
+    // End [knauf]
     {
       path: 'oauth',
       errorElement: <RouteErrorBoundary />,

@@ -1,0 +1,106 @@
+import { useState } from 'react';
+import { Download, FileCode2, FileText, Image } from 'lucide-react';
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Spinner,
+  useToastContext,
+} from '@librechat/client';
+import type { Artifact } from '~/common';
+import { NotificationSeverity } from '~/common';
+import useArtifactProps from '~/hooks/Artifacts/useArtifactProps';
+import { useCodeState } from '~/Providers/EditorContext';
+import { useLocalize } from '~/hooks';
+import { postArtifactExport } from '~/knauf/data-provider/data-service';
+import { triggerDownload } from '~/utils/downloadFile';
+
+type ExportFormat = 'source' | 'png' | 'pdf';
+
+export default function ArtifactDownloadMenu({
+  artifact,
+  shareId,
+}: Readonly<{ artifact: Artifact; shareId?: string }>) {
+  const localize = useLocalize();
+  const { showToast } = useToastContext();
+  const { currentCode } = useCodeState();
+  const { fileKey } = useArtifactProps({ artifact });
+  const [isExporting, setIsExporting] = useState(false);
+  const content = currentCode ?? artifact.content ?? '';
+
+  const download = async (format: ExportFormat) => {
+    if (!content || isExporting) {
+      return;
+    }
+    setIsExporting(true);
+    try {
+      if (format === 'source') {
+        triggerDownload(URL.createObjectURL(new Blob([content], { type: 'text/plain' })), fileKey);
+        return;
+      }
+      const title = artifact.title || 'Generated artifact';
+      const blob = await postArtifactExport(
+        {
+          title,
+          type: artifact.type,
+          content,
+          language: artifact.language,
+        },
+        format,
+        shareId,
+      );
+      const safeTitle = title.replace(/[<>:"/\\|?*\p{Cc}]/gu, '_').trim() || 'artifact';
+      triggerDownload(URL.createObjectURL(blob), `${safeTitle}.${format}`);
+    } catch (error) {
+      console.error('Artifact export failed:', error);
+      showToast({
+        message: localize('com_knauf_artifact_download_error'),
+        severity: NotificationSeverity.ERROR,
+        showIcon: true,
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const label = localize(
+    isExporting ? 'com_knauf_artifact_download_loading' : 'com_ui_download_artifact',
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-9 w-9"
+          aria-label={label}
+          disabled={isExporting}
+        >
+          {isExporting ? (
+            <Spinner className="size-4" aria-hidden="true" />
+          ) : (
+            <Download size={16} aria-hidden="true" />
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="z-[1001] min-w-44">
+        <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('source')}>
+          <FileCode2 className="size-4" aria-hidden="true" />
+          {localize('com_knauf_artifact_download_source')}
+        </DropdownMenuItem>
+        <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('png')}>
+          <Image className="size-4" aria-hidden="true" />
+          {localize('com_knauf_artifact_download_png')}
+        </DropdownMenuItem>
+        <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('pdf')}>
+          <FileText className="size-4" aria-hidden="true" />
+          {localize('com_knauf_artifact_download_pdf')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

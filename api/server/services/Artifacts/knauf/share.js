@@ -182,4 +182,5 @@ module.exports = {
   MAX_ARTIFACT_BYTES,
   createArtifactShare,
   extractDirectiveSnapshot,
+  extractDirectiveContent,
 };
