@@ -113,16 +113,26 @@ describe('[knauf] shipped deployment skills', () => {
     expect(readme).not.toContain('Must stay `always-apply: true`');
   });
 
-  it('keeps logo clearance equal to the rendered mark height in artifact templates', () => {
+  it('pins theme-safe text and a full-width white logo header in artifact templates', () => {
     const artifacts = byName.get('karl-artifacts');
+    const brand = byName.get(TOKEN_SOURCE_SKILL);
     expect(artifacts).toBeDefined();
+    expect(artifacts?.body).toContain('Treat every background and its foreground as one pair');
+    expect(artifacts?.body).toContain('Never pair a fixed light surface');
 
-    const dashboard = artifacts?.files.find(
-      (file) => file.relativePath === 'references/dashboard.md',
-    )?.content;
-    expect(dashboard).toContain('<KnaufWordmark height={28} fill="#FFFFFF" />');
-    expect(dashboard).toContain('rounded-lg px-7 py-7');
-    expect(dashboard).toContain('items-center gap-7');
+    const logo = brand?.files.find((file) => file.relativePath === 'references/logo.md')?.content;
+    expect(logo).toMatch(/entire artifact\s+header band is white/);
+
+    for (const relativePath of [
+      'references/dashboard.md',
+      'references/report.md',
+      'references/slides.md',
+    ]) {
+      const template = artifacts?.files.find((file) => file.relativePath === relativePath)?.content;
+      expect(template).toContain('className="w-full border-b');
+      expect(template).toContain('fill={KNAUF.brand.logoCyan}');
+      expect(template).not.toMatch(/<KnaufWordmark[^>]*fill="#FFFFFF"/);
+    }
   });
 
   it('bounds native web research to one synthesis with distinct inline sources', () => {
