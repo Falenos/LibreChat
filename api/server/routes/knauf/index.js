@@ -16,6 +16,7 @@ const costs = require('./costs');
 const promptTemplates = require('./promptTemplates');
 const artifactExport = require('./artifactExport');
 const artifactContinuation = require('./artifactContinuation');
+const artifactRevisions = require('./artifactRevisions');
 // [knauf] Migration access gate — public endpoint queried by the frontend after Okta login.
 const migrationAccess = require('./migrationAccess');
 // End [knauf]
@@ -31,6 +32,7 @@ router.use('/costs', costs);
 router.use('/prompt-templates', promptTemplates);
 router.use('/artifact-export', artifactExport);
 router.use('/artifact-continuation', artifactContinuation);
+router.use('/artifact-revisions', artifactRevisions);
 // [knauf] Mount migration access check endpoint.
 router.use('/migration/access', migrationAccess);
 // End [knauf]

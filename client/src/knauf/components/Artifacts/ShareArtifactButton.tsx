@@ -10,6 +10,14 @@ import { NotificationSeverity } from '~/common';
 import { buildShareLinkUrl } from '~/utils';
 
 export const getArtifactShareLocator = (artifact: Artifact): TArtifactShareLocator | null => {
+  const revision = (
+    artifact as Artifact & { knaufRevision?: { identifier: string; version: number } }
+  ).knaufRevision;
+  if (revision) {
+    // The workspace consumes data-provider's built declarations, which can lag this branch's
+    // source union until packages are rebuilt; the API contract is updated in the same change.
+    return { kind: 'revision', ...revision } as unknown as TArtifactShareLocator;
+  }
   if (artifact.sourceFileId && artifact.type) {
     return {
       kind: 'file',

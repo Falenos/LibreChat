@@ -1,7 +1,9 @@
 const {
   applyArtifactEdit,
   buildArtifactEditContext,
+  compareAndSwapMessage,
   createEditArtifactTool,
+  getArtifactRevisionSnapshot,
   sha256,
 } = require('./edit');
 
@@ -55,7 +57,9 @@ describe('edit_artifact', () => {
         source: 'content',
         partIndex: 0,
         original: latest.content[0].text,
-        updated: expect.stringContaining('const colour = "cyan";'),
+        updated: expect.stringContaining(
+          ':::artifact{identifier="dashboard" type="application/vnd.react" title="Demo" version="2"}',
+        ),
       }),
     );
     expect(result).toEqual(
@@ -64,9 +68,94 @@ describe('edit_artifact', () => {
         identifier: 'dashboard',
         messageId: 'assistant-2',
         replacements: 1,
+        title: 'Demo',
+        version: 2,
+        baseSha256: sha256('const colour = "blue";'),
         contentSha256: sha256('const colour = "cyan";'),
+        inversePatches: [{ start: 15, old: '"blue"', newLength: 6 }],
       }),
     );
+  });
+
+  test('reconstructs each historical artifact version from compact inverse patches', () => {
+    const source = 'The theme colour is orange.';
+    const colourStart = 'The theme colour is '.length;
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="4"'),
+      },
+      {
+        messageId: 'assistant-3',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                version: 3,
+                base_sha256: sha256('The theme colour is green.'),
+                content_sha256: sha256('The theme colour is pink.'),
+                inverse_patches: [{ start: colourStart, old: 'green', new_length: 'pink'.length }],
+              }),
+            },
+          },
+        ],
+      },
+      {
+        messageId: 'assistant-4',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                version: 4,
+                base_sha256: sha256('The theme colour is pink.'),
+                content_sha256: sha256(source),
+                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 2,
+      }),
+    ).toEqual({
+      title: 'Demo',
+      type: 'application/vnd.react',
+      content: 'The theme colour is green.',
+      version: 2,
+    });
+  });
+
+  test('never substitutes the latest content when a historical patch is unavailable', () => {
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', 'orange').replace('title="Demo"', 'title="Demo" version="3"'),
+      },
+    ];
+
+    expect(() =>
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 2,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'revision_unavailable', status: 409 }));
   });
 
   test('rejects stale revisions and non-unique matches without writing', async () => {
@@ -140,6 +229,8 @@ describe('edit_artifact', () => {
       compareAndSwap,
     });
 
+    expect(tool.returnDirect).toBe(true);
+
     const output = JSON.parse(
       await tool.invoke({
         identifier: 'dashboard',
@@ -155,5 +246,35 @@ describe('edit_artifact', () => {
         conversationId: 'conversation-1',
       }),
     );
+  });
+
+  test('does not wait for Mongoose search-index middleware after the atomic write', async () => {
+    const updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+    const modelUpdateOne = jest.fn();
+
+    await expect(
+      compareAndSwapMessage(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          messageId: 'assistant-1',
+          source: 'text',
+          original: 'before',
+          updated: 'after',
+        },
+        { collection: { updateOne }, updateOne: modelUpdateOne },
+      ),
+    ).resolves.toBe(true);
+
+    expect(updateOne).toHaveBeenCalledWith(
+      {
+        user: 'user-1',
+        conversationId: 'conversation-1',
+        messageId: 'assistant-1',
+        text: 'before',
+      },
+      { $set: { text: 'after', updatedAt: expect.any(Date), _meiliIndex: false } },
+    );
+    expect(modelUpdateOne).not.toHaveBeenCalled();
   });
 });

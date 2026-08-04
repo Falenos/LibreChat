@@ -138,6 +138,19 @@ export function postSharedArtifactContinuation(
   return request.post(endpoints.artifactContinuation(shareId), { conversation });
 }
 
+export interface ArtifactRevisionSnapshot extends ArtifactExportSnapshot {
+  type: string;
+  version: number;
+}
+
+export function getArtifactRevision(params: {
+  messageId: string;
+  identifier: string;
+  version: number;
+}): Promise<ArtifactRevisionSnapshot> {
+  return request.get(endpoints.artifactRevision(params));
+}
+
 // KK20-195 WP5 — async file-indexing status + retry (plan §6.3/§6.4).
 import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
 

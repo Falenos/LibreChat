@@ -1,12 +1,14 @@
 const { createArtifactShare, MAX_ARTIFACT_BYTES } = require('./share');
+const { sha256 } = require('./edit');
 
-const buildMongoose = (message) => {
+const buildMongoose = (message, messages = [message]) => {
   const create = jest.fn().mockResolvedValue({ _id: { toString: () => 'share-object-id' } });
   return {
     mongoose: {
       models: {
         Message: {
           findOne: jest.fn(() => ({ lean: jest.fn().mockResolvedValue(message) })),
+          find: jest.fn(() => ({ lean: jest.fn().mockResolvedValue(messages) })),
         },
         SharedLink: { create },
       },
@@ -118,6 +120,51 @@ A clean, branded summary with citations that must not compile.
           type: 'text/markdown',
           content: '# Server-owned snapshot',
         },
+      }),
+    );
+  });
+
+  test('shares the exact immutable artifact revision selected by the user', async () => {
+    const colourStart = 'The theme colour is '.length;
+    const source = {
+      messageId: 'message-1',
+      text: `:::artifact{identifier="page" type="text/html" title="Status page" version="3"}
+The theme colour is pink.
+:::`,
+    };
+    const edit = {
+      messageId: 'message-2',
+      content: [
+        {
+          type: 'tool_call',
+          tool_call: {
+            name: 'edit_artifact',
+            output: JSON.stringify({
+              status: 'updated',
+              identifier: 'page',
+              messageId: 'message-1',
+              version: 3,
+              base_sha256: sha256('The theme colour is green.'),
+              content_sha256: sha256('The theme colour is pink.'),
+              inverse_patches: [{ start: colourStart, old: 'green', new_length: 'pink'.length }],
+            }),
+          },
+        },
+      ],
+    };
+    const { mongoose, create } = buildMongoose(source, [source, edit]);
+
+    await createArtifactShare({
+      mongoose,
+      user: 'user-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      locator: { kind: 'revision', identifier: 'page', version: 2 },
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        knauf_artifact: expect.objectContaining({ content: 'The theme colour is green.' }),
       }),
     );
   });
