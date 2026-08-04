@@ -1011,6 +1011,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `skill/karl-artifacts/{SKILL.md,references/{dashboard,report,slides}.md}` | Deployment-skill loader; `/knauf/brand` sandbox module | Medium — pairs every light/dark surface with matching ink and standardises generated layouts on a full-width white logo header instead of an isolated white logo box | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 | `skill/karl-brand/{SKILL.md,references/logo.md}` | Deployment-skill loader; `/knauf/brand` sandbox module | Medium — makes the fixed white artifact-header band and cyan wordmark the canonical generated-logo placement while retaining the official inverse mark only as external-layout reference | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | Real deployment-skill tree and loaded reference files | Low — pins the theme-pairing language and full-width white/cyan logo-header contract across every shipped artifact template | Self | NO-TICKET |
+| `client/src/knauf/components/Share/ArtifactShareView*.tsx` | upstream `ArtifactsProvider`, `EditorProvider`, `ArtifactTabs`, localization, and testing-library contracts | Medium — mounts shared artifact tabs inside their required context so link recipients can open the source Code tab without leaving view-only mode | `client/src/knauf/components/Share/ArtifactShareView.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

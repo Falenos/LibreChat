@@ -8,14 +8,32 @@ jest.mock('@radix-ui/react-tabs', () => ({
 }));
 
 jest.mock('@librechat/client', () => ({
-  Radio: () => null,
+  Radio: ({ options }: Readonly<{ options: Array<{ label: string; value: string }> }>) => (
+    <div>
+      {options.map((option) => (
+        <button key={option.value}>{option.label}</button>
+      ))}
+    </div>
+  ),
 }));
 
 jest.mock('~/components/Artifacts/ArtifactTabs', () => ({
   __esModule: true,
-  default: ({ artifact }: Readonly<{ artifact: Artifact }>) => (
-    <pre data-testid="compiled-source">{artifact.content}</pre>
-  ),
+  default: function MockArtifactTabs({
+    artifact,
+    isSharedConvo,
+  }: Readonly<{ artifact: Artifact; isSharedConvo?: boolean }>) {
+    const { useArtifactsContext } = jest.requireMock('~/Providers') as {
+      useArtifactsContext: () => { isSubmitting: boolean };
+    };
+    const { isSubmitting } = useArtifactsContext();
+
+    return (
+      <pre data-testid="compiled-source" data-read-only={isSharedConvo && !isSubmitting}>
+        {artifact.content}
+      </pre>
+    );
+  },
 }));
 
 jest.mock('~/knauf/components/Artifacts/ArtifactDownloadMenu', () => ({
@@ -25,9 +43,26 @@ jest.mock('~/knauf/components/Artifacts/ArtifactDownloadMenu', () => ({
   ),
 }));
 
-jest.mock('~/Providers', () => ({
-  EditorProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
-}));
+jest.mock('~/Providers', () => {
+  const React = jest.requireActual<typeof import('react')>('react');
+  const ArtifactsContext = React.createContext<{ isSubmitting: boolean } | undefined>(undefined);
+
+  return {
+    ArtifactsProvider: ({ children }: Readonly<{ children: ReactNode }>) => (
+      <ArtifactsContext.Provider value={{ isSubmitting: false }}>
+        {children}
+      </ArtifactsContext.Provider>
+    ),
+    EditorProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
+    useArtifactsContext: () => {
+      const context = React.useContext(ArtifactsContext);
+      if (!context) {
+        throw new Error('useArtifactsContext must be used within ArtifactsProvider');
+      }
+      return context;
+    },
+  };
+});
 
 jest.mock('~/utils/artifacts', () => ({
   isCodeOnlyArtifact: () => false,
@@ -61,6 +96,8 @@ A clean, branded summary with citations that must not compile.`,
     );
     expect(screen.getByTestId('compiled-source')).not.toHaveTextContent('```');
     expect(screen.getByTestId('compiled-source')).not.toHaveTextContent('branded summary');
+    expect(screen.getByTestId('compiled-source')).toHaveAttribute('data-read-only', 'true');
+    expect(screen.getByRole('button', { name: 'com_ui_code' })).toBeInTheDocument();
     expect(screen.getByTestId('artifact-download-share-id')).toHaveTextContent('share-1');
   });
 });
