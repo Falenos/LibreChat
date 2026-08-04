@@ -276,6 +276,35 @@ describe('telemetry SDK lifecycle', () => {
     expect(JSON.stringify(attributes)).not.toContain('sensitive+prompt+words');
   });
 
+  // [knauf] KK20-199 — private Blob identity must not enter Datadog spans.
+  it('omits signed Azure Blob paths and SAS parameters from outgoing HTTP spans', () => {
+    initializeTelemetry({ OTEL_TRACING_ENABLED: 'true' });
+    const instrumentationOptions = mockHttpInstrumentation.mock.calls[0]?.[0];
+    const startOutgoingSpanHook = instrumentationOptions?.startOutgoingSpanHook;
+
+    if (!startOutgoingSpanHook) {
+      throw new Error('HTTP instrumentation startOutgoingSpanHook was not configured');
+    }
+
+    const attributes = startOutgoingSpanHook({
+      protocol: 'https:',
+      hostname: 'storage.example.test',
+      path: '/files/images/user-secret/private-name.png?sv=2025-11-05&sig=SAS_SECRET',
+    });
+
+    expect(attributes).toEqual({
+      'http.target': '/[REDACTED]',
+      'http.url': 'https://storage.example.test/[REDACTED]',
+      'url.full': 'https://storage.example.test/[REDACTED]',
+      'url.path': '/[REDACTED]',
+      'url.query': '[REDACTED]',
+    });
+    expect(JSON.stringify(attributes)).not.toContain('user-secret');
+    expect(JSON.stringify(attributes)).not.toContain('private-name.png');
+    expect(JSON.stringify(attributes)).not.toContain('SAS_SECRET');
+  });
+  // End [knauf]
+
   it('redacts delimiter-less outgoing query segments and preserves separate HTTP ports', () => {
     initializeTelemetry({ OTEL_TRACING_ENABLED: 'true' });
     const instrumentationOptions = mockHttpInstrumentation.mock.calls[0]?.[0];
@@ -430,6 +459,30 @@ describe('telemetry SDK lifecycle', () => {
     expect(JSON.stringify(attributes)).not.toContain('40.71');
     expect(JSON.stringify(attributes)).not.toContain('-74.01');
   });
+
+  // [knauf] KK20-199 — overwrite Undici's pre-populated raw SAS query attribute.
+  it('omits signed Blob identity and SAS values from outgoing Undici spans', () => {
+    initializeTelemetry({ OTEL_TRACING_ENABLED: 'true' });
+    const startSpanHook = mockUndiciInstrumentation.mock.calls[0]?.[0]?.startSpanHook;
+    if (!startSpanHook) {
+      throw new Error('Undici instrumentation startSpanHook was not configured');
+    }
+
+    const attributes = startSpanHook({
+      origin: 'https://storage.example.test',
+      path: '/files/images/user-secret/private.png?sv=2025-11-05&sig=SAS_SECRET',
+    });
+
+    expect(attributes).toEqual({
+      'http.target': '/[REDACTED]',
+      'http.url': 'https://storage.example.test/[REDACTED]',
+      'url.full': 'https://storage.example.test/[REDACTED]',
+      'url.path': '/[REDACTED]',
+      'url.query': '[REDACTED]',
+    });
+    expect(JSON.stringify(attributes)).not.toMatch(/user-secret|private\.png|SAS_SECRET/);
+  });
+  // End [knauf]
 
   it('reflects lifecycle status from the controller getter', async () => {
     const controller = initializeTelemetry({ OTEL_TRACING_ENABLED: 'true' });

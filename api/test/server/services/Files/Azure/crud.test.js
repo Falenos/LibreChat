@@ -56,6 +56,9 @@ jest.mock('@azure/identity', () => ({
 }));
 
 const { getAzureContainerClient, deleteRagFile } = require('@librechat/api');
+// [knauf] KK20-199 — assert SAS download failures retain only bounded diagnostics.
+const { logger } = require('@librechat/data-schemas');
+// End [knauf]
 const azureIdentity = require('@azure/identity');
 
 // A syntactically-valid connection string accepted by BlobServiceClient.fromConnectionString.
@@ -654,6 +657,44 @@ describe('Azure crud.js - URL refresh tests', () => {
       // The shallow-path guard short-circuits before the container client.
       expect(getAzureContainerClient).not.toHaveBeenCalled();
     });
+
+    it('does not attempt an unsigned private download when re-signing fails', async () => {
+      process.env.AZURE_STORAGE_PUBLIC_ACCESS = 'false';
+      const unsignedPrivateUrl = 'https://test.blob.core.windows.net/files/shallow.pdf';
+
+      await expect(getAzureFileStream({}, unsignedPrivateUrl)).rejects.toThrow(
+        'Azure Blob URL refresh failed',
+      );
+
+      expect(axios).not.toHaveBeenCalled();
+      expect(getAzureContainerClient).not.toHaveBeenCalled();
+    });
+
+    it('does not log SAS URLs, user paths, or Axios error bodies on download failure', async () => {
+      const futureDate = new Date(Date.now() + 7_200_000).toISOString();
+      const signedUrl = `https://test.blob.core.windows.net/files/images/user-secret/x.png?se=${encodeURIComponent(
+        futureDate,
+      )}&sp=r&sig=SECRET`;
+      const error = Object.assign(new Error(`download failed for ${signedUrl}`), {
+        code: 'ERR_BAD_REQUEST',
+        config: { url: signedUrl },
+        response: { status: 403, headers: { 'x-request-id': 'request-123' } },
+      });
+      axios.mockRejectedValueOnce(error);
+
+      await expect(getAzureFileStream({}, signedUrl)).rejects.toBe(error);
+
+      expect(logger.error).toHaveBeenCalledWith('[getAzureFileStream] Blob download failed', {
+        operation: 'azure_blob_download',
+        retryable: false,
+        providerStatus: 403,
+        code: 'ERR_BAD_REQUEST',
+        requestId: 'request-123',
+      });
+      expect(JSON.stringify(logger.error.mock.calls)).not.toMatch(
+        /sig=SECRET|user-secret|download failed for/i,
+      );
+    });
   });
   // End [knauf]
 
@@ -705,15 +746,26 @@ describe('Azure crud.js - URL refresh tests', () => {
       await expect(deleteFileFromAzure(req, file)).resolves.toBeUndefined();
     });
 
-    it('rethrows non-404 SDK errors', async () => {
-      blobDelete.mockRejectedValue(Object.assign(new Error('boom'), { statusCode: 500 }));
-      const req = { user: { id: 'user123' } };
+    // [knauf] KK20-199 — Azure delete failures retain diagnosis without Blob identity.
+    it('rethrows non-404 SDK errors with bounded telemetry', async () => {
+      const error = Object.assign(new Error('boom for user-secret?sig=SAS_SECRET'), {
+        statusCode: 500,
+      });
+      blobDelete.mockRejectedValue(error);
+      const req = { user: { id: 'user-secret' } };
       const file = {
         file_id: 'f4',
-        filepath: 'https://test.blob.core.windows.net/files/images/user123/x.pdf',
+        filepath:
+          'https://test.blob.core.windows.net/files/images/user-secret/x.pdf?sig=SAS_SECRET',
       };
-      await expect(deleteFileFromAzure(req, file)).rejects.toThrow(/boom/);
+      await expect(deleteFileFromAzure(req, file)).rejects.toBe(error);
+      expect(logger.error).toHaveBeenCalledWith(
+        '[deleteFileFromAzure] Blob delete failed',
+        expect.objectContaining({ operation: 'azure_blob_delete' }),
+      );
+      expect(JSON.stringify(logger.error.mock.calls)).not.toMatch(/user-secret|SAS_SECRET|boom/);
     });
+    // End [knauf]
   });
 
   describe('refreshAzureFileUrls', () => {
@@ -793,6 +845,29 @@ describe('Azure crud.js - URL refresh tests', () => {
       const out = await refreshAzureUrl({ source: 'azure_blob', filepath: original });
       expect(out).toBe(original);
     });
+
+    // [knauf] KK20-199 — failed refresh diagnostics must not disclose the Blob path or SAS.
+    it('does not log the signed URL or file identity when refresh is unavailable', async () => {
+      getAzureContainerClient.mockResolvedValue({
+        getBlockBlobClient: jest.fn().mockReturnValue({ url: undefined }),
+      });
+      const expired = new Date(Date.now() - 3_600_000).toISOString();
+      const original = `https://test.blob.core.windows.net/files/images/user-secret/x.png?se=${encodeURIComponent(
+        expired,
+      )}&sp=r&sig=SAS_SECRET`;
+
+      await expect(
+        refreshAzureUrl({ file_id: 'file-secret', source: 'azure_blob', filepath: original }),
+      ).resolves.toBe(original);
+
+      expect(logger.warn).toHaveBeenCalledWith('[refreshAzureUrl] Azure URL refresh unavailable', {
+        operation: 'azure_file_refresh',
+      });
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toMatch(
+        /user-secret|file-secret|SAS_SECRET|sig=/,
+      );
+    });
+    // End [knauf]
   });
 
   describe('getNewAzureURL - containerName override (multi-container support)', () => {
