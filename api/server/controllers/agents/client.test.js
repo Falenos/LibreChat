@@ -1,5 +1,7 @@
 // [knauf] Mutable routed response metadata for title-usage tests.
 const mockCollectedMetadata = [];
+// End [knauf]
+// [knauf] KK20-199 — inject a rich provider failure at the production call site.
 const mockCreateRun = jest.fn();
 // End [knauf]
 // [knauf] NO-TICKET — observe whether legacy vector augmentation is constructed.
@@ -25,7 +27,9 @@ jest.mock('@librechat/agents', () => ({
 
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
+  // [knauf] KK20-199 — route the test failure through AgentClient.chatCompletion().
   createRun: mockCreateRun,
+  // End [knauf]
   checkAccess: jest.fn(),
   countFormattedMessageTokens: jest.fn(() => 42),
   countTokens: jest.fn((text) => Math.ceil(String(text ?? '').length / 4)),
@@ -1125,7 +1129,7 @@ describe('AgentClient - titleConvo', () => {
     });
   });
 
-  // [knauf] Provider failures must retain bounded diagnosis without leaking
+  // [knauf] KK20-199 — provider failures retain bounded diagnosis without leaking
   // request bodies, signed URLs, identity, or stack data.
   describe('chatCompletion provider failure logging', () => {
     it('logs only the bounded provider summary and persists a stable error', async () => {

@@ -12,44 +12,9 @@ const {
   knaufCategorySizeLimit,
 } = require('librechat-data-provider');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-
-/**
- * Converts a readable stream to a base64 encoded string.
- *
- * @param {NodeJS.ReadableStream} stream - The readable stream to convert.
- * @param {boolean} [destroyStream=true] - Whether to destroy the stream after processing.
- * @returns {Promise<string>} - Promise resolving to the base64 encoded content.
- */
-async function streamToBase64(stream, destroyStream = true) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-
-    stream.on('data', (chunk) => {
-      chunks.push(chunk);
-    });
-
-    stream.on('end', () => {
-      try {
-        const buffer = Buffer.concat(chunks);
-        const base64Data = buffer.toString('base64');
-        chunks.length = 0; // Clear the array
-        resolve(base64Data);
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    stream.on('error', (error) => {
-      chunks.length = 0;
-      reject(error);
-    });
-  }).finally(() => {
-    // Clean up the stream if required
-    if (destroyStream && stream.destroy && typeof stream.destroy === 'function') {
-      stream.destroy();
-    }
-  });
-}
+// [knauf] KK20-199 — validate private Blob bytes before Foundry delivery.
+const streamToValidatedBase64 = require('./knauf/streamToValidatedBase64');
+// End [knauf]
 
 /**
  * Fetches an image from a URL and returns its base64 representation.
@@ -68,7 +33,7 @@ async function fetchImageToBase64(url) {
     response.data = null;
     return base64Data;
   } catch (_error) {
-    // [knauf] NO-TICKET — signed blob URLs and transport errors must not leak
+    // [knauf] KK20-199 — signed blob URLs and transport errors must not leak
     // through the base64-only provider compatibility path.
     logger.error('Image fetch for normalization failed', {
       operation: 'image_normalization_fetch',
@@ -93,7 +58,7 @@ const blobStorageSources = new Set([
   FileSources.cloudfront,
 ]);
 
-// [knauf] NO-TICKET — keep stored image metadata inside the same type/size
+// [knauf] KK20-199 — keep stored image metadata inside the same type/size
 // boundary as upload before handing a signed URL or bytes to a model provider.
 const knaufImageEndpoints = new Set([EModelEndpoint.agents, EModelEndpoint.azureOpenAI]);
 // End [knauf]
@@ -124,7 +89,7 @@ async function encodeAndFormat(req, files, params, mode) {
     return result;
   }
 
-  // [knauf] NO-TICKET — outbound validation is defense in depth for historical
+  // [knauf] KK20-199 — outbound validation is defense in depth for historical
   // or tampered Mongo rows that did not pass today's upload boundary.
   const fileConfig = mergeFileConfig(req.config?.fileConfig);
   const endpointConfig = getEndpointFileConfig({ fileConfig, endpoint: effectiveEndpoint });
@@ -140,7 +105,7 @@ async function encodeAndFormat(req, files, params, mode) {
       continue;
     }
 
-    // [knauf] NO-TICKET — never send an unapproved or unbounded stored image to
+    // [knauf] KK20-199 — never send an unapproved or unbounded stored image to
     // Foundry. Error text deliberately excludes filenames, paths, and user data.
     if (!fileConfig.checkType(file.type, endpointConfig?.supportedMimeTypes)) {
       throw new Error('Unsupported image type');
@@ -165,7 +130,7 @@ async function encodeAndFormat(req, files, params, mode) {
 
     const preparePayload = encodingMethods[source].prepareImagePayload;
     /* Base64-only providers and private Azure Foundry inputs need blob bytes. */
-    // [knauf] NO-TICKET — Foundry's Chat Completions image fetcher cannot access
+    // [knauf] KK20-199 — Foundry's Chat Completions image fetcher cannot access
     // private Blob Storage even through the application's short-lived SAS URL.
     // Read through the existing authenticated storage strategy and send the
     // provider-supported data URL. Image-bearing agent tracing is disabled at
@@ -176,7 +141,7 @@ async function encodeAndFormat(req, files, params, mode) {
       try {
         const downloadStream = encodingMethods[source].getDownloadStream;
         let stream = await downloadStream(req, file.filepath);
-        let base64Data = await streamToBase64(stream);
+        let base64Data = await streamToValidatedBase64(stream, sizeLimit, file.type);
         stream = null;
         promises.push([file, base64Data]);
         base64Data = null;
@@ -238,7 +203,7 @@ async function encodeAndFormat(req, files, params, mode) {
         );
 
         if (!validation.isValid) {
-          // [knauf] NO-TICKET — provider/application errors must not disclose
+          // [knauf] KK20-199 — provider/application errors must not disclose
           // filenames or parser internals through logs or terminal job errors.
           throw new Error('Image validation failed');
           // End [knauf]

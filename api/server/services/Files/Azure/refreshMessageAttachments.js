@@ -77,7 +77,7 @@ async function refreshAttachment(attachment, bufferSeconds, cache) {
   }
   let pending = cache.get(filepath);
   if (!pending) {
-    // [knauf] NO-TICKET — refresh diagnostics must not emit the SAS URL or
+    // [knauf] KK20-199 — refresh diagnostics must not emit the SAS URL or
     // the Azure error object, both of which can contain signed/user paths.
     pending = (async () => {
       try {

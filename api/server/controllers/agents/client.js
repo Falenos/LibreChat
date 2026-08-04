@@ -57,7 +57,7 @@ const {
 // current model boundary and remove its streamed placeholder before persist.
 const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
 // End [knauf]
-// [knauf] NO-TICKET — provider errors may contain request bodies, image data,
+// [knauf] KK20-199 — provider errors may contain request bodies, image data,
 // signed URLs, and identity fields. Keep only bounded diagnostic attributes.
 const { summarizeProviderError } = require('./knauf/providerError');
 // End [knauf]
@@ -1567,7 +1567,7 @@ class AgentClient extends BaseClient {
           { conversationId: this.conversationId, name: err?.name, code: err?.code },
         );
       } else {
-        // [knauf] NO-TICKET — never serialize provider errors into logs or
+        // [knauf] KK20-199 — never serialize provider errors into logs or
         // persisted response content; retain only bounded operational fields.
         logger.error(
           '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',

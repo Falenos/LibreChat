@@ -882,7 +882,8 @@ function buildSubagentConfigs(
   return configs;
 }
 
-// [knauf] Correlate the agent and its detached title trace by source message.
+// [knauf] KK20-199 — correlate text runs, but disable capture when an image
+// input would place private bytes or identity metadata in Langfuse/OTEL.
 export function buildLangfuseConfig(
   tenantIdInput?: unknown,
   sourceMessageIdInput?: unknown,
@@ -1239,7 +1240,7 @@ export async function createRun({
     // feedback can be scored against the trace without a lookup (see the
     // feedback route in api/server/routes/messages.js). No-op unless Langfuse
     // tracing is enabled. Requires @librechat/agents >= 3.2.21.
-    // [knauf] The title run inherits this source-message correlation metadata.
+    // [knauf] KK20-199 — share source correlation and image-trace omission inputs.
     langfuse: buildLangfuseConfig(tenantId ?? user?.tenantId, runId, messages),
     // End [knauf]
     ...(enableToolOutputReferences && {

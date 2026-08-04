@@ -8,7 +8,7 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
-// [knauf] NO-TICKET — assert refresh diagnostics contain neither SAS URLs nor errors.
+// [knauf] KK20-199 — assert refresh diagnostics contain neither SAS URLs nor errors.
 const { logger } = require('@librechat/data-schemas');
 // End [knauf]
 
@@ -79,7 +79,7 @@ describe('refreshMessageAttachmentUrls', () => {
     const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(messages[0].attachments[0].filepath).toBe(FRESH);
-    // [knauf] NO-TICKET — the fallback keeps the URL in memory, never in telemetry.
+    // [knauf] KK20-199 — the fallback keeps the URL in memory, never in telemetry.
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain(FRESH);
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('boom');
     // End [knauf]
@@ -91,7 +91,7 @@ describe('refreshMessageAttachmentUrls', () => {
     const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(messages[0].attachments[0].filepath).toBe(FRESH);
-    // [knauf] NO-TICKET — an empty refresh result also omits the SAS URL.
+    // [knauf] KK20-199 — an empty refresh result also omits the SAS URL.
     expect(JSON.stringify(logger.debug.mock.calls)).not.toContain(FRESH);
     // End [knauf]
   });

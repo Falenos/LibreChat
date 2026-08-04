@@ -23,6 +23,9 @@ export interface TelemetryController {
 
 const WARNING_CODE = 'LIBRECHAT_OTEL';
 const REDACTED_QUERY_VALUE = '[REDACTED]';
+// [knauf] KK20-199 — signed Blob paths contain user IDs and filenames.
+const REDACTED_PRIVATE_PATH = '/[REDACTED]';
+// End [knauf]
 const SIGNAL_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 interface RequestUrlParts {
@@ -150,8 +153,11 @@ function getSanitizedUrlAttributesFromParts(
   pathname: string,
   search: string,
 ): Attributes {
-  const path = pathname || '/';
-  const redactedQuery = getRedactedQuery(search);
+  // [knauf] KK20-199 — omit the entire path/query for SAS-authenticated downloads.
+  const hasSasSignature = new URLSearchParams(search).has('sig');
+  const path = hasSasSignature ? REDACTED_PRIVATE_PATH : pathname || '/';
+  const redactedQuery = hasSasSignature ? undefined : getRedactedQuery(search);
+  // End [knauf]
   const target = redactedQuery ? `${path}?${redactedQuery}` : path;
   const fullUrl = origin ? `${origin}${target}` : target;
   const attributes: Attributes = {
@@ -164,6 +170,11 @@ function getSanitizedUrlAttributesFromParts(
   if (redactedQuery) {
     attributes['url.query'] = redactedQuery;
   }
+  // [knauf] KK20-199 — overwrite query attributes pre-populated by Undici/HTTP.
+  if (hasSasSignature) {
+    attributes['url.query'] = REDACTED_QUERY_VALUE;
+  }
+  // End [knauf]
 
   return attributes;
 }
