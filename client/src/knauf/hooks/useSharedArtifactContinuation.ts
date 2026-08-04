@@ -1,82 +1,120 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useGetSharedMessages } from 'librechat-data-provider/react-query';
-import { Constants } from 'librechat-data-provider';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { Constants, QueryKeys } from 'librechat-data-provider';
 import { useToastContext } from '@librechat/client';
 import { NotificationSeverity } from '~/common';
 import useLocalize from '~/hooks/useLocalize';
-import { useChatFormContext } from '~/Providers';
-import { extractSharedArtifactBody } from '~/knauf/utils/artifactBody';
+import useNavigateToConvo from '~/hooks/Conversations/useNavigateToConvo';
+import { useChatContext } from '~/Providers';
+import { postSharedArtifactContinuation } from '~/knauf/data-provider/data-service';
 import {
   SHARED_ARTIFACT_PARAM,
-  buildSharedArtifactPrompt,
+  SHARED_ARTIFACT_PENDING_OPEN,
 } from '~/knauf/utils/sharedArtifactContinuation';
+import store from '~/store';
+
+const inFlightShareIds = new Set<string>();
 
 export default function useSharedArtifactContinuation({
   conversationId,
-  textAreaRef,
 }: Readonly<{
   conversationId: string;
-  textAreaRef: RefObject<HTMLTextAreaElement>;
 }>) {
   const localize = useLocalize();
-  const methods = useChatFormContext();
+  const { navigateToConvo } = useNavigateToConvo();
+  const queryClient = useQueryClient();
   const { showToast } = useToastContext();
+  const { conversation } = useChatContext();
   const [searchParams, setSearchParams] = useSearchParams();
+  const artifacts = useRecoilValue(store.artifactsState);
+  const setCurrentArtifactId = useSetRecoilState(store.currentArtifactId);
+  const setArtifactsVisibility = useSetRecoilState(store.artifactsVisibility);
   const shareId = searchParams.get(SHARED_ARTIFACT_PARAM) ?? '';
-  const enabled = conversationId === Constants.NEW_CONVO && shareId.length > 0;
-  const handledShareIdRef = useRef<string | null>(null);
-  const query = useGetSharedMessages(shareId, { enabled, retry: false });
+  const enabled =
+    conversationId === Constants.NEW_CONVO && shareId.length > 0 && conversation?.endpoint != null;
 
   useEffect(() => {
-    if (!enabled || handledShareIdRef.current === shareId) {
+    if (typeof sessionStorage === 'undefined') {
       return;
     }
-    if (!query.data && !query.isError) {
-      return;
-    }
-
-    handledShareIdRef.current = shareId;
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.delete(SHARED_ARTIFACT_PARAM);
-    setSearchParams(nextParams, { replace: true });
-
-    if (query.isError || query.data?.kind !== 'artifact' || !query.data.artifact) {
-      showToast({
-        message: localize('com_knauf_artifact_continue_error'),
-        severity: NotificationSeverity.ERROR,
-        showIcon: true,
-      });
+    const rawPending = sessionStorage.getItem(SHARED_ARTIFACT_PENDING_OPEN);
+    if (!rawPending) {
       return;
     }
 
-    const artifact = {
-      ...query.data.artifact,
-      content: extractSharedArtifactBody(query.data.artifact.content, query.data.artifact.type),
+    try {
+      const pending = JSON.parse(rawPending) as { conversationId?: string; artifactId?: string };
+      if (
+        pending.conversationId !== conversationId ||
+        !pending.artifactId ||
+        artifacts?.[pending.artifactId] == null
+      ) {
+        return;
+      }
+      setCurrentArtifactId(pending.artifactId);
+      setArtifactsVisibility(true);
+      sessionStorage.removeItem(SHARED_ARTIFACT_PENDING_OPEN);
+    } catch {
+      sessionStorage.removeItem(SHARED_ARTIFACT_PENDING_OPEN);
+    }
+  }, [artifacts, conversationId, setArtifactsVisibility, setCurrentArtifactId]);
+
+  useEffect(() => {
+    if (!enabled || !conversation || inFlightShareIds.has(shareId)) {
+      return;
+    }
+
+    inFlightShareIds.add(shareId);
+    const removeShareParam = () => {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete(SHARED_ARTIFACT_PARAM);
+      setSearchParams(nextParams, { replace: true });
     };
-    const importedPrompt = buildSharedArtifactPrompt(
-      artifact,
-      localize('com_knauf_artifact_continue_prompt'),
-      localize('com_knauf_artifact_continue_request'),
-    );
-    const currentText = methods.getValues('text');
-    const nextText =
-      typeof currentText === 'string' && currentText.trim().length > 0
-        ? `${importedPrompt}\n\n${currentText}`
-        : importedPrompt;
 
-    methods.setValue('text', nextText, { shouldDirty: true, shouldValidate: true });
-    textAreaRef.current?.focus();
+    void postSharedArtifactContinuation(shareId, conversation)
+      .then((result) => {
+        const clonedConversationId = result.conversation.conversationId;
+        if (!clonedConversationId) {
+          throw new Error('Continuation response is missing a conversation ID');
+        }
+
+        removeShareParam();
+        queryClient.invalidateQueries([QueryKeys.allConversations]);
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem(
+            SHARED_ARTIFACT_PENDING_OPEN,
+            JSON.stringify({
+              conversationId: clonedConversationId,
+              artifactId: result.artifactId,
+            }),
+          );
+        }
+        navigateToConvo(result.conversation, {
+          currentConvoId: Constants.NEW_CONVO,
+        });
+      })
+      .catch(() => {
+        removeShareParam();
+        showToast({
+          message: localize('com_knauf_artifact_continue_error'),
+          severity: NotificationSeverity.ERROR,
+          showIcon: true,
+        });
+      })
+      .finally(() => {
+        inFlightShareIds.delete(shareId);
+      });
   }, [
+    conversation,
     enabled,
     localize,
-    methods,
-    query.data,
-    query.isError,
+    navigateToConvo,
+    queryClient,
     searchParams,
     setSearchParams,
     shareId,
     showToast,
-    textAreaRef,
   ]);
 }

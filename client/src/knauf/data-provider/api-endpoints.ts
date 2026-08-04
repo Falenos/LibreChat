@@ -22,6 +22,8 @@ export const artifactExport = (shareId?: string) =>
     : `${knaufBase}/artifact-export`;
 export const artifactExportSnapshot = (token: string) =>
   `${knaufBase}/artifact-export/render/${encodeURIComponent(token)}`;
+export const artifactContinuation = (shareId: string) =>
+  `${knaufBase}/artifact-continuation/${encodeURIComponent(shareId)}`;
 
 // KK20-195 WP5 — async-indexing status/retry. These live under upstream's
 // /api/files (Knauf [knauf]-seamed routes in api/server/routes/files/files.js),

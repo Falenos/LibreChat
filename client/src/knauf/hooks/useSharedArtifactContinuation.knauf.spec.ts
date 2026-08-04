@@ -1,32 +1,54 @@
 import fs from 'fs';
 import path from 'path';
-import { renderHook } from '@testing-library/react';
-import {
-  SHARED_ARTIFACT_PARAM,
-  buildSharedArtifactPrompt,
-  getSharedArtifactContinuationPath,
-} from '~/knauf/utils/sharedArtifactContinuation';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { SHARED_ARTIFACT_PENDING_OPEN } from '~/knauf/utils/sharedArtifactContinuation';
 import useSharedArtifactContinuation from './useSharedArtifactContinuation';
 
-const mockSetValue = jest.fn();
-const mockGetValues = jest.fn();
+const mockNavigateToConvo = jest.fn();
 const mockSetSearchParams = jest.fn();
 const mockShowToast = jest.fn();
-const mockFocus = jest.fn();
-const mockUseGetSharedMessages = jest.fn();
+const mockSetCurrentArtifactId = jest.fn();
+const mockSetArtifactsVisibility = jest.fn();
+const mockInvalidateQueries = jest.fn();
+const mockPostContinuation = jest.fn();
 const mockLocalize = jest.fn((key: string) => key);
 let mockSearchParams = new URLSearchParams();
+let mockConversation = {
+  conversationId: 'new',
+  endpoint: 'agents',
+  agent_id: 'recipient-agent',
+  title: 'New Chat',
+  createdAt: '',
+  updatedAt: '',
+};
+let mockArtifacts: Record<string, unknown> = {};
 
 jest.mock('react-router-dom', () => ({
   useSearchParams: () => [mockSearchParams, mockSetSearchParams],
 }));
 
-jest.mock('librechat-data-provider', () => ({
-  Constants: { NEW_CONVO: 'new' },
+jest.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({
+    invalidateQueries: mockInvalidateQueries,
+  }),
 }));
 
-jest.mock('librechat-data-provider/react-query', () => ({
-  useGetSharedMessages: (...args: unknown[]) => mockUseGetSharedMessages(...args),
+jest.mock('~/hooks/Conversations/useNavigateToConvo', () => ({
+  __esModule: true,
+  default: () => ({ navigateToConvo: mockNavigateToConvo }),
+}));
+
+jest.mock('recoil', () => ({
+  useRecoilValue: () => mockArtifacts,
+  useSetRecoilState: (atom: string) =>
+    atom === 'currentArtifactId' ? mockSetCurrentArtifactId : mockSetArtifactsVisibility,
+}));
+
+jest.mock('librechat-data-provider', () => ({
+  Constants: { NEW_CONVO: 'new' },
+  QueryKeys: {
+    allConversations: 'allConversations',
+  },
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -43,59 +65,110 @@ jest.mock('~/hooks/useLocalize', () => ({
 }));
 
 jest.mock('~/Providers', () => ({
-  useChatFormContext: () => ({
-    getValues: mockGetValues,
-    setValue: mockSetValue,
+  useChatContext: () => ({
+    conversation: mockConversation,
   }),
 }));
 
-jest.mock('~/knauf/utils/artifactBody', () => ({
-  extractSharedArtifactBody: (content: string) => content,
+jest.mock('~/knauf/data-provider/data-service', () => ({
+  postSharedArtifactContinuation: (...args: unknown[]) => mockPostContinuation(...args),
+}));
+
+jest.mock('~/store', () => ({
+  __esModule: true,
+  default: {
+    artifactsState: 'artifactsState',
+    currentArtifactId: 'currentArtifactId',
+    artifactsVisibility: 'artifactsVisibility',
+  },
 }));
 
 describe('shared artifact continuation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSearchParams = new URLSearchParams({ [SHARED_ARTIFACT_PARAM]: 'share-1' });
-    mockGetValues.mockReturnValue('Add quarterly revenue.');
-    mockUseGetSharedMessages.mockReturnValue({
-      data: {
-        kind: 'artifact',
-        artifact: {
-          title: 'KPI dashboard',
-          type: 'application/vnd.react',
-          language: 'tsx',
-          content: 'export default function App() { return <main />; }',
-        },
+    sessionStorage.clear();
+    mockSearchParams = new URLSearchParams({ artifactShareId: 'share-1' });
+    mockConversation = {
+      conversationId: 'new',
+      endpoint: 'agents',
+      agent_id: 'recipient-agent',
+      title: 'New Chat',
+      createdAt: '',
+      updatedAt: '',
+    };
+    mockArtifacts = {};
+    mockPostContinuation.mockResolvedValue({
+      conversation: {
+        conversationId: 'recipient-conversation-1',
+        endpoint: 'agents',
+        title: 'Shared deck',
+        createdAt: '2026-08-04',
+        updatedAt: '2026-08-04',
       },
-      isError: false,
+      messages: [{ messageId: 'artifact-message-1' }],
+      artifactId: 'shared-artifact-1',
     });
   });
 
-  it('imports only the shared snapshot into a reviewable new-chat draft', () => {
-    const textAreaRef = { current: { focus: mockFocus } as unknown as HTMLTextAreaElement };
+  it('clones the snapshot into an owned conversation and navigates without putting code in chat', async () => {
+    renderHook(() => useSharedArtifactContinuation({ conversationId: 'new' }));
 
-    renderHook(() => useSharedArtifactContinuation({ conversationId: 'new', textAreaRef }));
+    await waitFor(() => expect(mockNavigateToConvo).toHaveBeenCalled());
 
-    expect(mockUseGetSharedMessages).toHaveBeenCalledWith('share-1', {
-      enabled: true,
-      retry: false,
-    });
-    expect(mockSetValue).toHaveBeenCalledWith(
-      'text',
-      expect.stringContaining('export default function App()'),
-      { shouldDirty: true, shouldValidate: true },
+    expect(mockPostContinuation).toHaveBeenCalledWith('share-1', mockConversation);
+    expect(mockNavigateToConvo).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'recipient-conversation-1' }),
+      { currentConvoId: 'new' },
     );
-    const importedText = mockSetValue.mock.calls[0][1] as string;
-    expect(importedText).toContain('com_knauf_artifact_continue_prompt');
-    expect(importedText).toContain('"title":"KPI dashboard"');
-    expect(importedText).toContain('Add quarterly revenue.');
-    expect(importedText).not.toContain('source conversation');
-    expect(mockFocus).toHaveBeenCalled();
-    const cleanedParams = mockSetSearchParams.mock.calls[0][0] as URLSearchParams;
-    expect(cleanedParams.has(SHARED_ARTIFACT_PARAM)).toBe(false);
-    expect(mockSetSearchParams.mock.calls[0][1]).toEqual({ replace: true });
+    expect(mockInvalidateQueries).toHaveBeenCalledWith(['allConversations']);
+    expect(mockSetSearchParams).toHaveBeenCalledWith(expect.any(URLSearchParams), {
+      replace: true,
+    });
+    expect(JSON.parse(sessionStorage.getItem(SHARED_ARTIFACT_PENDING_OPEN) ?? '{}')).toEqual({
+      conversationId: 'recipient-conversation-1',
+      artifactId: 'shared-artifact-1',
+    });
     expect(mockShowToast).not.toHaveBeenCalled();
+  });
+
+  it('opens the cloned artifact as soon as its persisted message registers it', () => {
+    mockSearchParams = new URLSearchParams();
+    mockConversation = { ...mockConversation, conversationId: 'recipient-conversation-1' };
+    mockArtifacts = { 'shared-artifact-1': { content: 'exact snapshot' } };
+    sessionStorage.setItem(
+      SHARED_ARTIFACT_PENDING_OPEN,
+      JSON.stringify({
+        conversationId: 'recipient-conversation-1',
+        artifactId: 'shared-artifact-1',
+      }),
+    );
+
+    act(() => {
+      renderHook(() =>
+        useSharedArtifactContinuation({ conversationId: 'recipient-conversation-1' }),
+      );
+    });
+
+    expect(mockSetCurrentArtifactId).toHaveBeenCalledWith('shared-artifact-1');
+    expect(mockSetArtifactsVisibility).toHaveBeenCalledWith(true);
+    expect(sessionStorage.getItem(SHARED_ARTIFACT_PENDING_OPEN)).toBeNull();
+  });
+
+  it('removes the share locator and reports a clone failure', async () => {
+    mockPostContinuation.mockRejectedValue(new Error('failed'));
+
+    renderHook(() => useSharedArtifactContinuation({ conversationId: 'new' }));
+
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalled());
+
+    expect(mockNavigateToConvo).not.toHaveBeenCalled();
+    const cleanedParams = mockSetSearchParams.mock.calls[0][0] as URLSearchParams;
+    expect(cleanedParams.has('artifactShareId')).toBe(false);
+    expect(mockShowToast).toHaveBeenCalledWith({
+      message: 'com_knauf_artifact_continue_error',
+      severity: 'error',
+      showIcon: true,
+    });
   });
 
   it('is mounted by the chat composer', () => {
@@ -104,41 +177,6 @@ describe('shared artifact continuation', () => {
       'utf8',
     );
 
-    expect(chatForm).toContain('useSharedArtifactContinuation({ conversationId, textAreaRef });');
-  });
-
-  it('uses a collision-free source boundary and puts only the opaque ID in the URL', () => {
-    const prompt = buildSharedArtifactPrompt(
-      {
-        title: 'Boundary test',
-        type: 'text/plain',
-        content: '--- KNAUF SHARED ARTIFACT SOURCE ---',
-      },
-      'Intro',
-      'Request',
-    );
-
-    expect(prompt).toContain('--- KNAUF SHARED ARTIFACT SOURCE ----');
-    expect(getSharedArtifactContinuationPath('share /?')).toBe(
-      '/c/new?artifactShareId=share+%2F%3F',
-    );
-  });
-
-  it('rejects conversation shares instead of importing their messages', () => {
-    mockUseGetSharedMessages.mockReturnValue({
-      data: { kind: 'conversation', messages: [{ text: 'private history' }] },
-      isError: false,
-    });
-
-    renderHook(() =>
-      useSharedArtifactContinuation({ conversationId: 'new', textAreaRef: { current: null } }),
-    );
-
-    expect(mockSetValue).not.toHaveBeenCalled();
-    expect(mockShowToast).toHaveBeenCalledWith({
-      message: 'com_knauf_artifact_continue_error',
-      severity: 'error',
-      showIcon: true,
-    });
+    expect(chatForm).toContain('useSharedArtifactContinuation({ conversationId });');
   });
 });
