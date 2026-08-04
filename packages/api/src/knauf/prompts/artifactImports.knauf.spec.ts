@@ -60,6 +60,16 @@ describe('[knauf] artifacts prompt — sandbox import rules', () => {
     expect(prompt).toMatch(/NO OTHER LIBRARIES/);
   });
 
+  it('uses edit_artifact for existing-artifact changes and keeps full emission as fallback', () => {
+    for (const endpoint of [EModelEndpoint.azureOpenAI, EModelEndpoint.anthropic]) {
+      const prompt =
+        generateArtifactsPrompt({ endpoint, artifacts: KARL_ARTIFACT_MODE as never }) ?? '';
+      expect(prompt).toContain('edit_artifact');
+      expect(prompt).toMatch(/do not re-emit the artifact/i);
+      expect(prompt).toMatch(/unavailable|rejects|fails/i);
+    }
+  });
+
   it('leaves the Anthropic variant alone', () => {
     // Deliberate asymmetry, recorded so it stays a decision rather than an oversight:
     // KARL never receives this variant. If KARL is ever moved to an Anthropic

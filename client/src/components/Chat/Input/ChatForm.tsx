@@ -43,7 +43,7 @@ import Mention from './Mention';
 // [knauf] Conversation total belongs with the composer controls, not inside the tool-chip cluster.
 import { KnaufConversationCostTotal } from '~/knauf/components/Chat/KnaufCostDisplay';
 // End [knauf]
-// [knauf] Import artifact-only shared snapshots into a recipient-owned new-chat draft. (NO-TICKET)
+// [knauf] Clone shared artifact snapshots into recipient-owned chats and open them immediately. (NO-TICKET)
 import useSharedArtifactContinuation from '~/knauf/hooks/useSharedArtifactContinuation';
 // End [knauf]
 // [knauf] KK20-195 WP5a — async-indexing poll loop + send gate (plan §6.5).
@@ -207,8 +207,8 @@ const ChatForm = memo(function ChatForm({
   });
 
   useQueryParams({ textAreaRef });
-  // [knauf] The recipient reviews and sends the imported source; shared links never auto-submit. (NO-TICKET)
-  useSharedArtifactContinuation({ conversationId, textAreaRef });
+  // [knauf] Clone the shared snapshot into an owned chat and open its artifact immediately. (NO-TICKET)
+  useSharedArtifactContinuation({ conversationId });
   // End [knauf]
 
   const { ref, ...registerProps } = methods.register('text', {

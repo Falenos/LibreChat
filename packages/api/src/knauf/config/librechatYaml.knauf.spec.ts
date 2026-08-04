@@ -188,6 +188,14 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     expect(offenders).toEqual([]);
   });
 
+  it('uses the runtime edit tool instead of re-emitting small artifact changes', () => {
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset?.promptPrefix).toContain('use edit_artifact');
+      expect(spec.preset?.promptPrefix).toMatch(/do not re-emit it/i);
+      expect(spec.preset?.promptPrefix).toMatch(/Full artifact emission is the fallback/i);
+    }
+  });
+
   it('never tells the model to respond only as text in the chat', () => {
     // "otherwise, respond as text within the chat" was the other half: a standing
     // instruction to stay in chat cannot coexist with a preview panel.

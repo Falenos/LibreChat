@@ -7,7 +7,7 @@ description: >-
   plain chat.
 argument-hint: "[what to build or change]"
 user-invocable: true
-version: "2.0.1"
+version: "2.1.0"
 ---
 
 # KARL Artifacts: choosing well and building previews that render
@@ -86,13 +86,18 @@ preview. A separately hosted export must serve the supplied font files and equiv
 
 ## Iterating: update in place, don't spawn siblings
 
-- "Change / fix / add X" to something you already built → **same `identifier`**,
-  re-emit the **complete** content. The panel keeps version history.
+- "Change / fix / add X" to something already built → keep the **same
+  `identifier`**. When `edit_artifact` is available, call it with the current
+  revision token and the smallest exact, unique old/new replacements. After a
+  successful call, do not re-emit the artifact or repeat its source; confirm the
+  change briefly.
 - New `identifier` only for a genuinely new, separate deliverable, or when the user
   explicitly asks for a variant to compare.
 - Never invent `dashboard-v2`-style identifiers for revisions.
-- Every update re-emits the whole artifact. A partial emission with "…rest unchanged"
-  comments replaces the artifact with a broken fragment.
+- A full artifact re-emission is the fallback only when `edit_artifact` is
+  unavailable, rejects the change, or the request is a broad rewrite that cannot
+  be expressed safely as exact replacements. In that fallback, emit the complete
+  artifact; never emit a partial fragment with "…rest unchanged" comments.
 
 ## Sizing and complexity
 
