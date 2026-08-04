@@ -48,7 +48,7 @@ const PERMISSIONS = {
   // below is a full `$set` replace, and the next reader should see the intent.
   RUN_CODE:       { USE: false },
   WEB_SEARCH:     { USE: true },
-  PEOPLE_PICKER:  { VIEW_USERS: false, VIEW_GROUPS: false, VIEW_ROLES: false },
+  PEOPLE_PICKER:  { VIEW_USERS: true, VIEW_GROUPS: false, VIEW_ROLES: false },
   MARKETPLACE:    { USE: true },
   FILE_SEARCH:    { USE: true },
   FILE_CITATIONS: { USE: true },
