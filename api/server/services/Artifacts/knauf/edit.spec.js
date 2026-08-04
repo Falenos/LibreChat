@@ -1,6 +1,7 @@
 const {
   applyArtifactEdit,
   buildArtifactEditContext,
+  compareAndSwapMessage,
   createEditArtifactTool,
   sha256,
 } = require('./edit');
@@ -55,7 +56,9 @@ describe('edit_artifact', () => {
         source: 'content',
         partIndex: 0,
         original: latest.content[0].text,
-        updated: expect.stringContaining('const colour = "cyan";'),
+        updated: expect.stringContaining(
+          ':::artifact{identifier="dashboard" type="application/vnd.react" title="Demo" version="2"}',
+        ),
       }),
     );
     expect(result).toEqual(
@@ -64,6 +67,8 @@ describe('edit_artifact', () => {
         identifier: 'dashboard',
         messageId: 'assistant-2',
         replacements: 1,
+        title: 'Demo',
+        version: 2,
         contentSha256: sha256('const colour = "cyan";'),
       }),
     );
@@ -140,6 +145,8 @@ describe('edit_artifact', () => {
       compareAndSwap,
     });
 
+    expect(tool.returnDirect).toBe(true);
+
     const output = JSON.parse(
       await tool.invoke({
         identifier: 'dashboard',
@@ -155,5 +162,35 @@ describe('edit_artifact', () => {
         conversationId: 'conversation-1',
       }),
     );
+  });
+
+  test('does not wait for Mongoose search-index middleware after the atomic write', async () => {
+    const updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+    const modelUpdateOne = jest.fn();
+
+    await expect(
+      compareAndSwapMessage(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          messageId: 'assistant-1',
+          source: 'text',
+          original: 'before',
+          updated: 'after',
+        },
+        { collection: { updateOne }, updateOne: modelUpdateOne },
+      ),
+    ).resolves.toBe(true);
+
+    expect(updateOne).toHaveBeenCalledWith(
+      {
+        user: 'user-1',
+        conversationId: 'conversation-1',
+        messageId: 'assistant-1',
+        text: 'before',
+      },
+      { $set: { text: 'after', updatedAt: expect.any(Date), _meiliIndex: false } },
+    );
+    expect(modelUpdateOne).not.toHaveBeenCalled();
   });
 });

@@ -666,6 +666,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Prompts/lists/ChatGroupItem.tsx` | `ChatGroupItem` prompt overflow menu and dialog mount | 4–6, 20–22, 62–64, 128–136, 256–258 | Adds permission-aware peer sharing to the prompt overflow menu while keeping the existing dialog mounted after the dropdown closes; public sharing remains independently gated | `client/src/knauf/components/Prompts/ChatGroupItem.knauf.spec.tsx` | NO-TICKET |
 | `client/src/components/Sharing/GenericGrantAccessDialog.tsx` | `GenericGrantAccessDialog` controlled triggerless mode | 40–44, 54–67, 316–318 | Lets an external overflow-menu action open the existing access dialog without rendering a duplicate Share trigger, preserving existing uncontrolled call sites | `client/src/components/Sharing/__tests__/GenericGrantAccessDialog.spec.tsx` | NO-TICKET |
 | `client/src/components/Sharing/__tests__/GenericGrantAccessDialog.spec.tsx` | controlled peer-only prompt-sharing regression | 141–161 | Proves the recipient picker opens without an internal trigger and that global sharing stays hidden when `SHARE_PUBLIC` is false | Self | NO-TICKET |
+| `client/src/components/Chat/Messages/Content/Part.tsx` | — | 35–39, 144–152 | Render completed in-place artifact patches as compact version pointers. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1062,6 +1063,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Prompts/ChatGroupItem.knauf.spec.tsx` | `@testing-library/react`, React Router, upstream `ChatGroupItem`; dependency contracts mocked at public boundaries | Low — test-only seam proving owners and delegated sharers see the menu action while roles lacking both people search and public sharing do not | Self | NO-TICKET |
 | `knauf/scripts/seed-agent-builder-role.js` | Mongo shell `db`; no application imports | Low — lets Agent Builders discover individual colleagues for prompt grants while `PROMPTS.SHARE_PUBLIC` remains explicitly false | `knauf/tests/agentBuilderRole.spec.js` | NO-TICKET |
 | `knauf/tests/agentBuilderRole.spec.js` | Node standard library; executes the real role seeder in a bounded `vm` database stub | Low — pins Agent Builder prompt sharing to users only, with groups, roles, and global prompt sharing disabled | Self | NO-TICKET |
+| `api/server/services/Artifacts/knauf/edit*.js` | Native Mongo collection compare-and-swap; LangChain direct-return metadata; artifact directive metadata | Medium — keeps the exact patch atomic, bypasses non-critical Meili middleware that held successful chat streams open, increments the same artifact's durable version, and returns a compact pointer payload | `api/server/services/Artifacts/knauf/edit.spec.js`; isolated real-browser edit completion/open smoke | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactEditCall*.tsx` | Recoil artifact registry and selection atoms; existing updated-file/version localizations | Low — renders `Updated <title> · Version N` in the editing turn and opens the already-refreshed logical artifact without duplicating its source | Self; isolated real-browser edit completion/open smoke | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

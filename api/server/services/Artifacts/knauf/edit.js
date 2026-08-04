@@ -28,6 +28,19 @@ const readIdentifier = (boundary) => {
   return openingLine.match(/\bidentifier\s*=\s*(["'])(.*?)\1/)?.[2] ?? '';
 };
 
+const readAttribute = (boundary, name) => {
+  const openingLine = boundary.text.slice(
+    boundary.start,
+    boundary.text.indexOf('\n', boundary.start),
+  );
+  return openingLine.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? '';
+};
+
+const readVersion = (boundary) => {
+  const version = Number.parseInt(readAttribute(boundary, 'version'), 10);
+  return Number.isSafeInteger(version) && version > 0 ? version : 1;
+};
+
 const readArtifactContent = (boundary) => {
   const raw = boundary.text.slice(boundary.start, boundary.end);
   const openingLineEnd = raw.indexOf('\n');
@@ -123,6 +136,24 @@ const withUpdatedText = (message, boundary, updatedText) => {
   return { ...message, text: updatedText };
 };
 
+const withVersion = (message, boundary, version) => {
+  const openingLineEnd = boundary.text.indexOf('\n', boundary.start);
+  const openingLine = boundary.text.slice(boundary.start, openingLineEnd);
+  const updatedOpeningLine = /\bversion\s*=\s*(["']).*?\1/.test(openingLine)
+    ? openingLine.replace(/\bversion\s*=\s*(["']).*?\1/, `version="${version}"`)
+    : openingLine.replace(/}\s*$/, ` version="${version}"}`);
+  if (openingLineEnd === -1 || updatedOpeningLine === openingLine) {
+    throw new ArtifactEditError('Artifact metadata cannot be versioned', 'invalid_artifact');
+  }
+  return withUpdatedText(
+    message,
+    boundary,
+    boundary.text.slice(0, boundary.start) +
+      updatedOpeningLine +
+      boundary.text.slice(openingLineEnd),
+  );
+};
+
 const replaceExactInBoundary = (boundary, editableContent, oldValue, newValue) => {
   const raw = boundary.text.slice(boundary.start, boundary.end);
   const openingLineEnd = raw.indexOf('\n');
@@ -189,6 +220,12 @@ async function applyArtifactEdit(input, deps) {
     workingMessage = withUpdatedText(workingMessage, boundary, updatedText);
   }
 
+  const version = readVersion(target.boundary) + 1;
+  workingMessage = withVersion(
+    workingMessage,
+    findAllArtifacts(workingMessage)[target.artifactIndex],
+    version,
+  );
   const finalBoundary = findAllArtifacts(workingMessage)[target.artifactIndex];
   const original = target.boundary.text;
   const updated = finalBoundary.text;
@@ -213,6 +250,8 @@ async function applyArtifactEdit(input, deps) {
     status: 'updated',
     identifier,
     messageId: target.message.messageId,
+    title: readAttribute(target.boundary, 'title') || identifier,
+    version,
     replacements: replacements.length,
     contentSha256: sha256(readArtifactContent(finalBoundary)),
   };
@@ -220,23 +259,21 @@ async function applyArtifactEdit(input, deps) {
 
 const defaultGetMessages = (...args) => require('~/models').getMessages(...args);
 
-const defaultCompareAndSwap = async ({
-  userId,
-  conversationId,
-  messageId,
-  source,
-  partIndex,
-  original,
-  updated,
-}) => {
-  const mongoose = require('mongoose');
+const compareAndSwapMessage = async (
+  { userId, conversationId, messageId, source, partIndex, original, updated },
+  Message,
+) => {
   const path = source === 'content' ? `content.${partIndex}.text` : 'text';
-  const result = await mongoose.models.Message.updateOne(
+  // Use the native collection so search indexing cannot hold the chat stream open; flag it to retry.
+  const result = await Message.collection.updateOne(
     { user: userId, conversationId, messageId, [path]: original },
-    { $set: { [path]: updated } },
+    { $set: { [path]: updated, updatedAt: new Date(), _meiliIndex: false } },
   );
   return result.modifiedCount === 1;
 };
+
+const defaultCompareAndSwap = (args) =>
+  compareAndSwapMessage(args, require('mongoose').models.Message);
 
 async function buildArtifactEditContext(
   { userId, conversationId },
@@ -291,6 +328,7 @@ function createEditArtifactTool({
     name: TOOL_NAME,
     description: definition.description,
     schema: definition.schema,
+    returnDirect: true,
     func: async (args) => {
       try {
         const result = await applyArtifactEdit(
@@ -310,7 +348,6 @@ function createEditArtifactTool({
         return JSON.stringify({
           ...payload,
           content_sha256: contentSha256,
-          instruction: 'The artifact is already updated. Reply with a short confirmation only.',
         });
       } catch (error) {
         const payload =
@@ -329,6 +366,7 @@ module.exports = {
   ArtifactEditError,
   applyArtifactEdit,
   buildArtifactEditContext,
+  compareAndSwapMessage,
   createEditArtifactTool,
   sha256,
 };
