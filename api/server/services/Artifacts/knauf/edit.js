@@ -184,6 +184,7 @@ async function applyArtifactEdit(input, deps) {
   }
 
   const currentContent = readArtifactContent(target.boundary);
+  const baseSha256 = sha256(currentContent);
   if (sha256(currentContent) !== expectedSha256) {
     throw new ArtifactEditError(
       'Artifact changed since this request started; read the current revision and retry',
@@ -193,6 +194,7 @@ async function applyArtifactEdit(input, deps) {
   }
 
   let workingMessage = target.message;
+  const inversePatches = [];
   for (const replacement of replacements) {
     const boundary = findAllArtifacts(workingMessage)[target.artifactIndex];
     const editableContent = readArtifactContent(boundary);
@@ -203,6 +205,12 @@ async function applyArtifactEdit(input, deps) {
         409,
       );
     }
+
+    inversePatches.push({
+      start: editableContent.indexOf(replacement.old),
+      old: replacement.old,
+      newLength: replacement.new.length,
+    });
 
     const updatedText = replaceExactInBoundary(
       boundary,
@@ -253,7 +261,111 @@ async function applyArtifactEdit(input, deps) {
     title: readAttribute(target.boundary, 'title') || identifier,
     version,
     replacements: replacements.length,
+    baseSha256,
+    inversePatches,
     contentSha256: sha256(readArtifactContent(finalBoundary)),
+  };
+}
+
+const parseStoredRevision = (output) => {
+  if (typeof output !== 'string') {
+    return null;
+  }
+  try {
+    const value = JSON.parse(output);
+    if (
+      value?.status !== 'updated' ||
+      typeof value.identifier !== 'string' ||
+      typeof value.messageId !== 'string' ||
+      !Number.isSafeInteger(value.version) ||
+      value.version < 2 ||
+      typeof value.base_sha256 !== 'string' ||
+      typeof value.content_sha256 !== 'string' ||
+      !Array.isArray(value.inverse_patches) ||
+      value.inverse_patches.some(
+        (patch) =>
+          !Number.isSafeInteger(patch?.start) ||
+          patch.start < 0 ||
+          typeof patch.old !== 'string' ||
+          !Number.isSafeInteger(patch.new_length) ||
+          patch.new_length < 0,
+      )
+    ) {
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+};
+
+const readStoredRevisions = (messages, messageId, identifier) => {
+  const revisions = new Map();
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) {
+      continue;
+    }
+    for (const part of message.content) {
+      const toolCall = part?.type === 'tool_call' ? part.tool_call : null;
+      if (toolCall?.name !== TOOL_NAME) {
+        continue;
+      }
+      const revision = parseStoredRevision(toolCall.output);
+      if (revision?.messageId === messageId && revision.identifier === identifier) {
+        revisions.set(revision.version, revision);
+      }
+    }
+  }
+  return revisions;
+};
+
+function getArtifactRevisionSnapshot(messages, { messageId, identifier, version }) {
+  if (!Number.isSafeInteger(version) || version < 1) {
+    throw new ArtifactEditError('A valid artifact version is required', 'invalid_version');
+  }
+  const sourceMessage = messages.find((message) => message.messageId === messageId);
+  const target = sourceMessage ? findLatestArtifact([sourceMessage], identifier) : null;
+  if (!target) {
+    throw new ArtifactEditError('Artifact not found', 'artifact_not_found', 404);
+  }
+
+  const currentVersion = readVersion(target.boundary);
+  if (version > currentVersion) {
+    throw new ArtifactEditError('Artifact version not found', 'revision_not_found', 404);
+  }
+
+  let content = readArtifactContent(target.boundary);
+  const revisions = readStoredRevisions(messages, messageId, identifier);
+  for (let candidateVersion = currentVersion; candidateVersion > version; candidateVersion -= 1) {
+    const revision = revisions.get(candidateVersion);
+    if (!revision || sha256(content) !== revision.content_sha256) {
+      throw new ArtifactEditError(
+        'This artifact version predates immutable revision history',
+        'revision_unavailable',
+        409,
+      );
+    }
+    for (let patchIndex = revision.inverse_patches.length - 1; patchIndex >= 0; patchIndex -= 1) {
+      const patch = revision.inverse_patches[patchIndex];
+      if (patch.start + patch.new_length > content.length) {
+        throw new ArtifactEditError('Artifact revision is invalid', 'invalid_revision', 409);
+      }
+      content =
+        content.slice(0, patch.start) + patch.old + content.slice(patch.start + patch.new_length);
+    }
+    if (sha256(content) !== revision.base_sha256) {
+      throw new ArtifactEditError('Artifact revision is invalid', 'invalid_revision', 409);
+    }
+  }
+
+  return {
+    title: readAttribute(target.boundary, 'title') || identifier,
+    type: readAttribute(target.boundary, 'type'),
+    content,
+    version,
+    ...(readAttribute(target.boundary, 'language')
+      ? { language: readAttribute(target.boundary, 'language') }
+      : {}),
   };
 }
 
@@ -344,10 +456,16 @@ function createEditArtifactTool({
         logger.info(
           `[edit_artifact] updated identifier=${result.identifier} replacements=${result.replacements}`,
         );
-        const { contentSha256, ...payload } = result;
+        const { contentSha256, baseSha256, inversePatches, ...payload } = result;
         return JSON.stringify({
           ...payload,
+          base_sha256: baseSha256,
           content_sha256: contentSha256,
+          inverse_patches: inversePatches.map(({ start, old, newLength }) => ({
+            start,
+            old,
+            new_length: newLength,
+          })),
         });
       } catch (error) {
         const payload =
@@ -368,5 +486,6 @@ module.exports = {
   buildArtifactEditContext,
   compareAndSwapMessage,
   createEditArtifactTool,
+  getArtifactRevisionSnapshot,
   sha256,
 };

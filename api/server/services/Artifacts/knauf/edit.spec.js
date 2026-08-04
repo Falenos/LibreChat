@@ -3,6 +3,7 @@ const {
   buildArtifactEditContext,
   compareAndSwapMessage,
   createEditArtifactTool,
+  getArtifactRevisionSnapshot,
   sha256,
 } = require('./edit');
 
@@ -69,9 +70,92 @@ describe('edit_artifact', () => {
         replacements: 1,
         title: 'Demo',
         version: 2,
+        baseSha256: sha256('const colour = "blue";'),
         contentSha256: sha256('const colour = "cyan";'),
+        inversePatches: [{ start: 15, old: '"blue"', newLength: 6 }],
       }),
     );
+  });
+
+  test('reconstructs each historical artifact version from compact inverse patches', () => {
+    const source = 'The theme colour is orange.';
+    const colourStart = 'The theme colour is '.length;
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="4"'),
+      },
+      {
+        messageId: 'assistant-3',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                version: 3,
+                base_sha256: sha256('The theme colour is green.'),
+                content_sha256: sha256('The theme colour is pink.'),
+                inverse_patches: [{ start: colourStart, old: 'green', new_length: 'pink'.length }],
+              }),
+            },
+          },
+        ],
+      },
+      {
+        messageId: 'assistant-4',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                version: 4,
+                base_sha256: sha256('The theme colour is pink.'),
+                content_sha256: sha256(source),
+                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 2,
+      }),
+    ).toEqual({
+      title: 'Demo',
+      type: 'application/vnd.react',
+      content: 'The theme colour is green.',
+      version: 2,
+    });
+  });
+
+  test('never substitutes the latest content when a historical patch is unavailable', () => {
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', 'orange').replace('title="Demo"', 'title="Demo" version="3"'),
+      },
+    ];
+
+    expect(() =>
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 2,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'revision_unavailable', status: 409 }));
   });
 
   test('rejects stale revisions and non-unique matches without writing', async () => {
