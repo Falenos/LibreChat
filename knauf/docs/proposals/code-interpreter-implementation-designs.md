@@ -1,6 +1,20 @@
 # Code Interpreter backend — implementation designs: self-hosted ClickHouse vs Azure Container Apps (KK20-108)
 
-> **Status: design / decision input.** Companion to the decision matrix
+> **Status: DECIDED (Aug 2026) — Option 2 (ACA dynamic sessions + adapter) SELECTED and being built.**
+> The adapter exists at [`knauf/code-adapter/`](../../code-adapter/) (see its README for the
+> authoritative contract + operational reference); the CI workflow is
+> `.github/workflows/build-code-adapter.yaml`. Build-out corrections discovered during
+> implementation, beyond what Option 2 below describes: the contract also includes
+> `POST /upload/batch` (+`read_only`), `GET /sessions/{s}/objects/{f}` freshness probe,
+> `DELETE /files/{s}/{f}` fallback, `POST /exec/programmatic` (PTC — adapter returns 501),
+> the `?kind&id&version` identity protocol on every file call, and per-file
+> `storage_session_id` + `inherited` response fields; `CodeExecutor`/`BashExecutor` freeze
+> the exec URL at module load (env var must precede boot; no runtime override); and
+> `verifyToolAuth` never probes the backend, so failures surface at exec time. The exec
+> wrapper (base64 + sentinel + `/mnt/data` log tee) upgrades the "synthesize 0/1" plan to
+> REAL exit codes and recovers output past the ~4000-char cap.
+>
+> Originally: companion to the decision matrix
 > [`code-interpreter-backend-options.md`](code-interpreter-backend-options.md) and the
 > [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md). This doc builds out the **two finalist
 > backends** concretely — against how AGK *actually* deploys services (mined from the live
