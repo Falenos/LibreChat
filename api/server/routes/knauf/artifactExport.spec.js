@@ -20,20 +20,16 @@ jest.mock('~/server/middleware/canAccessSharedLink', () => (req, _res, next) => 
   next();
 });
 
-jest.mock(
-  '~/server/services/Artifacts/knauf/export',
-  () => ({
-    ArtifactExportError: class ArtifactExportError extends Error {
-      constructor(message, status = 400) {
-        super(message);
-        this.status = status;
-      }
-    },
-    getRenderSnapshot: jest.fn(),
-    renderArtifact: (...args) => mockRenderArtifact(...args),
-  }),
-  { virtual: true },
-);
+jest.mock('~/server/services/Artifacts/knauf/export', () => ({
+  ArtifactExportError: class ArtifactExportError extends Error {
+    constructor(message, status = 400) {
+      super(message);
+      this.status = status;
+    }
+  },
+  getRenderSnapshot: jest.fn(),
+  renderArtifact: mockRenderArtifact,
+}));
 
 const artifactExportRouter = require('./artifactExport');
 
@@ -51,8 +47,8 @@ const createApp = () => {
 
 describe('artifact PNG/PDF export routes', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockRenderArtifact.mockResolvedValue({
+    mockGetSharedMessages.mockReset();
+    mockRenderArtifact.mockReset().mockResolvedValue({
       buffer: Buffer.from('rendered'),
       mime: 'image/png',
       extension: 'png',
