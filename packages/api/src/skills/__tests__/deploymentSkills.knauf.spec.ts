@@ -135,6 +135,15 @@ describe('[knauf] shipped deployment skills', () => {
     }
   });
 
+  // [knauf] NO-TICKET — pin runtime artifact edits and the safe fallback.
+  it('patches existing artifacts when edit_artifact is available', () => {
+    const artifacts = byName.get('karl-artifacts');
+    expect(artifacts?.body).toContain('edit_artifact');
+    expect(artifacts?.body).toMatch(/do not re-emit the artifact/i);
+    expect(artifacts?.body).toMatch(/full artifact.*fallback/i);
+  });
+  // End [knauf]
+
   it('bounds native web research to one synthesis with distinct inline sources', () => {
     const research = byName.get('web-research');
     expect(research).toBeDefined();

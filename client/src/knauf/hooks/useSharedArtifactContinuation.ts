@@ -92,7 +92,7 @@ export default function useSharedArtifactContinuation({
           );
         }
         navigateToConvo(result.conversation, {
-          currentConvoId: Constants.NEW_CONVO,
+          currentConvoId: String(Constants.NEW_CONVO),
         });
       })
       .catch(() => {

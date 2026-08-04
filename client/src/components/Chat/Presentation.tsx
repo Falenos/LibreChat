@@ -3,6 +3,9 @@ import { useRecoilValue } from 'recoil';
 import { FileSources, LocalStorageKeys } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
 import useResetArtifactsOnConversationChange from '~/hooks/Artifacts/useResetArtifactsOnConversationChange';
+// [knauf] NO-TICKET — refresh the mutated source after edit_artifact completes.
+import { useRefreshEditedArtifact } from '~/knauf/hooks/useRefreshEditedArtifact';
+// End [knauf]
 import DragDropWrapper from '~/components/Chat/Input/Files/DragDropWrapper';
 import { EditorProvider, ArtifactsProvider } from '~/Providers';
 import { useDeleteFilesMutation } from '~/data-provider';
@@ -24,6 +27,10 @@ export default function Presentation({ children }: { children: React.ReactNode }
   const currentArtifactId = useRecoilValue(store.currentArtifactId);
 
   useResetArtifactsOnConversationChange();
+  // [knauf] NO-TICKET — server-side exact edits mutate the owned source message;
+  // one refetch makes the existing artifact card/panel render that new source.
+  useRefreshEditedArtifact();
+  // End [knauf]
 
   const setFilesToDelete = useSetFilesToDelete();
 
