@@ -640,6 +640,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/routes/index.tsx` | `loadArtifactExportPage` and `artifact-export/:token` | 57–62, 74–80 | Gives server-side Chromium a public render-only SPA route protected by a short-lived snapshot token instead of account UI | `client/src/knauf/components/Artifacts/ArtifactExportPage.spec.tsx`; frontend build; real-browser smoke | NO-TICKET |
 | `api/server/index.js` | `MIGRATION_GATE_EXEMPT` artifact render entry | 280, 295 | Lets the one-time-secret snapshot route bypass the temporary user/JWT migration gate while authenticated export creation remains protected | `api/server/index.spec.js` (`lets the one-time-secret artifact render route bypass user authentication`) | NO-TICKET |
 | `api/server/index.spec.js` | `Migration gate wiring` artifact render assertion | 125–132 | Seam test — pins the internal artifact snapshot exemption required by headless PNG/PDF rendering without exempting authenticated export creation | Self | NO-TICKET |
+| `client/src/components/Chat/Input/ChatForm.tsx` | `ChatForm` shared-artifact continuation mount | 46–48, 210–212 | Loads an artifact-only snapshot into a recipient-owned, reviewable new-chat draft without auto-submitting or mutating the public share | `client/src/knauf/hooks/useSharedArtifactContinuation.knauf.spec.ts` | NO-TICKET |
+| `client/src/hooks/Input/useQueryParams.ts` | `getPreservedSearchParams` artifact share ID branch | 24–26, 86–91 | Preserves only the opaque share ID through standard new-chat and post-login query cleanup until the importer resolves it | `client/src/hooks/Input/useQueryParams.spec.ts` | NO-TICKET |
+| `client/src/hooks/Input/useQueryParams.spec.ts` | `preserves the shared artifact ID during generic query cleanup` | 28–30, 263–278 | Seam regression proving login/new-chat initialization cannot discard the continuation locator before snapshot import | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -708,6 +711,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 | `librechat.yaml` | KK20-243 branding follow-up — the shared KARL prompt now makes Knauf branding a fixed parameter for Knauf/KARL visual deliverables, requires `karl-brand` before artifacts/documents/decks/spreadsheets/generated images, pins Knauf Screen + Knauf Screen Head and the exact clear-spaced SVG wordmark, and forbids image models from redrawing the logo. A named external brand remains an explicit carve-out. |
 | `librechat.yaml` | Leaves prompt create/share and colleague discovery out of deployment-owned overrides so Admin Dashboard values persist; prompt use stays enabled and USER public sharing remains server-enforced off (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Localizes the Continue in KARL action, artifact-only context instructions, change-request cue, and failed-import message (NO-TICKET) |
 
 ## Net-New Files
 
@@ -1012,6 +1016,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `skill/karl-brand/{SKILL.md,references/logo.md}` | Deployment-skill loader; `/knauf/brand` sandbox module | Medium — makes the fixed white artifact-header band and cyan wordmark the canonical generated-logo placement while retaining the official inverse mark only as external-layout reference | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | Real deployment-skill tree and loaded reference files | Low — pins the theme-pairing language and full-width white/cyan logo-header contract across every shipped artifact template | Self | NO-TICKET |
 | `client/src/knauf/components/Share/ArtifactShareView*.tsx` | upstream `ArtifactsProvider`, `EditorProvider`, `ArtifactTabs`, localization, and testing-library contracts | Medium — mounts shared artifact tabs inside their required context so link recipients can open the source Code tab without leaving view-only mode | `client/src/knauf/components/Share/ArtifactShareView.knauf.spec.tsx` | NO-TICKET |
+| `client/src/knauf/hooks/useSharedArtifactContinuation*.ts` | React Router; public shared-message query; upstream form, localization, toast, and artifact-body contracts | Medium — resolves only artifact-kind public snapshots, creates a visible user-level draft, rejects conversation shares, and removes the locator after handling | `client/src/knauf/hooks/useSharedArtifactContinuation.knauf.spec.ts` | NO-TICKET |
+| `client/src/knauf/utils/sharedArtifactContinuation.ts` | `librechat-data-provider` artifact type only | Low — builds a collision-free untrusted-source envelope and an encoded new-chat path containing only the opaque share ID | `client/src/knauf/hooks/useSharedArtifactContinuation.knauf.spec.ts` | NO-TICKET |
+| `client/src/knauf/components/Share/ArtifactShareView*.tsx` | upstream Link/Button/localization contracts; Knauf continuation-path helper | Medium — adds the localized Continue in KARL action while leaving Preview, Code, downloads, and the shared snapshot read-only | `client/src/knauf/components/Share/ArtifactShareView.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

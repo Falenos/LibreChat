@@ -8,12 +8,19 @@ jest.mock('@radix-ui/react-tabs', () => ({
 }));
 
 jest.mock('@librechat/client', () => ({
+  Button: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
   Radio: ({ options }: Readonly<{ options: Array<{ label: string; value: string }> }>) => (
     <div>
       {options.map((option) => (
         <button key={option.value}>{option.label}</button>
       ))}
     </div>
+  ),
+}));
+
+jest.mock('react-router-dom', () => ({
+  Link: ({ children, to }: Readonly<{ children: ReactNode; to: string }>) => (
+    <a href={to}>{children}</a>
   ),
 }));
 
@@ -98,6 +105,10 @@ A clean, branded summary with citations that must not compile.`,
     expect(screen.getByTestId('compiled-source')).not.toHaveTextContent('branded summary');
     expect(screen.getByTestId('compiled-source')).toHaveAttribute('data-read-only', 'true');
     expect(screen.getByRole('button', { name: 'com_ui_code' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'com_knauf_artifact_continue' })).toHaveAttribute(
+      'href',
+      '/c/new?artifactShareId=share-1',
+    );
     expect(screen.getByTestId('artifact-download-share-id')).toHaveTextContent('share-1');
   });
 });

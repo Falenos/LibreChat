@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
-import { Code, Play } from 'lucide-react';
-import { Radio } from '@librechat/client';
+import { Link } from 'react-router-dom';
+import { Code, MessageSquareText, Play } from 'lucide-react';
+import { Button, Radio } from '@librechat/client';
 import * as Tabs from '@radix-ui/react-tabs';
 import type { SandpackPreviewRef } from '@codesandbox/sandpack-react/unstyled';
 import type { TSharedArtifact } from 'librechat-data-provider';
@@ -8,6 +9,7 @@ import type { Artifact } from '~/common';
 import { isCodeOnlyArtifact, isPreviewOnlyArtifact } from '~/utils/artifacts';
 import ArtifactDownloadMenu from '~/knauf/components/Artifacts/ArtifactDownloadMenu';
 import { extractSharedArtifactBody } from '~/knauf/utils/artifactBody';
+import { getSharedArtifactContinuationPath } from '~/knauf/utils/sharedArtifactContinuation';
 import ArtifactTabs from '~/components/Artifacts/ArtifactTabs';
 import { ArtifactsProvider, EditorProvider } from '~/Providers';
 import { useLocalize } from '~/hooks';
@@ -67,6 +69,12 @@ export default function ArtifactShareView({
                 <p className="truncate text-xs text-text-secondary">{artifact.type}</p>
               </div>
               <div className="flex items-center gap-2">
+                <Button type="button" size="sm" className="gap-1.5" asChild>
+                  <Link to={getSharedArtifactContinuationPath(shareId)}>
+                    <MessageSquareText className="size-4" aria-hidden="true" />
+                    {localize('com_knauf_artifact_continue')}
+                  </Link>
+                </Button>
                 <Radio
                   options={visibleOptions}
                   value={displayedTab}
