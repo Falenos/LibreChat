@@ -1,6 +1,9 @@
 // [knauf] Mutable routed response metadata for title-usage tests.
 const mockCollectedMetadata = [];
 // End [knauf]
+// [knauf] KK20-199 — inject a rich provider failure at the production call site.
+const mockCreateRun = jest.fn();
+// End [knauf]
 // [knauf] NO-TICKET — observe whether legacy vector augmentation is constructed.
 const mockCreateContextHandlers = jest.fn();
 jest.mock('~/app/clients/prompts', () => ({
@@ -24,6 +27,9 @@ jest.mock('@librechat/agents', () => ({
 
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
+  // [knauf] KK20-199 — route the test failure through AgentClient.chatCompletion().
+  createRun: mockCreateRun,
+  // End [knauf]
   checkAccess: jest.fn(),
   countFormattedMessageTokens: jest.fn(() => 42),
   countTokens: jest.fn((text) => Math.ceil(String(text ?? '').length / 4)),
@@ -1122,6 +1128,47 @@ describe('AgentClient - titleConvo', () => {
       });
     });
   });
+
+  // [knauf] KK20-199 — provider failures retain bounded diagnosis without leaking
+  // request bodies, signed URLs, identity, or stack data.
+  describe('chatCompletion provider failure logging', () => {
+    it('logs only the bounded provider summary and persists a stable error', async () => {
+      const { logger } = require('@librechat/data-schemas');
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => logger);
+      const error = Object.assign(new Error('private body data:image/png;base64,secret'), {
+        status: 403,
+        code: 'invalid_value',
+        type: 'StorageAccessDenied',
+        request_id: 'request-123',
+        userId: 'user-secret',
+        request: { url: 'https://blob.example/file?sig=secret' },
+      });
+      mockCreateRun.mockRejectedValueOnce(error);
+      client.run = null;
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',
+        {
+          operation: 'agent_generation',
+          retryable: false,
+          providerStatus: 403,
+          code: 'invalid_value',
+          type: 'StorageAccessDenied',
+          requestId: 'request-123',
+        },
+      );
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(
+        /data:image|sig=secret|user-secret|private body/i,
+      );
+      expect(client.contentParts).toContainEqual({
+        type: ContentTypes.ERROR,
+        error: 'An error occurred while processing the request',
+      });
+    });
+  });
+  // End [knauf]
 
   describe('getOptions method - GPT-5+ model handling', () => {
     let mockReq;

@@ -504,6 +504,7 @@ describe('helpers', () => {
   });
 
   test('computeNextAttemptAt honors Retry-After as the floor and caps the exponential', () => {
+    const randomInt = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(999);
     const now = new Date('2026-07-16T00:00:00Z');
     const withRetryAfter = computeNextAttemptAt({
       attempt: 1,
@@ -512,12 +513,13 @@ describe('helpers', () => {
       maxMs: 60_000,
       now,
     });
-    expect(withRetryAfter.getTime() - now.getTime()).toBeGreaterThanOrEqual(30_000);
+    expect(withRetryAfter.getTime() - now.getTime()).toBe(30_999);
 
     for (let attempt = 1; attempt <= 12; attempt++) {
       const next = computeNextAttemptAt({ attempt, baseMs: 1_000, maxMs: 5_000, now });
-      expect(next.getTime() - now.getTime()).toBeLessThanOrEqual(30_000 + 5_000);
+      expect(next.getTime() - now.getTime()).toBe(999);
     }
+    randomInt.mockRestore();
   });
 
   test('computeNextAttemptAt caps a hostile Retry-After at maxMs (no day-long park)', () => {
