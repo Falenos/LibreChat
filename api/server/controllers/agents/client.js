@@ -57,6 +57,10 @@ const {
 // current model boundary and remove its streamed placeholder before persist.
 const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
 // End [knauf]
+// [knauf] NO-TICKET — provider errors may contain request bodies, image data,
+// signed URLs, and identity fields. Keep only bounded diagnostic attributes.
+const { summarizeProviderError } = require('./knauf/providerError');
+// End [knauf]
 // [knauf] KK20-194 — replace phase-concatenated native-search text before persistence.
 const { replaceLastTextPart } = require('~/server/knauf/nativeWebSearchOutput');
 // End [knauf]
@@ -1563,14 +1567,17 @@ class AgentClient extends BaseClient {
           { conversationId: this.conversationId, name: err?.name, code: err?.code },
         );
       } else {
+        // [knauf] NO-TICKET — never serialize provider errors into logs or
+        // persisted response content; retain only bounded operational fields.
         logger.error(
-          '[api/server/controllers/agents/client.js #sendCompletion] Unhandled error type',
-          err,
+          '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',
+          summarizeProviderError(err, 'agent_generation'),
         );
         this.contentParts.push({
           type: ContentTypes.ERROR,
-          [ContentTypes.ERROR]: `An error occurred while processing the request${err?.message ? `: ${err.message}` : ''}`,
+          [ContentTypes.ERROR]: 'An error occurred while processing the request',
         });
+        // End [knauf]
       }
     } finally {
       /** Capture calibration state from the run for persistence on the response message.

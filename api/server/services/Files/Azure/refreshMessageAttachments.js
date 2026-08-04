@@ -77,6 +77,8 @@ async function refreshAttachment(attachment, bufferSeconds, cache) {
   }
   let pending = cache.get(filepath);
   if (!pending) {
+    // [knauf] NO-TICKET — refresh diagnostics must not emit the SAS URL or
+    // the Azure error object, both of which can contain signed/user paths.
     pending = (async () => {
       try {
         if (!needsRefreshAzure(filepath, bufferSeconds)) {
@@ -84,20 +86,20 @@ async function refreshAttachment(attachment, bufferSeconds, cache) {
         }
         const newUrl = await getNewAzureURL(filepath);
         if (!newUrl) {
-          logger.debug(
-            `[refreshMessageAttachments] Unable to refresh Azure URL for "${filepath}"; keeping original`,
-          );
+          logger.debug('[refreshMessageAttachments] Azure URL refresh unavailable', {
+            operation: 'azure_attachment_refresh',
+          });
           return filepath;
         }
         return newUrl;
-      } catch (error) {
-        logger.error(
-          `[refreshMessageAttachments] Error refreshing Azure URL for "${filepath}":`,
-          error,
-        );
+      } catch (_error) {
+        logger.error('[refreshMessageAttachments] Azure URL refresh failed', {
+          operation: 'azure_attachment_refresh',
+        });
         return filepath;
       }
     })();
+    // End [knauf]
     cache.set(filepath, pending);
   }
   const resolved = await pending;

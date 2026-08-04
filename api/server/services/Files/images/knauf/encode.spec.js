@@ -48,7 +48,7 @@ describe('[knauf] image provider payload normalization', () => {
     mockGetDownloadStream.mockResolvedValue(Readable.from(Buffer.from('image-bytes')));
   });
 
-  it('keeps the signed blob URL for Foundry instead of serializing image bytes', async () => {
+  it('supplies private Azure blob bytes to Foundry without forwarding its signed URL', async () => {
     const image = makeImage();
     const result = await encodeAndFormat(
       makeRequest(),
@@ -57,10 +57,11 @@ describe('[knauf] image provider payload normalization', () => {
       VisionModes.agents,
     );
 
-    expect(mockGetDownloadStream).not.toHaveBeenCalled();
-    expect(result.image_urls[0].image_url.url).toBe(image.filepath);
-    expect(JSON.stringify(result)).not.toContain('data:image');
-    expect(JSON.stringify(result).length).toBeLessThan(2048);
+    expect(mockGetDownloadStream).toHaveBeenCalledWith(expect.any(Object), image.filepath);
+    expect(result.image_urls[0].image_url.url).toBe(
+      `data:image/png;base64,${Buffer.from('image-bytes').toString('base64')}`,
+    );
+    expect(JSON.stringify(result.image_urls)).not.toContain('sig=secret');
   });
 
   it('still supplies base64 to providers that require inline image content', async () => {

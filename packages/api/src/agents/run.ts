@@ -22,6 +22,7 @@ import type {
   RunConfig,
   IState,
   LCTool,
+  LangfuseConfig,
 } from '@librechat/agents';
 import type {
   Agent,
@@ -882,7 +883,25 @@ function buildSubagentConfigs(
 }
 
 // [knauf] Correlate the agent and its detached title trace by source message.
-function buildLangfuseConfig(tenantIdInput?: unknown, sourceMessageIdInput?: unknown) {
+export function buildLangfuseConfig(
+  tenantIdInput?: unknown,
+  sourceMessageIdInput?: unknown,
+  messages?: BaseMessage[],
+): LangfuseConfig {
+  const hasImageInput =
+    messages?.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some(
+          (part) =>
+            part != null &&
+            typeof part === 'object' &&
+            ['image_url', 'input_image', 'image'].includes((part as { type?: string }).type ?? ''),
+        ),
+    ) === true;
+  if (hasImageInput) {
+    return { enabled: false };
+  }
   const tenantId = typeof tenantIdInput === 'string' ? tenantIdInput.trim() : '';
   const sourceMessageId =
     typeof sourceMessageIdInput === 'string' ? sourceMessageIdInput.trim() : '';
@@ -1221,7 +1240,7 @@ export async function createRun({
     // feedback route in api/server/routes/messages.js). No-op unless Langfuse
     // tracing is enabled. Requires @librechat/agents >= 3.2.21.
     // [knauf] The title run inherits this source-message correlation metadata.
-    langfuse: buildLangfuseConfig(tenantId ?? user?.tenantId, runId),
+    langfuse: buildLangfuseConfig(tenantId ?? user?.tenantId, runId, messages),
     // End [knauf]
     ...(enableToolOutputReferences && {
       toolOutputReferences: { enabled: true },

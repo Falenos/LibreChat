@@ -8,6 +8,10 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
 }));
 
+// [knauf] NO-TICKET — assert refresh diagnostics contain neither SAS URLs nor errors.
+const { logger } = require('@librechat/data-schemas');
+// End [knauf]
+
 jest.mock('../../../../../server/services/Files/Azure/crud', () => ({
   needsRefreshAzure: jest.fn(),
   getNewAzureURL: jest.fn(),
@@ -30,8 +34,10 @@ beforeEach(() => {
   isAzureBlobUrl.mockReturnValue(true);
 });
 
-const FRESH = 'https://acct.blob.core.windows.net/files/images/u/old?sig=OLD&se=2026-01-01T00:00:00Z';
-const REFRESHED = 'https://acct.blob.core.windows.net/files/images/u/old?sig=NEW&se=2099-01-01T00:00:00Z';
+const FRESH =
+  'https://acct.blob.core.windows.net/files/images/u/old?sig=OLD&se=2026-01-01T00:00:00Z';
+const REFRESHED =
+  'https://acct.blob.core.windows.net/files/images/u/old?sig=NEW&se=2099-01-01T00:00:00Z';
 
 describe('refreshMessageAttachmentUrls', () => {
   test('returns input unchanged for null / undefined / []', async () => {
@@ -51,9 +57,7 @@ describe('refreshMessageAttachmentUrls', () => {
 
   test('passes through attachments whose filepath is not near expiry', async () => {
     needsRefreshAzure.mockReturnValue(false);
-    const messages = [
-      { messageId: 'm1', attachments: [{ filepath: FRESH }] },
-    ];
+    const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(needsRefreshAzure).toHaveBeenCalledTimes(1);
     expect(getNewAzureURL).not.toHaveBeenCalled();
@@ -63,9 +67,7 @@ describe('refreshMessageAttachmentUrls', () => {
   test('rewrites filepath in place when near expiry', async () => {
     needsRefreshAzure.mockReturnValue(true);
     getNewAzureURL.mockResolvedValue(REFRESHED);
-    const messages = [
-      { messageId: 'm1', attachments: [{ filepath: FRESH, file_id: 'f1' }] },
-    ];
+    const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH, file_id: 'f1' }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(messages[0].attachments[0].filepath).toBe(REFRESHED);
     expect(messages[0].attachments[0].file_id).toBe('f1');
@@ -77,6 +79,10 @@ describe('refreshMessageAttachmentUrls', () => {
     const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(messages[0].attachments[0].filepath).toBe(FRESH);
+    // [knauf] NO-TICKET — the fallback keeps the URL in memory, never in telemetry.
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(FRESH);
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('boom');
+    // End [knauf]
   });
 
   test('keeps original URL when getNewAzureURL returns undefined', async () => {
@@ -85,6 +91,9 @@ describe('refreshMessageAttachmentUrls', () => {
     const messages = [{ messageId: 'm1', attachments: [{ filepath: FRESH }] }];
     await refreshMessageAttachmentUrls(messages);
     expect(messages[0].attachments[0].filepath).toBe(FRESH);
+    // [knauf] NO-TICKET — an empty refresh result also omits the SAS URL.
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain(FRESH);
+    // End [knauf]
   });
 
   test('tolerates attachments without filepath / null entries', async () => {
@@ -93,12 +102,7 @@ describe('refreshMessageAttachmentUrls', () => {
     const messages = [
       {
         messageId: 'm1',
-        attachments: [
-          null,
-          {},
-          { filepath: '' },
-          { filepath: FRESH },
-        ],
+        attachments: [null, {}, { filepath: '' }, { filepath: FRESH }],
       },
     ];
     await refreshMessageAttachmentUrls(messages);

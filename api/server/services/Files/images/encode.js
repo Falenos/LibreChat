@@ -164,10 +164,15 @@ async function encodeAndFormat(req, files, params, mode) {
     }
 
     const preparePayload = encodingMethods[source].prepareImagePayload;
-    /* Base64-only providers still need blob bytes; URL-capable providers keep the signed URL. */
-    // [knauf] NO-TICKET — Foundry accepts the already-authorized SAS URL. Avoid
-    // expanding a bounded blob into a large data URI in the request and OTEL span.
-    if (blobStorageSources.has(source) && base64Only.has(effectiveEndpoint)) {
+    /* Base64-only providers and private Azure Foundry inputs need blob bytes. */
+    // [knauf] NO-TICKET — Foundry's Chat Completions image fetcher cannot access
+    // private Blob Storage even through the application's short-lived SAS URL.
+    // Read through the existing authenticated storage strategy and send the
+    // provider-supported data URL. Image-bearing agent tracing is disabled at
+    // Run creation so these bytes never enter OTEL/Langfuse payloads.
+    const needsBlobBytes =
+      base64Only.has(effectiveEndpoint) || provider === EModelEndpoint.azureOpenAI;
+    if (blobStorageSources.has(source) && needsBlobBytes) {
       try {
         const downloadStream = encodingMethods[source].getDownloadStream;
         let stream = await downloadStream(req, file.filepath);

@@ -1,5 +1,39 @@
 // [knauf] Tests for applyKnaufResponseStyle helper (KK20-128).
-import { applyKnaufResponseStyle } from '../run';
+import { HumanMessage } from '@librechat/agents/langchain/messages';
+import { applyKnaufResponseStyle, buildLangfuseConfig } from '../run';
+
+describe('buildLangfuseConfig', () => {
+  it('disables trace capture when provider input contains an image', () => {
+    const privateImage = 'data:image/png;base64,aW1hZ2UtYnl0ZXM=';
+    const messages = [
+      new HumanMessage({
+        content: [
+          { type: 'text', text: 'Describe this image' },
+          { type: 'image_url', image_url: { url: privateImage } },
+        ],
+      }),
+    ];
+
+    const config = buildLangfuseConfig('tenant-secret', 'message-1', messages);
+
+    expect(config).toEqual({ enabled: false });
+    expect(JSON.stringify(config)).not.toContain(privateImage);
+    expect(JSON.stringify(config)).not.toContain('tenant-secret');
+  });
+
+  it('preserves ordinary text-run correlation', () => {
+    const config = buildLangfuseConfig('tenant-1', 'message-1', [new HumanMessage('hello')]);
+
+    expect(config).toEqual({
+      deterministicTraceId: true,
+      metadata: {
+        'librechat.source.message.id': 'message-1',
+        'librechat.tenant.id': 'tenant-1',
+      },
+      tags: ['tenant:tenant-1'],
+    });
+  });
+});
 
 describe('applyKnaufResponseStyle', () => {
   it('is a no-op when neither flag is set', () => {
