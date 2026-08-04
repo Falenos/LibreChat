@@ -1001,6 +1001,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/knauf/package.json` | None — Knauf workspace dependency manifest | Low — promotes the already-used Playwright core version to a production dependency so pruning retains the renderer | `knauf/tests/artifactExportRuntime.spec.js`; production frontend build | NO-TICKET |
 | `knauf/docker/chromium-wrapper.sh` | Alpine `su-exec` and Chromium binary | Low — privilege-drops the multi-stage runtime before launching Chromium and never uses `--no-sandbox` | `knauf/tests/artifactExportRuntime.spec.js` | NO-TICKET |
 | `knauf/tests/artifactExportRuntime.spec.js` | Node `test`, `assert`, `fs`, and `path`; production manifests/scripts | Low — dependency-free guard for Chromium, Playwright, wrapper copying, and sandbox-preserving privilege drop | Self | NO-TICKET |
+| `knauf/code-adapter/**` | None — standalone Node/TS package with its own dependency tree; mirrors the LibreChat Code API contract (`api/server/services/Files/Code/*`, `@librechat/agents` CodeExecutor/BashExecutor) and the codeapi JWT shape (`packages/api/src/auth/codeapi.ts`) by test, never by import | Low — zero upstream imports; the drift surface is the Code API HTTP contract, guarded by the replay suite in `test/contract/` | `knauf/code-adapter/test/{unit,contract}/*.spec.ts` (7 suites, 55 specs) | KK20-108 |
 <!-- seams:new:end -->
 
 ## Static Assets
