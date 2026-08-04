@@ -7,7 +7,7 @@ description: >-
   plain chat.
 argument-hint: "[what to build or change]"
 user-invocable: true
-version: "2.0.0"
+version: "2.0.1"
 ---
 
 # KARL Artifacts: choosing well and building previews that render
@@ -110,10 +110,26 @@ preview. A separately hosted export must serve the supplied font files and equiv
 
 - Semantic HTML (`button` for actions, `label htmlFor` on every input, ordered
   headings); keep keyboard focus visible.
-- Ensure text/background contrast; never encode meaning by colour alone — add a
-  label, an icon, or a legend. This applies to status chips and KPI deltas too.
-- The preview follows the user's light/dark preference — don't hardcode near-white
-  text/backgrounds that only work in one mode.
+- **Treat every background and its foreground as one pair.** A surface is not themed
+  until its heading, body and muted text come from the matching row below:
+
+  | Surface | Background | Heading / body / muted text |
+  |---|---|---|
+  | Theme-aware page or card | `theme.page` / `theme.card` | `theme.heading` / `theme.text` / `theme.muted` |
+  | Fixed white logo header | `KNAUF.surface.card` | `KNAUF.ink.heading` / `KNAUF.ink.primary` / `KNAUF.ink.muted` |
+  | Brand-blue title field | `KNAUF.brand.accessibleBlue` | `#FFFFFF` / `#FFFFFF` / `KNAUF.ink.accentOnBrand` |
+
+  Never pair a fixed light surface (`#FFFFFF`, `KNAUF.surface.card`, a white
+  shadcn card) with `theme.text`, `theme.heading` or `theme.muted`: those become
+  light ink in dark mode and disappear on white. Conversely, never put fixed
+  light-mode ink on `theme.card` when that card can become dark.
+- One `dark` state drives `useKnaufTheme(dark)` and every theme-aware surface and
+  text token. Do not combine that state with Tailwind `dark:*`, inherited shadcn
+  text colours, or a second theme detector. For a visible Light/Dark toggle, test
+  every card, label, chart axis, tooltip and disabled control in both positions.
+- Ensure normal text reaches 4.5:1 against its immediate background (3:1 for large
+  text). Never encode meaning by colour alone — add a label, icon or legend. This
+  applies to status chips and KPI deltas too.
 - Default to a clean layout: page padding (`p-6`), constrained width
   (`max-w-4xl mx-auto`), a consistent spacing scale. shadcn/ui `Card`, `Tabs`,
   `Table` and `Badge` give a professional look for almost no effort. Each lives in
@@ -175,8 +191,11 @@ and no skill.
 - The wordmark in a React artifact is `<KnaufWordmark />` from `/knauf/brand`; in an
   HTML or SVG artifact it is the real inline SVG from
   `skills/karl-brand/references/logo.md` — never an `<img>`, and never typed as text.
-  Product naming sits beside the mark, not inside it; clear space on every side is at
-  least the mark's height.
+  Its generated artifact header is a full-width white band in both modes, with
+  `fill={KNAUF.brand.logoCyan}`. Never place the mark in a small white tile, pill or
+  box inside a dark or coloured header. Product naming sits beside the mark in fixed
+  light-mode ink, not inside it; clear space on every side is at least the mark's
+  height.
 - Charts keep the categorical order fixed by series index and always carry a legend
   or direct labels. Labels and axes wear ink tokens, never a series colour — which
   recharts does *not* give you for free: `<Legend>` needs a `formatter` and `<Pie>`

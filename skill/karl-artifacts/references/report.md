@@ -10,7 +10,7 @@ no visible toggle, because a deliverable is read, not operated. If the user want
 filters, tabs, live data, or drill-down, reach for the dashboard template instead.
 
 Adapt it by swapping `DATA`, the KPI tiles, the chart type (bar↔line), and the table
-rows. Keep the top-to-bottom order: **brand bar → title → executive summary → KPI
+rows. Keep the top-to-bottom order: **white brand header → title → executive summary → KPI
 row → one chart → findings table → footer.**
 
 ## Before you write
@@ -29,20 +29,21 @@ the `KNAUF` const.**
 
 | Token | Styles |
 |---|---|
-| `KNAUF.brand.accessibleBlue` | the top brand bar field |
+| `KNAUF.surface.card` / `KNAUF.surface.border` | fixed white logo header / its hairline |
+| `KNAUF.ink.heading` | report-kind label inside the fixed white header |
 | `theme.heading` | h1, card titles, table headers, KPI values |
 | `theme.text` / `theme.muted` | body copy / captions, axis labels, footer |
 | `theme.card` / `theme.page` / `theme.border` | card fill / page fill / hairlines |
 | `theme.palette[i]` | chart series, by index |
 | `theme.grid` | gridlines, axis strokes |
-| `KNAUF.ink.accentOnBrand` | the eyebrow label on the brand bar |
 | `KNAUF.status[tone]` | KPI delta icon, status chip ring + dot; text stays ink |
 
 ## Brand + layout guidance
 
-- The brand mark is `<KnaufWordmark fill="#FFFFFF" />` in the `accessibleBlue` bar,
-  with the report kind as a **separate** eyebrow label on the right. Never fuse
-  naming into the mark; never use an `<img>`. Bar padding and the gap to other
+- The logo header is a full-width white band in both modes, never a white logo box
+  inside a coloured header. Render `<KnaufWordmark fill={KNAUF.brand.logoCyan} />`
+  directly on it, with the report kind as a **separate** fixed-ink label. Never fuse
+  naming into the mark; never use an `<img>`. Header padding and the gap to other
   content are at least the 26px mark height.
 - Headings and structural type read from `theme.heading`, never from
   `KNAUF.brand.accessibleBlue` directly — that hex is 1.56:1 on a dark surface.
@@ -128,14 +129,14 @@ export default function KnaufReport() {
   return (
     <div className="min-h-full w-full" style={{ backgroundColor: theme.page, color: theme.text }}>
       <header
-        className="w-full px-7 py-7 md:px-10"
-        style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
+        className="w-full border-b px-7 py-7 md:px-10"
+        style={{ backgroundColor: KNAUF.surface.card, borderColor: KNAUF.surface.border }}
       >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-7">
-          <KnaufWordmark height={26} fill="#FFFFFF" />
+          <KnaufWordmark height={26} fill={KNAUF.brand.logoCyan} />
           <span
             className="text-xs font-medium uppercase tracking-widest"
-            style={{ color: KNAUF.ink.accentOnBrand }}
+            style={{ color: KNAUF.ink.heading }}
           >
             Analytics Report
           </span>

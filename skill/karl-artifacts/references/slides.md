@@ -29,7 +29,9 @@ the `KNAUF` const.**
 
 | Token | Styles |
 |---|---|
-| `KNAUF.brand.accessibleBlue` | title-slide field, top-bar mark background |
+| `KNAUF.brand.accessibleBlue` | title-slide field |
+| `KNAUF.surface.card` / `KNAUF.surface.border` | fixed white logo header / its hairline |
+| `KNAUF.ink.heading` | deck label inside the fixed white header |
 | `KNAUF.brand.cyanBlue` | section rule, bullet markers, the Next button |
 | `KNAUF.ink.accentOnBrand` | title-slide subtitle on the blue field |
 | `theme.heading` / `theme.text` / `theme.muted` | slide headings / body / captions |
@@ -39,12 +41,11 @@ the `KNAUF` const.**
 
 ## Brand & layout guidance
 
-- **The real wordmark, not typed text.** `<KnaufWordmark />` in the top bar and in the
-  slide footer. On the `accessibleBlue` field it takes `#FFFFFF`; on a light surface
-  it takes `KNAUF.brand.logoCyan`. Deck naming is separate text beside it. Both
-  placements sit at or above the **20px floor** from `logo.md` — the footer mark is
-  the one that tempts you below it, and below 20px the counters close up. Padding
-  around each placement is at least the mark height.
+- **The real wordmark, not typed text.** Put it once in a full-width white header
+  that stays white in both modes; never put a small white logo box inside a coloured
+  bar. Use `fill={KNAUF.brand.logoCyan}` and fixed light-surface ink for the separate
+  deck label. Keep the mark at or above the **20px floor** from `logo.md`, with clear
+  space at least equal to its height. The themed slide footer contains text only.
 - **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage. Slide content is
   absolutely positioned to fill it, so every slide is the same size.
 - **Type scale.** Title slides `text-5xl`; section dividers `text-4xl`; slide headings
@@ -198,20 +199,22 @@ export default function KarlSlideDeck() {
   return (
     <div
       data-knauf-export-pages={total}
-      className="min-h-screen w-full px-4 py-8"
+      className="min-h-screen w-full"
       style={{ backgroundColor: theme.page }}
     >
-      <div className="mx-auto max-w-5xl">
-        <div
-          className="mb-3 flex items-center justify-between rounded-t-lg border px-6 py-6"
-          style={{ backgroundColor: KNAUF.brand.accessibleBlue, borderColor: theme.border }}
-        >
-          <KnaufWordmark height={22} fill="#FFFFFF" />
-          <span className="text-sm font-medium" style={{ color: KNAUF.ink.accentOnBrand }}>
+      <header
+        className="w-full border-b px-6 py-5"
+        style={{ backgroundColor: KNAUF.surface.card, borderColor: KNAUF.surface.border }}
+      >
+        <div className="mx-auto flex max-w-5xl items-center justify-between">
+          <KnaufWordmark height={22} fill={KNAUF.brand.logoCyan} />
+          <span className="text-sm font-medium" style={{ color: KNAUF.ink.heading }}>
             Knauf Digital · Confidential
           </span>
         </div>
+      </header>
 
+      <div className="mx-auto max-w-5xl px-4 py-8">
         <div
           className="relative aspect-video w-full overflow-hidden rounded-lg border"
           style={{ borderColor: theme.border }}
@@ -221,8 +224,7 @@ export default function KarlSlideDeck() {
             className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-5"
             style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
           >
-            {/* 20px is the wordmark floor — do not shrink this to fit. */}
-            <KnaufWordmark height={20} fill={dark ? '#FFFFFF' : KNAUF.brand.logoCyan} />
+            <span className="text-sm" style={{ color: theme.muted }}>Knauf Digital</span>
             <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
           </div>
         </div>
