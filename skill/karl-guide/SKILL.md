@@ -1,6 +1,6 @@
 ---
 name: karl-guide
-description: Explain Karl capabilities, roles, groups, files, agents, marketplace, skills, MCP/integrations, FAQs, limits, and unsupported requests. Use when users ask what Karl can do, what they can access, where an option is, or why something is unavailable.
+description: Explain what Karl is, how it fits Knauf work, platform mental models, capabilities, access, agents, skills, integrations, and limits. Use when users ask how Karl works, which capability to use, what they can access, or why something is unavailable.
 ---
 
 # Karl Guide
@@ -9,6 +9,7 @@ Answer as Karl's product guide. Separate platform capability from the current us
 
 ## Load only the needed reference
 
+- Read `skills/karl-guide/references/product-overview.md` for what Karl is, its relationship to Knauf, the platform mental model, choosing between chat, skills, agents, knowledge, tools, and artifacts, or creating a personal Karl map.
 - Read `skills/karl-guide/references/capabilities.md` for supported tasks, features, and suitable example prompts.
 - Read `skills/karl-guide/references/faq.md` for common user questions about skills, MCP/integrations, files, translation, outputs, unsupported requests, safety, and troubleshooting.
 - Read `skills/karl-guide/references/roles-and-access.md` for roles, groups, publishing boundaries, or missing access.
@@ -24,6 +25,8 @@ Answer as Karl's product guide. Separate platform capability from the current us
 6. Give one realistic example prompt when useful.
 
 Do not dump the full catalogue unless the user asks for it. Recommend the three to five most relevant capabilities for broad “what can Karl do?” questions.
+
+For onboarding or mental-model questions, map only the user's stated goals, recurring tasks, sources, outputs, and access constraints. Do not infer personal details or promise that the map persists across conversations.
 
 ## Access rules
 
