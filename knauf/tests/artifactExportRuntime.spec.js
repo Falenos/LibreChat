@@ -6,6 +6,29 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
+test('CI uses the current shared workflow and pinned action versions', () => {
+  assert.match(
+    read('.github/workflows/test_pipeline.yaml'),
+    /test-nextjs\.yaml@v3\.0\.0/,
+  );
+  assert.match(
+    read('.github/workflows/upstream-release-watcher.yml'),
+    /actions\/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6\.0\.2/,
+  );
+  assert.match(
+    read('.github/workflows/upstream-release-watcher.yml'),
+    /actions\/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9\.0\.0/,
+  );
+  assert.match(
+    read('.github/workflows/seam-validator.yml'),
+    /actions\/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6\.0\.2/,
+  );
+  assert.match(
+    read('.github/workflows/combine_prs.yml'),
+    /actions\/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9\.0\.0/,
+  );
+});
+
 test('production images provide a sandboxed Chromium artifact renderer', () => {
   assert.match(read('Dockerfile'), /apk add --no-cache jemalloc chromium/);
   assert.match(read('Dockerfile.multi'), /apk add --no-cache jemalloc chromium su-exec/);
