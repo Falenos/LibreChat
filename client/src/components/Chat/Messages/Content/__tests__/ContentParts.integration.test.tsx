@@ -48,15 +48,15 @@ jest.mock('../ProgressText', () => ({
 
 jest.mock('lucide-react', () => ({
   ChevronDown: () => <span>{'chevron'}</span>,
-  // [knauf] Render the artifact edit card in the grouping regression. (NO-TICKET)
-  FilePenLine: () => <span>{'file-pen'}</span>,
-  // End [knauf]
   TriangleAlert: () => <span>{'alert'}</span>,
   Users: () => <span>{'users'}</span>,
 }));
 
 jest.mock('@librechat/client', () => ({
   Button: ({ children }: { children?: React.ReactNode }) => <button>{children}</button>,
+  // [knauf] Render the shared artifact file preview in the grouping regression. (NO-TICKET)
+  FileIcon: () => <span>{'artifact-file'}</span>,
+  // End [knauf]
 }));
 
 jest.mock('../Parts', () => ({
