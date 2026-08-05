@@ -679,6 +679,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/app/permissions.spec.ts` | `Knauf USER restrictions and Admin-managed sharing` | 2410–2606 | Proves prompt and People Picker settings survive restart while unrelated USER restrictions remain enforced | Self | NO-TICKET |
 | `packages/api/src/middleware/share.ts` | `getResourcePerms` | 7–9, 135–140 | Enforces protected non-prompt role bits at the request boundary while trusting stored Admin-managed prompt permissions | `packages/api/src/middleware/share.spec.ts` | NO-TICKET |
 | `packages/api/src/middleware/share.spec.ts` | `Admin UI ownership at the prompt-sharing request boundary` | 180–217 | Proves a USER grant for public prompt sharing is honored by request authorization | Self | NO-TICKET |
+| `packages/data-schemas/src/methods/message.ts` | `saveMessage` duplicate-key recovery | 197–230 | Recognizes Mongo/FerretDB duplicate-key races by stable error code instead of vendor-specific message text, then reapplies the completed response | `packages/data-schemas/src/methods/message.spec.ts` (`recovers duplicate-key errors that use FerretDB wording`) | NO-TICKET |
+| `packages/data-schemas/src/methods/message.spec.ts` | FerretDB duplicate-key wording regression | 130–210 | Proves code 11000 recovery remains active when the database reports “Duplicate key violation” rather than MongoDB's legacy wording | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1092,6 +1094,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/tests/agentBuilderRole.spec.js` | Node standard library; real role seeder executed in a bounded `vm` database stub | Low — proves reseeding neither creates nor overwrites Admin-managed Agent Builder sharing permissions | Self | NO-TICKET |
 | `packages/api/src/knauf/config/librechatYaml.knauf.spec.ts` | Node filesystem/path; `js-yaml`; committed LibreChat configuration | Low — proves deployment YAML does not declare prompt or People Picker permissions that would override Admin choices at startup | Self | NO-TICKET |
 | `knauf/docs/contributing/roles-and-access.md` | None (Markdown) | Low — documents Admin-only ownership of prompt and People Picker permissions and the seeder's preservation contract | Docs only | NO-TICKET |
+| `knauf/docs/implementation-plans/pdf-password-permission-handling.md` | None | Low — Knauf-only proposed implementation plan doc; no runtime coupling, out for review before any code lands | Docs only | KK20-232 |
+| `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded projection | Low — retains only the provider's bounded parameter path so invalid Model Router requests identify the failing field without logging request content | `api/server/controllers/agents/knauf/providerError.spec.js` | NO-TICKET |
+| `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves safe nested parameter paths survive projection while paths, payloads, and free-form values remain excluded | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
