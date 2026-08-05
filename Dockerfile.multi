@@ -10,7 +10,9 @@ ARG BUILD_BRANCH=
 ARG BUILD_DATE=
 
 # Base for all builds
-FROM node:24.16.0-alpine AS base-min
+# [knauf] Pin the patched Node 24 Alpine runtime used by AGK multi-stage images. (NO-TICKET)
+FROM node:24.18.1-alpine AS base-min
+# End [knauf]
 ARG NPM_CI_TIMEOUT_SECONDS=1500
 ARG NPM_CI_ATTEMPTS=2
 RUN apk upgrade --no-cache
