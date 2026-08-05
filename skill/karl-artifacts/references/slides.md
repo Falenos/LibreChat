@@ -1,256 +1,72 @@
-# Slide-deck template (`slides`)
+# Slide decks: data only
 
-## When to use this template
-
-Reach for this when the artifact is a **presentation**: a linear sequence of
-full-bleed 16:9 slides the viewer clicks through — a quarterly review, a rollout
-plan, a pitch. It follows the viewer's OS light/dark preference and routes every
-colour through the theme; there is no visible toggle, because the viewer is here to
-advance slides. If the ask is an interactive dashboard, a single report page, or a
-form, use a different template.
-
-The deck is driven by one `const SLIDES = [...]` array. Each entry has a `type` that
-picks a layout — `'title'`, `'section'`, `'bullets'`, `'chart'`. Add or reorder slides
-by editing that array only; the renderer, navigation and footer adapt automatically.
-
-## Before you write
-
-Read `skills/karl-brand/SKILL.md` for what the tokens mean, then start the artifact
-with the import below — the module is mounted in every preview, so nothing is pasted:
+Use the platform slide renderer. Do not recreate navigation, headers, theming,
+layout, page counters, keyboard controls, or export attributes in the artifact.
 
 ```tsx
-import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
-```
+import { KnaufSlideDeck } from '/knauf/slides';
 
-**The code below assumes that import and introduces no colour that is not already in
-the `KNAUF` const.**
-
-## Tokens this layout uses
-
-| Token | Styles |
-|---|---|
-| `KNAUF.brand.accessibleBlue` | title-slide field |
-| `KNAUF.surface.card` / `KNAUF.surface.border` | fixed white logo header / its hairline |
-| `KNAUF.ink.heading` | deck label inside the fixed white header |
-| `KNAUF.brand.cyanBlue` | section rule, bullet markers, the Next button |
-| `KNAUF.ink.accentOnBrand` | title-slide subtitle on the blue field |
-| `theme.heading` / `theme.text` / `theme.muted` | slide headings / body / captions |
-| `theme.card` / `theme.page` / `theme.border` | slide surface / stage surround / hairlines |
-| `theme.palette[i]` | chart series, by index |
-| `theme.grid` | gridlines, axis strokes |
-
-## Brand & layout guidance
-
-- **The real wordmark, not typed text.** Put it once in a full-width white header
-  that stays white in both modes; never put a small white logo box inside a coloured
-  bar. Use `fill={KNAUF.brand.logoCyan}` and fixed light-surface ink for the separate
-  deck label. Keep the mark at or above the **20px floor** from `logo.md`, with clear
-  space at least equal to its height. The themed slide footer contains text only.
-- **Stage.** A `max-w-5xl` wrapper holds an `aspect-video` stage. Slide content is
-  absolutely positioned to fill it, so every slide is the same size.
-- **Type scale.** Title slides `text-5xl`; section dividers `text-4xl`; slide headings
-  `text-3xl`; body `text-lg`/`text-base`; footer `text-sm`. Tailwind scale classes
-  only — never bracket values.
-- **Navigation.** Prev/Next buttons (lucide `ChevronLeft`/`ChevronRight`) plus
-  `ArrowLeft`/`ArrowRight` keys via a `keydown` `useEffect`. A `"3 / 5"` counter and a
-  slide-number footer orient the viewer. Every deck must put
-  `data-knauf-export-pages={total}` on its root and `data-knauf-export-next` on the
-  Next button. These language-independent attributes are the PDF/PNG export contract;
-  do not rename or omit them when adapting this template.
-- **A cyan button takes ink text, not white.** White on `#0099DE` is 3.18:1, which
-  fails AA for a `text-sm` label; ink on cyan is 5.50:1.
-- **Charts.** Assign `theme.palette` in **fixed index order**, never rank- or
-  value-driven. Always include a `<Legend />`, and always give it a `formatter` —
-  recharts paints legend label text in the series colour and `wrapperStyle` does not
-  override it. The `<ResponsiveContainer>` sits in a parent with an explicit
-  `h-72 w-full`. Status colours never enter the data palette.
-
-```tsx
-import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, Legend,
-} from 'recharts';
-
-const REVENUE = [
-  { region: 'DACH', prior: 42, current: 51 },
-  { region: 'Iberia', prior: 28, current: 33 },
-  { region: 'Nordics', prior: 19, current: 26 },
-  { region: 'Benelux', prior: 23, current: 24 },
-];
-
-// `field: 'brand'` renders a full-bleed accessibleBlue title slide.
 const SLIDES = [
-  { type: 'title', title: 'KARL Platform Review', subtitle: 'Q2 2026 · Knauf Digital', field: 'brand' },
-  { type: 'section', title: '01 — Adoption', subtitle: 'Where the rollout stands today' },
-  { type: 'bullets', title: 'Highlights this quarter', items: [
-    'Active users up 38% across DACH and Iberia business units',
-    'Median time-to-first-answer down from 14s to 5s',
-    'Four production agents live; two more in UAT',
-    'Zero SEV-1 incidents since the March hardening release',
-  ] },
-  { type: 'chart', title: 'Revenue by region', unit: '€M',
-    keys: [{ k: 'prior', label: 'FY2023' }, { k: 'current', label: 'FY2024' }] },
-  { type: 'title', title: 'Thank you', subtitle: 'Questions & discussion', field: 'brand' },
+  {
+    type: 'title',
+    eyebrow: 'Technology briefing',
+    title: 'Retrieval-Augmented Generation',
+    subtitle: 'Grounding generative AI in trusted, current knowledge',
+  },
+  {
+    type: 'process',
+    title: 'How RAG works',
+    steps: [
+      { title: 'Retrieve', text: 'Find passages relevant to the user question.' },
+      { title: 'Augment', text: 'Add the passages to the model context.' },
+      { title: 'Generate', text: 'Answer from the supplied evidence.' },
+    ],
+  },
+  {
+    type: 'columns',
+    title: 'Why teams use RAG',
+    columns: [
+      { title: 'Benefits', items: ['Current information', 'Traceable sources', 'Domain relevance'] },
+      { title: 'Controls', items: ['Access filtering', 'Retrieval evaluation', 'Citation checks'] },
+    ],
+    sources: [
+      { text: 'AWS: What is RAG?', href: 'https://aws.amazon.com/what-is/retrieval-augmented-generation/' },
+    ],
+  },
 ];
 
-function Slide({ slide, theme }) {
-  if (slide.type === 'title') {
-    return (
-      <div
-        className="absolute inset-0 flex flex-col justify-center px-16"
-        style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
-      >
-        <h1 className="text-5xl font-bold leading-tight" style={{ color: '#FFFFFF' }}>{slide.title}</h1>
-        <p className="mt-4 text-xl" style={{ color: KNAUF.ink.accentOnBrand }}>{slide.subtitle}</p>
-      </div>
-    );
-  }
-  if (slide.type === 'section') {
-    return (
-      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: theme.page }}>
-        <div className="mb-5 h-1.5 w-24 rounded-full" style={{ backgroundColor: KNAUF.brand.cyanBlue }} />
-        <h2 className="text-4xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
-        <p className="mt-3 text-lg" style={{ color: theme.muted }}>{slide.subtitle}</p>
-      </div>
-    );
-  }
-  if (slide.type === 'bullets') {
-    return (
-      <div className="absolute inset-0 flex flex-col justify-center px-16" style={{ backgroundColor: theme.card }}>
-        <h2 className="mb-8 text-3xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
-        <ul className="space-y-5">
-          {slide.items.map((item, i) => (
-            <li key={i} className="flex items-start gap-4">
-              <span
-                className="mt-2 inline-block h-3 w-3 flex-shrink-0 rounded-sm"
-                style={{ backgroundColor: KNAUF.brand.cyanBlue }}
-                aria-hidden="true"
-              />
-              <span className="text-lg leading-snug" style={{ color: theme.text }}>{item}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-  // 'chart'
-  return (
-    <div className="absolute inset-0 flex flex-col px-16 py-12" style={{ backgroundColor: theme.card }}>
-      <h2 className="mb-1 text-3xl font-semibold" style={{ color: theme.heading }}>{slide.title}</h2>
-      <p className="mb-4 text-sm" style={{ color: theme.muted }}>Figures in {slide.unit}</p>
-      <div className="h-72 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={REVENUE} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} />
-            <XAxis dataKey="region" tick={{ fill: theme.muted, fontSize: 13 }} stroke={theme.grid} />
-            <YAxis tick={{ fill: theme.muted, fontSize: 13 }} stroke={theme.grid} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: theme.card,
-                border: `1px solid ${theme.border}`,
-                borderRadius: 8,
-                color: theme.text,
-              }}
-            />
-            {/* formatter, not wrapperStyle: recharts colours legend text by series. */}
-            <Legend
-              wrapperStyle={{ fontSize: 13 }}
-              formatter={(value) => <span style={{ color: theme.text }}>{value}</span>}
-            />
-            {slide.keys.map((s, i) => (
-              <Bar key={s.k} dataKey={s.k} name={s.label} fill={theme.palette[i]} radius={[3, 3, 0, 0]} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-export default function KarlSlideDeck() {
-  // Follow the viewer's OS preference. No toggle: they are here to advance slides.
-  const dark = useMemo(
-    () => typeof window !== 'undefined'
-      && window.matchMedia?.('(prefers-color-scheme: dark)').matches === true,
-    [],
-  );
-  const theme = useKnaufTheme(dark);
-  const [index, setIndex] = useState(0);
-  const total = SLIDES.length;
-
-  const go = useCallback((delta) => {
-    setIndex((prev) => Math.min(total - 1, Math.max(0, prev + delta)));
-  }, [total]);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'ArrowRight') go(1);
-      else if (e.key === 'ArrowLeft') go(-1);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [go]);
-
-  const slide = SLIDES[index];
-
-  return (
-    <div
-      data-knauf-export-pages={total}
-      className="min-h-screen w-full"
-      style={{ backgroundColor: theme.page }}
-    >
-      <header
-        className="w-full border-b px-6 py-5"
-        style={{ backgroundColor: KNAUF.surface.card, borderColor: KNAUF.surface.border }}
-      >
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <KnaufWordmark height={22} fill={KNAUF.brand.logoCyan} />
-          <span className="text-sm font-medium" style={{ color: KNAUF.ink.heading }}>
-            Knauf Digital · Confidential
-          </span>
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-5xl px-4 py-8">
-        <div
-          className="relative aspect-video w-full overflow-hidden rounded-lg border"
-          style={{ borderColor: theme.border }}
-        >
-          <Slide slide={slide} theme={theme} />
-          <div
-            className="absolute bottom-0 left-0 right-0 flex items-center justify-between border-t px-6 py-5"
-            style={{ borderTopColor: theme.border, backgroundColor: theme.card }}
-          >
-            <span className="text-sm" style={{ color: theme.muted }}>Knauf Digital</span>
-            <span className="text-sm" style={{ color: theme.muted }}>Slide {index + 1}</span>
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center justify-between">
-          <button
-            onClick={() => go(-1)}
-            disabled={index === 0}
-            className="flex items-center gap-1 rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-40"
-            style={{ backgroundColor: theme.card, color: theme.heading, borderColor: theme.border }}
-          >
-            <ChevronLeft size={18} aria-hidden="true" /> Prev
-          </button>
-          <span className="text-sm font-semibold" style={{ color: theme.text }}>{index + 1} / {total}</span>
-          <button
-            data-knauf-export-next
-            onClick={() => go(1)}
-            disabled={index === total - 1}
-            className="flex items-center gap-1 rounded-md px-4 py-2 text-sm font-medium disabled:opacity-40"
-            style={{ backgroundColor: KNAUF.brand.cyanBlue, color: KNAUF.ink.primary }}
-          >
-            Next <ChevronRight size={18} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+export default function Presentation() {
+  return <KnaufSlideDeck slides={SLIDES} deckLabel="RAG briefing" />;
 }
 ```
+
+## Supported layouts
+
+| `type` | Data |
+|---|---|
+| `title` | `title`, optional `subtitle`, optional `eyebrow` |
+| `section` | `title`, optional `subtitle` |
+| `bullets` | `title`, `items` |
+| `columns` | `title`, `columns: [{ title, items }]` |
+| `process` | `title`, `steps: [{ title, text }]` |
+| `chart` | `title`, `data`, `categoryKey`, `series: [{ key, label }]`, optional `subtitle` |
+
+`items` can contain plain strings or `{ text, href }` link objects. Any non-title
+slide can also carry `sources: [{ text, href }]`.
+
+## Required postconditions
+
+- The `SLIDES` array length equals the requested page count exactly.
+- Every requested page is one entry in that array. Never hide pages with
+  `display: none`.
+- The root has no required props. Pass all content into `KnaufSlideDeck`.
+- Links are `{ text, href }` objects. Never put Markdown `[label](url)` syntax in
+  TSX strings or JSX text.
+- Keep slide copy concise: one idea per page, short headings, at most five bullets,
+  and no paragraph-shaped bullets.
+- Do not import cards, brand primitives, navigation icons, or chart components for
+  a standard deck. `/knauf/slides` already owns them.
+- Do not add or rename export attributes. `/knauf/slides` owns PDF/PNG pagination.
+- If the user asks for a genuinely custom interaction that the layouts cannot
+  express, keep `KnaufSlideDeck` for the deck and simplify the content. A fully
+  custom renderer is the last resort, not the default.

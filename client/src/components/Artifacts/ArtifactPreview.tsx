@@ -71,7 +71,9 @@ export const ArtifactPreview = memo(function ({
         ref={previewRef}
       >
         {/* [knauf] Keep the repair action above the generated app's error overlay for owners only. (NO-TICKET) */}
-        {isSharedConvo === true ? undefined : <ArtifactRepairButton artifact={artifact} />}
+        {isSharedConvo === true ? undefined : (
+          <ArtifactRepairButton artifact={artifact} sourceCode={currentCode ?? artifact.content} />
+        )}
         {/* End [knauf] */}
       </SandpackPreview>
     </SandpackProvider>

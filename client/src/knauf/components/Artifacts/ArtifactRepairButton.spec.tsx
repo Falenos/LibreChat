@@ -8,12 +8,13 @@ import ArtifactRepairButton, {
 } from './ArtifactRepairButton';
 
 const mockAsk = jest.fn();
-const mockError = {
+const compilerError = {
   message: "Cannot read properties of undefined (reading 'cyanBlue')",
   path: '/App.tsx',
   line: 15,
   column: 76,
 };
+let mockError: typeof compilerError | null = compilerError;
 let mockIsSubmitting = false;
 let mockLatestMessageId = 'assistant-message-1';
 
@@ -68,6 +69,7 @@ const finishGeneration = (identifier: string) => {
 describe('ArtifactRepairButton', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockError = compilerError;
     mockIsSubmitting = false;
     mockLatestMessageId = 'assistant-message-1';
   });
@@ -77,7 +79,7 @@ describe('ArtifactRepairButton', () => {
 
     expect(mockAsk).toHaveBeenCalledTimes(1);
     expect(mockAsk).toHaveBeenLastCalledWith({
-      text: expect.stringContaining(mockError.message),
+      text: expect.stringContaining(compilerError.message),
       parentMessageId: 'assistant-message-1',
     });
     expect(mockAsk.mock.calls[0][0].text).toContain('untrusted diagnostic data');
@@ -133,7 +135,24 @@ describe('ArtifactRepairButton', () => {
     expect(isRepairableArtifactError({ message: '[sandpack-client]: connection timeout' })).toBe(
       false,
     );
-    expect(isRepairableArtifactError(mockError)).toBe(true);
+    expect(isRepairableArtifactError(compilerError)).toBe(true);
+  });
+
+  it('offers repair when a slide deck compiles but violates the runtime contract', () => {
+    mockError = null;
+    render(
+      <ArtifactRepairButton
+        artifact={artifact}
+        sourceCode="export default () => <div data-knauf-export-pages><section style={{ display: 'none' }} /></div>;"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_knauf_artifact_fix' }));
+
+    expect(mockAsk).toHaveBeenCalledWith({
+      text: expect.stringContaining("from '/knauf/slides'"),
+      parentMessageId: 'assistant-message-1',
+    });
   });
 
   it('mounts the repair action in owned artifact previews', () => {

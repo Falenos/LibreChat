@@ -20,11 +20,13 @@ test('production images provide a sandboxed Chromium artifact renderer', () => {
   assert.doesNotMatch(wrapper, /--no-sandbox/);
 });
 
-test('the slide template exposes a language-independent export contract', () => {
+test('the platform slide renderer owns the language-independent export contract', () => {
   const skill = read('skill/karl-artifacts/SKILL.md');
   const slides = read('skill/karl-artifacts/references/slides.md');
-  assert.match(skill, /data-knauf-export-pages/);
-  assert.match(skill, /data-knauf-export-next/);
-  assert.match(slides, /data-knauf-export-pages=/);
-  assert.match(slides, /data-knauf-export-next/);
+  const renderer = read('client/src/knauf/sandbox/slideDeckModule.ts');
+  assert.match(skill, /\/knauf\/slides/);
+  assert.match(slides, /import \{ KnaufSlideDeck \} from '\/knauf\/slides'/);
+  assert.doesNotMatch(slides, /function Slide\(/);
+  assert.match(renderer, /data-knauf-export-pages=\{total\}/);
+  assert.match(renderer, /data-knauf-export-next/);
 });
