@@ -1,8 +1,4 @@
 agentic-karl:
-  # ponytail: remove after prod completes its first generation-scoped Redis deployment.
-  strategy:
-    type: Recreate
-
   configmap:
     KNAUF_RESTRICT_USER_PERMISSIONS: 'true'
     KNAUF_RESTRICT_PROD_USER_PERMISSIONS: 'true'
