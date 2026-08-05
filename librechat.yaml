@@ -739,12 +739,6 @@ modelSpecs:
         # headroom on the smallest candidates, rather than a guessed model cap.
         maxContextTokens: 256000
         useResponsesApi: true
-        # [knauf] NO-TICKET — Datadog/Langfuse showed healthy sub-second TTFT
-        # but multi-minute generations dominated by 5k–9k token answers. Use
-        # the Responses API's native style control instead of a hard token cap:
-        # artifacts and requested source can still finish, while ordinary prose
-        # is biased towards the short answer users expect from KARL.
-        verbosity: low
         web_search: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
