@@ -61,6 +61,9 @@ export function Artifact({
 
   const setArtifacts = useSetRecoilState(artifactsState);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
+  // [knauf] NO-TICKET — keep Version 1's sort position stable across later revisions.
+  const rootRevisionTimeRef = useRef<{ artifactKey: string; time: number } | null>(null);
+  // End [knauf]
 
   const throttledUpdateRef = useRef(
     throttle((updateFn: () => void) => {
@@ -122,11 +125,15 @@ export function Artifact({
         }));
         void getArtifactRevision({ messageId, identifier, version: 1 })
           .then((snapshot) => {
+            const previousRoot = rootRevisionTimeRef.current;
+            const rootRevisionTime =
+              previousRoot?.artifactKey === artifactKey ? previousRoot.time : now - 1;
+            rootRevisionTimeRef.current = { artifactKey, time: rootRevisionTime };
             const original = {
               ...currentArtifact,
               ...snapshot,
               id: artifactKey,
-              lastUpdateTime: now - 1,
+              lastUpdateTime: rootRevisionTime,
             };
             setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: original }));
             setArtifact(original);

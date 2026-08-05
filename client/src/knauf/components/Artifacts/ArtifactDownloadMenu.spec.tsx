@@ -5,6 +5,7 @@ import ArtifactDownloadMenu from './ArtifactDownloadMenu';
 const mockPostArtifactExport = jest.fn();
 const mockTriggerDownload = jest.fn();
 const mockShowToast = jest.fn();
+let mockCurrentCode: string | undefined;
 
 jest.mock('@librechat/client', () => ({
   Button: ({ children, ...props }: Readonly<{ children: ReactNode }>) => (
@@ -37,7 +38,7 @@ jest.mock('~/hooks/Artifacts/useArtifactProps', () => ({
 }));
 
 jest.mock('~/Providers/EditorContext', () => ({
-  useCodeState: () => ({ currentCode: 'export default () => <main>Edited</main>;' }),
+  useCodeState: () => ({ currentCode: mockCurrentCode }),
 }));
 
 jest.mock('~/knauf/data-provider/data-service', () => ({
@@ -59,6 +60,7 @@ const artifact = {
 describe('ArtifactDownloadMenu', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCurrentCode = 'export default () => <main>Edited</main>;';
     mockPostArtifactExport.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -95,6 +97,21 @@ describe('ArtifactDownloadMenu', () => {
     expect(mockTriggerDownload).toHaveBeenCalledWith(
       'blob:artifact-export',
       'Quarterly status.png',
+    );
+  });
+
+  it('exports artifact content before the code editor initializes', async () => {
+    mockCurrentCode = '';
+    render(<ArtifactDownloadMenu artifact={artifact} />);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_png' }));
+
+    await waitFor(() =>
+      expect(mockPostArtifactExport).toHaveBeenCalledWith(
+        expect.objectContaining({ content: artifact.content }),
+        'png',
+        undefined,
+      ),
     );
   });
 
