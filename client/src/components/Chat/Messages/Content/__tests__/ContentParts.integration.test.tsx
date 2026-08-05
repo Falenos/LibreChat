@@ -48,6 +48,9 @@ jest.mock('../ProgressText', () => ({
 
 jest.mock('lucide-react', () => ({
   ChevronDown: () => <span>{'chevron'}</span>,
+  // [knauf] Render the artifact edit card in the grouping regression. (NO-TICKET)
+  FilePenLine: () => <span>{'file-pen'}</span>,
+  // End [knauf]
   TriangleAlert: () => <span>{'alert'}</span>,
   Users: () => <span>{'users'}</span>,
 }));
@@ -139,6 +142,26 @@ const makeMcpToolCallWithoutId = (name: string, hasOutput = true): TMessageConte
 
 const makeTextPart = (text: string): TMessageContentParts =>
   ({ type: ContentTypes.TEXT, text }) as unknown as TMessageContentParts;
+
+// [knauf] Build a successful artifact edit result for the visible-card regression. (NO-TICKET)
+const makeArtifactEditCall = (): TMessageContentParts =>
+  ({
+    type: ContentTypes.TOOL_CALL,
+    [ContentTypes.TOOL_CALL]: {
+      id: 'edit-1',
+      name: 'edit_artifact',
+      args: '{}',
+      output: JSON.stringify({
+        status: 'updated',
+        identifier: 'watch',
+        messageId: 'assistant-1',
+        title: 'HLMP Watch',
+        version: 2,
+        replacements: 1,
+      }),
+    },
+  }) as unknown as TMessageContentParts;
+// End [knauf]
 
 const imageAttachment = (toolCallId: string, name = 'tiny.png'): TAttachment =>
   ({
@@ -236,6 +259,18 @@ describe('ContentParts integration: MCP image hoist and grouping', () => {
 
     expect(screen.queryByTestId('attachment-group')).not.toBeInTheDocument();
   });
+
+  // [knauf] Pin artifact version cards outside the collapsible tool diagnostics. (NO-TICKET)
+  it('keeps a completed artifact update visible outside collapsed tool groups', () => {
+    renderContentParts({
+      ...baseProps,
+      content: [makeMcpToolCall('t1'), makeArtifactEditCall()],
+    });
+
+    expect(screen.getByText('com_ui_version_var')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Used 2 tools' })).not.toBeInTheDocument();
+  });
+  // End [knauf]
 
   it('keeps a manually expanded completed tool group open when its content index shifts', () => {
     const content = [makeMcpToolCall('t1'), makeMcpToolCall('t2')];

@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { findAllArtifacts, getToolDefinition } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
+const { validateReactArtifactSource } = require('@knauf/knauf/server/validateArtifactSource');
 
 const TOOL_NAME = 'edit_artifact';
 const MAX_REPLACEMENTS = 25;
@@ -193,6 +194,13 @@ async function applyArtifactEdit(input, deps) {
     );
   }
 
+  if (replacements.some((replacement) => replacement.old === currentContent)) {
+    throw new ArtifactEditError(
+      'Do not replace the complete artifact source; use localized exact replacements instead',
+      'full_source_replacement',
+    );
+  }
+
   let workingMessage = target.message;
   const inversePatches = [];
   for (const replacement of replacements) {
@@ -226,6 +234,20 @@ async function applyArtifactEdit(input, deps) {
       );
     }
     workingMessage = withUpdatedText(workingMessage, boundary, updatedText);
+  }
+
+  const editedBoundary = findAllArtifacts(workingMessage)[target.artifactIndex];
+  if (readAttribute(editedBoundary, 'type') === 'application/vnd.react') {
+    const syntaxError = validateReactArtifactSource(readArtifactContent(editedBoundary));
+    if (syntaxError) {
+      const location = syntaxError.line
+        ? ` at line ${syntaxError.line}, column ${syntaxError.column ?? 0}`
+        : '';
+      throw new ArtifactEditError(
+        `Updated React artifact has invalid syntax${location}; use localized replacements and retry`,
+        'invalid_artifact_syntax',
+      );
+    }
   }
 
   const version = readVersion(target.boundary) + 1;

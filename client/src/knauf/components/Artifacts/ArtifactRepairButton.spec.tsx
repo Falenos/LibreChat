@@ -94,7 +94,9 @@ describe('ArtifactRepairButton', () => {
     );
 
     expect(mockAsk).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'com_knauf_artifact_fix' })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'com_knauf_artifact_fix' });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('left-1/2', 'top-1/2');
   });
 
   it('does not repair an old artifact after an unrelated generation', () => {
