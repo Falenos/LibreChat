@@ -32,7 +32,6 @@ jest.mock(
     getRenderSnapshot: jest.fn(),
     renderArtifact: (...args) => mockRenderArtifact(...args),
   }),
-  { virtual: true },
 );
 
 const artifactExportRouter = require('./artifactExport');
