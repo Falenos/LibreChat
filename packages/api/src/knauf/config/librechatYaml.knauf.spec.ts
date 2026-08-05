@@ -53,7 +53,7 @@ interface LibreChatYaml {
   summarization?: { enabled?: boolean };
   modelSpecs?: { list?: ModelSpec[] };
   endpoints?: { agents?: { capabilities?: string[] } };
-  interface?: { runCode?: boolean };
+  interface?: { runCode?: boolean; prompts?: unknown; peoplePicker?: unknown };
 }
 
 let config: LibreChatYaml;
@@ -76,6 +76,13 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
       expect(spec.preset?.endpoint).toBeTruthy();
       expect(spec.preset?.model).toBeTruthy();
     }
+  });
+});
+
+describe('[knauf] librechat.yaml — Admin-managed prompt sharing', () => {
+  it('does not override prompt or People Picker permissions', () => {
+    expect(config.interface).not.toHaveProperty('prompts');
+    expect(config.interface).not.toHaveProperty('peoplePicker');
   });
 });
 

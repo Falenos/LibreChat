@@ -11,7 +11,7 @@ test('the Agent Builder role can create public artifact links', () => {
     insertOne: () => {
       throw new Error('Expected the existing role to be updated');
     },
-    updateMany: (_filter, update) => {
+    updateOne: (_filter, update) => {
       role = { ...role, ...update.$set };
       return { matchedCount: 1, modifiedCount: 1 };
     },
@@ -28,16 +28,25 @@ test('the Agent Builder role can create public artifact links', () => {
   assert.equal(role.permissions.SHARED_LINKS.CREATE, true);
   assert.equal(role.permissions.SHARED_LINKS.SHARE, true);
   assert.equal(role.permissions.SHARED_LINKS.SHARE_PUBLIC, true);
+  assert.equal(role.permissions.PROMPTS, undefined);
+  assert.equal(role.permissions.PEOPLE_PICKER, undefined);
 });
 
-test('the Agent Builder role can share prompts with users but not globally', () => {
-  let role = { name: 'AGENT_BUILDER', permissions: {} };
+test('the Agent Builder seeder preserves Admin-managed prompt sharing permissions', () => {
+  let role = {
+    _id: 'agent-builder-role',
+    name: 'AGENT_BUILDER',
+    permissions: {
+      PROMPTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: true },
+      PEOPLE_PICKER: { VIEW_USERS: false, VIEW_GROUPS: true, VIEW_ROLES: true },
+    },
+  };
   const roles = {
     find: () => ({ toArray: () => [role] }),
     insertOne: () => {
       throw new Error('Expected the existing role to be updated');
     },
-    updateMany: (_filter, update) => {
+    updateOne: (_filter, update) => {
       role = { ...role, ...update.$set };
       return { matchedCount: 1, modifiedCount: 1 };
     },
@@ -51,9 +60,15 @@ test('the Agent Builder role can share prompts with users but not globally', () 
     },
   );
 
-  assert.equal(role.permissions.PROMPTS.SHARE, true);
-  assert.equal(role.permissions.PROMPTS.SHARE_PUBLIC, false);
-  assert.equal(role.permissions.PEOPLE_PICKER.VIEW_USERS, true);
-  assert.equal(role.permissions.PEOPLE_PICKER.VIEW_GROUPS, false);
-  assert.equal(role.permissions.PEOPLE_PICKER.VIEW_ROLES, false);
+  assert.deepEqual(role.permissions.PROMPTS, {
+    USE: false,
+    CREATE: false,
+    SHARE: false,
+    SHARE_PUBLIC: true,
+  });
+  assert.deepEqual(role.permissions.PEOPLE_PICKER, {
+    VIEW_USERS: false,
+    VIEW_GROUPS: true,
+    VIEW_ROLES: true,
+  });
 });
