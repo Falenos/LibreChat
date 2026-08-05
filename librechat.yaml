@@ -196,7 +196,6 @@ interface:
   modelSelect: true
   parameters: false
   presets: false
-  prompts: true
   bookmarks: true
   memories: true
   multiConvo: true
