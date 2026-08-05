@@ -14,7 +14,8 @@ PDFs that require an open password remain rejected with a typed error unless Kna
 approves the optional password-submission extension described below. That extension must not delay
 or block the readable-PDF fix.
 
-This plan changes the app and its deployment only. The RAG API needs no code change.
+No RAG API change is currently planned. That remains true only if the core fixture corpus passes
+the deployed `/embed` and `/agent/embed` paths, including Azure Document Intelligence fallback.
 
 ## Scope
 
@@ -83,25 +84,58 @@ not a reason to keep rejecting case B.
 ### PR 1 - Fix case-A/B/C classification
 
 Replace the `/Encrypt` byte-sniff decision in
-`packages/api/src/files/validation.ts` with a PDF.js access probe:
+`packages/api/src/files/validation.ts` with a bounded PDF.js access probe that returns a
+discriminated result:
 
 - successful open without a supplied password -> `readable` (A or B);
 - PDF.js `PasswordException` requiring a password -> `password_required` (C);
 - malformed, spoofed, or unsupported PDF -> validation failure, not `password_required`.
 
+Run the probe only after the existing MIME and file-size checks. Bound parser wall time, disable
+PDF.js evaluation, and destroy both the loading task and loaded document in `finally`. Add tests
+that prove timeout and parser failures release their resources. The route must not inherit the
+current encryption detector's broad fail-open catch:
+
+- file read, parser initialization, and timeout failures return a retryable validation error;
+- only a confirmed `PasswordException` returns the password-required error;
+- deterministic malformed/unsupported input returns the invalid-file error.
+
 Keep the existing OOXML encrypted-container check unchanged. Preserve client-ID adoption,
 authorization, original-byte hashing, reservation, and temp-file cleanup order.
 
 Ship the case-A/B behavior independently: readable PDFs continue through the existing storage and
-RAG path without stripping encryption or creating alternate content. Until the later PRs are
-enabled, case C retains a typed password-required rejection.
+RAG path without stripping encryption or creating alternate content. Unless the optional extension
+is separately approved and enabled, case C retains a typed password-required rejection.
 
-### Optional extension - requires separate Knauf approval
+### PR 2 - Prove downstream and deployment readiness
+
+Run unencrypted, permission-encrypted but credential-free, signed/certified, PDF/A, malformed, and
+open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. Assert
+actual text extraction and generation activation, not only successful upload or PDF metadata
+loading. Exercise Azure Document Intelligence rejection/fallback where applicable.
+
+If any readable fixture cannot be fully extracted by the existing RAG stack, the required RAG
+change joins KK20-232; do not weaken the acceptance matrix or mark the upload ready with incomplete
+content.
+
+Before rollout, make the indexing execution mode coherent in each environment:
+
+1. deploy a draining worker with `KNAUF_INDEXING_WORKER_ENABLED=true` before setting
+   `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true`; or
+2. set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false` and use bounded synchronous generation.
+
+Prove the selected mode with a canary that reaches `ready`. This is mandatory core work, not part of
+the optional open-password extension.
+
+## Appendix: optional open-password extension
+
+This appendix preserves the ready technical design without making it part of the committed delivery
+sequence.
 
 The following work is technically designed but is not required to complete KK20-232. Start it only
 after product ownership confirms that open-password PDFs are an important Knauf use case.
 
-#### PR 2 - Add the server-side password lifecycle
+### Optional PR 1 - Add the server-side password lifecycle
 
 Extend the physical `KnaufFileAsset` machine and types with:
 
@@ -135,7 +169,7 @@ worker execution, retry, and reconciliation. Downloads and citations always reso
 Add qpdf to both Alpine app images (`Dockerfile` and `Dockerfile.multi`). Root Dockerfile changes
 need `[knauf]` markers, KK20-232 `SEAMS.md` rows, and image smoke coverage.
 
-#### PR 3 - Add actionable client behavior
+### Optional PR 2 - Add actionable client behavior
 
 Split the current `isIndexingPending` concept into explicit predicates:
 
@@ -152,7 +186,7 @@ normal status polling only after the server returns `queued` or `processing`.
 
 The server-side chat readiness check remains the enforcement boundary.
 
-#### PR 4 - Complete cleanup, deployment, and rollout
+### Optional PR 3 - Complete cleanup and rollout
 
 Update deletion, cancellation, expiry, reconciler, partial-persistence, and CAS-loss paths to delete
 the original and worker descriptors once each. A `needs_password` asset expires after 24 hours by
@@ -161,11 +195,9 @@ artifacts using the normal tombstone/delete lifecycle.
 
 Before enabling case-C acceptance:
 
-1. either deploy the dedicated worker with `KNAUF_INDEXING_WORKER_ENABLED=true`, or set
-   `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false` so uploads use synchronous execution;
-2. prove the selected mode drains a queued canary asset;
-3. deploy qpdf image changes to every API pod that can serve the password endpoint;
-4. enable new case-C acceptance for dev, then prod.
+1. confirm the mandatory core indexing-mode correction remains active;
+2. deploy qpdf image changes to every API pod that can serve the password endpoint;
+3. enable new case-C acceptance for dev, then prod.
 
 Use a creation gate for case C so rollback can stop new `needs_password` assets while leaving the
 password endpoint available to drain existing ones. Disabling the feature must not strand already
@@ -181,9 +213,12 @@ Update the files architecture docs and seam manifest after behavior is accepted.
 | KK20-232 permission-encrypted PDF readable without credentials | Original stored unchanged; indexes normally |
 | Readable signed/certified or DocMDP PDF | Original stored unchanged; indexes normally |
 | Readable PDF/A document | Original stored unchanged; indexes normally |
+| Readable PDF rejected by Azure Document Intelligence | Existing pypdf fallback extracts and activates the generation |
 | Open-password PDF | Typed password-required rejection; does not block the readable-PDF release |
 | Malformed PDF or MIME spoof | Rejected as invalid, never presented as a password prompt |
-| Worker unavailable | No new work is queued; bounded synchronous path is used |
+| PDF.js read, initialization, or timeout failure | Retryable validation failure; no silent pass-through |
+| Worker disabled or unavailable | Async acceptance is disabled; bounded synchronous path reaches `ready` |
+| Worker enabled | Canary queues once and reaches `ready` |
 
 ## Optional-extension acceptance matrix
 
@@ -204,16 +239,17 @@ Applies only if Knauf approves open-password support:
 
 | Repository | Work |
 |---|---|
-| `agentic-karl` | Core classification/tests/docs; optional state machine, qpdf lifecycle, and client UX only if approved |
-| `agk-deployment-configs` | Coherent async/worker flags; optional worker deployment and case-C feature gate |
-| `agentic-karl-rag-api` | No change; validate the existing PDF fallback and generation contract |
+| `agentic-karl` | Bounded core classification/tests/docs; optional state machine, qpdf lifecycle, and client UX only if approved |
+| `agk-deployment-configs` | Coherent async/worker flags, worker deployment if async is selected, and optional case-C feature gate |
+| `agentic-karl-rag-api` | Validate the existing PDF fallback and generation contract; change it if a readable core fixture fails |
 
 ## Completion
 
 KK20-232 is complete when unencrypted, permission-encrypted, signed/certified, and PDF/A documents
-that are readable without credentials pass upload and full indexing in dev and prod; malformed PDFs
-and open-password PDFs fail with distinct typed errors; and the selected indexing mode demonstrably
-drains every state it accepts.
+that are readable without credentials pass upload, text extraction, and generation activation in
+dev and prod; malformed PDFs, parser infrastructure failures, and open-password PDFs fail with
+their distinct typed errors; and the selected indexing mode demonstrably drains every state it
+accepts.
 
 If Knauf later approves the optional extension, its separate completion condition is that case C
 passes the optional-extension matrix without exposing a password or internal worker descriptor.
