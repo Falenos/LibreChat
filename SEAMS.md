@@ -684,6 +684,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/role.ts` | effective and persisted Shared Links baseline | 3–5, 24–38, 155–157, 174–180, 519–521 | Makes public-link sharing part of every custom role, including roles created before the permission existed, while preserving explicit administrator denials | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/methods/role.methods.spec.ts` | custom-role Shared Links defaults regression | 78–102, 676–699 | Proves legacy, cached, and newly created roles receive all-on link sharing while explicit public-sharing denials still win | Self | NO-TICKET |
 | `client/src/components/Artifacts/Artifact.tsx` | `updateArtifact` versioned-source branch | 15–17, 55, 87–88, 110–141, 168 | Keeps the original message card bound to reconstructed revision 1 after an edit mutates the persisted source, while registering the latest content under its stable revision-scoped ID | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | NO-TICKET |
+| `client/src/utils/groupToolCalls.ts` | `isGroupableToolCall` | 19–23 | Keeps successful artifact-version pointers visible as message content instead of burying them in collapsed tool diagnostics | `client/src/components/Chat/Messages/Content/__tests__/ContentParts.integration.test.tsx` | NO-TICKET |
+| `client/src/components/Chat/Messages/Content/__tests__/ContentParts.integration.test.tsx` | `makeArtifactEditCall`; visible artifact card regression | 51–53, 146–164, 263–273 | Exercises the upstream grouping seam with a real successful `edit_artifact` result and proves no disclosure expansion is required | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1101,6 +1103,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded projection | Low — retains only the provider's bounded parameter path so invalid Model Router requests identify the failing field without logging request content | `api/server/controllers/agents/knauf/providerError.spec.js` | NO-TICKET |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves safe nested parameter paths survive projection while paths, payloads, and free-form values remain excluded | Self | NO-TICKET |
 | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | Upstream `Artifact`, Recoil artifact registry, and mocked Knauf revision service | Low — exact regression proving a mutated version-2 source leaves the root card on version 1 and registers version 2 under its immutable revision ID | Self | NO-TICKET |
+| `api/server/services/Artifacts/knauf/edit*.js` | `@knauf/knauf/server/validateArtifactSource`; authenticated artifact message compare-and-swap | Medium — rejects whole-source rewrites and malformed React/TSX before any artifact revision is persisted | `api/server/services/Artifacts/knauf/edit.spec.js` | NO-TICKET |
+| `packages/knauf/src/server/validateArtifactSource.js` | `@babel/parser` | Low — parses generated React/TypeScript source and returns only bounded source coordinates for invalid syntax | `api/server/services/Artifacts/knauf/edit.spec.js` | NO-TICKET |
+| `packages/knauf/package.json` | None — Knauf workspace dependency and export manifest | Low — promotes the already-transitive Babel parser to a production dependency and exposes the artifact validator | `api/server/services/Artifacts/knauf/edit.spec.js` | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactRepairButton*.tsx` | Sandpack error state, upstream Button/localization, artifact/chat providers | Medium — keeps owner-only repair behavior while placing the manual recovery action at the center of a broken preview | `ArtifactRepairButton.spec.tsx` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
