@@ -673,6 +673,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/prompts/artifacts/index.ts` | `knaufArtifactImportLines` in both artifact prompt variants | 14–17, 88, 294 | Declares `/knauf/slides` as the mandatory data-only presentation renderer for default and Agent Builder artifact chats across OpenAI and Anthropic endpoints | `packages/api/src/knauf/prompts/artifactImports.knauf.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/methods/message.ts` | `saveMessage` duplicate-key recovery | 197–230 | Recognizes Mongo/FerretDB duplicate-key races by stable error code instead of vendor-specific message text, then reapplies the completed response | `packages/data-schemas/src/methods/message.spec.ts` (`recovers duplicate-key errors that use FerretDB wording`) | NO-TICKET |
 | `packages/data-schemas/src/methods/message.spec.ts` | FerretDB duplicate-key wording regression | 130–210 | Proves code 11000 recovery remains active when the database reports “Duplicate key violation” rather than MongoDB's legacy wording | Self | NO-TICKET |
+| `packages/data-schemas/src/methods/role.ts` | effective and persisted Shared Links baseline | 3–5, 24–38, 155–157, 174–180, 519–521 | Makes public-link sharing part of every custom role, including roles created before the permission existed, while preserving explicit administrator denials | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
+| `packages/data-schemas/src/methods/role.methods.spec.ts` | custom-role Shared Links defaults regression | 78–102, 676–699 | Proves legacy, cached, and newly created roles receive all-on link sharing while explicit public-sharing denials still win | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
