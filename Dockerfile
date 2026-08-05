@@ -1,9 +1,7 @@
 # v0.8.7
 
 # Base node image
-# [knauf] Pin the patched Node 24 Alpine runtime used by AGK images. (NO-TICKET)
-FROM node:24.18.1-alpine AS node
-# End [knauf]
+FROM node:24.16.0-alpine AS node
 
 RUN apk upgrade --no-cache
 # [knauf] Headless Chromium renders artifact PNG/PDF downloads. (NO-TICKET)

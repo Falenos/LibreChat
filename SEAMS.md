@@ -683,8 +683,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/message.spec.ts` | FerretDB duplicate-key wording regression | 130–210 | Proves code 11000 recovery remains active when the database reports “Duplicate key violation” rather than MongoDB's legacy wording | Self | NO-TICKET |
 | `packages/data-schemas/src/methods/role.ts` | effective and persisted Shared Links baseline | 3–5, 24–38, 155–157, 174–180, 519–521 | Makes public-link sharing part of every custom role, including roles created before the permission existed, while preserving explicit administrator denials | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/methods/role.methods.spec.ts` | custom-role Shared Links defaults regression | 78–102, 676–699 | Proves legacy, cached, and newly created roles receive all-on link sharing while explicit public-sharing denials still win | Self | NO-TICKET |
-| `Dockerfile` | `FROM node:24.18.1-alpine AS node` | 4–6 | Security runtime pin — keeps the production AGK image on the patched Node 24 Alpine base instead of waiting for the next upstream sync | `knauf/tests/artifactExportRuntime.spec.js` | NO-TICKET |
-| `Dockerfile.multi` | `FROM node:24.18.1-alpine AS base-min` | 13–15 | Security runtime pin — keeps every multi-stage AGK image target on the same patched Node 24 Alpine base | `knauf/tests/artifactExportRuntime.spec.js` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration

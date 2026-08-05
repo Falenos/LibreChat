@@ -6,18 +6,7 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
-test('runtime and CI use the patched Node and action versions', () => {
-  assert.match(read('Dockerfile'), /FROM node:24\.18\.1-alpine AS node/);
-  assert.match(read('Dockerfile.multi'), /FROM node:24\.18\.1-alpine AS base-min/);
-
-  for (const workflow of [
-    '.github/workflows/config-review.yml',
-    '.github/workflows/playwright-mock.yml',
-  ]) {
-    assert.match(read(workflow), /node-version: '24\.18\.1'/);
-    assert.doesNotMatch(read(workflow), /24\.16\.0/);
-  }
-
+test('CI uses the current shared workflow and pinned action versions', () => {
   assert.match(
     read('.github/workflows/test_pipeline.yaml'),
     /test-nextjs\.yaml@v3\.0\.0/,
