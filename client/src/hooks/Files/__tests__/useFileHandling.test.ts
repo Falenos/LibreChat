@@ -856,9 +856,20 @@ describe('useFileHandling', () => {
       mockMutate.mockImplementation(() => Promise.resolve());
     });
 
+    // End [knauf]
+    // [knauf] KK20-232 — PDF probe infrastructure failures retain the stable
+    // localization code while using the existing bounded 503 retry path.
     it('uses exponential backoff for three retries before succeeding', async () => {
       jest.useFakeTimers();
-      const transientError = { response: { status: 503 } };
+      const transientError = {
+        response: {
+          status: 503,
+          data: {
+            message: 'com_knauf_error_pdf_probe_unavailable',
+            code: 'com_knauf_error_pdf_probe_unavailable',
+          },
+        },
+      };
       mockMutate
         .mockRejectedValueOnce(transientError)
         .mockRejectedValueOnce(transientError)
@@ -902,7 +913,9 @@ describe('useFileHandling', () => {
       jest.useRealTimers();
       mockMutate.mockImplementation(() => Promise.resolve());
     });
+    // End [knauf]
 
+    // [knauf] KK20-227 — continue the sequential multi-file upload regressions.
     it('does not retry a non-transient document upload failure', async () => {
       mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
 

@@ -8,6 +8,12 @@ const {
   resolveUploadErrorMessage,
   verifyAgentUploadPermission,
 } = require('@librechat/api');
+// [knauf] KK20-232 — bounded, process-isolated PDF access classification for File Search.
+const {
+  probePdfAccess,
+  PDF_PROBE_UNAVAILABLE_CODE,
+} = require('@knauf/knauf/server/pdfAccessProbe');
+// End [knauf]
 const {
   isUUID,
   CacheKeys,
@@ -17,6 +23,9 @@ const {
   PermissionBits,
   checkOpenAIStorage,
   isAssistantsEndpoint,
+  // [knauf] KK20-232 — scope PDF probing to File Search uploads only.
+  EToolResources,
+  // End [knauf]
 } = require('librechat-data-provider');
 const {
   filterFile,
@@ -751,21 +760,9 @@ router.post('/', async (req, res) => {
   try {
     filterFile({ req });
 
-    // [knauf] Reject encrypted / password-protected PDFs and OOXML files
-    // (KK20-190). filterFile already validated size + mime; now inspect the
-    // bytes. detectEncryptedFileAtPath reads only the file head (+ the PDF
-    // trailer region) — not the whole upload — and on a match throws the i18n
-    // key `com_knauf_error_file_encrypted`, which resolveUploadErrorMessage
-    // forwards to the client (USER_FACING_UPLOAD_ERRORS) for localization.
-    // KARL's active Azure path never hits upstream's Anthropic-only PDF check.
-    //
-    // INTENTIONALLY NOT gated to the Knauf endpoints (unlike the allow-list +
-    // per-category caps, which key off isKnaufCappedEndpoint in filterFile): an
-    // encrypted/password-protected PDF or OOXML is unprocessable on EVERY endpoint
-    // (rag_api can't embed it, Azure DI / OpenAI can't parse it), so rejecting it
-    // up front with an actionable message beats a downstream parse failure
-    // everywhere. The check is byte-sniffed and self-limiting (returns early for
-    // non-PDF/OOXML), so it's effectively a no-op for other formats. KK20-190.
+    // [knauf] Reject encrypted OOXML containers globally (KK20-190, narrowed by
+    // KK20-232). PDF access is classified separately below because an /Encrypt
+    // dictionary can still be readable without credentials.
     if (req.file?.path) {
       let encryptionCheck = { encrypted: false };
       try {
@@ -781,6 +778,29 @@ router.post('/', async (req, res) => {
       }
       if (encryptionCheck.encrypted) {
         throw new Error(encryptionCheck.error);
+      }
+    }
+    // End [knauf]
+
+    // [knauf] KK20-232 — classify PDF access only for non-Assistants File Search.
+    // The worker is terminated at a fixed deadline; only a confirmed PDF.js
+    // PasswordException becomes password_required. Parser/content failures are
+    // invalid input, while worker/read/init/timeout failures remain retryable 503s.
+    if (
+      req.file?.path &&
+      req.file.mimetype === 'application/pdf' &&
+      !isAssistantsEndpoint(metadata.endpoint) &&
+      metadata.tool_resource === EToolResources.file_search
+    ) {
+      const access = await probePdfAccess(req.file.path);
+      if (access.result !== 'readable') {
+        const code =
+          access.result === 'password_required'
+            ? 'com_knauf_error_pdf_password_required'
+            : 'com_knauf_error_pdf_invalid';
+        const pdfError = new Error(code);
+        pdfError.code = code;
+        throw pdfError;
       }
     }
     // End [knauf]
@@ -942,18 +962,26 @@ router.post('/', async (req, res) => {
 
     return await processAgentFileUpload({ req, res, metadata });
   } catch (error) {
-    const message = resolveUploadErrorMessage(error);
-    // [knauf] NO-TICKET — encrypted/password-protected content is an expected,
-    // unprocessable client input, not an operational 5xx. Logs retain only a
-    // stable code/type and never the upload name, path, bytes, or user identity.
-    const isEncryptedFile = message === 'com_knauf_error_file_encrypted';
+    const resolvedMessage = resolveUploadErrorMessage(error);
+    // [knauf] KK20-232 — stable PDF validation/infrastructure outcomes. Expected
+    // input rejection stays out of 5xx metrics; probe infrastructure failures
+    // remain 503 so the existing bounded upload retry path can recover.
+    const isProbeUnavailable =
+      resolvedMessage === PDF_PROBE_UNAVAILABLE_CODE || error?.code === PDF_PROBE_UNAVAILABLE_CODE;
+    const message = isProbeUnavailable ? PDF_PROBE_UNAVAILABLE_CODE : resolvedMessage;
+    const inputRejectionCodes = new Set([
+      'com_knauf_error_file_encrypted',
+      'com_knauf_error_pdf_password_required',
+      'com_knauf_error_pdf_invalid',
+    ]);
+    const isInputRejection = inputRejectionCodes.has(message);
     const logMetadata = {
       operation: 'file_upload',
       errorType: error instanceof Error ? error.name : 'UnknownError',
-      ...(isEncryptedFile && { code: message }),
+      ...((isInputRejection || isProbeUnavailable) && { code: message }),
     };
-    logger[isEncryptedFile ? 'info' : 'error'](
-      isEncryptedFile ? '[/files] Rejected encrypted file' : '[/files] File processing failed',
+    logger[isInputRejection ? 'info' : 'error'](
+      isInputRejection ? '[/files] Rejected invalid file input' : '[/files] File processing failed',
       logMetadata,
     );
 
@@ -963,11 +991,15 @@ router.post('/', async (req, res) => {
     } catch (_error) {
       logger.error('[/files] Upload cleanup failed', { operation: 'file_upload_cleanup' });
     }
-    // 422 keeps expected rejection out of HTTP 5xx metrics
-    // and exposes a stable localization code to the client.
-    res.status(isEncryptedFile ? 422 : 500).json({
+    let status = 500;
+    if (isInputRejection) {
+      status = 422;
+    } else if (isProbeUnavailable) {
+      status = 503;
+    }
+    res.status(status).json({
       message,
-      ...(isEncryptedFile && { code: message }),
+      ...((isInputRejection || isProbeUnavailable) && { code: message }),
     });
   } finally {
     if (cleanup) {

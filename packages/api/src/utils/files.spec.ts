@@ -563,6 +563,16 @@ describe('resolveUploadErrorMessage', () => {
     );
   });
 
+  test('forwards each PDF access i18n key via the shared prefix', () => {
+    for (const key of [
+      'com_knauf_error_pdf_password_required',
+      'com_knauf_error_pdf_invalid',
+      'com_knauf_error_pdf_probe_unavailable',
+    ]) {
+      expect(resolveUploadErrorMessage({ message: key })).toBe(key);
+    }
+  });
+
   test('forwards each per-category too-large i18n key via the shared prefix', () => {
     for (const key of [
       'com_knauf_error_file_too_large_document',

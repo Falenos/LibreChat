@@ -827,33 +827,21 @@ describe('PDF Validation with fileConfig.endpoints.*.fileSizeLimit', () => {
   });
 });
 
-// [knauf] detectEncryptedFile — PDF + OOXML encryption detection (KK20-190).
+// [knauf] detectEncryptedFile — OOXML encryption detection (KK20-190, KK20-232).
 describe('detectEncryptedFile', () => {
   const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const CFBF_HEADER = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
   const ZIP_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
 
-  it('rejects an encrypted PDF (has /Encrypt)', () => {
+  it('does not globally reject a PDF merely because it has /Encrypt', () => {
     const buf = Buffer.from('%PDF-1.6\n... /Encrypt 12 0 R ... trailer', 'binary');
     const result = detectEncryptedFile(buf, 'application/pdf');
-    expect(result.encrypted).toBe(true);
-    expect(result.error).toBe('com_knauf_error_file_encrypted');
+    expect(result.encrypted).toBe(false);
   });
 
   it('accepts a plain PDF (no /Encrypt)', () => {
     const buf = Buffer.from('%PDF-1.4\nhello world plain content', 'binary');
-    expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
-  });
-
-  it('accepts a non-encrypted PDF with /Encrypt only in an early content stream (F6 regression)', () => {
-    // The /Encrypt entry is authoritative only in the trailer dictionary near EOF.
-    // A non-encrypted PDF can carry the literal bytes "/Encrypt" inside an
-    // (uncompressed) content stream; the tail-only scan must NOT false-positive.
-    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
-    const padding = Buffer.alloc(5000, 0x20); // > the 4096-byte trailer scan window
-    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
-    const buf = Buffer.concat([head, padding, trailer]);
     expect(detectEncryptedFile(buf, 'application/pdf').encrypted).toBe(false);
   });
 
@@ -869,7 +857,7 @@ describe('detectEncryptedFile', () => {
     expect(detectEncryptedFile(buf, XLSX).encrypted).toBe(false);
   });
 
-  // [knauf] MIME-spoof regression (KK20-190): CFBF magic is flagged regardless of
+  // MIME-spoof regression (KK20-190): CFBF magic is flagged regardless of
   // the declared (attacker-controlled) mimetype, so an encrypted OOXML can't slip
   // past by claiming an allow-listed non-OOXML type.
   it('flags an encrypted OOXML spoofed as application/pdf (declared mime ignored)', () => {
@@ -894,9 +882,7 @@ describe('detectEncryptedFile', () => {
   });
 });
 
-// detectEncryptedFileAtPath — partial-read variant used on the upload route. It
-// must reach the same verdict as detectEncryptedFile while reading only the file
-// head (+ PDF trailer region), never the whole file.
+// detectEncryptedFileAtPath — header-only OOXML variant used on the upload route.
 describe('detectEncryptedFileAtPath', () => {
   const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -918,23 +904,14 @@ describe('detectEncryptedFileAtPath', () => {
     await Promise.all(tmpFiles.map((file) => fs.rm(file, { force: true })));
   });
 
-  it('rejects an encrypted PDF (/Encrypt in trailer)', async () => {
+  it('does not globally reject a PDF merely because it has /Encrypt', async () => {
     const file = await writeTmp(Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer', 'binary'));
     const result = await detectEncryptedFileAtPath(file, 'application/pdf');
-    expect(result.encrypted).toBe(true);
-    expect(result.error).toBe('com_knauf_error_file_encrypted');
+    expect(result.encrypted).toBe(false);
   });
 
   it('accepts a plain PDF', async () => {
     const file = await writeTmp(Buffer.from('%PDF-1.4\nhello world plain content', 'binary'));
-    expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
-  });
-
-  it('does not false-positive on /Encrypt outside the trailer window (F6 regression)', async () => {
-    const head = Buffer.from('%PDF-1.7\nstream ... /Encrypt ... endstream\n', 'binary');
-    const padding = Buffer.alloc(5000, 0x20);
-    const trailer = Buffer.from('\ntrailer << /Root 1 0 R >>\nstartxref\n0\n%%EOF', 'binary');
-    const file = await writeTmp(Buffer.concat([head, padding, trailer]));
     expect((await detectEncryptedFileAtPath(file, 'application/pdf')).encrypted).toBe(false);
   });
 
@@ -948,7 +925,7 @@ describe('detectEncryptedFileAtPath', () => {
     expect((await detectEncryptedFileAtPath(file, XLSX)).encrypted).toBe(false);
   });
 
-  // [knauf] MIME-spoof regression (KK20-190): same byte-sniffed verdict as the
+  // MIME-spoof regression (KK20-190): same byte-sniffed verdict as the
   // buffer variant — CFBF magic is flagged whatever the declared mimetype claims.
   it('flags an encrypted OOXML spoofed as application/pdf', async () => {
     const file = await writeTmp(Buffer.concat([CFBF_HEADER, Buffer.alloc(64)]));

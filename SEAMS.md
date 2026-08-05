@@ -684,6 +684,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/role.ts` | effective and persisted Shared Links baseline | 3–5, 24–38, 155–157, 174–180, 519–521 | Makes public-link sharing part of every custom role, including roles created before the permission existed, while preserving explicit administrator denials | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/methods/role.methods.spec.ts` | custom-role Shared Links defaults regression | 78–102, 676–699 | Proves legacy, cached, and newly created roles receive all-on link sharing while explicit public-sharing denials still win | Self | NO-TICKET |
 | `client/src/components/Artifacts/Artifact.tsx` | `updateArtifact` versioned-source branch | 15–17, 55, 87–88, 110–141, 168 | Keeps the original message card bound to reconstructed revision 1 after an edit mutates the persisted source, while registering the latest content under its stable revision-scoped ID | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | NO-TICKET |
+| `api/server/routes/files/files.js` | PDF probe imports and `router.post('/')` access/error branches | 11–28, 763–806, 966–1008 | Classifies non-Assistants File Search PDFs before storage, preserves the global OOXML byte guard, and returns stable 422 validation or retryable 503 infrastructure outcomes | `api/server/routes/files/files.agents.test.js` (`[knauf] POST /files — PDF access classification`) | KK20-232 |
+| `api/server/routes/files/files.agents.test.js` | PDF helper mocks and `[knauf] POST /files — PDF access classification` | 52–74, 764–917 | Proves readable permission-encrypted PDFs continue, password/invalid PDFs stop with stable 422 codes, probe failures return 503, and out-of-scope uploads bypass the probe | Self | KK20-232 |
+| `packages/api/src/files/validation.ts` | `detectEncryptedFile`; `detectEncryptedFileAtPath` | 401–482 | Narrows the legacy global encrypted-file detector to CFBF/OOXML so readable permission-encrypted PDFs are decided by the isolated PDF.js probe instead of `/Encrypt` byte scanning | `packages/api/src/files/validation.spec.ts` | KK20-232 |
+| `packages/api/src/files/validation.spec.ts` | `detectEncryptedFile` and `detectEncryptedFileAtPath` regressions | 830–951 | Proves PDF `/Encrypt` bytes no longer cause global rejection while CFBF/OOXML detection and MIME-spoof protection remain intact | Self | KK20-232 |
+| `packages/api/src/utils/files.ts` | `USER_FACING_UPLOAD_ERRORS` PDF prefix | 10–22 | Forwards all stable PDF access codes through the shared upload error resolver so API responses preserve localization keys | `packages/api/src/utils/files.spec.ts` | KK20-232 |
+| `packages/api/src/utils/files.spec.ts` | PDF access localization-key forwarding | 557–601 | Proves password-required, invalid-PDF, and probe-unavailable codes survive shared upload error normalization | Self | KK20-232 |
+| `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | PDF probe 503 retry regression | 860–916 | Pins probe infrastructure failures to the existing bounded exponential upload retry path without changing production retry policy | Self | KK20-232 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -755,6 +762,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the Continue in KARL action, artifact-only context instructions, change-request cue, and failed-import message (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Keeps only the localized Continue in KARL action and clone-failure message; the former composer prompt is intentionally removed because continuation now opens a persisted recipient-owned artifact immediately (NO-TICKET) |
 | `librechat.yaml` | Routes changes to existing artifacts through `edit_artifact`, requires only a short confirmation after success, and retains full source emission as the safe fallback (NO-TICKET) |
+| `packages/knauf/package.json` | KK20-232 — exports the isolated PDF probe and worker modules and pins `pdfjs-dist` 5.4.624 in the Knauf workspace so PDF parsing does not add a Knauf-only dependency to an upstream package manifest. |
+| `client/src/locales/{en,de}/translation.json` | KK20-232 — localizes the stable password-required, invalid-PDF, and temporarily-unavailable upload outcomes in English and German. JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 
 ## Net-New Files
 
@@ -1101,6 +1110,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded projection | Low — retains only the provider's bounded parameter path so invalid Model Router requests identify the failing field without logging request content | `api/server/controllers/agents/knauf/providerError.spec.js` | NO-TICKET |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves safe nested parameter paths survive projection while paths, payloads, and free-form values remain excluded | Self | NO-TICKET |
 | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | Upstream `Artifact`, Recoil artifact registry, and mocked Knauf revision service | Low — exact regression proving a mutated version-2 source leaves the root card on version 1 and registers version 2 under its immutable revision ID | Self | NO-TICKET |
+| `packages/knauf/src/server/pdfAccessProbe.js` | Node `path` and `worker_threads` | Low — bounded worker orchestration exposes only stable readable/password/invalid results and converts timeout, crash, or result-less exit into a retryable unavailable error | `api/knauf/pdfAccessProbe.spec.js` | KK20-232 |
+| `packages/knauf/src/server/pdfAccessProbe.worker.js` | Node filesystem/worker APIs; `pdfjs-dist` legacy build | Low — reads and parses the original upload inside an isolated worker, distinguishes only confirmed `PasswordException`, and destroys PDF.js resources on every classified path | `api/knauf/pdfAccessProbe.spec.js`; real KK20-253 PDF fixture lab | KK20-232 |
+| `api/knauf/pdfAccessProbe.spec.js` | `@knauf/knauf/server/pdfAccessProbe*`; Node `EventEmitter` | Low — injects fake workers and PDF.js tasks to pin classification, deadline termination, result-less exits, failures, and cleanup without starting external services | Self | KK20-232 |
 <!-- seams:new:end -->
 
 ## Static Assets

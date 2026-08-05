@@ -49,7 +49,23 @@ jest.mock('sharp', () =>
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   refreshS3FileUrls: jest.fn(),
+  // [knauf] KK20-232 — package-level tests cover these helpers; route tests
+  // isolate the PDF branch from the global byte-detector implementation.
+  detectEncryptedFileAtPath: jest.fn((filePath, mimeType) => {
+    const actual = jest.requireActual('@librechat/api');
+    return mimeType === 'application/pdf'
+      ? Promise.resolve({ encrypted: false })
+      : actual.detectEncryptedFileAtPath(filePath, mimeType);
+  }),
+  // End [knauf]
 }));
+
+// [knauf] KK20-232 — isolate route outcome tests from the real PDF worker.
+jest.mock('@knauf/knauf/server/pdfAccessProbe', () => ({
+  probePdfAccess: jest.fn().mockResolvedValue({ result: 'readable' }),
+  PDF_PROBE_UNAVAILABLE_CODE: 'com_knauf_error_pdf_probe_unavailable',
+}));
+// End [knauf]
 
 jest.mock('~/cache', () => ({
   getLogStores: jest.fn(() => ({
@@ -71,6 +87,7 @@ jest.mock('fs', () => {
 });
 
 const { processAgentFileUpload } = require('~/server/services/Files/process');
+const { probePdfAccess } = require('@knauf/knauf/server/pdfAccessProbe');
 
 // Import the router
 const router = require('~/server/routes/files/files');
@@ -738,12 +755,8 @@ describe('File Routes - Agent Files Endpoint', () => {
   });
 });
 
-// [knauf] KK20-190 — the POST /files encryption call-site. filterFile (mocked
-// here) passes, then the route inspects the bytes via detectEncryptedFileAtPath
-// and rejects an encrypted PDF/OOXML with the localized i18n key. This pins the
-// route WIRING (not just the lib fn): an encrypted file is rejected, and an
-// unreadable path is tolerated (fail-open) rather than 500-ing the upload.
-describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', () => {
+// [knauf] KK20-232 — the POST /files PDF classifier and retained OOXML guard.
+describe('[knauf] POST /files — PDF access classification', () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
@@ -792,11 +805,15 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
     return app;
   };
 
-  it('rejects an encrypted PDF (message attachment) with the localized key', async () => {
+  beforeEach(() => {
+    probePdfAccess.mockResolvedValue({ result: 'readable' });
+  });
+
+  it('allows a readable permission-encrypted PDF through the File Search gate', async () => {
     const encPdf = Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF', 'binary');
-    const filePath = writeTmp(encPdf, 'enc.pdf');
+    const filePath = writeTmp(encPdf, 'permission-encrypted.pdf');
     const app = buildApp({
-      originalname: 'enc.pdf',
+      originalname: 'permission-encrypted.pdf',
       mimetype: 'application/pdf',
       size: encPdf.length,
       path: filePath,
@@ -804,23 +821,82 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
 
     const response = await request(app)
       .post('/files')
-      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
 
-    // Expected input rejection must not count as an
-    // operational server failure.
+    expect(probePdfAccess).toHaveBeenCalledWith(filePath);
+    expect(response.body.code).not.toBe('com_knauf_error_file_encrypted');
+  });
+
+  it.each([
+    ['password_required', 'com_knauf_error_pdf_password_required'],
+    ['invalid', 'com_knauf_error_pdf_invalid'],
+  ])('returns 422 for %s PDFs', async (result, code) => {
+    probePdfAccess.mockResolvedValue({ result });
+    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
+    const filePath = writeTmp(pdf, `${result}.pdf`);
+    const app = buildApp({
+      originalname: `${result}.pdf`,
+      mimetype: 'application/pdf',
+      size: pdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
+
     expect(response.status).toBe(422);
-    expect(response.body.message).toBe('com_knauf_error_file_encrypted');
-    expect(response.body.code).toBe('com_knauf_error_file_encrypted');
+    expect(response.body.message).toBe(code);
+    expect(response.body.code).toBe(code);
     expect(processAgentFileUpload).not.toHaveBeenCalled();
   });
 
-  it('does not reject a plain PDF on the encryption check (proceeds past it)', async () => {
-    const plainPdf = Buffer.from('%PDF-1.4\nplain content, no encrypt dict\n%%EOF', 'binary');
-    const filePath = writeTmp(plainPdf, 'plain.pdf');
+  it('returns retryable 503 when the PDF probe is unavailable', async () => {
+    const error = new Error('com_knauf_error_pdf_probe_unavailable');
+    error.code = 'com_knauf_error_pdf_probe_unavailable';
+    probePdfAccess.mockRejectedValue(error);
+    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
+    const filePath = writeTmp(pdf, 'unavailable.pdf');
     const app = buildApp({
-      originalname: 'plain.pdf',
+      originalname: 'unavailable.pdf',
       mimetype: 'application/pdf',
-      size: plainPdf.length,
+      size: pdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('com_knauf_error_pdf_probe_unavailable');
+  });
+
+  it('does not probe PDFs outside non-Assistants File Search', async () => {
+    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
+    const filePath = writeTmp(pdf, 'chat.pdf');
+    const app = buildApp({
+      originalname: 'chat.pdf',
+      mimetype: 'application/pdf',
+      size: pdf.length,
+      path: filePath,
+    });
+
+    await request(app).post('/files').send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    expect(probePdfAccess).not.toHaveBeenCalled();
+  });
+
+  it('retains global encrypted-OOXML rejection', async () => {
+    const cfbf = Buffer.concat([
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+      Buffer.alloc(64),
+    ]);
+    const filePath = writeTmp(cfbf, 'encrypted.docx');
+    const app = buildApp({
+      originalname: 'encrypted.docx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: cfbf.length,
       path: filePath,
     });
 
@@ -828,8 +904,8 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
       .post('/files')
       .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
 
-    // Not rejected for encryption — the encrypted-file key is never returned.
-    expect(response.body.message).not.toBe('com_knauf_error_file_encrypted');
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('com_knauf_error_file_encrypted');
   });
 });
 // End [knauf]
