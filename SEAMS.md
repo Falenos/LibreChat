@@ -688,6 +688,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/__tests__/ContentParts.integration.test.tsx` | `makeArtifactEditCall`; visible artifact card regression | 51–53, 146–164, 263–273 | Exercises the upstream grouping seam with a real successful `edit_artifact` result and proves no disclosure expansion is required | Self | NO-TICKET |
 | `client/src/utils/messages.ts` | — | 169–190, 198–200, 204–217 | Keep artifact source out of screen-reader completion announcements. (NO-TICKET) | — | — |
 | `client/src/utils/__tests__/messages.test.ts` | — | 3–11, 92–120 | Keep artifact source out of the screen-reader completion announcement. (NO-TICKET) | Self | — |
+| `client/src/components/Chat/Messages/MessageNav.tsx` | `buildEntry` artifact-safe preview | 7–10, 22–30 | Keep artifact source out of message-navigation labels and hover previews. | `MessageNav.spec.tsx` | NO-TICKET |
+| `client/src/components/Chat/Messages/__tests__/MessageNav.spec.tsx` | artifact-safe assistant indicator label | 354–377 | Proves accessible message navigation exposes assistant prose without artifact source. | Self | NO-TICKET |
+| `client/src/components/Artifacts/ArtifactPreview.tsx` | `SandpackProvider` artifact identity key | 63–65 | Remount the preview runtime when users switch immutable artifact versions so stale code and styles cannot survive the selection. | `ArtifactRepairButton.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
