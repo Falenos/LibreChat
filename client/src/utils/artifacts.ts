@@ -11,6 +11,9 @@ import type { Artifact } from '~/common';
 import { knaufBrandModule } from '~/knauf/sandbox/brandModule';
 import { knaufFontCss } from '~/knauf/sandbox/brandFonts';
 // End [knauf]
+// [knauf] NO-TICKET — platform-owned renderer for generated slide artifacts.
+import { knaufSlideDeckModule } from '~/knauf/sandbox/slideDeckModule';
+// End [knauf]
 
 const artifactFilename = {
   'application/vnd.react': 'App.tsx',
@@ -957,6 +960,9 @@ export const sharedFiles = {
   // the official webfonts offline and avoid cross-origin font requests from the
   // Sandpack iframe. Standalone HTML artifacts can link `/knauf/fonts.css` too.
   '/knauf/fonts.css': knaufFontCss,
+  // End [knauf]
+  // [knauf] NO-TICKET — generated decks supply data; this module owns the shell.
+  '/knauf/slides.tsx': knaufSlideDeckModule,
   // End [knauf]
   '/public/index.html': dedent`
     <!DOCTYPE html>

@@ -123,16 +123,24 @@ describe('[knauf] shipped deployment skills', () => {
     const logo = brand?.files.find((file) => file.relativePath === 'references/logo.md')?.content;
     expect(logo).toMatch(/entire artifact\s+header band is white/);
 
-    for (const relativePath of [
-      'references/dashboard.md',
-      'references/report.md',
-      'references/slides.md',
-    ]) {
+    for (const relativePath of ['references/dashboard.md', 'references/report.md']) {
       const template = artifacts?.files.find((file) => file.relativePath === relativePath)?.content;
       expect(template).toContain('className="w-full border-b');
       expect(template).toContain('fill={KNAUF.brand.logoCyan}');
       expect(template).not.toMatch(/<KnaufWordmark[^>]*fill="#FFFFFF"/);
     }
+
+    const slides = artifacts?.files.find(
+      (file) => file.relativePath === 'references/slides.md',
+    )?.content;
+    const slideRenderer = fs.readFileSync(
+      path.join(REPO_ROOT, 'client/src/knauf/sandbox/slideDeckModule.ts'),
+      'utf8',
+    );
+    expect(slides).toContain("import { KnaufSlideDeck } from '/knauf/slides'");
+    expect(slideRenderer).toContain('className="w-full border-b');
+    expect(slideRenderer).toContain('fill={KNAUF.brand.logoCyan}');
+    expect(slideRenderer).not.toMatch(/<KnaufWordmark[^>]*fill="#FFFFFF"/);
   });
 
   // [knauf] NO-TICKET — pin runtime artifact edits and the safe fallback.
@@ -278,7 +286,7 @@ describe('[knauf] shipped deployment skills', () => {
       // module's exports, and those legitimately come from `/knauf/brand`.
       for (const component of named) {
         const imported = new RegExp(
-          `import \\{[^}]*\\b${component}\\b[^}]*\\} from '(?:/components/ui/[a-z-]+|/knauf/brand)'`,
+          `import \\{[^}]*\\b${component}\\b[^}]*\\} from '(?:/components/ui/[a-z-]+|/knauf/(?:brand|slides))'`,
         ).test(corpus);
         if (!imported) {
           missing.push(`${skill.name} recommends ${component} with no import example`);
