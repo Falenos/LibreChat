@@ -19,6 +19,7 @@ describe('[knauf] provider error safety', () => {
       status: 400,
       code: 'invalid_payload',
       type: 'invalid_request_error',
+      param: 'input[3].content[1].image_url',
       request_id: 'req-safe-123',
       userId: 'user-secret',
       path: '/private/upload.png',
@@ -33,6 +34,7 @@ describe('[knauf] provider error safety', () => {
       providerStatus: 400,
       code: 'invalid_payload',
       type: 'invalid_request_error',
+      param: 'input[3].content[1].image_url',
       requestId: 'req-safe-123',
     });
     expect(JSON.stringify(summary)).not.toContain(base64.substring(0, 32));
@@ -46,6 +48,7 @@ describe('[knauf] provider error safety', () => {
         status: 500,
         code: 'bad code with user data',
         type: 'x'.repeat(200),
+        param: 'input /private/upload.png',
         request_id: 'id with spaces',
       },
       'agent_generation',
