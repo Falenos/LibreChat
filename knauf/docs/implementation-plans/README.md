@@ -38,6 +38,6 @@ If you can't decide between promote and archive: archive.
 | [`file-lifecycle-dedup-cleanup.md`](./file-lifecycle-dedup-cleanup.md) | jorgecostak | 2026-06-26 | KK20-203 cascade cleanup on chat delete, then KK20-204 per-user content-hash dedup |
 | [`agent-retrieval-and-langgraph-reliability-plan.md`](./agent-retrieval-and-langgraph-reliability-plan.md) | Agentic Karl / RAG / agents SDK maintainers | 2026-07-16 | Correct dual-backend retrieval, compaction, termination, and tracing |
 | [`file-upload-model-router-remediation.md`](./file-upload-model-router-remediation.md) | Agentic Karl maintainers | 2026-07-17 | Bound router failures, correct document routing/dedup, repair cost attribution, and validate dev retrieval paths |
-| [`pdf-password-permission-handling.md`](./pdf-password-permission-handling.md) | Agentic Karl maintainers | 2026-07-20 | KK20-232 — admit all readable PDFs and distinguish invalid files from open-password files; keep password submission as an optional follow-up |
+| [`pdf-password-permission-handling.md`](./pdf-password-permission-handling.md) | Agentic Karl maintainers | 2026-07-20 | KK20-232 — admit all PDFs readable without credentials and distinguish invalid files from open-password files; keep password submission as an optional follow-up |
 
 When that table empties, this folder can be reconsidered — maybe it stays as a known home for the next workstream, maybe it gets dropped. For now it has a clear purpose.

@@ -6,7 +6,7 @@
 
 ## Outcome
 
-File Search accepts PDFs that are readable without a password, including owner-password-only,
+File Search accepts PDFs that are readable without credentials, including permission-encrypted,
 signed/certified, and PDF/A documents. This is the committed KK20-232 outcome and must ship
 independently.
 
@@ -22,8 +22,9 @@ In scope:
 
 - `POST /api/files` for chat attachments and agent knowledge using `file_search`;
 - upload-time PDF access classification;
-- unchanged storage and indexing of every PDF that is readable without a password;
-- explicit regression coverage for owner-password-only, signed/certified, PDF/A, and malformed PDFs.
+- unchanged storage and indexing of every PDF that is readable without credentials;
+- explicit regression coverage for permission-encrypted but credential-free, signed/certified,
+  PDF/A, and malformed PDFs.
 
 Out of scope:
 
@@ -52,13 +53,14 @@ The current upload gate scans bytes for `/Encrypt` and rejects both encrypted ca
 | Case | PDF access | Required behavior |
 |---|---|---|
 | A | Unencrypted | Upload and index normally |
-| B | Encrypted with owner/permission password only; opens with an empty password | Upload and index normally |
+| B | Encrypted but readable without credentials | Upload and index normally |
 | C | Open/user password required | Return a typed rejection; password submission is an optional extension |
 
-The KK20-232 sample is case B: `pdfjs-dist` and the RAG API's pinned `pypdf==6.13.3` stack both open
-and extract all 18 pages without a supplied password. If Azure Document Intelligence rejects it,
-the existing RAG loader falls back to pypdf. The current `/Encrypt` upload gate is therefore the
-reported defect.
+For the standard PDF security handler, libraries commonly detect case B by attempting the empty
+user password. This is an internal probe, not a password users enter. The KK20-232 sample is case B:
+`pdfjs-dist` and the RAG API's pinned `pypdf==6.13.3` stack both open and extract all 18 pages
+without supplied credentials. If Azure Document Intelligence rejects it, the existing RAG loader
+falls back to pypdf. The current `/Encrypt` upload gate is therefore the reported defect.
 
 Dev and prod currently set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true`, but GitOps contains no dedicated
 indexing-worker service and does not set `KNAUF_INDEXING_WORKER_ENABLED`. Queuing work is not a valid
@@ -176,7 +178,7 @@ Update the files architecture docs and seam manifest after behavior is accepted.
 | Scenario | Expected result |
 |---|---|
 | Unencrypted PDF | Original stored; indexes normally |
-| KK20-232 owner-password-only PDF | Original stored unchanged; indexes normally |
+| KK20-232 permission-encrypted PDF readable without credentials | Original stored unchanged; indexes normally |
 | Readable signed/certified or DocMDP PDF | Original stored unchanged; indexes normally |
 | Readable PDF/A document | Original stored unchanged; indexes normally |
 | Open-password PDF | Typed password-required rejection; does not block the readable-PDF release |
@@ -208,8 +210,8 @@ Applies only if Knauf approves open-password support:
 
 ## Completion
 
-KK20-232 is complete when unencrypted, owner-password-only, signed/certified, and PDF/A documents
-that are readable without a password pass upload and full indexing in dev and prod; malformed PDFs
+KK20-232 is complete when unencrypted, permission-encrypted, signed/certified, and PDF/A documents
+that are readable without credentials pass upload and full indexing in dev and prod; malformed PDFs
 and open-password PDFs fail with distinct typed errors; and the selected indexing mode demonstrably
 drains every state it accepts.
 
