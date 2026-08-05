@@ -856,8 +856,7 @@ describe('useFileHandling', () => {
       mockMutate.mockImplementation(() => Promise.resolve());
     });
 
-    // End [knauf]
-    // [knauf] KK20-232 — PDF probe infrastructure failures retain the stable
+    // KK20-232: PDF probe infrastructure failures retain the stable
     // localization code while using the existing bounded 503 retry path.
     it('uses exponential backoff for three retries before succeeding', async () => {
       jest.useFakeTimers();
@@ -913,9 +912,6 @@ describe('useFileHandling', () => {
       jest.useRealTimers();
       mockMutate.mockImplementation(() => Promise.resolve());
     });
-    // End [knauf]
-
-    // [knauf] KK20-227 — continue the sequential multi-file upload regressions.
     it('does not retry a non-transient document upload failure', async () => {
       mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
 

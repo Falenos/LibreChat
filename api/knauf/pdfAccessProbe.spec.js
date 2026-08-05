@@ -64,6 +64,24 @@ describe('PDF access probe', () => {
     await expect(resultPromise).rejects.toBeInstanceOf(PdfAccessProbeError);
   });
 
+  it('maps worker construction failures to a stable unavailable error', async () => {
+    class ThrowingWorker {
+      constructor() {
+        throw new Error('worker initialization failed');
+      }
+    }
+
+    await expect(
+      probePdfAccess('/tmp/failure.pdf', {
+        WorkerImpl: ThrowingWorker,
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
   it('rejects when a worker exits without returning a result', async () => {
     const resultPromise = probePdfAccess('/tmp/no-result.pdf', {
       WorkerImpl: FakeWorker,
@@ -143,5 +161,26 @@ describe('PDF access probe', () => {
         }),
       }),
     ).resolves.toEqual({ result: 'unavailable', stage: 'cleanup' });
+  });
+
+  it('attempts loading-task cleanup when document cleanup fails', async () => {
+    const pdfDocument = {
+      destroy: jest.fn().mockRejectedValue(new Error('document cleanup failed')),
+    };
+    const loadingTask = {
+      promise: Promise.resolve(pdfDocument),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'cleanup' });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
   });
 });

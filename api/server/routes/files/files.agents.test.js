@@ -821,10 +821,11 @@ describe('[knauf] POST /files — PDF access classification', () => {
 
     const response = await request(app)
       .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
+      .send({ endpoint: 'agents', tool_resource: 'file_search' });
 
     expect(probePdfAccess).toHaveBeenCalledWith(filePath);
-    expect(response.body.code).not.toBe('com_knauf_error_file_encrypted');
+    expect(response.status).toBe(200);
+    expect(processAgentFileUpload).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -882,9 +883,11 @@ describe('[knauf] POST /files — PDF access classification', () => {
       path: filePath,
     });
 
-    await request(app).post('/files').send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+    const response = await request(app).post('/files').send({ endpoint: 'azureOpenAI' });
 
     expect(probePdfAccess).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(processAgentFileUpload).toHaveBeenCalledTimes(1);
   });
 
   it('retains global encrypted-OOXML rejection', async () => {

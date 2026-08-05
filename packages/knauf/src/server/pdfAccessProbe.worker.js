@@ -7,11 +7,23 @@ const { isMainThread, parentPort, workerData } = require('node:worker_threads');
 const PASSWORD_EXCEPTION = 'PasswordException';
 
 async function destroyProbeResources(pdfDocument, loadingTask) {
+  let cleanupError;
   if (pdfDocument != null) {
-    await pdfDocument.destroy();
+    try {
+      await pdfDocument.destroy();
+    } catch (error) {
+      cleanupError = error;
+    }
   }
   if (loadingTask != null) {
-    await loadingTask.destroy();
+    try {
+      await loadingTask.destroy();
+    } catch (error) {
+      cleanupError ??= error;
+    }
+  }
+  if (cleanupError != null) {
+    throw cleanupError;
   }
 }
 

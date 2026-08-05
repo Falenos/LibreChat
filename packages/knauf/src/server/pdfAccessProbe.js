@@ -25,7 +25,8 @@ function probePdfAccess(
 ) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const worker = new WorkerImpl(workerPath, { workerData: { filePath } });
+    let worker;
+    let timeout;
 
     const finish = (callback, value) => {
       if (settled) {
@@ -36,7 +37,14 @@ function probePdfAccess(
       callback(value);
     };
 
-    const timeout = setTimeout(() => {
+    try {
+      worker = new WorkerImpl(workerPath, { workerData: { filePath } });
+    } catch (error) {
+      finish(reject, new PdfAccessProbeError('PDF access probe worker failed to start', error));
+      return;
+    }
+
+    timeout = setTimeout(() => {
       void worker.terminate();
       finish(reject, new PdfAccessProbeError(`PDF access probe timed out after ${timeoutMs}ms`));
     }, timeoutMs);
