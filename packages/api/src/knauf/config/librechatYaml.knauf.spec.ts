@@ -41,6 +41,7 @@ interface SpecPreset {
   model?: string;
   promptPrefix?: string;
   maxContextTokens?: number;
+  verbosity?: string;
 }
 interface ModelSpec {
   name: string;
@@ -76,6 +77,18 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
       expect(spec.preset?.endpoint).toBeTruthy();
       expect(spec.preset?.model).toBeTruthy();
     }
+  });
+});
+
+describe('[knauf] librechat.yaml — default KARL response latency', () => {
+  it('uses native low verbosity and bounds ordinary prose without truncating source', () => {
+    const karl = specs.find((spec) => spec.name === 'karl');
+    const prompt = karl?.preset?.promptPrefix ?? '';
+
+    expect(karl?.preset?.verbosity).toBe('low');
+    expect(prompt).toMatch(/ordinary chat prose, stay below 500 words/i);
+    expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
+    expect(prompt).toMatch(/never truncate valid source/i);
   });
 });
 
