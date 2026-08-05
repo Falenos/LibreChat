@@ -74,8 +74,9 @@ not a reason to keep rejecting case B.
    provenance, citation, and download.
 2. Classification and hashing read the same original upload bytes in the existing order:
    classify, then hash, then reserve/store.
-3. Work enters `queued` only when a draining worker deployment is enabled. Otherwise the request
-   uses the existing bounded synchronous generation path.
+3. Async acceptance is computed as `acceptFlag && workerEnabled`. When false, the existing
+   transient `uploading -> queued -> processing` synchronous claim path remains valid and the
+   request waits for bounded generation completion.
 4. Every terminal cleanup path deletes the original blob and all vector generations.
 5. PDF permission observations are not authorization controls and are not persisted by KK20-232.
 
@@ -83,22 +84,49 @@ not a reason to keep rejecting case B.
 
 ### PR 1 - Fix case-A/B/C classification
 
-Replace the `/Encrypt` byte-sniff decision in
-`packages/api/src/files/validation.ts` with a bounded PDF.js access probe that returns a
-discriminated result:
+Extract the non-trivial classifier to
+`packages/knauf/src/server/pdfAccessProbe.js` with its process-isolated worker beside it, and export
+it from `packages/knauf/package.json`. Declare the pinned `pdfjs-dist` runtime dependency in
+`packages/knauf/package.json` and update the lockfile. Leave only minimal `[knauf]` import/call
+integration seams in upstream files. Add:
+
+- an append-only KK20-232 Net-New Files row for each Knauf module;
+- append-only KK20-232 Inline Modifications rows for the route and validation seams;
+- a seam test that pins the imports, File Search gate, and removal of global PDF rejection.
+
+Keep the existing CFBF/OOXML sniff global. Remove PDF classification from that global detector and
+invoke the new PDF access probe only when:
+
+```js
+!isAssistantsEndpoint(metadata.endpoint) &&
+metadata.tool_resource === EToolResources.file_search
+```
+
+This preserves current Assistants and native/provider behavior, which is outside KK20-232.
+
+The probe returns a discriminated result:
 
 - successful open without a supplied password -> `readable` (A or B);
 - PDF.js `PasswordException` requiring a password -> `password_required` (C);
 - malformed, spoofed, or unsupported PDF -> validation failure, not `password_required`.
 
-Run the probe only after the existing MIME and file-size checks. Bound parser wall time, disable
-PDF.js evaluation, and destroy both the loading task and loaded document in `finally`. Add tests
-that prove timeout and parser failures release their resources. The route must not inherit the
-current encryption detector's broad fail-open catch:
+Run the probe only after the existing MIME and file-size checks. Execute `pdfjs-dist@5.4.624` in a
+Node worker thread or child process because its Node fake worker parses in-process and cannot be
+bounded by `Promise.race`. The parent terminates the isolated process at the deadline. Inside the
+isolate, disable PDF.js evaluation and destroy both the loading task and loaded document in
+`finally`. Add tests that prove timeout termination and parser failures release their resources.
+The route must not inherit the current encryption detector's broad fail-open catch.
 
-- file read, parser initialization, and timeout failures return a retryable validation error;
-- only a confirmed `PasswordException` returns the password-required error;
-- deterministic malformed/unsupported input returns the invalid-file error.
+Define stable route/client outcomes:
+
+| Probe result | HTTP | Stable code | Client behavior |
+|---|---:|---|---|
+| Password required | 422 | `com_knauf_error_pdf_password_required` | Localize; do not retry |
+| Invalid/malformed/unsupported PDF | 422 | `com_knauf_error_pdf_invalid` | Localize; do not retry |
+| Read/init/worker/timeout failure | 503 | `com_knauf_error_pdf_probe_unavailable` | Localize and use the existing bounded 503 retry path |
+
+Add all three codes to `resolveUploadErrorMessage`, English/German localization, route tests, and
+upload-client tests. Only a confirmed `PasswordException` maps to password-required.
 
 Keep the existing OOXML encrypted-container check unchanged. Preserve client-ID adoption,
 authorization, original-byte hashing, reservation, and temp-file cleanup order.
@@ -118,14 +146,16 @@ If any readable fixture cannot be fully extracted by the existing RAG stack, the
 change joins KK20-232; do not weaken the acceptance matrix or mark the upload ready with incomplete
 content.
 
-Before rollout, make the indexing execution mode coherent in each environment:
+Before rollout, make the indexing execution mode coherent in code and each environment:
 
-1. deploy a draining worker with `KNAUF_INDEXING_WORKER_ENABLED=true` before setting
-   `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true`; or
-2. set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false` and use bounded synchronous generation.
+1. compute `asyncAccepted = acceptFlag && workerEnabled`;
+2. when false, retain the existing `markQueued` followed immediately by the synchronous claim and
+   bounded generation path;
+3. when true, prove that a draining worker is deployed and enabled before returning async success.
 
-Prove the selected mode with a canary that reaches `ready`. This is mandatory core work, not part of
-the optional open-password extension.
+This prevents mismatched flags from stranding uploads without incorrectly forbidding the internal
+transient `queued` state. Prove the selected mode with a canary that reaches `ready`. This is
+mandatory core work, not part of the optional open-password extension.
 
 ## Appendix: optional open-password extension
 
@@ -155,8 +185,8 @@ Add an owner/agent-EDIT-authorized password endpoint for the logical `file_id`:
 4. invoke qpdf with the password on stdin, bounded by timeout, output-size, temp-permission, and
    sanitized-error limits;
 5. persist the decrypted PDF as `knauf_worker_blob`;
-6. CAS to `queued` only when the worker deployment is enabled; otherwise claim and run the existing
-   bounded synchronous generation embed in the same request;
+6. CAS to `queued`; return asynchronously only when `acceptFlag && workerEnabled`, otherwise claim
+   immediately and run the existing bounded synchronous generation embed in the same request;
 7. delete a newly written worker blob if persistence or CAS loses.
 
 Wrong passwords return one generic error and leave the asset in `needs_password`. Limit failed
@@ -216,8 +246,8 @@ Update the files architecture docs and seam manifest after behavior is accepted.
 | Readable PDF rejected by Azure Document Intelligence | Existing pypdf fallback extracts and activates the generation |
 | Open-password PDF | Typed password-required rejection; does not block the readable-PDF release |
 | Malformed PDF or MIME spoof | Rejected as invalid, never presented as a password prompt |
-| PDF.js read, initialization, or timeout failure | Retryable validation failure; no silent pass-through |
-| Worker disabled or unavailable | Async acceptance is disabled; bounded synchronous path reaches `ready` |
+| PDF.js read, initialization, worker, or timeout failure | Stable 503 probe-unavailable response; bounded client retry; no silent pass-through |
+| Worker disabled or unavailable | `asyncAccepted=false`; transient queue plus bounded synchronous claim reaches `ready` |
 | Worker enabled | Canary queues once and reaches `ready` |
 
 ## Optional-extension acceptance matrix
@@ -239,7 +269,7 @@ Applies only if Knauf approves open-password support:
 
 | Repository | Work |
 |---|---|
-| `agentic-karl` | Bounded core classification/tests/docs; optional state machine, qpdf lifecycle, and client UX only if approved |
+| `agentic-karl` | Process-isolated classifier in `packages/knauf/`, small upstream seams, tests/docs; optional state machine, qpdf lifecycle, and client UX only if approved |
 | `agk-deployment-configs` | Coherent async/worker flags, worker deployment if async is selected, and optional case-C feature gate |
 | `agentic-karl-rag-api` | Validate the existing PDF fallback and generation contract; change it if a readable core fixture fails |
 
@@ -247,9 +277,9 @@ Applies only if Knauf approves open-password support:
 
 KK20-232 is complete when unencrypted, permission-encrypted, signed/certified, and PDF/A documents
 that are readable without credentials pass upload, text extraction, and generation activation in
-dev and prod; malformed PDFs, parser infrastructure failures, and open-password PDFs fail with
-their distinct typed errors; and the selected indexing mode demonstrably drains every state it
-accepts.
+dev and prod; malformed PDFs, parser infrastructure failures, and open-password PDFs return their
+specified stable HTTP/code combinations; and `asyncAccepted = acceptFlag && workerEnabled` while
+both synchronous and asynchronous modes demonstrably reach `ready`.
 
 If Knauf later approves the optional extension, its separate completion condition is that case C
 passes the optional-extension matrix without exposing a password or internal worker descriptor.
