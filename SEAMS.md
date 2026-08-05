@@ -683,6 +683,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/message.spec.ts` | FerretDB duplicate-key wording regression | 130–210 | Proves code 11000 recovery remains active when the database reports “Duplicate key violation” rather than MongoDB's legacy wording | Self | NO-TICKET |
 | `packages/data-schemas/src/methods/role.ts` | effective and persisted Shared Links baseline | 3–5, 24–38, 155–157, 174–180, 519–521 | Makes public-link sharing part of every custom role, including roles created before the permission existed, while preserving explicit administrator denials | `packages/data-schemas/src/methods/role.methods.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/methods/role.methods.spec.ts` | custom-role Shared Links defaults regression | 78–102, 676–699 | Proves legacy, cached, and newly created roles receive all-on link sharing while explicit public-sharing denials still win | Self | NO-TICKET |
+| `client/src/components/Artifacts/Artifact.tsx` | `updateArtifact` versioned-source branch | 15–17, 55, 87–88, 110–141, 168 | Keeps the original message card bound to reconstructed revision 1 after an edit mutates the persisted source, while registering the latest content under its stable revision-scoped ID | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1099,6 +1100,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/implementation-plans/pdf-password-permission-handling.md` | None | Low — Knauf-only proposed implementation plan doc; no runtime coupling, out for review before any code lands | Docs only | KK20-232 |
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded projection | Low — retains only the provider's bounded parameter path so invalid Model Router requests identify the failing field without logging request content | `api/server/controllers/agents/knauf/providerError.spec.js` | NO-TICKET |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves safe nested parameter paths survive projection while paths, payloads, and free-form values remain excluded | Self | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | Upstream `Artifact`, Recoil artifact registry, and mocked Knauf revision service | Low — exact regression proving a mutated version-2 source leaves the root card on version 1 and registers version 2 under its immutable revision ID | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
