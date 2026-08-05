@@ -28,7 +28,7 @@ export default function ArtifactDownloadMenu({
   const { currentCode } = useCodeState();
   const { fileKey } = useArtifactProps({ artifact });
   const [isExporting, setIsExporting] = useState(false);
-  const content = currentCode ?? artifact.content ?? '';
+  const content = currentCode || artifact.content || '';
 
   const download = async (format: ExportFormat) => {
     if (!content || isExporting) {

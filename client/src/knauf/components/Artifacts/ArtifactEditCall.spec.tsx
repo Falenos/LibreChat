@@ -72,6 +72,25 @@ describe('ArtifactEditCall', () => {
     expect(parseArtifactEditResult('not-json')).toBeNull();
   });
 
+  it('uses the original artifact card presentation for edited versions', () => {
+    render(
+      <RecoilRoot>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+      </RecoilRoot>,
+    );
+
+    const card = screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' });
+    expect(card).toHaveClass(
+      'relative',
+      'overflow-hidden',
+      'rounded-xl',
+      'hover:shadow-lg',
+      'active:scale-[0.98]',
+    );
+    expect(screen.getByText('Sales dashboard')).toBeInTheDocument();
+    expect(screen.getByText('com_ui_version_var:2')).toBeInTheDocument();
+  });
+
   it('opens an immutable artifact revision from its compact version card', async () => {
     render(
       <RecoilRoot

@@ -59,6 +59,7 @@ export const ArtifactPreview = memo(function ({
 
   return (
     <SandpackProvider
+      key={artifact.id}
       files={{ ...artifactFiles, ...sharedFiles }}
       options={options}
       {...sharedProps}

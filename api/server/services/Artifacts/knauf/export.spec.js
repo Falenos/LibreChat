@@ -27,6 +27,7 @@ const artifact = {
 describe('artifact renderer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    delete process.env.ARTIFACT_EXPORT_BASE_URL;
     mockScreenshot.mockResolvedValue(Buffer.from('png'));
     mockPdf.mockResolvedValue(Buffer.from('pdf'));
     mockPreviewEvaluate.mockImplementation(async (callback) => {
@@ -72,6 +73,7 @@ describe('artifact renderer', () => {
     let secret;
     mockGoto.mockImplementation(async (url) => {
       const parsed = new URL(url);
+      expect(parsed.hostname).toBe('localhost');
       token = parsed.pathname.split('/').pop();
       secret = parsed.hash.slice(1);
       expect(getRenderSnapshot(token, secret)).toEqual(artifact);

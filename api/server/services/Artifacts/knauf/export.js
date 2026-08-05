@@ -72,7 +72,7 @@ const clientBasePath = () => {
 
 const exportPageUrl = (token, secret) => {
   const origin =
-    process.env.ARTIFACT_EXPORT_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3080}`;
+    process.env.ARTIFACT_EXPORT_BASE_URL || `http://localhost:${process.env.PORT || 3080}`;
   return `${origin.replace(/\/$/, '')}${clientBasePath()}/artifact-export/${token}#${secret}`;
 };
 

@@ -686,6 +686,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Artifacts/Artifact.tsx` | `updateArtifact` versioned-source branch | 15–17, 55, 87–88, 110–141, 168 | Keeps the original message card bound to reconstructed revision 1 after an edit mutates the persisted source, while registering the latest content under its stable revision-scoped ID | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx` | NO-TICKET |
 | `client/src/utils/groupToolCalls.ts` | `isGroupableToolCall` | 19–23 | Keeps successful artifact-version pointers visible as message content instead of burying them in collapsed tool diagnostics | `client/src/components/Chat/Messages/Content/__tests__/ContentParts.integration.test.tsx` | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/__tests__/ContentParts.integration.test.tsx` | `makeArtifactEditCall`; visible artifact card regression | 51–53, 146–164, 263–273 | Exercises the upstream grouping seam with a real successful `edit_artifact` result and proves no disclosure expansion is required | Self | NO-TICKET |
+| `client/src/utils/messages.ts` | — | 169–190, 198–200, 204–217 | Keep artifact source out of screen-reader completion announcements. (NO-TICKET) | — | — |
+| `client/src/utils/__tests__/messages.test.ts` | — | 3–11, 92–120 | Keep artifact source out of the screen-reader completion announcement. (NO-TICKET) | Self | — |
+| `client/src/components/Chat/Messages/MessageNav.tsx` | `buildEntry` artifact-safe preview | 7–10, 22–30 | Keep artifact source out of message-navigation labels and hover previews. | `MessageNav.spec.tsx` | NO-TICKET |
+| `client/src/components/Chat/Messages/__tests__/MessageNav.spec.tsx` | artifact-safe assistant indicator label | 354–377 | Proves accessible message navigation exposes assistant prose without artifact source. | Self | NO-TICKET |
+| `client/src/components/Artifacts/ArtifactPreview.tsx` | `SandpackProvider` artifact identity key | 63–65 | Remount the preview runtime when users switch immutable artifact versions so stale code and styles cannot survive the selection. | `ArtifactRepairButton.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
