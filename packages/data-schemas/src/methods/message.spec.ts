@@ -178,6 +178,34 @@ describe('Message Operations', () => {
         expect(result).toMatchObject({ messageId, text: 'Complete answer', unfinished: false });
         expect(logger.error).not.toHaveBeenCalled();
       });
+
+      it('recovers duplicate-key errors that use FerretDB wording', async () => {
+        const conversationId = uuidv4();
+        const messageId = 'ferretdb-duplicate-target';
+        await Message.create({
+          messageId,
+          conversationId,
+          user: mockCtx.userId,
+          text: 'Partial answer',
+          unfinished: true,
+        });
+        jest.spyOn(Message, 'findOneAndUpdate').mockRejectedValueOnce(
+          Object.assign(new Error('Duplicate key violation on the requested collection'), {
+            code: 11000,
+            codeName: 'DuplicateKey',
+          }),
+        );
+
+        const result = await saveMessage(mockCtx, {
+          messageId,
+          conversationId,
+          text: 'Complete answer',
+          unfinished: false,
+        });
+
+        expect(result).toMatchObject({ messageId, text: 'Complete answer', unfinished: false });
+        expect(logger.error).not.toHaveBeenCalled();
+      });
     });
     // End [knauf]
   });
