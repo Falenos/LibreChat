@@ -542,13 +542,9 @@ export async function updateInterfacePermissions({
       },
     };
 
-    // [knauf] Apply normal-user restrictions after YAML values and role
-    // defaults are resolved so ADMIN keeps the full configured surface.
-    const resolvedPermissions = applyKnaufUserRestrictions(
-      roleName,
-      allPermissions,
-      existingPermissions,
-    );
+    // [knauf] Apply non-prompt normal-user restrictions after YAML values and
+    // role defaults are resolved. Prompt permissions remain Admin-managed.
+    const resolvedPermissions = applyKnaufUserRestrictions(roleName, allPermissions);
     // End [knauf]
 
     // Check and add each permission type if needed

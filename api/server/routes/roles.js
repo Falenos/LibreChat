@@ -85,7 +85,7 @@ const createPermissionUpdateHandler = (permissionKey) => {
 
     try {
       const parsedUpdates = config.schema.partial().parse(updates);
-      // [knauf] Admin controls peer sharing; regular USER public sharing stays disabled.
+      // [knauf] Preserve protected non-prompt USER permissions on legacy Admin writes.
       const effectiveUpdates =
         applyKnaufUserRestrictions(roleName, {
           [config.permissionType]: parsedUpdates,
@@ -105,7 +105,7 @@ const createPermissionUpdateHandler = (permissionKey) => {
           ...role.permissions,
           [config.permissionType]: {
             ...currentPermissions,
-            // [knauf] Persist the policy-enforced update, not the raw Admin payload.
+            // [knauf] Persist the non-prompt policy update, not the raw Admin payload.
             ...effectiveUpdates,
             // End [knauf]
           },
