@@ -754,8 +754,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the Continue in KARL action, artifact-only context instructions, change-request cue, and failed-import message (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Keeps only the localized Continue in KARL action and clone-failure message; the former composer prompt is intentionally removed because continuation now opens a persisted recipient-owned artifact immediately (NO-TICKET) |
 | `librechat.yaml` | Routes changes to existing artifacts through `edit_artifact`, requires only a short confirmation after success, and retains full source emission as the safe fallback (NO-TICKET) |
-| `.github/workflows/test_pipeline.yaml` | Uses CT shared test workflow v3 for Node 24-native actions and current Sonar/Snyk support |
-| `.github/workflows/{combine_prs,upstream-release-watcher,seam-validator}.yml` | Pins checkout v6.0.2 and github-script v9.0.0 to verified release SHAs in Knauf-owned maintenance workflows |
 
 ## Net-New Files
 
