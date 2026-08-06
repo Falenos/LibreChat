@@ -1,12 +1,13 @@
 import { memo, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
-import { ContentTypes } from 'librechat-data-provider';
 import { HoverCard, HoverCardTrigger, HoverCardPortal, HoverCardContent } from '@librechat/client';
-import type { TMessage, TMessageContentParts } from 'librechat-data-provider';
+import type { TMessage } from 'librechat-data-provider';
 import { useMessagesConversation, useMessagesSubmission } from '~/Providers';
 import { useGetMessagesByConvoId } from '~/data-provider';
 import { useLocalize } from '~/hooks';
-import { cn } from '~/utils';
+// [knauf] NO-TICKET — keep artifact source out of accessible message previews.
+import { cn, getAllContentText } from '~/utils';
+// End [knauf]
 
 type MessageEntry = {
   id: string;
@@ -17,28 +18,10 @@ type MessageEntry = {
 
 const MESSAGES_END_ID = 'messages-end';
 
-function extractPreviewFromContent(content?: TMessageContentParts[]): string {
-  if (!content) {
-    return '';
-  }
-  for (const part of content) {
-    if (part?.type !== ContentTypes.TEXT) {
-      continue;
-    }
-    const textField = part.text;
-    if (typeof textField === 'string' && textField.trim()) {
-      return textField;
-    }
-    if (textField && typeof textField === 'object' && textField.value?.trim()) {
-      return textField.value;
-    }
-  }
-  return '';
-}
-
 function buildEntry(id: string, msg: TMessage): MessageEntry {
-  const raw = msg.text?.trim() ? msg.text : extractPreviewFromContent(msg.content);
-  const trimmed = raw.trim();
+  // [knauf] NO-TICKET — artifact source belongs in the artifact pane, never navigation labels.
+  const trimmed = getAllContentText(msg).trim();
+  // End [knauf]
   return {
     id,
     isUser: !!msg.isCreatedByUser,

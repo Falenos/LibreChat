@@ -2,6 +2,11 @@ import {
   buildSandpackOptions,
   detectArtifactTypeFromFile,
   fileToArtifact,
+  // [knauf] NO-TICKET — native SVG artifact mapping assertions.
+  getArtifactFilename,
+  getDependencies,
+  getTemplate,
+  // End [knauf]
   isCodeOnlyArtifact,
   isPreviewOnlyArtifact,
   languageForFilename,
@@ -10,6 +15,16 @@ import {
 import type { ToolArtifactType } from '../artifacts';
 
 const TAILWIND_CDN = 'https://cdn.tailwindcss.com/3.4.17#tailwind.js';
+
+// [knauf] NO-TICKET — native SVG artifacts use a stable static, dependency-free source file.
+describe('native SVG artifact mapping', () => {
+  it('maps image/svg+xml to an editable SVG file without runtime dependencies', () => {
+    expect(getArtifactFilename('image/svg+xml')).toBe('artwork.svg');
+    expect(getTemplate('image/svg+xml')).toBe('static');
+    expect(getDependencies('image/svg+xml')).toEqual({});
+  });
+});
+// End [knauf]
 
 describe('buildSandpackOptions', () => {
   it('includes externalResources with .js fragment hint for static template', () => {

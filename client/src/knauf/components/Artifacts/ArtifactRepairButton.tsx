@@ -122,7 +122,7 @@ export default function ArtifactRepairButton({
       type="button"
       size="sm"
       variant="submit"
-      className="absolute bottom-2 right-2 z-[70] gap-1.5 shadow-lg"
+      className="absolute left-1/2 top-1/2 z-[70] -translate-x-1/2 -translate-y-1/2 gap-1.5 shadow-xl"
       disabled={isSubmitting}
       onClick={repair}
     >

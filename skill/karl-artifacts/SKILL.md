@@ -7,7 +7,7 @@ description: >-
   plain chat.
 argument-hint: "[what to build or change]"
 user-invocable: true
-version: "3.0.0"
+version: "3.2.0"
 ---
 
 # KARL Artifacts: choosing well and building previews that render
@@ -27,13 +27,19 @@ like Knauf.
 | Interactive UI, dashboard, calculator, form — anything with state or a chart | `application/vnd.react` | Tailwind + recharts + shadcn/ui are available; the only type with interactivity and styling batteries included |
 | A complete standalone web page the user will save/host, or something needing a cdnjs library (d3, chart.js) | `text/html` | Single self-contained file with its own CSS/JS; the only type allowed to load external scripts (from `cdnjs.cloudflare.com` only) |
 | Architecture, flow, sequence, ER, or Gantt diagrams | `application/vnd.mermaid` | Renders with zoom/pan; far cheaper to iterate than hand-drawing boxes |
-| A logo, icon, or static illustration | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height |
+| A logo, icon, or self-contained vector illustration — static or declaratively animated | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height, and load the SVG reference |
 | Plain unstyled prose the user will paste elsewhere: a policy, a plan, a spec, meeting notes | `text/markdown` | Rendered document the user can copy/export. No layout, no brand styling, no slides — if the deliverable needs any of those, it is a react artifact |
 
 Before emitting `application/vnd.mermaid`, load and follow:
 
 ```
 read_file  skills/karl-mermaid/SKILL.md
+```
+
+Before emitting or editing `image/svg+xml`, load and follow:
+
+```
+read_file  skills/karl-artifacts/references/svg.md
 ```
 
 Rules of thumb:
@@ -45,6 +51,8 @@ Rules of thumb:
   responsive layout, light/dark colours, and PDF/PNG pagination.
 - **"Document deliverable" is not a routing rule.** A deck and a branded report are document deliverables too, and both are react. Markdown is for output with no layout and no branding.
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
+- A small animation with no state or controls → SVG. Animation that must loop,
+  pause, respond to input, or coordinate a presentation → react.
 - No interactivity, no branding and no layout needed → markdown beats html.
 - Code you are explaining, or that the user will run elsewhere → a plain fenced code block in chat, not an artifact.
 - Numbers you have already computed → embed them as `const DATA = [...]`.
