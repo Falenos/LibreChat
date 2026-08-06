@@ -2,6 +2,7 @@
 
 const { EventEmitter } = require('node:events');
 const {
+  isPdfFileAtPath,
   probePdfAccess,
   PdfAccessProbeError,
   PDF_PROBE_UNAVAILABLE_CODE,
@@ -91,6 +92,38 @@ describe('PDF access probe', () => {
     FakeWorker.instances[0].emit('exit', 0);
 
     await expect(resultPromise).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
+  it.each([
+    ['%PDF-', true],
+    ['plain', false],
+  ])('detects PDF bytes independently of the declared MIME type', async (headerBytes, expected) => {
+    const handle = {
+      read: jest.fn(async (buffer) => {
+        const header = Buffer.from(headerBytes);
+        header.copy(buffer);
+        return { bytesRead: header.length };
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      isPdfFileAtPath('/tmp/document', {
+        openFile: jest.fn().mockResolvedValue(handle),
+      }),
+    ).resolves.toBe(expected);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps PDF header read failures to the stable unavailable error', async () => {
+    await expect(
+      isPdfFileAtPath('/tmp/document', {
+        openFile: jest.fn().mockRejectedValue(new Error('read failed')),
+      }),
+    ).rejects.toMatchObject({
       name: 'PdfAccessProbeError',
       code: PDF_PROBE_UNAVAILABLE_CODE,
     });

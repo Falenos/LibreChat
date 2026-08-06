@@ -10,6 +10,7 @@ const {
 } = require('@librechat/api');
 // [knauf] KK20-232 — bounded, process-isolated PDF access classification for File Search.
 const {
+  isPdfFileAtPath,
   probePdfAccess,
   PDF_PROBE_UNAVAILABLE_CODE,
 } = require('@knauf/knauf/server/pdfAccessProbe');
@@ -782,25 +783,52 @@ router.post('/', async (req, res) => {
     }
     // End [knauf]
 
+    // [knauf] KK20-232 — authorize before the CPU-bound PDF classification.
+    if (!isAssistantsEndpoint(metadata.endpoint)) {
+      let skipUploadAuth = false;
+      try {
+        skipUploadAuth = await hasCapability(req.user, SystemCapabilities.MANAGE_AGENTS);
+      } catch (err) {
+        logger.warn(`[/files] capability check failed, denying bypass: ${err.message}`);
+      }
+
+      if (!skipUploadAuth) {
+        const denied = await verifyAgentUploadPermission({
+          req,
+          res,
+          metadata,
+          getAgent: db.getAgent,
+          checkPermission,
+        });
+        if (denied) {
+          return;
+        }
+      }
+    }
+    // End [knauf]
+
     // [knauf] KK20-232 — classify PDF access only for non-Assistants File Search.
     // The worker is terminated at a fixed deadline; only a confirmed PDF.js
     // PasswordException becomes password_required. Parser/content failures are
     // invalid input, while worker/read/init/timeout failures remain retryable 503s.
     if (
       req.file?.path &&
-      req.file.mimetype === 'application/pdf' &&
       !isAssistantsEndpoint(metadata.endpoint) &&
       metadata.tool_resource === EToolResources.file_search
     ) {
-      const access = await probePdfAccess(req.file.path);
-      if (access.result !== 'readable') {
-        const code =
-          access.result === 'password_required'
-            ? 'com_knauf_error_pdf_password_required'
-            : 'com_knauf_error_pdf_invalid';
-        const pdfError = new Error(code);
-        pdfError.code = code;
-        throw pdfError;
+      const isPdf =
+        req.file.mimetype === 'application/pdf' || (await isPdfFileAtPath(req.file.path));
+      if (isPdf) {
+        const access = await probePdfAccess(req.file.path);
+        if (access.result !== 'readable') {
+          const code =
+            access.result === 'password_required'
+              ? 'com_knauf_error_pdf_password_required'
+              : 'com_knauf_error_pdf_invalid';
+          const pdfError = new Error(code);
+          pdfError.code = code;
+          throw pdfError;
+        }
       }
     }
     // End [knauf]
@@ -938,26 +966,6 @@ router.post('/', async (req, res) => {
 
     if (isAssistantsEndpoint(metadata.endpoint)) {
       return await processFileUpload({ req, res, metadata });
-    }
-
-    let skipUploadAuth = false;
-    try {
-      skipUploadAuth = await hasCapability(req.user, SystemCapabilities.MANAGE_AGENTS);
-    } catch (err) {
-      logger.warn(`[/files] capability check failed, denying bypass: ${err.message}`);
-    }
-
-    if (!skipUploadAuth) {
-      const denied = await verifyAgentUploadPermission({
-        req,
-        res,
-        metadata,
-        getAgent: db.getAgent,
-        checkPermission,
-      });
-      if (denied) {
-        return;
-      }
     }
 
     return await processAgentFileUpload({ req, res, metadata });

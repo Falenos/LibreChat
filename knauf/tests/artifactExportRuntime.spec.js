@@ -7,10 +7,7 @@ const root = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
 test('CI uses the current shared workflow and pinned action versions', () => {
-  assert.match(
-    read('.github/workflows/test_pipeline.yaml'),
-    /test-nextjs\.yaml@v3\.0\.0/,
-  );
+  assert.match(read('.github/workflows/test_pipeline.yaml'), /test-nextjs\.yaml@v3\.0\.0/);
   assert.match(
     read('.github/workflows/upstream-release-watcher.yml'),
     /actions\/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6\.0\.2/,
@@ -32,6 +29,7 @@ test('CI uses the current shared workflow and pinned action versions', () => {
 test('production images provide a sandboxed Chromium artifact renderer', () => {
   assert.match(read('Dockerfile'), /apk add --no-cache jemalloc chromium/);
   assert.match(read('Dockerfile.multi'), /apk add --no-cache jemalloc chromium su-exec/);
+  assert.match(read('Dockerfile.multi'), /COPY packages\/knauf\/src \.\/packages\/knauf\/src/);
   assert.match(read('Dockerfile.multi'), /COPY knauf\/docker\/chromium-wrapper\.sh/);
   assert.equal(
     require('../../packages/knauf/package.json').dependencies['playwright-core'],

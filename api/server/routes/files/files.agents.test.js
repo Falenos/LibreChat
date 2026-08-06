@@ -48,6 +48,9 @@ jest.mock('sharp', () =>
 
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
+  verifyAgentUploadPermission: jest.fn(
+    jest.requireActual('@librechat/api').verifyAgentUploadPermission,
+  ),
   refreshS3FileUrls: jest.fn(),
   // [knauf] KK20-232 — package-level tests cover these helpers; route tests
   // isolate the PDF branch from the global byte-detector implementation.
@@ -62,6 +65,7 @@ jest.mock('@librechat/api', () => ({
 
 // [knauf] KK20-232 — isolate route outcome tests from the real PDF worker.
 jest.mock('@knauf/knauf/server/pdfAccessProbe', () => ({
+  isPdfFileAtPath: jest.fn().mockResolvedValue(false),
   probePdfAccess: jest.fn().mockResolvedValue({ result: 'readable' }),
   PDF_PROBE_UNAVAILABLE_CODE: 'com_knauf_error_pdf_probe_unavailable',
 }));
@@ -87,7 +91,8 @@ jest.mock('fs', () => {
 });
 
 const { processAgentFileUpload } = require('~/server/services/Files/process');
-const { probePdfAccess } = require('@knauf/knauf/server/pdfAccessProbe');
+const { verifyAgentUploadPermission } = require('@librechat/api');
+const { isPdfFileAtPath, probePdfAccess } = require('@knauf/knauf/server/pdfAccessProbe');
 
 // Import the router
 const router = require('~/server/routes/files/files');
@@ -806,6 +811,13 @@ describe('[knauf] POST /files — PDF access classification', () => {
   };
 
   beforeEach(() => {
+    verifyAgentUploadPermission.mockClear();
+    verifyAgentUploadPermission.mockImplementation(
+      jest.requireActual('@librechat/api').verifyAgentUploadPermission,
+    );
+    isPdfFileAtPath.mockClear();
+    isPdfFileAtPath.mockResolvedValue(false);
+    probePdfAccess.mockClear();
     probePdfAccess.mockResolvedValue({ result: 'readable' });
   });
 
@@ -826,6 +838,53 @@ describe('[knauf] POST /files — PDF access classification', () => {
     expect(probePdfAccess).toHaveBeenCalledWith(filePath);
     expect(response.status).toBe(200);
     expect(processAgentFileUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('classifies a PDF whose declared multipart MIME type is spoofed', async () => {
+    isPdfFileAtPath.mockResolvedValue(true);
+    probePdfAccess.mockResolvedValue({ result: 'password_required' });
+    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
+    const filePath = writeTmp(pdf, 'spoofed.txt');
+    const app = buildApp({
+      originalname: 'spoofed.txt',
+      mimetype: 'text/plain',
+      size: pdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
+
+    expect(isPdfFileAtPath).toHaveBeenCalledWith(filePath);
+    expect(probePdfAccess).toHaveBeenCalledWith(filePath);
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('com_knauf_error_pdf_password_required');
+    expect(processAgentFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unauthorized upload before starting PDF classification', async () => {
+    verifyAgentUploadPermission.mockImplementationOnce(({ res }) => {
+      res.status(403).json({ message: 'Forbidden' });
+      return Promise.resolve(true);
+    });
+    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
+    const filePath = writeTmp(pdf, 'authorization-order.pdf');
+    const app = buildApp({
+      originalname: 'authorization-order.pdf',
+      mimetype: 'application/pdf',
+      size: pdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
+
+    expect(response.status).toBe(403);
+    expect(verifyAgentUploadPermission).toHaveBeenCalledTimes(1);
+    expect(probePdfAccess).not.toHaveBeenCalled();
+    expect(processAgentFileUpload).not.toHaveBeenCalled();
   });
 
   it.each([

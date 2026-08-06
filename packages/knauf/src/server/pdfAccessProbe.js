@@ -1,10 +1,12 @@
 'use strict';
 
+const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const PDF_PROBE_UNAVAILABLE_CODE = 'com_knauf_error_pdf_probe_unavailable';
+const PDF_MAGIC = Buffer.from('%PDF-');
 const VALID_RESULTS = new Set(['readable', 'password_required', 'invalid']);
 
 class PdfAccessProbeError extends Error {
@@ -13,6 +15,36 @@ class PdfAccessProbeError extends Error {
     this.name = 'PdfAccessProbeError';
     this.code = PDF_PROBE_UNAVAILABLE_CODE;
   }
+}
+
+async function isPdfFileAtPath(filePath, { openFile = fs.open } = {}) {
+  let handle;
+  let isPdf = false;
+  let operationError;
+  try {
+    handle = await openFile(filePath, 'r');
+    const header = Buffer.alloc(PDF_MAGIC.length);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    isPdf = bytesRead === header.length && header.equals(PDF_MAGIC);
+  } catch (error) {
+    operationError = error;
+  }
+
+  if (handle != null) {
+    try {
+      await handle.close();
+    } catch (error) {
+      operationError ??= error;
+    }
+  }
+
+  if (operationError != null) {
+    throw new PdfAccessProbeError(
+      'PDF access probe failed to inspect the file header',
+      operationError,
+    );
+  }
+  return isPdf;
 }
 
 function probePdfAccess(
@@ -81,6 +113,7 @@ function probePdfAccess(
 }
 
 module.exports = {
+  isPdfFileAtPath,
   probePdfAccess,
   PdfAccessProbeError,
   PDF_PROBE_UNAVAILABLE_CODE,
