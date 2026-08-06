@@ -1380,7 +1380,7 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
     ['image/jpeg', 20, 'com_knauf_error_file_too_large_image'],
     ['image/webp', 20, 'com_knauf_error_file_too_large_image'],
     // [knauf] NO-TICKET — editable SVG uploads use their own small source cap.
-    ['image/svg+xml', 4, 'com_knauf_error_file_too_large_svg'],
+    ['image/svg+xml', 8, 'com_knauf_error_file_too_large_svg'],
     // End [knauf]
   ];
 

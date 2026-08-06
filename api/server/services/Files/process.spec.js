@@ -1659,7 +1659,7 @@ describe('startExpiredFileSweep', () => {
 });
 
 // [knauf] filterFile per-category size caps (KK20-190). Documents 25 / data 50 /
-// images 20 MB / SVG source 4 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
+// images 20 MB / SVG source 8 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
 // endpoints that carry the Knauf allow-list (azureOpenAI + agents) and skipped
 // for avatars. Endpoint fileSizeLimit is set high here so the per-category cap is
 // what fires.
@@ -1709,8 +1709,8 @@ describe('filterFile per-category size caps', () => {
   });
 
   // [knauf] NO-TICKET — SVG source uses the artifact-size boundary, not raster limits.
-  test('throws the SVG key above 4 MB on azureOpenAI', () => {
-    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/svg+xml', size: 5 * MB });
+  test('throws the SVG key above 8 MB on azureOpenAI', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/svg+xml', size: 9 * MB });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_svg');
   });
   // End [knauf]

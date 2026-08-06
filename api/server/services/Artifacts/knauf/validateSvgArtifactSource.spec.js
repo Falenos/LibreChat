@@ -57,13 +57,13 @@ describe('validateSvgArtifactSource', () => {
     );
   });
 
-  test('rejects source above the 4 MiB artifact limit', () => {
+  test('rejects source above the 8 MB artifact limit', () => {
     expect(validateSvgArtifactSource(' '.repeat(MAX_SVG_ARTIFACT_BYTES + 1))).toEqual(
-      expect.objectContaining({ message: expect.stringContaining('4 MiB') }),
+      expect.objectContaining({ message: expect.stringContaining('8 MB') }),
     );
   });
 
-  test('accepts valid source exactly at the 4 MiB limit', () => {
+  test('accepts valid source exactly at the 8 MB limit', () => {
     const start = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><!--';
     const end = '--></svg>';
     const source = start + ' '.repeat(MAX_SVG_ARTIFACT_BYTES - start.length - end.length) + end;

@@ -796,7 +796,7 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 // [knauf] Per-format-category upload size caps (KK20-190). The fileConfig schema
 // exposes only a single `fileSizeLimit` per endpoint, but the product spec needs
 // different per-file caps by category: documents 25 MB, data/spreadsheets 50 MB,
-// images 20 MB, SVG source 4 MB. Centralized here so the client (validateFiles) and server
+// images 20 MB, SVG source 8 MB. Centralized here so the client (validateFiles) and server
 // (filterFile) classify + enforce identically, reusing the MIME regexes above.
 // Endpoint `fileSizeLimit` is set to the largest cap (50 MB) as a backstop; this
 // applies the tighter per-category limit on top.
@@ -814,7 +814,7 @@ export const knaufCategorySizeLimits = {
   document: mbToBytes(25),
   data: mbToBytes(50),
   image: mbToBytes(20),
-  svg: mbToBytes(4),
+  svg: mbToBytes(8),
 } as const;
 
 /** CSV arrives as text/csv or application/csv; classified as "data", not document. */

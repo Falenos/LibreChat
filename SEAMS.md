@@ -727,6 +727,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/utils/files.ts` | user-facing upload error prefix | SVG cap key | Preserves the localized SVG size rejection through shared API error normalization | `packages/api/src/utils/files.spec.ts` | NO-TICKET |
 | `packages/api/src/utils/files.spec.ts` | SVG error-key normalization regression | SVG key assertion | Proves the stable localization key reaches the client unchanged | Self | NO-TICKET |
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | attached-SVG skill routing | SVG attachment assertions | Pins question answering, first-edit artifact creation, and immutable-upload wording in the deployed skill | Self | NO-TICKET |
+| `packages/data-provider/src/file-config.ts` | `knaufCategorySizeLimits.svg` | SVG size category | Raises the shared SVG source ceiling to the product-facing 8 MB limit for client and server enforcement | `packages/data-provider/src/file-config.spec.ts` | NO-TICKET |
+| `packages/data-provider/src/file-config.spec.ts` | SVG category limit case | SVG size assertion | Pins the shared SVG source category at 8 MB | Self | NO-TICKET |
+| `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -802,6 +805,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the native **SVG vector** source-download label (NO-TICKET) |
 | `librechat.yaml` | Adds native SVG to the existing Knauf upload allow-list while retaining the same chat/agent limits and the dedicated 4 MiB source cap enforced in shared code (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Localizes the 4 MiB SVG rejection and the dedicated editable-vector group in the supported-upload dialog (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
 
 ## Net-New Files
 

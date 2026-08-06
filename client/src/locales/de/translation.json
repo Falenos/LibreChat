@@ -453,7 +453,7 @@
   "com_knauf_error_file_too_large_data": "Tabellen-/Datendateien dürfen höchstens 50 MB groß sein.",
   "com_knauf_error_file_too_large_document": "Dokumente dürfen höchstens 25 MB groß sein.",
   "com_knauf_error_file_too_large_image": "Bilder dürfen höchstens 20 MB groß sein.",
-  "com_knauf_error_file_too_large_svg": "SVG-Dateien dürfen höchstens 4 MB groß sein.",
+  "com_knauf_error_file_too_large_svg": "SVG-Dateien dürfen höchstens 8 MB groß sein.",
   "com_knauf_error_legacy_doc": "Word 97–2003 (.doc) wird nicht unterstützt. Öffnen Sie die Datei in Word, wählen Sie Datei → Speichern unter → Word-Dokument (.docx) und laden Sie die .docx-Datei hoch.",
   "com_knauf_error_legacy_ppt": "PowerPoint 97–2003 (.ppt) wird nicht unterstützt. Öffnen Sie die Datei in PowerPoint, wählen Sie Datei → Speichern unter → PowerPoint-Präsentation (.pptx) und laden Sie die .pptx-Datei hoch.",
   "com_knauf_error_legacy_xls": "Excel 97–2003 (.xls) wird nicht unterstützt. Öffnen Sie die Datei in Excel, wählen Sie Datei → Speichern unter → Excel-Arbeitsmappe (.xlsx) und laden Sie die .xlsx-Datei hoch.",

@@ -453,7 +453,7 @@
   "com_knauf_error_file_too_large_data": "Spreadsheet/data files must be 50 MB or smaller.",
   "com_knauf_error_file_too_large_document": "Documents must be 25 MB or smaller.",
   "com_knauf_error_file_too_large_image": "Images must be 20 MB or smaller.",
-  "com_knauf_error_file_too_large_svg": "SVG files must be 4 MB or smaller.",
+  "com_knauf_error_file_too_large_svg": "SVG files must be 8 MB or smaller.",
   "com_knauf_error_legacy_doc": "Word 97–2003 (.doc) isn't supported. Open it in Word, choose File → Save As → Word Document (.docx), then upload the .docx.",
   "com_knauf_error_legacy_ppt": "PowerPoint 97–2003 (.ppt) isn't supported. Open it in PowerPoint, choose File → Save As → PowerPoint Presentation (.pptx), then upload the .pptx.",
   "com_knauf_error_legacy_xls": "Excel 97–2003 (.xls) isn't supported. Open it in Excel, choose File → Save As → Excel Workbook (.xlsx), then upload the .xlsx.",

@@ -3,7 +3,7 @@
 const { parse } = require('@babel/parser');
 const { JSDOM } = require('jsdom');
 
-const MAX_SVG_ARTIFACT_BYTES = 4 * 1024 * 1024;
+const MAX_SVG_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const FORBIDDEN_SVG_ELEMENTS = new Set([
   'script',
   'foreignObject',
@@ -31,7 +31,7 @@ function validateReactArtifactSource(source) {
 
 function validateSvgArtifactSource(source) {
   if (typeof source !== 'string' || Buffer.byteLength(source, 'utf8') > MAX_SVG_ARTIFACT_BYTES) {
-    return { message: 'SVG source must be text no larger than 4 MiB' };
+    return { message: 'SVG source must be text no larger than 8 MB' };
   }
 
   let document;
