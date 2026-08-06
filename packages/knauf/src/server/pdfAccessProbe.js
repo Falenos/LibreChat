@@ -5,6 +5,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PDF_HEADER_SCAN_BYTES = 1024;
 const PDF_PROBE_UNAVAILABLE_CODE = 'com_knauf_error_pdf_probe_unavailable';
 const PDF_MAGIC = Buffer.from('%PDF-');
 const VALID_RESULTS = new Set(['readable', 'password_required', 'invalid']);
@@ -23,9 +24,9 @@ async function isPdfFileAtPath(filePath, { openFile = fs.open } = {}) {
   let operationError;
   try {
     handle = await openFile(filePath, 'r');
-    const header = Buffer.alloc(PDF_MAGIC.length);
+    const header = Buffer.alloc(PDF_HEADER_SCAN_BYTES);
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
-    isPdf = bytesRead === header.length && header.equals(PDF_MAGIC);
+    isPdf = header.subarray(0, bytesRead).indexOf(PDF_MAGIC) !== -1;
   } catch (error) {
     operationError = error;
   }
@@ -117,5 +118,5 @@ module.exports = {
   probePdfAccess,
   PdfAccessProbeError,
   PDF_PROBE_UNAVAILABLE_CODE,
-  __internal__: { DEFAULT_TIMEOUT_MS },
+  __internal__: { DEFAULT_TIMEOUT_MS, PDF_HEADER_SCAN_BYTES },
 };

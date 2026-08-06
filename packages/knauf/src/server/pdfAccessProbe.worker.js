@@ -5,6 +5,17 @@ const { pathToFileURL } = require('node:url');
 const { isMainThread, parentPort, workerData } = require('node:worker_threads');
 
 const PASSWORD_EXCEPTION = 'PasswordException';
+const INVALID_PDF_EXCEPTIONS = new Set(['InvalidPDFException', 'FormatError']);
+
+function classifyPdfError(error) {
+  if (error?.name === PASSWORD_EXCEPTION) {
+    return { result: 'password_required' };
+  }
+  if (INVALID_PDF_EXCEPTIONS.has(error?.name)) {
+    return { result: 'invalid' };
+  }
+  return { result: 'unavailable', stage: 'parse' };
+}
 
 async function destroyProbeResources(pdfDocument, loadingTask) {
   let cleanupError;
@@ -62,12 +73,10 @@ async function runPdfAccessProbe(
       pdfDocument = await loadingTask.promise;
       result = { result: 'readable' };
     } catch (error) {
-      result = {
-        result: error?.name === PASSWORD_EXCEPTION ? 'password_required' : 'invalid',
-      };
+      result = classifyPdfError(error);
     }
   } catch {
-    result = { result: 'invalid' };
+    result = { result: 'unavailable', stage: 'initialize' };
   }
 
   try {
@@ -86,5 +95,5 @@ if (!isMainThread) {
 
 module.exports = {
   runPdfAccessProbe,
-  __internal__: { destroyProbeResources },
+  __internal__: { classifyPdfError, destroyProbeResources },
 };

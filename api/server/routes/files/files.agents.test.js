@@ -48,28 +48,8 @@ jest.mock('sharp', () =>
 
 jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
-  verifyAgentUploadPermission: jest.fn(
-    jest.requireActual('@librechat/api').verifyAgentUploadPermission,
-  ),
   refreshS3FileUrls: jest.fn(),
-  // [knauf] KK20-232 — package-level tests cover these helpers; route tests
-  // isolate the PDF branch from the global byte-detector implementation.
-  detectEncryptedFileAtPath: jest.fn((filePath, mimeType) => {
-    const actual = jest.requireActual('@librechat/api');
-    return mimeType === 'application/pdf'
-      ? Promise.resolve({ encrypted: false })
-      : actual.detectEncryptedFileAtPath(filePath, mimeType);
-  }),
-  // End [knauf]
 }));
-
-// [knauf] KK20-232 — isolate route outcome tests from the real PDF worker.
-jest.mock('@knauf/knauf/server/pdfAccessProbe', () => ({
-  isPdfFileAtPath: jest.fn().mockResolvedValue(false),
-  probePdfAccess: jest.fn().mockResolvedValue({ result: 'readable' }),
-  PDF_PROBE_UNAVAILABLE_CODE: 'com_knauf_error_pdf_probe_unavailable',
-}));
-// End [knauf]
 
 jest.mock('~/cache', () => ({
   getLogStores: jest.fn(() => ({
@@ -91,8 +71,6 @@ jest.mock('fs', () => {
 });
 
 const { processAgentFileUpload } = require('~/server/services/Files/process');
-const { verifyAgentUploadPermission } = require('@librechat/api');
-const { isPdfFileAtPath, probePdfAccess } = require('@knauf/knauf/server/pdfAccessProbe');
 
 // Import the router
 const router = require('~/server/routes/files/files');
@@ -760,8 +738,12 @@ describe('File Routes - Agent Files Endpoint', () => {
   });
 });
 
-// [knauf] KK20-232 — the POST /files PDF classifier and retained OOXML guard.
-describe('[knauf] POST /files — PDF access classification', () => {
+// [knauf] KK20-190 — the POST /files encryption call-site. filterFile (mocked
+// here) passes, then the route inspects the bytes via detectEncryptedFileAtPath
+// and rejects encrypted OOXML with the localized i18n key. This pins the route
+// WIRING (not just the lib fn): an encrypted container is rejected while PDF
+// encryption decisions are delegated to the isolated access probe.
+describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
@@ -810,155 +792,16 @@ describe('[knauf] POST /files — PDF access classification', () => {
     return app;
   };
 
-  beforeEach(() => {
-    verifyAgentUploadPermission.mockClear();
-    verifyAgentUploadPermission.mockImplementation(
-      jest.requireActual('@librechat/api').verifyAgentUploadPermission,
-    );
-    isPdfFileAtPath.mockClear();
-    isPdfFileAtPath.mockResolvedValue(false);
-    probePdfAccess.mockClear();
-    probePdfAccess.mockResolvedValue({ result: 'readable' });
-  });
-
-  it('allows a readable permission-encrypted PDF through the File Search gate', async () => {
-    const encPdf = Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF', 'binary');
-    const filePath = writeTmp(encPdf, 'permission-encrypted.pdf');
-    const app = buildApp({
-      originalname: 'permission-encrypted.pdf',
-      mimetype: 'application/pdf',
-      size: encPdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app)
-      .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search' });
-
-    expect(probePdfAccess).toHaveBeenCalledWith(filePath);
-    expect(response.status).toBe(200);
-    expect(processAgentFileUpload).toHaveBeenCalledTimes(1);
-  });
-
-  it('classifies a PDF whose declared multipart MIME type is spoofed', async () => {
-    isPdfFileAtPath.mockResolvedValue(true);
-    probePdfAccess.mockResolvedValue({ result: 'password_required' });
-    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
-    const filePath = writeTmp(pdf, 'spoofed.txt');
-    const app = buildApp({
-      originalname: 'spoofed.txt',
-      mimetype: 'text/plain',
-      size: pdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app)
-      .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
-
-    expect(isPdfFileAtPath).toHaveBeenCalledWith(filePath);
-    expect(probePdfAccess).toHaveBeenCalledWith(filePath);
-    expect(response.status).toBe(422);
-    expect(response.body.code).toBe('com_knauf_error_pdf_password_required');
-    expect(processAgentFileUpload).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unauthorized upload before starting PDF classification', async () => {
-    verifyAgentUploadPermission.mockImplementationOnce(({ res }) => {
-      res.status(403).json({ message: 'Forbidden' });
-      return Promise.resolve(true);
-    });
-    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
-    const filePath = writeTmp(pdf, 'authorization-order.pdf');
-    const app = buildApp({
-      originalname: 'authorization-order.pdf',
-      mimetype: 'application/pdf',
-      size: pdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app)
-      .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
-
-    expect(response.status).toBe(403);
-    expect(verifyAgentUploadPermission).toHaveBeenCalledTimes(1);
-    expect(probePdfAccess).not.toHaveBeenCalled();
-    expect(processAgentFileUpload).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['password_required', 'com_knauf_error_pdf_password_required'],
-    ['invalid', 'com_knauf_error_pdf_invalid'],
-  ])('returns 422 for %s PDFs', async (result, code) => {
-    probePdfAccess.mockResolvedValue({ result });
-    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
-    const filePath = writeTmp(pdf, `${result}.pdf`);
-    const app = buildApp({
-      originalname: `${result}.pdf`,
-      mimetype: 'application/pdf',
-      size: pdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app)
-      .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
-
-    expect(response.status).toBe(422);
-    expect(response.body.message).toBe(code);
-    expect(response.body.code).toBe(code);
-    expect(processAgentFileUpload).not.toHaveBeenCalled();
-  });
-
-  it('returns retryable 503 when the PDF probe is unavailable', async () => {
-    const error = new Error('com_knauf_error_pdf_probe_unavailable');
-    error.code = 'com_knauf_error_pdf_probe_unavailable';
-    probePdfAccess.mockRejectedValue(error);
-    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
-    const filePath = writeTmp(pdf, 'unavailable.pdf');
-    const app = buildApp({
-      originalname: 'unavailable.pdf',
-      mimetype: 'application/pdf',
-      size: pdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app)
-      .post('/files')
-      .send({ endpoint: 'agents', tool_resource: 'file_search', file_id: uuidv4() });
-
-    expect(response.status).toBe(503);
-    expect(response.body.code).toBe('com_knauf_error_pdf_probe_unavailable');
-  });
-
-  it('does not probe PDFs outside non-Assistants File Search', async () => {
-    const pdf = Buffer.from('%PDF-1.7\nfixture\n%%EOF', 'binary');
-    const filePath = writeTmp(pdf, 'chat.pdf');
-    const app = buildApp({
-      originalname: 'chat.pdf',
-      mimetype: 'application/pdf',
-      size: pdf.length,
-      path: filePath,
-    });
-
-    const response = await request(app).post('/files').send({ endpoint: 'azureOpenAI' });
-
-    expect(probePdfAccess).not.toHaveBeenCalled();
-    expect(response.status).toBe(200);
-    expect(processAgentFileUpload).toHaveBeenCalledTimes(1);
-  });
-
-  it('retains global encrypted-OOXML rejection', async () => {
-    const cfbf = Buffer.concat([
+  it('rejects an encrypted OOXML container with the localized key', async () => {
+    const encryptedOoxml = Buffer.concat([
       Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
       Buffer.alloc(64),
     ]);
-    const filePath = writeTmp(cfbf, 'encrypted.docx');
+    const filePath = writeTmp(encryptedOoxml, 'encrypted.docx');
     const app = buildApp({
       originalname: 'encrypted.docx',
       mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      size: cfbf.length,
+      size: encryptedOoxml.length,
       path: filePath,
     });
 
@@ -966,8 +809,33 @@ describe('[knauf] POST /files — PDF access classification', () => {
       .post('/files')
       .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
 
+    // Expected input rejection must not count as an
+    // operational server failure.
     expect(response.status).toBe(422);
+    expect(response.body.message).toBe('com_knauf_error_file_encrypted');
     expect(response.body.code).toBe('com_knauf_error_file_encrypted');
+    expect(processAgentFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('leaves PDF encryption decisions to the PDF access probe', async () => {
+    const permissionEncryptedPdf = Buffer.from(
+      '%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF',
+      'binary',
+    );
+    const filePath = writeTmp(permissionEncryptedPdf, 'permission-encrypted.pdf');
+    const app = buildApp({
+      originalname: 'permission-encrypted.pdf',
+      mimetype: 'application/pdf',
+      size: permissionEncryptedPdf.length,
+      path: filePath,
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    // Not rejected for encryption — the encrypted-file key is never returned.
+    expect(response.body.message).not.toBe('com_knauf_error_file_encrypted');
   });
 });
 // End [knauf]

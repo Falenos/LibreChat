@@ -1,6 +1,7 @@
 'use strict';
 
 const { EventEmitter } = require('node:events');
+const path = require('node:path');
 const {
   isPdfFileAtPath,
   probePdfAccess,
@@ -65,6 +66,20 @@ describe('PDF access probe', () => {
     await expect(resultPromise).rejects.toBeInstanceOf(PdfAccessProbeError);
   });
 
+  it('maps retryable parser outcomes to the stable unavailable error', async () => {
+    const resultPromise = probePdfAccess('/tmp/failure.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 100,
+    });
+
+    FakeWorker.instances[0].emit('message', { result: 'unavailable', stage: 'parse' });
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
   it('maps worker construction failures to a stable unavailable error', async () => {
     class ThrowingWorker {
       constructor() {
@@ -98,14 +113,21 @@ describe('PDF access probe', () => {
   });
 
   it.each([
-    ['%PDF-', true],
-    ['plain', false],
-  ])('detects PDF bytes independently of the declared MIME type', async (headerBytes, expected) => {
+    ['at offset zero', '%PDF-', true],
+    ['after a prefix', 'prefix%PDF-1.7', true],
+    [
+      'at the last complete offset',
+      Buffer.concat([Buffer.alloc(1019), Buffer.from('%PDF-')]),
+      true,
+    ],
+    ['outside the scan window', Buffer.concat([Buffer.alloc(1020), Buffer.from('%PDF-')]), false],
+    ['when absent', 'plain', false],
+  ])('detects PDF bytes %s', async (_scenario, headerBytes, expected) => {
     const handle = {
       read: jest.fn(async (buffer) => {
         const header = Buffer.from(headerBytes);
         header.copy(buffer);
-        return { bytesRead: header.length };
+        return { bytesRead: Math.min(header.length, buffer.length) };
       }),
       close: jest.fn().mockResolvedValue(undefined),
     };
@@ -132,6 +154,7 @@ describe('PDF access probe', () => {
   it.each([
     ['PasswordException', 'password_required'],
     ['InvalidPDFException', 'invalid'],
+    ['FormatError', 'invalid'],
   ])('classifies %s from PDF.js as %s', async (name, expected) => {
     const loadingTask = {
       promise: Promise.reject(Object.assign(new Error(name), { name })),
@@ -147,6 +170,38 @@ describe('PDF access probe', () => {
       }),
     ).resolves.toEqual({ result: expected });
     expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps unknown PDF.js parser failures retryable', async () => {
+    const loadingTask = {
+      promise: Promise.reject(
+        Object.assign(new Error('unknown parser failure'), { name: 'UnknownErrorException' }),
+      ),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'parse' });
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps synchronous PDF.js initialization failures retryable', async () => {
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => {
+            throw new Error('initialization failed');
+          }),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'initialize' });
   });
 
   it('destroys both the loaded document and loading task after a readable PDF', async () => {
@@ -215,5 +270,20 @@ describe('PDF access probe', () => {
     ).resolves.toEqual({ result: 'unavailable', stage: 'cleanup' });
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
     expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PDF access probe with real PDF.js fixtures', () => {
+  const fixture = (name) => path.join(__dirname, 'fixtures', 'pdf-access', name);
+
+  it.each([
+    ['01-plain-unencrypted.pdf', 'readable'],
+    ['02-owner-password-broad-permissions.pdf', 'readable'],
+    ['03-owner-password-restricted-assembly-extraction.pdf', 'readable'],
+    ['04-open-password-required.pdf', 'password_required'],
+    ['06-certified-docmdp-no-changes.pdf', 'readable'],
+    ['malformed.pdf', 'invalid'],
+  ])('classifies %s as %s through pdfjs-dist', async (name, expected) => {
+    await expect(probePdfAccess(fixture(name))).resolves.toEqual({ result: expected });
   });
 });
