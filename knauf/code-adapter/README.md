@@ -8,7 +8,9 @@ rolls the whole feature back.
 
 Design rationale and the backend decision live in
 [`knauf/docs/proposals/code-interpreter-implementation-designs.md`](../docs/proposals/code-interpreter-implementation-designs.md)
-(Option 2). This README is the operational reference for the service itself.
+(Option 2); why this is a separate service rather than a router inside LibreChat is argued in
+[`knauf/docs/proposals/code-adapter-placement.md`](../docs/proposals/code-adapter-placement.md).
+This README is the operational reference for the service itself.
 
 ## Contract served (under `/v1`, JWT-authenticated)
 

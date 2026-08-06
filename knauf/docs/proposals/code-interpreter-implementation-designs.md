@@ -3,7 +3,8 @@
 > **Status: DECIDED (Aug 2026) — Option 2 (ACA dynamic sessions + adapter) SELECTED and being built.**
 > The adapter exists at [`knauf/code-adapter/`](../../code-adapter/) (see its README for the
 > authoritative contract + operational reference); the CI workflow is
-> `.github/workflows/build-code-adapter.yaml`. Build-out corrections discovered during
+> `.github/workflows/build-code-adapter.yaml`. Why it's a separate service rather than a router
+> inside LibreChat: [`code-adapter-placement.md`](code-adapter-placement.md). Build-out corrections discovered during
 > implementation, beyond what Option 2 below describes: the contract also includes
 > `POST /upload/batch` (+`read_only`), `GET /sessions/{s}/objects/{f}` freshness probe,
 > `DELETE /files/{s}/{f}` fallback, `POST /exec/programmatic` (PTC — adapter returns 501),
