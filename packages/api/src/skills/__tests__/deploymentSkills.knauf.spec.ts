@@ -174,6 +174,15 @@ describe('[knauf] shipped deployment skills', () => {
     expect(svg).toContain('Do not convert HTML or React to SVG');
     expect(svg).toContain('official approved vector');
     expect(svg).toContain('fonts must be installed');
+    expect(svg).toContain('<animate>');
+    expect(svg).toContain('<animateTransform>');
+    expect(svg).toContain('prefers-reduced-motion');
+    expect(svg).toContain('completes within five seconds');
+    expect(svg).toContain('Do not use `repeatCount="indefinite"`');
+    expect(svg).toContain('PNG and PDF export capture one still frame');
+    expect(svg).toContain('Never wrap the pixels in `<image>`');
+    expect(svg).toContain('Do not trace a complex photograph');
+    expect(svg).toContain('Any tracer output must still pass every source');
   });
   // End [knauf]
 

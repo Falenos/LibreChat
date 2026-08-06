@@ -188,7 +188,7 @@ describe('useArtifactProps', () => {
   describe('native SVG artifacts', () => {
     it('uses the exact SVG source as a static artwork.svg file', () => {
       const content =
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>Grüße</text></svg>';
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>Grüße</title><circle cx="2" cy="5" r="2"><animate attributeName="cx" from="2" to="8" dur="2s" fill="freeze" /></circle></svg>';
       const artifact = createArtifact({ type: 'image/svg+xml', content });
 
       const { result } = renderHook(() => useArtifactProps({ artifact }));
