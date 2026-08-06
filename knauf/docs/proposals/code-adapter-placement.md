@@ -20,6 +20,52 @@ The decision is cheaply reversible in the sidecar→in-process direction and pai
 
 ---
 
+## 0. What the code adapter does
+
+The adapter is a small stateless HTTP service with **one job: make Azure Container Apps dynamic sessions look
+*exactly* like the code backend LibreChat already knows how to talk to.** LibreChat's tools were written to call the
+"LibreChat Code API" (the contract the self-hosted ClickHouse sandbox implements natively). Azure's sessions speak a
+different API, with a different auth model, and are missing several things LibreChat's contract assumes. The adapter
+sits between the two and closes every one of those gaps. Nothing else in KARL changes — the app just points
+`LIBRECHAT_CODE_BASEURL` at the adapter.
+
+Concretely, it performs six functions:
+
+1. **Protocol translation.** Receives the LibreChat Code API request (`POST /exec {lang, code, files?}` and the
+   file/session endpoints) and re-expresses it as the ACA data-plane call
+   (`POST {pool}/executions?identifier=… {properties:{codeInputType:"inline", executionType:"synchronous", code}}`),
+   then reshapes the ACA response back into `{session_id, stdout, stderr, code, files[]}` the way LibreChat expects.
+
+2. **Language → pool routing.** Maps `lang: "py"` to the **PythonLTS** session pool and `lang: "bash"` to the
+   **Shell** pool (anything else → HTTP 501). These are the two Microsoft-managed images KARL's traffic needs.
+
+3. **Auth translation (the two-sided credential bridge).** *Inbound*, it verifies the short-lived JWT LibreChat mints
+   per request (the same token [`packages/api/src/auth/codeapi.ts`](../../../packages/api/src/auth/codeapi.ts)
+   produces — EdDSA, issuer/audience/kid). *Outbound*, it acquires an Entra token via workload identity
+   (`DefaultAzureCredential`, audience `https://dynamicsessions.io`) and presents it to the pools. LibreChat never
+   learns anything about Azure; the pools never see LibreChat's JWT.
+
+4. **File lifecycle / staging.** LibreChat uploads input files *before* any session exists, and ACA sessions
+   self-destruct after a cooldown (≥300 s). The adapter stages uploads in **Azure Blob** and records them in a
+   **Mongo** TTL collection (`code_adapter_files`, 24 h), pushes them into the session lazily at first exec, and after
+   execution captures generated files back to Blob — so `GET /download` keeps working long after the sandbox is gone.
+
+5. **Filling the contract gaps ACA leaves.** ACA's execution response carries **no numeric exit code** and
+   **truncates stdout (~4000 chars)**. The adapter wraps user code in a base64-embedded subprocess wrapper that tees
+   full stdout/stderr to `/mnt/data` log files and emits a sentinel line — restoring **real exit codes** and
+   **recovering the full output** past the cap.
+
+6. **Resilience the contract assumes but ACA doesn't guarantee.** On `SessionWithIdentifierNotFound` (a cooldown
+   expiry mid-conversation) it transparently re-mints the session and re-pushes staged files; on the 220-second
+   platform timeout, capacity limits, or expired inputs it returns a normal `{code:1}` result with a
+   model-actionable message — **never a 5xx into LibreChat's tool loop**.
+
+The net effect: KARL runs Python and Bash in Microsoft-operated Hyper-V sandboxes, with real exit codes, file
+round-trips, and durable downloads — while every line of LibreChat and every `@librechat/agents` tool stays
+untouched. The rest of this document is about **where** this service should run, not what it does.
+
+---
+
 ## 1. Constraint zero: the client is immutable
 
 Everything below follows from one verified fact: the code that decides how KARL talks to a code backend is **not ours
