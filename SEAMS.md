@@ -708,6 +708,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/files/files.js` | `router.post('/')` authorization and PDF classification gates | 786–834 | Rejects unauthorized agent uploads before worker execution and applies PDF.js classification to `%PDF-` content even when multipart MIME metadata is spoofed | `api/server/routes/files/files.agents.test.js` (`[knauf] POST /files — PDF access classification`) | KK20-232 |
 | `api/server/routes/files/files.agents.test.js` | PDF MIME-spoof and authorization-order regressions | 763–973 | Proves content-sniffed PDFs cannot bypass access classification and denied uploads consume no PDF worker resources | Self | KK20-232 |
 | `Dockerfile.multi` | `api-build` Knauf workspace runtime sources | 118–120 | Ships the source files targeted by `@knauf/knauf` package exports so the multi-stage production image can resolve the PDF probe at startup | `knauf/tests/artifactExportRuntime.spec.js` | KK20-232 |
+| `packages/api/src/stream/implementations/RedisEventTransport.ts` | `NEXT_SEQUENCE_SCRIPT`; `getNextSequence` atomic evaluation | 137–149, 254–264 | Allocates sequence numbers and their safety TTL atomically, while repairing legacy counters that have no expiry, so a Redis disconnect cannot leave permanent generation keys | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
+| `packages/api/src/stream/__tests__/helpers/publisher.ts` | `MockPublisher.eval`; Lua evaluation mock | 5–7, 23–25, 37–46 | Models the atomic Redis sequence command while preserving existing command-level failure controls | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
+| `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | atomic sequence TTL regression | 89–113 | Proves sequence allocation and the safety TTL use one Redis evaluation | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
