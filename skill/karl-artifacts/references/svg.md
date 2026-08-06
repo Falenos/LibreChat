@@ -20,7 +20,7 @@ Use `image/svg+xml` only for logos, icons, diagrams, and self-contained vector i
 - No `image` elements, including data-URI raster images.
 - Avoid filters, blend modes, complex masks, browser-only CSS, and experimental constructs unless explicitly requested and tested in the target editor.
 - Keep coordinates finite and conservative. Check malformed XML, multiple roots, duplicate IDs, and unresolved internal references before delivery.
-- Keep the UTF-8 source below the artifact limit of 4 MiB.
+- Keep the UTF-8 source below the artifact limit of 8 MB.
 
 ## Declarative animation
 

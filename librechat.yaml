@@ -476,7 +476,7 @@ fileConfig:
     gptPlugins:
       fileLimit: 5
     # [knauf] Restricted upload allow-list (KK20-190). Only these formats are
-    # accepted; everything else (video, audio, archives, SVG, code/text types,
+    # accepted; everything else (video, audio, archives, code/text types,
     # etc.) is rejected client-side (client/src/utils/files.ts) and server-side
     # (api/server/services/Files/process.js). `supportedMimeTypes` entries are
     # strings compiled to RegExp by the loader
@@ -504,6 +504,7 @@ fileConfig:
         - "^application/(csv|json)$"                                                           # .csv / .json
         - "^text/(plain|markdown|csv)$"                                                        # .txt / .md / .csv
         - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
+        - "^image/svg(?:\\+xml)?$"                                                           # .svg (editable artifact source)
       fileLimit: 5
       fileSizeLimit: 50
       totalSizeLimit: 100

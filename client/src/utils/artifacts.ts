@@ -304,6 +304,9 @@ export const TOOL_ARTIFACT_TYPES = {
   MERMAID: 'application/vnd.mermaid',
   PLAIN_TEXT: 'text/plain',
   CODE: 'application/vnd.code',
+  // [knauf] NO-TICKET — uploaded XML source renders as the existing native SVG artifact.
+  SVG: 'image/svg+xml',
+  // End [knauf]
   /* Office-format rich previews. The backend renders the binary file as a
    * complete sanitized HTML document and ships it via `attachment.text`;
    * the client routes these types through the Sandpack `static` template's
@@ -593,6 +596,9 @@ const EXTENSION_TO_TOOL_ARTIFACT_TYPE: Record<string, ToolArtifactType> = {
   mdx: TOOL_ARTIFACT_TYPES.MARKDOWN,
   mmd: TOOL_ARTIFACT_TYPES.MERMAID,
   mermaid: TOOL_ARTIFACT_TYPES.MERMAID,
+  // [knauf] NO-TICKET — uploaded native SVG opens in the artifact panel.
+  svg: TOOL_ARTIFACT_TYPES.SVG,
+  // End [knauf]
   txt: TOOL_ARTIFACT_TYPES.PLAIN_TEXT,
   // ODT has no rich HTML producer — it stays on the markdown-text path.
   odt: TOOL_ARTIFACT_TYPES.PLAIN_TEXT,
@@ -630,6 +636,10 @@ const MIME_TO_TOOL_ARTIFACT_TYPE: Record<string, ToolArtifactType> = {
   'application/vnd.react': TOOL_ARTIFACT_TYPES.REACT,
   'application/vnd.ant.react': TOOL_ARTIFACT_TYPES.REACT,
   'application/vnd.mermaid': TOOL_ARTIFACT_TYPES.MERMAID,
+  // [knauf] NO-TICKET — canonicalize both deployed SVG MIME variants.
+  'image/svg': TOOL_ARTIFACT_TYPES.SVG,
+  'image/svg+xml': TOOL_ARTIFACT_TYPES.SVG,
+  // End [knauf]
   // Code MIME types — codeapi serves these via Content-Type for source
   // files (`text/x-python`, `text/x-typescript`, etc.) so a file whose
   // extension was stripped or renamed upstream still routes to CODE.

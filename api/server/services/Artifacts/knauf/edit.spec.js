@@ -16,7 +16,44 @@ ${source}
 \`\`\`
 :::`;
 
+// [knauf] NO-TICKET — native SVG revisions use the same artifact edit seam.
+const svgArtifact = (source) => `:::artifact{identifier="mark" type="image/svg+xml" title="Mark"}
+\`\`\`svg
+${source}
+\`\`\`
+:::`;
+// End [knauf]
+
 describe('edit_artifact', () => {
+  // [knauf] NO-TICKET — edits cannot turn a safe SVG artifact into active content.
+  test('rejects an unsafe SVG revision before writing', async () => {
+    const source =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path id="mark" d="M0 0h10v10z"/></svg>';
+    const message = {
+      messageId: 'assistant-svg',
+      conversationId: 'conversation-1',
+      user: 'user-1',
+      text: svgArtifact(source),
+    };
+    const compareAndSwap = jest.fn();
+
+    await expect(
+      applyArtifactEdit(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          identifier: 'mark',
+          expectedSha256: sha256(source),
+          replacements: [
+            { old: '<path id="mark"', new: '<script>alert(1)</script><path id="mark"' },
+          ],
+        },
+        { getMessages: jest.fn().mockResolvedValue([message]), compareAndSwap },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_artifact_syntax' });
+    expect(compareAndSwap).not.toHaveBeenCalled();
+  });
+  // End [knauf]
   test('atomically applies exact replacements to the latest owned artifact', async () => {
     const older = {
       messageId: 'assistant-1',

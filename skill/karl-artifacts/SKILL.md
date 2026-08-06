@@ -1,10 +1,9 @@
 ---
 name: karl-artifacts
 description: >-
-  Building KARL artifacts (the live preview panel): React, HTML, SVG, Mermaid,
-  Markdown. Use when creating or iterating an interactive UI, dashboard, chart,
-  diagram, or Knauf-branded report or slide deck — or when deciding artifact vs.
-  plain chat.
+  Build KARL React, HTML, SVG, Mermaid, or Markdown artifacts. Use for previews,
+  dashboards, charts, diagrams, reports, decks, or interpreting, answering
+  questions about, and modifying an attached SVG.
 argument-hint: "[what to build or change]"
 user-invocable: true
 version: "3.2.0"
@@ -41,6 +40,12 @@ Before emitting or editing `image/svg+xml`, load and follow:
 ```
 read_file  skills/karl-artifacts/references/svg.md
 ```
+
+For an attached SVG, answer questions from its exact XML source. On the first
+requested visual change, emit a complete `image/svg+xml` artifact with a stable
+identifier derived from the filename; the upload remains immutable. Use
+`edit_artifact` for later revisions of that emitted artifact. Never claim the
+uploaded original was overwritten.
 
 Rules of thumb:
 

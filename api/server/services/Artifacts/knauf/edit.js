@@ -3,7 +3,10 @@
 const crypto = require('crypto');
 const { findAllArtifacts, getToolDefinition } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
-const { validateReactArtifactSource } = require('@knauf/knauf/server/validateArtifactSource');
+const {
+  validateReactArtifactSource,
+  validateSvgArtifactSource,
+} = require('@knauf/knauf/server/validateArtifactSource');
 
 const TOOL_NAME = 'edit_artifact';
 const MAX_REPLACEMENTS = 25;
@@ -249,6 +252,17 @@ async function applyArtifactEdit(input, deps) {
       );
     }
   }
+  // [knauf] NO-TICKET — keep edited native SVG revisions inside the upload safety contract.
+  if (readAttribute(editedBoundary, 'type') === 'image/svg+xml') {
+    const syntaxError = validateSvgArtifactSource(readArtifactContent(editedBoundary));
+    if (syntaxError) {
+      throw new ArtifactEditError(
+        `Updated SVG artifact is invalid: ${syntaxError.message}`,
+        'invalid_artifact_syntax',
+      );
+    }
+  }
+  // End [knauf]
 
   const version = readVersion(target.boundary) + 1;
   workingMessage = withVersion(

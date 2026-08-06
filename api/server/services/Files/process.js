@@ -30,6 +30,9 @@ const { logger, runAsSystem } = require('@librechat/data-schemas');
 const {
   sanitizeFilename,
   parseText,
+  // [knauf] NO-TICKET — preserve uploaded native SVG markup byte-for-byte as text.
+  parseTextNative,
+  // End [knauf]
   processAudioFile,
   getStorageMetadata,
   recordFileIndexEmbed,
@@ -38,6 +41,9 @@ const {
   sweepExpiredFiles: sweepExpiredFilesWithDeps,
   startExpiredFileSweep: startExpiredFileSweepWithDeps,
 } = require('@librechat/api');
+// [knauf] NO-TICKET — reject active/external SVG content before it reaches artifact preview.
+const { validateSvgArtifactSource } = require('@knauf/knauf/server/validateArtifactSource');
+// End [knauf]
 const {
   convertImage,
   resizeAndConvert,
@@ -930,6 +936,17 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     };
 
     const fileConfig = mergeFileConfig(appConfig.fileConfig);
+
+    // [knauf] NO-TICKET — SVG is readable XML source, not OCR/RAG or a vision bitmap.
+    if (/^image\/svg(?:\+xml)?$/i.test(file.mimetype)) {
+      const { text, bytes } = await parseTextNative(file);
+      const validationError = validateSvgArtifactSource(text);
+      if (validationError) {
+        throw new Error(`Invalid SVG upload: ${validationError.message}`);
+      }
+      return await createTextFile({ text, bytes, type: 'image/svg+xml' });
+    }
+    // End [knauf]
 
     const shouldUseConfiguredOCR =
       appConfig?.ocr != null &&

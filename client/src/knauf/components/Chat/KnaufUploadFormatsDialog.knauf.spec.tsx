@@ -1,7 +1,7 @@
 /**
  * [knauf] Seam test for the "Supported file types" dialog. Mocks OGDialog (to
  * honour the `open` prop) and `useLocalize` (key → key), then pins the rendered
- * structure: the three format groups, the limits line, and the three legacy
+ * structure: the format groups, the limits line, and the three legacy
  * conversion steps. KK20-190 (upload-guidance follow-up).
  */
 import React from 'react';
@@ -27,7 +27,7 @@ describe('[knauf] KnaufUploadFormatsDialog', () => {
     expect(screen.queryByTestId('og-dialog')).toBeNull();
   });
 
-  it('renders title, the three format groups, limits, and legacy conversion steps when open', () => {
+  it('renders title, format groups, limits, and legacy conversion steps when open', () => {
     render(<KnaufUploadFormatsDialog open={true} onOpenChange={jest.fn()} />);
 
     // title
@@ -41,6 +41,8 @@ describe('[knauf] KnaufUploadFormatsDialog', () => {
       'com_knauf_upload_formats_data_items',
       'com_knauf_upload_formats_images_label',
       'com_knauf_upload_formats_images_items',
+      'com_knauf_upload_formats_svg_label',
+      'com_knauf_upload_formats_svg_items',
     ]) {
       expect(screen.getByText(new RegExp(key))).toBeInTheDocument();
     }

@@ -49,6 +49,9 @@ jest.mock('@librechat/api', () => {
   return {
     sanitizeFilename: jest.fn((n) => n),
     parseText: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
+    // [knauf] NO-TICKET — source-preserving reader for uploaded SVG artifacts.
+    parseTextNative: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
+    // End [knauf]
     processAudioFile: jest.fn(),
     getStorageMetadata: jest.fn(() => ({})),
     recordFileIndexEmbed: jest.fn(),
@@ -287,6 +290,35 @@ describe('processAgentFileUpload', () => {
   });
 
   describe('OCR strategy selection', () => {
+    // [knauf] NO-TICKET — uploaded SVG source is preserved for artifact rendering and AI context.
+    test('stores exact SVG source as a message text attachment', async () => {
+      const source =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text y="8">Grüße ✓</text></svg>';
+      const { parseText, parseTextNative } = require('@librechat/api');
+      parseTextNative.mockResolvedValueOnce({ text: source, bytes: Buffer.byteLength(source) });
+      const req = makeReq({ mimetype: 'image/svg+xml' });
+      req.file.originalname = 'brand.svg';
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), message_file: true },
+      });
+
+      expect(parseTextNative).toHaveBeenCalledWith(req.file);
+      expect(parseText).not.toHaveBeenCalled();
+      expect(db.createFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filename: 'brand.svg',
+          source: FileSources.text,
+          text: source,
+          type: 'image/svg+xml',
+          context: FileContext.message_attachment,
+        }),
+        true,
+      );
+    });
+    // End [knauf]
     test.each([
       ['PDF', PDF_MIME],
       ['DOCX', DOCX_MIME],
@@ -1627,7 +1659,7 @@ describe('startExpiredFileSweep', () => {
 });
 
 // [knauf] filterFile per-category size caps (KK20-190). Documents 25 / data 50 /
-// images 20 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
+// images 20 MB / SVG source 8 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
 // endpoints that carry the Knauf allow-list (azureOpenAI + agents) and skipped
 // for avatars. Endpoint fileSizeLimit is set high here so the per-category cap is
 // what fires.
@@ -1675,6 +1707,13 @@ describe('filterFile per-category size caps', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/png', size: 26 * MB });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_image');
   });
+
+  // [knauf] NO-TICKET — SVG source uses the artifact-size boundary, not raster limits.
+  test('throws the SVG key above 8 MB on azureOpenAI', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/svg+xml', size: 9 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_svg');
+  });
+  // End [knauf]
 
   test('allows a PDF exactly at the 25 MB cap (strict > boundary)', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 25 * MB });

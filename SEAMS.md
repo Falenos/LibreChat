@@ -714,6 +714,22 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | atomic sequence TTL regression | 89–113 | Proves sequence allocation and the safety TTL use one Redis evaluation | Self | NO-TICKET |
 | `client/src/hooks/Artifacts/__tests__/useArtifactProps.test.ts` | `native SVG artifacts` describe | 187–203 | Proves exact Unicode SVG with declarative animation reaches both editable source and static preview entrypoint unchanged | Self | NO-TICKET |
 | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | declarative animation and raster-vectorization SVG instructions | 155–187 | Pins finite no-script animation, reduced-motion, deterministic still-frame export, and honest raster-tracing constraints | Self | NO-TICKET |
+| `packages/data-provider/src/file-config.ts` | SVG MIME inference, picker accept list, and 4 MiB source category | SVG additions | Keeps client and server upload classification identical, including extension fallback when browsers omit MIME metadata | `packages/data-provider/src/file-config.spec.ts` | NO-TICKET |
+| `packages/data-provider/src/file-config.spec.ts` | Native SVG upload policy regressions | SVG assertions | Pins extension inference, picker visibility, category, limit, and localized key | Self | NO-TICKET |
+| `client/src/hooks/Files/useFileHandling.ts` | SVG upload routing | `handleFiles` source branches | Forces SVG through text context while bypassing raster resize and vision paths, preserving exact XML for artifact rendering and model context | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | NO-TICKET |
+| `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | SVG source-routing regression | SVG upload case | Proves context metadata is sent without raster dimensions | Self | NO-TICKET |
+| `client/src/utils/files.ts` | context-upload MIME selection | SVG validation branch | Allows endpoint-approved SVG context while keeping extractor MIME restrictions for every other context upload | `client/src/utils/__tests__/validateFiles.spec.ts` | NO-TICKET |
+| `client/src/utils/__tests__/validateFiles.spec.ts` | SVG context and localized-cap regressions | SVG assertions | Pins accepted context routing and English/German 4 MiB copy | Self | NO-TICKET |
+| `client/src/utils/artifacts.ts` | uploaded SVG artifact classification | SVG extension/MIME mappings | Converts source-bearing `.svg` attachments into native `image/svg+xml` artifacts with exact Unicode content | `client/src/utils/__tests__/artifacts.test.ts` | NO-TICKET |
+| `client/src/utils/__tests__/artifacts.test.ts` | uploaded native SVG artifact regressions | SVG assertions | Pins extension, MIME fallback, and exact Unicode source preservation | Self | NO-TICKET |
+| `api/server/services/Files/process.js` | `processAgentFileUpload` SVG context branch and size gate | SVG source path | Reads staged SVG natively, validates it with the Knauf parser, and stores exact source as a message attachment instead of OCR, RAG, or vision input | `api/server/services/Files/process.spec.js` | NO-TICKET |
+| `api/server/services/Files/process.spec.js` | SVG upload integration regressions | SVG cases | Pins exact source persistence and the 4 MiB server boundary | Self | NO-TICKET |
+| `packages/api/src/utils/files.ts` | user-facing upload error prefix | SVG cap key | Preserves the localized SVG size rejection through shared API error normalization | `packages/api/src/utils/files.spec.ts` | NO-TICKET |
+| `packages/api/src/utils/files.spec.ts` | SVG error-key normalization regression | SVG key assertion | Proves the stable localization key reaches the client unchanged | Self | NO-TICKET |
+| `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | attached-SVG skill routing | SVG attachment assertions | Pins question answering, first-edit artifact creation, and immutable-upload wording in the deployed skill | Self | NO-TICKET |
+| `packages/data-provider/src/file-config.ts` | `knaufCategorySizeLimits.svg` | SVG size category | Raises the shared SVG source ceiling to the product-facing 8 MB limit for client and server enforcement | `packages/data-provider/src/file-config.spec.ts` | NO-TICKET |
+| `packages/data-provider/src/file-config.spec.ts` | SVG category limit case | SVG size assertion | Pins the shared SVG source category at 8 MB | Self | NO-TICKET |
+| `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -787,6 +803,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/knauf/package.json` | KK20-232 — exports the isolated PDF probe and worker modules and pins `pdfjs-dist` 5.4.624 in the Knauf workspace so PDF parsing does not add a Knauf-only dependency to an upstream package manifest. |
 | `client/src/locales/{en,de}/translation.json` | KK20-232 — localizes the stable password-required, invalid-PDF, and temporarily-unavailable upload outcomes in English and German. JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 | `client/src/locales/{en,de}/translation.json` | Localizes the native **SVG vector** source-download label (NO-TICKET) |
+| `librechat.yaml` | Adds native SVG to the existing Knauf upload allow-list while retaining the same chat/agent limits and the dedicated 4 MiB source cap enforced in shared code (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Localizes the 4 MiB SVG rejection and the dedicated editable-vector group in the supported-upload dialog (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
 
 ## Net-New Files
 
@@ -1150,6 +1169,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `skill/karl-artifacts/{SKILL.md,references/svg.md}` | Deployment-skill loader and on-demand SVG reference | Medium — adds the bounded declarative-animation contract plus explicit raster-vectorization limits without introducing an unreachable tracing dependency | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 | `api/knauf/pdfAccessRoute.spec.js` | Upstream files router and Knauf PDF access probe contract | Medium — keeps the KK20-232 route regression suite outside the upstream test file while pinning authorization order, MIME-spoof classification, stable 422/503 responses, and retained OOXML rejection | Self | KK20-232 |
 | `api/knauf/fixtures/pdf-access/*.pdf` | None | Low — deterministic PDFs exercise real PDF.js outcomes for plain, permission-encrypted, certified, open-password, and malformed inputs | `api/knauf/pdfAccessProbe.spec.js` | KK20-232 |
+| `api/server/services/Artifacts/knauf/validateSvgArtifactSource.spec.js` | Shared Knauf artifact validator and existing `jsdom` dependency | Medium — pins strict XML rejection for active/external content, invalid geometry, duplicate IDs, broken references, and oversized source without silently rewriting artwork | Self | NO-TICKET |
+| `api/server/services/Artifacts/knauf/edit*.js` | Shared Knauf artifact validator and existing authenticated compare-and-swap | Medium — applies the same SVG safety contract to every persisted native SVG revision | Focused edit suite | NO-TICKET |
+| `client/src/knauf/components/Chat/KnaufUploadFormatsDialog*.tsx` | Shared upload-size map and existing Knauf dialog surface | Low — adds one source-cap group so displayed SVG guidance matches enforced policy | Focused dialog suite | NO-TICKET |
+| `skill/karl-artifacts/SKILL.md` | Deployment skill loader and existing `edit_artifact` contract | Medium — makes attached SVG interpretation and first-edit native artifact creation explicit while preserving immutable uploads | Deployment skill suite | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
