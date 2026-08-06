@@ -63,10 +63,13 @@ user password. This is an internal probe, not a password users enter. The KK20-2
 without supplied credentials. If Azure Document Intelligence rejects it, the existing RAG loader
 falls back to pypdf. The current `/Encrypt` upload gate is therefore the reported defect.
 
-Dev and prod currently set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true`, but GitOps contains no dedicated
-indexing-worker service and does not set `KNAUF_INDEXING_WORKER_ENABLED`. Queuing work is not a valid
-completion strategy until that deployment mismatch is corrected. This is a rollout prerequisite,
-not a reason to keep rejecting case B.
+GitOps now contains dedicated dev and prod indexing-worker services that run
+`npm run backend:worker`, use the same application image as their API deployment, and set
+`KNAUF_INDEXING_WORKER_ENABLED=true` in the worker pods. The API deployments set
+`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` but do not currently set
+`KNAUF_INDEXING_WORKER_ENABLED`. Because effective acceptance is evaluated in the API process, the
+API deployments must also declare the worker available before they can return async acceptance.
+This is a rollout prerequisite, not a reason to keep rejecting case B.
 
 ## Core invariants
 
@@ -139,10 +142,12 @@ is separately approved and enabled, case C retains a typed password-required rej
 
 Implementation started on `feat/kk20-232-pdf-downstream-readiness`. The first
 rollout guard makes effective async acceptance require both the acceptance flag
-and an enabled indexing worker. Environments that currently set only
+and declared worker availability. Environments that set only
 `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` therefore retain the transient queued
-state but immediately claim and embed synchronously instead of returning work
-that no deployed worker can drain.
+state but immediately claim and embed synchronously. Dev and prod GitOps must
+set `KNAUF_INDEXING_WORKER_ENABLED=true` on the API deployment after the
+dedicated worker is verified Healthy; the worker deployment already sets it
+for its own startup gate.
 
 Run unencrypted, permission-encrypted but credential-free, signed/certified, PDF/A, malformed, and
 open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. Assert
