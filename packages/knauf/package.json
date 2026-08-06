@@ -5,6 +5,8 @@
   "description": "Knauf-specific shared code (isolated from upstream lockfile)",
   "exports": {
     "./server/htmlExtract": "./src/server/htmlExtract.js",
+    "./server/pdfAccessProbe": "./src/server/pdfAccessProbe.js",
+    "./server/pdfAccessProbe.worker": "./src/server/pdfAccessProbe.worker.js",
     "./server/validateArtifactSource": "./src/server/validateArtifactSource.js"
   },
   "dependencies": {
@@ -14,6 +16,7 @@
     "@mozilla/readability": "^0.6.0",
     "html-to-text": "^9.0.5",
     "jsdom": "^26.1.0",
+    "pdfjs-dist": "5.4.624",
     "playwright-core": "1.56.1"
   }
 }
