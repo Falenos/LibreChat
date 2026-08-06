@@ -166,26 +166,58 @@ export const getLatestText = (message?: TMessage | null, includeIndex?: boolean)
   return '';
 };
 
+// [knauf] Keep artifact source out of screen-reader completion announcements. (NO-TICKET)
+const withoutArtifactDirectives = (text: string): string => {
+  if (!/^\s*:::artifact(?:\{|\s|$)/m.test(text)) {
+    return text;
+  }
+  let insideArtifact = false;
+  return text
+    .split('\n')
+    .filter((line) => {
+      if (!insideArtifact && /^\s*:::artifact(?:\{|\s|$)/.test(line)) {
+        insideArtifact = true;
+        return false;
+      }
+      if (insideArtifact) {
+        if (/^\s*:::\s*$/.test(line)) {
+          insideArtifact = false;
+        }
+        return false;
+      }
+      return true;
+    })
+    .join('\n')
+    .trim();
+};
+// End [knauf]
+
 export const getAllContentText = (message?: TMessage | null): string => {
   if (!message) {
     return '';
   }
 
   if (message.text) {
-    return message.text;
+    // [knauf] Announce prose around artifact cards, never their source. (NO-TICKET)
+    return withoutArtifactDirectives(message.text);
+    // End [knauf]
   }
 
   if (message.content && message.content.length > 0) {
-    return message.content
-      .filter((part) => part != null && part.type === ContentTypes.TEXT)
-      .map((part) => {
-        if (!('text' in part)) return '';
-        const text = part.text;
-        if (typeof text === 'string') return text;
-        return text?.value || '';
-      })
-      .filter((text) => text.length > 0)
-      .join('\n');
+    // [knauf] Content-part responses use the same artifact-safe announcement path. (NO-TICKET)
+    return withoutArtifactDirectives(
+      message.content
+        .filter((part) => part != null && part.type === ContentTypes.TEXT)
+        .map((part) => {
+          if (!('text' in part)) return '';
+          const text = part.text;
+          if (typeof text === 'string') return text;
+          return text?.value || '';
+        })
+        .filter((text) => text.length > 0)
+        .join('\n'),
+    );
+    // End [knauf]
   }
 
   return '';

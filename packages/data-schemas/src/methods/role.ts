@@ -1,5 +1,8 @@
 import {
   CacheKeys,
+  // [knauf] Default public-link sharing for every custom role.
+  PermissionTypes,
+  // End [knauf]
   SystemRoles,
   roleDefaults,
   permissionsSchema,
@@ -17,6 +20,22 @@ const systemRoleValues = new Set<string>(Object.values(SystemRoles));
 function isSystemRoleName(name: string): boolean {
   return systemRoleValues.has(name.toUpperCase());
 }
+
+// [knauf] Old custom roles may predate SHARED_LINKS. Make the baseline effective on read
+// so API authorization and both user/admin clients agree, while stored false values win.
+function withDefaultSharedLinks<T extends { permissions?: IRole['permissions'] }>(role: T) {
+  return {
+    ...role,
+    permissions: {
+      ...role.permissions,
+      [PermissionTypes.SHARED_LINKS]: {
+        ...roleDefaults[SystemRoles.USER].permissions[PermissionTypes.SHARED_LINKS],
+        ...role.permissions?.[PermissionTypes.SHARED_LINKS],
+      },
+    },
+  };
+}
+// End [knauf]
 
 export class RoleConflictError extends Error {
   constructor(message: string) {
@@ -133,7 +152,9 @@ export function createRoleMethods(
       if (cache) {
         const cachedRole = await cache.get(scopedCacheKey(roleName));
         if (cachedRole) {
-          return cachedRole as IRole;
+          // [knauf] Apply the universal capability to roles cached before this permission existed.
+          return withDefaultSharedLinks(cachedRole as IRole);
+          // End [knauf]
         }
       }
       const Role = mongoose.models.Role;
@@ -150,10 +171,13 @@ export function createRoleMethods(
         }
         return newRole.toObject() as IRole;
       }
+      // [knauf] Apply and cache the effective default without requiring a database migration.
+      const effectiveRole = role ? withDefaultSharedLinks(role as unknown as IRole) : role;
       if (cache) {
-        await cache.set(scopedCacheKey(roleName), role);
+        await cache.set(scopedCacheKey(roleName), effectiveRole);
       }
-      return role as unknown as IRole;
+      return effectiveRole as IRole;
+      // End [knauf]
     } catch (error) {
       throw new Error(`Failed to retrieve or create role: ${(error as Error).message}`);
     }
@@ -492,7 +516,9 @@ export function createRoleMethods(
     }
     let role;
     try {
-      role = await new Role({ ...roleData, name: trimmed }).save();
+      // [knauf] Sharing is a baseline app capability, while explicit role denials still win.
+      role = await new Role(withDefaultSharedLinks({ ...roleData, name: trimmed })).save();
+      // End [knauf]
     } catch (err) {
       /**
        * The compound unique index `{ name: 1, tenantId: 1 }` on the role schema

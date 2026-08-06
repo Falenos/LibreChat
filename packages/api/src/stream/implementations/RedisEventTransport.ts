@@ -134,8 +134,19 @@ export class RedisEventTransport implements IEventTransport {
     });
   }
 
-  /** Safety-net TTL (seconds) set once on first INCR. Not refreshed — prevents mid-stream resets. */
+  // [knauf] Allocate a sequence and its safety TTL in one Redis operation so a disconnect
+  // cannot leave a permanent generation key between INCR and EXPIRE.
+  private static readonly NEXT_SEQUENCE_SCRIPT = `
+local value = redis.call('INCR', KEYS[1])
+if value == 1 or redis.call('TTL', KEYS[1]) < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return value
+`;
+
+  /** Safety-net TTL set for new or legacy no-expiry counters. Never refreshed while valid. */
   private static readonly SEQUENCE_TTL_SECONDS = 86400;
+  // End [knauf]
 
   // [knauf] Keep lifecycle and subscription state generation-scoped on the shared channel.
   private generationKey(streamId: string, generationId?: string): string {
@@ -233,19 +244,24 @@ export class RedisEventTransport implements IEventTransport {
 
   /**
    * Get next sequence number for a stream (0-indexed, backed by Redis INCR).
-   * A 24-hour TTL is set on the first INCR only (val === 1) as a safety net
-   * for orphaned keys from crashed processes. It is never refreshed, so an
-   * active stream cannot have its counter reset mid-generation.
+   * A 24-hour TTL is set on the first INCR, or repaired when a legacy counter
+   * has no expiry. It is never refreshed while valid, so an active stream cannot
+   * have its counter reset mid-generation.
    * Generation-scoped counters expire by TTL; cleanup never deletes shared ordering state.
    */
   private async getNextSequence(streamId: string, generationId?: string): Promise<number> {
     const key = KEYS.sequence(streamId, generationId);
-    const val = await this.publisher.incr(key);
-    if (val === 1) {
-      this.publisher.expire(key, RedisEventTransport.SEQUENCE_TTL_SECONDS).catch((err) => {
-        logger.warn(`[RedisEventTransport] Failed to set TTL on sequence key ${key}:`, err);
-      });
-    }
+    // [knauf] Redis 6-compatible Lua keeps INCR and the first safety TTL atomic while
+    // repairing any legacy counter that exists without an expiry.
+    const val = Number(
+      await this.publisher.eval(
+        RedisEventTransport.NEXT_SEQUENCE_SCRIPT,
+        1,
+        key,
+        String(RedisEventTransport.SEQUENCE_TTL_SECONDS),
+      ),
+    );
+    // End [knauf]
     return val - 1;
   }
 

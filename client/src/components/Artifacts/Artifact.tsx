@@ -12,6 +12,9 @@ import { logger, isArtifactRoute } from '~/utils';
 import { extractArtifactBody } from '~/knauf/utils/artifactBody';
 // End [knauf]
 import { artifactsState } from '~/store/artifacts';
+// [knauf] NO-TICKET — keep the original artifact card bound to revision 1.
+import { getArtifactRevision } from '~/knauf/data-provider/data-service';
+// End [knauf]
 import ArtifactButton from './ArtifactButton';
 
 export const artifactPlugin: Pluggable = () => {
@@ -49,6 +52,7 @@ export function Artifact({
 }: Artifact & {
   children: React.ReactNode | { props: { children: React.ReactNode } };
   node: unknown;
+  version?: string | number;
 }) {
   const location = useLocation();
   const { messageId } = useMessageContext();
@@ -57,6 +61,9 @@ export function Artifact({
 
   const setArtifacts = useSetRecoilState(artifactsState);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
+  // [knauf] NO-TICKET — keep Version 1's sort position stable across later revisions.
+  const rootRevisionTimeRef = useRef<{ artifactKey: string; time: number } | null>(null);
+  // End [knauf]
 
   const throttledUpdateRef = useRef(
     throttle((updateFn: () => void) => {
@@ -80,6 +87,8 @@ export function Artifact({
     logger.log('artifacts', 'updateArtifact: content.length', content.length);
 
     const identifier = props.identifier ?? defaultIdentifier;
+    const parsedVersion = Number.parseInt(String(props.version ?? 1), 10);
+    const version = Number.isSafeInteger(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1;
     const artifactKey = `${identifier}_${type}_${title}_${messageId}`
       .replace(/\s+/g, '_')
       .toLowerCase();
@@ -100,6 +109,43 @@ export function Artifact({
         index: artifactIndex,
         lastUpdateTime: now,
       };
+
+      // [knauf] NO-TICKET — the backend advances the source message in place but
+      // retains inverse patches. Expose the new source under its immutable revision
+      // id, then reconstruct V1 for the original message card instead of overwriting it.
+      if (version > 1 && isArtifactRoute(location.pathname)) {
+        const revisionId = `artifact-revision:${messageId}:${identifier}:version:${version}`;
+        setArtifacts((artifacts) => ({
+          ...artifacts,
+          [revisionId]: {
+            ...currentArtifact,
+            id: revisionId,
+            knaufRevision: { identifier, version },
+          } as Artifact,
+        }));
+        void getArtifactRevision({ messageId, identifier, version: 1 })
+          .then((snapshot) => {
+            const previousRoot = rootRevisionTimeRef.current;
+            const rootRevisionTime =
+              previousRoot?.artifactKey === artifactKey ? previousRoot.time : now - 1;
+            rootRevisionTimeRef.current = { artifactKey, time: rootRevisionTime };
+            const original = {
+              ...currentArtifact,
+              ...snapshot,
+              id: artifactKey,
+              lastUpdateTime: rootRevisionTime,
+              knaufRevision: { identifier, version: 1 },
+            };
+            setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: original }));
+            setArtifact(original);
+          })
+          .catch(() => {
+            setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: currentArtifact }));
+            setArtifact(currentArtifact);
+          });
+        return;
+      }
+      // End [knauf]
 
       if (!isArtifactRoute(location.pathname)) {
         return setArtifact(currentArtifact);
@@ -127,6 +173,7 @@ export function Artifact({
     setArtifacts,
     props.children,
     props.identifier,
+    props.version,
     messageId,
     artifactIndex,
     location.pathname,

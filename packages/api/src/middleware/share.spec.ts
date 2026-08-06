@@ -177,8 +177,8 @@ describe('createSharePolicyMiddleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  // [knauf] Pin the request boundary against stale USER public prompt grants.
-  it('blocks USER public prompt sharing while Knauf restrictions are enabled', async () => {
+  // [knauf] Pin Admin UI ownership at the prompt-sharing request boundary.
+  it('allows USER public prompt sharing when Admin enabled it', async () => {
     const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
     process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
 
@@ -204,8 +204,8 @@ describe('createSharePolicyMiddleware', () => {
 
       await checkSharePublicAccess(req, res, next);
 
-      expect(res.status).toHaveBeenCalledWith(403);
-      expect(next).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
     } finally {
       if (previous === undefined) {
         delete process.env.KNAUF_RESTRICT_USER_PERMISSIONS;

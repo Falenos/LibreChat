@@ -22,7 +22,7 @@ interface KnaufUploadFormatsDialogProps {
 }
 
 /**
- * The three accepted-format groups: a label, a ` · `-delimited item list, and the
+ * The accepted-format groups: a label, a ` · `-delimited item list, and the
  * per-category per-file size cap (MB) shown as a badge on the header. `mb` is derived
  * from `knaufCategorySizeLimits` so it always matches the enforced cap.
  */
@@ -41,6 +41,11 @@ const FORMAT_GROUPS = [
     labelKey: 'com_knauf_upload_formats_images_label',
     itemsKey: 'com_knauf_upload_formats_images_items',
     mb: knaufCategorySizeLimits.image / megabyte,
+  },
+  {
+    labelKey: 'com_knauf_upload_formats_svg_label',
+    itemsKey: 'com_knauf_upload_formats_svg_items',
+    mb: knaufCategorySizeLimits.svg / megabyte,
   },
 ] as const;
 

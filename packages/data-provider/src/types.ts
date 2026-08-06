@@ -434,7 +434,8 @@ export type TSharedArtifact = {
 
 export type TArtifactShareLocator =
   | { kind: 'directive'; index: number }
-  | { kind: 'file'; fileId: string; type: string; language?: string };
+  | { kind: 'file'; fileId: string; type: string; language?: string }
+  | { kind: 'revision'; identifier: string; version: number };
 
 export type TCreateArtifactShareRequest = {
   conversationId: string;

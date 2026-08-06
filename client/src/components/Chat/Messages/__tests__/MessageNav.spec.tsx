@@ -351,6 +351,30 @@ describe('MessageNav', () => {
       );
     });
 
+    // [knauf] NO-TICKET — artifact source must not leak through accessible navigation labels.
+    it('excludes artifact source from assistant indicator labels', () => {
+      const messages = [
+        buildMessage({ messageId: 'u', text: 'create a dashboard', isCreatedByUser: true }),
+        buildMessage({
+          messageId: 'a',
+          text: `:::artifact{identifier="dashboard" type="application/vnd.react" title="Dashboard"}
+export default function Dashboard() { return <div>secret source</div>; }
+:::
+Created the dashboard.`,
+        }),
+        buildMessage({ messageId: 'u2', text: 'make it blue', isCreatedByUser: true }),
+      ];
+      const { container } = renderNav(messages);
+      const assistantLabel = container
+        .querySelector('[data-msg-id="a"]')
+        ?.getAttribute('aria-label');
+
+      expect(assistantLabel).toContain('Created the dashboard.');
+      expect(assistantLabel).not.toContain(':::artifact');
+      expect(assistantLabel).not.toContain('secret source');
+    });
+    // End [knauf]
+
     it('sets aria-current on the active indicator after IntersectionObserver fires', () => {
       const messages = [
         buildMessage({ messageId: 'a', text: 'alpha', isCreatedByUser: true }),

@@ -196,7 +196,6 @@ interface:
   modelSelect: true
   parameters: false
   presets: false
-  prompts: true
   bookmarks: true
   memories: true
   multiConvo: true
@@ -477,7 +476,7 @@ fileConfig:
     gptPlugins:
       fileLimit: 5
     # [knauf] Restricted upload allow-list (KK20-190). Only these formats are
-    # accepted; everything else (video, audio, archives, SVG, code/text types,
+    # accepted; everything else (video, audio, archives, code/text types,
     # etc.) is rejected client-side (client/src/utils/files.ts) and server-side
     # (api/server/services/Files/process.js). `supportedMimeTypes` entries are
     # strings compiled to RegExp by the loader
@@ -505,6 +504,7 @@ fileConfig:
         - "^application/(csv|json)$"                                                           # .csv / .json
         - "^text/(plain|markdown|csv)$"                                                        # .txt / .md / .csv
         - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
+        - "^image/svg(?:\\+xml)?$"                                                           # .svg (editable artifact source)
       fileLimit: 5
       fileSizeLimit: 50
       totalSizeLimit: 100
@@ -753,6 +753,8 @@ modelSpecs:
           Formatting: Use Markdown lightly for prose. Only add headings when the answer is long enough to benefit from structure, and use bold sparingly for key terms.
 
           Conciseness: Be direct and concise. Provide essential information without filler, excessive caveats, or restating the question. Prioritise actionable guidance over exhaustive coverage; if a short answer suffices, keep it short.
+
+          Response length: Use the smallest range that fits: simple facts, weather, status, or definitions in 40–120 words; ordinary questions in 80–180 words; comparisons, troubleshooting, or decisions in 150–300 words. Exceed 300 words only when the user requests detail or completeness genuinely requires it. Lead with the answer. Do not repeat facts in a concluding summary. Do not append a follow-up offer unless clarification is genuinely needed. This policy does not apply to a complete artifact, code, configuration, or other source the user requested; never truncate valid source to satisfy it.
 
           Location: {{current_user_location}}. This is a best-effort locale/timezone hint derived from the user's own browser, not confirmed proof of physical location — browser language and timezone can be wrong (travel, VPNs, shared devices, a non-native-language browser). Never assert a specific country or region as fact from this alone; at most use it to softly tailor tone or examples, and always defer to what the user explicitly tells you about their location.
 

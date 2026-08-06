@@ -857,8 +857,8 @@ describe('createAdminRolesHandlers', () => {
       expect(json).toHaveBeenCalledWith({ role: updatedRole });
     });
 
-    // [knauf] Pin Admin role writes to peer-only prompt sharing for USER.
-    it('forces USER public prompt sharing off while preserving peer sharing', async () => {
+    // [knauf] Pin Admin UI ownership of USER prompt-sharing permissions.
+    it('preserves the complete USER prompt-sharing choice from Admin', async () => {
       const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
       process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
       const role = mockRole({ name: SystemRoles.USER });
@@ -887,7 +887,7 @@ describe('createAdminRolesHandlers', () => {
             [PermissionTypes.PROMPTS]: {
               [Permissions.CREATE]: true,
               [Permissions.SHARE]: true,
-              [Permissions.SHARE_PUBLIC]: false,
+              [Permissions.SHARE_PUBLIC]: true,
             },
           }),
           role,

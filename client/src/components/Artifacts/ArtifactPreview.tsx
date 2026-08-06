@@ -42,11 +42,20 @@ export const ArtifactPreview = memo(function ({
     if (!code) {
       return files;
     }
+    // [knauf] Keep the static SVG entrypoint aligned with edits to artwork.svg. (NO-TICKET)
+    if (artifact.type === 'image/svg+xml') {
+      return {
+        ...files,
+        [fileKey]: { code },
+        'index.html': { code },
+      };
+    }
+    // End [knauf]
     return {
       ...files,
       [fileKey]: { code },
     };
-  }, [currentCode, files, fileKey]);
+  }, [artifact.type, currentCode, files, fileKey]);
 
   const options: SandpackProviderProps['options'] = useMemo(
     () => buildSandpackOptions(template, startupConfig),
@@ -59,6 +68,7 @@ export const ArtifactPreview = memo(function ({
 
   return (
     <SandpackProvider
+      key={artifact.id}
       files={{ ...artifactFiles, ...sharedFiles }}
       options={options}
       {...sharedProps}
@@ -71,7 +81,9 @@ export const ArtifactPreview = memo(function ({
         ref={previewRef}
       >
         {/* [knauf] Keep the repair action above the generated app's error overlay for owners only. (NO-TICKET) */}
-        {isSharedConvo === true ? undefined : <ArtifactRepairButton artifact={artifact} />}
+        {isSharedConvo === true ? undefined : (
+          <ArtifactRepairButton artifact={artifact} sourceCode={currentCode ?? artifact.content} />
+        )}
         {/* End [knauf] */}
       </SandpackPreview>
     </SandpackProvider>

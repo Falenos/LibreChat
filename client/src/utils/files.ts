@@ -13,6 +13,9 @@ import {
   excelMimeTypes,
   EToolResources,
   EModelEndpoint,
+  // [knauf] NO-TICKET — SVG remains endpoint-allowlisted when uploaded as context.
+  svgMimeTypes,
+  // End [knauf]
   fileConfig as defaultFileConfig,
   // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
   knaufCategorySizeLimit,
@@ -296,7 +299,7 @@ export const validateFiles = ({
     }
 
     let mimeTypesToCheck = supportedMimeTypes;
-    if (toolResource === EToolResources.context) {
+    if (toolResource === EToolResources.context && !svgMimeTypes.test(originalFile.type)) {
       mimeTypesToCheck = [
         ...(fileConfig?.text?.supportedMimeTypes || []),
         ...(fileConfig?.ocr?.supportedMimeTypes || []),

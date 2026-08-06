@@ -1,11 +1,14 @@
 import type { TMessage } from 'librechat-data-provider';
 import type { LocalizeFunction } from '~/common';
+// [knauf] Keep artifact source out of the screen-reader completion announcement. (NO-TICKET)
 import {
+  getAllContentText,
   isValidTimestamp,
   getMessageAriaLabel,
   getMessageTimestamp,
   getHeaderPrefixForScreenReader,
 } from '../messages';
+// End [knauf]
 
 const translations: Record<string, string> = {
   com_endpoint_message: 'Message',
@@ -85,6 +88,42 @@ describe('getHeaderPrefixForScreenReader', () => {
     expect(getHeaderPrefixForScreenReader(msg, localize)).toBe('Response: ');
   });
 });
+
+// [knauf] Artifact cards are announced by the UI; their source must not be read aloud. (NO-TICKET)
+describe('getAllContentText artifact announcements', () => {
+  it('leaves ordinary response text unchanged', () => {
+    expect(getAllContentText(makeMessage({ text: '  Ordinary response.  ' }))).toBe(
+      '  Ordinary response.  ',
+    );
+  });
+
+  it('keeps prose and removes a complete artifact directive', () => {
+    const msg = makeMessage({
+      text: [
+        'Created the requested dashboard.',
+        ':::artifact{identifier="dashboard" type="application/vnd.react" title="Dashboard"}',
+        '```tsx',
+        'export default function Dashboard() { return <main>Secret source</main>; }',
+        '```',
+        ':::',
+        'You can open it from the card.',
+      ].join('\n'),
+    });
+
+    expect(getAllContentText(msg)).toBe(
+      'Created the requested dashboard.\nYou can open it from the card.',
+    );
+  });
+
+  it('fails closed for an unterminated streaming artifact', () => {
+    const msg = makeMessage({
+      text: 'Ready.\n:::artifact{identifier="dashboard"}\nexport default function Dashboard() {}',
+    });
+
+    expect(getAllContentText(msg)).toBe('Ready.');
+  });
+});
+// End [knauf]
 
 describe('isValidTimestamp', () => {
   it('returns false for missing values', () => {

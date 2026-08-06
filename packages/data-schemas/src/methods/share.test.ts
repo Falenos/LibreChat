@@ -1725,6 +1725,49 @@ describe('Share Methods', () => {
       expect(String(file.filepath)).not.toContain(userId);
     });
 
+    // [knauf] Keep shared Markdown citations on the share-scoped file route (NO-TICKET)
+    test('getSharedMessages rewrites snapshotted Markdown file citations', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const conversationId = `conv_${nanoid()}`;
+      const filename = 'CA3226591(A1).pdf';
+      await seedConversation(userId, conversationId);
+      const docId = await createFile(userId, { filename });
+
+      await Message.create([
+        {
+          messageId: `msg_${nanoid()}`,
+          conversationId,
+          user: userId,
+          text: 'please recap this file',
+          isCreatedByUser: true,
+          files: [{ file_id: docId }],
+        },
+        {
+          messageId: `msg_${nanoid()}`,
+          conversationId,
+          user: userId,
+          text: `Summary [${filename}](${filename})`,
+          content: [
+            { type: 'text', text: `Details [${filename}](${filename})` },
+            { type: 'text', text: { value: `More [${filename}](${filename})` } },
+          ],
+          isCreatedByUser: false,
+        },
+      ]);
+
+      const { shareId } = await shareMethods.createSharedLink(userId, conversationId);
+      const result = await shareMethods.getSharedMessages(shareId);
+      const response = result?.messages.find((message) => !message.isCreatedByUser);
+      const route = `/api/share/${shareId}/files/${docId}`;
+
+      expect(response?.text).toContain(`](${route})`);
+      expect((response?.content?.[0] as { text?: string })?.text).toContain(`](${route})`);
+      expect((response?.content?.[1] as { text?: { value?: string } })?.text?.value).toContain(
+        `](${route})`,
+      );
+    });
+    // End [knauf]
+
     test('getSharedMessages neutralizes URLs for non-snapshotted files', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
       const conversationId = `conv_${nanoid()}`;

@@ -74,6 +74,34 @@ beforeEach(async () => {
   mockCache.del.mockClear();
 });
 
+describe('getRoleByName', () => {
+  // [knauf] Existing and cached custom roles inherit Shared Links without a data migration.
+  it('applies shared-link defaults on read while preserving explicit denials', async () => {
+    await Role.create({ name: 'LEGACY_ROLE', permissions: {} });
+
+    const storedRole = await getRoleByName('LEGACY_ROLE');
+    mockCache.get.mockResolvedValueOnce({
+      name: 'RESTRICTED_ROLE',
+      permissions: {
+        [PermissionTypes.SHARED_LINKS]: { [Permissions.SHARE_PUBLIC]: false },
+      },
+    });
+    const cachedRole = await getRoleByName('RESTRICTED_ROLE');
+
+    expect(storedRole.permissions[PermissionTypes.SHARED_LINKS]).toEqual({
+      [Permissions.CREATE]: true,
+      [Permissions.SHARE]: true,
+      [Permissions.SHARE_PUBLIC]: true,
+    });
+    expect(cachedRole.permissions[PermissionTypes.SHARED_LINKS]).toEqual({
+      [Permissions.CREATE]: true,
+      [Permissions.SHARE]: true,
+      [Permissions.SHARE_PUBLIC]: false,
+    });
+  });
+  // End [knauf]
+});
+
 describe('findRolesByNames', () => {
   it('queries storage without reading or writing the role cache', async () => {
     await Role.create([
@@ -644,6 +672,31 @@ describe('createRoleByName', () => {
     const persisted = await Role.findOne({ name: 'editor' }).lean();
     expect(persisted).toBeTruthy();
   });
+
+  // [knauf] Sharing is on for every new role unless an administrator explicitly denies it.
+  it('defaults shared-link permissions on while preserving explicit denials', async () => {
+    const defaultRole = await createRoleByName({ name: 'default-sharing' });
+    const restrictedRole = await createRoleByName({
+      name: 'restricted-sharing',
+      permissions: {
+        [PermissionTypes.SHARED_LINKS]: {
+          [Permissions.SHARE_PUBLIC]: false,
+        },
+      },
+    });
+
+    expect(defaultRole.permissions[PermissionTypes.SHARED_LINKS]).toEqual({
+      [Permissions.CREATE]: true,
+      [Permissions.SHARE]: true,
+      [Permissions.SHARE_PUBLIC]: true,
+    });
+    expect(restrictedRole.permissions[PermissionTypes.SHARED_LINKS]).toEqual({
+      [Permissions.CREATE]: true,
+      [Permissions.SHARE]: true,
+      [Permissions.SHARE_PUBLIC]: false,
+    });
+  });
+  // End [knauf]
 
   it('trims whitespace from role name', async () => {
     const role = await createRoleByName({ name: '  editor  ' });

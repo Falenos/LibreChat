@@ -70,6 +70,15 @@ describe('getArtifactShareLocator', () => {
     });
   });
 
+  it('uses the immutable revision before the mutable directive locator', () => {
+    expect(
+      getArtifactShareLocator({
+        ...artifact({ index: 2 }),
+        knaufRevision: { identifier: 'dashboard', version: 3 },
+      } as Artifact & { knaufRevision: { identifier: string; version: number } }),
+    ).toEqual({ kind: 'revision', identifier: 'dashboard', version: 3 });
+  });
+
   it('does not create an unverifiable client-content locator', () => {
     expect(getArtifactShareLocator(artifact({ index: undefined }))).toBeNull();
   });
