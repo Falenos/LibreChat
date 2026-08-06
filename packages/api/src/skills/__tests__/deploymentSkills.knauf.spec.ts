@@ -191,6 +191,9 @@ describe('[knauf] shipped deployment skills', () => {
     expect(research).toBeDefined();
     expect(research?.body).toMatch(/emit one final synthesis/i);
     expect(research?.body).toMatch(/do not repeat interim drafts/i);
+    expect(research?.body).toMatch(/simple factual research[^\n]*40[–-]120 words/i);
+    expect(research?.body).toMatch(/no more than two sources/i);
+    expect(research?.body).toMatch(/do not narrate the sources one by one/i);
     expect(research?.body).toMatch(/maximum three distinct source URLs/i);
     expect(research?.body).toMatch(/do not append a duplicate sources list/i);
     expect(research?.body).toMatch(/source or domain restrictions/i);
