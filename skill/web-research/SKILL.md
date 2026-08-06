@@ -50,6 +50,8 @@ When `open_url` returns `blocked_or_js_required`, `url_not_user_provided`, `http
 
 One strong source can support a simple fact. Broader conclusions usually need multiple independent sources. Do not pad the response with redundant links.
 
+For simple factual research, keep the final synthesis to 40–120 words and use no more than two sources. Answer the question directly; do not narrate the sources one by one, repeat the same facts in a summary, or add a closing offer.
+
 ## Cite claims
 
 - Preserve the model search's native citations beside the claims they support.
