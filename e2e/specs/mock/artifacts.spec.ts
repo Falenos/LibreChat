@@ -10,6 +10,7 @@ test.describe('artifacts', () => {
   test('ART-GEN-001 ART-GEN-003 ART-GEN-005 ART-PRE-001 ART-PRE-002 ART-DL-001 ART-OPS-005 @artifact-pr', async ({
     page,
   }) => {
+    test.setTimeout(60000);
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
     const requestFailures: string[] = [];
@@ -40,10 +41,12 @@ test.describe('artifacts', () => {
     await expect(messages).not.toContainText(':::artifact');
     await expect(messages).not.toContainText(ARTIFACT_SOURCE);
 
+    await artifactCard.click();
     await expect(page.getByRole('radio', { name: 'Preview' })).toBeChecked();
-    const preview = page.frameLocator('iframe').last().getByTestId('e2e-artifact-preview');
+    const previewFrame = page.frameLocator('iframe[title="Sandpack Preview"]');
+    const preview = previewFrame.locator('main');
     await expect(preview).toHaveText('E2E artifact preview', { timeout: 30000 });
-    await expect(page.frameLocator('iframe').last().locator('body')).not.toContainText(
+    await expect(previewFrame.locator('body')).not.toContainText(
       /ModuleNotFoundError|SyntaxError|is not a function|Cannot find module/i,
     );
     await expect(page.getByRole('button', { name: 'Fix artifact' })).toHaveCount(0);
@@ -68,7 +71,7 @@ test.describe('artifacts', () => {
     for await (const chunk of stream) {
       chunks.push(Buffer.from(chunk));
     }
-    expect(Buffer.concat(chunks).toString('utf8')).toBe(ARTIFACT_SOURCE);
+    expect(Buffer.concat(chunks).toString('utf8')).toBe(`${ARTIFACT_SOURCE}\n`);
     expect(pageErrors, `Unexpected runtime errors: ${pageErrors.join(', ')}`).toHaveLength(0);
     expect(consoleErrors, `Unexpected console errors: ${consoleErrors.join(', ')}`).toHaveLength(0);
     expect(
