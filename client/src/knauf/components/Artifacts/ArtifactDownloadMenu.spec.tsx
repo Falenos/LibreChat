@@ -77,6 +77,48 @@ describe('ArtifactDownloadMenu', () => {
     expect(mockPostArtifactExport).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['owner', undefined],
+    ['shared', 'share-1'],
+  ])('downloads %s native SVG as the exact Unicode vector source', async (_view, shareId) => {
+    const content =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>Grüße</text></svg>';
+    mockCurrentCode = content;
+    render(
+      <ArtifactDownloadMenu
+        artifact={{ ...artifact, title: ' ../Brand:*? ', type: 'image/svg+xml', content }}
+        shareId={shareId}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_svg' }));
+
+    const blob = (URL.createObjectURL as jest.Mock).mock.calls[0][0] as Blob;
+    const source = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(blob);
+    });
+    expect(blob.type).toBe('image/svg+xml');
+    expect(source).toBe(content);
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:artifact-export', '_Brand___.svg');
+    expect(mockPostArtifactExport).not.toHaveBeenCalled();
+  });
+
+  it('uses artifact.svg when the native SVG title is empty or hostile', () => {
+    mockCurrentCode = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" />';
+    render(
+      <ArtifactDownloadMenu
+        artifact={{ ...artifact, title: '<>:"/\\|?*\u0000', type: 'image/svg+xml' }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_svg' }));
+
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:artifact-export', 'artifact.svg');
+  });
+
   it('requests a rendered PNG and downloads the returned blob', async () => {
     render(<ArtifactDownloadMenu artifact={artifact} />);
 

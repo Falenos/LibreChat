@@ -691,6 +691,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/MessageNav.tsx` | `buildEntry` artifact-safe preview | 7–10, 22–30 | Keep artifact source out of message-navigation labels and hover previews. | `MessageNav.spec.tsx` | NO-TICKET |
 | `client/src/components/Chat/Messages/__tests__/MessageNav.spec.tsx` | artifact-safe assistant indicator label | 354–377 | Proves accessible message navigation exposes assistant prose without artifact source. | Self | NO-TICKET |
 | `client/src/components/Artifacts/ArtifactPreview.tsx` | `SandpackProvider` artifact identity key | 63–65 | Remount the preview runtime when users switch immutable artifact versions so stale code and styles cannot survive the selection. | `ArtifactRepairButton.spec.tsx` | NO-TICKET |
+| `client/src/utils/artifacts.ts` | `artifactFilename`, `artifactTemplate`, `dependenciesMap` native SVG entries | Native SVG entries | Routes native SVG to stable editable `artwork.svg` in the static dependency-free sandbox instead of the HTML fallback | `client/src/utils/__tests__/artifacts.test.ts`, `client/src/hooks/Artifacts/__tests__/useArtifactProps.test.ts` | NO-TICKET |
+| `client/src/utils/__tests__/artifacts.test.ts` | native SVG mapping regression | Native SVG assertions | Proves stable filename, static template, and empty dependency mapping | Self | NO-TICKET |
+| `client/src/hooks/Artifacts/useArtifactProps.ts` | `image/svg+xml` artifact routing | Native SVG branch | Keeps exact editable source in `artwork.svg` and mirrors it to the static sandbox's required `index.html` entrypoint | `client/src/hooks/Artifacts/__tests__/useArtifactProps.test.ts` | NO-TICKET |
+| `client/src/hooks/Artifacts/__tests__/useArtifactProps.test.ts` | `native SVG artifacts` describe | Native SVG assertions | Proves exact Unicode SVG reaches both editable source and static preview entrypoint unchanged | Self | NO-TICKET |
+| `client/src/components/Artifacts/ArtifactPreview.tsx` | Native SVG current-code projection | `artifact.type === 'image/svg+xml'` | Mirrors editor changes to `index.html` so preview, PNG, and PDF render the current vector instead of Sandpack's default page | `client/src/knauf/components/Artifacts/ArtifactRepairButton.spec.tsx`; real-browser SVG smoke | NO-TICKET |
+| `client/src/components/Artifacts/Artifact.tsx` | Reconstructed root revision metadata | Version 1 artifact registration | Tags the reconstructed root with its immutable revision locator so sharing Version 1 cannot fall through to mutable directive source | `client/src/knauf/components/Artifacts/ArtifactRootRevision.spec.tsx`; real-browser SVG revision/share smoke | NO-TICKET |
+| `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | selectively loaded native SVG instructions | SVG skill assertions | Pins selective routing plus Adobe-safe source, accessibility, security, font, and no-conversion constraints | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -761,6 +768,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the Continue in KARL action, artifact-only context instructions, change-request cue, and failed-import message (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Keeps only the localized Continue in KARL action and clone-failure message; the former composer prompt is intentionally removed because continuation now opens a persisted recipient-owned artifact immediately (NO-TICKET) |
 | `librechat.yaml` | Routes changes to existing artifacts through `edit_artifact`, requires only a short confirmation after success, and retains full source emission as the safe fallback (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Localizes the native **SVG vector** source-download label (NO-TICKET) |
 
 ## Net-New Files
 
@@ -1111,6 +1119,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/knauf/src/server/validateArtifactSource.js` | `@babel/parser` | Low — parses generated React/TypeScript source and returns only bounded source coordinates for invalid syntax | `api/server/services/Artifacts/knauf/edit.spec.js` | NO-TICKET |
 | `packages/knauf/package.json` | None — Knauf workspace dependency and export manifest | Low — promotes the already-transitive Babel parser to a production dependency and exposes the artifact validator | `api/server/services/Artifacts/knauf/edit.spec.js` | NO-TICKET |
 | `client/src/knauf/components/Artifacts/ArtifactRepairButton*.tsx` | Sandpack error state, upstream Button/localization, artifact/chat providers | Medium — keeps owner-only repair behavior while placing the manual recovery action at the center of a broken preview | `ArtifactRepairButton.spec.tsx` | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactDownloadMenu*.tsx` | Upstream artifact/editor hooks, localized dropdown controls, Blob/download helper, and Knauf export data service | Medium — downloads exact native SVG source with vector MIME and a safe title while preserving PNG/PDF and non-SVG source behavior | `ArtifactDownloadMenu.spec.tsx` | NO-TICKET |
+| `client/src/knauf/utils/artifactBody.knauf.spec.tsx` | Artifact body normalizer public contract | Low — proves old shared fenced SVG snapshots normalize to exact vector source without trailing prose | Self | NO-TICKET |
+| `api/server/services/Artifacts/knauf/share*.js` | SharedLink model, artifact parser, immutable revision service | Medium — allows native SVG in revocable public snapshots and normalizes fenced SVG to server-owned exact source | `api/server/services/Artifacts/knauf/share.spec.js` | NO-TICKET |
+| `skill/karl-artifacts/{SKILL.md,references/svg.md}` | Deployment-skill loader; on-demand `read_file`; official `karl-brand` logo reference | Medium — keeps the broad artifact skill concise while loading an Adobe-safe native SVG generation contract only for SVG work | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

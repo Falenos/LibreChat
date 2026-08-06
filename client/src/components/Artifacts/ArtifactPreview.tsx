@@ -42,11 +42,20 @@ export const ArtifactPreview = memo(function ({
     if (!code) {
       return files;
     }
+    // [knauf] Keep the static SVG entrypoint aligned with edits to artwork.svg. (NO-TICKET)
+    if (artifact.type === 'image/svg+xml') {
+      return {
+        ...files,
+        [fileKey]: { code },
+        'index.html': { code },
+      };
+    }
+    // End [knauf]
     return {
       ...files,
       [fileKey]: { code },
     };
-  }, [currentCode, files, fileKey]);
+  }, [artifact.type, currentCode, files, fileKey]);
 
   const options: SandpackProviderProps['options'] = useMemo(
     () => buildSandpackOptions(template, startupConfig),

@@ -7,7 +7,7 @@ description: >-
   plain chat.
 argument-hint: "[what to build or change]"
 user-invocable: true
-version: "3.0.0"
+version: "3.1.0"
 ---
 
 # KARL Artifacts: choosing well and building previews that render
@@ -34,6 +34,12 @@ Before emitting `application/vnd.mermaid`, load and follow:
 
 ```
 read_file  skills/karl-mermaid/SKILL.md
+```
+
+Before emitting or editing `image/svg+xml`, load and follow:
+
+```
+read_file  skills/karl-artifacts/references/svg.md
 ```
 
 Rules of thumb:

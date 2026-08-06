@@ -60,6 +60,13 @@ export default function useArtifactProps({ artifact }: { artifact: Artifact }) {
       return ['index.html', { 'index.html': artifact.content ?? '' }];
     }
 
+    // [knauf] Native SVG stays editable as artwork.svg while the static sandbox loads index.html. (NO-TICKET)
+    if (type === 'image/svg+xml') {
+      const content = artifact.content ?? '';
+      return ['artwork.svg', { 'artwork.svg': content, 'index.html': content }];
+    }
+    // End [knauf]
+
     const fileKey = getArtifactFilename(artifact.type ?? '', artifact.language);
     const files = removeNullishValues({
       [fileKey]: artifact.content,

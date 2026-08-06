@@ -91,6 +91,40 @@ A clean, branded summary with citations that must not compile.
     );
   });
 
+  test('shares only the exact fenced Unicode source for a native SVG artifact', async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>Grüße</text></svg>';
+    const message = {
+      _id: 'message-object-id',
+      messageId: 'message-1',
+      text: `:::artifact{identifier="mark" type="image/svg+xml" title="Brand mark"}
+\`\`\`svg
+${svg}
+\`\`\`
+This prose is not part of the vector.
+:::`,
+    };
+    const { mongoose, create } = buildMongoose(message);
+
+    await createArtifactShare({
+      mongoose,
+      user: 'user-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      locator: { kind: 'directive', index: 0 },
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        knauf_artifact: {
+          title: 'Brand mark',
+          type: 'image/svg+xml',
+          content: svg,
+        },
+      }),
+    );
+  });
+
   test('uses stored file text instead of accepting artifact content from the client', async () => {
     const message = {
       _id: 'message-object-id',
@@ -172,7 +206,7 @@ The theme colour is pink.
   test('rejects unsupported artifact types and oversized content before persistence', async () => {
     const unsupported = buildMongoose({
       _id: 'message-object-id',
-      text: ':::artifact{type="image/svg+xml" title="SVG"}\n<svg />\n:::',
+      text: ':::artifact{type="application/json" title="JSON"}\n{}\n:::',
     });
     await expect(
       createArtifactShare({
