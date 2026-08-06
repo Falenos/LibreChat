@@ -1,6 +1,7 @@
 import {
   megabyte,
   EModelEndpoint,
+  EToolResources,
   fileConfig as defaultFileConfig,
   // [knauf] per-category caps — single source of truth for the locale lockstep drift-guard. KK20-190.
   knaufCategorySizeLimits,
@@ -58,6 +59,22 @@ describe('validateFiles', () => {
     expect(result).toBe(true);
     expect(setError).not.toHaveBeenCalled();
   });
+
+  // [knauf] NO-TICKET — SVG context uses the endpoint allow-list, not text-extractor MIMEs.
+  it('accepts an SVG uploaded as readable message context', () => {
+    const fileList = [makeFile('mark.svg', 'image/svg+xml', 1024)];
+    const result = validateFiles({
+      files,
+      fileList,
+      setError,
+      endpointFileConfig,
+      fileConfig,
+      endpoint: EModelEndpoint.azureOpenAI,
+      toolResource: EToolResources.context,
+    });
+    expect(result).toBe(true);
+  });
+  // End [knauf]
 
   it('rejects when endpoint is disabled', () => {
     endpointFileConfig = makeEndpointConfig({ disabled: true });
@@ -357,6 +374,7 @@ describe('Knauf per-category cap ↔ locale copy lockstep', () => {
     document: 'com_knauf_error_file_too_large_document',
     data: 'com_knauf_error_file_too_large_data',
     image: 'com_knauf_error_file_too_large_image',
+    svg: 'com_knauf_error_file_too_large_svg',
   };
 
   for (const [locale, translation] of Object.entries(localesByName)) {

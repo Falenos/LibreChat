@@ -190,6 +190,9 @@ export const applicationMimeTypes =
   /^(application\/(epub\+zip|csv|json|msword|pdf|x-tar|x-sh|x-zip-compressed|typescript|sql|yaml|x-parquet|vnd\.apache\.parquet|vnd\.coffeescript|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation|spreadsheetml\.sheet)|vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)|xml|zip))$/;
 
 export const imageMimeTypes = /^image\/(jpeg|gif|png|webp|heic|heif)$/;
+// [knauf] NO-TICKET — SVG is editable source, kept separate from raster-image limits/routing.
+export const svgMimeTypes = /^image\/svg(?:\+xml)?$/;
+// End [knauf]
 
 export const audioMimeTypes =
   /^audio\/(mp3|mpeg|mpeg3|wav|wave|x-wav|ogg|vorbis|mp4|m4a|x-m4a|flac|x-flac|webm|aac|wma|opus)$/;
@@ -365,6 +368,9 @@ export const codeTypeMapping: { [key: string]: string } = {
 export const imageTypeMapping: { [key: string]: string } = {
   heic: 'image/heic',
   heif: 'image/heif',
+  // [knauf] NO-TICKET — browsers may omit the MIME for dragged SVG files.
+  svg: 'image/svg+xml',
+  // End [knauf]
 };
 
 /** Normalizes non-standard MIME types that browsers may report to their canonical forms */
@@ -790,7 +796,7 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
 // [knauf] Per-format-category upload size caps (KK20-190). The fileConfig schema
 // exposes only a single `fileSizeLimit` per endpoint, but the product spec needs
 // different per-file caps by category: documents 25 MB, data/spreadsheets 50 MB,
-// images 20 MB. Centralized here so the client (validateFiles) and server
+// images 20 MB, SVG source 4 MB. Centralized here so the client (validateFiles) and server
 // (filterFile) classify + enforce identically, reusing the MIME regexes above.
 // Endpoint `fileSizeLimit` is set to the largest cap (50 MB) as a backstop; this
 // applies the tighter per-category limit on top.
@@ -808,6 +814,7 @@ export const knaufCategorySizeLimits = {
   document: mbToBytes(25),
   data: mbToBytes(50),
   image: mbToBytes(20),
+  svg: mbToBytes(4),
 } as const;
 
 /** CSV arrives as text/csv or application/csv; classified as "data", not document. */
@@ -820,6 +827,7 @@ const knaufCategorySizeErrorKeys: Record<KnaufSizeCategory, string> = {
   document: 'com_knauf_error_file_too_large_document',
   data: 'com_knauf_error_file_too_large_data',
   image: 'com_knauf_error_file_too_large_image',
+  svg: 'com_knauf_error_file_too_large_svg',
 };
 
 /**
@@ -830,6 +838,9 @@ const knaufCategorySizeErrorKeys: Record<KnaufSizeCategory, string> = {
 function classifyKnaufCategory(mimetype?: string | null): KnaufSizeCategory | undefined {
   if (!mimetype) {
     return undefined;
+  }
+  if (svgMimeTypes.test(mimetype)) {
+    return 'svg';
   }
   if (imageMimeTypes.test(mimetype)) {
     return 'image';
@@ -866,7 +877,7 @@ export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
  * AttachFileMenu and pinned by its spec so a change here surfaces in review.
  */
 export const knaufChatUploadAccept =
-  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,image/png,image/jpeg,image/webp';
+  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,.svg,image/png,image/jpeg,image/webp,image/svg+xml';
 // End [knauf]
 
 // [knauf] Legacy Office binary detection (KK20-190 upload-guidance follow-up).

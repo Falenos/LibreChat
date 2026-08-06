@@ -14,6 +14,7 @@ import {
   megabyte,
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
+  knaufChatUploadAccept,
   knaufLegacyOfficeErrorKey,
 } from './file-config';
 import { EModelEndpoint } from './schemas';
@@ -46,6 +47,9 @@ describe('inferMimeType', () => {
     expect(inferMimeType('code.js', '')).toBe('text/javascript');
     expect(inferMimeType('archive.zip', '')).toBe('application/zip');
     expect(inferMimeType('photo.heic', '')).toBe('image/heic');
+    // [knauf] NO-TICKET — extension fallback keeps SVG uploads on the source path.
+    expect(inferMimeType('mark.svg', '')).toBe('image/svg+xml');
+    // End [knauf]
     expect(inferMimeType('Main.java', '')).toBe('text/x-java');
   });
 
@@ -1375,6 +1379,9 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
     ['image/png', 20, 'com_knauf_error_file_too_large_image'],
     ['image/jpeg', 20, 'com_knauf_error_file_too_large_image'],
     ['image/webp', 20, 'com_knauf_error_file_too_large_image'],
+    // [knauf] NO-TICKET — editable SVG uploads use their own small source cap.
+    ['image/svg+xml', 4, 'com_knauf_error_file_too_large_svg'],
+    // End [knauf]
   ];
 
   it.each(cases)('classifies %s → %i MB cap + %s', (mime, mb, key) => {
@@ -1394,6 +1401,13 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
     expect(knaufCategorySizeLimit('')).toBeUndefined();
     expect(knaufCategorySizeLimit()).toBeUndefined();
   });
+
+  // [knauf] NO-TICKET — the picker and server allow-list expose native SVG explicitly.
+  it('accepts native SVG files in the chat picker', () => {
+    expect(knaufChatUploadAccept).toContain('.svg');
+    expect(knaufChatUploadAccept).toContain('image/svg+xml');
+  });
+  // End [knauf]
 });
 
 describe('knaufLegacyOfficeErrorKey', () => {

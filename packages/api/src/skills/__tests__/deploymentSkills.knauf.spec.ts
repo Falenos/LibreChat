@@ -158,6 +158,9 @@ describe('[knauf] shipped deployment skills', () => {
     const svg = artifacts?.files.find((file) => file.relativePath === 'references/svg.md')?.content;
 
     expect(artifacts?.body).toContain('skills/karl-artifacts/references/svg.md');
+    expect(artifacts?.description).toMatch(/attached SVG/);
+    expect(artifacts?.body).toMatch(/answer questions from its exact XML source/i);
+    expect(artifacts?.body).toMatch(/upload remains immutable/i);
     expect(artifacts?.body).not.toContain('No `foreignObject`');
     expect(svg).toContain('viewBox');
     expect(svg).toContain('<title>');

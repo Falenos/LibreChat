@@ -80,6 +80,9 @@ describe('detectArtifactTypeFromFile', () => {
     ['legacy.xls', TOOL_ARTIFACT_TYPES.SPREADSHEET],
     ['sheet.ods', TOOL_ARTIFACT_TYPES.SPREADSHEET],
     ['slides.pptx', TOOL_ARTIFACT_TYPES.PRESENTATION],
+    // [knauf] NO-TICKET — uploaded SVG source becomes a native artifact.
+    ['mark.svg', 'image/svg+xml'],
+    // End [knauf]
   ])('classifies %s by extension', (filename, expected) => {
     /* Office types require `textFormat: 'html'` to route to their HTML
      * preview buckets — the security gate added for Codex P1 review on
@@ -600,6 +603,33 @@ describe('fileToArtifact', () => {
     // End [knauf]
     expect(artifact!.lastUpdateTime).toBe(new Date(baseFile.updatedAt).getTime());
   });
+
+  // [knauf] NO-TICKET — preserve exact Unicode SVG source in the artifact panel.
+  it('builds a native SVG artifact from an uploaded file', () => {
+    const source =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><text x="1" y="12">Grüße ✓</text></svg>';
+    const artifact = fileToArtifact({
+      ...baseFile,
+      filename: 'brand.svg',
+      type: 'image/svg+xml',
+      text: source,
+    });
+
+    expect(artifact).toMatchObject({
+      type: 'image/svg+xml',
+      title: 'brand.svg',
+      content: source,
+    });
+  });
+
+  // [knauf] NO-TICKET — MIME fallback covers server attachments without an extension.
+  it('classifies canonical SVG MIME without a filename extension', () => {
+    expect(
+      detectArtifactTypeFromFile({ filename: 'brand', type: 'image/svg+xml', text: '<svg />' }),
+    ).toBe('image/svg+xml');
+  });
+  // End [knauf]
+  // End [knauf]
 
   it('returns null for unsupported types so callers can fall through', () => {
     expect(fileToArtifact({ ...baseFile, filename: 'photo.jpg', type: 'image/jpeg' })).toBeNull();
