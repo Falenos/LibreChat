@@ -134,6 +134,7 @@ export function Artifact({
               ...snapshot,
               id: artifactKey,
               lastUpdateTime: rootRevisionTime,
+              knaufRevision: { identifier, version: 1 },
             };
             setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: original }));
             setArtifact(original);

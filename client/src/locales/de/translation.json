@@ -417,6 +417,7 @@
   "com_knauf_artifact_download_pdf": "PDF-Dokument",
   "com_knauf_artifact_download_png": "PNG-Bild",
   "com_knauf_artifact_download_source": "Quelldatei",
+  "com_knauf_artifact_download_svg": "SVG-Vektordatei",
   "com_knauf_artifact_download_unavailable": "Der Artefakt-Export ist nicht verfügbar.",
   "com_knauf_artifact_fix": "Artefakt reparieren",
   "com_knauf_artifact_share_error": "Der Artefakt-Link konnte nicht erstellt werden. Bitte versuchen Sie es erneut.",

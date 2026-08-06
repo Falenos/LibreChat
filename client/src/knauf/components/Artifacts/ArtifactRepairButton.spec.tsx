@@ -34,8 +34,13 @@ jest.mock('@codesandbox/sandpack-react/unstyled', () => ({
   }) => {
     const React = jest.requireActual<typeof import('react')>('react');
     const [mountedFile] = React.useState(files['App.tsx']);
+    const [mountedIndex] = React.useState(files['index.html']);
     return (
-      <div data-testid="sandpack-provider" data-file={JSON.stringify(mountedFile)}>
+      <div
+        data-testid="sandpack-provider"
+        data-file={JSON.stringify(mountedFile)}
+        data-index={JSON.stringify(mountedIndex)}
+      >
         {children}
       </div>
     );
@@ -205,6 +210,37 @@ describe('ArtifactRepairButton', () => {
       screen.queryByRole('button', { name: 'com_knauf_artifact_fix' }),
     ).not.toBeInTheDocument();
   });
+
+  // [knauf] NO-TICKET — native SVG edits also drive the static preview entrypoint.
+  it('previews the current native SVG source through index.html', () => {
+    const svgArtifact = {
+      ...artifact,
+      type: 'image/svg+xml',
+      content: '<svg><text>OLD</text></svg>',
+    };
+
+    render(
+      <ArtifactPreview
+        artifact={svgArtifact}
+        files={{
+          'artwork.svg': svgArtifact.content,
+          'index.html': svgArtifact.content,
+        }}
+        fileKey="artwork.svg"
+        template="static"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+        currentCode="<svg><text>NEW</text></svg>"
+        isSharedConvo
+      />,
+    );
+
+    expect(screen.getByTestId('sandpack-provider')).toHaveAttribute(
+      'data-index',
+      expect.stringContaining('NEW'),
+    );
+  });
+  // End [knauf]
 
   it('remounts Sandpack when selecting a different artifact version', () => {
     const view = render(

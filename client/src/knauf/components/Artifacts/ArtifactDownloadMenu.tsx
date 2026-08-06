@@ -19,6 +19,14 @@ import { triggerDownload } from '~/utils/downloadFile';
 
 type ExportFormat = 'source' | 'png' | 'pdf';
 
+const safeTitle = (title: string): string => {
+  const sanitized = title
+    .replace(/[<>:"/\\|?*\p{Cc}]/gu, '_')
+    .trim()
+    .replace(/^\.+/u, '');
+  return /[\p{L}\p{N}]/u.test(sanitized) ? sanitized : 'artifact';
+};
+
 export default function ArtifactDownloadMenu({
   artifact,
   shareId,
@@ -29,6 +37,7 @@ export default function ArtifactDownloadMenu({
   const { fileKey } = useArtifactProps({ artifact });
   const [isExporting, setIsExporting] = useState(false);
   const content = currentCode || artifact.content || '';
+  const isNativeSvg = artifact.type === 'image/svg+xml';
 
   const download = async (format: ExportFormat) => {
     if (!content || isExporting) {
@@ -37,7 +46,13 @@ export default function ArtifactDownloadMenu({
     setIsExporting(true);
     try {
       if (format === 'source') {
-        triggerDownload(URL.createObjectURL(new Blob([content], { type: 'text/plain' })), fileKey);
+        const sourceTitle = safeTitle((artifact.title || 'artifact').replace(/\.svg$/iu, ''));
+        triggerDownload(
+          URL.createObjectURL(
+            new Blob([content], { type: isNativeSvg ? 'image/svg+xml' : 'text/plain' }),
+          ),
+          isNativeSvg ? `${sourceTitle}.svg` : fileKey,
+        );
         return;
       }
       const title = artifact.title || 'Generated artifact';
@@ -51,8 +66,7 @@ export default function ArtifactDownloadMenu({
         format,
         shareId,
       );
-      const safeTitle = title.replace(/[<>:"/\\|?*\p{Cc}]/gu, '_').trim() || 'artifact';
-      triggerDownload(URL.createObjectURL(blob), `${safeTitle}.${format}`);
+      triggerDownload(URL.createObjectURL(blob), `${safeTitle(title)}.${format}`);
     } catch (error) {
       console.error('Artifact export failed:', error);
       showToast({
@@ -90,7 +104,9 @@ export default function ArtifactDownloadMenu({
       <DropdownMenuContent align="end" className="z-[1001] min-w-44">
         <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('source')}>
           <FileCode2 className="size-4" aria-hidden="true" />
-          {localize('com_knauf_artifact_download_source')}
+          {localize(
+            isNativeSvg ? 'com_knauf_artifact_download_svg' : 'com_knauf_artifact_download_source',
+          )}
         </DropdownMenuItem>
         <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('png')}>
           <Image className="size-4" aria-hidden="true" />

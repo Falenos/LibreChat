@@ -152,6 +152,31 @@ describe('[knauf] shipped deployment skills', () => {
   });
   // End [knauf]
 
+  // [knauf] NO-TICKET — native SVG guidance stays focused and Adobe-safe.
+  it('loads focused Adobe-safe native SVG guidance only for SVG work', () => {
+    const artifacts = byName.get('karl-artifacts');
+    const svg = artifacts?.files.find((file) => file.relativePath === 'references/svg.md')?.content;
+
+    expect(artifacts?.body).toContain('skills/karl-artifacts/references/svg.md');
+    expect(artifacts?.body).not.toContain('No `foreignObject`');
+    expect(svg).toContain('viewBox');
+    expect(svg).toContain('<title>');
+    expect(svg).toContain('<desc>');
+    expect(svg).toContain('No `script`');
+    expect(svg).toContain('event-handler attributes');
+    expect(svg).toContain('`javascript:`');
+    expect(svg).toContain('remote references');
+    expect(svg).toContain('No `foreignObject`');
+    expect(svg).toContain('No `image`');
+    expect(svg).toContain('duplicate IDs');
+    expect(svg).toContain('broken `url(#id)`');
+    expect(svg).toContain('`NaN` or `Infinity`');
+    expect(svg).toContain('Do not convert HTML or React to SVG');
+    expect(svg).toContain('official approved vector');
+    expect(svg).toContain('fonts must be installed');
+  });
+  // End [knauf]
+
   it('bounds native web research to one synthesis with distinct inline sources', () => {
     const research = byName.get('web-research');
     expect(research).toBeDefined();
