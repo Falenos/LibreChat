@@ -113,23 +113,87 @@ describe('[knauf] shipped deployment skills', () => {
     expect(readme).not.toContain('Must stay `always-apply: true`');
   });
 
-  it('keeps logo clearance equal to the rendered mark height in artifact templates', () => {
+  it('pins theme-safe text and a full-width white logo header in artifact templates', () => {
     const artifacts = byName.get('karl-artifacts');
+    const brand = byName.get(TOKEN_SOURCE_SKILL);
     expect(artifacts).toBeDefined();
+    expect(artifacts?.body).toContain('Treat every background and its foreground as one pair');
+    expect(artifacts?.body).toContain('Never pair a fixed light surface');
 
-    const dashboard = artifacts?.files.find(
-      (file) => file.relativePath === 'references/dashboard.md',
+    const logo = brand?.files.find((file) => file.relativePath === 'references/logo.md')?.content;
+    expect(logo).toMatch(/entire artifact\s+header band is white/);
+
+    for (const relativePath of ['references/dashboard.md', 'references/report.md']) {
+      const template = artifacts?.files.find((file) => file.relativePath === relativePath)?.content;
+      expect(template).toContain('className="w-full border-b');
+      expect(template).toContain('fill={KNAUF.brand.logoCyan}');
+      expect(template).not.toMatch(/<KnaufWordmark[^>]*fill="#FFFFFF"/);
+    }
+
+    const slides = artifacts?.files.find(
+      (file) => file.relativePath === 'references/slides.md',
     )?.content;
-    expect(dashboard).toContain('<KnaufWordmark height={28} fill="#FFFFFF" />');
-    expect(dashboard).toContain('rounded-lg px-7 py-7');
-    expect(dashboard).toContain('items-center gap-7');
+    const slideRenderer = fs.readFileSync(
+      path.join(REPO_ROOT, 'client/src/knauf/sandbox/slideDeckModule.ts'),
+      'utf8',
+    );
+    expect(slides).toContain("import { KnaufSlideDeck } from '/knauf/slides'");
+    expect(slideRenderer).toContain('className="w-full border-b');
+    expect(slideRenderer).toContain('fill={KNAUF.brand.logoCyan}');
+    expect(slideRenderer).not.toMatch(/<KnaufWordmark[^>]*fill="#FFFFFF"/);
   });
+
+  // [knauf] NO-TICKET — pin runtime artifact edits and the safe fallback.
+  it('patches existing artifacts when edit_artifact is available', () => {
+    const artifacts = byName.get('karl-artifacts');
+    expect(artifacts?.body).toContain('edit_artifact');
+    expect(artifacts?.body).toMatch(/do not re-emit the artifact/i);
+    expect(artifacts?.body).toMatch(/full artifact.*fallback/i);
+  });
+  // End [knauf]
+
+  // [knauf] NO-TICKET — native SVG guidance stays focused and Adobe-safe.
+  it('loads focused Adobe-safe native SVG guidance only for SVG work', () => {
+    const artifacts = byName.get('karl-artifacts');
+    const svg = artifacts?.files.find((file) => file.relativePath === 'references/svg.md')?.content;
+
+    expect(artifacts?.body).toContain('skills/karl-artifacts/references/svg.md');
+    expect(artifacts?.body).not.toContain('No `foreignObject`');
+    expect(svg).toContain('viewBox');
+    expect(svg).toContain('<title>');
+    expect(svg).toContain('<desc>');
+    expect(svg).toContain('No `script`');
+    expect(svg).toContain('event-handler attributes');
+    expect(svg).toContain('`javascript:`');
+    expect(svg).toContain('remote references');
+    expect(svg).toContain('No `foreignObject`');
+    expect(svg).toContain('No `image`');
+    expect(svg).toContain('duplicate IDs');
+    expect(svg).toContain('broken `url(#id)`');
+    expect(svg).toContain('`NaN` or `Infinity`');
+    expect(svg).toContain('Do not convert HTML or React to SVG');
+    expect(svg).toContain('official approved vector');
+    expect(svg).toContain('fonts must be installed');
+    expect(svg).toContain('<animate>');
+    expect(svg).toContain('<animateTransform>');
+    expect(svg).toContain('prefers-reduced-motion');
+    expect(svg).toContain('completes within five seconds');
+    expect(svg).toContain('Do not use `repeatCount="indefinite"`');
+    expect(svg).toContain('PNG and PDF export capture one still frame');
+    expect(svg).toContain('Never wrap the pixels in `<image>`');
+    expect(svg).toContain('Do not trace a complex photograph');
+    expect(svg).toContain('Any tracer output must still pass every source');
+  });
+  // End [knauf]
 
   it('bounds native web research to one synthesis with distinct inline sources', () => {
     const research = byName.get('web-research');
     expect(research).toBeDefined();
     expect(research?.body).toMatch(/emit one final synthesis/i);
     expect(research?.body).toMatch(/do not repeat interim drafts/i);
+    expect(research?.body).toMatch(/simple factual research[^\n]*40[–-]120 words/i);
+    expect(research?.body).toMatch(/no more than two sources/i);
+    expect(research?.body).toMatch(/do not narrate the sources one by one/i);
     expect(research?.body).toMatch(/maximum three distinct source URLs/i);
     expect(research?.body).toMatch(/do not append a duplicate sources list/i);
     expect(research?.body).toMatch(/source or domain restrictions/i);
@@ -259,7 +323,7 @@ describe('[knauf] shipped deployment skills', () => {
       // module's exports, and those legitimately come from `/knauf/brand`.
       for (const component of named) {
         const imported = new RegExp(
-          `import \\{[^}]*\\b${component}\\b[^}]*\\} from '(?:/components/ui/[a-z-]+|/knauf/brand)'`,
+          `import \\{[^}]*\\b${component}\\b[^}]*\\} from '(?:/components/ui/[a-z-]+|/knauf/(?:brand|slides))'`,
         ).test(corpus);
         if (!imported) {
           missing.push(`${skill.name} recommends ${component} with no import example`);

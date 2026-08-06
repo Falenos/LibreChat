@@ -37,6 +37,11 @@ export default function GenericGrantAccessDialog({
   disabled = false,
   buttonClassName,
   children,
+  // [knauf] Let resource-list menus open this dialog without rendering a second trigger.
+  open,
+  onOpenChange,
+  hideTrigger = false,
+  // End [knauf]
 }: {
   resourceDbId?: string | null;
   resourceId?: string | null;
@@ -46,11 +51,20 @@ export default function GenericGrantAccessDialog({
   disabled?: boolean;
   buttonClassName?: string;
   children?: React.ReactNode;
+  // [knauf] Controlled triggerless mode for permission-aware resource-list actions.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
+  // End [knauf]
 }) {
   const localize = useLocalize();
   const { showToast } = useToastContext();
   const [isCopying, setIsCopying] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // [knauf] Preserve the upstream uncontrolled mode while allowing a menu to own open state.
+  const [uncontrolledModalOpen, setUncontrolledModalOpen] = useState(false);
+  const isModalOpen = open ?? uncontrolledModalOpen;
+  const setIsModalOpen = onOpenChange ?? setUncontrolledModalOpen;
+  // End [knauf]
   const canSharePublic = useCanSharePublic(resourceType);
   const { hasPeoplePickerAccess, peoplePickerTypeFilter } = usePeoplePickerPermissions();
 
@@ -299,7 +313,9 @@ export default function GenericGrantAccessDialog({
 
   return (
     <OGDialog open={isModalOpen} onOpenChange={setIsModalOpen} modal>
-      <OGDialogTrigger asChild>{TriggerComponent}</OGDialogTrigger>
+      {/* [knauf] Menu actions render their trigger elsewhere and keep this dialog mounted. */}
+      {!hideTrigger && <OGDialogTrigger asChild>{TriggerComponent}</OGDialogTrigger>}
+      {/* End [knauf] */}
       <OGDialogContent className="max-h-[90vh] w-11/12 overflow-y-auto md:max-w-3xl">
         <OGDialogTitle>
           <div className="flex items-center gap-2">

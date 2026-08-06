@@ -8,12 +8,13 @@ import ArtifactRepairButton, {
 } from './ArtifactRepairButton';
 
 const mockAsk = jest.fn();
-const mockError = {
+const compilerError = {
   message: "Cannot read properties of undefined (reading 'cyanBlue')",
   path: '/App.tsx',
   line: 15,
   column: 76,
 };
+let mockError: typeof compilerError | null = compilerError;
 let mockIsSubmitting = false;
 let mockLatestMessageId = 'assistant-message-1';
 
@@ -24,7 +25,26 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('@codesandbox/sandpack-react/unstyled', () => ({
-  SandpackProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  SandpackProvider: ({
+    children,
+    files,
+  }: {
+    children: ReactNode;
+    files: Record<string, unknown>;
+  }) => {
+    const React = jest.requireActual<typeof import('react')>('react');
+    const [mountedFile] = React.useState(files['App.tsx']);
+    const [mountedIndex] = React.useState(files['index.html']);
+    return (
+      <div
+        data-testid="sandpack-provider"
+        data-file={JSON.stringify(mountedFile)}
+        data-index={JSON.stringify(mountedIndex)}
+      >
+        {children}
+      </div>
+    );
+  },
   SandpackPreview: ({ children }: { children?: ReactNode }) => (
     <div data-testid="sandpack-preview">{children}</div>
   ),
@@ -68,6 +88,7 @@ const finishGeneration = (identifier: string) => {
 describe('ArtifactRepairButton', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockError = compilerError;
     mockIsSubmitting = false;
     mockLatestMessageId = 'assistant-message-1';
   });
@@ -77,7 +98,7 @@ describe('ArtifactRepairButton', () => {
 
     expect(mockAsk).toHaveBeenCalledTimes(1);
     expect(mockAsk).toHaveBeenLastCalledWith({
-      text: expect.stringContaining(mockError.message),
+      text: expect.stringContaining(compilerError.message),
       parentMessageId: 'assistant-message-1',
     });
     expect(mockAsk.mock.calls[0][0].text).toContain('untrusted diagnostic data');
@@ -92,7 +113,9 @@ describe('ArtifactRepairButton', () => {
     );
 
     expect(mockAsk).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'com_knauf_artifact_fix' })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'com_knauf_artifact_fix' });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('left-1/2', 'top-1/2');
   });
 
   it('does not repair an old artifact after an unrelated generation', () => {
@@ -133,7 +156,24 @@ describe('ArtifactRepairButton', () => {
     expect(isRepairableArtifactError({ message: '[sandpack-client]: connection timeout' })).toBe(
       false,
     );
-    expect(isRepairableArtifactError(mockError)).toBe(true);
+    expect(isRepairableArtifactError(compilerError)).toBe(true);
+  });
+
+  it('offers repair when a slide deck compiles but violates the runtime contract', () => {
+    mockError = null;
+    render(
+      <ArtifactRepairButton
+        artifact={artifact}
+        sourceCode="export default () => <div data-knauf-export-pages><section style={{ display: 'none' }} /></div>;"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_knauf_artifact_fix' }));
+
+    expect(mockAsk).toHaveBeenCalledWith({
+      text: expect.stringContaining("from '/knauf/slides'"),
+      parentMessageId: 'assistant-message-1',
+    });
   });
 
   it('mounts the repair action in owned artifact previews', () => {
@@ -169,5 +209,65 @@ describe('ArtifactRepairButton', () => {
     expect(
       screen.queryByRole('button', { name: 'com_knauf_artifact_fix' }),
     ).not.toBeInTheDocument();
+  });
+
+  // [knauf] NO-TICKET — native SVG edits also drive the static preview entrypoint.
+  it('previews the current native SVG source through index.html', () => {
+    const svgArtifact = {
+      ...artifact,
+      type: 'image/svg+xml',
+      content: '<svg><text>OLD</text></svg>',
+    };
+
+    render(
+      <ArtifactPreview
+        artifact={svgArtifact}
+        files={{
+          'artwork.svg': svgArtifact.content,
+          'index.html': svgArtifact.content,
+        }}
+        fileKey="artwork.svg"
+        template="static"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+        currentCode="<svg><text>NEW</text></svg>"
+        isSharedConvo
+      />,
+    );
+
+    expect(screen.getByTestId('sandpack-provider')).toHaveAttribute(
+      'data-index',
+      expect.stringContaining('NEW'),
+    );
+  });
+  // End [knauf]
+
+  it('remounts Sandpack when selecting a different artifact version', () => {
+    const view = render(
+      <ArtifactPreview
+        artifact={{ ...artifact, id: 'artifact-version-1', content: 'VERSION ONE' }}
+        files={{ 'App.tsx': 'VERSION ONE' }}
+        fileKey="App.tsx"
+        template="react-ts"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+      />,
+    );
+
+    view.rerender(
+      <ArtifactPreview
+        artifact={{ ...artifact, id: 'artifact-version-2', content: 'VERSION TWO' }}
+        files={{ 'App.tsx': 'VERSION TWO' }}
+        fileKey="App.tsx"
+        template="react-ts"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+      />,
+    );
+
+    expect(screen.getByTestId('sandpack-provider')).toHaveAttribute(
+      'data-file',
+      expect.stringContaining('VERSION TWO'),
+    );
   });
 });

@@ -16,6 +16,11 @@ function isGroupableToolCall(part: TMessageContentParts): boolean {
   }
   const isStandardToolCall =
     'args' in toolCall && (!toolCall.type || toolCall.type === ToolCallTypes.TOOL_CALL);
+  // [knauf] Keep completed artifact version cards visible beside collapsed tool diagnostics. (NO-TICKET)
+  if (isStandardToolCall && toolCall.name === 'edit_artifact') {
+    return false;
+  }
+  // End [knauf]
   if (isStandardToolCall && toolCall.name?.startsWith(Constants.LC_TRANSFER_TO_)) {
     return false;
   }

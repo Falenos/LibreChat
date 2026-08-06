@@ -32,6 +32,11 @@ import WebSearch from './WebSearch';
 import ToolCall from './ToolCall';
 import Image from './Image';
 import { isBashProgrammaticToolCall } from './routing';
+// [knauf] Render completed in-place artifact patches as compact version pointers.
+import ArtifactEditCall, {
+  parseArtifactEditResult,
+} from '~/knauf/components/Artifacts/ArtifactEditCall';
+// End [knauf]
 
 type PartProps = {
   part?: TMessageContentParts;
@@ -136,6 +141,15 @@ const Part = memo(function Part({
 
     const isToolCall =
       'args' in toolCall && (!toolCall.type || toolCall.type === ToolCallTypes.TOOL_CALL);
+    // [knauf] Keep the normal running/error tool UI; replace only a validated success result.
+    const artifactEditResult =
+      isToolCall && toolCall.name === 'edit_artifact'
+        ? parseArtifactEditResult(toolCall.output ?? '')
+        : null;
+    if (artifactEditResult) {
+      return <ArtifactEditCall result={artifactEditResult} />;
+    }
+    // End [knauf]
     if (isToolCall && isBashProgrammaticToolCall(toolCall.name, toolCall.args)) {
       return (
         <BashCall

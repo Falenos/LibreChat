@@ -1,5 +1,6 @@
 const { nanoid } = require('nanoid');
 const { findAllArtifacts } = require('@librechat/api');
+const { getArtifactRevisionSnapshot } = require('./edit');
 
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 240;
@@ -8,6 +9,7 @@ const SINGLE_FILE_ARTIFACT_TYPES = new Set([
   'application/vnd.ant.react',
   'text/html',
   'application/vnd.code-html',
+  'image/svg+xml',
   'application/vnd.mermaid',
 ]);
 const FENCED_SOURCE_PATTERN =
@@ -23,6 +25,7 @@ const ALLOWED_ARTIFACT_TYPES = new Set([
   'application/vnd.mermaid',
   'application/vnd.code-html',
   'application/vnd.code',
+  'image/svg+xml',
   'application/vnd.librechat.docx-preview',
   'application/vnd.librechat.spreadsheet-preview',
   'application/vnd.librechat.presentation-preview',
@@ -148,15 +151,25 @@ const createArtifactShare = async ({
   if (!message) {
     throw new ArtifactShareError('Message not found or access denied', 404);
   }
-  if (locator.kind !== 'file' && locator.kind !== 'directive') {
+  if (locator.kind !== 'file' && locator.kind !== 'directive' && locator.kind !== 'revision') {
     throw new ArtifactShareError('Unsupported artifact locator');
   }
 
-  const snapshot = validateSnapshot(
-    locator.kind === 'file'
-      ? extractFileSnapshot(message, locator)
-      : extractDirectiveSnapshot(message, locator.index),
-  );
+  let sourceSnapshot;
+  if (locator.kind === 'revision') {
+    const messages = await Message.find({ user, conversationId }).lean();
+    sourceSnapshot = getArtifactRevisionSnapshot(messages, {
+      messageId,
+      identifier: locator.identifier,
+      version: locator.version,
+    });
+  } else {
+    sourceSnapshot =
+      locator.kind === 'file'
+        ? extractFileSnapshot(message, locator)
+        : extractDirectiveSnapshot(message, locator.index);
+  }
+  const snapshot = validateSnapshot(sourceSnapshot);
   const shareId = nanoid();
   const created = await SharedLink.create({
     shareId,

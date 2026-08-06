@@ -11,12 +11,18 @@ import type { Artifact } from '~/common';
 import { knaufBrandModule } from '~/knauf/sandbox/brandModule';
 import { knaufFontCss } from '~/knauf/sandbox/brandFonts';
 // End [knauf]
+// [knauf] NO-TICKET — platform-owned renderer for generated slide artifacts.
+import { knaufSlideDeckModule } from '~/knauf/sandbox/slideDeckModule';
+// End [knauf]
 
 const artifactFilename = {
   'application/vnd.react': 'App.tsx',
   'application/vnd.ant.react': 'App.tsx',
   'text/html': 'index.html',
   'application/vnd.code-html': 'index.html',
+  // [knauf] NO-TICKET — native SVG stays an editable vector source file.
+  'image/svg+xml': 'artwork.svg',
+  // End [knauf]
   /* Office preview buckets — the backend produces a complete sanitized
    * `index.html` document (head + body) and ships it via `attachment.text`.
    * The Sandpack `static` template loads it as-is. See
@@ -47,6 +53,9 @@ const artifactTemplate: Record<
   'application/vnd.ant.react': 'react-ts',
   'application/vnd.mermaid': 'react-ts',
   'application/vnd.code-html': 'static',
+  // [knauf] NO-TICKET — native SVG renders directly in the static sandbox.
+  'image/svg+xml': 'static',
+  // End [knauf]
   /* CODE bucket reuses the static markdown pipeline — `useArtifactProps`
    * pre-wraps the content in a fenced block and hands it to
    * `getMarkdownFiles`, so the rendered HTML uses the same `marked`
@@ -147,6 +156,9 @@ const dependenciesMap: Record<
   'application/vnd.ant.react': standardDependencies,
   'text/html': standardDependencies,
   'application/vnd.code-html': standardDependencies,
+  // [knauf] NO-TICKET — native SVG needs no runtime package installation.
+  'image/svg+xml': {},
+  // End [knauf]
   /* CODE renders in the static markdown template; no React or other
    * runtime deps. Empty map skips the sandpack `package.json` install
    * step entirely (same as MARKDOWN/PLAIN_TEXT). */
@@ -957,6 +969,9 @@ export const sharedFiles = {
   // the official webfonts offline and avoid cross-origin font requests from the
   // Sandpack iframe. Standalone HTML artifacts can link `/knauf/fonts.css` too.
   '/knauf/fonts.css': knaufFontCss,
+  // End [knauf]
+  // [knauf] NO-TICKET — generated decks supply data; this module owns the shell.
+  '/knauf/slides.tsx': knaufSlideDeckModule,
   // End [knauf]
   '/public/index.html': dedent`
     <!DOCTYPE html>

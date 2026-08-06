@@ -25,6 +25,9 @@ import useQueryParams from './useQueryParams';
 import { useChatContext, useChatFormContext } from '~/Providers';
 import useSubmitMessage from '~/hooks/Messages/useSubmitMessage';
 import useDefaultConvo from '~/hooks/Conversations/useDefaultConvo';
+// [knauf] Shared-artifact continuation must survive the generic query cleanup. (NO-TICKET)
+import { SHARED_ARTIFACT_PARAM } from '~/knauf/utils/sharedArtifactContinuation';
+// End [knauf]
 import store from '~/store';
 
 // Other mocks
@@ -256,6 +259,23 @@ describe('useQueryParams', () => {
     expect(params.toString()).toBe('');
     expect(options).toEqual(expect.objectContaining({ replace: true }));
   });
+
+  // [knauf] The importer owns removal after the public snapshot resolves or fails. (NO-TICKET)
+  it('preserves the shared artifact ID during generic query cleanup', () => {
+    (useQueryClient as jest.Mock).mockReturnValue({
+      getQueryData: jest.fn(() => ({ modelSpecs: { list: [] } })),
+    });
+    setUrlParams({ [SHARED_ARTIFACT_PARAM]: 'share-1' });
+
+    renderHook(() =>
+      useQueryParams({ textAreaRef: { current: document.createElement('textarea') } }),
+    );
+    act(() => jest.advanceTimersByTime(100));
+
+    const setParams = (useSearchParams as jest.Mock).mock.results[0].value[1];
+    expect(setParams.mock.calls[0][0].get(SHARED_ARTIFACT_PARAM)).toBe('share-1');
+  });
+  // End [knauf]
 
   it('should auto-submit message when submit=true and no settings to apply', () => {
     // Setup

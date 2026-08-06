@@ -6,6 +6,9 @@ import GenericGrantAccessDialog from '../GenericGrantAccessDialog';
 
 const mockRefetchPermissions = jest.fn();
 const mockUseResourcePermissionState = jest.fn();
+// [knauf] Make the public-sharing permission variable for peer-only dialog coverage.
+const mockUseCanSharePublic = jest.fn();
+// End [knauf]
 
 const config = {
   defaultViewerRoleId: 'viewer',
@@ -37,7 +40,7 @@ jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
   useResourcePermissionState: () => mockUseResourcePermissionState(),
   usePeoplePickerPermissions: () => ({ hasPeoplePickerAccess: true, peoplePickerTypeFilter: '' }),
-  useCanSharePublic: () => true,
+  useCanSharePublic: () => mockUseCanSharePublic(),
   useCopyToClipboard: () => jest.fn(),
 }));
 
@@ -77,6 +80,7 @@ describe('GenericGrantAccessDialog - permissions load failure', () => {
   beforeEach(() => {
     mockUseResourcePermissionState.mockReset();
     mockRefetchPermissions.mockReset();
+    mockUseCanSharePublic.mockReturnValue(true);
   });
 
   it('renders a compact alert button (not the share trigger, not raw text) when permissions fail to load', () => {
@@ -133,4 +137,26 @@ describe('GenericGrantAccessDialog - permissions load failure', () => {
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_share_var' }));
     expect(screen.getByTestId('unified-people-search')).toBeInTheDocument();
   });
+
+  // [knauf] Pin the controlled menu mode and keep public sharing separately gated.
+  it('opens without a trigger for peer sharing while public sharing is disabled', () => {
+    mockUseResourcePermissionState.mockReturnValue(baseState());
+    mockUseCanSharePublic.mockReturnValue(false);
+
+    render(
+      <GenericGrantAccessDialog
+        resourceDbId="prompt-1"
+        resourceName="Test Prompt"
+        resourceType={ResourceType.PROMPTGROUP}
+        open={true}
+        onOpenChange={jest.fn()}
+        hideTrigger={true}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'com_ui_share_var' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('unified-people-search')).toBeInTheDocument();
+    expect(screen.queryByTestId('public-toggle')).not.toBeInTheDocument();
+  });
+  // End [knauf]
 });

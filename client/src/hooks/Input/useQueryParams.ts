@@ -21,6 +21,9 @@ import {
 import { useAuthContext, useAgentsMap, useDefaultConvo, useSubmitMessage } from '~/hooks';
 import { startupConfigKey, useGetAgentByIdQuery } from '~/data-provider';
 import { useChatContext, useChatFormContext } from '~/Providers';
+// [knauf] Keep the opaque artifact share ID through standard query-param initialization. (NO-TICKET)
+import { SHARED_ARTIFACT_PARAM } from '~/knauf/utils/sharedArtifactContinuation';
+// End [knauf]
 import store from '~/store';
 
 const PROJECT_ID_SEARCH_PARAM = 'projectId';
@@ -80,6 +83,12 @@ export default function useQueryParams({
     if (projectId) {
       preservedParams.set(PROJECT_ID_SEARCH_PARAM, projectId);
     }
+    // [knauf] The continuation hook removes this only after importing or rejecting the snapshot. (NO-TICKET)
+    const artifactShareId = searchParams.get(SHARED_ARTIFACT_PARAM);
+    if (artifactShareId) {
+      preservedParams.set(SHARED_ARTIFACT_PARAM, artifactShareId);
+    }
+    // End [knauf]
     return preservedParams;
   }, [searchParams]);
 

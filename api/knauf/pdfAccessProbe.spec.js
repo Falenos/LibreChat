@@ -1,0 +1,289 @@
+'use strict';
+
+const { EventEmitter } = require('node:events');
+const path = require('node:path');
+const {
+  isPdfFileAtPath,
+  probePdfAccess,
+  PdfAccessProbeError,
+  PDF_PROBE_UNAVAILABLE_CODE,
+} = require('@knauf/knauf/server/pdfAccessProbe');
+const { runPdfAccessProbe } = require('@knauf/knauf/server/pdfAccessProbe.worker');
+
+class FakeWorker extends EventEmitter {
+  constructor() {
+    super();
+    this.terminate = jest.fn().mockResolvedValue(0);
+    FakeWorker.instances.push(this);
+  }
+}
+FakeWorker.instances = [];
+
+describe('PDF access probe', () => {
+  beforeEach(() => {
+    FakeWorker.instances.length = 0;
+  });
+
+  it('returns the worker classification and terminates the isolate', async () => {
+    const resultPromise = probePdfAccess('/tmp/readable.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 100,
+    });
+    const worker = FakeWorker.instances[0];
+
+    worker.emit('message', { result: 'readable' });
+
+    await expect(resultPromise).resolves.toEqual({ result: 'readable' });
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminates a hung worker at the deadline', async () => {
+    jest.useFakeTimers();
+    const resultPromise = probePdfAccess('/tmp/hung.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 50,
+    });
+    const worker = FakeWorker.instances[0];
+
+    jest.advanceTimersByTime(50);
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
+  it('maps worker failures to a stable unavailable error', async () => {
+    const resultPromise = probePdfAccess('/tmp/failure.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 100,
+    });
+
+    FakeWorker.instances[0].emit('error', new Error('worker crashed'));
+
+    await expect(resultPromise).rejects.toBeInstanceOf(PdfAccessProbeError);
+  });
+
+  it('maps retryable parser outcomes to the stable unavailable error', async () => {
+    const resultPromise = probePdfAccess('/tmp/failure.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 100,
+    });
+
+    FakeWorker.instances[0].emit('message', { result: 'unavailable', stage: 'parse' });
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
+  it('maps worker construction failures to a stable unavailable error', async () => {
+    class ThrowingWorker {
+      constructor() {
+        throw new Error('worker initialization failed');
+      }
+    }
+
+    await expect(
+      probePdfAccess('/tmp/failure.pdf', {
+        WorkerImpl: ThrowingWorker,
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
+  it('rejects when a worker exits without returning a result', async () => {
+    const resultPromise = probePdfAccess('/tmp/no-result.pdf', {
+      WorkerImpl: FakeWorker,
+      timeoutMs: 100,
+    });
+
+    FakeWorker.instances[0].emit('exit', 0);
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
+  it.each([
+    ['at offset zero', '%PDF-', true],
+    ['after a prefix', 'prefix%PDF-1.7', true],
+    [
+      'at the last complete offset',
+      Buffer.concat([Buffer.alloc(1019), Buffer.from('%PDF-')]),
+      true,
+    ],
+    ['outside the scan window', Buffer.concat([Buffer.alloc(1020), Buffer.from('%PDF-')]), false],
+    ['when absent', 'plain', false],
+  ])('detects PDF bytes %s', async (_scenario, headerBytes, expected) => {
+    const handle = {
+      read: jest.fn(async (buffer) => {
+        const header = Buffer.from(headerBytes);
+        header.copy(buffer);
+        return { bytesRead: Math.min(header.length, buffer.length) };
+      }),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      isPdfFileAtPath('/tmp/document', {
+        openFile: jest.fn().mockResolvedValue(handle),
+      }),
+    ).resolves.toBe(expected);
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps PDF header read failures to the stable unavailable error', async () => {
+    await expect(
+      isPdfFileAtPath('/tmp/document', {
+        openFile: jest.fn().mockRejectedValue(new Error('read failed')),
+      }),
+    ).rejects.toMatchObject({
+      name: 'PdfAccessProbeError',
+      code: PDF_PROBE_UNAVAILABLE_CODE,
+    });
+  });
+
+  it.each([
+    ['PasswordException', 'password_required'],
+    ['InvalidPDFException', 'invalid'],
+    ['FormatError', 'invalid'],
+  ])('classifies %s from PDF.js as %s', async (name, expected) => {
+    const loadingTask = {
+      promise: Promise.reject(Object.assign(new Error(name), { name })),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: expected });
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps unknown PDF.js parser failures retryable', async () => {
+    const loadingTask = {
+      promise: Promise.reject(
+        Object.assign(new Error('unknown parser failure'), { name: 'UnknownErrorException' }),
+      ),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'parse' });
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps synchronous PDF.js initialization failures retryable', async () => {
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => {
+            throw new Error('initialization failed');
+          }),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'initialize' });
+  });
+
+  it('destroys both the loaded document and loading task after a readable PDF', async () => {
+    const pdfDocument = { destroy: jest.fn().mockResolvedValue(undefined) };
+    const loadingTask = {
+      promise: Promise.resolve(pdfDocument),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'readable' });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports read, initialization, and cleanup failures as unavailable', async () => {
+    await expect(
+      runPdfAccessProbe('/tmp/missing.pdf', {
+        readFile: jest.fn().mockRejectedValue(new Error('missing')),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'read' });
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockRejectedValue(new Error('import failed')),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'initialize' });
+
+    const loadingTask = {
+      promise: Promise.reject(Object.assign(new Error('invalid'), { name: 'InvalidPDFException' })),
+      destroy: jest.fn().mockRejectedValue(new Error('cleanup failed')),
+    };
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'cleanup' });
+  });
+
+  it('attempts loading-task cleanup when document cleanup fails', async () => {
+    const pdfDocument = {
+      destroy: jest.fn().mockRejectedValue(new Error('document cleanup failed')),
+    };
+    const loadingTask = {
+      promise: Promise.resolve(pdfDocument),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      runPdfAccessProbe('/tmp/document.pdf', {
+        readFile: jest.fn().mockResolvedValue(Buffer.from('%PDF-1.7')),
+        loadPdfjs: jest.fn().mockResolvedValue({
+          getDocument: jest.fn(() => loadingTask),
+        }),
+      }),
+    ).resolves.toEqual({ result: 'unavailable', stage: 'cleanup' });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+    expect(loadingTask.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PDF access probe with real PDF.js fixtures', () => {
+  const fixture = (name) => path.join(__dirname, 'fixtures', 'pdf-access', name);
+
+  it.each([
+    ['01-plain-unencrypted.pdf', 'readable'],
+    ['02-owner-password-broad-permissions.pdf', 'readable'],
+    ['03-owner-password-restricted-assembly-extraction.pdf', 'readable'],
+    ['04-open-password-required.pdf', 'password_required'],
+    ['06-certified-docmdp-no-changes.pdf', 'readable'],
+    ['malformed.pdf', 'invalid'],
+  ])('classifies %s as %s through pdfjs-dist', async (name, expected) => {
+    await expect(probePdfAccess(fixture(name))).resolves.toEqual({ result: expected });
+  });
+});

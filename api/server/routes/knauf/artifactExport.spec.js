@@ -20,16 +20,19 @@ jest.mock('~/server/middleware/canAccessSharedLink', () => (req, _res, next) => 
   next();
 });
 
-jest.mock('~/server/services/Artifacts/knauf/export', () => ({
-  ArtifactExportError: class ArtifactExportError extends Error {
-    constructor(message, status = 400) {
-      super(message);
-      this.status = status;
-    }
-  },
-  getRenderSnapshot: jest.fn(),
-  renderArtifact: mockRenderArtifact,
-}));
+jest.mock(
+  '~/server/services/Artifacts/knauf/export',
+  () => ({
+    ArtifactExportError: class ArtifactExportError extends Error {
+      constructor(message, status = 400) {
+        super(message);
+        this.status = status;
+      }
+    },
+    getRenderSnapshot: jest.fn(),
+    renderArtifact: (...args) => mockRenderArtifact(...args),
+  }),
+);
 
 const artifactExportRouter = require('./artifactExport');
 

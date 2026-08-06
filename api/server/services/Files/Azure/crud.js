@@ -4,6 +4,9 @@ const mime = require('mime');
 const axios = require('axios');
 const fetch = require('node-fetch');
 const { logger } = require('@librechat/data-schemas');
+// [knauf] KK20-199 — emit only bounded Azure failure attributes, never SAS paths.
+const { summarizeProviderError } = require('~/server/controllers/agents/knauf/providerError');
+// End [knauf]
 // [knauf] KK20-167 — Tier 5 overlay: SAS-signed Azure Blob support.
 //
 // Upstream's azure_blob strategy ships unsigned URLs and a public-by-default
@@ -275,7 +278,14 @@ async function getSignedAzureURL({ blobPath, containerName = AZURE_CONTAINER_NAM
       'Azure storage not configured: set AZURE_STORAGE_CONNECTION_STRING for local/AccountKey signing, or AZURE_STORAGE_ACCOUNT_NAME for Managed Identity',
     );
   } catch (error) {
-    logger.error('[getSignedAzureURL] Error generating signed URL:', error);
+    // End [knauf]
+    // [knauf] KK20-199 — omit SAS paths and raw Azure errors from diagnostics.
+    logger.error(
+      '[getSignedAzureURL] SAS generation failed',
+      summarizeProviderError(error, 'azure_sas_generation'),
+    );
+    // End [knauf]
+    // [knauf] KK20-167 — preserve SAS generation failure propagation.
     throw error;
   }
 }
@@ -342,7 +352,12 @@ async function saveBufferToAzure({
     return blockBlobClient.url;
     // End [knauf]
   } catch (error) {
-    logger.error('[saveBufferToAzure] Error uploading buffer:', error);
+    // [knauf] KK20-199 — Azure SDK errors may carry Blob paths and SAS credentials.
+    logger.error(
+      '[saveBufferToAzure] Blob upload failed',
+      summarizeProviderError(error, 'azure_blob_upload_buffer'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -370,7 +385,12 @@ async function saveURLToAzure({
     const buffer = await response.buffer();
     return await saveBufferToAzure({ userId, buffer, fileName, basePath, containerName });
   } catch (error) {
-    logger.error('[saveURLToAzure] Error uploading file from URL:', error);
+    // [knauf] KK20-199 — source and destination URLs must not enter logs.
+    logger.error(
+      '[saveURLToAzure] URL upload failed',
+      summarizeProviderError(error, 'azure_blob_upload_url'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -401,7 +421,12 @@ async function getAzureURL({ fileName, basePath = defaultBasePath, userId, conta
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     return blockBlobClient.url;
   } catch (error) {
-    logger.error('[getAzureURL] Error retrieving blob URL:', error);
+    // [knauf] KK20-199 — omit signed URLs and identity paths from lookup failures.
+    logger.error(
+      '[getAzureURL] Blob URL lookup failed',
+      summarizeProviderError(error, 'azure_blob_url_lookup'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -436,7 +461,12 @@ async function deleteFileFromAzure(req, file) {
     await blockBlobClient.delete();
     logger.debug('[deleteFileFromAzure] Blob deleted successfully from Azure Blob Storage');
   } catch (error) {
-    logger.error('[deleteFileFromAzure] Error deleting blob:', error);
+    // [knauf] KK20-199 — omit Blob paths and raw Azure errors from delete logs.
+    logger.error(
+      '[deleteFileFromAzure] Blob delete failed',
+      summarizeProviderError(error, 'azure_blob_delete'),
+    );
+    // End [knauf]
     if (error.statusCode === 404) {
       return;
     }
@@ -499,7 +529,12 @@ async function streamFileToAzure({
     return blockBlobClient.url;
     // End [knauf]
   } catch (error) {
-    logger.error('[streamFileToAzure] Error streaming file:', error);
+    // [knauf] KK20-199 — omit local/Blob paths and raw Azure upload errors.
+    logger.error(
+      '[streamFileToAzure] Blob stream upload failed',
+      summarizeProviderError(error, 'azure_blob_upload_stream'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -542,7 +577,12 @@ async function uploadFileToAzure({
 
     return { filepath: fileURL, bytes };
   } catch (error) {
-    logger.error('[uploadFileToAzure] Error uploading file:', error);
+    // [knauf] KK20-199 — omit local/Blob paths from the outer upload failure.
+    logger.error(
+      '[uploadFileToAzure] File upload failed',
+      summarizeProviderError(error, 'azure_blob_upload_file'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -564,7 +604,11 @@ async function getAzureFileStream(_req, fileURL) {
     // streaming) self-healing. Small buffer: the download is immediate, so we
     // only re-sign when actually near expiry. No-op for fresh/non-Azure URLs.
     if (needsRefreshAzure(fileURL, AZURE_DOWNLOAD_REFRESH_BUFFER_SECONDS)) {
-      fileURL = (await getNewAzureURL(fileURL)) ?? fileURL;
+      const refreshedURL = await getNewAzureURL(fileURL);
+      if (!refreshedURL && !isPublicAccess()) {
+        throw new Error('Azure Blob URL refresh failed');
+      }
+      fileURL = refreshedURL ?? fileURL;
     }
     // End [knauf]
     const response = await axios({
@@ -574,7 +618,12 @@ async function getAzureFileStream(_req, fileURL) {
     });
     return response.data;
   } catch (error) {
-    logger.error('[getAzureFileStream] Error getting blob stream:', error);
+    // [knauf] KK20-199 — Axios errors carry config.url, including SAS and user paths.
+    logger.error(
+      '[getAzureFileStream] Blob download failed',
+      summarizeProviderError(error, 'azure_blob_download'),
+    );
+    // End [knauf]
     throw error;
   }
 }
@@ -690,7 +739,14 @@ function needsRefreshAzure(signedUrl, bufferSeconds) {
     const bufferTime = new Date(now.getTime() + bufferSeconds * 1000);
     return expiresAtDate <= bufferTime;
   } catch (error) {
-    logger.error(`[needsRefreshAzure] Error checking URL expiration for "${signedUrl}":`, error);
+    // End [knauf]
+    // [knauf] KK20-199 — omit signed URLs from refresh-check diagnostics.
+    logger.error(
+      '[needsRefreshAzure] SAS refresh check failed',
+      summarizeProviderError(error, 'azure_sas_refresh_check'),
+    );
+    // End [knauf]
+    // [knauf] KK20-167 — continue the Azure URL refresh chain.
     return true;
   }
 }
@@ -728,14 +784,23 @@ function extractBlobPathFromAzureUrl(fileUrl, containerName) {
       // generated before this helper existed (or under a container name that has
       // since changed) still resolve to *something* — but log it loudly so the
       // misconfiguration is visible.
-      logger.warn(
-        `[extractBlobPathFromAzureUrl] Container "${container}" not found in URL path "${url.pathname}"; falling back to legacy extraction`,
-      );
+      // End [knauf]
+      // [knauf] KK20-199 — report mismatch without including the Blob path.
+      logger.warn('[extractBlobPathFromAzureUrl] Container path mismatch; using legacy extraction');
+      // End [knauf]
+      // [knauf] KK20-167 — continue the Azure URL refresh chain.
       return parts.slice(1).join('/') || null;
     }
     return parts.slice(containerIdx + 1).join('/');
   } catch (error) {
-    logger.error('[extractBlobPathFromAzureUrl] Error extracting blob path:', error);
+    // End [knauf]
+    // [knauf] KK20-199 — omit the source URL from extraction diagnostics.
+    logger.error(
+      '[extractBlobPathFromAzureUrl] Blob path extraction failed',
+      summarizeProviderError(error, 'azure_blob_path_extraction'),
+    );
+    // End [knauf]
+    // [knauf] KK20-167 — continue the Azure URL refresh chain.
     return null;
   }
 }
@@ -765,7 +830,11 @@ async function getNewAzureURL(currentURL, containerName) {
     // `{basePath}/{userId}/{fileName}`, so anything shallower is malformed input
     // we shouldn't sign or rebuild a URL for.
     if (blobPath.split('/').length < 3) {
-      logger.warn(`[getNewAzureURL] Unexpected blob path structure: "${blobPath}"`);
+      // End [knauf]
+      // [knauf] KK20-199 — reject malformed paths without logging identity segments.
+      logger.warn('[getNewAzureURL] Unexpected blob path structure');
+      // End [knauf]
+      // [knauf] KK20-167 — continue the Azure URL refresh chain.
       return;
     }
 
@@ -778,7 +847,14 @@ async function getNewAzureURL(currentURL, containerName) {
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
     return blockBlobClient.url;
   } catch (error) {
-    logger.error('[getNewAzureURL] Error getting new Azure URL:', error);
+    // End [knauf]
+    // [knauf] KK20-199 — omit signed URLs and raw Azure errors from refresh diagnostics.
+    logger.error(
+      '[getNewAzureURL] SAS refresh failed',
+      summarizeProviderError(error, 'azure_sas_refresh'),
+    );
+    // End [knauf]
+    // [knauf] KK20-167 — continue the Azure URL refresh chain.
   }
 }
 
@@ -818,10 +894,12 @@ async function refreshAzureFileUrls(files, batchUpdateFiles, bufferSeconds = 360
       });
       files[i].filepath = newURL;
     } catch (error) {
+      // [knauf] KK20-199 — omit file identity, signed URLs, and raw refresh errors.
       logger.error(
-        `[refreshAzureFileUrls] Error refreshing Azure URL for file ${file.file_id}:`,
-        error,
+        '[refreshAzureFileUrls] Azure URL refresh failed',
+        summarizeProviderError(error, 'azure_file_batch_refresh'),
       );
+      // End [knauf]
     }
   }
 
@@ -858,15 +936,22 @@ async function refreshAzureUrl(fileObj, bufferSeconds = 3600) {
   try {
     const newUrl = await getNewAzureURL(fileObj.filepath);
     if (!newUrl) {
-      logger.warn(`[refreshAzureUrl] Unable to refresh Azure URL: ${fileObj.filepath}`);
+      // [knauf] KK20-199 — a failed refresh must not log the signed URL.
+      logger.warn('[refreshAzureUrl] Azure URL refresh unavailable', {
+        operation: 'azure_file_refresh',
+      });
+      // End [knauf]
       return fileObj.filepath;
     }
-    logger.debug(`[refreshAzureUrl] Refreshed URL for ${fileObj.file_id ?? '(unknown file_id)'}`);
+    logger.debug('[refreshAzureUrl] Azure URL refreshed');
     return newUrl;
   } catch (error) {
+    // [knauf] KK20-199 — omit file identity, signed URLs, and raw refresh errors.
     logger.error(
-      `[refreshAzureUrl] Error refreshing Azure URL for ${fileObj.file_id ?? '(unknown file_id)'}: ${error.message}`,
+      '[refreshAzureUrl] Azure URL refresh failed',
+      summarizeProviderError(error, 'azure_file_refresh'),
     );
+    // End [knauf]
     return fileObj.filepath;
   }
 }

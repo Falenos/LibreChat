@@ -3,6 +3,20 @@ import { EModelEndpoint, ArtifactModes } from 'librechat-data-provider';
 import { generateShadcnPrompt } from './generate';
 import { components } from './components';
 
+// [knauf] NO-TICKET — prefer bounded server-side edits for owned artifacts.
+const knaufArtifactEditRules = `- When the user asks to change an existing artifact and the edit_artifact tool is available, use it with the current revision token and exact, unique old/new replacements. After it succeeds, do not re-emit the artifact or its source; reply with a short confirmation.
+- Complete artifact emission is the fallback when edit_artifact is unavailable, rejects the edit, or the requested rewrite cannot be expressed safely as exact replacements.
+- Whenever emitting an artifact (new or fallback), provide complete, specific, and fully functional content without snippets, placeholders, ellipses, or 'remains the same' comments.`;
+const knaufArtifactCodeIterationRule =
+  '      - When a code iteration requires full artifact emission, ensure that the code is complete and functional without any snippets, placeholders, or ellipses.';
+const knaufArtifactStepFiveRule =
+  '  5. For new artifacts and full-emission fallbacks, include the complete and updated content without truncation or minimization. Don\'t use "// rest of the code remains the same...".';
+// Mounted by client/src/utils/artifacts.ts. Both prompt variants receive the same
+// contract so custom agent builders do not lose it when their endpoint changes.
+const knaufArtifactImportLines =
+  "      - Knauf brand tokens, official fonts and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them once; it loads Knauf Screen and Knauf Screen Head automatically. Never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.\n      - For every presentation, slide deck or pitch, use the platform renderer: `import { KnaufSlideDeck } from '/knauf/slides';`. Supply one data object per requested slide. Never rebuild or override its navigation, white logo header, theme, keyboard controls, page counter, or PDF/PNG export contract.";
+// End [knauf]
+
 const artifactsPrompt = dedent`The assistant can create and reference artifacts during conversations.
   
 Artifacts are for substantial, self-contained content that users might modify or reuse, displayed in a separate UI window for clarity.
@@ -29,7 +43,7 @@ Artifacts are for substantial, self-contained content that users might modify or
 - If a user asks the assistant to "draw an SVG" or "make a website," the assistant does not need to explain that it doesn't have these capabilities. Creating the code and placing it within the appropriate artifact will fulfill the user's intentions.
 - If asked to generate an image, the assistant can offer an SVG instead. The assistant isn't very proficient at making SVG images but should engage with the task positively. Self-deprecating humor about its abilities can make it an entertaining experience for users.
 - The assistant errs on the side of simplicity and avoids overusing artifacts for content that can be effectively presented within the conversation.
-- Always provide complete, specific, and fully functional content for artifacts without any snippets, placeholders, ellipses, or 'remains the same' comments.
+${knaufArtifactEditRules}
 - If an artifact is not necessary or requested, the assistant should not mention artifacts at all, and respond to the user accordingly.
 
 <artifact_instructions>
@@ -71,11 +85,12 @@ Artifacts are for substantial, self-contained content that users might modify or
       - The react-day-picker library is available to be imported, e.g. \`import { DayPicker } from "react-day-picker";\`
       - The assistant can use prebuilt components from the \`shadcn/ui\` library after it is imported: \`import { Alert, AlertDescription, AlertTitle, AlertDialog, AlertDialogAction } from '/components/ui/alert';\`. If using components from the shadcn/ui library, the assistant mentions this to the user and offers to help them install the components if necessary.
       - Components MUST be imported from \`/components/ui/name\` and NOT from \`/components/name\` or \`@/components/ui/name\`.
+${knaufArtifactImportLines}
       - NO OTHER LIBRARIES (e.g. zod, hookform) ARE INSTALLED OR ABLE TO BE IMPORTED.
       - Images from the web are not allowed, but you can use placeholder images by specifying the width and height like so \`<img src="/api/placeholder/400/320" alt="placeholder" />\`
-      - When iterating on code, ensure that the code is complete and functional without any snippets, placeholders, or ellipses.
+${knaufArtifactCodeIterationRule}
       - If you are unable to follow the above requirements for any reason, don't use artifacts and use regular code blocks instead, which will not attempt to render the component.
-  5. Include the complete and updated content of the artifact, without any truncation or minimization. Don't use "// rest of the code remains the same...".
+${knaufArtifactStepFiveRule}
   6. If unsure whether the content qualifies as an artifact, if an artifact should be updated, or which type to assign to an artifact, err on the side of not creating an artifact.
   7. Always use triple backticks (\`\`\`) to enclose the content within the artifact, regardless of the content type.
 </artifact_instructions>
@@ -194,38 +209,6 @@ Here are some examples of correct usage of artifacts:
   </example>
 </examples>`;
 
-// [knauf] KK20-252 — declare the Knauf brand module to the model.
-//
-// `client/src/utils/artifacts.ts` mounts `/knauf/brand.tsx` into every artifact
-// sandbox via `sharedFiles`, so the import resolves. The model still has to be told
-// it exists: the `NO OTHER LIBRARIES ... ABLE TO BE IMPORTED` line further down would
-// otherwise forbid it.
-//
-// This lives here rather than in the `&karl_prompt` anchor because
-// `generateArtifactsPrompt` is injected only when `agent.artifacts` is a non-empty
-// string (`packages/api/src/agents/initialize.ts`), so it costs nothing on turns where
-// artifacts are off, and it sits beside the upstream import rules it extends.
-//
-// A sibling rule banning the shadcn barrel (`from '/components/ui'`) was added here
-// and then removed: the real cause was `artifacts: 'default'`, which omits
-// `generateShadcnPrompt` and therefore the whole `components.ts` manifest — so the
-// model had no per-component import path and guessed a barrel. Switching the specs to
-// `artifacts: 'shadcnui'` gives it every exact import statement, which is the native
-// LibreChat fix and makes a hand-written ban redundant. If that mode is ever switched
-// back to 'default', the ban has to come back with it.
-//
-// Interpolated rather than written inline because the surrounding text is one `dedent`
-// template literal — a comment cannot sit on the changed line, so the marker lives here
-// and the conflict surface at the insertion point is a single `${...}`.
-//
-// OpenAI variant only. All four KARL specs are `azureOpenAI`, and
-// `generateArtifactsPrompt` serves this variant to every non-Anthropic endpoint. If
-// KARL is ever moved to an Anthropic endpoint this line silently disappears and the
-// sibling `artifactsPrompt` above needs it.
-const knaufArtifactImportLines =
-  "      - Knauf brand tokens, official fonts and the Knauf wordmark are prebuilt and always available: `import { KNAUF, useKnaufTheme, KnaufWordmark } from '/knauf/brand';`. Import them once; it loads Knauf Screen and Knauf Screen Head automatically. Never re-declare the KNAUF const, the useKnaufTheme hook or the wordmark SVG path inside the artifact.";
-// End [knauf]
-
 const artifactsOpenAIPrompt = dedent`The assistant can create and reference artifacts during conversations.
   
 Artifacts are for substantial, self-contained content that users might modify or reuse, displayed in a separate UI window for clarity.
@@ -252,7 +235,7 @@ Artifacts are for substantial, self-contained content that users might modify or
 - If a user asks the assistant to "draw an SVG" or "make a website," the assistant does not need to explain that it doesn't have these capabilities. Creating the code and placing it within the appropriate artifact will fulfill the user's intentions.
 - If asked to generate an image, the assistant can offer an SVG instead. The assistant isn't very proficient at making SVG images but should engage with the task positively. Self-deprecating humor about its abilities can make it an entertaining experience for users.
 - The assistant errs on the side of simplicity and avoids overusing artifacts for content that can be effectively presented within the conversation.
-- Always provide complete, specific, and fully functional content for artifacts without any snippets, placeholders, ellipses, or 'remains the same' comments.
+${knaufArtifactEditRules}
 - If an artifact is not necessary or requested, the assistant should not mention artifacts at all, and respond to the user accordingly.
 
 ## Artifact Instructions
@@ -311,9 +294,9 @@ Artifacts are for substantial, self-contained content that users might modify or
 ${knaufArtifactImportLines}
       - NO OTHER LIBRARIES (e.g. zod, hookform) ARE INSTALLED OR ABLE TO BE IMPORTED.
       - Images from the web are not allowed, but you can use placeholder images by specifying the width and height like so \`<img src="/api/placeholder/400/320" alt="placeholder" />\`
-      - When iterating on code, ensure that the code is complete and functional without any snippets, placeholders, or ellipses.
+${knaufArtifactCodeIterationRule}
       - If you are unable to follow the above requirements for any reason, don't use artifacts and use regular code blocks instead, which will not attempt to render the component.
-  5. Include the complete and updated content of the artifact, without any truncation or minimization. Don't use "// rest of the code remains the same...".
+${knaufArtifactStepFiveRule}
   6. If unsure whether the content qualifies as an artifact, if an artifact should be updated, or which type to assign to an artifact, err on the side of not creating an artifact.
   7. NEVER use triple backticks to enclose the artifact, ONLY the content within the artifact.
 

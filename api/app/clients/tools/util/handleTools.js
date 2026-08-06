@@ -58,6 +58,13 @@ const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
 const { getMCPServersRegistry } = require('~/config');
 const { getRoleByName } = require('~/models');
+// [knauf] NO-TICKET — request-scoped, authenticated artifact patch tool.
+const {
+  TOOL_NAME: EDIT_ARTIFACT_TOOL,
+  buildArtifactEditContext,
+  createEditArtifactTool,
+} = require('~/server/services/Artifacts/knauf/edit');
+// End [knauf]
 
 // [knauf] KK20-194 — extract exact http(s) URLs from the current user message
 // for open_url's fail-closed provenance check. Preserve balanced parentheses in
@@ -241,6 +248,18 @@ const loadTools = async ({
         userProvidedUrls: extractUserProvidedUrls(options.req?.body?.text),
         req: options.req,
       });
+    },
+    // End [knauf]
+    // [knauf] NO-TICKET — runtime-only tool; never user-configured or persisted.
+    [EDIT_ARTIFACT_TOOL]: async (toolContextMap) => {
+      const context = await buildArtifactEditContext({
+        userId: options.req?.user?.id,
+        conversationId: options.req?.body?.conversationId,
+      });
+      if (context) {
+        toolContextMap[EDIT_ARTIFACT_TOOL] = context;
+      }
+      return createEditArtifactTool({ req: options.req });
     },
     // End [knauf]
     image_gen_oai: async (_toolContextMap, dynamicToolContextMap) => {
