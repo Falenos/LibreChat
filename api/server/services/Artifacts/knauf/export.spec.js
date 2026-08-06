@@ -3,6 +3,7 @@ const mockPdf = jest.fn();
 const mockSetContent = jest.fn();
 const mockGoto = jest.fn();
 const mockWaitForTimeout = jest.fn();
+const mockPreviewWaitForFunction = jest.fn();
 const mockPreviewEvaluate = jest.fn();
 const mockRoute = jest.fn();
 const mockCloseContext = jest.fn();
@@ -28,8 +29,11 @@ describe('artifact renderer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     delete process.env.ARTIFACT_EXPORT_BASE_URL;
-    mockScreenshot.mockResolvedValue(Buffer.from('png'));
-    mockPdf.mockResolvedValue(Buffer.from('pdf'));
+    mockScreenshot.mockReset().mockResolvedValue(Buffer.from('png'));
+    mockPdf.mockReset().mockResolvedValue(Buffer.from('pdf'));
+    mockPreviewEvaluate.mockReset();
+    mockPreviewWaitForFunction.mockReset().mockResolvedValue(undefined);
+    mockGoto.mockReset().mockResolvedValue(undefined);
     mockPreviewEvaluate.mockImplementation(async (callback) => {
       const source = callback.toString();
       if (source.includes('scrollHeight')) {
@@ -41,7 +45,7 @@ describe('artifact renderer', () => {
       return undefined;
     });
     const previewFrame = {
-      waitForFunction: jest.fn().mockResolvedValue(undefined),
+      waitForFunction: mockPreviewWaitForFunction,
       evaluate: mockPreviewEvaluate,
     };
     mockLaunch.mockResolvedValue({
@@ -158,6 +162,63 @@ describe('artifact renderer', () => {
     });
     expect(mockSetContent.mock.calls[0][0].match(/data:image\/png;base64/g)).toHaveLength(3);
     expect(mockScreenshot).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a slide export when the rendered preview has no slide contract', async () => {
+    mockPreviewEvaluate.mockImplementation(async (callback, requiresContract) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 900;
+      }
+      if (requiresContract === true) {
+        return 0;
+      }
+      if (source.includes("querySelectorAll('button')")) {
+        return 1;
+      }
+      return undefined;
+    });
+    const slideArtifact = {
+      ...artifact,
+      type: 'application/vnd.react',
+      content: "import { KnaufSlideDeck } from '/knauf/slides';",
+    };
+
+    await expect(renderArtifact(slideArtifact, 'png')).rejects.toThrow(
+      'Artifact preview did not become ready',
+    );
+    expect(mockPreviewWaitForFunction).toHaveBeenCalledWith(
+      expect.any(Function),
+      true,
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+    expect(mockScreenshot).not.toHaveBeenCalled();
+  });
+
+  it('accepts the disabled next button on the final slide as ready', async () => {
+    await renderArtifact(
+      {
+        ...artifact,
+        type: 'application/vnd.react',
+        content: "import { KnaufSlideDeck } from '/knauf/slides';",
+      },
+      'png',
+    );
+    const readiness = mockPreviewWaitForFunction.mock.calls[0][0];
+    const now = jest.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1601);
+    global.window = {};
+    global.document = {
+      body: { childElementCount: 1, innerText: 'Slide 3 ready', innerHTML: '<main>Slide 3</main>' },
+      querySelector: (selector) =>
+        selector === '[data-knauf-export-pages]' ? { getAttribute: () => '3' } : { disabled: true },
+    };
+
+    expect(readiness(true)).toBe(false);
+    expect(readiness(true)).toBe(true);
+
+    now.mockRestore();
+    delete global.window;
+    delete global.document;
   });
 
   it('removes legacy prose outside a compiled shared artifact fence', async () => {

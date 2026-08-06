@@ -139,43 +139,65 @@ const configureNetworkBoundary = async (context, localOrigin) => {
   }
 };
 
-const waitForStablePreview = (previewFrame) =>
-  previewFrame.waitForFunction(
-    () => {
-      const loading =
-        /\[[123]\/3\]\s+(?:Downloading manifest|Downloaded .+ \(\d+\/\d+\)|Starting)/m;
-      const body = document.body;
-      const text = body?.innerText ?? '';
-      const markup = body?.innerHTML ?? '';
-      const now = performance.now();
-      const state = window.__knaufArtifactExportState;
+const expectsSlideContract = (artifact) =>
+  artifact.content.includes('/knauf/slides') ||
+  artifact.content.includes('data-knauf-export-pages');
 
-      if (!body?.childElementCount || loading.test(text)) {
-        window.__knaufArtifactExportState = { markup: '', since: now };
-        return false;
-      }
-      if (!state || state.markup !== markup) {
-        window.__knaufArtifactExportState = { markup, since: now };
-        return false;
-      }
-      return now - state.since >= 1500;
-    },
-    undefined,
-    { timeout: EXPORT_TIMEOUT_MS },
-  );
+const waitForStablePreview = async (previewFrame, requireSlideContract) => {
+  try {
+    await previewFrame.waitForFunction(
+      (requiresContract) => {
+        const loading =
+          /\[\d+\/\d+\]\s+(?:Downloading manifest|Downloaded .+ \(\d+\/\d+\)|Starting)/m;
+        const body = document.body;
+        const text = body?.innerText ?? '';
+        const markup = body?.innerHTML ?? '';
+        const now = performance.now();
+        const state = window.__knaufArtifactExportState;
+        const contract = document.querySelector('[data-knauf-export-pages]');
+        const contractButton = document.querySelector('[data-knauf-export-next]');
+        const contractPages = Number(contract?.getAttribute('data-knauf-export-pages'));
+        const hasValidContract =
+          Number.isInteger(contractPages) &&
+          contractPages > 0 &&
+          (contractPages === 1 || contractButton);
 
-const getPreviewPageCount = (previewFrame) =>
-  previewFrame.evaluate(() => {
+        if (
+          !body?.childElementCount ||
+          loading.test(text) ||
+          (requiresContract && !hasValidContract)
+        ) {
+          window.__knaufArtifactExportState = { markup: '', since: now };
+          return false;
+        }
+        if (!state || state.markup !== markup) {
+          window.__knaufArtifactExportState = { markup, since: now };
+          return false;
+        }
+        return now - state.since >= 1500;
+      },
+      requireSlideContract,
+      { timeout: EXPORT_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new ArtifactExportError('Artifact preview did not become ready', 500, { cause: error });
+  }
+};
+
+const getPreviewPageCount = (previewFrame, requireSlideContract) =>
+  previewFrame.evaluate((requiresContract) => {
     const contract = document.querySelector('[data-knauf-export-pages]');
     const contractButton = document.querySelector('[data-knauf-export-next]');
     const contractPages = Number(contract?.getAttribute('data-knauf-export-pages'));
     if (
       Number.isInteger(contractPages) &&
-      contractPages > 1 &&
-      contractButton &&
-      !contractButton.disabled
+      contractPages > 0 &&
+      (contractPages === 1 || contractButton)
     ) {
       return contractPages;
+    }
+    if (requiresContract) {
+      return 0;
     }
     const nextButton = [...document.querySelectorAll('button')].find((button) =>
       /^next\b/i.test((button.getAttribute('aria-label') || button.textContent || '').trim()),
@@ -188,7 +210,7 @@ const getPreviewPageCount = (previewFrame) =>
         element.childElementCount === 0 && /^1\s*\/\s*\d+$/.test(element.textContent?.trim() ?? ''),
     );
     return Number(counter?.textContent?.trim().match(/^1\s*\/\s*(\d+)$/)?.[1]) || 1;
-  });
+  }, requireSlideContract);
 
 const advancePreviewPage = (previewFrame) =>
   previewFrame.evaluate(() => {
@@ -224,6 +246,7 @@ const renderArtifact = async (input, format) => {
   let context;
   try {
     const pageUrl = exportPageUrl(token, secret);
+    const requireSlideContract = expectsSlideContract(artifact);
     browser = await chromium.launch({
       headless: true,
       executablePath: chromiumExecutable(),
@@ -242,14 +265,17 @@ const renderArtifact = async (input, format) => {
       throw new ArtifactExportError('Artifact preview did not start', 500);
     }
     await page.waitForTimeout(5000);
-    await waitForStablePreview(previewFrame);
+    await waitForStablePreview(previewFrame, requireSlideContract);
     await previewFrame.evaluate(async () => document.fonts?.ready);
     const contentHeight = await previewFrame.evaluate(() =>
       Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
     );
     const height = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, contentHeight));
     await page.setViewportSize({ width: VIEWPORT.width, height });
-    const pageCount = await getPreviewPageCount(previewFrame);
+    const pageCount = await getPreviewPageCount(previewFrame, requireSlideContract);
+    if (pageCount < 1) {
+      throw new ArtifactExportError('Artifact preview did not become ready', 500);
+    }
     if (
       pageCount > MAX_ARTIFACT_PAGES ||
       (format === 'png' && height * pageCount > MAX_PNG_HEIGHT)
@@ -263,7 +289,7 @@ const renderArtifact = async (input, format) => {
         if (!(await advancePreviewPage(previewFrame))) {
           throw new ArtifactExportError('Artifact page navigation failed', 500);
         }
-        await waitForStablePreview(previewFrame);
+        await waitForStablePreview(previewFrame, requireSlideContract);
         await previewFrame.evaluate(async () => document.fonts?.ready);
       }
       const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
