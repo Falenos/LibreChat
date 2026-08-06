@@ -77,6 +77,42 @@ describe('edit_artifact', () => {
     );
   });
 
+  test('ART-EDIT-009 preserves imports, styles, and icons outside a minimal model edit', async () => {
+    const source = `import { Card } from '/components/ui/card';
+
+const styles = { color: '#005eb8', padding: 24 };
+const Icon = () => <svg aria-label="status"><circle cx="8" cy="8" r="6" /></svg>;
+
+export default function Dashboard() {
+  return <Card style={styles}><Icon /><h1>Old heading</h1></Card>;
+}`;
+    const latest = {
+      messageId: 'assistant-1',
+      conversationId: 'conversation-1',
+      user: 'user-1',
+      text: artifact('dashboard', source),
+    };
+    const compareAndSwap = jest.fn().mockResolvedValue(true);
+
+    await applyArtifactEdit(
+      {
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        identifier: 'dashboard',
+        expectedSha256: sha256(source),
+        replacements: [{ old: 'Old heading', new: 'New heading' }],
+      },
+      { getMessages: jest.fn().mockResolvedValue([latest]), compareAndSwap },
+    );
+
+    const updated = compareAndSwap.mock.calls[0][0].updated;
+    expect(updated).toContain("import { Card } from '/components/ui/card';");
+    expect(updated).toContain("const styles = { color: '#005eb8', padding: 24 };");
+    expect(updated).toContain('<svg aria-label="status">');
+    expect(updated).toContain('<h1>New heading</h1>');
+    expect(updated).not.toContain('Old heading');
+  });
+
   test('reconstructs each historical artifact version from compact inverse patches', () => {
     const source = 'The theme colour is orange.';
     const colourStart = 'The theme colour is '.length;

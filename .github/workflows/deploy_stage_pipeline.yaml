@@ -331,6 +331,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
+          GITOPS_REVISION=$(git -C agk-deployment-configs rev-parse HEAD)
           CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-e2e"
           run_id=""
           run_url=""
@@ -339,7 +340,10 @@ jobs:
           gh workflow run stage-e2e.yaml \
             --repo "$QUALITY_REPOSITORY" \
             --ref main \
-            -f correlation_id="$CORRELATION_ID"
+            -f correlation_id="$CORRELATION_ID" \
+            -f application_version="$VERSION" \
+            -f worker_version="$VERSION" \
+            -f gitops_revision="$GITOPS_REVISION"
 
           for attempt in {1..30}; do
             RUN_JSON=$(gh run list \

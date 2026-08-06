@@ -126,9 +126,12 @@ jobs:
 
       - name: Run Karl mock-LLM Tier-1 smoke tests
         run: |
-          npx playwright test e2e/specs/mock/knauf-smoke.spec.ts --config=e2e/playwright.config.mock.ts
-          npx playwright test e2e/specs/mock/agents.spec.ts --config=e2e/playwright.config.mock.ts
-          npx playwright test e2e/specs/mock/attachment-preview-loop.spec.ts --config=e2e/playwright.config.mock.ts
+          npx playwright test \
+            e2e/specs/mock/knauf-smoke.spec.ts \
+            e2e/specs/mock/artifacts.spec.ts \
+            e2e/specs/mock/agents.spec.ts \
+            e2e/specs/mock/attachment-preview-loop.spec.ts \
+            --config=e2e/playwright.config.mock.ts
         env:
           CI: 'true'
 

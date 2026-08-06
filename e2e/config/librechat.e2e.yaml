@@ -95,6 +95,7 @@ modelSpecs:
   list:
     - name: 'e2e-mock-provider-a'
       label: 'Mock Provider A'
+      artifacts: 'default'
       preset:
         endpoint: 'Mock Provider A'
         model: 'mock-model-a'
