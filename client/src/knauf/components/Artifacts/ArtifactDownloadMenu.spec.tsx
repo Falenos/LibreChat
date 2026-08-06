@@ -82,7 +82,7 @@ describe('ArtifactDownloadMenu', () => {
     ['shared', 'share-1'],
   ])('downloads %s native SVG as the exact Unicode vector source', async (_view, shareId) => {
     const content =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>Grüße</text></svg>';
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>Grüße</title><circle cx="2" cy="5" r="2"><animate attributeName="cx" from="2" to="8" dur="2s" fill="freeze" /></circle></svg>';
     mockCurrentCode = content;
     render(
       <ArtifactDownloadMenu

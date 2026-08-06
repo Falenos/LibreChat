@@ -711,6 +711,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/stream/implementations/RedisEventTransport.ts` | `NEXT_SEQUENCE_SCRIPT`; `getNextSequence` atomic evaluation | 137–149, 254–264 | Allocates sequence numbers and their safety TTL atomically, while repairing legacy counters that have no expiry, so a Redis disconnect cannot leave permanent generation keys | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
 | `packages/api/src/stream/__tests__/helpers/publisher.ts` | `MockPublisher.eval`; Lua evaluation mock | 5–7, 23–25, 37–46 | Models the atomic Redis sequence command while preserving existing command-level failure controls | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | NO-TICKET |
 | `packages/api/src/stream/__tests__/RedisEventTransport.spec.ts` | atomic sequence TTL regression | 89–113 | Proves sequence allocation and the safety TTL use one Redis evaluation | Self | NO-TICKET |
+| `client/src/hooks/Artifacts/__tests__/useArtifactProps.test.ts` | `native SVG artifacts` describe | 187–203 | Proves exact Unicode SVG with declarative animation reaches both editable source and static preview entrypoint unchanged | Self | NO-TICKET |
+| `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | declarative animation and raster-vectorization SVG instructions | 155–187 | Pins finite no-script animation, reduced-motion, deterministic still-frame export, and honest raster-tracing constraints | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1141,6 +1143,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/utils/artifactBody.knauf.spec.tsx` | Artifact body normalizer public contract | Low — proves old shared fenced SVG snapshots normalize to exact vector source without trailing prose | Self | NO-TICKET |
 | `api/server/services/Artifacts/knauf/share*.js` | SharedLink model, artifact parser, immutable revision service | Medium — allows native SVG in revocable public snapshots and normalizes fenced SVG to server-owned exact source | `api/server/services/Artifacts/knauf/share.spec.js` | NO-TICKET |
 | `skill/karl-artifacts/{SKILL.md,references/svg.md}` | Deployment-skill loader; on-demand `read_file`; official `karl-brand` logo reference | Medium — keeps the broad artifact skill concise while loading an Adobe-safe native SVG generation contract only for SVG work | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactDownloadMenu.spec.tsx` | Testing Library, React, and native SVG download menu | Low — proves an animated SVG downloads as exact vector source rather than a rasterized still frame | Self | NO-TICKET |
+| `api/server/services/Artifacts/knauf/share.spec.js` | Native SVG share snapshot service and Mongoose stubs | Low — proves an animated SVG remains exact source in a revocable share snapshot | Self | NO-TICKET |
+| `skill/karl-artifacts/{SKILL.md,references/svg.md}` | Deployment-skill loader and on-demand SVG reference | Medium — adds the bounded declarative-animation contract plus explicit raster-vectorization limits without introducing an unreachable tracing dependency | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

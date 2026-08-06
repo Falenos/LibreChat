@@ -93,7 +93,7 @@ A clean, branded summary with citations that must not compile.
 
   test('shares only the exact fenced Unicode source for a native SVG artifact', async () => {
     const svg =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>Grüße</text></svg>';
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>Grüße</title><circle cx="2" cy="5" r="2"><animate attributeName="cx" from="2" to="8" dur="2s" fill="freeze" /></circle></svg>';
     const message = {
       _id: 'message-object-id',
       messageId: 'message-1',
