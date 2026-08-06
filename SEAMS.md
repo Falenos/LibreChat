@@ -732,6 +732,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/Parts/Attachment.tsx` | uploaded native SVG route precedence | SVG routing branches | Sends source-bearing SVG uploads to the existing artifact card and Code/Preview panel before the overlapping generic image route can emit a broken `<img>` preview | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | uploaded SVG attachment routing regression | SVG single/group assertions | Proves both attachment render paths prefer the native artifact card even when SVG dimensions satisfy the image predicate | Self | NO-TICKET |
+| `api/server/services/Files/process.spec.js` | `acceptance flag without worker falls back to synchronous indexing` | 2280–2294 | Proves the deployed accept-on/worker-off mismatch queues only transiently, claims and embeds in-request, and returns 200 instead of stranding an async upload | Self | KK20-232 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1176,6 +1177,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Artifacts/knauf/edit*.js` | Shared Knauf artifact validator and existing authenticated compare-and-swap | Medium — applies the same SVG safety contract to every persisted native SVG revision | Focused edit suite | NO-TICKET |
 | `client/src/knauf/components/Chat/KnaufUploadFormatsDialog*.tsx` | Shared upload-size map and existing Knauf dialog surface | Low — adds one source-cap group so displayed SVG guidance matches enforced policy | Focused dialog suite | NO-TICKET |
 | `skill/karl-artifacts/SKILL.md` | Deployment skill loader and existing `edit_artifact` contract | Medium — makes attached SVG interpretation and first-edit native artifact creation explicit while preserving immutable uploads | Deployment skill suite | NO-TICKET |
+| `api/server/services/Files/knauf/asyncIndexingConfig.js` | None | Low — derives effective async acceptance from the independent accept and worker switches, forcing mismatched deployments onto the bounded synchronous path | `api/server/services/Files/knauf/asyncIndexingConfig.spec.js`, `api/server/services/Files/process.spec.js` | KK20-232 |
+| `api/server/services/Files/knauf/asyncIndexingConfig.spec.js` | Subject under test | Low — test-only regression for accept/worker conjunction and tenant allow-list behavior | Self | KK20-232 |
 <!-- seams:new:end -->
 
 ## Static Assets

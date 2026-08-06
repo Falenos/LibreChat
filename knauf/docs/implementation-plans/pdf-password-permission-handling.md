@@ -2,7 +2,7 @@
 
 | Status | Owner | Started | Target | Related |
 |---|---|---|---|---|
-| PR 1 in review | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228); KK20-253 (PDF permission governance; separate follow-up) |
+| PR 2 in progress | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228) merged; KK20-253 (PDF permission governance; separate follow-up) |
 
 ## Outcome
 
@@ -82,7 +82,7 @@ not a reason to keep rejecting case B.
 
 ## Delivery sequence
 
-### PR 1 - Fix case-A/B/C classification ([in review](https://github.com/Knauf-Group/agentic-karl/pull/228))
+### PR 1 - Fix case-A/B/C classification ([merged](https://github.com/Knauf-Group/agentic-karl/pull/228))
 
 Extract the non-trivial classifier to
 `packages/knauf/src/server/pdfAccessProbe.js` with its process-isolated worker beside it, and export
@@ -136,6 +136,13 @@ RAG path without stripping encryption or creating alternate content. Unless the 
 is separately approved and enabled, case C retains a typed password-required rejection.
 
 ### PR 2 - Prove downstream and deployment readiness
+
+Implementation started on `feat/kk20-232-pdf-downstream-readiness`. The first
+rollout guard makes effective async acceptance require both the acceptance flag
+and an enabled indexing worker. Environments that currently set only
+`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` therefore retain the transient queued
+state but immediately claim and embed synchronously instead of returning work
+that no deployed worker can drain.
 
 Run unencrypted, permission-encrypted but credential-free, signed/certified, PDF/A, malformed, and
 open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. Assert

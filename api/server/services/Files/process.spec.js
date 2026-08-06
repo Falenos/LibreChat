@@ -2280,6 +2280,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 
   test('async acceptance flag ON — 202 + indexing projection, no in-request embed (WP3b)', async () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     try {
       const queuedAt = new Date('2026-07-16T00:00:00.000Z');
       db.getAssetByAssetId.mockResolvedValueOnce({
@@ -2311,11 +2312,28 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect(fileInfo.embedded).toBe(false); // flips on generation activation (WP4)
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+      delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
     }
   });
 
+  // KK20-232 PR2 — async acceptance is safe only with a draining worker.
+  test('acceptance flag without worker falls back to synchronous indexing', async () => {
+    process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
+    try {
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+      expect(db.markQueued).toHaveBeenCalled();
+      expect(db.claimAsset).toHaveBeenCalled();
+      expect(mockEmbedGeneration).toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+    } finally {
+      delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+    }
+  });
   test('async acceptance over the backlog cap — 429, reservation compensated (WP3c/R7)', async () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '2';
     try {
       // R7 reserve-then-recheck: the count INCLUDES this request's own
@@ -2339,6 +2357,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect(db.createFile).not.toHaveBeenCalled();
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+      delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
       delete process.env.KNAUF_INDEX_MAX_QUEUED_FILES;
     }
   });
