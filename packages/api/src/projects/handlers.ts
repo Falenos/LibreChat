@@ -4,7 +4,11 @@ import type {
   ChatProjectMethods,
   ChatProjectSortBy,
   ChatProjectSortDirection,
+  ChatProjectSourceMethods,
   CreateChatProjectInput,
+  FileMethods,
+  IChatProjectSource,
+  IMongoFile,
   UpdateChatProjectInput,
 } from '@librechat/data-schemas';
 import type { Request, Response } from 'express';
@@ -25,6 +29,8 @@ interface ProjectRequest extends Request {
   user?: ProjectUser;
 }
 
+type FileOwner = { user: string; tenantId?: string | null };
+
 type ProjectHandlerDependencies = Pick<
   ChatProjectMethods,
   | 'listChatProjects'
@@ -33,9 +39,33 @@ type ProjectHandlerDependencies = Pick<
   | 'updateChatProject'
   | 'deleteChatProject'
   | 'assignConversationToProject'
->;
+> &
+  // [knauf] KK20-248 — project knowledge file API depends on explicit project-source methods.
+  Pick<
+    ChatProjectSourceMethods,
+    | 'createChatProjectSource'
+    | 'listChatProjectSources'
+    | 'deleteChatProjectSource'
+    | 'deleteChatProjectSourcesForProject'
+  > &
+  Pick<FileMethods, 'getFiles'>;
+// End [knauf]
 
 const getUserId = (req: ProjectRequest): string => req.user?.id ?? req.user?._id?.toString() ?? '';
+
+const projectFileOwnerFilter = (req: ProjectRequest): FileOwner & Record<string, unknown> => {
+  const user = getUserId(req);
+  const tenantId = (req.user as ProjectUser & { tenantId?: string | null } | undefined)?.tenantId;
+  if (!tenantId) {
+    return { user };
+  }
+  return {
+    user,
+    // [knauf] KK20-248 — include legacy user-owned file rows that predate
+    // tenantId persistence; otherwise valid project files appear as missing.
+    $or: [{ tenantId }, { tenantId: { $exists: false } }, { tenantId: null }],
+  };
+};
 
 const queryString = (value: Request['query'][string]): string | undefined => {
   if (typeof value === 'string') {
@@ -81,8 +111,48 @@ const createProjectInput = (req: ProjectRequest): CreateChatProjectInput | null 
   return {
     name,
     description: typeof req.body?.description === 'string' ? req.body.description : '',
+    // [knauf] KK20-248 — accept project-level instructions at creation time.
+    instructions: typeof req.body?.instructions === 'string' ? req.body.instructions : '',
+    // End [knauf]
   };
 };
+
+// [knauf] KK20-248 — merge project-source lifecycle state with authorized File metadata.
+type ProjectFileResponse = IChatProjectSource &
+  Partial<Pick<IMongoFile, 'filename' | 'type' | 'bytes' | 'embedded'>>;
+
+const deriveProjectFileStatus = (
+  source: IChatProjectSource,
+  file?: IMongoFile,
+): Pick<IChatProjectSource, 'status' | 'error'> => {
+  if (!file) {
+    return { status: 'failed', error: source.error ?? 'File not found' };
+  }
+  if (file.embedded === true) {
+    return { status: 'ready', error: null };
+  }
+  if (source.status === 'failed') {
+    return { status: 'failed', error: source.error ?? null };
+  }
+  return { status: 'processing', error: source.error ?? null };
+};
+
+const buildProjectFileResponse = (
+  source: IChatProjectSource,
+  file?: IMongoFile,
+): ProjectFileResponse => {
+  const { status, error } = deriveProjectFileStatus(source, file);
+  return {
+    ...source,
+    status,
+    error,
+    filename: file?.filename,
+    type: file?.type,
+    bytes: file?.bytes,
+    embedded: file?.embedded,
+  };
+};
+// End [knauf]
 
 export function createProjectHandlers(deps: ProjectHandlerDependencies): {
   listProjects: (req: ProjectRequest, res: Response) => Promise<Response>;
@@ -91,6 +161,11 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
   getProject: (req: ProjectRequest, res: Response) => Promise<Response>;
   updateProject: (req: ProjectRequest, res: Response) => Promise<Response>;
   deleteProject: (req: ProjectRequest, res: Response) => Promise<Response>;
+  // [knauf] KK20-248 — project knowledge file API surface.
+  listProjectFiles: (req: ProjectRequest, res: Response) => Promise<Response>;
+  addProjectFile: (req: ProjectRequest, res: Response) => Promise<Response>;
+  deleteProjectFile: (req: ProjectRequest, res: Response) => Promise<Response>;
+  // End [knauf]
 } {
   async function listProjects(req: ProjectRequest, res: Response): Promise<Response> {
     try {
@@ -188,6 +263,11 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     if (req.body?.description !== undefined) {
       input.description = typeof req.body.description === 'string' ? req.body.description : '';
     }
+    // [knauf] KK20-248 — allow saving project-level instructions separately.
+    if (req.body?.instructions !== undefined) {
+      input.instructions = typeof req.body.instructions === 'string' ? req.body.instructions : '';
+    }
+    // End [knauf]
 
     try {
       const project = await deps.updateChatProject(getUserId(req), projectId, input);
@@ -208,16 +288,110 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     }
 
     try {
-      const result = await deps.deleteChatProject(getUserId(req), projectId);
+      const userId = getUserId(req);
+      const result = await deps.deleteChatProject(userId, projectId);
       if (!result.deletedCount) {
         return res.status(404).json({ error: PROJECT_NOT_FOUND });
       }
+      await deps.deleteChatProjectSourcesForProject(userId, projectId);
       return res.status(200).json(result);
     } catch (error) {
       logger.error('[projects] Error deleting project', error);
       return res.status(500).json({ error: 'Error deleting project' });
     }
   }
+
+  // [knauf] KK20-248 — explicit project file endpoints for project knowledge.
+  async function listProjectFiles(req: ProjectRequest, res: Response): Promise<Response> {
+    const { projectId } = req.params;
+    if (!isValidObjectIdString(projectId)) {
+      return res.status(404).json({ error: PROJECT_NOT_FOUND });
+    }
+
+    try {
+      const sources = await deps.listChatProjectSources(getUserId(req), projectId);
+      const fileIds = sources.map((source) => source.file_id).filter(Boolean);
+      const fileRows = fileIds.length
+        ? ((await deps.getFiles(
+            {
+              file_id: { $in: fileIds },
+              ...projectFileOwnerFilter(req),
+            },
+            {},
+            { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+          )) ?? [])
+        : [];
+      const filesById = new Map(fileRows.map((file) => [file.file_id, file]));
+      return res.status(200).json({
+        files: sources.map((source) => buildProjectFileResponse(source, filesById.get(source.file_id))),
+      });
+    } catch (error) {
+      logger.error('[projects] Error listing project files', error);
+      return res.status(500).json({ error: 'Error listing project files' });
+    }
+  }
+
+  async function addProjectFile(req: ProjectRequest, res: Response): Promise<Response> {
+    const { projectId } = req.params;
+    const fileId = normalizeString(req.body?.file_id ?? req.body?.fileId);
+    if (!isValidObjectIdString(projectId)) {
+      return res.status(404).json({ error: PROJECT_NOT_FOUND });
+    }
+    if (!fileId) {
+      return res.status(400).json({ error: 'file_id is required' });
+    }
+
+    try {
+      const [authorizedFile] =
+        (await deps.getFiles(
+          {
+            file_id: { $in: [fileId] },
+            ...projectFileOwnerFilter(req),
+          },
+          {},
+          { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+        )) ?? [];
+      if (!authorizedFile) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+
+      const source = await deps.createChatProjectSource(getUserId(req), {
+        projectId,
+        file_id: fileId,
+        status: req.body?.status,
+      });
+      if (!source) {
+        return res.status(404).json({ error: PROJECT_NOT_FOUND });
+      }
+      return res.status(201).json(buildProjectFileResponse(source, authorizedFile));
+    } catch (error) {
+      logger.error('[projects] Error adding project file', error);
+      return res.status(500).json({ error: 'Error adding project file' });
+    }
+  }
+
+  async function deleteProjectFile(req: ProjectRequest, res: Response): Promise<Response> {
+    const { projectId, fileId } = req.params;
+    if (!isValidObjectIdString(projectId)) {
+      return res.status(404).json({ error: PROJECT_NOT_FOUND });
+    }
+    if (!fileId) {
+      return res.status(400).json({ error: 'fileId is required' });
+    }
+
+    try {
+      const deleted = await deps.deleteChatProjectSource(getUserId(req), projectId, fileId);
+      if (!deleted) {
+        return res.status(404).json({ error: 'Project file not found' });
+      }
+      return res.status(200).json({ deleted: true });
+    } catch (error) {
+      logger.error('[projects] Error deleting project file', error);
+      return res.status(500).json({ error: 'Error deleting project file' });
+    }
+  }
+
+  // End [knauf]
 
   return {
     listProjects,
@@ -226,5 +400,10 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     getProject,
     updateProject,
     deleteProject,
+    // [knauf] KK20-248 — expose project knowledge file handlers.
+    listProjectFiles,
+    addProjectFile,
+    deleteProjectFile,
+    // End [knauf]
   };
 }

@@ -296,6 +296,9 @@ router.delete('/', async (req, res) => {
       // pointer's removal GCs the shared blob/vectors only when its content-hash
       // group is empty. `ownedFiles` are full DB docs (from db.getFiles above).
       await deleteFilesWithDedupAwareness({ req, files: ownedFiles });
+      await Promise.all(
+        ownedFiles.map((file) => db.deleteChatProjectSourcesByFileId(req.user.id, file.file_id)),
+      );
       // End [knauf]
 
       logger.debug(
@@ -403,6 +406,9 @@ router.delete('/', async (req, res) => {
     // stay on processDeleteRequest: they operate on client BatchFiles with no DB
     // row and need the per-agent/assistant unlink scope this dispatcher lacks.
     await deleteFilesWithDedupAwareness({ req, files: authorizedFiles });
+    await Promise.all(
+      authorizedFiles.map((file) => db.deleteChatProjectSourcesByFileId(req.user.id, file.file_id)),
+    );
     // End [knauf]
 
     logger.debug(
@@ -950,10 +956,18 @@ router.post('/', async (req, res) => {
     const logMetadata = {
       operation: 'file_upload',
       errorType: error instanceof Error ? error.name : 'UnknownError',
+      errorCode: error?.code ?? error?.knaufCode,
+      status: error?.response?.status ?? error?.status,
+      cause: error?.message,
+      keyPattern: error?.keyPattern ? JSON.stringify(error.keyPattern) : undefined,
+      keyValue: error?.keyValue ? JSON.stringify(error.keyValue) : undefined,
       ...(isEncryptedFile && { code: message }),
     };
+    const failureDetail = `type=${logMetadata.errorType ?? 'unknown'} code=${logMetadata.errorCode ?? 'none'} status=${logMetadata.status ?? 'none'} keyPattern=${logMetadata.keyPattern ?? 'none'} keyValue=${logMetadata.keyValue ?? 'none'} cause=${logMetadata.cause ?? 'none'}`;
     logger[isEncryptedFile ? 'info' : 'error'](
-      isEncryptedFile ? '[/files] Rejected encrypted file' : '[/files] File processing failed',
+      isEncryptedFile
+        ? `[/files] Rejected encrypted file ${failureDetail}`
+        : `[/files] File processing failed ${failureDetail}`,
       logMetadata,
     );
 

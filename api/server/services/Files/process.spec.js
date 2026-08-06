@@ -2047,6 +2047,26 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
     expect(handleFileUpload).toHaveBeenCalledTimes(1);
   });
 
+  test('records a non-owner pending File when the content-hash owner slot already exists', async () => {
+    const duplicateOwner = Object.assign(new Error('E11000 duplicate owner'), {
+      code: 11000,
+      keyPattern: { user: 1, knauf_content_hash: 1, knauf_dedup_owner: 1 },
+    });
+    db.createFile
+      .mockRejectedValueOnce(duplicateOwner)
+      .mockResolvedValueOnce({ file_id: 'up-1' })
+      .mockResolvedValueOnce({ file_id: 'up-1' });
+
+    await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+    expect(db.createFile.mock.calls[1][0]).toMatchObject({
+      file_id: 'up-1',
+      knauf_content_hash: 'hashABC',
+      knauf_dedup_owner: undefined,
+    });
+    expect(handleFileUpload).toHaveBeenCalledTimes(1);
+  });
+
   test('compensates the blob when its durable File intent cannot be recorded', async () => {
     const deleteFile = jest.fn().mockResolvedValue(undefined);
     getStrategyFunctions.mockReturnValue({ handleFileUpload, deleteFile });

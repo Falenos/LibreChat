@@ -11,6 +11,9 @@ export type ChatProjectSortDirection = 'asc' | 'desc';
 export type CreateChatProjectInput = {
   name: string;
   description?: string | null;
+  // [knauf] KK20-248 — project-level instructions shared by project chats.
+  instructions?: string | null;
+  // End [knauf]
 };
 
 export type UpdateChatProjectInput = Partial<CreateChatProjectInput>;
@@ -90,6 +93,9 @@ function sanitizeProjectInput(input: CreateChatProjectInput): CreateChatProjectI
   return {
     name: input.name.trim().slice(0, 100),
     description: input.description?.trim().slice(0, 1000) ?? '',
+    // [knauf] KK20-248 — cap project instructions before persistence.
+    instructions: input.instructions?.trim().slice(0, 8000) ?? '',
+    // End [knauf]
   };
 }
 
@@ -338,7 +344,7 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-    const update: Partial<Pick<IChatProject, 'name' | 'description'>> = {};
+    const update: Partial<Pick<IChatProject, 'name' | 'description' | 'instructions'>> = {};
     if (typeof input.name === 'string') {
       const name = input.name.trim().slice(0, 100);
       if (!name) {
@@ -349,6 +355,11 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     if (input.description !== undefined) {
       update.description = input.description?.trim().slice(0, 1000) ?? '';
     }
+    // [knauf] KK20-248 — update project-level instructions independently of name/description.
+    if (input.instructions !== undefined) {
+      update.instructions = input.instructions?.trim().slice(0, 8000) ?? '';
+    }
+    // End [knauf]
 
     return await ChatProject.findOneAndUpdate(
       { _id: new mongoose.Types.ObjectId(projectId), user },

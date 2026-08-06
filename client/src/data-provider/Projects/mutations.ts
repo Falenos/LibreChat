@@ -10,6 +10,10 @@ import type {
   TUpdateChatProjectRequest,
   TAssignConversationToProjectRequest,
   TAssignConversationToProjectResponse,
+  TAddChatProjectFileRequest,
+  TChatProjectFile,
+  TDeleteChatProjectFileRequest,
+  TDeleteChatProjectFileResponse,
 } from 'librechat-data-provider';
 import store from '~/store';
 
@@ -121,3 +125,40 @@ export const useAssignConversationToProjectMutation = (): UseMutationResult<
     },
   );
 };
+
+// [knauf] KK20-248 — mutations for explicit project knowledge files.
+export const useAddProjectFileMutation = (): UseMutationResult<
+  TChatProjectFile,
+  unknown,
+  TAddChatProjectFileRequest,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+  return useMutation((payload: TAddChatProjectFileRequest) => dataService.addProjectFile(payload), {
+    onSuccess: (_result, payload) => {
+      queryClient.invalidateQueries([QueryKeys.projectFiles, payload.projectId]);
+    },
+  });
+};
+
+export const useDeleteProjectFileMutation = (): UseMutationResult<
+  TDeleteChatProjectFileResponse,
+  unknown,
+  TDeleteChatProjectFileRequest,
+  unknown
+> => {
+  const queryClient = useQueryClient();
+  return useMutation(
+    (payload: TDeleteChatProjectFileRequest) => dataService.deleteProjectFile(payload),
+    {
+      onSuccess: (_result, payload) => {
+        queryClient.setQueryData([QueryKeys.files], (files: TChatProjectFile[] | undefined) =>
+          files?.filter((file) => file.file_id !== payload.file_id),
+        );
+        queryClient.invalidateQueries([QueryKeys.files]);
+        queryClient.invalidateQueries([QueryKeys.projectFiles, payload.projectId]);
+      },
+    },
+  );
+};
+// End [knauf]

@@ -844,7 +844,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           // Never serialize the provider Error: it can carry
           // request inputs, base64 images, filenames, paths, and user fields.
           const errorSummary = summarizeProviderError(error, 'agent_generation');
-          const publicError = errorSummary.code ?? 'provider_request_failed';
+          // [knauf] Do not leak Axios/provider library codes like ERR_BAD_REQUEST
+          // to the UI; expose a stable public class while logs keep diagnostics.
+          const publicError =
+            errorSummary.providerStatus === 400 ? 'provider_bad_request' : 'provider_request_failed';
+          // End [knauf]
           logger.error('[ResumableAgentController] Generation failed', errorSummary);
           await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
           await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);

@@ -307,6 +307,9 @@ export type TChatProject = {
   _id: string;
   name: string;
   description?: string;
+  // [knauf] KK20-248 — project-level instructions shared by project chats.
+  instructions?: string;
+  // End [knauf]
   user?: string;
   conversationCount: number;
   lastConversationAt?: string | null;
@@ -318,6 +321,9 @@ export type TChatProject = {
 export type TCreateChatProjectRequest = {
   name: string;
   description?: string;
+  // [knauf] KK20-248 — allow project instructions on create/update payloads.
+  instructions?: string;
+  // End [knauf]
 };
 
 export type TUpdateChatProjectRequest = Partial<TCreateChatProjectRequest> & {
@@ -328,6 +334,54 @@ export type TDeleteChatProjectResponse = {
   deletedCount: number;
   modifiedCount: number;
 };
+
+// [knauf] KK20-248 — project knowledge file API contracts.
+export type TChatProjectFileStatus = 'uploading' | 'processing' | 'ready' | 'failed';
+
+export type TChatProjectFileIndexing = {
+  status: 'uploading' | 'queued' | 'processing' | 'ready' | 'failed';
+  ready: boolean;
+  retryable: boolean;
+  error_code: string | null;
+  queued_at: string | null;
+};
+
+export type TChatProjectFile = {
+  _id?: string;
+  projectId: string;
+  file_id: string;
+  sourceType: 'file';
+  user: string;
+  status: TChatProjectFileStatus;
+  error?: string | null;
+  filename?: string;
+  type?: string;
+  bytes?: number;
+  embedded?: boolean;
+  indexing?: TChatProjectFileIndexing;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type TChatProjectFilesResponse = {
+  files: TChatProjectFile[];
+};
+
+export type TAddChatProjectFileRequest = {
+  projectId: string;
+  file_id: string;
+  status?: TChatProjectFileStatus;
+};
+
+export type TDeleteChatProjectFileRequest = {
+  projectId: string;
+  file_id: string;
+};
+
+export type TDeleteChatProjectFileResponse = {
+  deleted: boolean;
+};
+// End [knauf]
 
 export type TAssignConversationToProjectRequest = {
   conversationId: string;

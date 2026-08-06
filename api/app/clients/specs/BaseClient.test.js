@@ -35,10 +35,20 @@ jest.mock('~/models', () => ({
   deleteFile: jest.fn(),
   deleteFiles: jest.fn(),
   getFiles: jest.fn(),
+  // [knauf] KK20-248 — project knowledge retrieval test seam.
+  listReadyChatProjectSourceFileIds: jest.fn(),
+  // End [knauf]
   updateFileUsage: jest.fn(),
 }));
 
-const { getConvo, getFiles, getMessages, saveConvo, saveMessage } = require('~/models');
+const {
+  getConvo,
+  getFiles,
+  getMessages,
+  listReadyChatProjectSourceFileIds,
+  saveConvo,
+  saveMessage,
+} = require('~/models');
 
 jest.mock('@librechat/agents', () => {
   const actual = jest.requireActual('@librechat/agents');
@@ -1341,10 +1351,23 @@ describe('BaseClient', () => {
       },
     };
 
+    // [knauf] KK20-248 — explicit project knowledge file fixture.
+    const projectFile = {
+      ...ownerFile,
+      file_id: 'project-file',
+      filename: 'project-knowledge.md',
+      filepath: '/uploads/project-knowledge.md',
+      text: 'shared project knowledge',
+    };
+    // End [knauf]
+
     beforeEach(() => {
       getFiles.mockReset();
+      listReadyChatProjectSourceFileIds.mockReset();
+      listReadyChatProjectSourceFileIds.mockResolvedValue([]);
       TestClient.options.resendFiles = true;
       TestClient.options.attachments = undefined;
+      TestClient.options.chatProjectId = undefined;
       TestClient.options.req = {
         user: {
           id: 'user-1',
@@ -1475,6 +1498,102 @@ describe('BaseClient', () => {
       ]);
       expect(JSON.stringify(secondMessage)).not.toContain('second-forged');
     });
+
+    // [knauf] KK20-248 — project knowledge files are added to latest turn only.
+    test('adds ready project files to latest message context without rewriting history', async () => {
+      TestClient.options.chatProjectId = 'project-1';
+      listReadyChatProjectSourceFileIds.mockResolvedValueOnce(['project-file']);
+      getFiles.mockResolvedValueOnce([projectFile]);
+
+      const [firstMessage, secondMessage] = await TestClient.addPreviousAttachments([
+        { messageId: 'msg-project-1', text: 'Earlier turn' },
+        { messageId: 'msg-project-2', text: 'Use project knowledge' },
+      ]);
+
+      expect(listReadyChatProjectSourceFileIds).toHaveBeenCalledWith('user-1', 'project-1');
+      expect(getFiles).toHaveBeenCalledWith(
+        {
+          file_id: { $in: ['project-file'] },
+          user: 'user-1',
+          tenantId: 'tenant-a',
+        },
+        {},
+        {},
+      );
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledTimes(1);
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledWith(secondMessage, [projectFile]);
+      expect(TestClient.processAttachments).toHaveBeenCalledWith(secondMessage, [projectFile]);
+      expect(firstMessage.fileContext).toBeUndefined();
+      expect(secondMessage.fileContext).toBe('shared project knowledge');
+      expect(firstMessage.files).toBeUndefined();
+      expect(secondMessage.files).toBeUndefined();
+    });
+
+    test('keeps composer files conversation-scoped while adding project files only to the latest turn', async () => {
+      TestClient.options.chatProjectId = 'project-1';
+      listReadyChatProjectSourceFileIds.mockResolvedValueOnce(['project-file']);
+      getFiles
+        .mockResolvedValueOnce([ownerFile])
+        .mockResolvedValueOnce([projectFile]);
+
+      const [historyMessage, latestMessage] = await TestClient.addPreviousAttachments([
+        {
+          messageId: 'msg-mixed-1',
+          files: [{ file_id: 'owner-file', filename: 'owner.txt', text: 'forged owner text' }],
+        },
+        { messageId: 'msg-mixed-2', text: 'Use mixed context' },
+      ]);
+
+      expect(getFiles).toHaveBeenNthCalledWith(
+        1,
+        {
+          file_id: { $in: ['owner-file'] },
+          user: 'user-1',
+          tenantId: 'tenant-a',
+        },
+        {},
+        {},
+      );
+      expect(getFiles).toHaveBeenNthCalledWith(
+        2,
+        {
+          file_id: { $in: ['project-file'] },
+          user: 'user-1',
+          tenantId: 'tenant-a',
+        },
+        {},
+        {},
+      );
+      expect(listReadyChatProjectSourceFileIds).toHaveBeenCalledWith('user-1', 'project-1');
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledWith(historyMessage, [ownerFile]);
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledWith(latestMessage, [projectFile]);
+      expect(historyMessage.fileContext).toBe('authorized owner text');
+      expect(latestMessage.fileContext).toBe('shared project knowledge');
+      expect(historyMessage.files).toEqual([expect.objectContaining({ file_id: 'owner-file' })]);
+      expect(latestMessage.files).toBeUndefined();
+      expect(JSON.stringify(latestMessage)).not.toContain('owner-file');
+    });
+
+    test('stops loading project knowledge after a conversation is moved out of a project', async () => {
+      getFiles.mockResolvedValueOnce([ownerFile]);
+
+      const [historyMessage, latestMessage] = await TestClient.addPreviousAttachments([
+        {
+          messageId: 'msg-unassigned-1',
+          files: [{ file_id: 'owner-file', filename: 'owner.txt' }],
+        },
+        { messageId: 'msg-unassigned-2', text: 'No project anymore' },
+      ]);
+
+      expect(listReadyChatProjectSourceFileIds).not.toHaveBeenCalled();
+      expect(getFiles).toHaveBeenCalledTimes(1);
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledTimes(1);
+      expect(TestClient.addFileContextToMessage).toHaveBeenCalledWith(historyMessage, [ownerFile]);
+      expect(historyMessage.fileContext).toBe('authorized owner text');
+      expect(latestMessage.fileContext).toBeUndefined();
+      expect(latestMessage.files).toBeUndefined();
+    });
+    // End [knauf]
 
     test('preserves download-only historical attachments without trusting file fields', async () => {
       const [message] = await TestClient.addPreviousAttachments([

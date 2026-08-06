@@ -12,6 +12,10 @@ import { useConversationsInfiniteQuery, useProjectQuery } from '~/data-provider'
 import { useLocalize, useNewConvo } from '~/hooks';
 import { cn, clearMessagesCache } from '~/utils';
 import ProjectChatList from './ProjectChatList';
+// [knauf] KK20-248 — explicit project knowledge files section.
+import KnaufProjectFilesSection from '~/knauf/components/Projects/KnaufProjectFilesSection';
+import KnaufProjectInstructionsSection from '~/knauf/components/Projects/KnaufProjectInstructionsSection';
+// End [knauf]
 import store from '~/store';
 
 type ChatSortField = 'updatedAt' | 'createdAt';
@@ -169,6 +173,11 @@ export default function ProjectWorkspace() {
             {localize('com_ui_new_chat_in_project', { name: project.name })}
           </span>
         </button>
+
+        {/* [knauf] KK20-248 — shared instructions and files available to every chat in this project. */}
+        <KnaufProjectInstructionsSection project={project} />
+        <KnaufProjectFilesSection projectId={project._id} />
+        {/* End [knauf] */}
 
         <section className="mt-8 flex min-h-0 flex-1 flex-col">
           <div className="mb-2 flex items-center justify-between gap-3">

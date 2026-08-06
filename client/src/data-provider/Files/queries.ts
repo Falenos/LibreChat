@@ -56,6 +56,9 @@ export const useGetFileConfig = <TData = t.TFileConfig>(
 type FileDownloadOptions = {
   source?: string | null;
   direct?: boolean;
+  // [knauf] KK20-248 — project knowledge previews must prove project association.
+  projectId?: string | null;
+  // End [knauf]
 };
 
 export const isDirectDownloadSource = (source?: string | null): boolean =>
@@ -75,12 +78,19 @@ export const useFileDownload = (
 ): QueryObserverResult<string> => {
   const queryClient = useQueryClient();
   return useQuery(
-    [QueryKeys.fileDownload, file_id, options.source ?? '', options.direct ?? true],
+    [QueryKeys.fileDownload, file_id, options.source ?? '', options.direct ?? true, options.projectId ?? ''],
     async ({ signal }) => {
-      if (!userId || !file_id) {
-        console.warn('No user ID provided for file download');
+      if (!file_id || (!userId && !options.projectId)) {
+        console.warn('No user ID or project ID provided for file download');
         return;
       }
+      // [knauf] KK20-248 — project knowledge download goes through a project-scoped route.
+      if (options.projectId) {
+        const response = await dataService.getProjectFileDownload(options.projectId, file_id, signal);
+        const blob = response.data;
+        return window.URL.createObjectURL(blob);
+      }
+      // End [knauf]
       if ((options.direct ?? true) && isDirectDownloadSource(options.source)) {
         try {
           const directDownload = await dataService.getFileDownloadURL(userId, file_id);

@@ -567,6 +567,16 @@ class AgentClient extends BaseClient {
       }
     }
 
+    // [knauf] KK20-248 — project-level instructions apply only to chats in that project.
+    if (this.options.chatProjectId && this.options.req?.user?.id) {
+      const project = await db.getChatProject(this.options.req.user.id, this.options.chatProjectId);
+      const projectInstructions = project?.instructions?.trim();
+      if (projectInstructions) {
+        sharedRunContextParts.push(`# Project instructions\n${projectInstructions}`);
+      }
+    }
+    // End [knauf]
+
     /** Memory context (user preferences/memories) */
     const withoutKeys = await this.useMemory();
     const memoryContext = withoutKeys

@@ -64,6 +64,10 @@ describe('FileAsset tenant isolation (KK20-195 review R1)', () => {
     const first = await tenantStorage.run({ tenantId: 't1' }, async () =>
       db.reserveAsset(reserveParams({ asset_id: 'dk-1', dedup_key: 'u:u1:h:h1' })),
     );
+    const firstRaw = await runAsSystem(async () =>
+      mongoose.models.KnaufFileAsset.findOne({ asset_id: 'dk-1' }).lean<{ tenantId?: string }>(),
+    );
+    expect(firstRaw?.tenantId).toBe('t1');
     const second = await tenantStorage.run({ tenantId: 't2' }, async () =>
       db.reserveAsset(reserveParams({ asset_id: 'dk-2', dedup_key: 'u:u1:h:h1' })),
     );

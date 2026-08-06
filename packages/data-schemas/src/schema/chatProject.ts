@@ -16,6 +16,14 @@ const chatProjectSchema: Schema<IChatProjectDocument> = new Schema<IChatProjectD
       trim: true,
       maxlength: 1000,
     },
+    // [knauf] KK20-248 — project-level instructions shared by project chats.
+    instructions: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 8000,
+    },
+    // End [knauf]
     user: {
       type: String,
       required: true,

@@ -95,10 +95,6 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
   const handleFileClick = useCallback(
     (file: TFile) => {
       if (!fileMap?.[file.file_id] || !conversation?.endpoint) {
-        showToast({
-          message: localize('com_ui_attach_error'),
-          status: 'error',
-        });
         return;
       }
 
@@ -245,6 +241,10 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
                   >
                     {row.getVisibleCells().map((cell) => {
                       const isFilenameCell = cell.column.id === 'filename';
+                      const canAttachFromRow =
+                        isFilenameCell &&
+                        !!conversation?.endpoint &&
+                        !!fileMap?.[(row.original as TFile | undefined)?.file_id ?? ''];
 
                       return (
                         <TableCell
@@ -256,18 +256,17 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
                             whiteSpace: 'nowrap',
                           }}
                           className={
-                            isFilenameCell
+                            canAttachFromRow
                               ? 'focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-text-primary'
                               : ''
                           }
                           data-skip-refocus="true"
                           key={cell.id}
-                          role={isFilenameCell ? 'button' : undefined}
-                          tabIndex={isFilenameCell ? 0 : undefined}
+                          role={canAttachFromRow ? 'button' : undefined}
+                          tabIndex={canAttachFromRow ? 0 : undefined}
                           onClick={(e) => {
-                            if (isFilenameCell) {
+                            if (canAttachFromRow) {
                               const clickedElement = e.target as HTMLElement;
-                              // Check if clicked element is within cell and not a button/link
                               if (
                                 clickedElement.closest('td') &&
                                 !clickedElement.closest('button, a')
@@ -279,7 +278,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
                             }
                           }}
                           onKeyDown={(e) => {
-                            if (isFilenameCell && (e.key === 'Enter' || e.key === ' ')) {
+                            if (canAttachFromRow && (e.key === 'Enter' || e.key === ' ')) {
                               const clickedElement = e.target as HTMLElement;
                               if (
                                 clickedElement.closest('td') &&

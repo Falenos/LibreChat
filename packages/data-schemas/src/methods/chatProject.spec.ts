@@ -257,6 +257,26 @@ describe('ChatProject methods', () => {
     expect(refreshedSecond?.conversationCount).toBe(1);
   });
 
+  // [knauf] KK20-248 — removing a chat from a project must stop future project context.
+  it('unassigns a moved conversation when projectId is null', async () => {
+    const project = await methods.createChatProject(user, { name: 'Movable' });
+    const projectId = project._id!.toString();
+    await createConversation(user, 'convo-1', 'Movable chat');
+
+    const assigned = await methods.assignConversationToProject(user, 'convo-1', projectId);
+    const unassigned = await methods.assignConversationToProject(user, 'convo-1', null);
+
+    const conversation = await Conversation.findOne({ user, conversationId: 'convo-1' }).lean<IConversation>();
+    const refreshedProject = await methods.getChatProject(user, projectId);
+
+    expect(assigned?.projectId).toBe(projectId);
+    expect(unassigned?.previousProjectId).toBe(projectId);
+    expect(unassigned?.projectId).toBeNull();
+    expect(conversation?.chatProjectId).toBeUndefined();
+    expect(refreshedProject?.conversationCount).toBe(0);
+  });
+  // End [knauf]
+
   it('deleting a project unassigns chats instead of deleting them', async () => {
     const project = await methods.createChatProject(user, { name: 'Delete me' });
     await createConversation(user, 'convo-1', 'First');

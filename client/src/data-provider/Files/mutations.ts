@@ -166,16 +166,24 @@ export const useDeleteFilesMutation = (
       onError?.(error, vars, context);
     },
     onSuccess: (data, vars, context) => {
-      queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (cachefiles) => {
-        const { files: filesDeleted } = vars;
+      const { files: filesDeleted } = vars;
+      const deletedIds = new Set(filesDeleted.map((file) => file.file_id));
 
-        const fileMap = filesDeleted.reduce((acc, file) => {
-          acc.set(file.file_id, file);
-          return acc;
-        }, new Map<string, t.BatchFile>());
-
-        return (cachefiles ?? []).filter((file) => !fileMap.has(file.file_id));
-      });
+      queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (cachefiles) =>
+        (cachefiles ?? []).filter((file) => !deletedIds.has(file.file_id)),
+      );
+      queryClient
+        .getQueryCache()
+        .findAll({ queryKey: [QueryKeys.projectFiles] })
+        .forEach((query) => {
+          queryClient.setQueryData<t.TChatProjectFilesResponse | undefined>(query.queryKey, (cached) => {
+            if (!cached?.files?.length) {
+              return cached;
+            }
+            const nextFiles = cached.files.filter((file) => !deletedIds.has(file.file_id));
+            return nextFiles.length === cached.files.length ? cached : { ...cached, files: nextFiles };
+          });
+        });
 
       showToast({
         message: localize('com_ui_delete_success'),

@@ -236,4 +236,18 @@ describe('PanelTable handleFileClick', () => {
 
     expect(mockAddFile).toHaveBeenCalledTimes(1);
   });
+
+  it('does not expose row attachment when there is no active conversation endpoint', () => {
+    const file = makeFile({ file_id: 'no-chat-file' });
+    mockFileMap = { [file.file_id]: file };
+    mockConversation = null;
+
+    renderTable([file]);
+
+    expect(screen.queryAllByRole('button').some((el) => el.tagName === 'TD')).toBe(false);
+    expect(mockAddFile).not.toHaveBeenCalled();
+    expect(mockShowToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('com_ui_attach_error') }),
+    );
+  });
 });

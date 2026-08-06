@@ -1423,7 +1423,16 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
             throw pendingError;
           }
           // Concurrent upserts can both miss; after one insert wins, the retry is an update.
-          pendingFile = await db.createFile(pendingFileData, true, pendingOwnerScope);
+          const ownerClaimConflict = Boolean(pendingError?.keyPattern?.knauf_dedup_owner);
+          // If an older/pending owner already owns this content hash, keep this logical
+          // upload visible as a non-owner row and reuse the shared asset lifecycle.
+          pendingFile = await db.createFile(
+            ownerClaimConflict
+              ? { ...pendingFileData, knauf_dedup_owner: undefined }
+              : pendingFileData,
+            true,
+            pendingOwnerScope,
+          );
         }
         if (!pendingFile) {
           throw new Error('file_asset_pending_file_lost');

@@ -3,6 +3,9 @@ import { createSkillSyncStatusModel } from './skillSyncStatus';
 import { createConversationTagModel } from './conversationTag';
 import { createAgentCategoryModel } from './agentCategory';
 import { createChatProjectModel } from './chatProject';
+// [knauf] KK20-248 — register project-scoped knowledge source model.
+import { createChatProjectSourceModel } from './chatProjectSource';
+// End [knauf]
 import { createAgentApiKeyModel } from './agentApiKey';
 import { createTransactionModel } from './transaction';
 import { createPromptGroupModel } from './promptGroup';
@@ -51,6 +54,9 @@ export function createModels(mongoose: typeof import('mongoose')): {
   Balance: ReturnType<typeof createBalanceModel>;
   Conversation: ReturnType<typeof createConversationModel>;
   ChatProject: ReturnType<typeof createChatProjectModel>;
+  // [knauf] KK20-248 — expose project-scoped knowledge source model.
+  ChatProjectSource: ReturnType<typeof createChatProjectSourceModel>;
+  // End [knauf]
   Message: ReturnType<typeof createMessageModel>;
   Agent: ReturnType<typeof createAgentModel>;
   AgentApiKey: ReturnType<typeof createAgentApiKeyModel>;
@@ -94,6 +100,9 @@ export function createModels(mongoose: typeof import('mongoose')): {
     Balance: createBalanceModel(mongoose),
     Conversation: createConversationModel(mongoose),
     ChatProject: createChatProjectModel(mongoose),
+    // [knauf] KK20-248 — instantiate project-scoped knowledge source model.
+    ChatProjectSource: createChatProjectSourceModel(mongoose),
+    // End [knauf]
     Message: createMessageModel(mongoose),
     Agent: createAgentModel(mongoose),
     AgentApiKey: createAgentApiKeyModel(mongoose),

@@ -58,14 +58,21 @@ export default function ChatRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { conversationId = '' } = useParams();
   const projectIdParam = searchParams.get('projectId');
-  const chatProjectId = isValidChatProjectId(projectIdParam) ? projectIdParam : null;
+  const routeChatProjectId = isValidChatProjectId(projectIdParam) ? projectIdParam : null;
   useIdChangeEffect(conversationId);
   const { hasSetConversation, conversation } = store.useCreateConversationAtom(index);
   const { newConversation } = useNewConvo();
   const { showToast } = useToastContext();
   const localize = useLocalize();
-  const projectQuery = useProjectQuery(chatProjectId, {
-    enabled: isAuthenticated && Boolean(chatProjectId),
+  // [knauf] KK20-248 — existing project chats may not carry `?projectId`, so
+  // fall back to the persisted conversation scope for the read-only header badge.
+  const conversationChatProjectId =
+    conversationId !== Constants.NEW_CONVO && isValidChatProjectId(conversation?.chatProjectId ?? null)
+      ? conversation.chatProjectId
+      : null;
+  const resolvedChatProjectId = routeChatProjectId ?? conversationChatProjectId;
+  const projectQuery = useProjectQuery(resolvedChatProjectId, {
+    enabled: isAuthenticated && Boolean(resolvedChatProjectId),
     retry: false,
     staleTime: 30000,
     cacheTime: 300000,
@@ -83,11 +90,13 @@ export default function ChatRoute() {
    * transient errors via React Query's retained data — but never for a project that
    * is confirmed gone (otherwise the deleted project's chip lingers).
    */
-  const verifiedChatProjectId =
-    !projectNotFound && projectQuery.data?._id === chatProjectId ? chatProjectId : null;
+  const verifiedRouteChatProjectId =
+    !projectNotFound && projectQuery.data?._id === routeChatProjectId ? routeChatProjectId : null;
+  const verifiedResolvedChatProjectId =
+    !projectNotFound && projectQuery.data?._id === resolvedChatProjectId ? resolvedChatProjectId : null;
   const projectTemplate = useMemo(
-    () => (verifiedChatProjectId ? { chatProjectId: verifiedChatProjectId } : {}),
-    [verifiedChatProjectId],
+    () => (verifiedRouteChatProjectId ? { chatProjectId: verifiedRouteChatProjectId } : {}),
+    [verifiedRouteChatProjectId],
   );
 
   /**
@@ -96,9 +105,9 @@ export default function ChatRoute() {
    * stale chip lingers and sends target a dead project.
    */
   const projectScopeMissing =
-    Boolean(chatProjectId) &&
+    Boolean(routeChatProjectId) &&
     conversationId === Constants.NEW_CONVO &&
-    (projectNotFound || (projectQuery.isSuccess && projectQuery.data?._id !== chatProjectId));
+    (projectNotFound || (projectQuery.isSuccess && projectQuery.data?._id !== routeChatProjectId));
 
   useEffect(() => {
     if (!projectScopeMissing) {
@@ -145,8 +154,8 @@ export default function ChatRoute() {
     const rolesLoaded = roles?.USER != null;
     const isNewConvo = conversationId === Constants.NEW_CONVO;
     const isDraftNewConvo = conversation?.conversationId === Constants.NEW_CONVO;
-    const draftProjectMismatch = verifiedChatProjectId
-      ? conversation?.chatProjectId !== verifiedChatProjectId
+    const draftProjectMismatch = verifiedRouteChatProjectId
+      ? conversation?.chatProjectId !== verifiedRouteChatProjectId
       : conversation?.chatProjectId != null;
     const newConvoNeedsInit =
       isNewConvo && (!conversation || (isDraftNewConvo && draftProjectMismatch));
@@ -161,7 +170,7 @@ export default function ChatRoute() {
       return;
     }
 
-    if (isNewConvo && chatProjectId && projectQuery.isLoading) {
+    if (isNewConvo && routeChatProjectId && projectQuery.isLoading) {
       return;
     }
 
@@ -265,7 +274,7 @@ export default function ChatRoute() {
     endpointsQuery.data,
     modelsQuery.data,
     assistantListMap,
-    chatProjectId,
+    routeChatProjectId,
     projectQuery.data?._id,
     projectQuery.isLoading,
     projectTemplate,
@@ -301,7 +310,7 @@ export default function ChatRoute() {
 
   return (
     <ToolCallsMapProvider conversationId={conversation.conversationId ?? ''}>
-      <ChatView index={index} project={verifiedChatProjectId ? projectQuery.data : undefined} />
+      <ChatView index={index} project={verifiedResolvedChatProjectId ? projectQuery.data : undefined} />
     </ToolCallsMapProvider>
   );
 }

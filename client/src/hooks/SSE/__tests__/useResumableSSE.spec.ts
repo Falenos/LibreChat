@@ -1518,6 +1518,63 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  it('maps provider bad-request stream errors to readable copy', async () => {
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+
+    await act(async () => {
+      sse._emit('error', { data: JSON.stringify({ error: 'provider_bad_request' }) });
+    });
+
+    expect(mockErrorHandler).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        text: 'The model rejected this request before it could answer. Please try again; if it repeats, check the server logs for the provider bad-request details.',
+      }),
+      submission: expect.objectContaining({ userMessage: expect.any(Object) }),
+    });
+    expect(mockSetIsSubmitting).toHaveBeenCalledWith(false);
+    expect(sse.close).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('surfaces file indexing start errors without reconnecting', async () => {
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+
+    await act(async () => {
+      sse._emit('error', {
+        responseCode: 409,
+        data: JSON.stringify({ error: 'file_indexing_not_ready', file_ids: ['file-1'] }),
+      });
+    });
+
+    expect(mockErrorHandler).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        text: 'Some project files are still being indexed. Please wait until they are ready and try again.',
+      }),
+      submission: expect.objectContaining({ userMessage: expect.any(Object) }),
+    });
+    expect(mockSetIsSubmitting).toHaveBeenCalledWith(false);
+    expect(sse.close).toHaveBeenCalled();
+    unmount();
+  });
+
   it.each([undefined, 500, 503])(
     'does not call errorHandler for responseCode %s (reconnect path)',
     async (responseCode) => {

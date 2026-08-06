@@ -56,6 +56,9 @@ jest.mock('~/models', () => ({
   getAgent: jest.fn(),
   getRoleByName: jest.fn(),
   getFormattedMemories: jest.fn(),
+  // [knauf] KK20-248 — project instructions are loaded through the DB seam.
+  getChatProject: jest.fn(),
+  // End [knauf]
 }));
 
 // Mock getMCPManager
@@ -1584,6 +1587,40 @@ describe('AgentClient - titleConvo', () => {
       // Verify the instructions still work without MCP content (from agent config, not buildOptions)
       expect(client.options.agent.instructions).toBe('Base agent instructions');
       expect(client.options.agent.instructions).not.toContain('[object Promise]');
+    });
+
+    it('adds owner-scoped project instructions to the dynamic run context', async () => {
+      const db = require('~/models');
+      mockOptions.chatProjectId = 'project-123';
+      client = new AgentClient(mockOptions);
+      client.conversationId = 'convo-123';
+      client.responseMessageId = 'response-123';
+      client.shouldSummarize = false;
+      client.maxContextTokens = 4096;
+      client.useMemory = jest.fn().mockResolvedValue(undefined);
+      db.getChatProject.mockResolvedValue({ instructions: 'Answer using project terminology.' });
+
+      const messages = [
+        {
+          messageId: 'msg-1',
+          parentMessageId: null,
+          sender: 'User',
+          text: 'Hello',
+          isCreatedByUser: true,
+        },
+      ];
+
+      await client.buildMessages(messages, null, {
+        instructions: 'Base instructions',
+        additional_instructions: null,
+      });
+
+      expect(db.getChatProject).toHaveBeenCalledWith('user-123', 'project-123');
+      expect(client.options.agent.instructions).toContain('Base agent instructions');
+      expect(client.options.agent.additional_instructions).toContain('# Project instructions');
+      expect(client.options.agent.additional_instructions).toContain(
+        'Answer using project terminology.',
+      );
     });
 
     it('should handle MCP instructions error gracefully', async () => {
