@@ -6,9 +6,11 @@
   "exports": {
     "./server/htmlExtract": "./src/server/htmlExtract.js",
     "./server/pdfAccessProbe": "./src/server/pdfAccessProbe.js",
-    "./server/pdfAccessProbe.worker": "./src/server/pdfAccessProbe.worker.js"
+    "./server/pdfAccessProbe.worker": "./src/server/pdfAccessProbe.worker.js",
+    "./server/validateArtifactSource": "./src/server/validateArtifactSource.js"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@datadog/browser-rum": "^6.11.1",
     "@datadog/browser-logs": "^6.11.1",
     "@mozilla/readability": "^0.6.0",

@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { FilePenLine } from 'lucide-react';
 import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { Artifact } from '~/common';
+import FilePreview from '~/components/Chat/Input/Files/FilePreview';
 import { useLocalize } from '~/hooks';
 import { getArtifactRevision } from '~/knauf/data-provider/data-service';
 import store from '~/store';
+import { getFileType } from '~/utils';
 
 export type ArtifactEditResult = {
   status: 'updated';
@@ -38,6 +39,7 @@ export function parseArtifactEditResult(output: string): ArtifactEditResult | nu
 
 export default function ArtifactEditCall({ result }: Readonly<{ result: ArtifactEditResult }>) {
   const localize = useLocalize();
+  const fileType = getFileType('artifact');
   const [isLoading, setIsLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [artifacts, setArtifacts] = useRecoilState(store.artifactsState);
@@ -85,23 +87,25 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   };
 
   return (
-    <div className="my-3">
+    <div className="group relative my-4 rounded-xl text-sm text-text-primary">
       <button
         type="button"
         aria-label={localize('com_ui_updated_file', { 0: result.title })}
         disabled={isLoading}
         onClick={handleOpen}
-        className="flex items-center gap-3 rounded-xl border border-border-light bg-surface-tertiary px-3 py-2 text-left text-sm transition hover:border-border-medium hover:bg-surface-hover disabled:cursor-wait disabled:opacity-70"
+        className="relative overflow-hidden rounded-xl border-border-light bg-surface-tertiary shadow-sm transition-all duration-300 hover:border-border-medium hover:bg-surface-hover hover:shadow-lg active:scale-[0.98] disabled:cursor-wait disabled:opacity-70"
       >
-        <FilePenLine className="size-5 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="min-w-0">
-          <span className="block truncate font-medium text-text-primary">
-            {localize('com_ui_updated_file', { 0: result.title })}
-          </span>
-          <span className="block text-text-secondary">
-            {localize('com_ui_version_var', { 0: String(result.version) })}
-          </span>
-        </span>
+        <div className="w-fit p-2">
+          <div className="flex flex-row items-center gap-2">
+            <FilePreview fileType={fileType} className="relative" />
+            <div className="overflow-hidden text-left">
+              <div className="truncate font-medium">{result.title}</div>
+              <div className="truncate text-text-secondary">
+                {localize('com_ui_version_var', { 0: String(result.version) })}
+              </div>
+            </div>
+          </div>
+        </div>
       </button>
       {failed ? (
         <span role="alert" className="mt-1 block text-xs text-red-600">

@@ -5,13 +5,14 @@ import { Artifact } from '~/components/Artifacts/Artifact';
 import store from '~/store';
 
 const mockGetArtifactRevision = jest.fn();
+let mockArtifactBody = 'EDITED VERSION TWO';
 
 jest.mock('~/knauf/data-provider/data-service', () => ({
   getArtifactRevision: (...args: unknown[]) => mockGetArtifactRevision(...args),
 }));
 
 jest.mock('~/knauf/utils/artifactBody', () => ({
-  extractArtifactBody: () => 'EDITED VERSION TWO',
+  extractArtifactBody: () => mockArtifactBody,
 }));
 
 jest.mock('~/Providers', () => ({
@@ -36,10 +37,22 @@ jest.mock('react-router-dom', () => ({
 
 function Registry() {
   const artifacts = useRecoilValue(store.artifactsState);
-  return <pre data-testid="artifact-registry">{JSON.stringify(artifacts)}</pre>;
+  const orderedContent = Object.values(artifacts ?? {})
+    .sort((left, right) => (left?.lastUpdateTime ?? 0) - (right?.lastUpdateTime ?? 0))
+    .map((artifact) => artifact?.content);
+  return (
+    <>
+      <pre data-testid="artifact-registry">{JSON.stringify(artifacts)}</pre>
+      <pre data-testid="artifact-order">{JSON.stringify(orderedContent)}</pre>
+    </>
+  );
 }
 
 describe('Artifact root revision binding', () => {
+  beforeEach(() => {
+    mockArtifactBody = 'EDITED VERSION TWO';
+  });
+
   it('keeps the root card on version 1 after the persisted source advances to version 2', async () => {
     mockGetArtifactRevision.mockResolvedValue({
       title: 'Versioning Probe',
@@ -77,5 +90,51 @@ describe('Artifact root revision binding', () => {
       'artifact-revision:message-1:versioning-probe:version:2',
     );
     expect(screen.getByTestId('artifact-registry')).toHaveTextContent('EDITED VERSION TWO');
+  });
+
+  it('keeps Version 1 before all later immutable revisions', async () => {
+    mockGetArtifactRevision.mockResolvedValue({
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      content: 'ROOT VERSION ONE',
+      version: 1,
+    });
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '2',
+      children: <code>{'EDITED VERSION TWO'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    const { rerender } = render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('artifact-order')).toHaveTextContent(
+        '["ROOT VERSION ONE","EDITED VERSION TWO"]',
+      ),
+    );
+
+    mockArtifactBody = 'EDITED VERSION THREE';
+    rerender(
+      <RecoilRoot>
+        <Artifact {...props} version="3" />
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('artifact-order')).toHaveTextContent('EDITED VERSION THREE'),
+    );
+    expect(screen.getByTestId('artifact-order')).toHaveTextContent(
+      '["ROOT VERSION ONE","EDITED VERSION TWO","EDITED VERSION THREE"]',
+    );
   });
 });

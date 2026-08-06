@@ -79,6 +79,18 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
   });
 });
 
+describe('[knauf] librechat.yaml — default KARL response latency', () => {
+  it('avoids provider-specific verbosity and bounds prose without truncating source', () => {
+    const karl = specs.find((spec) => spec.name === 'karl');
+    const prompt = karl?.preset?.promptPrefix ?? '';
+
+    expect(karl?.preset).not.toHaveProperty('verbosity');
+    expect(prompt).toMatch(/ordinary chat prose, stay below 500 words/i);
+    expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
+    expect(prompt).toMatch(/never truncate valid source/i);
+  });
+});
+
 describe('[knauf] librechat.yaml — Admin-managed prompt sharing', () => {
   it('does not override prompt or People Picker permissions', () => {
     expect(config.interface).not.toHaveProperty('prompts');

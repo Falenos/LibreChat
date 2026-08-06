@@ -196,6 +196,59 @@ describe('edit_artifact', () => {
     expect(compareAndSwap).not.toHaveBeenCalled();
   });
 
+  test('rejects replacing the complete artifact source', async () => {
+    const source = 'export default function Demo() { return <section>Styled watch</section>; }';
+    const message = {
+      messageId: 'assistant-1',
+      conversationId: 'conversation-1',
+      text: artifact('watch', source),
+    };
+    const compareAndSwap = jest.fn().mockResolvedValue(true);
+
+    await expect(
+      applyArtifactEdit(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          identifier: 'watch',
+          expectedSha256: sha256(source),
+          replacements: [
+            {
+              old: source,
+              new: 'export default function Demo() { return <div>Plain watch</div>; }',
+            },
+          ],
+        },
+        { getMessages: jest.fn().mockResolvedValue([message]), compareAndSwap },
+      ),
+    ).rejects.toMatchObject({ code: 'full_source_replacement', status: 400 });
+    expect(compareAndSwap).not.toHaveBeenCalled();
+  });
+
+  test('rejects invalid React syntax before writing', async () => {
+    const source = 'export default function Demo() { return <section>Styled watch</section>; }';
+    const message = {
+      messageId: 'assistant-1',
+      conversationId: 'conversation-1',
+      text: artifact('watch', source),
+    };
+    const compareAndSwap = jest.fn().mockResolvedValue(true);
+
+    await expect(
+      applyArtifactEdit(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          identifier: 'watch',
+          expectedSha256: sha256(source),
+          replacements: [{ old: '</section>', new: '</div>' }],
+        },
+        { getMessages: jest.fn().mockResolvedValue([message]), compareAndSwap },
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_artifact_syntax', status: 400 });
+    expect(compareAndSwap).not.toHaveBeenCalled();
+  });
+
   test('publishes bounded revision tokens for the latest artifact per identifier', async () => {
     const getMessages = jest.fn().mockResolvedValue([
       { messageId: 'a', text: artifact('dashboard', 'old') },

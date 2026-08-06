@@ -25,7 +25,21 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('@codesandbox/sandpack-react/unstyled', () => ({
-  SandpackProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  SandpackProvider: ({
+    children,
+    files,
+  }: {
+    children: ReactNode;
+    files: Record<string, unknown>;
+  }) => {
+    const React = jest.requireActual<typeof import('react')>('react');
+    const [mountedFile] = React.useState(files['App.tsx']);
+    return (
+      <div data-testid="sandpack-provider" data-file={JSON.stringify(mountedFile)}>
+        {children}
+      </div>
+    );
+  },
   SandpackPreview: ({ children }: { children?: ReactNode }) => (
     <div data-testid="sandpack-preview">{children}</div>
   ),
@@ -94,7 +108,9 @@ describe('ArtifactRepairButton', () => {
     );
 
     expect(mockAsk).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'com_knauf_artifact_fix' })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'com_knauf_artifact_fix' });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveClass('left-1/2', 'top-1/2');
   });
 
   it('does not repair an old artifact after an unrelated generation', () => {
@@ -188,5 +204,34 @@ describe('ArtifactRepairButton', () => {
     expect(
       screen.queryByRole('button', { name: 'com_knauf_artifact_fix' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('remounts Sandpack when selecting a different artifact version', () => {
+    const view = render(
+      <ArtifactPreview
+        artifact={{ ...artifact, id: 'artifact-version-1', content: 'VERSION ONE' }}
+        files={{ 'App.tsx': 'VERSION ONE' }}
+        fileKey="App.tsx"
+        template="react-ts"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+      />,
+    );
+
+    view.rerender(
+      <ArtifactPreview
+        artifact={{ ...artifact, id: 'artifact-version-2', content: 'VERSION TWO' }}
+        files={{ 'App.tsx': 'VERSION TWO' }}
+        fileKey="App.tsx"
+        template="react-ts"
+        sharedProps={{}}
+        previewRef={{ current: undefined } as never}
+      />,
+    );
+
+    expect(screen.getByTestId('sandpack-provider')).toHaveAttribute(
+      'data-file',
+      expect.stringContaining('VERSION TWO'),
+    );
   });
 });
