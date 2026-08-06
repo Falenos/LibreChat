@@ -9,6 +9,7 @@ const SINGLE_FILE_ARTIFACT_TYPES = new Set([
   'application/vnd.ant.react',
   'text/html',
   'application/vnd.code-html',
+  'image/svg+xml',
   'application/vnd.mermaid',
 ]);
 const FENCED_SOURCE_PATTERN =
@@ -24,6 +25,7 @@ const ALLOWED_ARTIFACT_TYPES = new Set([
   'application/vnd.mermaid',
   'application/vnd.code-html',
   'application/vnd.code',
+  'image/svg+xml',
   'application/vnd.librechat.docx-preview',
   'application/vnd.librechat.spreadsheet-preview',
   'application/vnd.librechat.presentation-preview',

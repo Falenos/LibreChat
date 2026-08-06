@@ -20,6 +20,9 @@ const artifactFilename = {
   'application/vnd.ant.react': 'App.tsx',
   'text/html': 'index.html',
   'application/vnd.code-html': 'index.html',
+  // [knauf] NO-TICKET — native SVG stays an editable vector source file.
+  'image/svg+xml': 'artwork.svg',
+  // End [knauf]
   /* Office preview buckets — the backend produces a complete sanitized
    * `index.html` document (head + body) and ships it via `attachment.text`.
    * The Sandpack `static` template loads it as-is. See
@@ -50,6 +53,9 @@ const artifactTemplate: Record<
   'application/vnd.ant.react': 'react-ts',
   'application/vnd.mermaid': 'react-ts',
   'application/vnd.code-html': 'static',
+  // [knauf] NO-TICKET — native SVG renders directly in the static sandbox.
+  'image/svg+xml': 'static',
+  // End [knauf]
   /* CODE bucket reuses the static markdown pipeline — `useArtifactProps`
    * pre-wraps the content in a fenced block and hands it to
    * `getMarkdownFiles`, so the rendered HTML uses the same `marked`
@@ -150,6 +156,9 @@ const dependenciesMap: Record<
   'application/vnd.ant.react': standardDependencies,
   'text/html': standardDependencies,
   'application/vnd.code-html': standardDependencies,
+  // [knauf] NO-TICKET — native SVG needs no runtime package installation.
+  'image/svg+xml': {},
+  // End [knauf]
   /* CODE renders in the static markdown template; no React or other
    * runtime deps. Empty map skips the sandpack `package.json` install
    * step entirely (same as MARKDOWN/PLAIN_TEXT). */

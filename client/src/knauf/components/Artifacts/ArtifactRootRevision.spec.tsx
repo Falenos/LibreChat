@@ -90,6 +90,14 @@ describe('Artifact root revision binding', () => {
       'artifact-revision:message-1:versioning-probe:version:2',
     );
     expect(screen.getByTestId('artifact-registry')).toHaveTextContent('EDITED VERSION TWO');
+    const registry = JSON.parse(screen.getByTestId('artifact-registry').textContent ?? '{}');
+    expect(
+      Object.values(registry).find(
+        (registered) => (registered as { content?: string }).content === 'ROOT VERSION ONE',
+      ),
+    ).toMatchObject({
+      knaufRevision: { identifier: 'versioning-probe', version: 1 },
+    });
   });
 
   it('keeps Version 1 before all later immutable revisions', async () => {
