@@ -260,9 +260,15 @@ Only after §1–4 are green in dev:
 - `librechat.yaml`: add `execute_code` to `endpoints.agents.capabilities`
   (rewrite the "excluded on purpose" comment). Keep `interface.runCode: false`
   (KK20-252) — execution is agent auto-run only.
-- `git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis` and run
-  the deployment-skills guard spec (its `bash_tool` / `/mnt/data` / pandas
-  promises are now all true on the one pool).
+- Re-enable both code-execution skills and update the guard spec
+  (`packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts`):
+  ```bash
+  git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis
+  git mv skill/_disabled/karl-xlsx          skill/karl-xlsx
+  ```
+  Their `bash_tool` / `/mnt/data` / pandas / xlsx promises are all true on the
+  one pool once the capability is on. (`karl-data-analysis` = general data work;
+  `karl-xlsx` = spreadsheets.)
 - Ships via the release pipeline (the yaml is baked into the image).
 
 ---

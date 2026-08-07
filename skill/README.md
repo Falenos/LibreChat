@@ -24,7 +24,17 @@ are not persisted as Skill documents in MongoDB.
 | `karl-guide` | Product guidance for Karl capabilities, navigation, roles, groups, settings, limits, and troubleshooting. | model-invocable + `$karl-guide` | skill gates |
 | `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | skill gates |
 | `web-research` | Uses model-native public-web search by default and the request-scoped `open_url` fetch only for an exact HTTPS link pasted in the current message; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
-| `_disabled/karl-data-analysis` | **Not loaded.** Sandbox workflow guidance (`bash_tool`, `/mnt/data`, matplotlib). Its body describes tools that do not exist while code execution is off, and its catalog entry would invite the model to promise work it cannot do. Re-enable with `git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis` once `execute_code` is in `endpoints.agents.capabilities` **and** a sandbox is reachable at `LIBRECHAT_CODE_BASEURL`. | — | needs `execute_code` |
+| `_disabled/karl-data-analysis` | **Not loaded.** General "run code on data" sandbox workflow (CSV/JSON/logs, stats, matplotlib, `/mnt/data`). Rewritten (v2.0.0) for the ACA code-interpreter pool — Python 3.12 + the verified library stack, the ~220 s / ~64 KB caps. | — | needs `execute_code` |
+| `_disabled/karl-xlsx` | **Not loaded.** Dedicated spreadsheet skill (read/analyze/author `.xlsx`/`.xls`/`.xlsb`/csv; multi-sheet, formulas, formatting, charts) with `references/{reading,authoring}.md`, including the LibreOffice recalc workflow. KARL-authored (not a copy of Anthropic's proprietary xlsx skill). | — | needs `execute_code` |
+
+Both code-execution skills are **parked** until code execution is live: their bodies advertise `bash_tool` / `/mnt/data` / pandas, so shipping them while `execute_code` is excluded invites the model to promise work it cannot do. Re-enable them **in the same change that flips `execute_code`** into `endpoints.agents.capabilities` (with a sandbox reachable at `LIBRECHAT_CODE_BASEURL`):
+
+```bash
+git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis
+git mv skill/_disabled/karl-xlsx          skill/karl-xlsx
+```
+
+Then add both to the loaded-set assertion in `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` and run it.
 
 `skill/_disabled/` is not scanned: discovery only looks at `skill/SKILL.md` and the immediate
 children of `skill/`, so a skill two levels down is invisible to the loader. The guard spec at
