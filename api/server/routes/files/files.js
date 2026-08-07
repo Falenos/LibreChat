@@ -78,6 +78,20 @@ const db = require('~/models');
 
 const router = express.Router();
 
+async function hasPdfMagicAtPath(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const head = Buffer.alloc(5);
+    const { bytesRead } = await handle.read(head, 0, 5, 0);
+    return bytesRead >= 5 && head.toString('ascii', 0, 5) === '%PDF-';
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
+  }
+}
+
 /**
  * Dispatch table for refreshing signed file URLs by storage source.
  * Adding a new provider only requires another entry here.
@@ -770,7 +784,9 @@ router.post('/', async (req, res) => {
     // [knauf] Reject encrypted OOXML containers globally (KK20-190, narrowed by
     // KK20-232). PDF access is classified separately below because an /Encrypt
     // dictionary can still be readable without credentials.
-    if (req.file?.path) {
+    const shouldRunGenericEncryptionCheck =
+      req.file?.path && !(req.file.mimetype === 'application/pdf' || (await hasPdfMagicAtPath(req.file.path)));
+    if (shouldRunGenericEncryptionCheck) {
       let encryptionCheck = { encrypted: false };
       try {
         encryptionCheck = await detectEncryptedFileAtPath(req.file.path, req.file.mimetype);
