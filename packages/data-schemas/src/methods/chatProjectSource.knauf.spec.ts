@@ -76,7 +76,7 @@ describe('ChatProjectSource methods', () => {
     expect(blocked).toBeNull();
   });
 
-  it('stores ready project file ids and keeps them isolated by project owner', async () => {
+  it('stores ready project file ids, includes legacy tenantless files, and keeps them isolated by project owner', async () => {
     const projectMethods = createChatProjectMethods(mongoose);
     const sourceMethods = createChatProjectSourceMethods(mongoose);
     const project = await projectMethods.createChatProject(user, {
@@ -113,6 +113,20 @@ describe('ChatProjectSource methods', () => {
       bytes: 42,
       embedded: true,
     });
+    await sourceMethods.createChatProjectSource(user, {
+      projectId,
+      file_id: 'file-legacy',
+      status: 'ready',
+    });
+    await File.create({
+      user,
+      file_id: 'file-legacy',
+      filename: 'legacy.md',
+      filepath: '/uploads/legacy.md',
+      type: 'text/markdown',
+      bytes: 42,
+      embedded: true,
+    });
     await File.create({
       user,
       tenantId: 'tenant-1',
@@ -139,10 +153,11 @@ describe('ChatProjectSource methods', () => {
 
     expect(created?.file_id).toBe('file-ready');
     expect(created?.sourceType).toBe('file');
-    expect(readyIds).toEqual(['file-ready']);
+    expect(readyIds).toEqual(expect.arrayContaining(['file-ready', 'file-legacy']));
+    expect(readyIds).toHaveLength(2);
     expect(listedForOtherUser).toEqual([]);
     expect(deleteByOtherUser).toBe(false);
-    expect(deletedAfterProjectRemoval).toBe(3);
+    expect(deletedAfterProjectRemoval).toBe(4);
   });
 
   it('deletes only the project file association and preserves the uploaded file row', async () => {

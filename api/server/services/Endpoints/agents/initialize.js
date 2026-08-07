@@ -330,6 +330,8 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   const loadTools = createToolLoader(signal, streamId, true);
   /** @type {Array<MongoFile>} */
   let requestFiles = req.body.files ?? [];
+  // [knauf] KK20-248 — hydrate agent runs with ready project knowledge files so
+  // project-scoped chats carry their attached library context into initialization.
   if (endpointOption.chatProjectId && req.user?.id) {
     const projectFileIds = await db.listReadyChatProjectSourceFileIds(
       req.user.id,
@@ -345,6 +347,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       requestFiles = requestFiles.concat(projectFiles.filter((file) => !seenFileIds.has(file.file_id)));
     }
   }
+  // End [knauf]
   /** @type {string} */
   const conversationId = req.body.conversationId;
   /** @type {string | undefined} */

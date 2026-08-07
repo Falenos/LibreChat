@@ -23,26 +23,25 @@ jest.mock('~/models', () => ({
   getFiles: jest.fn(),
 }));
 
-jest.mock('~/server/services/Files/knauf/cascadeDeleteConvoFiles', () => ({
-  deleteFilesWithDedupAwareness: jest.fn(),
-}));
-
-jest.mock('@librechat/api', () => ({
-  createProjectHandlers: jest.fn(() => ({
-    listProjects: jest.fn((_req, res) => res.status(200).json({ projects: [] })),
-    createProject: jest.fn((_req, res) => res.status(201).json({})),
-    assignConversationToProject: jest.fn((_req, res) => res.status(200).json({})),
-    listProjectFiles: jest.fn((_req, res) => res.status(200).json({ files: [] })),
-    addProjectFile: jest.fn((_req, res) => res.status(201).json({})),
-    deleteProjectFile: jest.fn((_req, res) => res.status(200).json({ deleted: true })),
-    getProject: jest.fn((_req, res) => res.status(200).json({})),
-    updateProject: jest.fn((_req, res) => res.status(200).json({})),
-    deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
-  })),
-}));
+jest.mock(
+  '@librechat/api',
+  () => ({
+    createProjectHandlers: jest.fn(() => ({
+      listProjects: jest.fn((_req, res) => res.status(200).json({ projects: [] })),
+      createProject: jest.fn((_req, res) => res.status(201).json({})),
+      assignConversationToProject: jest.fn((_req, res) => res.status(200).json({})),
+      listProjectFiles: jest.fn((_req, res) => res.status(200).json({ files: [] })),
+      addProjectFile: jest.fn((_req, res) => res.status(201).json({})),
+      deleteProjectFile: jest.fn((_req, res) => res.status(200).json({ deleted: true })),
+      getProject: jest.fn((_req, res) => res.status(200).json({})),
+      updateProject: jest.fn((_req, res) => res.status(200).json({})),
+      deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
+    })),
+  }),
+  { virtual: true },
+);
 
 const db = require('~/models');
-const { deleteFilesWithDedupAwareness } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
 const router = require('./projects');
 
 describe('[knauf] KK20-248 project file routes', () => {
@@ -73,10 +72,8 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(response.body).toEqual({ error: 'Project file not found' });
   });
 
-  it('deletes the project association and underlying uploaded file', async () => {
-    const file = { file_id: 'file-1', knauf_asset_id: 'asset-1', user: 'user-1', filename: 'doc.txt' };
+  it('deletes only the project association for a project file', async () => {
     db.listChatProjectSources.mockResolvedValue([{ file_id: 'file-1' }]);
-    db.getFiles.mockResolvedValue([file]);
     db.deleteChatProjectSource.mockResolvedValue(true);
 
     const response = await request(app).delete('/api/projects/project-1/files/file-1');
@@ -84,19 +81,10 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ deleted: true });
     expect(db.deleteChatProjectSource).toHaveBeenCalledWith('user-1', 'project-1', 'file-1');
-    expect(deleteFilesWithDedupAwareness).toHaveBeenCalledWith({
-      req: expect.objectContaining({ user: { id: 'user-1' } }),
-      files: [file],
-    });
+    expect(db.getFiles).not.toHaveBeenCalled();
   });
 
-  it('deletes project sources and underlying uploaded files when deleting a project', async () => {
-    const files = [
-      { file_id: 'file-1', knauf_asset_id: 'asset-1', user: 'user-1', filename: 'doc-1.txt' },
-      { file_id: 'file-2', knauf_asset_id: 'asset-2', user: 'user-1', filename: 'doc-2.txt' },
-    ];
-    db.listChatProjectSources.mockResolvedValue([{ file_id: 'file-1' }, { file_id: 'file-2' }]);
-    db.getFiles.mockResolvedValue(files);
+  it('deletes the project and its source associations without deleting library files', async () => {
     db.deleteChatProject.mockResolvedValue({ deletedCount: 1, modifiedCount: 0 });
     db.deleteChatProjectSourcesForProject.mockResolvedValue(2);
 
@@ -104,17 +92,10 @@ describe('[knauf] KK20-248 project file routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ deletedCount: 1, modifiedCount: 0 });
-    expect(db.listChatProjectSources).toHaveBeenCalledWith('user-1', 'project-1');
-    expect(db.getFiles).toHaveBeenCalledWith({
-      user: 'user-1',
-      file_id: { $in: ['file-1', 'file-2'] },
-    });
+    expect(db.listChatProjectSources).not.toHaveBeenCalled();
+    expect(db.getFiles).not.toHaveBeenCalled();
     expect(db.deleteChatProject).toHaveBeenCalledWith('user-1', 'project-1');
     expect(db.deleteChatProjectSourcesForProject).toHaveBeenCalledWith('user-1', 'project-1');
-    expect(deleteFilesWithDedupAwareness).toHaveBeenCalledWith({
-      req: expect.objectContaining({ user: { id: 'user-1' } }),
-      files,
-    });
   });
 });
 // End [knauf]

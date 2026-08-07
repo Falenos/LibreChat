@@ -98,6 +98,7 @@ export default function ChatRoute() {
     () => (verifiedRouteChatProjectId ? { chatProjectId: verifiedRouteChatProjectId } : {}),
     [verifiedRouteChatProjectId],
   );
+  // End [knauf]
 
   /**
    * The scoped project is gone even though the URL still carries `?projectId`. Drop

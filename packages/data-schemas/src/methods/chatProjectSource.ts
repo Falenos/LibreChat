@@ -154,7 +154,14 @@ export function createChatProjectSourceMethods(
         user,
         file_id: { $in: associatedFileIds },
         embedded: true,
-        ...(project.tenantId ? { tenantId: project.tenantId } : {}),
+        ...(project.tenantId
+          ? {
+              // [knauf] KK20-248 — include legacy user-owned file rows that predate
+              // tenantId persistence so project knowledge remains usable until backfilled.
+              $or: [{ tenantId: project.tenantId }, { tenantId: { $exists: false } }, { tenantId: null }],
+              // End [knauf]
+            }
+          : {}),
       })
         .select('file_id')
         .lean<Array<{ file_id: string }>>();

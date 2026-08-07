@@ -1,7 +1,6 @@
 const express = require('express');
 const { createProjectHandlers } = require('@librechat/api');
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
-const { deleteFilesWithDedupAwareness } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
 const db = require('~/models');
 
 const router = express.Router();
@@ -53,13 +52,9 @@ router.delete('/:projectId/files/:fileId', async (req, res) => {
       return res.status(404).json({ error: 'Project file not found' });
     }
 
-    const [file] = await db.getFiles({ user: req.user.id, file_id: fileId });
     const deleted = await db.deleteChatProjectSource(req.user.id, projectId, fileId);
     if (!deleted) {
       return res.status(404).json({ error: 'Project file not found' });
-    }
-    if (file) {
-      await deleteFilesWithDedupAwareness({ req, files: [file] });
     }
     return res.status(200).json({ deleted: true });
   } catch (error) {
@@ -69,13 +64,10 @@ router.delete('/:projectId/files/:fileId', async (req, res) => {
 // End [knauf]
 router.get('/:projectId', handlers.getProject);
 router.patch('/:projectId', handlers.updateProject);
-// [knauf] KK20-248 — deleting a project must remove its project knowledge files too.
+// [knauf] KK20-248 — deleting a project must remove its project knowledge associations too.
 router.delete('/:projectId', async (req, res) => {
   try {
     const { projectId } = req.params;
-    const sources = await db.listChatProjectSources(req.user.id, projectId);
-    const fileIds = sources.map((source) => source.file_id).filter(Boolean);
-    const files = fileIds.length ? await db.getFiles({ user: req.user.id, file_id: { $in: fileIds } }) : [];
 
     const result = await db.deleteChatProject(req.user.id, projectId);
     if (!result.deletedCount) {
@@ -83,9 +75,6 @@ router.delete('/:projectId', async (req, res) => {
     }
 
     await db.deleteChatProjectSourcesForProject(req.user.id, projectId);
-    if (files.length) {
-      await deleteFilesWithDedupAwareness({ req, files });
-    }
     return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({ error: 'Error deleting project' });
