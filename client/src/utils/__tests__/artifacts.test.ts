@@ -81,7 +81,7 @@ describe('detectArtifactTypeFromFile', () => {
     ['sheet.ods', TOOL_ARTIFACT_TYPES.SPREADSHEET],
     ['slides.pptx', TOOL_ARTIFACT_TYPES.PRESENTATION],
     // [knauf] NO-TICKET — uploaded SVG source becomes a native artifact.
-    ['mark.svg', 'image/svg+xml'],
+    ['mark.svg', TOOL_ARTIFACT_TYPES.SVG],
     // End [knauf]
   ])('classifies %s by extension', (filename, expected) => {
     /* Office types require `textFormat: 'html'` to route to their HTML

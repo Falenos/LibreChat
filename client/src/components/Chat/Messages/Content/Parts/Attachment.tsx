@@ -506,13 +506,19 @@ export default function Attachment({ attachment }: { attachment?: TAttachment })
     return null;
   }
 
-  if (isImageAttachment(attachment)) {
-    return <ImageAttachment attachment={attachment} />;
-  }
   // Single classification call. The result is threaded into
   // `PanelArtifact` -> `fileToArtifact` so the panel path doesn't
   // re-run `detectArtifactTypeFromFile` a second time.
   const artType = artifactTypeForAttachment(attachment);
+  // [knauf] NO-TICKET — source-bearing SVGs match the generic image predicate,
+  // but must stay editable and render through the native artifact Code/Preview panel.
+  if (artType === TOOL_ARTIFACT_TYPES.SVG) {
+    return <PanelArtifact attachment={attachment} type={artType} />;
+  }
+  // End [knauf]
+  if (isImageAttachment(attachment)) {
+    return <ImageAttachment attachment={attachment} />;
+  }
   if (artType === TOOL_ARTIFACT_TYPES.MERMAID) {
     return <MermaidArtifact attachment={attachment} />;
   }
@@ -550,15 +556,22 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
     if (isInternalSandboxArtifact(attachment)) {
       return;
     }
-    if (isImageAttachment(attachment)) {
-      imageAttachments.push(attachment);
-      return;
-    }
     if ((attachment as Partial<TFile>).status === 'pending') {
       panelRow.push({ attachment, type: null });
       return;
     }
     const artType = artifactTypeForAttachment(attachment);
+    // [knauf] NO-TICKET — route source-bearing SVGs before the generic image
+    // bucket so uploads become editable native artifacts, never broken <img> previews.
+    if (artType === TOOL_ARTIFACT_TYPES.SVG) {
+      panelRow.push({ attachment, type: artType });
+      return;
+    }
+    // End [knauf]
+    if (isImageAttachment(attachment)) {
+      imageAttachments.push(attachment);
+      return;
+    }
     if (artType === TOOL_ARTIFACT_TYPES.MERMAID) {
       mermaidArtifacts.push(attachment);
       return;
