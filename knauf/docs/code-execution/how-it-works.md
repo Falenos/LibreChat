@@ -101,7 +101,7 @@ bash, runs the script via `subprocess.run(['bash', …])`:
 
 | The code-interpreter pool has |                                       |
 | ----------------------------- | ------------------------------------- |
-| `python3`                     | ✓ (3.11)                              |
+| `python3`                     | ✓ (3.12)                              |
 | pandas / numpy / matplotlib   | ✓ **pandas 2.2.2**, numpy, matplotlib |
 | `bash`                        | ✓ `/usr/bin/bash`                     |
 
