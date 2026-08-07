@@ -110,15 +110,25 @@ plus 0/1 exit-code synthesis and increments `wrapper_parse_failures_total`.
 > runtime `pip install` can't rescue it either. **This is the pandas failure you
 > hit.**
 >
-> The fix is an infra decision (it changes the Terraform pools), not an adapter
-> bug: the pool that serves `lang=bash` needs the data-science stack. The clean
-> option is a **CustomContainer pool** — a small image with `bash` + `python3` +
-> pandas/numpy/matplotlib baked in — used for the bash path (and, since the two
-> languages don't share a sandbox anyway — see below — optionally for _both_
-> languages, giving one sandbox per conversation with everything present).
-> Tracked in the [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md)
-> and [backend-decision.md](backend-decision.md); until it lands, only pure-shell
-> work (and Python that needs no third-party libs) succeeds through an agent.
+> **The recommended fix needs no custom image and no egress: consolidate on the
+> Python (code-interpreter) pool.** Verified live — that pool already has **both
+> `bash` (`/usr/bin/bash`) and pandas/numpy/matplotlib**, and a bash subprocess
+> launched inside it sees pandas. So route **both** `lang=py` and `lang=bash` to
+> the code-interpreter pool (for `bash`, the wrapper runs the script via
+> `subprocess.run(['bash', …])`, which also yields the real exit code) and **drop
+> the Shell pool**. That single change closes all three gaps at once: pandas is
+> present for bash, `py` and `bash` now share one sandbox (files visible across
+> both — see below), and **egress stays disabled** (the secure default). It also
+> means one image Microsoft maintains, not one we own.
+>
+> Alternatives, both inferior for this use case: a **CustomContainer** pool (build
+> and own an image — only needed if KARL requires libraries the code-interpreter
+> image lacks); or **egress-enabled + `pip install`** (verified working, ~7 s for
+> pandas — but it opens sandbox internet egress, the posture you want _off_ for
+> untrusted code, and adds per-cold-session latency). Tracked in the
+> [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md) and
+> [backend-decision.md](backend-decision.md). Until the routing change lands, only
+> pure-shell work (and Python needing no third-party libs) succeeds through an agent.
 
 ---
 

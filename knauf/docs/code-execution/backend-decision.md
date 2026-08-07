@@ -60,24 +60,29 @@ The S1 spike confirmed the `Shell` pool runs `python3`, but a later check found 
 has **no pandas/numpy/matplotlib**, and the entire agent path (`bash_tool`,
 `lang=bash`) routes there — while pandas lives only in the `Python` pool, which
 agents never call (evidence in [`how-it-works.md`](how-it-works.md)). So the
-built-in-pools plan doesn't actually support KARL's data-analysis use case.
-Options, to settle before the `agk-infrastructure` Terraform lands:
+two-built-in-pools plan doesn't support KARL's data-analysis use case. Options,
+to settle before the `agk-infrastructure` Terraform lands:
 
-1. **CustomContainer pool with the data-science stack baked in (recommended).** A
-   small image (`bash` + `python3` + pandas/numpy/matplotlib) on a
-   `CustomContainer` session pool serving `lang=bash` — and, because `py` and
-   `bash` don't share a sandbox anyway, potentially serving **both** languages
-   from that one image, so a conversation gets a single sandbox with everything
-   present and files shared across languages. Cost: we build+own one small image
-   (a `build-*` workflow like the adapter's) and confirm CustomContainer billing;
-   still Microsoft-isolated, still no privileged pod.
-2. **Enable egress + `pip install` at session start.** Rejected posture (opens
-   sandbox egress) and slow/fragile per session.
-3. **Accept shell-only execution** (no third-party Python libs via agents) as a
-   documented interim while (1) is built.
+1. **Consolidate on the built-in Python (code-interpreter) pool — RECOMMENDED.**
+   Verified live: that pool already has **both `bash` (`/usr/bin/bash`) and
+   pandas/numpy/matplotlib**, and a bash subprocess inside it sees pandas. Route
+   **both** `lang=py` and `lang=bash` to it (the adapter's wrapper runs bash via
+   `subprocess.run(['bash', …])`, still giving a real exit code) and **drop the
+   Shell pool**. This closes all three gaps with **no image to build/own and no
+   egress**: pandas is present for bash; `py`/`bash` share one sandbox per
+   conversation (files visible across both); egress stays disabled. Adapter change
+   only (point both dialects at `/code/execute`); infra simplifies to one pool.
+2. **CustomContainer pool with a bespoke image.** Only if KARL needs libraries the
+   code-interpreter image lacks. Cost: build+own an image (+`build-*` workflow),
+   confirm CustomContainer billing and that it still exposes the exec/file API.
+   Reserve as a fallback.
+3. **Enable egress + `pip install` at session start.** Verified working (~7 s for
+   pandas on a cold session), but it opens sandbox internet egress — the posture
+   you want **off** for untrusted model code — and adds per-session latency.
+   Quick unblock, not the end state.
 
-This does **not** reopen the ACA-vs-self-hosted decision — it is about _which pool
-image_ ACA runs, still entirely within the chosen backend.
+This does **not** reopen the ACA-vs-self-hosted decision — it is about _which pool_
+(and image) ACA runs, entirely within the chosen backend.
 
 ## Verification
 

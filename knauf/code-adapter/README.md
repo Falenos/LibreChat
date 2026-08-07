@@ -33,13 +33,13 @@ The api-versions are pinned per pool (`ACA_API_VERSION_PY` / `ACA_API_VERSION_SH
 Bumping either requires refreshing the matching fixtures — `test/unit/acaShape.spec.ts`
 is the tripwire that fires when a shape drifts.
 
-> **⚠️ Important:** agent code execution runs through `bash_tool` → `lang=bash` →
-> the **Shell** pool, which has **no pandas/numpy**. So agent-driven data
-> analysis fails on the built-in Shell pool. Two pools are also two separate
-> sandboxes — a file written by `lang=py` is **not** visible to a `lang=bash`
-> call with the same `session_id`, and vice versa. Both point to the same infra
-> decision (a `CustomContainer` pool with the data-science stack, optionally
-> serving both languages from one image): see
+> **⚠️ Important (open item):** agent code execution runs through `bash_tool` →
+> `lang=bash` → the **Shell** pool, which has **no pandas/numpy**, so agent-driven
+> data analysis fails there today; and the two pools are two separate sandboxes
+> (a `lang=py` file isn't visible to `lang=bash` with the same `session_id`).
+> **Recommended fix (verified): route both languages to the code-interpreter
+> pool** — it already has `bash` + pandas/numpy/matplotlib — and drop the Shell
+> pool. Closes both gaps with no custom image and no egress. Details:
 > [`../docs/code-execution/how-it-works.md`](../docs/code-execution/how-it-works.md)
 > and [`../docs/code-execution/backend-decision.md`](../docs/code-execution/backend-decision.md).
 
