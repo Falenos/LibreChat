@@ -10,6 +10,11 @@ const searchEnabled = isEnabled(process.env.SEARCH);
 const indexingDisabled = isEnabled(process.env.MEILI_NO_SYNC);
 let currentTimeout = null;
 
+// [knauf] Periodically repair drift after an ephemeral Meilisearch restart.
+const reconciliationIntervalMs = 15 * 60 * 1000;
+let reconciliationInterval = null;
+// End [knauf]
+
 const defaultSyncThreshold = 1000;
 const syncThreshold = process.env.MEILI_SYNC_THRESHOLD
   ? parseInt(process.env.MEILI_SYNC_THRESHOLD, 10)
@@ -31,6 +36,19 @@ class MeiliSearchClient {
     return MeiliSearchClient.instance;
   }
 }
+
+// [knauf] Treat a missing ephemeral index as empty without hiding other provider failures.
+async function getIndexDocumentCount(index) {
+  try {
+    return (await index.getStats()).numberOfDocuments;
+  } catch (error) {
+    if (error.code === 'index_not_found') {
+      return 0;
+    }
+    throw error;
+  }
+}
+// End [knauf]
 
 /**
  * Deletes documents from MeiliSearch index that are missing the user field
@@ -232,8 +250,19 @@ async function performSync(flowManager, flowId, flowType) {
 
     // Check if we need to sync messages
     logger.info('[indexSync] Requesting message sync progress...');
-    const messageProgress = await Message.getSyncProgress();
-    if (!messageProgress.isComplete || settingsUpdated) {
+    let messageProgress = await Message.getSyncProgress();
+    // [knauf] Mongo flags survive Meilisearch pod resets; reset them when the index falls behind.
+    const messagesInMeili = await getIndexDocumentCount(client.index('messages'));
+    const messagesIndexBehind = messagesInMeili < messageProgress.totalProcessed;
+    if (messagesIndexBehind) {
+      logger.warn(
+        `[indexSync] Messages index has ${messagesInMeili} documents but Mongo marks ${messageProgress.totalProcessed} indexed. Forcing full re-sync.`,
+      );
+      await batchResetMeiliFlags(Message.collection);
+      messageProgress = await Message.getSyncProgress();
+    }
+    // End [knauf]
+    if (!messageProgress.isComplete || settingsUpdated || messagesIndexBehind) {
       logger.info(
         `[indexSync] Messages need syncing: ${messageProgress.totalProcessed}/${messageProgress.totalDocuments} indexed`,
       );
@@ -243,7 +272,12 @@ async function performSync(flowManager, flowId, flowType) {
       const unindexedMessages = messageCount - messagesIndexed;
       const noneIndexed = messagesIndexed === 0 && unindexedMessages > 0;
 
-      if (settingsUpdated || noneIndexed || unindexedMessages > syncThreshold) {
+      if (
+        settingsUpdated ||
+        messagesIndexBehind ||
+        noneIndexed ||
+        unindexedMessages > syncThreshold
+      ) {
         if (noneIndexed && !settingsUpdated) {
           logger.info('[indexSync] No messages marked as indexed, forcing full sync');
         }
@@ -262,8 +296,19 @@ async function performSync(flowManager, flowId, flowType) {
     }
 
     // Check if we need to sync conversations
-    const convoProgress = await Conversation.getSyncProgress();
-    if (!convoProgress.isComplete || settingsUpdated) {
+    let convoProgress = await Conversation.getSyncProgress();
+    // [knauf] Apply the same persisted-flag reconciliation to the conversations index.
+    const convosInMeili = await getIndexDocumentCount(client.index('convos'));
+    const convosIndexBehind = convosInMeili < convoProgress.totalProcessed;
+    if (convosIndexBehind) {
+      logger.warn(
+        `[indexSync] Conversations index has ${convosInMeili} documents but Mongo marks ${convoProgress.totalProcessed} indexed. Forcing full re-sync.`,
+      );
+      await batchResetMeiliFlags(Conversation.collection);
+      convoProgress = await Conversation.getSyncProgress();
+    }
+    // End [knauf]
+    if (!convoProgress.isComplete || settingsUpdated || convosIndexBehind) {
       logger.info(
         `[indexSync] Conversations need syncing: ${convoProgress.totalProcessed}/${convoProgress.totalDocuments} indexed`,
       );
@@ -273,7 +318,12 @@ async function performSync(flowManager, flowId, flowType) {
       const unindexedConvos = convoCount - convosIndexed;
       const noneConvosIndexed = convosIndexed === 0 && unindexedConvos > 0;
 
-      if (settingsUpdated || noneConvosIndexed || unindexedConvos > syncThreshold) {
+      if (
+        settingsUpdated ||
+        convosIndexBehind ||
+        noneConvosIndexed ||
+        unindexedConvos > syncThreshold
+      ) {
         if (noneConvosIndexed && !settingsUpdated) {
           logger.info('[indexSync] No conversations marked as indexed, forcing full sync');
         }
@@ -375,9 +425,59 @@ async function indexSync() {
   }
 }
 
+// [knauf] Run a silent bounded preflight; the existing Redis flow lock owns any required sync.
+async function needsReconciliation() {
+  const Message = mongoose.models.Message;
+  const Conversation = mongoose.models.Conversation;
+  if (!Message || !Conversation) {
+    return false;
+  }
+
+  const client = MeiliSearchClient.getInstance();
+  const [messageProgress, convoProgress, messagesInMeili, convosInMeili] = await Promise.all([
+    Message.getSyncProgress(),
+    Conversation.getSyncProgress(),
+    getIndexDocumentCount(client.index('messages')),
+    getIndexDocumentCount(client.index('convos')),
+  ]);
+
+  return (
+    messagesInMeili < messageProgress.totalProcessed ||
+    convosInMeili < convoProgress.totalProcessed ||
+    messageProgress.totalDocuments - messageProgress.totalProcessed > syncThreshold ||
+    convoProgress.totalDocuments - convoProgress.totalProcessed > syncThreshold
+  );
+}
+
+indexSync.startReconciliation = () => {
+  if (!searchEnabled || indexingDisabled || reconciliationInterval) {
+    return;
+  }
+
+  reconciliationInterval = setInterval(async () => {
+    try {
+      if (await needsReconciliation()) {
+        await indexSync();
+      }
+    } catch (error) {
+      logger.warn('[indexSync] Periodic reconciliation check failed:', error.message);
+    }
+  }, reconciliationIntervalMs);
+  reconciliationInterval.unref?.();
+};
+
+indexSync.stopReconciliation = () => {
+  clearInterval(reconciliationInterval);
+  reconciliationInterval = null;
+};
+// End [knauf]
+
 process.on('exit', () => {
   logger.debug('[indexSync] Clearing sync timeouts before exiting...');
   clearTimeout(currentTimeout);
+  // [knauf] Release the periodic reconciliation timer during shutdown.
+  indexSync.stopReconciliation();
+  // End [knauf]
 });
 
 module.exports = indexSync;
