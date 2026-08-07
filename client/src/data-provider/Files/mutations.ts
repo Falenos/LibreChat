@@ -172,6 +172,9 @@ export const useDeleteFilesMutation = (
       queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (cachefiles) =>
         (cachefiles ?? []).filter((file) => !deletedIds.has(file.file_id)),
       );
+      // [knauf] KK20-248 — deleting a library file must also evict any matching
+      // project-knowledge rows cached under QueryKeys.projectFiles so the project
+      // workspace and left-rail library stay in sync after one delete action.
       queryClient
         .getQueryCache()
         .findAll({ queryKey: [QueryKeys.projectFiles] })
@@ -184,6 +187,7 @@ export const useDeleteFilesMutation = (
             return nextFiles.length === cached.files.length ? cached : { ...cached, files: nextFiles };
           });
         });
+      // End [knauf]
 
       showToast({
         message: localize('com_ui_delete_success'),
