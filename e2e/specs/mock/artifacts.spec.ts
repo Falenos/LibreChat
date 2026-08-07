@@ -6,6 +6,8 @@ const ARTIFACT_SOURCE = `export default function App() {
   return <main data-testid="e2e-artifact-preview">E2E artifact preview</main>;
 }`;
 const CHROME_DEVTOOLS_PROBE = /\/\.well-known\/appspecific\/com\.chrome\.devtools\.json$/;
+// Mock providers disable title generation; the client/server polling contract uses 404 for no title.
+const DISABLED_TITLE_POLL = /\/api\/convos\/gen_title\/[^/?#]+$/;
 
 test.describe('artifacts', () => {
   test('ART-GEN-001 ART-GEN-003 ART-GEN-005 ART-PRE-001 ART-PRE-002 ART-DL-001 ART-OPS-005 @artifact-pr', async ({
@@ -20,7 +22,7 @@ test.describe('artifacts', () => {
     page.on('console', (message) => {
       if (message.type() !== 'error') return;
       const location = message.location();
-      if (!CHROME_DEVTOOLS_PROBE.test(location.url)) {
+      if (!CHROME_DEVTOOLS_PROBE.test(location.url) && !DISABLED_TITLE_POLL.test(location.url)) {
         consoleErrors.push(`${message.text()} (${location.url || 'unknown source'})`);
       }
     });
@@ -35,6 +37,10 @@ test.describe('artifacts', () => {
         badResponses.push(`${response.request().method()} ${response.url()} ${response.status()}`);
       }
     });
+
+    await page.route('**/api/convos/gen_title/**', (route) =>
+      route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }),
+    );
 
     await page.goto(NEW_CHAT_PATH);
     await sendMessage(page, 'E2E_ARTIFACT_REPLY');
