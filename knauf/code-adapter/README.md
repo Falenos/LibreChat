@@ -6,10 +6,10 @@ the code in **ACA dynamic session pools** (Microsoft-managed Hyper-V sandboxes)
 on the back. Zero LibreChat source changes; removing `LIBRECHAT_CODE_BASEURL`
 rolls the whole feature back.
 
-Design rationale and the backend decision live in
-[`knauf/docs/proposals/code-interpreter-implementation-designs.md`](../docs/proposals/code-interpreter-implementation-designs.md)
-(Option 2); why this is a separate service rather than a router inside LibreChat is argued in
-[`knauf/docs/proposals/code-adapter-placement.md`](../docs/proposals/code-adapter-placement.md).
+Design docs live in [`knauf/docs/code-execution/`](../docs/code-execution/): **how it works**
+([how-it-works.md](../docs/code-execution/how-it-works.md)), the **backend decision**
+([backend-decision.md](../docs/code-execution/backend-decision.md)), and **why a separate service
+rather than a router inside LibreChat** ([placement-and-justification.md](../docs/code-execution/placement-and-justification.md)).
 This README is the operational reference for the service itself.
 
 ## The ACA backend contract (verified live, Aug 2026)
