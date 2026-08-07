@@ -2,7 +2,7 @@
 
 | Status | Owner | Started | Target | Related |
 |---|---|---|---|---|
-| PR 2 in progress | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228) merged; KK20-253 (PDF permission governance; separate follow-up) |
+| PR 2 ready for review | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228) merged; KK20-253 (PDF permission governance; separate follow-up) |
 
 ## Outcome
 
@@ -51,7 +51,9 @@ Knowledge uses Azure AI Search `/agent/embed` when `AZURE_SEARCH_ENABLED=true`, 
 fallback uses pgvector `/embed` when it is false. Node text extraction belongs to the separate
 `context` path and is not a fallback for File Search.
 
-The current upload gate scans bytes for `/Encrypt` and rejects both encrypted cases:
+Before PR 1, the upload gate scanned bytes for `/Encrypt` and rejected both encrypted cases. PR 1
+replaced that heuristic with the isolated PDF.js access probe, so the current classifier distinguishes
+documents that are readable without credentials from documents that require an open password:
 
 | Case | PDF access | Required behavior |
 |---|---|---|
@@ -63,15 +65,15 @@ For the standard PDF security handler, libraries commonly detect case B by attem
 user password. This is an internal probe, not a password users enter. The KK20-232 sample is case B:
 `pdfjs-dist` and the RAG API's pinned `pypdf==6.13.3` stack both open and extract all 18 pages
 without supplied credentials. If Azure Document Intelligence rejects it, the existing RAG loader
-falls back to pypdf. The current `/Encrypt` upload gate is therefore the reported defect.
+falls back to pypdf. The former `/Encrypt` upload gate was therefore the reported defect.
 
 GitOps now contains dedicated dev and prod indexing-worker services that run
 `npm run backend:worker`, use the same application image as their API deployment, and set
-`KNAUF_INDEXING_WORKER_ENABLED=true` in the worker pods. The API deployments set
-`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` but do not currently set
-`KNAUF_INDEXING_WORKER_ENABLED`. Because effective acceptance is evaluated in the API process, the
-API deployments must also declare the worker available before they can return async acceptance.
-This is a rollout prerequisite, not a reason to keep rejecting case B.
+`KNAUF_INDEXING_WORKER_ENABLED=true` in the worker pods. Companion GitOps
+[PR #309](https://github.com/Knauf-Group/agk-deployment-configs/pull/309) is merged and also sets
+`KNAUF_INDEXING_WORKER_ENABLED=true` beside `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` in the dev and
+prod API deployments. Because effective acceptance is evaluated in the API process, this declaration
+allows the API to return async acceptance after the matching PR 2 image is deployed.
 
 ## Core invariants
 
@@ -142,14 +144,18 @@ is separately approved and enabled, case C retains a typed password-required rej
 
 ### PR 2 - Prove downstream and deployment readiness
 
-Implementation started on `feat/kk20-232-pdf-downstream-readiness`. The first
-rollout guard makes effective async acceptance require both the acceptance flag
-and declared worker availability. Environments that set only
+PR 2 is implemented on `feat/kk20-232-pdf-downstream-readiness`. Its rollout
+guard makes effective async acceptance require both the acceptance flag and
+declared worker availability. Environments that set only
 `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` therefore retain the transient queued
-state but immediately claim and embed synchronously. Dev and prod GitOps must
-set `KNAUF_INDEXING_WORKER_ENABLED=true` on the API deployment after the
-dedicated worker is verified Healthy; the worker deployment already sets it
-for its own startup gate.
+state but immediately claim and embed synchronously. Dev and prod GitOps now
+declare `KNAUF_INDEXING_WORKER_ENABLED=true` on the API deployment as well as
+the worker deployment through merged companion PR #309.
+
+The companion GitOps change is merged. Merge PR 2 through the standard release process to produce
+and deploy the matching application/worker image in dev, then run the deployed fixture matrix.
+Production promotion remains blocked until the exact release has passed the required readiness,
+retrieval, citation, rejection, and worker-health checks.
 
 Run unencrypted, permission-encrypted but credential-free, signed/certified, PDF/A, malformed, and
 open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. The
