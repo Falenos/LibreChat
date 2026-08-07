@@ -918,6 +918,78 @@ export function buildLangfuseConfig(
 }
 // End [knauf]
 
+// [knauf] NO-TICKET — the OpenAI client timeout ends when response headers
+// arrive, so a Model Router stream can otherwise remain open indefinitely.
+// Abort only while a body read is idle; active streams and caller cancellation
+// retain their existing behavior.
+export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unknown>): void {
+  const model = typeof cfg.model === 'string' ? cfg.model.toLowerCase() : '';
+  const timeout = cfg.timeout;
+  if (!model.includes('model-router') || typeof timeout !== 'number' || timeout <= 0) {
+    return;
+  }
+
+  const sourceConfiguration = (cfg.configuration ?? {}) as Record<string, unknown>;
+  const configuration = { ...sourceConfiguration };
+  const baseFetch =
+    typeof sourceConfiguration.fetch === 'function'
+      ? (sourceConfiguration.fetch as typeof fetch)
+      : globalThis.fetch;
+
+  configuration.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
+    const [input, init] = args;
+    const idleController = new AbortController();
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, idleController.signal])
+      : idleController.signal;
+    const response = await baseFetch(input, { ...init, signal });
+    if (response.body == null) {
+      return response;
+    }
+
+    const reader = response.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const timer = setTimeout(
+          () =>
+            idleController.abort(new DOMException('Model Router stream timed out', 'TimeoutError')),
+          timeout,
+        );
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            controller.close();
+          } else {
+            controller.enqueue(chunk.value);
+          }
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      async cancel(reason) {
+        idleController.abort(reason);
+        await reader.cancel(reason);
+      },
+    });
+
+    const wrappedResponse = new Response(body, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    Object.defineProperties(wrappedResponse, {
+      redirected: { value: response.redirected },
+      type: { value: response.type },
+      url: { value: response.url },
+    });
+    return wrappedResponse;
+  };
+  cfg.configuration = configuration;
+}
+// End [knauf]
+
 /**
  * Creates a new Run instance with custom handlers and configuration.
  *
@@ -1062,6 +1134,11 @@ export async function createRun({
       user: createSafeUser(user),
       body: requestBody,
     });
+
+    // [knauf] NO-TICKET — enforce the configured timeout between streamed
+    // Model Router chunks; the OpenAI client only applies it before headers.
+    applyKnaufModelRouterStreamIdleTimeout(llmConfig as Record<string, unknown>);
+    // End [knauf]
 
     /** Resolves issues with new OpenAI usage field */
     if (
