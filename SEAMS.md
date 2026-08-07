@@ -692,15 +692,12 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Projects/ProjectWorkspace.tsx` | `ProjectFilesSection` import and mount | 15–17, 176–178 | Adds the Knauf project-files panel to the upstream project workspace while keeping the project resource UI isolated in a Knauf-only component. | `npm run build:client` | KK20-248 |
 | `client/src/data-provider/Projects/queries.ts` | `useProjectFilesQuery` | 56–72 | React Query reader for explicit project-file associations keyed by project id, matching the new `/projects/:projectId/files` API. | `npm run build:client` | KK20-248 |
 | `client/src/data-provider/Projects/mutations.ts` | `useAddProjectFileMutation`, `useDeleteProjectFileMutation` | 129–165 | React Query mutations for attaching/removing uploaded files from project knowledge and invalidating both project and library file caches. | `npm run build:client` | KK20-248 |
-| `client/src/components/Chat/ProjectLandingChip.tsx` | `ProjectLandingChip` read-only project badge | 1–16 | Shows the active project on a project-scoped chat landing without exposing project switching/removal controls that duplicate the surrounding project context. | `npm run build:client` | KK20-248 |
-| `client/src/routes/ChatRoute.tsx` | Project scope resolution fallback | 60–109, 149–304 | Resolves the active project from `?projectId` for new project chats and falls back to persisted `conversation.chatProjectId` for existing project chats, so the persistent header project badge appears on already-created chats too. | `npm run build:client`; `npm run test:seams` | KK20-248 |
 | `packages/data-schemas/src/methods/chatProject.ts` | — | 14–16, 96–98, 358–362 | KK20-248 — project-level instructions shared by project chats. | — | — |
 | `packages/data-schemas/src/schema/chatProject.ts` | — | 19–26 | KK20-248 — project-level instructions shared by project chats. | — | — |
 | `packages/data-schemas/src/types/chatProject.ts` | — | 7–9 | KK20-248 — project-level instructions shared by project chats. | — | — |
 | `api/server/routes/projects.knauf.test.js` | Project file download route authorization | 1–70 | Seam test — proves project knowledge downloads redirect only after the requested file is attached to the authenticated user's project. | Self | KK20-248 |
 | `packages/data-schemas/src/methods/chatProjectSource.ts` | `deleteChatProjectSourcesByFileId` | 237–259 | Adds an owner-scoped cleanup helper so deleting a library file can remove every project knowledge association pointing at the same `file_id`. | `npm run test:packages:data-schemas -- --runInBand src/methods/chatProjectSource.knauf.spec.ts`; `npm run build:data-schemas` | KK20-248 |
 | `api/server/routes/files/files.js` | `router.delete('/')` project-source cleanup | 297–301, 407–411 | After dedup-aware library-file deletion succeeds, also delete matching `ChatProjectSource` rows so removing a file from the left rail removes it from attached projects too. | `api/server/routes/files/files.test.js`; `npm run build:api` | KK20-248 |
-| `client/src/data-provider/Files/mutations.ts` | `useDeleteFilesMutation` project-files cache eviction | 105–120 | When a library file is deleted, also evict matching rows from any cached `[QueryKeys.projectFiles, projectId]` queries so an already-open project workspace stops showing the removed file immediately. | `client/src/data-provider/Files/mutations.knauf.spec.tsx`; `npm run build:client` | KK20-248 |
 | `client/src/components/Chat/Messages/Content/Part.tsx` | — | 35–39, 144–152 | Render completed in-place artifact patches as compact version pointers. | — | — |
 | `packages/data-provider/src/types.ts` | `TArtifactShareLocator` revision variant | 381–384 | Lets historical artifact cards request a server-owned immutable revision snapshot instead of sharing the mutable latest directive | `client/src/knauf/components/Artifacts/ShareArtifactButton.spec.tsx`, `api/server/services/Artifacts/knauf/share.spec.js` | NO-TICKET |
 | `client/src/utils/artifacts.ts` | `knaufSlideDeckModule` import and `/knauf/slides.tsx` shared-file mount | 15–17, 964–966 | Mounts one platform-owned deck renderer into every React artifact sandbox so generated presentations provide data instead of duplicating navigation, branding, theme, and export code | `client/src/knauf/sandbox/slideDeckModule.knauf.spec.ts` | NO-TICKET |
@@ -765,6 +762,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-provider/src/file-config.ts` | `knaufCategorySizeLimits.svg` | SVG size category | Raises the shared SVG source ceiling to the product-facing 8 MB limit for client and server enforcement | `packages/data-provider/src/file-config.spec.ts` | NO-TICKET |
 | `packages/data-provider/src/file-config.spec.ts` | SVG category limit case | SVG size assertion | Pins the shared SVG source category at 8 MB | Self | NO-TICKET |
 | `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
+| `client/src/data-provider/Files/mutations.knauf.spec.tsx` | — | 1–77 | KK20-248 — deleting from the library must also evict matching project-file cache rows. | Self | — |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1215,6 +1213,13 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Artifacts/knauf/edit*.js` | Shared Knauf artifact validator and existing authenticated compare-and-swap | Medium — applies the same SVG safety contract to every persisted native SVG revision | Focused edit suite | NO-TICKET |
 | `client/src/knauf/components/Chat/KnaufUploadFormatsDialog*.tsx` | Shared upload-size map and existing Knauf dialog surface | Low — adds one source-cap group so displayed SVG guidance matches enforced policy | Focused dialog suite | NO-TICKET |
 | `skill/karl-artifacts/SKILL.md` | Deployment skill loader and existing `edit_artifact` contract | Medium — makes attached SVG interpretation and first-edit native artifact creation explicit while preserving immutable uploads | Deployment skill suite | NO-TICKET |
+| `api/knauf/fixtures/pdf-access/01-plain-unencrypted.pdf` | — | — | — | — |
+| `api/knauf/fixtures/pdf-access/02-owner-password-broad-permissions.pdf` | — | — | — | — |
+| `api/knauf/fixtures/pdf-access/03-owner-password-restricted-assembly-extraction.pdf` | — | — | — | — |
+| `api/knauf/fixtures/pdf-access/04-open-password-required.pdf` | — | — | — | — |
+| `api/knauf/fixtures/pdf-access/06-certified-docmdp-no-changes.pdf` | — | — | — | — |
+| `api/knauf/fixtures/pdf-access/malformed.pdf` | — | — | — | — |
+| `client/src/knauf/components/Projects/KnaufProjectFilesSection.knauf.spec.tsx` | — | — | — | — |
 <!-- seams:new:end -->
 
 ## Static Assets
