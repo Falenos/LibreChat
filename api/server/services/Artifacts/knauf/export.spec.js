@@ -2,9 +2,11 @@ const mockScreenshot = jest.fn();
 const mockPdf = jest.fn();
 const mockSetContent = jest.fn();
 const mockGoto = jest.fn();
-const mockWaitForTimeout = jest.fn();
+const mockPageWaitForFunction = jest.fn();
+const mockPageEvaluate = jest.fn();
 const mockPreviewWaitForFunction = jest.fn();
 const mockPreviewEvaluate = jest.fn();
+const mockSetViewportSize = jest.fn();
 const mockRoute = jest.fn();
 const mockCloseContext = jest.fn();
 const mockCloseBrowser = jest.fn();
@@ -32,6 +34,8 @@ describe('artifact renderer', () => {
     mockScreenshot.mockReset().mockResolvedValue(Buffer.from('png'));
     mockPdf.mockReset().mockResolvedValue(Buffer.from('pdf'));
     mockPreviewEvaluate.mockReset();
+    mockPageEvaluate.mockReset().mockResolvedValue(undefined);
+    mockPageWaitForFunction.mockReset().mockResolvedValue(undefined);
     mockPreviewWaitForFunction.mockReset().mockResolvedValue(undefined);
     mockGoto.mockReset().mockResolvedValue(undefined);
     mockPreviewEvaluate.mockImplementation(async (callback) => {
@@ -60,8 +64,9 @@ describe('artifact renderer', () => {
               contentFrame: jest.fn().mockResolvedValue(previewFrame),
             }),
           }),
-          waitForTimeout: mockWaitForTimeout.mockResolvedValue(undefined),
-          setViewportSize: jest.fn().mockResolvedValue(undefined),
+          evaluate: mockPageEvaluate,
+          waitForFunction: mockPageWaitForFunction,
+          setViewportSize: mockSetViewportSize.mockResolvedValue(undefined),
           setContent: mockSetContent.mockResolvedValue(undefined),
           screenshot: mockScreenshot,
           pdf: mockPdf,
@@ -93,13 +98,79 @@ describe('artifact renderer', () => {
       expect.objectContaining({ executablePath: expect.any(String) }),
     );
     expect(mockRoute).toHaveBeenCalled();
-    expect(mockWaitForTimeout).toHaveBeenCalledWith(5000);
+    expect(mockPageWaitForFunction).toHaveBeenCalled();
     expect(mockScreenshot).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'png', fullPage: true }),
     );
     expect(() => getRenderSnapshot(token, secret)).toThrow(ArtifactExportError);
     expect(mockCloseContext).toHaveBeenCalled();
     expect(mockCloseBrowser).toHaveBeenCalled();
+  });
+
+  it('does not capture while Sandpack still shows startup progress outside the iframe', async () => {
+    await renderArtifact(artifact, 'png');
+
+    const readiness = mockPageWaitForFunction.mock.calls[0][0];
+    let overlay = {};
+    const root = {
+      innerText: '[3/3] Starting',
+      querySelector: jest.fn((selector) => (selector === 'iframe' ? {} : overlay)),
+    };
+    global.document = { querySelector: jest.fn().mockReturnValue(root) };
+    try {
+      expect(readiness()).toBe(false);
+      root.innerText = '';
+      expect(readiness()).toBe(false);
+      overlay = null;
+      expect(readiness()).toBe(true);
+    } finally {
+      delete global.document;
+    }
+  });
+
+  it('expands the preview iframe to the measured artifact height before capture', async () => {
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 2400;
+      }
+      if (source.includes("querySelectorAll('button')")) {
+        return 1;
+      }
+      return undefined;
+    });
+
+    await renderArtifact(artifact, 'png');
+
+    expect(mockSetViewportSize).toHaveBeenCalledWith({ width: 1440, height: 2400 });
+    expect(mockPageEvaluate).toHaveBeenCalledWith(expect.any(Function), 2400);
+    expect(mockPageEvaluate.mock.calls[0][0].toString()).toContain(
+      '[data-knauf-artifact-export] iframe',
+    );
+    const fitFrame = mockPageEvaluate.mock.calls[0][0];
+    const style = { isConnected: false };
+    const appendChild = jest.fn();
+    global.document = {
+      getElementById: jest.fn().mockReturnValue(null),
+      createElement: jest.fn().mockReturnValue(style),
+      head: { appendChild },
+    };
+    try {
+      fitFrame(2400);
+      expect(style).toEqual(
+        expect.objectContaining({
+          id: 'knauf-artifact-export-frame-fit',
+          textContent:
+            '[data-knauf-artifact-export] iframe{height:2400px!important;max-height:none!important;flex:none!important}',
+        }),
+      );
+      expect(appendChild).toHaveBeenCalledWith(style);
+    } finally {
+      delete global.document;
+    }
+    expect(mockPageEvaluate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockScreenshot.mock.invocationCallOrder[0],
+    );
   });
 
   it('prints a static screen screenshot for PDF downloads', async () => {

@@ -143,6 +143,26 @@ const expectsSlideContract = (artifact) =>
   artifact.content.includes('/knauf/slides') ||
   artifact.content.includes('data-knauf-export-pages');
 
+const waitForSandboxReady = async (page) => {
+  try {
+    await page.waitForFunction(
+      () => {
+        const loading =
+          /\[\d+\/\d+\]\s+(?:Downloading manifest|Downloaded .+ \(\d+\/\d+\)|Starting)/m;
+        const root = document.querySelector('[data-knauf-artifact-export]');
+        const overlay = root?.querySelector('.sp-overlay.sp-loading, .sp-overlay.sp-error');
+        return (
+          Boolean(root?.querySelector('iframe')) && !overlay && !loading.test(root?.innerText ?? '')
+        );
+      },
+      undefined,
+      { timeout: EXPORT_TIMEOUT_MS },
+    );
+  } catch (error) {
+    throw new ArtifactExportError('Artifact preview did not become ready', 500, { cause: error });
+  }
+};
+
 const waitForStablePreview = async (previewFrame, requireSlideContract) => {
   try {
     await previewFrame.waitForFunction(
@@ -182,6 +202,33 @@ const waitForStablePreview = async (previewFrame, requireSlideContract) => {
   } catch (error) {
     throw new ArtifactExportError('Artifact preview did not become ready', 500, { cause: error });
   }
+};
+
+const fitPreviewFrame = async (page, previewFrame, requireSlideContract) => {
+  let height = 0;
+  for (let pass = 0; pass < 2; pass += 1) {
+    await previewFrame.evaluate(async () => document.fonts?.ready);
+    const contentHeight = await previewFrame.evaluate(() =>
+      Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+    );
+    const nextHeight = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, contentHeight));
+    if (nextHeight === height) {
+      break;
+    }
+    height = nextHeight;
+    await page.setViewportSize({ width: VIEWPORT.width, height });
+    await page.evaluate((fittedHeight) => {
+      const id = 'knauf-artifact-export-frame-fit';
+      const style = document.getElementById(id) ?? document.createElement('style');
+      style.id = id;
+      style.textContent = `[data-knauf-artifact-export] iframe{height:${fittedHeight}px!important;max-height:none!important;flex:none!important}`;
+      if (!style.isConnected) {
+        document.head.appendChild(style);
+      }
+    }, height);
+    await waitForStablePreview(previewFrame, requireSlideContract);
+  }
+  return height;
 };
 
 const getPreviewPageCount = (previewFrame, requireSlideContract) =>
@@ -259,19 +306,14 @@ const renderArtifact = async (input, format) => {
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: EXPORT_TIMEOUT_MS });
     const iframe = page.locator('[data-knauf-artifact-export] iframe');
     await iframe.waitFor({ state: 'visible', timeout: EXPORT_TIMEOUT_MS });
+    await waitForSandboxReady(page);
     const iframeHandle = await iframe.elementHandle();
     const previewFrame = await iframeHandle?.contentFrame();
     if (!previewFrame) {
       throw new ArtifactExportError('Artifact preview did not start', 500);
     }
-    await page.waitForTimeout(5000);
     await waitForStablePreview(previewFrame, requireSlideContract);
-    await previewFrame.evaluate(async () => document.fonts?.ready);
-    const contentHeight = await previewFrame.evaluate(() =>
-      Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
-    );
-    const height = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, contentHeight));
-    await page.setViewportSize({ width: VIEWPORT.width, height });
+    const height = await fitPreviewFrame(page, previewFrame, requireSlideContract);
     const pageCount = await getPreviewPageCount(previewFrame, requireSlideContract);
     if (pageCount < 1) {
       throw new ArtifactExportError('Artifact preview did not become ready', 500);
