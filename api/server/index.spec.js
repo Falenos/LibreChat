@@ -197,6 +197,9 @@ describe('Server Configuration', () => {
     const response = await request(app).get('/');
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+    // [knauf] Pin the browser policy that suppresses local-network permission prompts.
+    expect(response.headers['permissions-policy']).toBe('local-network-access=()');
+    // End [knauf]
     expect(response.headers['pragma']).toBe('no-cache');
     expect(response.headers['expires']).toBe('0');
   });

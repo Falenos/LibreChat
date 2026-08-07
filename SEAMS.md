@@ -734,6 +734,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | uploaded SVG attachment routing regression | SVG single/group assertions | Proves both attachment render paths prefer the native artifact card even when SVG dimensions satisfy the image predicate | Self | NO-TICKET |
 | `api/server/services/Files/process.spec.js` | `acceptance flag without worker falls back to synchronous indexing` | 2280–2294 | Proves the deployed accept-on/worker-off mismatch queues only transiently, claims and embeds in-request, and returns 200 instead of stranding an async upload | Self | KK20-232 |
 | `api/server/services/Files/process.js` | `processAgentFileUpload` backend-aligned generation route | 1038–1565 | Reuses the FileAsset's persisted embed route so Agent Knowledge falls back to pgvector `/embed` when Azure AI Search is disabled while retaining `/agent/embed` for Azure Search | `api/server/services/Files/process.spec.js` (`falls Agent Knowledge back to pgvector when Azure Search is disabled`, `uses the Agent Knowledge route when Azure Search is enabled`) | KK20-232 |
+| `api/server/index.js` | `sendIndexHtml` local-network permissions policy | 176–178 | Disables Local Network Access for the top-level document so Chrome blocks accidental private-network requests without prompting users | `api/server/index.spec.js` (`should not cache index page`) | NO-TICKET |
+| `api/server/index.spec.js` | `should not cache index page` permissions-policy assertion | 200–202 | Proves the HTML response denies Local Network Access through the browser-enforced policy header | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
