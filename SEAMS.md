@@ -737,6 +737,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/db/indexSync.js` | `getIndexDocumentCount`, `performSync`, `needsReconciliation`, `indexSync.startReconciliation` | 13–16, 40–51, 254–264, 300–310, 428–480 | Detects when ephemeral Meilisearch document counts fall behind durable Mongo sync flags, resets only the affected collection, and runs a silent 15-minute preflight so a pod restart self-heals without waiting for an API restart | `api/db/indexSync.spec.js` | NO-TICKET |
 | `api/db/indexSync.spec.js` | ephemeral-index drift and periodic no-op regressions | 163–216 | Pins count-based flag reset/full reindex behavior and proves healthy periodic checks do not enter the noisy full-sync path | Self | NO-TICKET |
 | `api/server/index.js` | `startServer` Meilisearch reconciliation startup | 110–112 | Starts the bounded reconciliation loop after the initial background sync so Meilisearch data loss is detected while API pods remain alive | `api/db/indexSync.spec.js` | NO-TICKET |
+| `api/server/index.js` | `sendIndexHtml` local-network permissions policy | 176–178 | Disables Local Network Access for the top-level document so Chrome blocks accidental private-network requests without prompting users | `api/server/index.spec.js` (`should not cache index page`) | NO-TICKET |
+| `api/server/index.spec.js` | `should not cache index page` permissions-policy assertion | 200–202 | Proves the HTML response denies Local Network Access through the browser-enforced policy header | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
