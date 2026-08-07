@@ -116,15 +116,16 @@ jobs:
             --arg workflow_sha "$RUN_HEAD_SHA" \
             --argjson run_id "$INPUT_STAGE_RUN_ID" \
             --argjson run_attempt "$RUN_ATTEMPT" \
-            '.schema == 1 and .repository == $repository and .workflow_ref == $workflow_ref and
+            '.schema == 2 and .repository == $repository and .workflow_ref == $workflow_ref and
              .workflow_sha == $workflow_sha and .stage_run_id == $run_id and
              .stage_run_attempt == $run_attempt and
              (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
              (.image_digest | test("^sha256:[0-9a-f]{64}$")) and
              (.app_revision | test("^[0-9a-f]{40}$")) and
+             (.app_gitops_revision | test("^[0-9a-f]{40}$")) and
              (.worker_revision | test("^[0-9a-f]{40}$")) and
              (.gitops_revision | test("^[0-9a-f]{40}$")) and
-             .app_revision == .worker_revision and .app_revision == .gitops_revision and
+             .app_gitops_revision == .worker_revision and .app_gitops_revision == .gitops_revision and
              (.app_config_sha256 | test("^[0-9a-f]{64}$")) and
              (.worker_config_sha256 | test("^[0-9a-f]{64}$")) and
              .app_runtime_digest == .image_digest and
@@ -142,6 +143,7 @@ jobs:
             echo "version=$VERSION"
             echo "image-digest=$(jq -er '.image_digest' "$PROVENANCE_FILE")"
             echo "app-revision=$(jq -er '.app_revision' "$PROVENANCE_FILE")"
+            echo "app-gitops-revision=$(jq -er '.app_gitops_revision' "$PROVENANCE_FILE")"
             echo "worker-revision=$(jq -er '.worker_revision' "$PROVENANCE_FILE")"
             echo "app-config-sha=$(jq -er '.app_config_sha256' "$PROVENANCE_FILE")"
             echo "worker-config-sha=$(jq -er '.worker_config_sha256' "$PROVENANCE_FILE")"
@@ -215,6 +217,7 @@ jobs:
         env:
           EXPECTED_DIGEST: ${{ steps.provenance.outputs.image-digest }}
           EXPECTED_APP_REVISION: ${{ steps.provenance.outputs.app-revision }}
+          EXPECTED_APP_GITOPS_REVISION: ${{ steps.provenance.outputs.app-gitops-revision }}
           EXPECTED_WORKER_REVISION: ${{ steps.provenance.outputs.worker-revision }}
           EXPECTED_APP_CONFIG_SHA: ${{ steps.provenance.outputs.app-config-sha }}
           EXPECTED_WORKER_CONFIG_SHA: ${{ steps.provenance.outputs.worker-config-sha }}
@@ -250,9 +253,9 @@ jobs:
           fi
 
           git merge-base --is-ancestor "$STAGE_WORKFLOW_SHA" HEAD
-          git -C agk-deployment-configs fetch origin "$EXPECTED_APP_REVISION"
+          git -C agk-deployment-configs fetch origin "$EXPECTED_APP_GITOPS_REVISION"
           APP_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${EXPECTED_APP_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+            show "${EXPECTED_APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
             show "${EXPECTED_WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           if [ "$APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
@@ -274,9 +277,26 @@ jobs:
             -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
           WORKER_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_WORKER_ARGOCD_APP" \
             -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
-          jq -e --arg revision "$EXPECTED_APP_REVISION" --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          CURRENT_APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          CURRENT_APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
+          if [ "$CURRENT_APP_REVISION" != "$EXPECTED_APP_REVISION" ] \
+            || [ "$CURRENT_APP_GITOPS_REVISION" != "$EXPECTED_APP_GITOPS_REVISION" ]; then
+            echo "::error::Current STAGE app revisions differ from E2E provenance"
+            exit 1
+          fi
+          jq -e --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
             '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
-             .status.sync.revision == $revision and
              any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
             <<< "$APP_JSON" > /dev/null
           jq -e --arg revision "$EXPECTED_WORKER_REVISION" --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
