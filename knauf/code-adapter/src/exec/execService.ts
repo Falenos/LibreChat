@@ -2,7 +2,7 @@ import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca
 import { isValidSessionId, mintSessionId } from '../validate.js';
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
 import { resolveInputs, movePlan, pushInputs, StagedFileMissingError } from './stagePush.js';
-import { captureOutputs, echoInputs } from './capture.js';
+import { captureOutputs, echoInputs, baselineFrom } from './capture.js';
 import type { SupportedLang } from '../validate.js';
 import type { AuthContext, ExecRequest, ExecResponse } from '../types/contract.js';
 import type { AcaClient } from '../azure/acaClient.js';
@@ -72,6 +72,20 @@ export async function runExec(
       await pushInputs(inputs, sessionId, deps);
     }
 
+    // Snapshot the sandbox's files BEFORE running user code, so capture returns
+    // only this exec's new/changed files — not everything accumulated in a
+    // reused session. A freshly minted session_id has no prior files, so skip
+    // the extra list call there; a supplied (reused) id might.
+    let baseline = new Map<string, string>();
+    if (isValidSessionId(body.session_id)) {
+      try {
+        baseline = baselineFrom(await deps.aca.listFiles(sessionId));
+      } catch (err) {
+        // Session may not exist yet (about to be created by execute) — empty baseline.
+        logger.debug({ err: (err as Error).message }, 'baseline snapshot skipped');
+      }
+    }
+
     // Everything runs on the code-interpreter (Python) pool, so the wrapper is
     // always a Python program (it runs bash via subprocess). It is mandatory for
     // bash — raw bash can't run on a Python pool — so `EXEC_WRAPPER=off` only
@@ -137,6 +151,7 @@ export async function runExec(
       const capture = await captureOutputs({
         sessionId,
         inputs,
+        baseline,
         auth,
         config,
         deps,

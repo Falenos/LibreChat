@@ -234,6 +234,48 @@ describe('POST /v1/exec contract', () => {
     expect(download.body.toString()).toBe('PNG!');
   });
 
+  it('reused session returns only THIS exec’s new files, not accumulated ones (KK20-257 regression)', async () => {
+    // Same session across three execs. The sandbox is reused, so /mnt/data
+    // accumulates — but each exec must return only the file it created, or the
+    // growing set breaks the follow-up model request (the pandas-chart 400).
+    const S = 'karl-' + 'd'.repeat(32);
+    const addFile = (name: string, content: string, t: string) => {
+      aca.sessionFiles.push({ name, type: 'File', sizeInBytes: content.length, lastModifiedAt: t });
+      aca.fileContents.set(name, Buffer.from(content));
+    };
+    const names = (r: { body: { files: { name: string }[] } }) =>
+      r.body.files.map((f) => f.name).sort();
+
+    aca.executeImpl = async (_sid, code) => {
+      addFile('out1.txt', 'aaa', 't1'); // this exec writes out1
+      return sentinelOutcome(code, 0, 'ok');
+    };
+    const r1 = await request(app).post('/v1/exec').send({ lang: 'py', code: 'a', session_id: S });
+    expect(names(r1)).toEqual(['out1.txt']);
+
+    aca.executeImpl = async (_sid, code) => {
+      addFile('out2.txt', 'bbb', 't2'); // out1 already sits in the reused sandbox
+      return sentinelOutcome(code, 0, 'ok');
+    };
+    const r2 = await request(app).post('/v1/exec').send({ lang: 'py', code: 'b', session_id: S });
+    expect(names(r2)).toEqual(['out2.txt']); // NOT [out1, out2]
+
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok'); // writes nothing
+    const r3 = await request(app).post('/v1/exec').send({ lang: 'py', code: 'c', session_id: S });
+    expect(names(r3)).toEqual([]); // no new files → nothing re-returned
+
+    // an overwrite (same name, changed size) IS returned again
+    aca.executeImpl = async (_sid, code) => {
+      const e = aca.sessionFiles.find((f) => f.name === 'out1.txt')!;
+      e.sizeInBytes = 9999;
+      e.lastModifiedAt = 't4';
+      aca.fileContents.set('out1.txt', Buffer.from('x'.repeat(9999)));
+      return sentinelOutcome(code, 0, 'ok');
+    };
+    const r4 = await request(app).post('/v1/exec').send({ lang: 'py', code: 'd', session_id: S });
+    expect(names(r4)).toEqual(['out1.txt']);
+  });
+
   it('wrapper sentinel missing → raw stdout + synthesized 0/1 (degraded mode)', async () => {
     aca.executeImpl = async () => ({
       succeeded: true,

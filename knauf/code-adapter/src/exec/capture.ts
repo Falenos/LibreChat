@@ -9,24 +9,51 @@ import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 
 /**
- * Post-exec capture: list the session's /mnt/data, diff against pushed
- * inputs, persist new/changed writable files to blob + Mongo so
- * /download outlives the session cooldown.
+ * A signature of a listed file, used to tell "same file as before" from
+ * "created or changed by this exec". `lastModifiedAt` alone can be unreliable
+ * across engines, so we combine it with size.
+ */
+export function fileSignature(
+  entry: Pick<AcaSessionFile, 'sizeInBytes' | 'lastModifiedAt'>,
+): string {
+  return `${entry.sizeInBytes ?? ''}|${entry.lastModifiedAt ?? ''}`;
+}
+
+/** Build a name→signature map from a pre-exec file listing (see snapshotBaseline). */
+export function baselineFrom(listing: AcaSessionFile[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const f of listing) {
+    if (f.name) {
+      m.set(f.name, fileSignature(f));
+    }
+  }
+  return m;
+}
+
+/**
+ * Post-exec capture: list the session's /mnt/data and return only the files
+ * this exec produced — NEW files, or files whose signature changed vs the
+ * pre-exec `baseline`. Persists them to blob + Mongo so /download outlives the
+ * session cooldown. Files left over from earlier execs in the same (reused)
+ * sandbox are in the baseline unchanged, so they are NOT re-returned — that
+ * accumulation is the bug this guards against.
  *
  * Contract rules honored:
  *  - unchanged inputs         → echoed with inherited:true (LibreChat skips re-persist)
  *  - changed but read_only    → echoed inherited:true, modifications dropped
  *  - changed writable / new   → captured under the exec session (storage_session_id = exec sid)
+ *  - pre-existing & unchanged → skipped (already delivered when first created)
  *  - `.karl_*` wrapper files  → never captured
  */
 export async function captureOutputs(params: {
   sessionId: string;
   inputs: ResolvedInput[];
+  baseline: Map<string, string>;
   auth: AuthContext;
   config: Config;
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
 }): Promise<{ files: ExecResponseFile[]; overflowNote: string | null }> {
-  const { sessionId, inputs, auth, config, deps } = params;
+  const { sessionId, inputs, baseline, auth, config, deps } = params;
 
   let listing: AcaSessionFile[];
   try {
@@ -68,6 +95,13 @@ export async function captureOutputs(params: {
       const unchanged = size === input.doc.size;
       if (unchanged || input.doc.readOnly) {
         files.push(echoInput(input));
+        continue;
+      }
+    } else {
+      // Not an input to this exec: only return it if it's new or changed vs the
+      // pre-exec baseline. Unchanged pre-existing files were delivered already.
+      const baseSig = baseline.get(name);
+      if (baseSig != null && baseSig === fileSignature(entry)) {
         continue;
       }
     }
