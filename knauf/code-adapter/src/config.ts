@@ -22,7 +22,11 @@ export interface Config {
   aca: {
     poolEndpointPy: string;
     poolEndpointSh: string;
-    apiVersion: string;
+    // Verified by the KK20-108 spike (West Europe, Aug 2026): the Python and
+    // Shell pools are two distinct data-plane contracts — different exec path,
+    // api-version, request body and response shape. See test/fixtures/aca/.
+    apiVersionPy: string;
+    apiVersionSh: string;
     tokenScope: string;
     tokenRefreshSkewS: number;
     execTimeoutMs: number;
@@ -123,7 +127,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     aca: {
       poolEndpointPy: required('ACA_POOL_ENDPOINT_PY').replace(/\/+$/, ''),
       poolEndpointSh: required('ACA_POOL_ENDPOINT_SH').replace(/\/+$/, ''),
-      apiVersion: str('ACA_API_VERSION') ?? '2025-10-02-preview',
+      apiVersionPy: str('ACA_API_VERSION_PY') ?? '2024-02-02-preview',
+      apiVersionSh: str('ACA_API_VERSION_SH') ?? '2025-02-02-preview',
       tokenScope: str('ACA_TOKEN_SCOPE') ?? 'https://dynamicsessions.io/.default',
       tokenRefreshSkewS: int('ACA_TOKEN_REFRESH_SKEW_S', 300),
       execTimeoutMs: int('ACA_EXEC_TIMEOUT_MS', 230_000),

@@ -12,6 +12,26 @@ Design rationale and the backend decision live in
 [`knauf/docs/proposals/code-adapter-placement.md`](../docs/proposals/code-adapter-placement.md).
 This README is the operational reference for the service itself.
 
+## The ACA backend contract (verified live, Aug 2026)
+
+The KK20-108 spike against live West Europe pools found the two built-in pool
+types are **two different data-plane contracts** — not one parameterized API.
+The adapter encodes both as "dialects" in [`src/azure/acaClient.ts`](src/azure/acaClient.ts);
+raw response fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
+
+|              | Python pool (`lang=py`)                                                                                         | Shell pool (`lang=bash`)                            |
+| ------------ | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Exec path    | `POST {pool}/code/execute`                                                                                      | `POST {pool}/executions`                            |
+| api-version  | `2024-02-02-preview`                                                                                            | `2025-02-02-preview`                                |
+| Request body | `{properties:{codeInputType:"inline",executionType:"synchronous",code}}`                                        | `{shellCommand}` (top-level)                        |
+| Response     | `{properties:{status:"Success"\|"Failure",stdout,stderr}}`                                                      | `{status:"<exit code>",result:{stdout,stderr}}`     |
+| Exit code    | **none** — runs in an IPython kernel, so `sys.exit()` is swallowed; the sentinel wrapper recovers the real code | **native** — `status` is the real numeric exit code |
+| Files        | `POST /files/upload`, `GET /files`, `GET /files/content/{name}` (all `?identifier=`)                            | same shape                                          |
+
+The api-versions are pinned per pool (`ACA_API_VERSION_PY` / `ACA_API_VERSION_SH`).
+Bumping either requires refreshing the matching fixtures — `test/unit/acaShape.spec.ts`
+is the tripwire that fires when a shape drifts.
+
 ## Contract served (under `/v1`, JWT-authenticated)
 
 | Endpoint                                                         | Caller in the fork                                                                                | Notes                                                                                                                                                         |

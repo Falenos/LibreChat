@@ -60,8 +60,8 @@ describe('POST /v1/exec contract', () => {
   });
 
   it('CodeExecutor shape: py exec returns real rc + stdout via the sentinel', async () => {
-    aca.executeImpl = async (pool, _sid, code) => {
-      expect(pool).toBe('https://py-pool.example.test');
+    aca.executeImpl = async (kind, _sid, code) => {
+      expect(kind).toBe('py');
       expect(code).toContain('subprocess.run');
       return sentinelOutcome(code, 0, '42\n');
     };
@@ -74,7 +74,10 @@ describe('POST /v1/exec contract', () => {
   });
 
   it('BashExecutor shape: lang=bash routes to the Shell pool with a real exit code', async () => {
-    aca.executeImpl = async (pool, _sid, code) => sentinelOutcome(code, 2, '', 'grep: no match\n');
+    aca.executeImpl = async (kind, _sid, code) => {
+      expect(kind).toBe('bash');
+      return sentinelOutcome(code, 2, '', 'grep: no match\n');
+    };
     const response = await request(app)
       .post('/v1/exec')
       .send({ lang: 'bash', code: 'grep nope /etc/hosts', user_id: 'user-1' });

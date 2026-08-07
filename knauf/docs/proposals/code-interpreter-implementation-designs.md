@@ -15,6 +15,16 @@
 > wrapper (base64 + sentinel + `/mnt/data` log tee) upgrades the "synthesize 0/1" plan to
 > REAL exit codes and recovers output past the ~4000-char cap.
 >
+> **Spike verified against live West Europe pools (S1/S5, Aug 2026 — fixtures in
+> [`knauf/code-adapter/test/fixtures/aca/`](../../code-adapter/test/fixtures/aca/)):** the two built-in pool
+> types are **two different data-plane contracts**, not one parameterized `/executions` API as assumed below:
+> **Python** = `POST {pool}/code/execute?api-version=2024-02-02-preview`, body `{properties:{codeInputType,executionType,code}}`,
+> resp `{properties:{status:"Success"|"Failure",stdout,stderr}}` (IPython kernel — `sys.exit()` swallowed, so the
+> sentinel wrapper is what yields a real exit code); **Shell** = `POST {pool}/executions?api-version=2025-02-02-preview`,
+> body `{shellCommand}` (top-level), resp `{status:"<numeric exit code>",result:{stdout,stderr}}` (native exit code).
+> **S1 PASSED** — the Shell image carries python3 3.10.12 + base64/head/wc/bash. Files (both): `POST /files/upload`,
+> `GET /files`, `GET /files/content/{name}`. End-to-end proven live incl. the CSV→pandas→PNG round-trip (`npm run smoke`).
+>
 > Originally: companion to the decision matrix
 > [`code-interpreter-backend-options.md`](code-interpreter-backend-options.md) and the
 > [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md). This doc builds out the **two finalist

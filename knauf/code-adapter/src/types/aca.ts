@@ -1,64 +1,80 @@
 /**
  * Azure Container Apps dynamic sessions data-plane types.
  *
- * PROVISIONAL until the S5 spike pins real response fixtures
- * (test/fixtures/aca/); the parser in exec/execService.ts is written
- * tolerantly against these shapes. Data-plane api-version is pinned via
- * ACA_API_VERSION. Shapes based on Microsoft Learn "sessions-usage"
- * (July 2026) + the LangChain azure_dynamic_sessions client.
+ * Pinned by the KK20-108 spike against live West Europe pools (Aug 2026);
+ * raw fixtures in test/fixtures/aca/. The two built-in pool types are two
+ * distinct contracts:
+ *
+ *   Python (lang=py): POST {pool}/code/execute?api-version=2024-02-02-preview
+ *     body { properties: { codeInputType, executionType, code } }
+ *     resp { properties: { status: "Success"|"Failure", stdout, stderr, ... } }
+ *     — runs in an IPython kernel; sys.exit() is swallowed, so a real exit
+ *       code requires the subprocess sentinel wrapper.
+ *
+ *   Shell (lang=bash): POST {pool}/executions?api-version=2025-02-02-preview
+ *     body { shellCommand }                              (top-level, NOT nested)
+ *     resp { status: "<numeric exit code>", result: { stdout, stderr, ... } }
+ *     — real exit code native in `status`.
  */
 
-export interface AcaExecutionRequest {
-  properties: {
-    codeInputType: 'inline';
-    executionType: 'synchronous';
-    code: string;
-  };
-}
+/** Which built-in pool / dialect an execution targets. */
+export type PoolKind = 'py' | 'bash';
 
-/**
- * Known observed shapes (the API changed once already):
- *  - 2024 preview: { properties: { status, stdout, stderr, result, executionTimeInMilliseconds } }
- *  - 2025 preview: { id, status, result: { stdout, stderr, executionResult, executionTimeInMilliseconds } }
- * The parser accepts both; S5 fixtures decide which one the pinned
- * api-version actually returns.
- */
-export interface AcaExecutionResponse {
-  id?: string;
-  status?: string;
+/** Python code-interpreter response (wrapped in `properties`). */
+export interface AcaPyResponse {
   properties?: {
-    status?: string;
+    status?: string; // "Success" | "Failure"
     stdout?: string;
     stderr?: string;
     result?: unknown;
     executionTimeInMilliseconds?: number;
   };
+}
+
+/** Shell response (flat; `status` is the numeric exit code as a string). */
+export interface AcaShellResponse {
+  identifier?: string;
+  status?: string; // e.g. "0", "7"
   result?: {
     stdout?: string;
     stderr?: string;
-    executionResult?: unknown;
     executionTimeInMilliseconds?: number;
   };
 }
 
+export type AcaExecutionResponse = AcaPyResponse | AcaShellResponse;
+
 export interface AcaSessionFile {
   name: string;
   /** e.g. 'File' | 'Directory' */
-  type?: string;
-  contentType?: string | null;
-  sizeInBytes?: number;
-  lastModifiedAt?: string;
+  type?: string | undefined;
+  contentType?: string | null | undefined;
+  sizeInBytes?: number | undefined;
+  lastModifiedAt?: string | undefined;
 }
 
+/** Python pool file entries arrive wrapped: { value: [ { properties: {...} } ] }. */
 export interface AcaFileListResponse {
-  value: AcaSessionFile[];
+  value: { properties?: AcaFileProperties }[];
 }
 
-/** Normalized execution outcome produced by the ACA client. */
+export interface AcaFileProperties {
+  filename?: string;
+  size?: number;
+  lastModifiedTime?: string;
+  contentType?: string | null;
+}
+
+/**
+ * Normalized execution outcome produced by the ACA client, hiding the
+ * per-pool response differences from the exec service.
+ */
 export interface AcaExecOutcome {
   succeeded: boolean;
   stdout: string;
   stderr: string;
+  /** Native exit code when the pool provides one (Shell); undefined for Python. */
+  nativeExitCode?: number | undefined;
   executionMs?: number | undefined;
   raw: AcaExecutionResponse;
 }

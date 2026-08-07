@@ -30,7 +30,9 @@ describe('loadConfig', () => {
 
   it('applies defaults and pins', () => {
     const config = loadConfig({ ...TEST_ENV_BASE });
-    expect(config.aca.apiVersion).toBe('2025-10-02-preview');
+    // Per-pool api-versions verified by the KK20-108 spike (two distinct contracts).
+    expect(config.aca.apiVersionPy).toBe('2024-02-02-preview');
+    expect(config.aca.apiVersionSh).toBe('2025-02-02-preview');
     expect(config.aca.execTimeoutMs).toBe(230_000);
     expect(config.exec.wrapper).toBe('full');
     expect(config.uploadMaxBytes).toBe(134_217_728);

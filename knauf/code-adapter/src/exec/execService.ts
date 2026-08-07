@@ -1,7 +1,6 @@
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
 import { isValidSessionId, mintSessionId } from '../validate.js';
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
-import { poolFor } from './langMap.js';
 import { resolveInputs, movePlan, pushInputs, StagedFileMissingError } from './stagePush.js';
 import { captureOutputs, echoInputs } from './capture.js';
 import type { SupportedLang } from '../validate.js';
@@ -44,7 +43,8 @@ export async function runExec(
 ): Promise<ExecResponse> {
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
-  const poolEndpoint = poolFor(config, lang);
+  // `lang` ('py' | 'bash') is exactly the PoolKind the ACA client routes on.
+  const kind = lang;
 
   const sessionId = isValidSessionId(body.session_id) ? body.session_id : mintSessionId();
   if (body.session_id != null && sessionId !== body.session_id) {
@@ -71,7 +71,7 @@ export async function runExec(
 
   const runOnce = async (): Promise<ExecResponse> => {
     if (inputs.length > 0) {
-      await pushInputs(inputs, poolEndpoint, sessionId, deps);
+      await pushInputs(inputs, kind, sessionId, deps);
     }
 
     const useWrapper = config.exec.wrapper === 'full';
@@ -80,7 +80,7 @@ export async function runExec(
       : null;
     const codeToRun = plan?.wrappedCode ?? body.code;
 
-    const outcome = await deps.aca.execute(poolEndpoint, sessionId, codeToRun);
+    const outcome = await deps.aca.execute(kind, sessionId, codeToRun);
 
     let stdout: string;
     let stderr: string;
@@ -95,7 +95,7 @@ export async function runExec(
       if (sentinel.outBytes > Buffer.byteLength(stdout, 'utf8')) {
         try {
           const full = await deps.aca.fetchFileContent(
-            poolEndpoint,
+            kind,
             sessionId,
             OUT_LOG,
             config.exec.stdoutMaxBytes,
@@ -109,7 +109,7 @@ export async function runExec(
       if (sentinel.errBytes > Buffer.byteLength(stderr, 'utf8')) {
         try {
           const full = await deps.aca.fetchFileContent(
-            poolEndpoint,
+            kind,
             sessionId,
             ERR_LOG,
             config.exec.stderrMaxBytes,
@@ -127,14 +127,15 @@ export async function runExec(
       }
       stdout = outcome.stdout;
       stderr = outcome.stderr;
-      code = outcome.succeeded ? 0 : 1;
+      // Prefer the pool's native exit code (Shell) over 0/1 synthesis (Python).
+      code = outcome.nativeExitCode ?? (outcome.succeeded ? 0 : 1);
     }
 
     let files = echoInputs(inputs);
     let overflowNote: string | null = null;
     if (code === 0) {
       const capture = await captureOutputs({
-        poolEndpoint,
+        kind,
         sessionId,
         inputs,
         auth,

@@ -22,7 +22,12 @@ async function main(): Promise<void> {
   const app = createApp({ config, logger, aca, blob, repo, mongo, metrics });
   const server = app.listen(config.port, () => {
     logger.info(
-      { port: config.port, localMode: config.localMode, apiVersion: config.aca.apiVersion },
+      {
+        port: config.port,
+        localMode: config.localMode,
+        apiVersionPy: config.aca.apiVersionPy,
+        apiVersionSh: config.aca.apiVersionSh,
+      },
       'code-adapter listening',
     );
   });

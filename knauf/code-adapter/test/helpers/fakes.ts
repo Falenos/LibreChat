@@ -9,7 +9,7 @@ import type { Config } from '../../src/config.js';
 import type { AcaClient } from '../../src/azure/acaClient.js';
 import type { BlobStore } from '../../src/azure/blobStore.js';
 import type { FileDoc, FilesRepo, InsertFileInput } from '../../src/store/filesRepo.js';
-import type { AcaExecOutcome, AcaSessionFile } from '../../src/types/aca.js';
+import type { AcaExecOutcome, AcaSessionFile, PoolKind } from '../../src/types/aca.js';
 
 export const TEST_ENV_BASE = {
   CODE_ADAPTER_LOCAL_MODE: 'true',
@@ -128,30 +128,25 @@ export class FakeBlobStore implements BlobStore {
 
 /** Programmable ACA client. */
 export class FakeAcaClient implements AcaClient {
-  executeImpl: (poolEndpoint: string, identifier: string, code: string) => Promise<AcaExecOutcome> =
+  executeImpl: (kind: PoolKind, identifier: string, code: string) => Promise<AcaExecOutcome> =
     async () => ({ succeeded: true, stdout: '', stderr: '', raw: {} });
-  pushed: { poolEndpoint: string; identifier: string; name: string; data: Buffer }[] = [];
+  pushed: { kind: PoolKind; identifier: string; name: string; data: Buffer }[] = [];
   sessionFiles: AcaSessionFile[] = [];
   fileContents = new Map<string, Buffer>();
 
-  async execute(poolEndpoint: string, identifier: string, code: string): Promise<AcaExecOutcome> {
-    return this.executeImpl(poolEndpoint, identifier, code);
+  async execute(kind: PoolKind, identifier: string, code: string): Promise<AcaExecOutcome> {
+    return this.executeImpl(kind, identifier, code);
   }
 
-  async pushFile(
-    poolEndpoint: string,
-    identifier: string,
-    name: string,
-    data: Buffer,
-  ): Promise<void> {
-    this.pushed.push({ poolEndpoint, identifier, name, data });
+  async pushFile(kind: PoolKind, identifier: string, name: string, data: Buffer): Promise<void> {
+    this.pushed.push({ kind, identifier, name, data });
   }
 
   async listFiles(): Promise<AcaSessionFile[]> {
     return this.sessionFiles;
   }
 
-  async fetchFileContent(_pool: string, _identifier: string, name: string): Promise<Buffer> {
+  async fetchFileContent(_kind: PoolKind, _identifier: string, name: string): Promise<Buffer> {
     const content = this.fileContents.get(name);
     if (content == null) {
       throw new Error(`no fixture content for ${name}`);

@@ -1,6 +1,6 @@
 import { OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { AcaClient } from '../azure/acaClient.js';
-import type { AcaSessionFile } from '../types/aca.js';
+import type { AcaSessionFile, PoolKind } from '../types/aca.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FilesRepo } from '../store/filesRepo.js';
 import type { AuthContext, ExecResponseFile } from '../types/contract.js';
@@ -20,18 +20,18 @@ import type { Config } from '../config.js';
  *  - `.karl_*` wrapper files  → never captured
  */
 export async function captureOutputs(params: {
-  poolEndpoint: string;
+  kind: PoolKind;
   sessionId: string;
   inputs: ResolvedInput[];
   auth: AuthContext;
   config: Config;
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
 }): Promise<{ files: ExecResponseFile[]; overflowNote: string | null }> {
-  const { poolEndpoint, sessionId, inputs, auth, config, deps } = params;
+  const { kind, sessionId, inputs, auth, config, deps } = params;
 
   let listing: AcaSessionFile[];
   try {
-    listing = await deps.aca.listFiles(poolEndpoint, sessionId);
+    listing = await deps.aca.listFiles(kind, sessionId);
   } catch (err) {
     deps.logger.warn({ err: (err as Error).message }, 'post-exec file listing failed');
     return { files: echoInputs(inputs), overflowNote: null };
@@ -57,7 +57,7 @@ export async function captureOutputs(params: {
     ) {
       continue;
     }
-    if (entry.type != null && entry.type.toLowerCase() === 'directory') {
+    if (entry.type?.toLowerCase() === 'directory') {
       continue;
     }
 
@@ -82,7 +82,7 @@ export async function captureOutputs(params: {
     }
 
     try {
-      const data = await deps.aca.fetchFileContent(poolEndpoint, sessionId, name);
+      const data = await deps.aca.fetchFileContent(kind, sessionId, name);
       const doc = await deps.repo.upsertCaptured({
         sessionId,
         filename: name,
