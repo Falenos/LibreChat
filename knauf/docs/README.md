@@ -32,12 +32,13 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 
 ## Code execution — how KARL runs Python/Bash (KK20-108)
 
-| Doc                                                                                            | Read it for                                                                                                                                                   |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [code-execution/README.md](code-execution/README.md)                                           | Folder index — start here                                                                                                                                     |
-| [code-execution/how-it-works.md](code-execution/how-it-works.md)                               | Architecture + request flow, the exec wrapper (real exit codes + output-cap recovery), **session/sandbox reuse & isolation**, the file journey, local vs prod |
-| [code-execution/backend-decision.md](code-execution/backend-decision.md)                       | Why ACA dynamic sessions, not a self-hosted sandbox or Azure OpenAI Assistants                                                                                |
-| [code-execution/placement-and-justification.md](code-execution/placement-and-justification.md) | Why the adapter is a separate sidecar rather than code inside LibreChat — re-verified after building it                                                       |
+| Doc                                                                                            | Read it for                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [code-execution/README.md](code-execution/README.md)                                           | Folder index — start here                                                                                                                                                 |
+| [code-execution/how-it-works.md](code-execution/how-it-works.md)                               | Architecture + request flow, the exec wrapper (real exit codes + output-cap recovery), **session/sandbox reuse & isolation**, the file journey, local vs prod             |
+| [code-execution/backend-decision.md](code-execution/backend-decision.md)                       | Why ACA dynamic sessions, not a self-hosted sandbox or Azure OpenAI Assistants                                                                                            |
+| [code-execution/placement-and-justification.md](code-execution/placement-and-justification.md) | Why the adapter is a separate sidecar rather than code inside LibreChat — re-verified after building it                                                                   |
+| [code-execution/deployment.md](code-execution/deployment.md)                                   | Infra deployment runbook — Terraform (pool + workload identity) → GitOps service → LibreChat wiring → capability flip; verified-environment table, verification, rollback |
 
 Operational reference (env, contract, run/test/deploy) lives with the service: [`knauf/code-adapter/README.md`](../code-adapter/README.md).
 

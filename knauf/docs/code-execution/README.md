@@ -11,10 +11,11 @@ Artifacts and Skills are separate features documented in
 | [how-it-works.md](how-it-works.md)                               | The architecture and request flow; the exec wrapper (real exit codes + output-cap recovery); **session/sandbox reuse and isolation** (same conversation = same sandbox, different = isolated; files persist, variables don't); the file journey; local vs prod. Start here. |
 | [backend-decision.md](backend-decision.md)                       | Why ACA dynamic sessions and not a self-hosted sandbox (or Azure OpenAI Assistants) — the decision record and the platform-fit reasoning that drove it.                                                                                                                     |
 | [placement-and-justification.md](placement-and-justification.md) | Why the adapter is a separate sidecar rather than code inside LibreChat — the dimension-by-dimension comparison, re-verified after building it live.                                                                                                                        |
+| [deployment.md](deployment.md)                                   | **Infra deployment runbook** — step-by-step across agk-infrastructure (Terraform: pool + workload identity), agk-deployment-configs (GitOps service), LibreChat wiring, and the capability flip; verified-environment table, ordering constraints, verification, rollback.  |
 
 **Operational reference** (env vars, the served contract table, how to run/test/build/deploy) lives with the service:
 [`knauf/code-adapter/README.md`](../../code-adapter/README.md).
 
-**Rollout status:** the adapter is built and verified live against a spike subscription; remaining work is the
-`agk-infrastructure` Terraform (session pools + workload identity) and the `agk-deployment-configs` deploy, tracked in
-the [artifacts + skills / code-interpreter rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md).
+**Rollout status:** the adapter is built and verified live against a spike subscription; the remaining AGK work —
+`agk-infrastructure` Terraform (one code-interpreter pool + workload identity) and the `agk-deployment-configs` deploy —
+is the step-by-step [deployment runbook](deployment.md).
