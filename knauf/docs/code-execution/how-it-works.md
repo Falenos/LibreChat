@@ -88,28 +88,73 @@ plus 0/1 exit-code synthesis and increments `wrapper_parse_failures_total`.
 
 ---
 
+## Pools, languages, and installed libraries (verified — and a gap that matters)
+
+`lang` doesn't just pick a syntax; it picks a **different pool**, which is a
+**different sandbox with a different set of installed libraries**. Verified live
+(Aug 2026):
+
+| `lang` | Which tool sends it                                                                     | Pool                          | `python3` | pandas / numpy            | `pip install`       |
+| ------ | --------------------------------------------------------------------------------------- | ----------------------------- | --------- | ------------------------- | ------------------- |
+| `bash` | **`bash_tool` — all agent code execution**, plus `readSandboxFile` / `writeSandboxFile` | **Shell**                     | 3.10.12 ✓ | **✗ absent**              | ✗ (egress disabled) |
+| `py`   | legacy `execute_code` / the manual **Run** button only                                  | **Python** (code interpreter) | ✓         | **pandas 2.2.2, numpy ✓** | ✗ (egress disabled) |
+
+> ### ⚠️ Known limitation — the data-science libraries are in the pool agents don't use
+>
+> The modern agent path registers **only `bash_tool`** (+ `read_file`), and
+> `bash_tool` always sends `lang: "bash"` → the **Shell** pool. But the Shell
+> pool has **no pandas/numpy/matplotlib** — those live only in the **Python**
+> pool, which agent traffic never reaches. So an agent that analyses data by
+> running `python3 <<'EOF' … import pandas …'EOF'` through `bash_tool` fails with
+> `ModuleNotFoundError: No module named 'pandas'`. Egress is disabled, so a
+> runtime `pip install` can't rescue it either. **This is the pandas failure you
+> hit.**
+>
+> The fix is an infra decision (it changes the Terraform pools), not an adapter
+> bug: the pool that serves `lang=bash` needs the data-science stack. The clean
+> option is a **CustomContainer pool** — a small image with `bash` + `python3` +
+> pandas/numpy/matplotlib baked in — used for the bash path (and, since the two
+> languages don't share a sandbox anyway — see below — optionally for _both_
+> languages, giving one sandbox per conversation with everything present).
+> Tracked in the [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md)
+> and [backend-decision.md](backend-decision.md); until it lands, only pure-shell
+> work (and Python that needs no third-party libs) succeeds through an agent.
+
+---
+
 ## Sessions and sandboxes — "is it the same sandbox for the same user?" (verified)
 
-The session identity is the hinge. Each ACA sandbox is keyed by an **`identifier`**
-string. The adapter mints `karl-<32 hex>` ids and uses them as that identifier;
-LibreChat returns the `session_id` from the first exec and sends it back on the
-next, so **one conversation reuses one identifier**.
+The session identity is the hinge — but the real key is **(pool, identifier)**.
+Each ACA sandbox is keyed by an **`identifier`** string _within a pool_. The
+adapter mints `karl-<32 hex>` ids and uses them as that identifier; LibreChat
+returns the `session_id` from the first exec and sends it back on the next, so
+**one conversation reuses one identifier**.
 
 Consequences, all verified live against the pools (Aug 2026):
 
-- **Same `session_id` → the same sandbox is reused** (until it self-destructs
-  after the cooldown, minimum 300 s idle). Files written to `/mnt/data` in one
-  exec are there in the next.
+- **Same pool + same `session_id` → the same sandbox is reused** (until it
+  self-destructs after the cooldown, minimum 300 s idle). Files written to
+  `/mnt/data` in one exec are there in the next.
 - **Different `session_id` → a different, fully isolated sandbox.** A second
   identifier could not see the first's `/mnt/data` file. So two users (or two
   conversations) never share a sandbox — isolation is by identifier, and
   identifiers are per-conversation, server-minted, and unguessable.
+- **`py` and `bash` do NOT share a sandbox — even in the same conversation.**
+  This is the one that surprises people. Because `lang` selects a different
+  _pool_, a `py` exec and a `bash` exec with the _same_ `session_id` land in two
+  **separate sandboxes**. Verified: a file written by `lang=py` was invisible to
+  a `lang=bash` call with the same id (`CANNOT SEE from_py.txt`), while a second
+  `lang=py` call saw it fine. So "the shell can then manipulate the files Python
+  wrote" is **false today** — the shell is a different box. (A single
+  CustomContainer pool serving both languages would fix this too — see the
+  limitation above.)
 - **Files persist across calls; in-memory variables do not.** Because the
   wrapper runs each exec as a fresh subprocess, a Python variable set in one
   call is gone in the next (verified: `var persists: False`), but a file written
-  to `/mnt/data` remains (`file persists: True`). This is the deliberate trade
-  for real exit codes; the model is expected to persist state to `/mnt/data`,
-  not to memory — which is also what the timeout message tells it to do.
+  to `/mnt/data` remains (`file persists: True`). `/tmp` is per-call scratch and
+  does not persist. The model is expected to persist state to `/mnt/data`, not
+  to memory — which is also what the read_file tool and the timeout message tell
+  it to do.
 
 > **Security note:** "same user" is _not_ what shares a sandbox — _same
 > conversation_ is. A shared/marketplace agent used by two people runs each
@@ -146,6 +191,13 @@ dead session.
 
 The whole round trip is covered by `npm run smoke` in the adapter and by the
 contract suite in `test/contract/`.
+
+> **Caveat:** this journey is proven with `lang=py` (the Python pool, which has
+> pandas). An **agent** doing the same analysis calls `bash_tool` → the Shell
+> pool, which has no pandas — so today the agent path fails at step 2 until the
+> data-science-libs limitation above is resolved. The staging, capture, and
+> download machinery is pool-agnostic and works either way; only the missing
+> library blocks the analysis itself.
 
 ---
 

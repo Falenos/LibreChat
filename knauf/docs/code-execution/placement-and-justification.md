@@ -8,7 +8,7 @@
 
 ---
 
-## TL;DR
+## TL;DR<>
 
 The adapter cannot live in the one place that would make it "not a hop" — LibreChat's code-execution client is
 compiled inside a published npm dependency and speaks exactly one protocol to one URL. "In-process" therefore means

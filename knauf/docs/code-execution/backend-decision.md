@@ -45,13 +45,39 @@ eight services + storage + a fork of the sandbox repo to maintain).
 
 ## What the choice costs (and how it's mitigated)
 
-| Cost                                                      | Mitigation                                                                                  |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Adapter is net-new code we own                            | ~2,000 lines, one contract, contract-replay test suite; Tier-3, zero upstream edits         |
-| No native exit code (Python pool) / ~4000-char stdout cap | The adapter's sentinel wrapper restores both                                                |
-| 220 s exec cap, 128 MB upload cap                         | Friendly `code:1` messages; RAG remains the large-file path                                 |
-| Preview data-plane API churn                              | api-versions pinned per pool + fixture tripwire test; the adapter is the single choke point |
-| First workload-identity app pod on AGK                    | Proven on a small pod, not the main app (see placement doc §3.4)                            |
+| Cost                                                                                                                                                                                               | Mitigation                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adapter is net-new code we own                                                                                                                                                                     | ~2,000 lines, one contract, contract-replay test suite; Tier-3, zero upstream edits                                                                                              |
+| No native exit code (Python pool) / ~4000-char stdout cap                                                                                                                                          | The adapter's sentinel wrapper restores both                                                                                                                                     |
+| 220 s exec cap, 128 MB upload cap                                                                                                                                                                  | Friendly `code:1` messages; RAG remains the large-file path                                                                                                                      |
+| Preview data-plane API churn                                                                                                                                                                       | api-versions pinned per pool + fixture tripwire test; the adapter is the single choke point                                                                                      |
+| First workload-identity app pod on AGK                                                                                                                                                             | Proven on a small pod, not the main app (see placement doc §3.4)                                                                                                                 |
+| **Built-in Shell pool lacks the data-science stack** (verified: no pandas/numpy; egress disabled ⇒ no `pip install`) — and agent code execution runs entirely through `bash_tool` → the Shell pool | **Open decision, below.** The built-in `PythonLTS` + `Shell` pools were the S1 plan; the pandas gap in the pool agents actually use means the bash pool must gain the libraries. |
+
+## Open decision — the execution pool must carry the data-science stack
+
+The S1 spike confirmed the `Shell` pool runs `python3`, but a later check found it
+has **no pandas/numpy/matplotlib**, and the entire agent path (`bash_tool`,
+`lang=bash`) routes there — while pandas lives only in the `Python` pool, which
+agents never call (evidence in [`how-it-works.md`](how-it-works.md)). So the
+built-in-pools plan doesn't actually support KARL's data-analysis use case.
+Options, to settle before the `agk-infrastructure` Terraform lands:
+
+1. **CustomContainer pool with the data-science stack baked in (recommended).** A
+   small image (`bash` + `python3` + pandas/numpy/matplotlib) on a
+   `CustomContainer` session pool serving `lang=bash` — and, because `py` and
+   `bash` don't share a sandbox anyway, potentially serving **both** languages
+   from that one image, so a conversation gets a single sandbox with everything
+   present and files shared across languages. Cost: we build+own one small image
+   (a `build-*` workflow like the adapter's) and confirm CustomContainer billing;
+   still Microsoft-isolated, still no privileged pod.
+2. **Enable egress + `pip install` at session start.** Rejected posture (opens
+   sandbox egress) and slow/fragile per session.
+3. **Accept shell-only execution** (no third-party Python libs via agents) as a
+   documented interim while (1) is built.
+
+This does **not** reopen the ACA-vs-self-hosted decision — it is about _which pool
+image_ ACA runs, still entirely within the chosen backend.
 
 ## Verification
 

@@ -19,18 +19,29 @@ types are **two different data-plane contracts** — not one parameterized API.
 The adapter encodes both as "dialects" in [`src/azure/acaClient.ts`](src/azure/acaClient.ts);
 raw response fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
 
-|              | Python pool (`lang=py`)                                                                                         | Shell pool (`lang=bash`)                            |
-| ------------ | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Exec path    | `POST {pool}/code/execute`                                                                                      | `POST {pool}/executions`                            |
-| api-version  | `2024-02-02-preview`                                                                                            | `2025-02-02-preview`                                |
-| Request body | `{properties:{codeInputType:"inline",executionType:"synchronous",code}}`                                        | `{shellCommand}` (top-level)                        |
-| Response     | `{properties:{status:"Success"\|"Failure",stdout,stderr}}`                                                      | `{status:"<exit code>",result:{stdout,stderr}}`     |
-| Exit code    | **none** — runs in an IPython kernel, so `sys.exit()` is swallowed; the sentinel wrapper recovers the real code | **native** — `status` is the real numeric exit code |
-| Files        | `POST /files/upload`, `GET /files`, `GET /files/content/{name}` (all `?identifier=`)                            | same shape                                          |
+|              | Python pool (`lang=py`)                                                                                         | Shell pool (`lang=bash`)                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Exec path    | `POST {pool}/code/execute`                                                                                      | `POST {pool}/executions`                                           |
+| api-version  | `2024-02-02-preview`                                                                                            | `2025-02-02-preview`                                               |
+| Request body | `{properties:{codeInputType:"inline",executionType:"synchronous",code}}`                                        | `{shellCommand}` (top-level)                                       |
+| Response     | `{properties:{status:"Success"\|"Failure",stdout,stderr}}`                                                      | `{status:"<exit code>",result:{stdout,stderr}}`                    |
+| Exit code    | **none** — runs in an IPython kernel, so `sys.exit()` is swallowed; the sentinel wrapper recovers the real code | **native** — `status` is the real numeric exit code                |
+| Files        | `POST /files/upload`, `GET /files`, `GET /files/content/{name}` (all `?identifier=`)                            | same shape                                                         |
+| Libraries    | pandas 2.2.2, numpy, matplotlib (built-in code-interpreter image)                                               | **python3 only — no pandas/numpy** (egress off ⇒ no `pip install`) |
 
 The api-versions are pinned per pool (`ACA_API_VERSION_PY` / `ACA_API_VERSION_SH`).
 Bumping either requires refreshing the matching fixtures — `test/unit/acaShape.spec.ts`
 is the tripwire that fires when a shape drifts.
+
+> **⚠️ Important:** agent code execution runs through `bash_tool` → `lang=bash` →
+> the **Shell** pool, which has **no pandas/numpy**. So agent-driven data
+> analysis fails on the built-in Shell pool. Two pools are also two separate
+> sandboxes — a file written by `lang=py` is **not** visible to a `lang=bash`
+> call with the same `session_id`, and vice versa. Both point to the same infra
+> decision (a `CustomContainer` pool with the data-science stack, optionally
+> serving both languages from one image): see
+> [`../docs/code-execution/how-it-works.md`](../docs/code-execution/how-it-works.md)
+> and [`../docs/code-execution/backend-decision.md`](../docs/code-execution/backend-decision.md).
 
 ## Contract served (under `/v1`, JWT-authenticated)
 
