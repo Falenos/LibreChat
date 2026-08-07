@@ -378,12 +378,25 @@ jobs:
           WORKER_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_WORKER_ARGOCD_APP" \
             .github/scripts/verify-argocd-runtime-digest.sh)
 
-          APP_REVISION=$(jq -er '.status.sync.revision' <<< "$APP_JSON")
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
           WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
           grep -Eq '^[0-9a-f]{40}$' <<< "$APP_REVISION"
+          grep -Eq '^[0-9a-f]{40}$' <<< "$APP_GITOPS_REVISION"
           grep -Eq '^[0-9a-f]{40}$' <<< "$WORKER_REVISION"
-          if [ "$APP_REVISION" != "$WORKER_REVISION" ]; then
-            echo "::error::STAGE app revision $APP_REVISION differs from worker revision $WORKER_REVISION"
+          if [ "$APP_GITOPS_REVISION" != "$WORKER_REVISION" ]; then
+            echo "::error::STAGE app GitOps revision $APP_GITOPS_REVISION differs from worker revision $WORKER_REVISION"
             exit 1
           fi
 
@@ -395,23 +408,24 @@ jobs:
             exit 1
           fi
 
-          git -C agk-deployment-configs fetch origin "$APP_REVISION"
-          APP_VALUES=$(git -C agk-deployment-configs show "$APP_REVISION:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml")
+          git -C agk-deployment-configs fetch origin "$APP_GITOPS_REVISION"
+          APP_VALUES=$(git -C agk-deployment-configs show "$APP_GITOPS_REVISION:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml")
           WORKER_VALUES=$(git -C agk-deployment-configs show "$WORKER_REVISION:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml")
           test "$(awk '$1 == "tag:" { print $2; exit }' <<< "$APP_VALUES" | tr -d "\"'")" = "$VERSION"
           test "$(awk '$1 == "tag:" { print $2; exit }' <<< "$WORKER_VALUES" | tr -d "\"'")" = "$VERSION"
           grep -Eq '^[[:space:]]+pullPolicy: Always$' <<< "$APP_VALUES"
           grep -Eq '^[[:space:]]+pullPolicy: Always$' <<< "$WORKER_VALUES"
           APP_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${APP_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+            show "${APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
             show "${WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
 
           {
             echo "image-digest=$CURRENT_DIGEST"
             echo "app-revision=$APP_REVISION"
+            echo "app-gitops-revision=$APP_GITOPS_REVISION"
             echo "worker-revision=$WORKER_REVISION"
-            echo "gitops-revision=$APP_REVISION"
+            echo "gitops-revision=$APP_GITOPS_REVISION"
             echo "app-config-sha=$APP_CONFIG_SHA"
             echo "worker-config-sha=$WORKER_CONFIG_SHA"
             echo "app-runtime-digest=$APP_RUNTIME_DIGEST"
@@ -596,6 +610,7 @@ jobs:
         env:
           EXPECTED_DIGEST: ${{ steps.stage-state.outputs.image-digest }}
           EXPECTED_APP_REVISION: ${{ steps.stage-state.outputs.app-revision }}
+          EXPECTED_APP_GITOPS_REVISION: ${{ steps.stage-state.outputs.app-gitops-revision }}
           EXPECTED_WORKER_REVISION: ${{ steps.stage-state.outputs.worker-revision }}
           EXPECTED_APP_CONFIG_SHA: ${{ steps.stage-state.outputs.app-config-sha }}
           EXPECTED_WORKER_CONFIG_SHA: ${{ steps.stage-state.outputs.worker-config-sha }}
@@ -631,7 +646,19 @@ jobs:
             -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
           WORKER_JSON=$(curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
             -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
-          APP_REVISION=$(jq -er '.status.sync.revision' <<< "$APP_JSON")
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
           WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
           for STATE in "$APP_JSON" "$WORKER_JSON"; do
             jq -e --arg image "$EXPECTED_IMAGE" \
@@ -651,13 +678,14 @@ jobs:
             exit 1
           fi
           if [ "$APP_REVISION" != "$EXPECTED_APP_REVISION" ] \
+            || [ "$APP_GITOPS_REVISION" != "$EXPECTED_APP_GITOPS_REVISION" ] \
             || [ "$WORKER_REVISION" != "$EXPECTED_WORKER_REVISION" ]; then
-            echo "::error::STAGE GitOps revision changed during E2E"
+            echo "::error::STAGE Argo revision changed during E2E"
             exit 1
           fi
 
           APP_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${APP_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+            show "${APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
             show "${WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           if [ "$APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
@@ -667,7 +695,7 @@ jobs:
           fi
 
           jq -n \
-            --argjson schema 1 \
+            --argjson schema 2 \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg workflow_ref "$WORKFLOW_REF" \
             --arg workflow_sha "$WORKFLOW_SHA" \
@@ -676,6 +704,7 @@ jobs:
             --arg version "$VERSION" \
             --arg image_digest "$EXPECTED_DIGEST" \
             --arg app_revision "$APP_REVISION" \
+            --arg app_gitops_revision "$APP_GITOPS_REVISION" \
             --arg worker_revision "$WORKER_REVISION" \
             --arg app_config_sha256 "$APP_CONFIG_SHA" \
             --arg worker_config_sha256 "$WORKER_CONFIG_SHA" \
@@ -689,7 +718,8 @@ jobs:
               workflow_sha: $workflow_sha, stage_run_id: $stage_run_id,
               stage_run_attempt: $stage_run_attempt, version: $version,
               image_digest: $image_digest, app_revision: $app_revision,
-              worker_revision: $worker_revision, gitops_revision: $app_revision,
+              app_gitops_revision: $app_gitops_revision,
+              worker_revision: $worker_revision, gitops_revision: $app_gitops_revision,
               app_config_sha256: $app_config_sha256,
               worker_config_sha256: $worker_config_sha256,
               app_runtime_digest: $app_runtime_digest,
