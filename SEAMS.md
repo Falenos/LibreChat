@@ -806,6 +806,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | Adds native SVG to the existing Knauf upload allow-list while retaining the same chat/agent limits and the dedicated 4 MiB source cap enforced in shared code (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Localizes the 4 MiB SVG rejection and the dedicated editable-vector group in the supported-upload dialog (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Localizes the cost disclaimer that tells users the euro amounts are informational and will not be charged now or in the future. |
 
 ## Net-New Files
 

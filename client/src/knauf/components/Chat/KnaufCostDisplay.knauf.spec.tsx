@@ -13,6 +13,8 @@ jest.mock('~/hooks', () => ({
     const strings: Record<string, string> = {
       com_knauf_cost_cached_input: 'Cached input tokens: {{0}}',
       com_knauf_cost_conversation_total: 'Conversation total: {{0}}',
+      com_knauf_cost_disclaimer:
+        'For information only — you are not charged for this usage now or in the future.',
       com_knauf_cost_image_tokens: 'Image tokens: {{0}} input / {{1}} output',
       com_knauf_cost_input: 'Input tokens: {{0}}',
       com_knauf_cost_message: 'Message cost: {{0}}',
@@ -78,6 +80,12 @@ describe('[knauf] KnaufCostDisplay', () => {
 
     const icon = screen.getByLabelText(/Message cost:/);
     expect(icon).toHaveAttribute('title', expect.stringContaining('Input tokens: 1'));
+    expect(icon).toHaveAttribute(
+      'title',
+      expect.stringContaining(
+        '• For information only — you are not charged for this usage now or in the future.',
+      ),
+    );
     expect(icon).toHaveAttribute('title', expect.stringContaining('Output tokens: 2'));
     expect(icon).toHaveAttribute(
       'title',

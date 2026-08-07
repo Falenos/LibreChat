@@ -35,7 +35,10 @@ function buildCostTitle({
   source?: string;
   localize: ReturnType<typeof useLocalize>;
 }) {
-  const parts = [localize(label, { 0: formatCurrency(summary.cost) })];
+  const parts = [
+    localize(label, { 0: formatCurrency(summary.cost) }),
+    `• ${localize('com_knauf_cost_disclaimer')}`,
+  ];
 
   if (summary.inputTokens > 0) {
     parts.push(localize('com_knauf_cost_input', { 0: formatTokens(summary.inputTokens) }));
