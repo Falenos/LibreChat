@@ -107,6 +107,9 @@ const startServer = async () => {
   indexSync().catch((err) => {
     logger.error('[indexSync] Background sync failed:', err);
   });
+  // [knauf] Detect and repair ephemeral Meilisearch index loss while API pods stay running.
+  indexSync.startReconciliation();
+  // End [knauf]
 
   app.disable('x-powered-by');
   app.set('trust proxy', trusted_proxy);
