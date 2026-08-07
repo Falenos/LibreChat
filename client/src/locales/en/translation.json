@@ -433,6 +433,7 @@
   "com_knauf_copy_agent_id": "Copy agent ID",
   "com_knauf_cost_cached_input": "Cached input tokens: {{0}}",
   "com_knauf_cost_conversation_total": "Conversation total: {{0}}",
+  "com_knauf_cost_disclaimer": "For information only — you are not charged for this usage now or in the future.",
   "com_knauf_cost_estimated": "Estimated at the highest configured Model Router rate because Azure did not report the routed model.",
   "com_knauf_cost_image_tokens": "Image tokens: {{0}} input / {{1}} output",
   "com_knauf_cost_input": "Input tokens: {{0}}",

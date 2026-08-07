@@ -763,6 +763,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-provider/src/file-config.spec.ts` | SVG category limit case | SVG size assertion | Pins the shared SVG source category at 8 MB | Self | NO-TICKET |
 | `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
 | `client/src/data-provider/Files/mutations.knauf.spec.tsx` | — | 1–77 | KK20-248 — deleting from the library must also evict matching project-file cache rows. | Self | — |
+| `client/src/components/Chat/Messages/Content/Parts/Attachment.tsx` | uploaded native SVG route precedence | SVG routing branches | Sends source-bearing SVG uploads to the existing artifact card and Code/Preview panel before the overlapping generic image route can emit a broken `<img>` preview | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | NO-TICKET |
+| `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | uploaded SVG attachment routing regression | SVG single/group assertions | Proves both attachment render paths prefer the native artifact card even when SVG dimensions satisfy the image predicate | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -839,6 +841,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | Adds native SVG to the existing Knauf upload allow-list while retaining the same chat/agent limits and the dedicated 4 MiB source cap enforced in shared code (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Localizes the 4 MiB SVG rejection and the dedicated editable-vector group in the supported-upload dialog (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
+| `client/src/locales/{en,de}/translation.json` | Localizes the cost disclaimer that tells users the euro amounts are informational and will not be charged now or in the future. |
 
 ## Net-New Files
 

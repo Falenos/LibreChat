@@ -165,6 +165,29 @@ describe('Attachment routing for tool artifacts', () => {
     expect(screen.getByRole('button', { name: /com_ui_download.*notes\.md/i })).toBeInTheDocument();
   });
 
+  // [knauf] NO-TICKET — uploaded SVG source must beat the overlapping image route.
+  it.each([
+    ['single attachment', (svg: TAttachment) => <Attachment attachment={svg} />],
+    ['attachment group', (svg: TAttachment) => <AttachmentGroup attachments={[svg]} />],
+  ])('routes a source-bearing SVG with image dimensions as an artifact for %s', (_, renderSvg) => {
+    const svg = baseAttachment({
+      file_id: 'uploaded-svg',
+      filename: 'diagram.svg',
+      text: '<svg xmlns="http://www.w3.org/2000/svg"><text>Editable</text></svg>',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(renderSvg(svg));
+
+    expect(screen.queryByTestId('image')).not.toBeInTheDocument();
+    expect(screen.getByText('diagram.svg')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /com_ui_download.*diagram\.svg/i }),
+    ).toBeInTheDocument();
+  });
+  // End [knauf]
+
   it.each([
     ['readme.txt', 'Lorem ipsum'],
     ['report.docx', 'Extracted document text'],
