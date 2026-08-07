@@ -730,6 +730,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-provider/src/file-config.ts` | `knaufCategorySizeLimits.svg` | SVG size category | Raises the shared SVG source ceiling to the product-facing 8 MB limit for client and server enforcement | `packages/data-provider/src/file-config.spec.ts` | NO-TICKET |
 | `packages/data-provider/src/file-config.spec.ts` | SVG category limit case | SVG size assertion | Pins the shared SVG source category at 8 MB | Self | NO-TICKET |
 | `api/server/services/Files/process.spec.js` | SVG per-category size-cap case | SVG size assertion | Pins server rejection above the 8 MB SVG upload boundary | Self | NO-TICKET |
+| `client/src/components/Chat/Messages/Content/Parts/Attachment.tsx` | uploaded native SVG route precedence | SVG routing branches | Sends source-bearing SVG uploads to the existing artifact card and Code/Preview panel before the overlapping generic image route can emit a broken `<img>` preview | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | NO-TICKET |
+| `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | uploaded SVG attachment routing regression | SVG single/group assertions | Proves both attachment render paths prefer the native artifact card even when SVG dimensions satisfy the image predicate | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
