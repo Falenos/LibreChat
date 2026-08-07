@@ -211,7 +211,7 @@ const fitPreviewFrame = async (page, previewFrame, requireSlideContract) => {
     const contentHeight = await previewFrame.evaluate(() =>
       Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
     );
-    const nextHeight = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, contentHeight));
+    const nextHeight = Math.min(MAX_PNG_HEIGHT, Math.max(VIEWPORT.height, height, contentHeight));
     if (nextHeight === height) {
       break;
     }
@@ -221,11 +221,12 @@ const fitPreviewFrame = async (page, previewFrame, requireSlideContract) => {
       const id = 'knauf-artifact-export-frame-fit';
       const style = document.getElementById(id) ?? document.createElement('style');
       style.id = id;
-      style.textContent = `[data-knauf-artifact-export] iframe{height:${fittedHeight}px!important;max-height:none!important;flex:none!important}`;
+      style.textContent = `[data-knauf-artifact-export]{height:${fittedHeight}px!important;min-height:${fittedHeight}px!important;overflow:visible!important}[data-knauf-artifact-export] iframe{height:${fittedHeight}px!important;max-height:none!important;flex:none!important}`;
       if (!style.isConnected) {
         document.head.appendChild(style);
       }
     }, height);
+    await waitForSandboxReady(page);
     await waitForStablePreview(previewFrame, requireSlideContract);
   }
   return height;

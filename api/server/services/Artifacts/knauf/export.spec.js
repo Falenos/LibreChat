@@ -129,10 +129,11 @@ describe('artifact renderer', () => {
   });
 
   it('expands the preview iframe to the measured artifact height before capture', async () => {
+    const measuredHeights = [2400, 900];
     mockPreviewEvaluate.mockImplementation(async (callback) => {
       const source = callback.toString();
       if (source.includes('scrollHeight')) {
-        return 2400;
+        return measuredHeights.shift();
       }
       if (source.includes("querySelectorAll('button')")) {
         return 1;
@@ -143,6 +144,7 @@ describe('artifact renderer', () => {
     await renderArtifact(artifact, 'png');
 
     expect(mockSetViewportSize).toHaveBeenCalledWith({ width: 1440, height: 2400 });
+    expect(mockPageWaitForFunction).toHaveBeenCalledTimes(2);
     expect(mockPageEvaluate).toHaveBeenCalledWith(expect.any(Function), 2400);
     expect(mockPageEvaluate.mock.calls[0][0].toString()).toContain(
       '[data-knauf-artifact-export] iframe',
@@ -161,7 +163,7 @@ describe('artifact renderer', () => {
         expect.objectContaining({
           id: 'knauf-artifact-export-frame-fit',
           textContent:
-            '[data-knauf-artifact-export] iframe{height:2400px!important;max-height:none!important;flex:none!important}',
+            '[data-knauf-artifact-export]{height:2400px!important;min-height:2400px!important;overflow:visible!important}[data-knauf-artifact-export] iframe{height:2400px!important;max-height:none!important;flex:none!important}',
         }),
       );
       expect(appendChild).toHaveBeenCalledWith(style);
