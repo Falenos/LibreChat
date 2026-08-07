@@ -9,8 +9,7 @@ describe('loadConfig', () => {
       expect.unreachable();
     } catch (err) {
       const message = (err as Error).message;
-      expect(message).toContain('ACA_POOL_ENDPOINT_PY is required');
-      expect(message).toContain('ACA_POOL_ENDPOINT_SH is required');
+      expect(message).toContain('ACA_POOL_ENDPOINT is required');
       expect(message).toContain('MONGO_URI is required');
       expect(message).toContain('AZURE_STORAGE_CONNECTION_STRING is required');
     }
@@ -30,9 +29,8 @@ describe('loadConfig', () => {
 
   it('applies defaults and pins', () => {
     const config = loadConfig({ ...TEST_ENV_BASE });
-    // Per-pool api-versions verified by the KK20-108 spike (two distinct contracts).
-    expect(config.aca.apiVersionPy).toBe('2024-02-02-preview');
-    expect(config.aca.apiVersionSh).toBe('2025-02-02-preview');
+    // One code-interpreter pool; api-version verified by the KK20-108 spike.
+    expect(config.aca.apiVersion).toBe('2024-02-02-preview');
     expect(config.aca.execTimeoutMs).toBe(230_000);
     expect(config.exec.wrapper).toBe('full');
     expect(config.uploadMaxBytes).toBe(134_217_728);
@@ -41,11 +39,11 @@ describe('loadConfig', () => {
     expect(config.jwt.audience).toBe('codeapi');
   });
 
-  it('strips trailing slashes from pool endpoints', () => {
+  it('strips trailing slashes from the pool endpoint', () => {
     const config = loadConfig({
       ...TEST_ENV_BASE,
-      ACA_POOL_ENDPOINT_PY: 'https://py.example.test///',
+      ACA_POOL_ENDPOINT: 'https://code-pool.example.test///',
     });
-    expect(config.aca.poolEndpointPy).toBe('https://py.example.test');
+    expect(config.aca.poolEndpoint).toBe('https://code-pool.example.test');
   });
 });

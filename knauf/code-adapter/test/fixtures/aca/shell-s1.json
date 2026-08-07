@@ -1,9 +1,0 @@
-{
-  "identifier": "s1-1521",
-  "status": "0",
-  "result": {
-    "stdout": "Python 3.10.12\n/usr/bin/base64\n/usr/bin/head\n/usr/bin/wc\n/usr/bin/bash\nS1-OK\n",
-    "stderr": "",
-    "executionTimeInMilliseconds": 14
-  }
-}

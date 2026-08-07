@@ -14,46 +14,48 @@ This README is the operational reference for the service itself.
 
 ## The ACA backend contract (verified live, Aug 2026)
 
-The KK20-108 spike against live West Europe pools found the two built-in pool
-types are **two different data-plane contracts** — not one parameterized API.
-The adapter encodes both as "dialects" in [`src/azure/acaClient.ts`](src/azure/acaClient.ts);
-raw response fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
+**One pool for everything: the built-in code-interpreter (PythonLTS) pool.** The
+KK20-108 spike found it already has `bash` (`/usr/bin/bash`) + `python3` +
+pandas/numpy/matplotlib, so both `lang=py` and `lang=bash` route here — and the
+adapter always submits a **Python wrapper** that runs the user's code (python or
+bash) as a subprocess (see [`src/exec/wrapper.ts`](src/exec/wrapper.ts)). This
+gives one sandbox per conversation (files shared across languages), pandas for
+bash, and real exit codes — with no custom image and no egress. Raw response
+fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
 
-|              | Python pool (`lang=py`)                                                                                         | Shell pool (`lang=bash`)                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Exec path    | `POST {pool}/code/execute`                                                                                      | `POST {pool}/executions`                                           |
-| api-version  | `2024-02-02-preview`                                                                                            | `2025-02-02-preview`                                               |
-| Request body | `{properties:{codeInputType:"inline",executionType:"synchronous",code}}`                                        | `{shellCommand}` (top-level)                                       |
-| Response     | `{properties:{status:"Success"\|"Failure",stdout,stderr}}`                                                      | `{status:"<exit code>",result:{stdout,stderr}}`                    |
-| Exit code    | **none** — runs in an IPython kernel, so `sys.exit()` is swallowed; the sentinel wrapper recovers the real code | **native** — `status` is the real numeric exit code                |
-| Files        | `POST /files/upload`, `GET /files`, `GET /files/content/{name}` (all `?identifier=`)                            | same shape                                                         |
-| Libraries    | pandas 2.2.2, numpy, matplotlib (built-in code-interpreter image)                                               | **python3 only — no pandas/numpy** (egress off ⇒ no `pip install`) |
+|              | Code-interpreter pool (both `lang=py` and `lang=bash`)                                                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exec path    | `POST {pool}/code/execute?api-version=&identifier=`                                                                                                                        |
+| api-version  | `2024-02-02-preview` (pinned via `ACA_API_VERSION`)                                                                                                                        |
+| Request body | `{properties:{codeInputType:"inline",executionType:"synchronous",code:<python wrapper>}}`                                                                                  |
+| Response     | `{properties:{status:"Success"\|"Failure",stdout,stderr}}`                                                                                                                 |
+| Exit code    | recovered by the wrapper (the pool's IPython kernel has none): `subprocess.run(...).returncode` for both `py` (`[sys.executable, script]`) and `bash` (`['bash', script]`) |
+| Files        | `POST /files/upload`, `GET /files`, `GET /files/content/{name}` (all `?identifier=`)                                                                                       |
+| Libraries    | pandas 2.2.2, numpy, matplotlib, + `/usr/bin/bash` (Microsoft-maintained image)                                                                                            |
 
-The api-versions are pinned per pool (`ACA_API_VERSION_PY` / `ACA_API_VERSION_SH`).
-Bumping either requires refreshing the matching fixtures — `test/unit/acaShape.spec.ts`
-is the tripwire that fires when a shape drifts.
+Bumping `ACA_API_VERSION` requires refreshing the fixtures — `test/unit/acaShape.spec.ts`
+is the tripwire that fires when the response shape drifts.
 
-> **⚠️ Important (open item):** agent code execution runs through `bash_tool` →
-> `lang=bash` → the **Shell** pool, which has **no pandas/numpy**, so agent-driven
-> data analysis fails there today; and the two pools are two separate sandboxes
-> (a `lang=py` file isn't visible to `lang=bash` with the same `session_id`).
-> **Recommended fix (verified): route both languages to the code-interpreter
-> pool** — it already has `bash` + pandas/numpy/matplotlib — and drop the Shell
-> pool. Closes both gaps with no custom image and no egress. Details:
+> **Why one pool (resolved):** agent code execution runs through `bash_tool` →
+> `lang=bash`. The built-in **Shell** pool has no pandas/numpy (and egress is
+> off, so no `pip install`), and it's a separate sandbox from the Python pool —
+> so routing bash there broke data analysis and cross-language file sharing.
+> Consolidating on the code-interpreter pool (which has bash + the data-science
+> stack) fixes both. Full reasoning:
 > [`../docs/code-execution/how-it-works.md`](../docs/code-execution/how-it-works.md)
 > and [`../docs/code-execution/backend-decision.md`](../docs/code-execution/backend-decision.md).
 
 ## Contract served (under `/v1`, JWT-authenticated)
 
-| Endpoint                                                         | Caller in the fork                                                                                | Notes                                                                                                                                                         |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /exec`                                                     | `execute_code`/`bash_tool` (@librechat/agents), `readSandboxFile`/`writeSandboxFile` (process.js) | `{lang, code, args?, files?, session_id?}` → `{session_id, stdout, stderr, code, files[]}`. `lang`: `py` → PythonLTS pool, `bash` → Shell pool, else **501**. |
-| `POST /exec/programmatic`                                        | PTC (not enabled in KARL)                                                                         | **501 PTC_NOT_SUPPORTED**                                                                                                                                     |
-| `POST /upload`                                                   | crud.js `uploadCodeEnvFile`                                                                       | multipart `file` + `kind/id/version` → `{message:'success', storage_session_id, files:[{fileId, filename}]}`                                                  |
-| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`                                                                       |
-| `GET /download/:sid/:fid?kind=&id=[&version=]`                   | crud.js (stream) + process.js (arraybuffer)                                                       | served from staging blob — outlives the ACA session                                                                                                           |
-| `GET /sessions/:sid/objects/:fid?…`                              | process.js `getSessionInfo` freshness probe                                                       | `{lastModified, size, …}`; a 404 routes LibreChat into its re-upload path (designed TTL recovery)                                                             |
-| `DELETE /sessions/:sid/objects/:fid` / `DELETE /files/:sid/:fid` | crud.js primary + fallback                                                                        | same handler; terminal 404 = success for the caller                                                                                                           |
+| Endpoint                                                         | Caller in the fork                                                                                | Notes                                                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /exec`                                                     | `execute_code`/`bash_tool` (@librechat/agents), `readSandboxFile`/`writeSandboxFile` (process.js) | `{lang, code, args?, files?, session_id?}` → `{session_id, stdout, stderr, code, files[]}`. `lang` ∈ {`py`, `bash`} (else **501**); both run on the one code-interpreter pool. |
+| `POST /exec/programmatic`                                        | PTC (not enabled in KARL)                                                                         | **501 PTC_NOT_SUPPORTED**                                                                                                                                                      |
+| `POST /upload`                                                   | crud.js `uploadCodeEnvFile`                                                                       | multipart `file` + `kind/id/version` → `{message:'success', storage_session_id, files:[{fileId, filename}]}`                                                                   |
+| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`                                                                                        |
+| `GET /download/:sid/:fid?kind=&id=[&version=]`                   | crud.js (stream) + process.js (arraybuffer)                                                       | served from staging blob — outlives the ACA session                                                                                                                            |
+| `GET /sessions/:sid/objects/:fid?…`                              | process.js `getSessionInfo` freshness probe                                                       | `{lastModified, size, …}`; a 404 routes LibreChat into its re-upload path (designed TTL recovery)                                                                              |
+| `DELETE /sessions/:sid/objects/:fid` / `DELETE /files/:sid/:fid` | crud.js primary + fallback                                                                        | same handler; terminal 404 = success for the caller                                                                                                                            |
 
 Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
 

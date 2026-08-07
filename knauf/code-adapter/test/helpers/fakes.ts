@@ -9,12 +9,11 @@ import type { Config } from '../../src/config.js';
 import type { AcaClient } from '../../src/azure/acaClient.js';
 import type { BlobStore } from '../../src/azure/blobStore.js';
 import type { FileDoc, FilesRepo, InsertFileInput } from '../../src/store/filesRepo.js';
-import type { AcaExecOutcome, AcaSessionFile, PoolKind } from '../../src/types/aca.js';
+import type { AcaExecOutcome, AcaSessionFile } from '../../src/types/aca.js';
 
 export const TEST_ENV_BASE = {
   CODE_ADAPTER_LOCAL_MODE: 'true',
-  ACA_POOL_ENDPOINT_PY: 'https://py-pool.example.test',
-  ACA_POOL_ENDPOINT_SH: 'https://sh-pool.example.test',
+  ACA_POOL_ENDPOINT: 'https://code-pool.example.test',
   MONGO_URI: 'mongodb://unused.example.test/karl',
   AZURE_STORAGE_CONNECTION_STRING: 'UseDevelopmentStorage=true',
 };
@@ -126,27 +125,31 @@ export class FakeBlobStore implements BlobStore {
   }
 }
 
-/** Programmable ACA client. */
+/** Programmable ACA client (single code-interpreter pool). */
 export class FakeAcaClient implements AcaClient {
-  executeImpl: (kind: PoolKind, identifier: string, code: string) => Promise<AcaExecOutcome> =
-    async () => ({ succeeded: true, stdout: '', stderr: '', raw: {} });
-  pushed: { kind: PoolKind; identifier: string; name: string; data: Buffer }[] = [];
+  executeImpl: (identifier: string, code: string) => Promise<AcaExecOutcome> = async () => ({
+    succeeded: true,
+    stdout: '',
+    stderr: '',
+    raw: {},
+  });
+  pushed: { identifier: string; name: string; data: Buffer }[] = [];
   sessionFiles: AcaSessionFile[] = [];
   fileContents = new Map<string, Buffer>();
 
-  async execute(kind: PoolKind, identifier: string, code: string): Promise<AcaExecOutcome> {
-    return this.executeImpl(kind, identifier, code);
+  async execute(identifier: string, code: string): Promise<AcaExecOutcome> {
+    return this.executeImpl(identifier, code);
   }
 
-  async pushFile(kind: PoolKind, identifier: string, name: string, data: Buffer): Promise<void> {
-    this.pushed.push({ kind, identifier, name, data });
+  async pushFile(identifier: string, name: string, data: Buffer): Promise<void> {
+    this.pushed.push({ identifier, name, data });
   }
 
   async listFiles(): Promise<AcaSessionFile[]> {
     return this.sessionFiles;
   }
 
-  async fetchFileContent(_kind: PoolKind, _identifier: string, name: string): Promise<Buffer> {
+  async fetchFileContent(_identifier: string, name: string): Promise<Buffer> {
     const content = this.fileContents.get(name);
     if (content == null) {
       throw new Error(`no fixture content for ${name}`);

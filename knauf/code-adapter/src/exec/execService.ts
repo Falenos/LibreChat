@@ -43,8 +43,6 @@ export async function runExec(
 ): Promise<ExecResponse> {
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
-  // `lang` ('py' | 'bash') is exactly the PoolKind the ACA client routes on.
-  const kind = lang;
 
   const sessionId = isValidSessionId(body.session_id) ? body.session_id : mintSessionId();
   if (body.session_id != null && sessionId !== body.session_id) {
@@ -71,16 +69,20 @@ export async function runExec(
 
   const runOnce = async (): Promise<ExecResponse> => {
     if (inputs.length > 0) {
-      await pushInputs(inputs, kind, sessionId, deps);
+      await pushInputs(inputs, sessionId, deps);
     }
 
-    const useWrapper = config.exec.wrapper === 'full';
+    // Everything runs on the code-interpreter (Python) pool, so the wrapper is
+    // always a Python program (it runs bash via subprocess). It is mandatory for
+    // bash — raw bash can't run on a Python pool — so `EXEC_WRAPPER=off` only
+    // sends raw code for `py`; bash always wraps.
+    const useWrapper = config.exec.wrapper === 'full' || lang === 'bash';
     const plan = useWrapper
       ? buildWrapper(lang, body.code, body.args ?? [], movePlan(inputs))
       : null;
     const codeToRun = plan?.wrappedCode ?? body.code;
 
-    const outcome = await deps.aca.execute(kind, sessionId, codeToRun);
+    const outcome = await deps.aca.execute(sessionId, codeToRun);
 
     let stdout: string;
     let stderr: string;
@@ -95,7 +97,6 @@ export async function runExec(
       if (sentinel.outBytes > Buffer.byteLength(stdout, 'utf8')) {
         try {
           const full = await deps.aca.fetchFileContent(
-            kind,
             sessionId,
             OUT_LOG,
             config.exec.stdoutMaxBytes,
@@ -109,7 +110,6 @@ export async function runExec(
       if (sentinel.errBytes > Buffer.byteLength(stderr, 'utf8')) {
         try {
           const full = await deps.aca.fetchFileContent(
-            kind,
             sessionId,
             ERR_LOG,
             config.exec.stderrMaxBytes,
@@ -127,15 +127,14 @@ export async function runExec(
       }
       stdout = outcome.stdout;
       stderr = outcome.stderr;
-      // Prefer the pool's native exit code (Shell) over 0/1 synthesis (Python).
-      code = outcome.nativeExitCode ?? (outcome.succeeded ? 0 : 1);
+      // Sentinel missing → synthesize from the pool status (no real rc available).
+      code = outcome.succeeded ? 0 : 1;
     }
 
     let files = echoInputs(inputs);
     let overflowNote: string | null = null;
     if (code === 0) {
       const capture = await captureOutputs({
-        kind,
         sessionId,
         inputs,
         auth,

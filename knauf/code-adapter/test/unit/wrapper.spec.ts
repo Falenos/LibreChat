@@ -16,25 +16,37 @@ describe('buildWrapper', () => {
     expect(a.delimiter).toMatch(/^KARL_[0-9a-f]{12}$/);
   });
 
-  it('shell-quotes args and move targets', () => {
+  it('is always a Python wrapper; bash runs via a bash subprocess on the same pool', () => {
+    const bash = buildWrapper('bash', 'grep x /etc/hosts', [], []);
+    // Python wrapper (goes to /code/execute), not a raw bash script.
+    expect(bash.wrappedCode).toContain('import base64, json, os, pathlib, subprocess, sys');
+    expect(bash.wrappedCode).toContain('[\'bash\', "/tmp/karl_user.sh"]');
+    const py = buildWrapper('py', 'print(1)', [], []);
+    expect(py.wrappedCode).toContain('[sys.executable, "/tmp/karl_user.py"]');
+  });
+
+  it('passes args as a JSON list appended to the argv (subprocess data path, not a shell string)', () => {
+    const plan = buildWrapper('bash', 'true', ["a'$(rm -rf /)'b"], []);
+    // The adversarial arg reaches the program only as an element of the argv
+    // list (subprocess.run(argv) passes it directly to execve) — never
+    // interpolated into a shell command line. It rides inside json.loads(...).
+    expect(plan.wrappedCode).toContain('json.loads(');
+    expect(plan.wrappedCode).toMatch(/subprocess\.run\([^)]*\+ json\.loads\(/);
+    // No bash-script redirection syntax — this is a Python wrapper, so the arg
+    // is never on a `bash -c` line where $(...) would expand.
+    expect(plan.wrappedCode).not.toContain('> /mnt/data/');
+  });
+
+  it('renders staged-file moves as python pathlib.rename (works for nested/space paths)', () => {
     const plan = buildWrapper(
       'bash',
       'true',
-      ["a'$(rm)'b"],
-      [{ from: '.karl_in_0', to: 'dir with space/$(evil).png' }],
+      [],
+      [{ from: '.karl_in_0', to: 'dir with space/out.png' }],
     );
-    expect(plan.wrappedCode).toContain(`'a'\\''$(rm)'\\''b'`);
-    expect(plan.wrappedCode).toContain(
-      `mv '/mnt/data/.karl_in_0' '/mnt/data/dir with space/$(evil).png'`,
-    );
-    expect(plan.wrappedCode).toContain(`mkdir -p '/mnt/data/dir with space'`);
-  });
-
-  it('python wrapper runs the program as a subprocess with args', () => {
-    const plan = buildWrapper('py', 'print(42)', ['--x', '1'], []);
-    expect(plan.wrappedCode).toContain('subprocess.run');
-    expect(plan.wrappedCode).toContain('karl_user.py');
-    expect(plan.wrappedCode).not.toContain('print(42)');
+    expect(plan.wrappedCode).toContain('.rename(');
+    expect(plan.wrappedCode).toContain('mkdir(parents=True, exist_ok=True)');
+    expect(plan.wrappedCode).toContain('dir with space/out.png');
   });
 });
 

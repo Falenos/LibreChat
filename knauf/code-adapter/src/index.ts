@@ -25,8 +25,7 @@ async function main(): Promise<void> {
       {
         port: config.port,
         localMode: config.localMode,
-        apiVersionPy: config.aca.apiVersionPy,
-        apiVersionSh: config.aca.apiVersionSh,
+        apiVersion: config.aca.apiVersion,
       },
       'code-adapter listening',
     );

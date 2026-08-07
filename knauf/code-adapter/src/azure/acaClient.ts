@@ -3,57 +3,32 @@ import type { Dispatcher } from 'undici';
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
 import type {
   AcaExecOutcome,
+  AcaExecutionResponse,
   AcaFileListResponse,
-  AcaPyResponse,
   AcaSessionFile,
-  AcaShellResponse,
-  PoolKind,
 } from '../types/aca.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { TokenProvider } from './credential.js';
 
 /**
- * Data-plane client for ACA dynamic session pools.
+ * Data-plane client for the ONE ACA code-interpreter pool.
  *
- * The two built-in pool types are two different contracts (pinned by the
- * KK20-108 spike, fixtures in test/fixtures/aca/):
+ * Both languages run here (the pool has bash + python3 + the data-science
+ * stack); the exec service always submits a Python wrapper, so this client
+ * speaks a single contract:
+ *   exec   POST {pool}/code/execute?api-version=…  { properties:{codeInputType,executionType,code} }
+ *          → { properties:{ status:"Success"|"Failure", stdout, stderr } }
+ *   files  POST {pool}/files/upload · GET {pool}/files · GET {pool}/files/content/{name}
  *
- *   py   → POST {pool}/code/execute?api-version=2024-02-02-preview
- *          body { properties: { codeInputType, executionType, code } }
- *          resp { properties: { status:"Success"|"Failure", stdout, stderr } }
- *   bash → POST {pool}/executions?api-version=2025-02-02-preview
- *          body { shellCommand }
- *          resp { status:"<exit code>", result: { stdout, stderr } }
- *
- * `execute` normalizes both into AcaExecOutcome. Auth: Entra bearer from the
- * TokenProvider; on 401/403 requests refresh the token and retry exactly once.
- * Executions are NOT retried on other failures (not idempotent).
+ * Auth: Entra bearer from the TokenProvider; on 401/403 requests refresh the
+ * token and retry once. Executions are NOT retried on other failures.
  */
 export interface AcaClient {
-  execute(kind: PoolKind, identifier: string, code: string): Promise<AcaExecOutcome>;
-  pushFile(
-    kind: PoolKind,
-    identifier: string,
-    name: string,
-    data: Buffer,
-    contentType: string,
-  ): Promise<void>;
-  listFiles(kind: PoolKind, identifier: string): Promise<AcaSessionFile[]>;
-  fetchFileContent(
-    kind: PoolKind,
-    identifier: string,
-    name: string,
-    maxBytes?: number,
-  ): Promise<Buffer>;
-}
-
-interface PoolDialect {
-  endpoint: string;
-  apiVersion: string;
-  execPath: string;
-  buildBody(code: string): string;
-  parse(raw: unknown): AcaExecOutcome;
+  execute(identifier: string, code: string): Promise<AcaExecOutcome>;
+  pushFile(identifier: string, name: string, data: Buffer, contentType: string): Promise<void>;
+  listFiles(identifier: string): Promise<AcaSessionFile[]>;
+  fetchFileContent(identifier: string, name: string, maxBytes?: number): Promise<Buffer>;
 }
 
 const SESSION_NOT_FOUND_RE = /SessionWithIdentifierNotFound/i;
@@ -63,61 +38,10 @@ function isSessionNotFound(statusCode: number, bodyText: string): boolean {
 }
 
 export function createAcaClient(config: Config, logger: Logger, tokens: TokenProvider): AcaClient {
-  const dialects: Record<PoolKind, PoolDialect> = {
-    py: {
-      endpoint: config.aca.poolEndpointPy,
-      apiVersion: config.aca.apiVersionPy,
-      execPath: '/code/execute',
-      buildBody: (code) =>
-        JSON.stringify({
-          properties: { codeInputType: 'inline', executionType: 'synchronous', code },
-        }),
-      parse: (raw) => {
-        const r = raw as AcaPyResponse;
-        const status = r.properties?.status ?? '';
-        return {
-          succeeded: /^succe/i.test(status),
-          stdout: r.properties?.stdout ?? '',
-          stderr: r.properties?.stderr ?? '',
-          nativeExitCode: undefined, // IPython kernel — no real exit code
-          executionMs: r.properties?.executionTimeInMilliseconds,
-          raw: r,
-        };
-      },
-    },
-    bash: {
-      endpoint: config.aca.poolEndpointSh,
-      apiVersion: config.aca.apiVersionSh,
-      execPath: '/executions',
-      buildBody: (code) => JSON.stringify({ shellCommand: code }),
-      parse: (raw) => {
-        const r = raw as AcaShellResponse;
-        const exit = Number(r.status);
-        return {
-          succeeded: r.status === '0',
-          stdout: r.result?.stdout ?? '',
-          stderr: r.result?.stderr ?? '',
-          nativeExitCode: Number.isFinite(exit) ? exit : undefined,
-          executionMs: r.result?.executionTimeInMilliseconds,
-          raw: r,
-        };
-      },
-    },
-  };
-
-  const buildUrl = (
-    kind: PoolKind,
-    path: string,
-    identifier: string,
-    extra?: Record<string, string>,
-  ): string => {
-    const d = dialects[kind];
-    const url = new URL(`${d.endpoint}${path}`);
-    url.searchParams.set('api-version', d.apiVersion);
+  const buildUrl = (path: string, identifier: string): string => {
+    const url = new URL(`${config.aca.poolEndpoint}${path}`);
+    url.searchParams.set('api-version', config.aca.apiVersion);
     url.searchParams.set('identifier', identifier);
-    for (const [k, v] of Object.entries(extra ?? {})) {
-      url.searchParams.set(k, v);
-    }
     return url.toString();
   };
 
@@ -153,10 +77,20 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
     return response;
   };
 
+  const parseExecution = (raw: AcaExecutionResponse): AcaExecOutcome => {
+    const status = raw.properties?.status ?? '';
+    return {
+      succeeded: /^succe/i.test(status),
+      stdout: raw.properties?.stdout ?? '',
+      stderr: raw.properties?.stderr ?? '',
+      executionMs: raw.properties?.executionTimeInMilliseconds,
+      raw,
+    };
+  };
+
   return {
-    async execute(kind, identifier, code) {
-      const dialect = dialects[kind];
-      const url = buildUrl(kind, dialect.execPath, identifier);
+    async execute(identifier, code) {
+      const url = buildUrl('/code/execute', identifier);
       let response;
       try {
         response = await authedRequest(
@@ -164,7 +98,9 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: dialect.buildBody(code),
+            body: JSON.stringify({
+              properties: { codeInputType: 'inline', executionType: 'synchronous', code },
+            }),
           },
           config.aca.execTimeoutMs,
         );
@@ -203,17 +139,17 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
         );
       }
 
-      let parsed: unknown;
+      let parsed: AcaExecutionResponse;
       try {
-        parsed = JSON.parse(bodyText);
+        parsed = JSON.parse(bodyText) as AcaExecutionResponse;
       } catch {
         throw new AcaError('pool returned non-JSON execution response', 502);
       }
-      return dialect.parse(parsed);
+      return parseExecution(parsed);
     },
 
-    async pushFile(kind, identifier, name, data, contentType) {
-      const url = buildUrl(kind, '/files/upload', identifier);
+    async pushFile(identifier, name, data, contentType) {
+      const url = buildUrl('/files/upload', identifier);
       const boundary = `karlform${Math.random().toString(16).slice(2)}`;
       const head = Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${contentType}\r\n\r\n`,
@@ -258,8 +194,8 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
       }
     },
 
-    async listFiles(kind, identifier) {
-      const url = buildUrl(kind, '/files', identifier);
+    async listFiles(identifier) {
+      const url = buildUrl('/files', identifier);
       const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
       const bodyText = await response.body.text();
       if (isSessionNotFound(response.statusCode, bodyText)) {
@@ -298,8 +234,8 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
       }
     },
 
-    async fetchFileContent(kind, identifier, name, maxBytes) {
-      const url = buildUrl(kind, `/files/content/${encodeURIComponent(name)}`, identifier);
+    async fetchFileContent(identifier, name, maxBytes) {
+      const url = buildUrl(`/files/content/${encodeURIComponent(name)}`, identifier);
       const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
       if (response.statusCode === 404) {
         const bodyText = await response.body.text();

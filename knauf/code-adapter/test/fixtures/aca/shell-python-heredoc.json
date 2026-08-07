@@ -1,9 +1,0 @@
-{
-  "identifier": "h-10419",
-  "status": "0",
-  "result": {
-    "stdout": "42\n",
-    "stderr": "",
-    "executionTimeInMilliseconds": 33
-  }
-}

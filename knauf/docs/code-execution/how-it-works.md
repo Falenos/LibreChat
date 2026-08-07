@@ -22,7 +22,7 @@ doesn't do for us.
 flowchart LR
   user["User / agent in chat"] --> karl["KARL (LibreChat)"]
   karl -->|"bash_tool / execute_code\nPOST /v1/exec (+JWT)"| ad["code-adapter\n(ClusterIP pod)"]
-  ad -->|"Entra token\n(workload identity)"| pool["ACA session pool\n(Python | Shell)"]
+  ad -->|"Entra token\n(workload identity)"| pool["ACA code-interpreter\nsession pool"]
   pool --> sbx["Hyper-V session\n/mnt/data"]
   ad --- mongo[("Mongo\ncode_adapter_files")]
   ad --- blob[("Azure Blob\ncode-adapter-staging")]
@@ -59,7 +59,7 @@ credential anywhere.**
 ## What the adapter actually does (the six jobs)
 
 1. **Protocol translation** — Code API ⇄ the ACA data-plane call, both directions.
-2. **Language → pool routing** — `py` → the Python pool, `bash` → the Shell pool, else `501`.
+2. **Language handling** — `py` and `bash` (else `501`) both run on the one code-interpreter pool; the wrapper picks the interpreter.
 3. **Auth bridge** — verify LibreChat's JWT inbound; acquire an Entra token outbound. Neither side sees the other's auth.
 4. **File staging** — uploads land in Blob + a Mongo TTL row _before_ any session exists, get pushed into the session at exec time, and generated files get captured back to Blob so downloads outlive the sandbox.
 5. **Filling ACA's gaps** — real exit codes and output past the ~4000-char cap, via the wrapper (below).
@@ -69,17 +69,21 @@ credential anywhere.**
 
 ## The exec wrapper (why code isn't sent raw)
 
-The spike found the two pools disagree on two things LibreChat needs, so the
-adapter never sends user code directly. It wraps it in a base64-embedded
-subprocess that tees full stdout/stderr to `/mnt/data/.karl_out.log` /
-`.karl_err.log` and prints a per-request random sentinel
+The adapter never sends user code directly. Everything runs on the
+code-interpreter pool, so the wrapper is always a **Python program** that runs
+the user's code — python (`[sys.executable, script]`) or bash (`['bash', script]`)
+— as a subprocess, tees full stdout/stderr to `/mnt/data/.karl_out.log` /
+`.karl_err.log`, and prints a per-request random sentinel
 `KARL_<hex> RC=<n> OUT=<bytes> ERR=<bytes>` plus inline heads. This buys:
 
-- **Real exit codes.** The Python pool runs an **IPython kernel** that swallows
+- **Real exit codes.** The pool runs an **IPython kernel** that swallows
   `sys.exit()` — verified: `sys.exit(3)` reported "Success". Running the user
-  program as a subprocess captures its true return code (→ `3`). The Shell pool
-  already returns a native exit code; the wrapper agrees with it.
-- **Output past the cap.** The pools truncate inline stdout (~4000 chars). When
+  program as a subprocess captures its true return code (→ `3`) for both
+  languages (bash `exit 7` → `7`, verified).
+- **Bash on a Python pool.** The pool has `/usr/bin/bash`, so `lang=bash` runs
+  via `subprocess.run(['bash', script])` — which is also how bash gets pandas
+  (the pool has it) and a real exit code.
+- **Output past the cap.** The pool truncates inline stdout (~4000 chars). When
   the sentinel's byte counts exceed the inlined head, the adapter fetches the
   full log from `/mnt/data` (capped at `STDOUT_MAX_BYTES`, 64 KB).
 
@@ -88,76 +92,66 @@ plus 0/1 exit-code synthesis and increments `wrapper_parse_failures_total`.
 
 ---
 
-## Pools, languages, and installed libraries (verified — and a gap that matters)
+## Pools, languages, and installed libraries (one pool for everything)
 
-`lang` doesn't just pick a syntax; it picks a **different pool**, which is a
-**different sandbox with a different set of installed libraries**. Verified live
-(Aug 2026):
+**Both `lang=py` and `lang=bash` run on the same pool: the built-in
+code-interpreter (PythonLTS) pool.** Verified live (Aug 2026), it carries
+everything KARL needs — so the adapter always submits a Python wrapper and, for
+bash, runs the script via `subprocess.run(['bash', …])`:
 
-| `lang` | Which tool sends it                                                                     | Pool                          | `python3` | pandas / numpy            | `pip install`       |
-| ------ | --------------------------------------------------------------------------------------- | ----------------------------- | --------- | ------------------------- | ------------------- |
-| `bash` | **`bash_tool` — all agent code execution**, plus `readSandboxFile` / `writeSandboxFile` | **Shell**                     | 3.10.12 ✓ | **✗ absent**              | ✗ (egress disabled) |
-| `py`   | legacy `execute_code` / the manual **Run** button only                                  | **Python** (code interpreter) | ✓         | **pandas 2.2.2, numpy ✓** | ✗ (egress disabled) |
+| The code-interpreter pool has |                                       |
+| ----------------------------- | ------------------------------------- |
+| `python3`                     | ✓ (3.11)                              |
+| pandas / numpy / matplotlib   | ✓ **pandas 2.2.2**, numpy, matplotlib |
+| `bash`                        | ✓ `/usr/bin/bash`                     |
 
-> ### ⚠️ Known limitation — the data-science libraries are in the pool agents don't use
+> ### Why one pool (this replaced an earlier two-pool design)
 >
-> The modern agent path registers **only `bash_tool`** (+ `read_file`), and
-> `bash_tool` always sends `lang: "bash"` → the **Shell** pool. But the Shell
-> pool has **no pandas/numpy/matplotlib** — those live only in the **Python**
-> pool, which agent traffic never reaches. So an agent that analyses data by
-> running `python3 <<'EOF' … import pandas …'EOF'` through `bash_tool` fails with
-> `ModuleNotFoundError: No module named 'pandas'`. Egress is disabled, so a
-> runtime `pip install` can't rescue it either. **This is the pandas failure you
-> hit.**
+> The obvious setup — a `PythonLTS` pool for `lang=py` and a `Shell` pool for
+> `lang=bash` — has a trap we hit in testing: the modern agent path registers
+> **only `bash_tool`** (+ `read_file`), and `bash_tool` always sends
+> `lang: "bash"`. The built-in **Shell** pool has `python3` but **no
+> pandas/numpy** (and egress is off, so no `pip install`), so an agent analysing
+> data via a `python3` heredoc failed with a `pandas` ModuleNotFoundError. The
+> two pools are also two separate sandboxes, so a file written by `lang=py`
+> wasn't visible to `lang=bash`.
 >
-> **The recommended fix needs no custom image and no egress: consolidate on the
-> Python (code-interpreter) pool.** Verified live — that pool already has **both
-> `bash` (`/usr/bin/bash`) and pandas/numpy/matplotlib**, and a bash subprocess
-> launched inside it sees pandas. So route **both** `lang=py` and `lang=bash` to
-> the code-interpreter pool (for `bash`, the wrapper runs the script via
-> `subprocess.run(['bash', …])`, which also yields the real exit code) and **drop
-> the Shell pool**. That single change closes all three gaps at once: pandas is
-> present for bash, `py` and `bash` now share one sandbox (files visible across
-> both — see below), and **egress stays disabled** (the secure default). It also
-> means one image Microsoft maintains, not one we own.
->
-> Alternatives, both inferior for this use case: a **CustomContainer** pool (build
-> and own an image — only needed if KARL requires libraries the code-interpreter
-> image lacks); or **egress-enabled + `pip install`** (verified working, ~7 s for
-> pandas — but it opens sandbox internet egress, the posture you want _off_ for
-> untrusted code, and adds per-cold-session latency). Tracked in the
-> [rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md) and
-> [backend-decision.md](backend-decision.md). Until the routing change lands, only
-> pure-shell work (and Python needing no third-party libs) succeeds through an agent.
+> The fix — implemented — is to route **both** languages to the **code-interpreter
+> pool**, which already has `bash` + the data-science stack. One change closes
+> every gap: pandas is present for bash, `py`/`bash` share one sandbox per
+> conversation (files visible across both), real exit codes come from the
+> subprocess, and it needs **no custom image and no egress** (the secure default;
+> the image is Microsoft-maintained). The rejected alternatives — a
+> `CustomContainer` image (own + patch it; only if KARL ever needs libraries the
+> code-interpreter image lacks) and egress-enabled + `pip install` (verified ~7 s
+> for pandas, but opens sandbox internet egress) — are recorded in
+> [backend-decision.md](backend-decision.md).
 
 ---
 
 ## Sessions and sandboxes — "is it the same sandbox for the same user?" (verified)
 
-The session identity is the hinge — but the real key is **(pool, identifier)**.
-Each ACA sandbox is keyed by an **`identifier`** string _within a pool_. The
-adapter mints `karl-<32 hex>` ids and uses them as that identifier; LibreChat
-returns the `session_id` from the first exec and sends it back on the next, so
-**one conversation reuses one identifier**.
+Each ACA sandbox is keyed by an **`identifier`** string. The adapter mints
+`karl-<32 hex>` ids and uses them as that identifier; LibreChat returns the
+`session_id` from the first exec and sends it back on the next, so **one
+conversation reuses one identifier** — and, because everything runs on the one
+code-interpreter pool, one conversation reuses **one sandbox** across both
+languages.
 
-Consequences, all verified live against the pools (Aug 2026):
+Consequences, all verified live against the pool (Aug 2026):
 
-- **Same pool + same `session_id` → the same sandbox is reused** (until it
-  self-destructs after the cooldown, minimum 300 s idle). Files written to
-  `/mnt/data` in one exec are there in the next.
+- **Same `session_id` → the same sandbox is reused** (until it self-destructs
+  after the cooldown, minimum 300 s idle). Files written to `/mnt/data` in one
+  exec are there in the next.
 - **Different `session_id` → a different, fully isolated sandbox.** A second
   identifier could not see the first's `/mnt/data` file. So two users (or two
   conversations) never share a sandbox — isolation is by identifier, and
   identifiers are per-conversation, server-minted, and unguessable.
-- **`py` and `bash` do NOT share a sandbox — even in the same conversation.**
-  This is the one that surprises people. Because `lang` selects a different
-  _pool_, a `py` exec and a `bash` exec with the _same_ `session_id` land in two
-  **separate sandboxes**. Verified: a file written by `lang=py` was invisible to
-  a `lang=bash` call with the same id (`CANNOT SEE from_py.txt`), while a second
-  `lang=py` call saw it fine. So "the shell can then manipulate the files Python
-  wrote" is **false today** — the shell is a different box. (A single
-  CustomContainer pool serving both languages would fix this too — see the
-  limitation above.)
+- **`py` and `bash` share the same sandbox** in a conversation. Since both run
+  on the one code-interpreter pool under the same identifier, a file a Python
+  step writes to `/mnt/data` **is** visible to a later bash step, and vice versa
+  — so "the shell can manipulate the files Python wrote" is now **true**. (It was
+  not, under the earlier two-pool design.)
 - **Files persist across calls; in-memory variables do not.** Because the
   wrapper runs each exec as a fresh subprocess, a Python variable set in one
   call is gone in the next (verified: `var persists: False`), but a file written
@@ -202,12 +196,10 @@ dead session.
 The whole round trip is covered by `npm run smoke` in the adapter and by the
 contract suite in `test/contract/`.
 
-> **Caveat:** this journey is proven with `lang=py` (the Python pool, which has
-> pandas). An **agent** doing the same analysis calls `bash_tool` → the Shell
-> pool, which has no pandas — so today the agent path fails at step 2 until the
-> data-science-libs limitation above is resolved. The staging, capture, and
-> download machinery is pool-agnostic and works either way; only the missing
-> library blocks the analysis itself.
+> Proven live end to end both via `lang=py` and via the **agent path** — a
+> `lang=bash` `python3` heredoc importing pandas now returns `code=0` on the
+> code-interpreter pool (this is the flow that failed under the old two-pool
+> design). `npm run smoke` covers it.
 
 ---
 

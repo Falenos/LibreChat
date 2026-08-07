@@ -57,7 +57,7 @@ await check('py exec real non-zero rc', async () => {
   assert(result.code === 3, `code=${result.code} (expected real rc 3 via wrapper)`);
 });
 
-await check('bash exec on the Shell pool', async () => {
+await check('bash exec on the code-interpreter pool (has python3 + pandas)', async () => {
   const result = await exec({ lang: 'bash', code: 'echo hello from bash; python3 --version' });
   assert(result.code === 0, `code=${result.code} stderr=${result.stderr}`);
   assert(result.stdout.includes('hello from bash'), `stdout=${result.stdout.slice(0, 120)}`);

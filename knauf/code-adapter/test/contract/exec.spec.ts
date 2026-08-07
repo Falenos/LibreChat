@@ -59,10 +59,11 @@ describe('POST /v1/exec contract', () => {
     });
   });
 
-  it('CodeExecutor shape: py exec returns real rc + stdout via the sentinel', async () => {
-    aca.executeImpl = async (kind, _sid, code) => {
-      expect(kind).toBe('py');
+  it('CodeExecutor shape: py exec wraps user code as a python subprocess and returns real rc', async () => {
+    aca.executeImpl = async (_sid, code) => {
+      // both langs submit a Python wrapper to the one code-interpreter pool
       expect(code).toContain('subprocess.run');
+      expect(code).toContain('/tmp/karl_user.py');
       return sentinelOutcome(code, 0, '42\n');
     };
     const response = await request(app)
@@ -73,9 +74,12 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.session_id).toMatch(/^karl-[0-9a-f]{32}$/);
   });
 
-  it('BashExecutor shape: lang=bash routes to the Shell pool with a real exit code', async () => {
-    aca.executeImpl = async (kind, _sid, code) => {
-      expect(kind).toBe('bash');
+  it('BashExecutor shape: lang=bash runs via a python-hosted bash subprocess with a real exit code', async () => {
+    aca.executeImpl = async (_sid, code) => {
+      // bash runs on the same code-interpreter pool, launched as subprocess(['bash', …])
+      expect(code).toContain('subprocess.run');
+      expect(code).toContain("'bash'");
+      expect(code).toContain('/tmp/karl_user.sh');
       return sentinelOutcome(code, 2, '', 'grep: no match\n');
     };
     const response = await request(app)
@@ -127,7 +131,7 @@ describe('POST /v1/exec contract', () => {
     });
     await blob.put(doc.blobPath, Buffer.from('hello'), 'text/plain');
 
-    aca.executeImpl = async (_pool, _sid, code) => sentinelOutcome(code, 0, 'hello');
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'hello');
     const response = await request(app)
       .post('/v1/exec')
       .send({
@@ -183,7 +187,7 @@ describe('POST /v1/exec contract', () => {
     await blob.put(doc.blobPath, Buffer.from('1,2'), 'text/csv');
 
     let attempts = 0;
-    aca.executeImpl = async (_pool, _sid, code) => {
+    aca.executeImpl = async (_sid, code) => {
       attempts += 1;
       if (attempts === 1) {
         throw new AcaSessionNotFoundError();
@@ -206,7 +210,7 @@ describe('POST /v1/exec contract', () => {
   });
 
   it('new files written by the code are captured and downloadable after the session dies', async () => {
-    aca.executeImpl = async (_pool, _sid, code) => sentinelOutcome(code, 0, 'saved\n');
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'saved\n');
     aca.sessionFiles = [
       { name: 'chart.png', type: 'File', sizeInBytes: 4, contentType: 'image/png' },
     ];

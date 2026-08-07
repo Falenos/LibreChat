@@ -1,0 +1,11 @@
+{
+  "$id": "1",
+  "properties": {
+    "$id": "2",
+    "status": "Success",
+    "stdout": "0\n/usr/bin/bash\n2.2.2\n",
+    "stderr": "",
+    "result": 20,
+    "executionTimeInMilliseconds": 497
+  }
+}

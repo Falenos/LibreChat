@@ -3,7 +3,6 @@ import type { AuthContext, ExecFileRef } from '../types/contract.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FileDoc, FilesRepo } from '../store/filesRepo.js';
 import type { AcaClient } from '../azure/acaClient.js';
-import type { PoolKind } from '../types/aca.js';
 import type { MoveInstruction } from './wrapper.js';
 import type { Logger } from '../logger.js';
 
@@ -78,7 +77,6 @@ export function movePlan(inputs: ResolvedInput[]): MoveInstruction[] {
 
 export async function pushInputs(
   inputs: ResolvedInput[],
-  kind: PoolKind,
   sessionId: string,
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger },
 ): Promise<void> {
@@ -91,7 +89,7 @@ export async function pushInputs(
         return;
       }
       const data = await deps.blob.getBuffer(input.doc.blobPath);
-      await deps.aca.pushFile(kind, sessionId, input.pushedAs, data, input.doc.contentType);
+      await deps.aca.pushFile(sessionId, input.pushedAs, data, input.doc.contentType);
       await deps.repo.touch(input.doc.sessionId, input.doc.fileId);
       deps.logger.debug(
         { sessionId, file: input.finalName, bytes: data.length },

@@ -2,26 +2,21 @@
  * Azure Container Apps dynamic sessions data-plane types.
  *
  * Pinned by the KK20-108 spike against live West Europe pools (Aug 2026);
- * raw fixtures in test/fixtures/aca/. The two built-in pool types are two
- * distinct contracts:
+ * raw fixtures in test/fixtures/aca/. KARL runs everything on ONE pool — the
+ * built-in **code-interpreter (PythonLTS)** pool, which has bash + python3 +
+ * the data-science stack. Both `lang=py` and `lang=bash` submit a Python
+ * wrapper (see exec/wrapper.ts) to:
  *
- *   Python (lang=py): POST {pool}/code/execute?api-version=2024-02-02-preview
+ *   POST {pool}/code/execute?api-version=2024-02-02-preview
  *     body { properties: { codeInputType, executionType, code } }
  *     resp { properties: { status: "Success"|"Failure", stdout, stderr, ... } }
- *     — runs in an IPython kernel; sys.exit() is swallowed, so a real exit
- *       code requires the subprocess sentinel wrapper.
  *
- *   Shell (lang=bash): POST {pool}/executions?api-version=2025-02-02-preview
- *     body { shellCommand }                              (top-level, NOT nested)
- *     resp { status: "<numeric exit code>", result: { stdout, stderr, ... } }
- *     — real exit code native in `status`.
+ * The pool runs an IPython kernel, so the wrapper always runs the user's code
+ * as a subprocess to recover the real exit code (and to run bash on the pool).
  */
 
-/** Which built-in pool / dialect an execution targets. */
-export type PoolKind = 'py' | 'bash';
-
-/** Python code-interpreter response (wrapped in `properties`). */
-export interface AcaPyResponse {
+/** Code-interpreter execution response (wrapped in `properties`). */
+export interface AcaExecutionResponse {
   properties?: {
     status?: string; // "Success" | "Failure"
     stdout?: string;
@@ -30,19 +25,6 @@ export interface AcaPyResponse {
     executionTimeInMilliseconds?: number;
   };
 }
-
-/** Shell response (flat; `status` is the numeric exit code as a string). */
-export interface AcaShellResponse {
-  identifier?: string;
-  status?: string; // e.g. "0", "7"
-  result?: {
-    stdout?: string;
-    stderr?: string;
-    executionTimeInMilliseconds?: number;
-  };
-}
-
-export type AcaExecutionResponse = AcaPyResponse | AcaShellResponse;
 
 export interface AcaSessionFile {
   name: string;
@@ -65,16 +47,13 @@ export interface AcaFileProperties {
   contentType?: string | null;
 }
 
-/**
- * Normalized execution outcome produced by the ACA client, hiding the
- * per-pool response differences from the exec service.
- */
+/** Normalized execution outcome produced by the ACA client. */
 export interface AcaExecOutcome {
+  /** Pool-level status: true iff properties.status === "Success". Used only for
+   *  the sentinel-missing fallback; the real exit code comes from the wrapper. */
   succeeded: boolean;
   stdout: string;
   stderr: string;
-  /** Native exit code when the pool provides one (Shell); undefined for Python. */
-  nativeExitCode?: number | undefined;
   executionMs?: number | undefined;
   raw: AcaExecutionResponse;
 }
