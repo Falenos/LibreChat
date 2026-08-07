@@ -733,6 +733,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/Parts/Attachment.tsx` | uploaded native SVG route precedence | SVG routing branches | Sends source-bearing SVG uploads to the existing artifact card and Code/Preview panel before the overlapping generic image route can emit a broken `<img>` preview | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | uploaded SVG attachment routing regression | SVG single/group assertions | Proves both attachment render paths prefer the native artifact card even when SVG dimensions satisfy the image predicate | Self | NO-TICKET |
 | `api/server/services/Files/process.spec.js` | `acceptance flag without worker falls back to synchronous indexing` | 2280–2294 | Proves the deployed accept-on/worker-off mismatch queues only transiently, claims and embeds in-request, and returns 200 instead of stranding an async upload | Self | KK20-232 |
+| `api/server/services/Files/process.js` | `processAgentFileUpload` backend-aligned generation route | 1038–1565 | Reuses the FileAsset's persisted embed route so Agent Knowledge falls back to pgvector `/embed` when Azure AI Search is disabled while retaining `/agent/embed` for Azure Search | `api/server/services/Files/process.spec.js` (`falls Agent Knowledge back to pgvector when Azure Search is disabled`, `uses the Agent Knowledge route when Azure Search is enabled`) | KK20-232 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1179,6 +1180,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `skill/karl-artifacts/SKILL.md` | Deployment skill loader and existing `edit_artifact` contract | Medium — makes attached SVG interpretation and first-edit native artifact creation explicit while preserving immutable uploads | Deployment skill suite | NO-TICKET |
 | `api/server/services/Files/knauf/asyncIndexingConfig.js` | None | Low — derives effective async acceptance from the independent accept and worker switches, forcing mismatched deployments onto the bounded synchronous path | `api/server/services/Files/knauf/asyncIndexingConfig.spec.js`, `api/server/services/Files/process.spec.js` | KK20-232 |
 | `api/server/services/Files/knauf/asyncIndexingConfig.spec.js` | Subject under test | Low — test-only regression for accept/worker conjunction and tenant allow-list behavior | Self | KK20-232 |
+| `api/server/services/Files/knauf/fileSearchAssetLifecycle.js` | `./dedupKey`, `./asyncIndexingConfig`; `db` createMethods surface | Medium — persists a generation route that matches the chosen pgvector or Azure Search backend for Agent Knowledge | `api/server/services/Files/knauf/fileSearchAssetLifecycle.spec.js`, `api/server/services/Files/process.spec.js` | KK20-232 |
+| `api/server/services/Files/knauf/fileSearchAssetLifecycle.spec.js` | Subject under test; real FileAsset schema and methods | Low — test-only backend/route alignment regression | Self | KK20-232 |
+| `api/server/services/Files/knauf/fileAssetMigration.js` | `mongoose.models.{File,KnaufFileAsset,Agent}` via injected mongoose; `./dedupKey` | Medium — migrates Agent Knowledge assets with an embed route that matches the configured pgvector or Azure Search backend | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | KK20-232 |
+| `api/server/services/Files/knauf/fileAssetMigration.spec.js` | Subject under test; real schemas from `@librechat/data-schemas`; mongodb-memory-server | Low — test-only migration backend/route alignment regression | Self | KK20-232 |
 <!-- seams:new:end -->
 
 ## Static Assets

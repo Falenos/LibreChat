@@ -2414,6 +2414,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 // user with access to the agent can retrieve them, and are NOT per-user deduped.
 describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', () => {
   const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
+  const { isAzureSearchEnabledForAgents } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
     .fn()
@@ -2438,9 +2439,10 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     mergeFileConfig.mockReturnValue(makeFileConfig());
     getStrategyFunctions.mockReturnValue({ handleFileUpload });
     computeContentHash.mockResolvedValue('agentHashABC');
+    isAzureSearchEnabledForAgents.mockReturnValue(false);
   });
 
-  test('embeds AGENT-scoped, skips per-user dedup, and adds to the agent library', async () => {
+  test('falls Agent Knowledge back to pgvector when Azure Search is disabled', async () => {
     await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
 
     // No dedup work on the library path — but the physical asset IS reserved
@@ -2452,7 +2454,8 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
         asset_id: 'mock-uuid',
         scope_type: 'agent',
         scope_id: 'agent-abc',
-        embed_route: '/agent/embed',
+        vector_backend: 'pgvector',
+        embed_route: '/embed',
         dedup_key: undefined,
       }),
     );
@@ -2461,7 +2464,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
       expect.objectContaining({
         asset_id: 'mock-uuid',
         generation: 1,
-        embed_route: '/agent/embed',
+        embed_route: '/embed',
         scope: { userId: 'user-123', entityId: 'agent-abc' },
       }),
     );
@@ -2473,6 +2476,22 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     expect(fileInfo.knauf_dedup_owner).toBeUndefined();
     // Added to the agent's persistent file_search library.
     expect(db.addAgentResourceFile).toHaveBeenCalled();
+  });
+
+  test('uses the Agent Knowledge route when Azure Search is enabled', async () => {
+    isAzureSearchEnabledForAgents.mockReturnValue(true);
+
+    await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
+
+    expect(db.reserveAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vector_backend: 'azure_search',
+        embed_route: '/agent/embed',
+      }),
+    );
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({ embed_route: '/agent/embed' }),
+    );
   });
 
   test('repairs an incomplete agent-library finalization using the existing ready asset', async () => {
@@ -2518,6 +2537,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
       status: 'processing',
       lease_expires_at: new Date(0),
       vector_backend: 'azure_search',
+      embed_route: '/agent/embed',
       scope_type: 'agent',
       scope_id: 'agent-abc',
       blob: {
