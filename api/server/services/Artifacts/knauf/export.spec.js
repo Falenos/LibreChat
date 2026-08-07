@@ -294,6 +294,44 @@ describe('artifact renderer', () => {
     delete global.document;
   });
 
+  it('ART-DL-004 keeps [3/3] Starting loading until the slide DOM is stable', async () => {
+    await renderArtifact(
+      {
+        ...artifact,
+        type: 'application/vnd.react',
+        content: "import { KnaufSlideDeck } from '/knauf/slides';",
+      },
+      'png',
+    );
+    const readiness = mockPreviewWaitForFunction.mock.calls[0][0];
+    const now = jest
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(100)
+      .mockReturnValueOnce(1701);
+    const body = {
+      childElementCount: 1,
+      innerText: '[3/3] Starting',
+      innerHTML: '<main>[3/3] Starting</main>',
+    };
+    global.window = {};
+    global.document = {
+      body,
+      querySelector: (selector) =>
+        selector === '[data-knauf-export-pages]' ? { getAttribute: () => '3' } : { disabled: true },
+    };
+
+    expect(readiness(true)).toBe(false);
+    body.innerText = 'Slide 3 ready';
+    body.innerHTML = '<main>Slide 3 ready</main>';
+    expect(readiness(true)).toBe(false);
+    expect(readiness(true)).toBe(true);
+
+    now.mockRestore();
+    delete global.window;
+    delete global.document;
+  });
+
   it('removes legacy prose outside a compiled shared artifact fence', async () => {
     let renderedSnapshot;
     mockGoto.mockImplementation(async (url) => {
