@@ -49,7 +49,7 @@ export class FakeFilesRepo {
     return doc;
   }
 
-  async upsertCaptured(input: InsertFileInput): Promise<FileDoc> {
+  async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
     for (const doc of this.docs.values()) {
       if (doc.sessionId === input.sessionId && doc.filename === input.filename) {
         Object.assign(doc, {
@@ -58,10 +58,10 @@ export class FakeFilesRepo {
           state: 'captured',
           lastModified: new Date(),
         });
-        return doc;
+        return { doc, inserted: false };
       }
     }
-    return this.insertStaged({ ...input, origin: 'exec-output' });
+    return { doc: await this.insertStaged({ ...input, origin: 'exec-output' }), inserted: true };
   }
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {

@@ -68,9 +68,12 @@ export class FilesRepo {
 
   /**
    * Capture upsert keyed on (sessionId, filename) so a re-run of the same
-   * code refreshes the row and keeps the fileId stable.
+   * code refreshes the row and keeps the fileId (and thus the blobPath /
+   * download link) stable across overwrites. Returns `inserted` so the caller
+   * can roll back a *fresh* row if the subsequent blob write fails — without
+   * deleting a row whose blob from a prior turn is still valid.
    */
-  async upsertCaptured(input: InsertFileInput): Promise<FileDoc> {
+  async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
     const now = new Date();
     const fileId = randomUUID();
     const result = await this.collection.findOneAndUpdate(
@@ -96,12 +99,12 @@ export class FilesRepo {
           createdAt: now,
         },
       },
-      { upsert: true, returnDocument: 'after' },
+      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
-    if (result == null) {
+    if (result.value == null) {
       throw new Error('upsertCaptured returned no document');
     }
-    return result;
+    return { doc: result.value, inserted: result.lastErrorObject?.updatedExisting === false };
   }
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {

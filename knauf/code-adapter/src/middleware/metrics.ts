@@ -3,7 +3,7 @@ import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client
 export interface Metrics {
   registry: Registry;
   execTotal: Counter<'lang' | 'outcome'>;
-  execDuration: Histogram<'pool' | 'outcome'>;
+  execDuration: Histogram<'lang' | 'outcome'>;
   acaRequestDuration: Histogram<'op'>;
   wrapperParseFailures: Counter<string>;
   truncationRecoveries: Counter<string>;
@@ -25,7 +25,7 @@ export function createMetrics(): Metrics {
     execDuration: new Histogram({
       name: 'code_adapter_exec_duration_seconds',
       help: 'End-to-end /exec latency',
-      labelNames: ['pool', 'outcome'],
+      labelNames: ['lang', 'outcome'],
       buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 220],
       registers: [registry],
     }),

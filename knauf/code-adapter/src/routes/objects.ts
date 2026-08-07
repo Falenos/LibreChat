@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { isValidFileId, isValidSessionId, parseIdentity } from '../validate.js';
+import type { RequestHandler } from 'express';
 import type { AuthContext } from '../types/contract.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FileDoc, FilesRepo } from '../store/filesRepo.js';
@@ -61,11 +62,7 @@ export function createObjectsRouter(deps: ObjectsDeps): Router {
     })().catch(next);
   });
 
-  const deleteHandler = (
-    req: Parameters<Parameters<Router['delete']>[1]>[0],
-    res: Parameters<Parameters<Router['delete']>[1]>[1],
-    next: Parameters<Parameters<Router['delete']>[1]>[2],
-  ) => {
+  const deleteHandler: RequestHandler = (req, res, next) => {
     void (async () => {
       const { sessionId, fileId } = req.params as { sessionId: string; fileId: string };
       if (!isValidSessionId(sessionId) || !isValidFileId(fileId)) {

@@ -85,7 +85,7 @@ export function sanitizeFilename(raw: unknown): string {
     throw new ValidationError('filename is too long');
   }
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\\]/.test(name)) {
+  if (/[\u0000-\u001f\\"]/.test(name)) {
     throw new ValidationError('filename contains invalid characters');
   }
   if (name.startsWith('/') || name.startsWith('~')) {

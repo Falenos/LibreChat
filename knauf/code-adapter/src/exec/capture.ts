@@ -74,70 +74,43 @@ export async function captureOutputs(params: {
 
   for (const entry of listing) {
     const name = entry.name;
-    if (
-      name == null ||
-      name === '' ||
-      name.startsWith('.karl_') ||
-      name === OUT_LOG ||
-      name === ERR_LOG
-    ) {
-      continue;
-    }
-    if (entry.type?.toLowerCase() === 'directory') {
+    if (!isCapturable(name, entry)) {
       continue;
     }
 
     const input = byFinalName.get(name) ?? byPushedName.get(name);
-    const size = entry.sizeInBytes ?? 0;
-
     if (input != null) {
       seenInputs.add(input);
-      const unchanged = size === input.doc.size;
+      const unchanged = (entry.sizeInBytes ?? 0) === input.doc.size;
       if (unchanged || input.doc.readOnly) {
         files.push(echoInput(input));
         continue;
       }
-    } else {
-      // Not an input to this exec: only return it if it's new or changed vs the
-      // pre-exec baseline. Unchanged pre-existing files were delivered already.
-      const baseSig = baseline.get(name);
-      if (baseSig != null && baseSig === fileSignature(entry)) {
-        continue;
-      }
-    }
-
-    if (
-      captured >= config.exec.captureMaxFiles ||
-      capturedBytes + size > config.exec.captureMaxTotalBytes
-    ) {
-      overflow = true;
+    } else if (baseline.get(name) === fileSignature(entry)) {
+      // Not an input, and unchanged since before this exec → already delivered.
       continue;
     }
 
-    try {
-      const data = await deps.aca.fetchFileContent(sessionId, name);
-      const doc = await deps.repo.upsertCaptured({
+    if (captured >= config.exec.captureMaxFiles) {
+      overflow = true;
+      continue;
+    }
+    const result = await captureNewFile(
+      entry,
+      name,
+      config.exec.captureMaxTotalBytes - capturedBytes,
+      {
         sessionId,
-        filename: name,
-        size: data.length,
-        contentType: entry.contentType ?? 'application/octet-stream',
-        origin: 'exec-output',
-        readOnly: false,
-        identity: { kind: 'user', id: auth.userId },
-        userId: auth.userId,
-        tenantId: auth.tenantId,
-      });
-      await deps.blob.put(doc.blobPath, data, doc.contentType);
+        auth,
+        deps,
+      },
+    );
+    if (result === 'overflow') {
+      overflow = true;
+    } else if (result != null) {
       captured += 1;
-      capturedBytes += data.length;
-      files.push({
-        id: doc.fileId,
-        name: doc.filename,
-        path: `/mnt/data/${doc.filename}`,
-        storage_session_id: sessionId,
-      });
-    } catch (err) {
-      deps.logger.warn({ file: name, err: (err as Error).message }, 'output capture failed');
+      capturedBytes += result.bytes;
+      files.push(result.file);
     }
   }
 
@@ -153,6 +126,84 @@ export async function captureOutputs(params: {
       ? `Note: some generated files were not captured (limit ${config.exec.captureMaxFiles} files / ${Math.round(config.exec.captureMaxTotalBytes / 1_048_576)} MB per execution).`
       : null,
   };
+}
+
+/** A listing entry is capturable if it's a real, non-wrapper, non-directory file. */
+function isCapturable(name: string | undefined, entry: AcaSessionFile): name is string {
+  if (
+    name == null ||
+    name === '' ||
+    name.startsWith('.karl_') ||
+    name === OUT_LOG ||
+    name === ERR_LOG
+  ) {
+    return false;
+  }
+  return entry.type?.toLowerCase() !== 'directory';
+}
+
+interface CaptureCtx {
+  sessionId: string;
+  auth: AuthContext;
+  deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
+}
+
+/**
+ * Fetch one output file (bounded), persist it to blob + Mongo, and return the
+ * ExecResponseFile. Returns 'overflow' if it doesn't fit the remaining budget,
+ * or null if the fetch/persist failed (logged). A missing sizeInBytes is
+ * treated as the whole remaining budget so an unsized entry can't slip the cap,
+ * and the fetch itself is hard-capped as defense in depth.
+ */
+async function captureNewFile(
+  entry: AcaSessionFile,
+  name: string,
+  remainingBytes: number,
+  ctx: CaptureCtx,
+): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | null> {
+  const { sessionId, auth, deps } = ctx;
+  if ((entry.sizeInBytes ?? remainingBytes) > remainingBytes) {
+    return 'overflow';
+  }
+  try {
+    const data = await deps.aca.fetchFileContent(sessionId, name, remainingBytes + 1);
+    if (data.length > remainingBytes) {
+      return 'overflow';
+    }
+    const { doc, inserted } = await deps.repo.upsertCaptured({
+      sessionId,
+      filename: name,
+      size: data.length,
+      contentType: entry.contentType ?? 'application/octet-stream',
+      origin: 'exec-output',
+      readOnly: false,
+      identity: { kind: 'user', id: auth.userId },
+      userId: auth.userId,
+      tenantId: auth.tenantId,
+    });
+    try {
+      await deps.blob.put(doc.blobPath, data, doc.contentType);
+    } catch (putErr) {
+      // Don't leave a row pointing at a blob that never landed. Only roll back a
+      // freshly inserted row — an updated row still has its prior valid blob.
+      if (inserted) {
+        await deps.repo.delete(sessionId, doc.fileId).catch(() => undefined);
+      }
+      throw putErr;
+    }
+    return {
+      file: {
+        id: doc.fileId,
+        name: doc.filename,
+        path: `/mnt/data/${doc.filename}`,
+        storage_session_id: sessionId,
+      },
+      bytes: data.length,
+    };
+  } catch (err) {
+    deps.logger.warn({ file: name, err: (err as Error).message }, 'output capture failed');
+    return null;
+  }
 }
 
 function echoInput(input: ResolvedInput): ExecResponseFile {

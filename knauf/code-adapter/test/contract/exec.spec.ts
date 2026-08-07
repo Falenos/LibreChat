@@ -276,6 +276,34 @@ describe('POST /v1/exec contract', () => {
     expect(names(r4)).toEqual(['out1.txt']);
   });
 
+  it('does not return files that exceed the capture byte budget — sized or unsized', async () => {
+    // Small cap so one output blows the budget. An unsized listing entry must be
+    // treated as the whole remaining budget (not 0), so it can't slip the cap.
+    const app2 = createApp({
+      config: testConfig({ CAPTURE_MAX_TOTAL_BYTES: '10' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metrics: testMetrics(),
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    // (a) sized-too-big
+    aca.sessionFiles = [{ name: 'big.bin', type: 'File', sizeInBytes: 1000 }];
+    aca.fileContents.set('big.bin', Buffer.alloc(1000));
+    const sized = await request(app2).post('/v1/exec').send({ lang: 'py', code: 'x' });
+    expect(sized.body.files.map((f: { name: string }) => f.name)).not.toContain('big.bin');
+    expect(sized.body.stderr).toContain('not captured');
+
+    // (b) unsized (no sizeInBytes) but actually large → still excluded, not fetched unbounded
+    aca.sessionFiles = [{ name: 'huge.bin', type: 'File' }];
+    aca.fileContents.set('huge.bin', Buffer.alloc(1000));
+    const unsized = await request(app2).post('/v1/exec').send({ lang: 'py', code: 'y' });
+    expect(unsized.body.files.map((f: { name: string }) => f.name)).not.toContain('huge.bin');
+  });
+
   it('wrapper sentinel missing → raw stdout + synthesized 0/1 (degraded mode)', async () => {
     aca.executeImpl = async () => ({
       succeeded: true,
