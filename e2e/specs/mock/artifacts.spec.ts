@@ -5,6 +5,7 @@ const ARTIFACT_TITLE = 'E2E React Artifact';
 const ARTIFACT_SOURCE = `export default function App() {
   return <main data-testid="e2e-artifact-preview">E2E artifact preview</main>;
 }`;
+const CHROME_DEVTOOLS_PROBE = /\/\.well-known\/appspecific\/com\.chrome\.devtools\.json$/;
 
 test.describe('artifacts', () => {
   test('ART-GEN-001 ART-GEN-003 ART-GEN-005 ART-PRE-001 ART-PRE-002 ART-DL-001 ART-OPS-005 @artifact-pr', async ({
@@ -17,7 +18,11 @@ test.describe('artifacts', () => {
     const badResponses: string[] = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text());
+      if (message.type() !== 'error') return;
+      const location = message.location();
+      if (!CHROME_DEVTOOLS_PROBE.test(location.url)) {
+        consoleErrors.push(`${message.text()} (${location.url || 'unknown source'})`);
+      }
     });
     page.on('requestfailed', (request) => {
       const failure = request.failure()?.errorText ?? 'unknown';

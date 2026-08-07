@@ -150,5 +150,6 @@ jobs:
         with:
           name: playwright-test-results
           path: e2e/specs/.test-results/**
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: ignore
