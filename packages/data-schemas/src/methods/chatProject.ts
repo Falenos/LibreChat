@@ -385,16 +385,15 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const [conversationResult, deleteResult] = await Promise.all([
-      Conversation.updateMany(
-        { user, chatProjectId: projectId },
-        { $unset: { chatProjectId: '' } },
-      ),
+      // [knauf] KK20-248 — deleting a project also deletes its linked chats.
+      Conversation.deleteMany({ user, chatProjectId: projectId }),
+      // End [knauf]
       ChatProject.deleteOne(projectFilter),
     ]);
 
     return {
       deletedCount: deleteResult.deletedCount ?? 0,
-      modifiedCount: conversationResult.modifiedCount ?? 0,
+      modifiedCount: conversationResult.deletedCount ?? conversationResult.modifiedCount ?? 0,
     };
   }
 

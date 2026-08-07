@@ -277,7 +277,8 @@ describe('ChatProject methods', () => {
   });
   // End [knauf]
 
-  it('deleting a project unassigns chats instead of deleting them', async () => {
+  // [knauf] KK20-248 — deleting a project must delete chats still assigned to it.
+  it('deleting a project deletes linked chats', async () => {
     const project = await methods.createChatProject(user, { name: 'Delete me' });
     await createConversation(user, 'convo-1', 'First');
     await methods.assignConversationToProject(user, 'convo-1', project._id!.toString());
@@ -290,9 +291,9 @@ describe('ChatProject methods', () => {
 
     expect(result.deletedCount).toBe(1);
     expect(result.modifiedCount).toBe(1);
-    expect(conversation).not.toBeNull();
-    expect(conversation?.chatProjectId).toBeUndefined();
+    expect(conversation).toBeNull();
   });
+  // End [knauf]
 
   it('isolates projects and assignments by user', async () => {
     const project = await methods.createChatProject(user, { name: 'Mine' });
