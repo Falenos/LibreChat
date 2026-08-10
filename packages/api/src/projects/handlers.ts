@@ -43,10 +43,7 @@ type ProjectHandlerDependencies = Pick<
   // [knauf] KK20-248 — project knowledge file API depends on explicit project-source methods.
   Pick<
     ChatProjectSourceMethods,
-    | 'createChatProjectSource'
-    | 'listChatProjectSources'
-    | 'deleteChatProjectSource'
-    | 'deleteChatProjectSourcesForProject'
+    'createChatProjectSource' | 'listChatProjectSources' | 'deleteChatProjectSource'
   > &
   Pick<FileMethods, 'getFiles'>;
 // End [knauf]
@@ -164,6 +161,7 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
   // [knauf] KK20-248 — project knowledge file API surface.
   listProjectFiles: (req: ProjectRequest, res: Response) => Promise<Response>;
   addProjectFile: (req: ProjectRequest, res: Response) => Promise<Response>;
+  downloadProjectFile: (req: ProjectRequest, res: Response) => Promise<Response | void>;
   deleteProjectFile: (req: ProjectRequest, res: Response) => Promise<Response>;
   // End [knauf]
 } {
@@ -369,6 +367,30 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     }
   }
 
+  async function downloadProjectFile(req: ProjectRequest, res: Response): Promise<Response | void> {
+    const { projectId, fileId } = req.params;
+    if (!isValidObjectIdString(projectId)) {
+      return res.status(404).json({ error: PROJECT_NOT_FOUND });
+    }
+    if (!fileId) {
+      return res.status(400).json({ error: 'fileId is required' });
+    }
+
+    try {
+      const sources = await deps.listChatProjectSources(getUserId(req), projectId);
+      if (!sources.some((source) => source.file_id === fileId)) {
+        return res.status(404).json({ error: 'Project file not found' });
+      }
+      return res.redirect(
+        307,
+        `/api/files/download/${encodeURIComponent(getUserId(req))}/${encodeURIComponent(fileId)}`,
+      );
+    } catch (error) {
+      logger.error('[projects] Error downloading project file', error);
+      return res.status(500).json({ error: 'Error downloading project file' });
+    }
+  }
+
   async function deleteProjectFile(req: ProjectRequest, res: Response): Promise<Response> {
     const { projectId, fileId } = req.params;
     if (!isValidObjectIdString(projectId)) {
@@ -402,6 +424,7 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     // [knauf] KK20-248 — expose project knowledge file handlers.
     listProjectFiles,
     addProjectFile,
+    downloadProjectFile,
     deleteProjectFile,
     // End [knauf]
   };

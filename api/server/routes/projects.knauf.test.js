@@ -18,25 +18,26 @@ jest.mock('~/models', () => ({
   createChatProjectSource: jest.fn(),
   listChatProjectSources: jest.fn(),
   deleteChatProjectSource: jest.fn(),
-  deleteChatProjectSourcesForProject: jest.fn(),
-  deleteChatProjectSourcesByFileId: jest.fn(),
   getFiles: jest.fn(),
 }));
+
+const mockHandlers = {
+  listProjects: jest.fn((_req, res) => res.status(200).json({ projects: [] })),
+  createProject: jest.fn((_req, res) => res.status(201).json({})),
+  assignConversationToProject: jest.fn((_req, res) => res.status(200).json({})),
+  listProjectFiles: jest.fn((_req, res) => res.status(200).json({ files: [] })),
+  addProjectFile: jest.fn((_req, res) => res.status(201).json({})),
+  downloadProjectFile: jest.fn((_req, res) => res.redirect(307, '/api/files/download/user-1/file-1')),
+  deleteProjectFile: jest.fn((_req, res) => res.status(200).json({ deleted: true })),
+  getProject: jest.fn((_req, res) => res.status(200).json({})),
+  updateProject: jest.fn((_req, res) => res.status(200).json({})),
+  deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
+};
 
 jest.mock(
   '@librechat/api',
   () => ({
-    createProjectHandlers: jest.fn(() => ({
-      listProjects: jest.fn((_req, res) => res.status(200).json({ projects: [] })),
-      createProject: jest.fn((_req, res) => res.status(201).json({})),
-      assignConversationToProject: jest.fn((_req, res) => res.status(200).json({})),
-      listProjectFiles: jest.fn((_req, res) => res.status(200).json({ files: [] })),
-      addProjectFile: jest.fn((_req, res) => res.status(201).json({})),
-      deleteProjectFile: jest.fn((_req, res) => res.status(200).json({ deleted: true })),
-      getProject: jest.fn((_req, res) => res.status(200).json({})),
-      updateProject: jest.fn((_req, res) => res.status(200).json({})),
-      deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
-    })),
+    createProjectHandlers: jest.fn(() => mockHandlers),
   }),
   { virtual: true },
 );
@@ -53,48 +54,34 @@ describe('[knauf] KK20-248 project file routes', () => {
     app.use('/api/projects', router);
   });
 
-  it('redirects only when the file is attached to the project for the user', async () => {
-    db.listChatProjectSources.mockResolvedValue([{ file_id: 'file-1' }]);
-
+  it('delegates project file downloads to the project handler layer', async () => {
     const response = await request(app).get('/api/projects/project-1/files/file-1/download');
 
     expect(response.status).toBe(307);
     expect(response.headers.location).toBe('/api/files/download/user-1/file-1');
-    expect(db.listChatProjectSources).toHaveBeenCalledWith('user-1', 'project-1');
+    expect(mockHandlers.downloadProjectFile).toHaveBeenCalled();
+    expect(db.listChatProjectSources).not.toHaveBeenCalled();
   });
 
-  it('returns 404 when the file is not attached to the project', async () => {
-    db.listChatProjectSources.mockResolvedValue([{ file_id: 'other-file' }]);
-
-    const response = await request(app).get('/api/projects/project-1/files/file-1/download');
-
-    expect(response.status).toBe(404);
-    expect(response.body).toEqual({ error: 'Project file not found' });
-  });
-
-  it('deletes only the project association for a project file', async () => {
-    db.listChatProjectSources.mockResolvedValue([{ file_id: 'file-1' }]);
-    db.deleteChatProjectSource.mockResolvedValue(true);
-
+  it('delegates project file deletion to the project handler layer', async () => {
     const response = await request(app).delete('/api/projects/project-1/files/file-1');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ deleted: true });
-    expect(db.deleteChatProjectSource).toHaveBeenCalledWith('user-1', 'project-1', 'file-1');
+    expect(mockHandlers.deleteProjectFile).toHaveBeenCalled();
+    expect(db.deleteChatProjectSource).not.toHaveBeenCalled();
     expect(db.getFiles).not.toHaveBeenCalled();
   });
 
-  it('deletes the project via the aggregate delete path without deleting library files', async () => {
-    db.deleteChatProject.mockResolvedValue({ deletedCount: 1, modifiedCount: 0 });
-
+  it('delegates project deletion to the aggregate project handler', async () => {
     const response = await request(app).delete('/api/projects/project-1');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ deletedCount: 1, modifiedCount: 0 });
+    expect(response.body).toEqual({ deletedCount: 1 });
+    expect(mockHandlers.deleteProject).toHaveBeenCalled();
     expect(db.listChatProjectSources).not.toHaveBeenCalled();
     expect(db.getFiles).not.toHaveBeenCalled();
-    expect(db.deleteChatProject).toHaveBeenCalledWith('user-1', 'project-1');
-    expect(db.deleteChatProjectSourcesForProject).not.toHaveBeenCalled();
+    expect(db.deleteChatProject).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

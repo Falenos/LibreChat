@@ -8,6 +8,7 @@ const createResponse = () => {
   const res = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
+    redirect: jest.fn().mockReturnThis(),
   };
   return res as any;
 };
@@ -23,7 +24,6 @@ const createDeps = (overrides: Record<string, unknown> = {}) =>
     createChatProjectSource: jest.fn(),
     listChatProjectSources: jest.fn(),
     deleteChatProjectSource: jest.fn(),
-    deleteChatProjectSourcesForProject: jest.fn(),
     getFiles: jest.fn(),
     ...overrides,
   }) as any;
@@ -175,6 +175,39 @@ describe('createProjectHandlers project files [knauf]', () => {
     );
   });
 
+  it('redirects project file download only after verifying project attachment', async () => {
+    const deps = createDeps({
+      listChatProjectSources: jest.fn(async () => [source('file-1')]),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.downloadProjectFile(
+      { params: { projectId, fileId: 'file-1' }, user: { id: userId } } as any,
+      res,
+    );
+
+    expect(deps.listChatProjectSources).toHaveBeenCalledWith(userId, projectId);
+    expect(res.redirect).toHaveBeenCalledWith(307, `/api/files/download/${userId}/file-1`);
+  });
+
+  it('rejects project file download when the file is not attached to the project', async () => {
+    const deps = createDeps({
+      listChatProjectSources: jest.fn(async () => [source('other-file')]),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.downloadProjectFile(
+      { params: { projectId, fileId: 'file-1' }, user: { id: userId } } as any,
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Project file not found' });
+    expect(res.redirect).not.toHaveBeenCalled();
+  });
+
   it('does not delete another user project file association', async () => {
     const deps = createDeps({ deleteChatProjectSource: jest.fn(async () => false) });
     const handlers = createProjectHandlers(deps);
@@ -203,7 +236,6 @@ describe('createProjectHandlers project files [knauf]', () => {
     );
 
     expect(deps.deleteChatProject).toHaveBeenCalledWith(userId, projectId);
-    expect(deps.deleteChatProjectSourcesForProject).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ deletedCount: 1, modifiedCount: 2 });
   });
