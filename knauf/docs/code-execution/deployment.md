@@ -338,17 +338,41 @@ between two execs transparently re-mints the session.
 
 ## 8. Prod promotion (after dev UAT)
 
-- Terraform: `sp-agk-code-prod` + `id-agk-code-adapter-prod` (federated subject
-  `system:serviceaccount:agentic-karl-prod:sa-code-adapter`), Session Executor
-  role, `maxConcurrentSessions: 50`; `AGK-CODEAPI-JWT-PRIVATE-KEY` in
-  `kv-agntkarl-prod-001`.
-- Image: `az acr import` the adapter tag `acragkhubnonprod001 → acragkhubprod001`.
-- GitOps: copy the dev service dir to `agentic-karl/prod/...`, swap ACR/KV/
-  namespace/clientId/pool-endpoint; mirror the ApplicationSet exclude+add for prod.
-- Slot the adapter into `promote_pipeline.yaml` beside the existing sibling
-  services so future promotions carry it.
-- The capability flip rides the normal release (config is byte-identical across
-  envs; only env vars differ).
+**What is already prepared in this repo.** The app-side work is done and env-agnostic —
+there is no separate "enable it in prod" code change to write:
+
+- `librechat.yaml` carries the capability, `executeCode: true` on all four user-facing
+  specs, and the prompt wording. It is baked into the image and byte-identical across
+  envs, so prod gets it from the normal release. Only env vars differ.
+- **What keeps that safe in prod is `LIBRECHAT_CODE_BASEURL`.** Until prod sets it to the
+  prod adapter, `packages/api/src/knauf/code/codeEnvGuard.ts` strips `execute_code`, so
+  prod users see no code tool, no attach-menu row, no tabular routing — and no file is
+  sent anywhere. The capability shipping ahead of the infra is therefore inert, not
+  broken. Do not "pre-set" that variable to anything else to silence a log line.
+- Image promotion: **`.github/workflows/promote-code-adapter.yaml`** (`workflow_dispatch`,
+  tag + confirm) imports `acragkhubnonprod001 → acragkhubprod001`. It is a separate
+  workflow rather than a step in `promote_pipeline.yaml` because the adapter versions from
+  `knauf/code-adapter/VERSION` independently of KARL's `vX.Y.Z` tag; coupling them would
+  force a full app promotion for a code-adapter hotfix. It only publishes the tag — the
+  rollout is the values bump below.
+
+**What is still outside this repo** (nothing here can do it):
+
+- Terraform (`agk-infrastructure`): `sp-agk-code-prod` + `id-agk-code-adapter-prod`
+  (federated subject `system:serviceaccount:agentic-karl-prod:sa-code-adapter`), Session
+  Executor role on the pool, `maxConcurrentSessions: 50`;
+  `AGK-CODEAPI-JWT-PRIVATE-KEY` in `kv-agntkarl-prod-001`.
+- GitOps (`agk-deployment-configs`): copy the dev service dir to
+  `agentic-karl/prod/services/agentic-karl-code-adapter`, swapping ACR / KV / namespace /
+  UAMI clientId / pool endpoint; mirror the ApplicationSet exclude+add for prod. Then set
+  `LIBRECHAT_CODE_BASEURL` in the prod `agentic-karl` values — that is the switch that
+  actually turns prod on.
+
+> **Ordering, and the current state.** As of this writing the adapter has **no service
+> directory in any environment** — not dev, not stage, not prod — so dev deployment (§1–4)
+> genuinely comes first; prod is two steps out. The order that matters is always the same:
+> pool + identity → adapter running → `LIBRECHAT_CODE_BASEURL` → verify. The capability is
+> already there and waiting, harmlessly.
 
 ---
 
