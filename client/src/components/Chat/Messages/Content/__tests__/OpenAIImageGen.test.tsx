@@ -18,9 +18,24 @@ jest.mock('~/hooks', () => ({
 
 jest.mock('~/components/Chat/Messages/Content/Image', () => ({
   __esModule: true,
-  default: ({ altText, imagePath }: { altText: string; imagePath: string }) => (
-    <div data-testid="image-component" data-alt={altText} data-src={imagePath} />
+  // [knauf] Expose the file identity passed to the resilient image renderer. (NO-TICKET)
+  default: ({
+    altText,
+    imagePath,
+    fileId,
+  }: {
+    altText: string;
+    imagePath: string;
+    fileId?: string;
+  }) => (
+    <div
+      data-testid="image-component"
+      data-alt={altText}
+      data-src={imagePath}
+      data-file-id={fileId}
+    />
   ),
+  // End [knauf]
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -76,6 +91,9 @@ describe('OpenAIImageGen', () => {
           isSubmitting={false}
           attachments={[
             {
+              // [knauf] Generated image identity must reach the recovery path. (NO-TICKET)
+              file_id: 'generated-image-1',
+              // End [knauf]
               filename: 'cat.png',
               filepath: '/images/cat.png',
               conversationId: 'conv1',
@@ -84,6 +102,12 @@ describe('OpenAIImageGen', () => {
         />,
       );
       expect(screen.getByTestId('image-component')).toBeInTheDocument();
+      // [knauf] Generated image identity must reach the recovery path. (NO-TICKET)
+      expect(screen.getByTestId('image-component')).toHaveAttribute(
+        'data-file-id',
+        'generated-image-1',
+      );
+      // End [knauf]
     });
   });
 

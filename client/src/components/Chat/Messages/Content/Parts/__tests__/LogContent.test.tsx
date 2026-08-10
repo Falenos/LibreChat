@@ -42,7 +42,11 @@ jest.mock('~/components/Chat/Input/Files/FilePreview', () => ({
 
 jest.mock('~/components/Chat/Messages/Content/Image', () => ({
   __esModule: true,
-  default: ({ altText }: { altText?: string }) => <img alt={altText ?? ''} data-testid="image" />,
+  // [knauf] Expose the file identity passed to the resilient image renderer. (NO-TICKET)
+  default: ({ altText, fileId }: { altText?: string; fileId?: string }) => (
+    <img alt={altText ?? ''} data-testid="image" data-file-id={fileId} />
+  ),
+  // End [knauf]
 }));
 
 jest.mock('~/components/Messages/Content/Mermaid/Mermaid', () => ({
@@ -95,6 +99,22 @@ const ArtifactsObserver = ({
 // End [knauf]
 
 describe('LogContent attachment routing', () => {
+  // [knauf] Generated raster output must retain file identity for authenticated recovery. (NO-TICKET)
+  it('passes image file identity to Image', () => {
+    const image = baseAttachment({
+      file_id: 'log-image-1',
+      filename: 'result.png',
+      filepath: '/api/share/share-1/files/log-image-1',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(<LogContent output="" attachments={[image]} renderImages={true} />);
+
+    expect(screen.getByTestId('image')).toHaveAttribute('data-file-id', 'log-image-1');
+  });
+  // End [knauf]
+
   it('routes HTML attachments through ToolArtifactCard (panel)', () => {
     const html = baseAttachment({
       file_id: 'a',

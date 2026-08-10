@@ -373,14 +373,17 @@ const Part = memo(function Part({
   } else if (part.type === ContentTypes.IMAGE_FILE) {
     const imageFile = part[ContentTypes.IMAGE_FILE];
     const cached = imageFile.file_id ? getCachedPreview(imageFile.file_id) : undefined;
+    // [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET)
     return (
       <Image
         imagePath={cached ?? imageFile.filepath}
+        fileId={imageFile.file_id}
         altText={imageFile.filename ?? 'Uploaded Image'}
         width={imageFile.width}
         height={imageFile.height}
       />
     );
+    // End [knauf]
   }
 
   return null;
