@@ -426,7 +426,14 @@ const TextAttachment = memo(
 
 const ImageAttachment = memo(({ attachment }: { attachment: TAttachment }) => {
   const [isLoaded, setIsLoaded] = useState(false);
-  const { width, height, filepath = null } = attachment as TFile & TAttachmentMetadata;
+  const {
+    width,
+    height,
+    filepath = null,
+    // [knauf] Authenticated image recovery needs the stable file id. (NO-TICKET)
+    file_id,
+    // End [knauf]
+  } = attachment as TFile & TAttachmentMetadata;
 
   useEffect(() => {
     setIsLoaded(false);
@@ -447,13 +454,16 @@ const ImageAttachment = memo(({ attachment }: { attachment: TAttachment }) => {
         WebkitFontSmoothing: 'subpixel-antialiased',
       }}
     >
+      {/* [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET) */}
       <Image
         altText={attachment.filename || 'attachment image'}
         imagePath={filepath ?? ''}
+        fileId={file_id}
         width={width}
         height={height}
         className="mb-4"
       />
+      {/* End [knauf] */}
     </div>
   );
 });

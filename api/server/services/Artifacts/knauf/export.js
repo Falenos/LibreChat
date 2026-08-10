@@ -172,6 +172,13 @@ const waitForStablePreview = async (previewFrame, requireSlideContract) => {
         const body = document.body;
         const text = body?.innerText ?? '';
         const markup = body?.innerHTML ?? '';
+        const layout = [
+          body?.scrollWidth,
+          body?.scrollHeight,
+          document.documentElement?.scrollWidth,
+          document.documentElement?.scrollHeight,
+          document.getElementsByTagName?.('*').length,
+        ].join(':');
         const now = performance.now();
         const state = window.__knaufArtifactExportState;
         const contract = document.querySelector('[data-knauf-export-pages]');
@@ -187,14 +194,31 @@ const waitForStablePreview = async (previewFrame, requireSlideContract) => {
           loading.test(text) ||
           (requiresContract && !hasValidContract)
         ) {
-          window.__knaufArtifactExportState = { markup: '', since: now };
+          window.__knaufArtifactExportState = {
+            markup: '',
+            layout: '',
+            markupSince: now,
+            layoutSince: now,
+          };
           return false;
         }
-        if (!state || state.markup !== markup) {
-          window.__knaufArtifactExportState = { markup, since: now };
+        if (!state) {
+          window.__knaufArtifactExportState = {
+            markup,
+            layout,
+            markupSince: now,
+            layoutSince: now,
+          };
           return false;
         }
-        return now - state.since >= 1500;
+        const next = {
+          markup,
+          layout,
+          markupSince: state.markup === markup ? state.markupSince : now,
+          layoutSince: state.layout === layout ? state.layoutSince : now,
+        };
+        window.__knaufArtifactExportState = next;
+        return now - next.markupSince >= 1500 || now - next.layoutSince >= 3000;
       },
       requireSlideContract,
       { timeout: EXPORT_TIMEOUT_MS },
