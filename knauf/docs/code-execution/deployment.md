@@ -11,6 +11,11 @@ code-interpreter half of the older
 > **Status:** the adapter is built and verified live against a spike pool in
 > CT-SANDBOX. None of the AGK infra below is applied yet. Steps are
 > dependency-ordered; do them top to bottom.
+>
+> **To actually run the dev rollout, use [deploy-to-dev.md](deploy-to-dev.md)** — the
+> checklist version, with the live state of each PR, the ordering traps, the exact keys to
+> paste, and the verification sequence. This document stays the reference for *what each
+> repo contributes and why*; capacity expectations are in [scaling.md](scaling.md).
 
 ---
 
