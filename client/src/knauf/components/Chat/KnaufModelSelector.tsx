@@ -25,7 +25,7 @@ import type { Agent, TModelSpec } from 'librechat-data-provider';
 import { Constants, EModelEndpoint, getConfigDefaults } from 'librechat-data-provider';
 import { TooltipAnchor } from '@librechat/client';
 import { MessageSquare, Pin, PinOff } from 'lucide-react';
-import type { ModelSelectorProps } from '~/common';
+import type { ModelSelectorProps, SelectedValues } from '~/common';
 import { useFavorites, useLocalize } from '~/hooks';
 import { useGetStartupConfig } from '~/data-provider';
 import store from '~/store';
@@ -46,6 +46,14 @@ const defaultInterface = getConfigDefaults().interface;
 
 /** Pinned alphabetical sort locale — pinned so cross-user/cross-tenant ordering is stable. */
 const SORT_LOCALE = 'en';
+
+export function hasKnaufPickerSelection({
+  endpoint,
+  model,
+  modelSpec,
+}: Pick<SelectedValues, 'endpoint' | 'model' | 'modelSpec'>) {
+  return Boolean(modelSpec || (endpoint === EModelEndpoint.agents && model));
+}
 
 export default function KnaufModelSelector({ startupConfig }: Readonly<ModelSelectorProps>) {
   const interfaceConfig = startupConfig?.interface ?? defaultInterface;
@@ -225,27 +233,24 @@ function KnaufModelSelectorContent() {
 
   /**
    * Auto-bind the default modelSpec ("Chat") on a fresh conversation that has
-   * no selection yet. Sister behaviour to upstream's
+   * no supported Knauf selection yet. Sister behaviour to upstream's
    * `modelSpecs.list[].default: true` mechanism — the spec gets selected on app
    * entry so the trigger shows its label (e.g. "KARL") instead of an empty
    * "Select Agent" placeholder.
    *
-   * Gated on the *state* ("nothing selected yet"), not a one-shot ref. The
-   * selection guard short-circuits the moment any value is chosen — including a
-   * user picking a custom agent on a still-unsent chat — so it never overrides
-   * a later choice; and because it re-evaluates on every fresh-state
-   * transition, New Chat (which resets `selectedValues`) correctly re-binds the
-   * default. A one-shot ref here would fire once and then never again, leaving
-   * New Chat stuck on "Select Agent" — see `.claude/notes/ANTI_PATTERNS.md`
-   * ("Don't gate a state-driven effect with a one-shot ref"). If upstream's
-   * startup hooks already selected the default spec, `selectedValues.modelSpec`
-   * is set and the guard no-ops.
+   * Gated on the state, not a one-shot ref. A modelSpec or custom agent is an
+   * intentional selection and wins. A raw endpoint/model is not selectable in
+   * this Knauf picker, so on a fresh chat it is only startup fallback state and
+   * must not block KARL from binding. This also repairs the first-login race
+   * where Azure OpenAI initializes before the default spec. Because the effect
+   * re-evaluates on every fresh-state transition, New Chat correctly re-binds
+   * the default without overriding a custom agent.
    */
   const conversationId = useRecoilValue(store.conversationIdByIndex(0));
   const isFreshChat = !conversationId || conversationId === Constants.NEW_CONVO;
   useEffect(() => {
     if (!defaultModelSpec || !isFreshChat) return;
-    if (selectedValues.endpoint || selectedValues.model || selectedValues.modelSpec) return;
+    if (hasKnaufPickerSelection(selectedValues)) return;
     handleSelectSpec(defaultModelSpec);
   }, [
     defaultModelSpec,
