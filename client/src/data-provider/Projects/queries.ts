@@ -13,7 +13,15 @@ import type {
   TChatProjectFilesResponse,
 } from 'librechat-data-provider';
 
-const PROJECT_FILE_INDEX_POLL_MS = 5_000;
+const DEFAULT_PROJECT_FILE_INDEX_POLL_MS = 3_000;
+const rawProjectFileIndexPollMs = Number.parseInt(
+  import.meta.env.VITE_PROJECT_FILE_INDEX_POLL_MS ?? '',
+  10,
+);
+const PROJECT_FILE_INDEX_POLL_MS =
+  Number.isFinite(rawProjectFileIndexPollMs) && rawProjectFileIndexPollMs > 0
+    ? rawProjectFileIndexPollMs
+    : DEFAULT_PROJECT_FILE_INDEX_POLL_MS;
 const pendingProjectFileStatuses = new Set(['uploading', 'processing']);
 
 const projectFilesRefetchInterval = (data?: TChatProjectFilesResponse): number | false =>
