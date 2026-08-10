@@ -24,6 +24,7 @@ const needsAuthenticatedRecovery = (url: string): boolean => {
     return false;
   }
 };
+const IMAGE_RECOVERY_RETRY_MS = 1_000;
 // End [knauf]
 
 /** Caches image dimensions by src so remounts can reserve space */
@@ -100,6 +101,7 @@ const Image = ({
     null,
   );
   const recoveringRef = useRef(false);
+  const recoveryRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const imageUrl =
     recoveredImage?.source === absoluteImageUrl ? recoveredImage.url : absoluteImageUrl;
 
@@ -111,12 +113,30 @@ const Image = ({
     try {
       const result = await downloadFile();
       if (result.data) {
+        if (recoveryRetryRef.current != null) {
+          clearTimeout(recoveryRetryRef.current);
+          recoveryRetryRef.current = null;
+        }
         setRecoveredImage({ source: absoluteImageUrl, url: result.data });
+      } else if (recoveryRetryRef.current == null) {
+        recoveryRetryRef.current = setTimeout(async () => {
+          recoveryRetryRef.current = null;
+          const retry = await downloadFile();
+          retry.data && setRecoveredImage({ source: absoluteImageUrl, url: retry.data });
+        }, IMAGE_RECOVERY_RETRY_MS);
       }
     } finally {
       recoveringRef.current = false;
     }
   }, [absoluteImageUrl, downloadFile, fileId, recoveredImage?.source]);
+
+  useEffect(() => {
+    return () => {
+      if (recoveryRetryRef.current != null) {
+        clearTimeout(recoveryRetryRef.current);
+      }
+    };
+  }, []);
   // End [knauf]
 
   const downloadImage = async () => {
