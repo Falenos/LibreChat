@@ -1360,7 +1360,7 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
             asset_id: knaufAssetId,
             generation,
             index_profile,
-            embed_route: messageAttachment ? '/embed' : '/agent/embed',
+            embed_route: knaufUploadAsset.embed_route,
             blob: {
               source,
               path: storageResult.filepath,

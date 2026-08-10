@@ -22,10 +22,13 @@ jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
 }));
 
+const { AIMessage, HumanMessage, ToolMessage } = require('@librechat/agents/langchain/messages');
+
 const {
   ModelEndHandler,
   createZeroUsageRefusalRetryHandler,
   isZeroUsageGenericRefusal,
+  stampLangfuseResponseModel,
   stripRetriedGenericRefusal,
 } = require('../callbacks');
 
@@ -295,6 +298,60 @@ describe('zero-usage generic refusal recovery', () => {
         { type: 'text', text: 'Here is the requested chart.' },
       ]),
     ).toEqual([{ type: 'text', text: 'Here is the requested chart.' }]);
+  });
+
+  it('stamps the routed model for Langfuse before downstream callbacks run', () => {
+    const result = {
+      generations: [
+        [
+          {
+            message: {
+              response_metadata: {
+                model_name: 'model-router',
+                model: 'model-routergpt-5.4-mini-2026-03-17',
+              },
+            },
+          },
+        ],
+      ],
+    };
+
+    stampLangfuseResponseModel(result);
+
+    expect(result.generations[0][0].message.response_metadata.model_name).toBe(
+      'gpt-5.4-mini-2026-03-17',
+    );
+  });
+
+  it('repairs only structurally invalid Model Router tool history', () => {
+    const { handler } = createZeroUsageRefusalRetryHandler({ messageId: 'm1' });
+    const valid = [
+      new HumanMessage('question'),
+      new AIMessage({
+        content: '',
+        tool_calls: [{ id: 'call-1', name: 'file_search', args: {} }],
+      }),
+      new ToolMessage({ content: 'result', tool_call_id: 'call-1' }),
+    ];
+    handler.handleChatModelStart(null, [valid], null, null, null, {
+      ls_model_name: 'model-router',
+    });
+    expect(valid).toHaveLength(3);
+
+    const orphaned = [
+      new HumanMessage('question'),
+      new AIMessage({
+        content: '',
+        tool_calls: [{ id: 'call-2', name: 'file_search', args: {} }],
+      }),
+      new ToolMessage({ content: 'result', tool_call_id: '' }),
+    ];
+    handler.handleChatModelStart(null, [orphaned], null, null, null, {
+      ls_model_name: 'model-router',
+    });
+
+    expect(orphaned).toHaveLength(1);
+    expect(orphaned[0].getType()).toBe('human');
   });
 });
 // End [knauf]

@@ -361,7 +361,7 @@ jobs:
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
           echo "DEV health smoke passed"
           echo "| DEV health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Stage promotion | manual from \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Stage promotion | manual; full STAGE E2E gates PROD promotion for \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
 
       # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
       # Best-effort visibility only: the app deploy above is the release's success

@@ -71,6 +71,7 @@ async function reserveForUpload({
   bytes,
 }) {
   const isAgent = !messageAttachment;
+  const usesAzureSearch = isAgent && azureSearchForAgents;
   const dedupKey =
     !isAgent && contentHash ? buildDedupKey({ user: userId, contentHash }) : undefined;
   const { asset, created } = await db.reserveAsset({
@@ -78,8 +79,8 @@ async function reserveForUpload({
     scope_type: isAgent ? 'agent' : 'user',
     scope_id: isAgent ? String(entityId ?? userId) : userId,
     target_index_profile: getIndexProfile(),
-    vector_backend: isAgent && azureSearchForAgents ? 'azure_search' : 'pgvector',
-    embed_route: isAgent ? '/agent/embed' : '/embed',
+    vector_backend: usesAzureSearch ? 'azure_search' : 'pgvector',
+    embed_route: usesAzureSearch ? '/agent/embed' : '/embed',
     content_hash: contentHash,
     dedup_key: dedupKey,
     // KK20-195 review F9 — carry the expected size so a concurrent contender's

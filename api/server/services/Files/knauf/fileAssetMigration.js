@@ -95,6 +95,7 @@ async function migrateFileAssetsBatch({
     const assetId = row.knauf_asset_id ?? row.file_id;
     const isAgent = row.context === 'agents';
     const isReady = row.embedded === true;
+    const usesAzureSearch = isAgent && isAzureSearchEnabled();
 
     let scopeType = 'user';
     let scopeId = row.user != null ? String(row.user) : '';
@@ -132,8 +133,8 @@ async function migrateFileAssetsBatch({
         : {}),
       target_index_profile: legacyProfile,
       active_index_profile: isReady ? legacyProfile : null,
-      vector_backend: isAgent && isAzureSearchEnabled() ? 'azure_search' : 'pgvector',
-      embed_route: isAgent ? '/agent/embed' : '/embed',
+      vector_backend: usesAzureSearch ? 'azure_search' : 'pgvector',
+      embed_route: usesAzureSearch ? '/agent/embed' : '/embed',
       blob: {
         source: row.source,
         path: row.filepath,

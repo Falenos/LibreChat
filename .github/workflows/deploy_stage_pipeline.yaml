@@ -36,11 +36,26 @@ jobs:
       AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       AGK_DEV_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
       AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
+      AGK_STAGE_WORKER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-worker
       AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       AGK_ARGOCD_APP: agentic-karl-stage-agentic-karl
+      AGK_WORKER_ARGOCD_APP: agentic-karl-stage-agentic-karl-worker
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
     steps:
+      - name: Validate workflow inputs
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ] && ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$INPUT_VERSION"; then
+            echo "::error::Invalid version"
+            exit 1
+          fi
+
+      - name: Check out app repository
+        uses: actions/checkout@v4
+
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -55,14 +70,15 @@ jobs:
 
       - name: Determine version to deploy
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
-          INPUT_VERSION="${{ inputs.version }}"
           if [ -n "$INPUT_VERSION" ]; then
             VERSION="$INPUT_VERSION"
           else
-            git clone --depth 1 "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-dc-version
+            git clone --depth 1 "https://$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-dc-version
             VERSION=$(awk '$1 == "tag:" { print $2; exit }' \
               "agk-dc-version/$AGK_DEV_CONFIG_DIRECTORY/values.yaml" | tr -d "\"'")
             rm -rf agk-dc-version
@@ -87,53 +103,57 @@ jobs:
             echo "| ArgoCD app | \`$AGK_ARGOCD_APP\` on \`$AGK_ARGOCD_DOMAIN\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Validate source image exists in dev ACR
+      - name: Import exact dev image into AGK stage ACR namespace
+        id: image
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          az acr repository show-tags \
+          DEV_DIGEST=$(az acr repository show \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
-            --repository "$AGK_DEV_IMAGE_REPOSITORY" \
-            --query "[?@=='$VERSION']" \
-            -o tsv | grep -Fx "$VERSION"
-
-      - name: Import image into AGK stage ACR namespace
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
+            --image "$AGK_DEV_IMAGE_REPOSITORY:$VERSION" \
+            --query digest -o tsv)
+          grep -Eq '^sha256:[0-9a-f]{64}$' <<< "$DEV_DIGEST"
           SOURCE_REGISTRY_ID=$(az acr show \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
             --query id -o tsv)
 
-          az acr import \
+          EXISTING_STAGE_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" --name "$AGK_ACR_NAME" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" --query digest -o tsv 2>/dev/null || true)
+          if [ -n "$EXISTING_STAGE_DIGEST" ]; then
+            if [ "$EXISTING_STAGE_DIGEST" != "$DEV_DIGEST" ]; then
+              echo "::error::Refusing to retarget immutable STAGE tag $VERSION from $EXISTING_STAGE_DIGEST to $DEV_DIGEST"
+              exit 1
+            fi
+            echo "STAGE tag $VERSION already points at $DEV_DIGEST; reusing it"
+          else
+            az acr import \
+              --subscription "$AGK_SUBSCRIPTION_ID" \
+              --name "$AGK_ACR_NAME" \
+              --registry "$SOURCE_REGISTRY_ID" \
+              --source "$AGK_DEV_IMAGE_REPOSITORY@$DEV_DIGEST" \
+              --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          fi
+          STAGE_DIGEST=$(az acr repository show \
             --subscription "$AGK_SUBSCRIPTION_ID" \
             --name "$AGK_ACR_NAME" \
-            --registry "$SOURCE_REGISTRY_ID" \
-            --source "$AGK_DEV_IMAGE_REPOSITORY:$VERSION" \
             --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
-            --force
-
-      - name: Verify stage image tag
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
-          az acr repository show-tags \
-            --subscription "$AGK_SUBSCRIPTION_ID" \
-            --name "$AGK_ACR_NAME" \
-            --repository "$AGK_STAGE_IMAGE_REPOSITORY" \
-            --query "[?@=='$VERSION']" \
-            -o tsv | grep -Fx "$VERSION"
+            --query digest -o tsv)
+          if [ "$STAGE_DIGEST" != "$DEV_DIGEST" ]; then
+            echo "::error::Stage digest $STAGE_DIGEST differs from imported dev digest $DEV_DIGEST"
+            exit 1
+          fi
+          echo "digest=$STAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
       - name: Update AGK stage deployment config values
-        env:
-          GH_TOKEN: ${{ env.GITHUB_PAT }}
         run: |
           set -euo pipefail
+          export GH_TOKEN="$GITHUB_PAT"
           VERSION="${{ steps.version.outputs.version }}"
 
-          git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+          git clone "https://$GITHUB_PAT@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
           cd agk-deployment-configs
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -144,7 +164,17 @@ jobs:
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
 
-          if git diff --quiet -- "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"; then
+          WORKER_VALUES="$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
+          test -f "$WORKER_VALUES"
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+          grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+
+          CONFIG_FILES=(
+            "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+            "$WORKER_VALUES"
+          )
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
             echo "AGK stage deployment config already points at $VERSION"
             echo "| Stage deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -152,7 +182,7 @@ jobs:
 
           BRANCH="release/agk-stage-$VERSION"
           git checkout -b "$BRANCH"
-          git add "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          git add "${CONFIG_FILES[@]}"
           git commit -m "Update agentic-karl stage to $VERSION"
           git push --force origin "$BRANCH"
 
@@ -161,7 +191,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl stage to $VERSION" \
-              --body "Automated stage GitOps version bump from the agentic-karl deploy-stage pipeline (run ${{ github.run_id }}). Bumps \`$AGK_STAGE_CONFIG_DIRECTORY/values.yaml\` image tag and Langfuse release to \`$VERSION\`.")
+              --body "Automated stage GitOps version bump from the agentic-karl deploy-stage pipeline (run ${{ github.run_id }}). Bumps the app and async-indexing worker image tags, plus the app Langfuse release, to \`$VERSION\`.")
           fi
           echo "Stage deployment config PR: $PR_URL"
 
@@ -263,15 +293,157 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
-      - name: Run STAGE E2E tests
-        if: success()
-        env:
-          GH_TOKEN: ${{ env.GITHUB_PAT }}
-          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+      - name: Refresh AGK stage worker ArgoCD application
         run: |
           set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
-          CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-e2e"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          echo "Waiting for worker ArgoCD app $AGK_WORKER_ARGOCD_APP on $EXPECTED_IMAGE"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          for attempt in {1..60}; do
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" > /dev/null 2>&1 || true
+
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" 2>/dev/null || true)
+            SYNC_STATUS=$(jq -r '.status.sync.status // "unknown"' <<< "${APP_JSON:-}")
+            HEALTH_STATUS=$(jq -r '.status.health.status // "unknown"' <<< "${APP_JSON:-}")
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "${APP_JSON:-}" | grep -F "$EXPECTED_IMAGE" || true)
+
+            echo "Attempt $attempt: worker sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+            if [ "$SYNC_STATUS" = "Synced" ] \
+              && [ "$HEALTH_STATUS" = "Healthy" ] \
+              && [ -n "$IMAGE_MATCH" ]; then
+              echo "| Stage worker | Synced/Healthy on \`$EXPECTED_IMAGE\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::Stage worker did not become Synced/Healthy on $EXPECTED_IMAGE"
+          exit 1
+
+      - name: Capture exact STAGE state before E2E
+        id: stage-state
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          EXPECTED_DIGEST="${{ steps.image.outputs.digest }}"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -er '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          APP_JSON=$(curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          WORKER_JSON=$(curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+
+          for STATE in "$APP_JSON" "$WORKER_JSON"; do
+            jq -e --arg image "$EXPECTED_IMAGE" \
+              '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
+               any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
+              <<< "$STATE" > /dev/null
+          done
+
+          export ARGOCD_BASE_URL="https://$AGK_ARGOCD_DOMAIN"
+          export ARGOCD_TOKEN EXPECTED_IMAGE EXPECTED_DIGEST
+          APP_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+          WORKER_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_WORKER_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
+          WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
+          grep -Eq '^[0-9a-f]{40}$' <<< "$APP_REVISION"
+          grep -Eq '^[0-9a-f]{40}$' <<< "$APP_GITOPS_REVISION"
+          grep -Eq '^[0-9a-f]{40}$' <<< "$WORKER_REVISION"
+          if [ "$APP_GITOPS_REVISION" != "$WORKER_REVISION" ]; then
+            echo "::error::STAGE app GitOps revision $APP_GITOPS_REVISION differs from worker revision $WORKER_REVISION"
+            exit 1
+          fi
+
+          CURRENT_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" --name "$AGK_ACR_NAME" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" --query digest -o tsv)
+          if [ "$CURRENT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::STAGE image digest changed before E2E"
+            exit 1
+          fi
+
+          git -C agk-deployment-configs fetch origin "$APP_GITOPS_REVISION"
+          APP_VALUES=$(git -C agk-deployment-configs show "$APP_GITOPS_REVISION:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml")
+          WORKER_VALUES=$(git -C agk-deployment-configs show "$WORKER_REVISION:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml")
+          test "$(awk '$1 == "tag:" { print $2; exit }' <<< "$APP_VALUES" | tr -d "\"'")" = "$VERSION"
+          test "$(awk '$1 == "tag:" { print $2; exit }' <<< "$WORKER_VALUES" | tr -d "\"'")" = "$VERSION"
+          grep -Eq '^[[:space:]]+pullPolicy: Always$' <<< "$APP_VALUES"
+          grep -Eq '^[[:space:]]+pullPolicy: Always$' <<< "$WORKER_VALUES"
+          APP_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+
+          {
+            echo "image-digest=$CURRENT_DIGEST"
+            echo "app-revision=$APP_REVISION"
+            echo "app-gitops-revision=$APP_GITOPS_REVISION"
+            echo "worker-revision=$WORKER_REVISION"
+            echo "gitops-revision=$APP_GITOPS_REVISION"
+            echo "app-config-sha=$APP_CONFIG_SHA"
+            echo "worker-config-sha=$WORKER_CONFIG_SHA"
+            echo "app-runtime-digest=$APP_RUNTIME_DIGEST"
+            echo "worker-runtime-digest=$WORKER_RUNTIME_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run STAGE E2E tests
+        id: stage-e2e
+        if: success()
+        env:
+          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$GITHUB_PAT"
+          VERSION="${{ steps.version.outputs.version }}"
+          QUALITY_HEAD_SHA=$(gh api "repos/$QUALITY_REPOSITORY/commits/main" --jq '.sha')
+          GITOPS_REVISION="${{ steps.stage-state.outputs.gitops-revision }}"
+          CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$(uuidgen)-e2e"
           run_id=""
           run_url=""
 
@@ -279,7 +451,10 @@ jobs:
           gh workflow run stage-e2e.yaml \
             --repo "$QUALITY_REPOSITORY" \
             --ref main \
-            -f correlation_id="$CORRELATION_ID"
+            -f correlation_id="$CORRELATION_ID" \
+            -f application_version="$VERSION" \
+            -f worker_version="$VERSION" \
+            -f gitops_revision="$GITOPS_REVISION"
 
           for attempt in {1..30}; do
             RUN_JSON=$(gh run list \
@@ -288,7 +463,7 @@ jobs:
               --event workflow_dispatch \
               --json databaseId,displayTitle,url \
               --limit 50 \
-              --jq "map(select(.displayTitle | contains(\"$CORRELATION_ID\"))) | first // empty")
+              --jq "map(select(.displayTitle == \"Stage E2E $CORRELATION_ID\")) | first // empty")
 
             if [ -n "$RUN_JSON" ]; then
               run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
@@ -307,7 +482,20 @@ jobs:
 
           echo "STAGE E2E run: $run_url"
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          RUN_JSON=$(gh api "repos/$QUALITY_REPOSITORY/actions/runs/$run_id")
+          WORKFLOW_ID=$(gh api "repos/$QUALITY_REPOSITORY/actions/workflows/stage-e2e.yaml" --jq '.id')
+          jq -e \
+            --argjson workflow_id "$WORKFLOW_ID" \
+            --arg head_sha "$QUALITY_HEAD_SHA" \
+            --arg title "Stage E2E $CORRELATION_ID" \
+            '.workflow_id == $workflow_id and .event == "workflow_dispatch" and .head_branch == "main" and .head_sha == $head_sha and .display_title == $title and .status == "completed" and .conclusion == "success"' \
+            <<< "$RUN_JSON" > /dev/null
           echo "| STAGE E2E | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "run-id=$run_id"
+            echo "run-url=$run_url"
+            echo "correlation-id=$CORRELATION_ID"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve manual STAGE k6 profiles
         id: stage-gates
@@ -317,6 +505,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # JavaScript template literals belong to Node, not the shell.
+          # shellcheck disable=SC2016
           K6_PROFILES=$(node -e '
             const valid = ["smoke", "load", "stress", "spike"];
             const raw = process.env.RAW_K6_PROFILES || "none";
@@ -345,18 +535,20 @@ jobs:
       - name: Run selected STAGE k6 profiles
         if: success() && steps.stage-gates.outputs.k6_profiles != ''
         env:
-          GH_TOKEN: ${{ env.GITHUB_PAT }}
           QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
           K6_PROFILES: ${{ steps.stage-gates.outputs.k6_profiles }}
         run: |
           set -euo pipefail
+          export GH_TOKEN="$GITHUB_PAT"
           VERSION="${{ steps.version.outputs.version }}"
+          QUALITY_HEAD_SHA=$(gh api "repos/$QUALITY_REPOSITORY/commits/main" --jq '.sha')
 
           wait_for_quality_run() {
             local profile="$1"
             local correlation_id="$2"
             local run_id=""
             local run_url=""
+            local expected_title="K6 stage $profile chat-llm $correlation_id"
 
             for attempt in {1..30}; do
               RUN_JSON=$(gh run list \
@@ -365,7 +557,7 @@ jobs:
                 --event workflow_dispatch \
                 --json databaseId,displayTitle,url \
                 --limit 50 \
-                --jq "map(select(.displayTitle | contains(\"$correlation_id\"))) | first // empty")
+                --jq "map(select(.displayTitle == \"$expected_title\")) | first // empty")
 
               if [ -n "$RUN_JSON" ]; then
                 run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
@@ -384,11 +576,18 @@ jobs:
 
             echo "STAGE $profile k6 run: $run_url"
             gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+            RUN_JSON=$(gh api "repos/$QUALITY_REPOSITORY/actions/runs/$run_id")
+            WORKFLOW_ID=$(gh api "repos/$QUALITY_REPOSITORY/actions/workflows/k6-stage-performance.yaml" --jq '.id')
+            jq -e --argjson workflow_id "$WORKFLOW_ID" --arg head_sha "$QUALITY_HEAD_SHA" \
+              --arg title "$expected_title" \
+              '.workflow_id == $workflow_id and .event == "workflow_dispatch" and .head_branch == "main" and
+               .head_sha == $head_sha and .display_title == $title and .status == "completed" and .conclusion == "success"' \
+              <<< "$RUN_JSON" > /dev/null
             echo "| STAGE k6 $profile | $run_url |" >> "$GITHUB_STEP_SUMMARY"
           }
 
           for profile in $K6_PROFILES; do
-            CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$profile"
+            CORRELATION_ID="agentic-karl-stage-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$profile-$(uuidgen)"
             echo "Dispatching STAGE k6: scenario=chat-llm profile=$profile correlation_id=$CORRELATION_ID"
             gh workflow run k6-stage-performance.yaml \
               --repo "$QUALITY_REPOSITORY" \
@@ -405,3 +604,137 @@ jobs:
         run: |
           echo "No manual STAGE k6 profiles selected; skipping STAGE k6 profiles."
           echo "| STAGE k6 profiles | skipped — none selected |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record immutable STAGE validation provenance
+        if: success()
+        env:
+          EXPECTED_DIGEST: ${{ steps.stage-state.outputs.image-digest }}
+          EXPECTED_APP_REVISION: ${{ steps.stage-state.outputs.app-revision }}
+          EXPECTED_APP_GITOPS_REVISION: ${{ steps.stage-state.outputs.app-gitops-revision }}
+          EXPECTED_WORKER_REVISION: ${{ steps.stage-state.outputs.worker-revision }}
+          EXPECTED_APP_CONFIG_SHA: ${{ steps.stage-state.outputs.app-config-sha }}
+          EXPECTED_WORKER_CONFIG_SHA: ${{ steps.stage-state.outputs.worker-config-sha }}
+          EXPECTED_APP_RUNTIME_DIGEST: ${{ steps.stage-state.outputs.app-runtime-digest }}
+          EXPECTED_WORKER_RUNTIME_DIGEST: ${{ steps.stage-state.outputs.worker-runtime-digest }}
+          QUALITY_RUN_ID: ${{ steps.stage-e2e.outputs.run-id }}
+          QUALITY_RUN_URL: ${{ steps.stage-e2e.outputs.run-url }}
+          CORRELATION_ID: ${{ steps.stage-e2e.outputs.correlation-id }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          STAGE_RUN_ID: ${{ github.run_id }}
+          STAGE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          CURRENT_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" --name "$AGK_ACR_NAME" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" --query digest -o tsv)
+          if [ "$CURRENT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::STAGE image digest changed during E2E"
+            exit 1
+          fi
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" --query value -o tsv)
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- | jq -er '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+          APP_JSON=$(curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          WORKER_JSON=$(curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
+          WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
+          for STATE in "$APP_JSON" "$WORKER_JSON"; do
+            jq -e --arg image "$EXPECTED_IMAGE" \
+              '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
+               any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
+              <<< "$STATE" > /dev/null
+          done
+          export ARGOCD_BASE_URL="https://$AGK_ARGOCD_DOMAIN"
+          export ARGOCD_TOKEN EXPECTED_IMAGE EXPECTED_DIGEST
+          APP_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+          WORKER_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_WORKER_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+          if [ "$APP_RUNTIME_DIGEST" != "$EXPECTED_APP_RUNTIME_DIGEST" ] \
+            || [ "$WORKER_RUNTIME_DIGEST" != "$EXPECTED_WORKER_RUNTIME_DIGEST" ]; then
+            echo "::error::STAGE runtime digest changed during E2E"
+            exit 1
+          fi
+          if [ "$APP_REVISION" != "$EXPECTED_APP_REVISION" ] \
+            || [ "$APP_GITOPS_REVISION" != "$EXPECTED_APP_GITOPS_REVISION" ] \
+            || [ "$WORKER_REVISION" != "$EXPECTED_WORKER_REVISION" ]; then
+            echo "::error::STAGE Argo revision changed during E2E"
+            exit 1
+          fi
+
+          APP_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          if [ "$APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
+            || [ "$WORKER_CONFIG_SHA" != "$EXPECTED_WORKER_CONFIG_SHA" ]; then
+            echo "::error::STAGE GitOps config changed during E2E"
+            exit 1
+          fi
+
+          jq -n \
+            --argjson schema 2 \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow_ref "$WORKFLOW_REF" \
+            --arg workflow_sha "$WORKFLOW_SHA" \
+            --argjson stage_run_id "$STAGE_RUN_ID" \
+            --argjson stage_run_attempt "$STAGE_RUN_ATTEMPT" \
+            --arg version "$VERSION" \
+            --arg image_digest "$EXPECTED_DIGEST" \
+            --arg app_revision "$APP_REVISION" \
+            --arg app_gitops_revision "$APP_GITOPS_REVISION" \
+            --arg worker_revision "$WORKER_REVISION" \
+            --arg app_config_sha256 "$APP_CONFIG_SHA" \
+            --arg worker_config_sha256 "$WORKER_CONFIG_SHA" \
+            --arg app_runtime_digest "$APP_RUNTIME_DIGEST" \
+            --arg worker_runtime_digest "$WORKER_RUNTIME_DIGEST" \
+            --arg quality_repository "Knauf-Group/agentic-karl-quality" \
+            --argjson quality_run_id "$QUALITY_RUN_ID" \
+            --arg quality_run_url "$QUALITY_RUN_URL" \
+            --arg correlation_id "$CORRELATION_ID" \
+            '{schema: $schema, repository: $repository, workflow_ref: $workflow_ref,
+              workflow_sha: $workflow_sha, stage_run_id: $stage_run_id,
+              stage_run_attempt: $stage_run_attempt, version: $version,
+              image_digest: $image_digest, app_revision: $app_revision,
+              app_gitops_revision: $app_gitops_revision,
+              worker_revision: $worker_revision, gitops_revision: $app_gitops_revision,
+              app_config_sha256: $app_config_sha256,
+              worker_config_sha256: $worker_config_sha256,
+              app_runtime_digest: $app_runtime_digest,
+              worker_runtime_digest: $worker_runtime_digest,
+              quality_repository: $quality_repository, quality_run_id: $quality_run_id,
+              quality_run_url: $quality_run_url, correlation_id: $correlation_id}' \
+            > "$RUNNER_TEMP/stage-validation.json"
+          jq -e . "$RUNNER_TEMP/stage-validation.json" > /dev/null
+          echo "| STAGE provenance | run-scoped artifact for digest \`$EXPECTED_DIGEST\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload STAGE validation provenance
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-validation-provenance-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stage-validation.json
+          if-no-files-found: error
+          retention-days: 90

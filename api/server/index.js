@@ -107,6 +107,9 @@ const startServer = async () => {
   indexSync().catch((err) => {
     logger.error('[indexSync] Background sync failed:', err);
   });
+  // [knauf] Detect and repair ephemeral Meilisearch index loss while API pods stay running.
+  indexSync.startReconciliation();
+  // End [knauf]
 
   app.disable('x-powered-by');
   app.set('trust proxy', trusted_proxy);
@@ -173,6 +176,9 @@ const startServer = async () => {
   const sendIndexHtml = (req, res) => {
     res.set({
       'Cache-Control': process.env.INDEX_CACHE_CONTROL || 'no-cache, no-store, must-revalidate',
+      // [knauf] Prevent Chrome from prompting users for local-network access.
+      'Permissions-Policy': 'local-network-access=()',
+      // End [knauf]
       Pragma: process.env.INDEX_PRAGMA || 'no-cache',
       Expires: process.env.INDEX_EXPIRES || '0',
     });

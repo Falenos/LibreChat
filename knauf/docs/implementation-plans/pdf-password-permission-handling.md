@@ -2,7 +2,7 @@
 
 | Status | Owner | Started | Target | Related |
 |---|---|---|---|---|
-| PR 1 in review | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228); KK20-253 (PDF permission governance; separate follow-up) |
+| PR 2 ready for review | Agentic Karl maintainers | 2026-07-20 | KK20-232 | [PR #228](https://github.com/Knauf-Group/agentic-karl/pull/228) merged; KK20-253 (PDF permission governance; separate follow-up) |
 
 ## Outcome
 
@@ -46,10 +46,14 @@ stored as encryption or authorization facts.
 ## Verified current behavior
 
 The active File Search path stores the original PDF in `KnaufFileAsset.blob` and sends that PDF to
-RAG `/embed` or `/agent/embed`. Node text extraction belongs to the separate `context` path and is
-not a fallback for File Search.
+the RAG route selected by its vector backend: chat attachments use pgvector `/embed`; Agent
+Knowledge uses Azure AI Search `/agent/embed` when `AZURE_SEARCH_ENABLED=true`, and the compatibility
+fallback uses pgvector `/embed` when it is false. Node text extraction belongs to the separate
+`context` path and is not a fallback for File Search.
 
-The current upload gate scans bytes for `/Encrypt` and rejects both encrypted cases:
+Before PR 1, the upload gate scanned bytes for `/Encrypt` and rejected both encrypted cases. PR 1
+replaced that heuristic with the isolated PDF.js access probe, so the current classifier distinguishes
+documents that are readable without credentials from documents that require an open password:
 
 | Case | PDF access | Required behavior |
 |---|---|---|
@@ -61,12 +65,15 @@ For the standard PDF security handler, libraries commonly detect case B by attem
 user password. This is an internal probe, not a password users enter. The KK20-232 sample is case B:
 `pdfjs-dist` and the RAG API's pinned `pypdf==6.13.3` stack both open and extract all 18 pages
 without supplied credentials. If Azure Document Intelligence rejects it, the existing RAG loader
-falls back to pypdf. The current `/Encrypt` upload gate is therefore the reported defect.
+falls back to pypdf. The former `/Encrypt` upload gate was therefore the reported defect.
 
-Dev and prod currently set `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true`, but GitOps contains no dedicated
-indexing-worker service and does not set `KNAUF_INDEXING_WORKER_ENABLED`. Queuing work is not a valid
-completion strategy until that deployment mismatch is corrected. This is a rollout prerequisite,
-not a reason to keep rejecting case B.
+GitOps now contains dedicated dev and prod indexing-worker services that run
+`npm run backend:worker`, use the same application image as their API deployment, and set
+`KNAUF_INDEXING_WORKER_ENABLED=true` in the worker pods. Companion GitOps
+[PR #309](https://github.com/Knauf-Group/agk-deployment-configs/pull/309) is merged and also sets
+`KNAUF_INDEXING_WORKER_ENABLED=true` beside `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` in the dev and
+prod API deployments. Because effective acceptance is evaluated in the API process, this declaration
+allows the API to return async acceptance after the matching PR 2 image is deployed.
 
 ## Core invariants
 
@@ -82,7 +89,7 @@ not a reason to keep rejecting case B.
 
 ## Delivery sequence
 
-### PR 1 - Fix case-A/B/C classification ([in review](https://github.com/Knauf-Group/agentic-karl/pull/228))
+### PR 1 - Fix case-A/B/C classification ([merged](https://github.com/Knauf-Group/agentic-karl/pull/228))
 
 Extract the non-trivial classifier to
 `packages/knauf/src/server/pdfAccessProbe.js` with its process-isolated worker beside it, and export
@@ -137,10 +144,25 @@ is separately approved and enabled, case C retains a typed password-required rej
 
 ### PR 2 - Prove downstream and deployment readiness
 
+PR 2 is implemented on `feat/kk20-232-pdf-downstream-readiness`. Its rollout
+guard makes effective async acceptance require both the acceptance flag and
+declared worker availability. Environments that set only
+`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` therefore retain the transient queued
+state but immediately claim and embed synchronously. Dev and prod GitOps now
+declare `KNAUF_INDEXING_WORKER_ENABLED=true` on the API deployment as well as
+the worker deployment through merged companion PR #309.
+
+The companion GitOps change is merged. Merge PR 2 through the standard release process to produce
+and deploy the matching application/worker image in dev, then run the deployed fixture matrix.
+Production promotion remains blocked until the exact release has passed the required readiness,
+retrieval, citation, rejection, and worker-health checks.
+
 Run unencrypted, permission-encrypted but credential-free, signed/certified, PDF/A, malformed, and
-open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. Assert
-actual text extraction and generation activation, not only successful upload or PDF metadata
-loading. Exercise Azure Document Intelligence rejection/fallback where applicable.
+open-password fixtures through the deployed File Search `/embed` and `/agent/embed` paths. The
+deployed Agent Knowledge path requires `AZURE_SEARCH_ENABLED=true`; a local configuration with the
+flag disabled must instead prove the supported pgvector `/embed` fallback. Assert actual text
+extraction and generation activation, not only successful upload or PDF metadata loading. Exercise
+Azure Document Intelligence rejection/fallback where applicable.
 
 If any readable fixture cannot be fully extracted by the existing RAG stack, the required RAG
 change joins KK20-232; do not weaken the acceptance matrix or mark the upload ready with incomplete
@@ -156,6 +178,26 @@ Before rollout, make the indexing execution mode coherent in code and each envir
 This prevents mismatched flags from stranding uploads without incorrectly forbidding the internal
 transient `queued` state. Prove the selected mode with a canary that reaches `ready`. This is
 mandatory core work, not part of the optional open-password extension.
+
+Add durable deployed regression coverage in `agentic-karl-quality`, building on its shared
+conversation-file and Agent Knowledge E2E flows rather than duplicating upload, polling, chat,
+citation, and cleanup helpers. The automated tests must:
+
+- accept either HTTP `200` or `202` according to the deployed indexing mode, then poll
+  `GET /api/files/:file_id/index-status` until `ready`;
+- exercise both conversation File Search and Agent Knowledge with PDFs, assert a
+  fixture-specific fact, and require a structured citation tied to the uploaded file;
+- assert that open-password and malformed PDFs return their stable HTTP `422` error codes without
+  producing an indexable file;
+- use unique resource names and delete only the conversations, agents, and files created by the
+  test; and
+- remain excluded from prod because they mutate data and consume indexing and model capacity.
+
+Keep a representative PDF canary in the blocking STAGE promotion suite. Make the complete readable
+fixture matrix available through a manually dispatched quality workflow so it can be run for
+release acceptance and broader regression checks without making every STAGE promotion pay the full
+matrix cost. A passing quality run is durable regression evidence, but it does not replace the
+required manual dev and prod evidence for the exact deployed KK20-232 release.
 
 ## Appendix: optional open-password extension
 
@@ -272,6 +314,7 @@ Applies only if Knauf approves open-password support:
 | `agentic-karl` | Process-isolated classifier in `packages/knauf/`, small upstream seams, tests/docs; optional state machine, qpdf lifecycle, and client UX only if approved |
 | `agk-deployment-configs` | Coherent async/worker flags, worker deployment if async is selected, and optional case-C feature gate |
 | `agentic-karl-rag-api` | Validate the existing PDF fallback and generation contract; change it if a readable core fixture fails |
+| `agentic-karl-quality` | Durable deployed PDF E2E coverage for conversation and Agent Knowledge retrieval, readiness, citations, rejection behavior, and scoped cleanup; blocking STAGE canary plus manually dispatched full matrix |
 
 ## Completion
 
@@ -279,7 +322,10 @@ KK20-232 is complete when unencrypted, permission-encrypted, signed/certified, a
 that are readable without credentials pass upload, text extraction, and generation activation in
 dev and prod; malformed PDFs, parser infrastructure failures, and open-password PDFs return their
 specified stable HTTP/code combinations; and `asyncAccepted = acceptFlag && workerEnabled` while
-both synchronous and asynchronous modes demonstrably reach `ready`.
+both synchronous and asynchronous modes demonstrably reach `ready`. Manual dev and prod evidence
+must identify the tested application and worker versions and remains authoritative for release
+acceptance; automated STAGE quality coverage protects subsequent promotions but is not a substitute
+for testing the exact deployed release.
 
 If Knauf later approves the optional extension, its separate completion condition is that case C
 passes the optional-extension matrix without exposing a password or internal worker descriptor.

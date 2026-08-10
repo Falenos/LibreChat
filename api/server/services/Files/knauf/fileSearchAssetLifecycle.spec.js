@@ -63,14 +63,15 @@ describe('reserveForUpload (KK20-195 WP3b)', () => {
     expect(first.asset.embed_route).toBe('/embed');
   });
 
-  test('agent-library uploads stay un-deduplicated and agent-scoped', async () => {
+  test('agent-library pgvector fallback stays un-deduplicated and agent-scoped', async () => {
     const a = await reserve({ asset_id: 'asset-a1', messageAttachment: false, contentHash: 'h1' });
     const b = await reserve({ asset_id: 'asset-a2', messageAttachment: false, contentHash: 'h1' });
     expect(a.created).toBe(true);
     expect(b.created).toBe(true); // same content, DIFFERENT assets
     expect(a.asset.scope_type).toBe('agent');
     expect(a.asset.scope_id).toBe('agent-1');
-    expect(a.asset.embed_route).toBe('/agent/embed');
+    expect(a.asset.vector_backend).toBe('pgvector');
+    expect(a.asset.embed_route).toBe('/embed');
     expect(a.asset.dedup_key).toBeUndefined();
   });
 
@@ -81,6 +82,7 @@ describe('reserveForUpload (KK20-195 WP3b)', () => {
       azureSearchForAgents: true,
     });
     expect(a.asset.vector_backend).toBe('azure_search');
+    expect(a.asset.embed_route).toBe('/agent/embed');
   });
 });
 

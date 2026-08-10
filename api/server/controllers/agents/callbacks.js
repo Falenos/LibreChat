@@ -14,6 +14,10 @@ const {
   GraphNodeKeys,
   ToolEndHandler,
   createContentAggregator,
+  // [knauf] NO-TICKET — Model Router needs the SDK's existing orphan-pair
+  // sanitizer too; the SDK currently invokes it only for Anthropic-like models.
+  sanitizeOrphanToolBlocks,
+  // End [knauf]
 } = require('@librechat/agents');
 const {
   sendEvent,
@@ -69,10 +73,61 @@ function isZeroUsageGenericRefusal(result) {
   );
 }
 
+function stampLangfuseResponseModel(result) {
+  const generation = result?.generations?.at(-1)?.at(-1);
+  const responseMetadata = generation?.message?.response_metadata;
+  if (responseMetadata == null || typeof responseMetadata !== 'object') {
+    return;
+  }
+  const responseModel = getResponseModel({ output: { response_metadata: responseMetadata } });
+  if (typeof responseModel === 'string' && responseModel !== '') {
+    responseMetadata.model_name = responseModel;
+  }
+}
+
+function getToolMessageType(message) {
+  return typeof message?.getType === 'function' ? message.getType() : message?.role;
+}
+
+function repairModelRouterToolHistory(messages) {
+  for (const message of messages) {
+    if (getToolMessageType(message) !== 'tool' || message.tool_call_id) {
+      continue;
+    }
+    const fallbackId = message.additional_kwargs?.tool_call_id;
+    if (typeof fallbackId === 'string' && fallbackId !== '') {
+      message.tool_call_id = fallbackId;
+    }
+  }
+
+  const paired = sanitizeOrphanToolBlocks(messages);
+  const complete = paired.filter(
+    (message) =>
+      getToolMessageType(message) !== 'tool' ||
+      (typeof message.tool_call_id === 'string' && message.tool_call_id !== ''),
+  );
+  return complete.length === paired.length ? paired : sanitizeOrphanToolBlocks(complete);
+}
+
 function createZeroUsageRefusalRetryHandler(metadata) {
   const state = { refusalCount: 0 };
   const handler = BaseCallbackHandler.fromMethods({
+    handleChatModelStart(_llm, messageBatches, _runId, _parentRunId, _tags, runMetadata) {
+      const model = runMetadata?.ls_model_name;
+      if (typeof model !== 'string' || !model.toLowerCase().includes('model-router')) {
+        return;
+      }
+      for (const messages of messageBatches) {
+        const repaired = repairModelRouterToolHistory(messages);
+        if (repaired !== messages) {
+          messages.splice(0, messages.length, ...repaired);
+        }
+      }
+    },
     handleLLMEnd(result) {
+      // Must stay synchronous: this handler is registered before Langfuse, so
+      // Langfuse sees Azure's routed model instead of the `model-router` alias.
+      stampLangfuseResponseModel(result);
       if (!isZeroUsageGenericRefusal(result)) {
         return;
       }
@@ -1390,6 +1445,7 @@ module.exports = {
   // [knauf] NO-TICKET — zero-usage refusal recovery helpers.
   createZeroUsageRefusalRetryHandler,
   isZeroUsageGenericRefusal,
+  stampLangfuseResponseModel,
   stripRetriedGenericRefusal,
   // End [knauf]
 };
