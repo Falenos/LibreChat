@@ -425,6 +425,8 @@
   "com_knauf_builder_simplified_view": "Simplified view",
   "com_knauf_capability_artifacts_description": "Create charts, dashboards, slide decks and branded reports in a live preview.",
   "com_knauf_capability_artifacts_label": "Build visuals & documents",
+  "com_knauf_capability_code_description": "Run calculations on spreadsheets and data files, and build charts from them.",
+  "com_knauf_capability_code_label": "Analyse data",
   "com_knauf_capability_skills_description": "Apply Knauf brand guidance and ready-made templates when a task calls for them.",
   "com_knauf_capability_skills_label": "Use Knauf skills",
   "com_knauf_copy_agent_id": "Copy agent ID",

@@ -12,7 +12,9 @@
  * isEnabled, then renders one CapabilitySwitch per entry, wiring the
  * applyToForm/readFromForm helpers into the form.
  */
-import { Globe, LayoutTemplate, ScrollText } from 'lucide-react';
+// `ChartSpline`/`ChartLine` do not exist in lucide-react 0.394.0 — importing one
+// yields `undefined` and the row renders with no icon. KK20-257.
+import { Globe, LayoutTemplate, LineChart, ScrollText } from 'lucide-react';
 import {
   AgentCapabilities,
   ArtifactModes,
@@ -192,29 +194,53 @@ const useKnaufSkills: KnaufCapability = {
 };
 
 /**
+ * "Analyse data" — KK20-257. Runs Python and Bash in an Azure Container Apps
+ * dynamic session via the Knauf code-adapter: pandas, charts, spreadsheet
+ * read/write, and files delivered back to the user as real downloads.
+ *
+ * Gated on `execute_code` being in `endpoints.agents.capabilities`, so the row
+ * disappears wherever the sandbox is not available — including when the
+ * fail-closed guard strips the capability because `LIBRECHAT_CODE_BASEURL` is
+ * unset (packages/api/src/knauf/code/codeEnvGuard.ts). That is deliberate: an
+ * agent author should never be able to switch on a tool that cannot run.
+ *
+ * A plain boolean form flag, unlike `artifacts` (a string mode). Turning it on
+ * puts `execute_code` in the persisted agent's tools, which is what
+ * `codeAllowedByAgent` reads on the chat side to decide whether a tabular
+ * attachment may be routed to the sandbox.
+ *
+ * Note the asymmetry worth knowing when reviewing a shared agent: agent auto-run
+ * is not gated by the RUN_CODE permission (KARL keeps that off to suppress the
+ * composer chip and the manual Run button), so an agent with this enabled runs
+ * code for whoever uses it.
+ */
+const analyseData: KnaufCapability = {
+  id: 'code',
+  label: 'Analyse data',
+  description: 'Run calculations on spreadsheets and data files, and build charts from them.',
+  labelKey: 'com_knauf_capability_code_label',
+  descriptionKey: 'com_knauf_capability_code_description',
+  icon: LineChart,
+  watchFields: [AgentCapabilities.execute_code],
+  isEnabled: (enabled) => enabled.includes(AgentCapabilities.execute_code),
+  readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.execute_code as keyof AgentForm),
+  applyToForm: (next, { setValue }) => {
+    setValue(AgentCapabilities.execute_code as keyof AgentForm, next as never, {
+      shouldDirty: true,
+    });
+  },
+};
+
+/**
  * Registry. Order here is render order in the V6 panel. New capabilities
  * append to this list; if the new capability needs `endpoints.agents.
  * capabilities` to include a flag (e.g. `execute_code`), wire that into
- * `isEnabled`.
- *
- * Example for a future capability (not yet implemented — left here as a
- * template). Note the boolean shape: unlike `artifacts`, `execute_code` is a
- * plain boolean form flag.
- *
- *   const analyzeData: KnaufCapability = {
- *     id: 'analyze',
- *     label: 'Analyze data, charts & diagrams',
- *     description: 'Turn numbers and files into visuals and insights.',
- *     icon: Layers,
- *     watchFields: [AgentCapabilities.execute_code],
- *     isEnabled: (enabled) => enabled.includes(AgentCapabilities.execute_code),
- *     readFromForm: ({ getValues }) => !!getValues(AgentCapabilities.execute_code),
- *     applyToForm: (next, { setValue }) =>
- *       setValue(AgentCapabilities.execute_code, next),
- *   };
+ * `isEnabled` — see `analyseData` above, which is the worked example the
+ * template comment here used to describe.
  */
 export const KNAUF_CAPABILITIES: ReadonlyArray<KnaufCapability> = [
   browseInternet,
   buildVisuals,
+  analyseData,
   useKnaufSkills,
 ];
