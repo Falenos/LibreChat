@@ -4,6 +4,7 @@ import { isValidObjectIdString } from '~/utils/objectId';
 import { buildRetentionVisibilityFilter } from '~/utils/retention';
 import { escapeRegExp } from '~/utils/string';
 import type { IChatProject, IChatProjectDocument, IConversation, IMessage } from '~/types';
+import { decrementTagCounts } from './conversationTag';
 
 export type ChatProjectSortBy = 'name' | 'createdAt' | 'lastConversationAt';
 export type ChatProjectSortDirection = 'asc' | 'desc';
@@ -386,9 +387,18 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const conversations = await Conversation.find({ user, chatProjectId: projectId })
-      .select('conversationId')
-      .lean<Array<Pick<IConversation, 'conversationId'>>>();
+      .select('conversationId tags')
+      .lean<Array<Pick<IConversation, 'conversationId' | 'tags'>>>();
     const conversationIds = conversations.map((conversation) => conversation.conversationId).filter(Boolean);
+    const tagDecrements: string[] = [];
+    for (const conversation of conversations) {
+      if (!conversation.tags?.length) {
+        continue;
+      }
+      for (const tag of new Set(conversation.tags)) {
+        tagDecrements.push(tag);
+      }
+    }
 
     const [conversationResult, _messageResult, deleteResult] = await Promise.all([
       // [knauf] KK20-248 — deleting a project also deletes its linked chats and
@@ -400,6 +410,10 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
       // End [knauf]
       ChatProject.deleteOne(projectFilter),
     ]);
+
+    if ((conversationResult.deletedCount ?? 0) > 0) {
+      await decrementTagCounts(mongoose, user, tagDecrements);
+    }
 
     return {
       deletedCount: deleteResult.deletedCount ?? 0,
