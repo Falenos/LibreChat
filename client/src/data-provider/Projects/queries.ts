@@ -9,8 +9,22 @@ import type {
   ProjectListParams,
   ProjectListResponse,
   TChatProject,
+  TChatProjectFile,
   TChatProjectFilesResponse,
 } from 'librechat-data-provider';
+
+const PROJECT_FILE_INDEX_POLL_MS = 5_000;
+const pendingProjectFileStatuses = new Set(['uploading', 'processing']);
+
+const projectFilesRefetchInterval = (data?: TChatProjectFilesResponse): number | false =>
+  data?.files?.some((file: TChatProjectFile) => {
+    if (file.indexing) {
+      return !file.indexing.ready && file.indexing.status !== 'failed';
+    }
+    return pendingProjectFileStatuses.has(file.status);
+  })
+    ? PROJECT_FILE_INDEX_POLL_MS
+    : false;
 
 export const useProjectsInfiniteQuery = (
   params: ProjectListParams = {},
@@ -65,6 +79,7 @@ export const useProjectFilesQuery = (
       enabled: Boolean(projectId),
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
+      refetchInterval: projectFilesRefetchInterval,
       ...config,
     },
   );
