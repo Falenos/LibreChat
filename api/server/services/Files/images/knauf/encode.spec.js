@@ -75,6 +75,22 @@ describe('[knauf] image provider payload normalization', () => {
     expect(JSON.stringify(result.image_urls)).not.toContain('sig=secret');
   });
 
+  it('still embeds Azure blob bytes after serverless Foundry normalizes the provider', async () => {
+    const image = makeImage();
+    const result = await encodeAndFormat(
+      makeRequest(),
+      [image],
+      { endpoint: EModelEndpoint.agents, provider: EModelEndpoint.openAI },
+      VisionModes.agents,
+    );
+
+    expect(mockGetDownloadStream).toHaveBeenCalledWith(expect.any(Object), image.filepath);
+    expect(result.image_urls[0].image_url.url).toBe(
+      `data:image/png;base64,${PNG_BYTES.toString('base64')}`,
+    );
+    expect(mockPrepareImagePayload).not.toHaveBeenCalled();
+  });
+
   it('still supplies base64 to providers that require inline image content', async () => {
     const result = await encodeAndFormat(
       makeRequest(),

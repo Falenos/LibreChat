@@ -756,6 +756,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | raster image recovery contract | 43–47, 134–148 | Proves ordinary raster attachments preserve file identity after attachment routing | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/LogContent.test.tsx` | generated raster recovery contract | 45–49, 102–116 | Proves generated raster log attachments preserve file identity at the Image boundary | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/__tests__/Files.knauf.spec.tsx` | `Files image recovery contract` | 1–40 | Proves message-level image files preserve stable identity at the Image boundary | Self | NO-TICKET |
+| `api/server/services/Files/images/encode.js` | `encodeAndFormat()` `needsBlobBytes` guard | 132–144 | Treat Azure Blob storage as the authoritative private-media signal even after serverless Foundry normalizes its provider to `openAI`, preventing signed or expired SAS URLs from reaching the Responses API | `api/server/services/Files/images/knauf/encode.spec.js` (`still embeds Azure blob bytes after serverless Foundry normalizes the provider`) | KK20-199 |
 <!-- seams:auto:end -->
 
 ## Configuration
