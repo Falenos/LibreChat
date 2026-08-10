@@ -121,6 +121,15 @@ describe('Migration gate wiring', () => {
 
     expect(exemptions).toContain("'/knauf/migration/file-assets'");
   });
+
+  it('lets the one-time-secret artifact render route bypass user authentication', () => {
+    const exemptionStart = source.indexOf('const MIGRATION_GATE_EXEMPT = [');
+    const exemptionEnd = source.indexOf('];', exemptionStart);
+    const exemptions = source.slice(exemptionStart, exemptionEnd);
+
+    expect(exemptions).toContain("'/knauf/artifact-export/render'");
+    expect(exemptions).not.toContain("'/knauf/artifact-export',");
+  });
 });
 // End [knauf]
 
@@ -188,6 +197,9 @@ describe('Server Configuration', () => {
     const response = await request(app).get('/');
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('no-cache, no-store, must-revalidate');
+    // [knauf] Pin the browser policy that suppresses local-network permission prompts.
+    expect(response.headers['permissions-policy']).toBe('local-network-access=()');
+    // End [knauf]
     expect(response.headers['pragma']).toBe('no-cache');
     expect(response.headers['expires']).toBe('0');
   });

@@ -40,7 +40,11 @@ jest.mock('~/components/Chat/Input/Files/FilePreview', () => ({
 
 jest.mock('~/components/Chat/Messages/Content/Image', () => ({
   __esModule: true,
-  default: ({ altText }: { altText?: string }) => <img alt={altText ?? ''} data-testid="image" />,
+  // [knauf] Expose the file identity passed to the resilient image renderer. (NO-TICKET)
+  default: ({ altText, fileId }: { altText?: string; fileId?: string }) => (
+    <img alt={altText ?? ''} data-testid="image" data-file-id={fileId} />
+  ),
+  // End [knauf]
 }));
 
 jest.mock('~/components/Messages/Content/Mermaid/Mermaid', () => ({
@@ -127,6 +131,22 @@ const renderWithProbe = (ui: React.ReactElement, opts: { streaming?: boolean } =
 };
 
 describe('Attachment routing for tool artifacts', () => {
+  // [knauf] Raster attachments must retain file identity for authenticated URL recovery. (NO-TICKET)
+  it('passes raster image file identity to Image', () => {
+    const image = baseAttachment({
+      file_id: 'raster-image-1',
+      filename: 'photo.png',
+      filepath: '/api/share/share-1/files/raster-image-1',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(<Attachment attachment={image} />);
+
+    expect(screen.getByTestId('image')).toHaveAttribute('data-file-id', 'raster-image-1');
+  });
+  // End [knauf]
+
   it('renders an HTML artifact card (panel artifact) and exposes a download control', () => {
     const html = baseAttachment({
       filename: 'index.html',
@@ -164,6 +184,29 @@ describe('Attachment routing for tool artifacts', () => {
     expect(screen.getByText('notes.md')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /com_ui_download.*notes\.md/i })).toBeInTheDocument();
   });
+
+  // [knauf] NO-TICKET — uploaded SVG source must beat the overlapping image route.
+  it.each([
+    ['single attachment', (svg: TAttachment) => <Attachment attachment={svg} />],
+    ['attachment group', (svg: TAttachment) => <AttachmentGroup attachments={[svg]} />],
+  ])('routes a source-bearing SVG with image dimensions as an artifact for %s', (_, renderSvg) => {
+    const svg = baseAttachment({
+      file_id: 'uploaded-svg',
+      filename: 'diagram.svg',
+      text: '<svg xmlns="http://www.w3.org/2000/svg"><text>Editable</text></svg>',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(renderSvg(svg));
+
+    expect(screen.queryByTestId('image')).not.toBeInTheDocument();
+    expect(screen.getByText('diagram.svg')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /com_ui_download.*diagram\.svg/i }),
+    ).toBeInTheDocument();
+  });
+  // End [knauf]
 
   it.each([
     ['readme.txt', 'Lorem ipsum'],

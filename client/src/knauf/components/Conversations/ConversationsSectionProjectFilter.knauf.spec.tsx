@@ -1,8 +1,12 @@
 import React from 'react';
 import { render } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import type { TConversation } from 'librechat-data-provider';
 import ConversationsSection from '~/components/UnifiedSidebar/ConversationsSection';
 
 const mockUseConversationsInfiniteQuery = jest.fn();
+let mockActiveConversation: TConversation | null = null;
+let mockRenderedConversations: TConversation[] = [];
 let mockSearch = {
   enabled: true,
   query: '',
@@ -12,7 +16,8 @@ let mockSearch = {
 
 jest.mock('recoil', () => ({
   useSetRecoilState: () => jest.fn(),
-  useRecoilValue: () => mockSearch,
+  useRecoilValue: (atom: unknown) =>
+    (atom as { key?: string })?.key === 'mock-conversation' ? mockActiveConversation : mockSearch,
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -32,18 +37,29 @@ jest.mock('~/data-provider', () => ({
   useTitleGeneration: jest.fn(),
 }));
 
-jest.mock('~/components/Conversations', () => ({ Conversations: () => null }));
+jest.mock('~/components/Conversations', () => ({
+  Conversations: ({ conversations }: { conversations: TConversation[] }) => {
+    mockRenderedConversations = conversations;
+    return null;
+  },
+}));
 jest.mock('~/components/Conversations/ProjectsSection', () => () => null);
 jest.mock('~/components/Nav/Favorites/FavoritesList', () => () => null);
 jest.mock('~/components/Nav/SearchBar', () => () => null);
 jest.mock('~/components/Nav/Bookmarks/BookmarkNav', () => () => null);
 jest.mock('~/store', () => ({
   __esModule: true,
-  default: { sidebarExpanded: {}, search: {} },
+  default: {
+    sidebarExpanded: {},
+    search: { key: 'mock-search' },
+    conversationByIndex: () => ({ key: 'mock-conversation' }),
+  },
 }));
 
 describe('[knauf] project conversations in the sidebar', () => {
   beforeEach(() => {
+    mockActiveConversation = null;
+    mockRenderedConversations = [];
     mockSearch = {
       enabled: true,
       query: '',
@@ -82,5 +98,28 @@ describe('[knauf] project conversations in the sidebar', () => {
       expect.objectContaining({ projectId: undefined, search: 'weather' }),
       expect.any(Object),
     );
+  });
+
+  it('keeps the opened message-search conversation selected when its title does not match', () => {
+    mockSearch = {
+      enabled: true,
+      query: 'text found only inside a message',
+      debouncedQuery: 'text found only inside a message',
+      isTyping: false,
+    };
+    mockActiveConversation = {
+      conversationId: 'selected-conversation',
+      title: 'A different conversation title',
+    } as TConversation;
+
+    render(
+      <MemoryRouter initialEntries={['/c/selected-conversation']}>
+        <Routes>
+          <Route path="/c/:conversationId" element={<ConversationsSection />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(mockRenderedConversations).toEqual([mockActiveConversation]);
   });
 });

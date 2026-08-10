@@ -42,6 +42,15 @@ describe('[knauf] artifacts prompt — sandbox import rules', () => {
     expect(prompt).toContain('loads Knauf Screen and Knauf Screen Head automatically');
   });
 
+  it('requires the platform slide renderer for every endpoint', () => {
+    for (const endpoint of [EModelEndpoint.azureOpenAI, EModelEndpoint.anthropic]) {
+      const prompt =
+        generateArtifactsPrompt({ endpoint, artifacts: KARL_ARTIFACT_MODE as never }) ?? '';
+      expect(prompt).toContain("import { KnaufSlideDeck } from '/knauf/slides';");
+      expect(prompt).toContain('Supply one data object per requested slide');
+    }
+  });
+
   it('does NOT carry the shadcn manifest — the skill supplies those paths', () => {
     // Pins the trade deliberately. `'default'` omits `generateShadcnPrompt`, so the
     // model gets one shadcn sentence and no per-component path from this prompt.
@@ -60,16 +69,24 @@ describe('[knauf] artifacts prompt — sandbox import rules', () => {
     expect(prompt).toMatch(/NO OTHER LIBRARIES/);
   });
 
-  it('leaves the Anthropic variant alone', () => {
-    // Deliberate asymmetry, recorded so it stays a decision rather than an oversight:
-    // KARL never receives this variant. If KARL is ever moved to an Anthropic
-    // endpoint, this failing is the reminder to add the brand line there too.
+  it('uses edit_artifact for existing-artifact changes and keeps full emission as fallback', () => {
+    for (const endpoint of [EModelEndpoint.azureOpenAI, EModelEndpoint.anthropic]) {
+      const prompt =
+        generateArtifactsPrompt({ endpoint, artifacts: KARL_ARTIFACT_MODE as never }) ?? '';
+      expect(prompt).toContain('edit_artifact');
+      expect(prompt).toMatch(/do not re-emit the artifact/i);
+      expect(prompt).toMatch(/unavailable|rejects|fails/i);
+    }
+  });
+
+  it('gives the Anthropic variant the same Knauf modules', () => {
     const anthropic =
       generateArtifactsPrompt({
         endpoint: EModelEndpoint.anthropic,
         artifacts: KARL_ARTIFACT_MODE as never,
       }) ?? '';
-    expect(anthropic).not.toContain('/knauf/brand');
+    expect(anthropic).toContain('/knauf/brand');
+    expect(anthropic).toContain('/knauf/slides');
   });
 
   it('is not emitted at all in custom-prompt mode', () => {

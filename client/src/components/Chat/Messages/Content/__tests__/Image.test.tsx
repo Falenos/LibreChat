@@ -1,6 +1,30 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Image, { _resetImageCaches } from '../Image';
+
+// [knauf] Image recovery seam mocks authenticated owned/shared file downloads. (NO-TICKET)
+const mockDownloadOwned = jest.fn();
+const mockDownloadShared = jest.fn();
+let mockShareId: string | undefined;
+
+jest.mock('recoil', () => ({
+  useRecoilValue: () => ({ id: 'user-1' }),
+}));
+
+jest.mock('~/store', () => ({
+  __esModule: true,
+  default: { user: {} },
+}));
+
+jest.mock('~/Providers', () => ({
+  useShareContext: () => ({ shareId: mockShareId }),
+}));
+
+jest.mock('~/data-provider', () => ({
+  useFileDownload: () => ({ refetch: mockDownloadOwned }),
+  useSharedFileDownload: () => ({ refetch: mockDownloadShared }),
+}));
+// End [knauf]
 
 jest.mock('~/utils', () => ({
   cn: (...classes: (string | boolean | undefined | null)[]) =>
@@ -35,6 +59,11 @@ describe('Image', () => {
   beforeEach(() => {
     _resetImageCaches();
     jest.clearAllMocks();
+    // [knauf] Fresh authenticated blob URLs returned by the recovery queries. (NO-TICKET)
+    mockShareId = undefined;
+    mockDownloadOwned.mockResolvedValue({ data: 'blob:owned-image' });
+    mockDownloadShared.mockResolvedValue({ data: 'blob:shared-image' });
+    // End [knauf]
   });
 
   describe('rendering without dimensions', () => {
@@ -149,7 +178,45 @@ describe('Image', () => {
       fireEvent.click(screen.getByRole('button'));
       expect(screen.getByTestId('dialog-image')).toBeInTheDocument();
     });
+
+    // [knauf] An expired SAS must recover on click without a page reload. (NO-TICKET)
+    it('recovers through the authenticated owned-file download when the dialog opens', async () => {
+      render(
+        <Image
+          {...defaultProps}
+          fileId="file-1"
+          imagePath="https://storage.example/image.png?se=2000-01-01T00:00:00Z"
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button'));
+
+      await waitFor(() => expect(mockDownloadOwned).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.getByTestId('dialog-image')).toHaveAttribute('data-src', 'blob:owned-image'),
+      );
+    });
+    // End [knauf]
   });
+
+  // [knauf] Shared image tags blocked by the global bearer gate recover via Axios auth. (NO-TICKET)
+  describe('authenticated recovery', () => {
+    it('replaces a failed shared image URL with the authenticated download blob', async () => {
+      mockShareId = 'share-1';
+      render(
+        <Image {...defaultProps} fileId="file-1" imagePath="/api/share/share-1/files/file-1" />,
+      );
+
+      fireEvent.error(screen.getByRole('img'));
+
+      await waitFor(() => expect(mockDownloadShared).toHaveBeenCalledTimes(1));
+      expect(mockDownloadOwned).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:shared-image'),
+      );
+    });
+  });
+  // End [knauf]
 
   describe('image URL resolution', () => {
     it('passes /images/ paths through with base URL', () => {

@@ -9,7 +9,6 @@ const KNAUF_RESTRICT_USER_PERMISSIONS = 'KNAUF_RESTRICT_USER_PERMISSIONS';
 const KNAUF_RESTRICT_PROD_USER_PERMISSIONS = 'KNAUF_RESTRICT_PROD_USER_PERMISSIONS';
 
 const KNAUF_RESTRICTED_USER_PERMISSION_TYPES = new Set<PermissionTypes>([
-  PermissionTypes.PROMPTS,
   PermissionTypes.AGENTS,
   PermissionTypes.MEMORIES,
   PermissionTypes.MULTI_CONVO,
@@ -43,7 +42,6 @@ export function shouldApplyKnaufUserRestriction(
 export function applyKnaufUserRestrictions(
   roleName: string,
   permissions: PermissionUpdate,
-  existingPermissions?: PermissionUpdate,
 ): PermissionUpdate {
   if (!shouldApplyKnaufUserRestriction(roleName)) {
     return permissions;
@@ -51,12 +49,6 @@ export function applyKnaufUserRestrictions(
 
   return {
     ...permissions,
-    [PermissionTypes.PROMPTS]: existingPermissions?.[PermissionTypes.PROMPTS]
-      ? { [Permissions.SHARE_PUBLIC]: false }
-      : {
-          ...permissions[PermissionTypes.PROMPTS],
-          [Permissions.SHARE_PUBLIC]: false,
-        },
     [PermissionTypes.AGENTS]: {
       ...permissions[PermissionTypes.AGENTS],
       [Permissions.CREATE]: false,

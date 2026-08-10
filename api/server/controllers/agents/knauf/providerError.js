@@ -9,6 +9,9 @@ const NETWORK_ERROR_CODES = new Set([
 const boundedIdentifier = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
 
+const boundedParameter = (value) =>
+  typeof value === 'string' && /^[A-Za-z0-9_.:[\]-]{1,256}$/.test(value) ? value : undefined;
+
 const getStatus = (error) => {
   const status = error?.status ?? error?.statusCode ?? error?.response?.status;
   return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
@@ -37,6 +40,7 @@ const summarizeProviderError = (error, operation) => {
   const providerStatus = getStatus(error);
   const code = boundedIdentifier(error?.code ?? error?.error?.code);
   const type = boundedIdentifier(error?.type ?? error?.error?.type);
+  const param = boundedParameter(error?.param ?? error?.error?.param);
   const requestId = getRequestId(error);
 
   return {
@@ -45,6 +49,7 @@ const summarizeProviderError = (error, operation) => {
     ...(providerStatus != null && { providerStatus }),
     ...(code != null && { code }),
     ...(type != null && { type }),
+    ...(param != null && { param }),
     ...(requestId != null && { requestId }),
   };
 };

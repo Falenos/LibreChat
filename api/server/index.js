@@ -107,6 +107,9 @@ const startServer = async () => {
   indexSync().catch((err) => {
     logger.error('[indexSync] Background sync failed:', err);
   });
+  // [knauf] Detect and repair ephemeral Meilisearch index loss while API pods stay running.
+  indexSync.startReconciliation();
+  // End [knauf]
 
   app.disable('x-powered-by');
   app.set('trust proxy', trusted_proxy);
@@ -173,6 +176,9 @@ const startServer = async () => {
   const sendIndexHtml = (req, res) => {
     res.set({
       'Cache-Control': process.env.INDEX_CACHE_CONTROL || 'no-cache, no-store, must-revalidate',
+      // [knauf] Prevent Chrome from prompting users for local-network access.
+      'Permissions-Policy': 'local-network-access=()',
+      // End [knauf]
       Pragma: process.env.INDEX_PRAGMA || 'no-cache',
       Expires: process.env.INDEX_EXPIRES || '0',
     });
@@ -277,6 +283,7 @@ const startServer = async () => {
   //                              The visual gate is handled by useMigrationAccess in Root.tsx.
   //   /knauf/migration/access  — the access-check endpoint the frontend calls
   //   /knauf/migration/file-assets — API-key-protected operational backfill
+  //   /knauf/artifact-export/render — one-time-secret snapshot for headless export
   //
   // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
   // (our current setting) share links already required login before this gate existed.
@@ -291,6 +298,7 @@ const startServer = async () => {
       '/knauf/migration/access',
       '/knauf/migration/access/check',
       '/knauf/migration/file-assets',
+      '/knauf/artifact-export/render',
     ];
     app.use('/api', (req, res, next) => {
       if (

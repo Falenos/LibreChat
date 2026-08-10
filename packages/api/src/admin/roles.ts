@@ -425,7 +425,7 @@ export function createAdminRolesHandlers(deps: AdminRolesDeps): {
         return res.status(404).json({ error: 'Role not found' });
       }
 
-      // [knauf] Admin controls ordinary prompt sharing; USER public sharing stays disabled.
+      // [knauf] Preserve protected non-prompt USER permissions on Admin writes.
       await updateAccessPermissions(name, applyKnaufUserRestrictions(name, permissions), existing);
       // End [knauf]
       const updated = await getRoleByName(name);

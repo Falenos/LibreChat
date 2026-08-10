@@ -184,6 +184,24 @@ describe('useArtifactProps', () => {
     });
   });
 
+  // [knauf] NO-TICKET — native SVG is the source file, not rendered-page conversion.
+  describe('native SVG artifacts', () => {
+    it('uses the exact SVG source as a static artwork.svg file', () => {
+      const content =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>Grüße</title><circle cx="2" cy="5" r="2"><animate attributeName="cx" from="2" to="8" dur="2s" fill="freeze" /></circle></svg>';
+      const artifact = createArtifact({ type: 'image/svg+xml', content });
+
+      const { result } = renderHook(() => useArtifactProps({ artifact }));
+
+      expect(result.current.fileKey).toBe('artwork.svg');
+      expect(result.current.files['artwork.svg']).toBe(content);
+      expect(result.current.files['index.html']).toBe(content);
+      expect(result.current.template).toBe('static');
+      expect(result.current.sharedProps.customSetup?.dependencies).toEqual({});
+    });
+  });
+  // End [knauf]
+
   describe('edge cases', () => {
     it('should handle artifact with language parameter', () => {
       const artifact = createArtifact({

@@ -426,7 +426,14 @@ const TextAttachment = memo(
 
 const ImageAttachment = memo(({ attachment }: { attachment: TAttachment }) => {
   const [isLoaded, setIsLoaded] = useState(false);
-  const { width, height, filepath = null } = attachment as TFile & TAttachmentMetadata;
+  const {
+    width,
+    height,
+    filepath = null,
+    // [knauf] Authenticated image recovery needs the stable file id. (NO-TICKET)
+    file_id,
+    // End [knauf]
+  } = attachment as TFile & TAttachmentMetadata;
 
   useEffect(() => {
     setIsLoaded(false);
@@ -447,13 +454,16 @@ const ImageAttachment = memo(({ attachment }: { attachment: TAttachment }) => {
         WebkitFontSmoothing: 'subpixel-antialiased',
       }}
     >
+      {/* [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET) */}
       <Image
         altText={attachment.filename || 'attachment image'}
         imagePath={filepath ?? ''}
+        fileId={file_id}
         width={width}
         height={height}
         className="mb-4"
       />
+      {/* End [knauf] */}
     </div>
   );
 });
@@ -506,13 +516,19 @@ export default function Attachment({ attachment }: { attachment?: TAttachment })
     return null;
   }
 
-  if (isImageAttachment(attachment)) {
-    return <ImageAttachment attachment={attachment} />;
-  }
   // Single classification call. The result is threaded into
   // `PanelArtifact` -> `fileToArtifact` so the panel path doesn't
   // re-run `detectArtifactTypeFromFile` a second time.
   const artType = artifactTypeForAttachment(attachment);
+  // [knauf] NO-TICKET — source-bearing SVGs match the generic image predicate,
+  // but must stay editable and render through the native artifact Code/Preview panel.
+  if (artType === TOOL_ARTIFACT_TYPES.SVG) {
+    return <PanelArtifact attachment={attachment} type={artType} />;
+  }
+  // End [knauf]
+  if (isImageAttachment(attachment)) {
+    return <ImageAttachment attachment={attachment} />;
+  }
   if (artType === TOOL_ARTIFACT_TYPES.MERMAID) {
     return <MermaidArtifact attachment={attachment} />;
   }
@@ -550,15 +566,22 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
     if (isInternalSandboxArtifact(attachment)) {
       return;
     }
-    if (isImageAttachment(attachment)) {
-      imageAttachments.push(attachment);
-      return;
-    }
     if ((attachment as Partial<TFile>).status === 'pending') {
       panelRow.push({ attachment, type: null });
       return;
     }
     const artType = artifactTypeForAttachment(attachment);
+    // [knauf] NO-TICKET — route source-bearing SVGs before the generic image
+    // bucket so uploads become editable native artifacts, never broken <img> previews.
+    if (artType === TOOL_ARTIFACT_TYPES.SVG) {
+      panelRow.push({ attachment, type: artType });
+      return;
+    }
+    // End [knauf]
+    if (isImageAttachment(attachment)) {
+      imageAttachments.push(attachment);
+      return;
+    }
     if (artType === TOOL_ARTIFACT_TYPES.MERMAID) {
       mermaidArtifacts.push(attachment);
       return;

@@ -2,6 +2,12 @@ const { Readable } = require('node:stream');
 
 const mockPrepareImagePayload = jest.fn();
 const mockGetDownloadStream = jest.fn();
+const mockDetermineFileType = jest.fn();
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl9sAAAAASUVORK5CYII=',
+  'base64',
+);
+const JPEG_BYTES = Buffer.from('ffd8ffe000104a46494600', 'hex');
 
 jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn() },
@@ -10,6 +16,10 @@ jest.mock('@librechat/data-schemas', () => ({
 jest.mock('@librechat/api', () => ({
   logAxiosError: jest.fn(),
   validateImage: jest.fn(async () => ({ isValid: true })),
+}));
+
+jest.mock('~/server/utils/files', () => ({
+  determineFileType: (...args) => mockDetermineFileType(...args),
 }));
 
 jest.mock('~/server/services/Files/strategies', () => ({
@@ -33,22 +43,23 @@ const makeImage = (overrides = {}) => ({
   filename: 'private-name.png',
   source: FileSources.azure_blob,
   type: 'image/png',
-  bytes: 1024,
+  bytes: PNG_BYTES.length,
   width: 10,
   height: 10,
   ...overrides,
 });
 
-const makeRequest = () => ({ body: {}, config: {} });
+const makeRequest = (fileConfig) => ({ body: {}, config: { fileConfig } });
 
 describe('[knauf] image provider payload normalization', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockDetermineFileType.mockResolvedValue({ ext: 'png', mime: 'image/png' });
     mockPrepareImagePayload.mockImplementation(async (_req, file) => [file, file.filepath]);
-    mockGetDownloadStream.mockResolvedValue(Readable.from(Buffer.from('image-bytes')));
+    mockGetDownloadStream.mockResolvedValue(Readable.from(PNG_BYTES));
   });
 
-  it('keeps the signed blob URL for Foundry instead of serializing image bytes', async () => {
+  it('supplies private Azure blob bytes to Foundry without forwarding its signed URL', async () => {
     const image = makeImage();
     const result = await encodeAndFormat(
       makeRequest(),
@@ -57,10 +68,27 @@ describe('[knauf] image provider payload normalization', () => {
       VisionModes.agents,
     );
 
-    expect(mockGetDownloadStream).not.toHaveBeenCalled();
-    expect(result.image_urls[0].image_url.url).toBe(image.filepath);
-    expect(JSON.stringify(result)).not.toContain('data:image');
-    expect(JSON.stringify(result).length).toBeLessThan(2048);
+    expect(mockGetDownloadStream).toHaveBeenCalledWith(expect.any(Object), image.filepath);
+    expect(result.image_urls[0].image_url.url).toBe(
+      `data:image/png;base64,${PNG_BYTES.toString('base64')}`,
+    );
+    expect(JSON.stringify(result.image_urls)).not.toContain('sig=secret');
+  });
+
+  it('still embeds Azure blob bytes after serverless Foundry normalizes the provider', async () => {
+    const image = makeImage();
+    const result = await encodeAndFormat(
+      makeRequest(),
+      [image],
+      { endpoint: EModelEndpoint.agents, provider: EModelEndpoint.openAI },
+      VisionModes.agents,
+    );
+
+    expect(mockGetDownloadStream).toHaveBeenCalledWith(expect.any(Object), image.filepath);
+    expect(result.image_urls[0].image_url.url).toBe(
+      `data:image/png;base64,${PNG_BYTES.toString('base64')}`,
+    );
+    expect(mockPrepareImagePayload).not.toHaveBeenCalled();
   });
 
   it('still supplies base64 to providers that require inline image content', async () => {
@@ -73,8 +101,38 @@ describe('[knauf] image provider payload normalization', () => {
 
     expect(mockGetDownloadStream).toHaveBeenCalledTimes(1);
     expect(result.image_urls[0].image_url.url).toBe(
-      `data:image/png;base64,${Buffer.from('image-bytes').toString('base64')}`,
+      `data:image/png;base64,${PNG_BYTES.toString('base64')}`,
     );
+  });
+
+  it('rejects a Blob that exceeds the configured limit despite safe Mongo metadata', async () => {
+    mockGetDownloadStream.mockResolvedValue(Readable.from(Buffer.concat([PNG_BYTES, PNG_BYTES])));
+    const fileConfig = { endpoints: { agents: { fileSizeLimit: 0.00002 } } };
+
+    await expect(
+      encodeAndFormat(
+        makeRequest(fileConfig),
+        [makeImage({ bytes: 10 })],
+        { endpoint: EModelEndpoint.agents, provider: EModelEndpoint.azureOpenAI },
+        VisionModes.agents,
+      ),
+    ).rejects.toThrow('Image normalization failed');
+    expect(mockPrepareImagePayload).not.toHaveBeenCalled();
+  });
+
+  it('rejects Blob bytes whose media signature differs from Mongo metadata', async () => {
+    mockGetDownloadStream.mockResolvedValue(Readable.from(JPEG_BYTES));
+    mockDetermineFileType.mockResolvedValue({ ext: 'jpg', mime: 'image/jpeg' });
+
+    await expect(
+      encodeAndFormat(
+        makeRequest(),
+        [makeImage()],
+        { endpoint: EModelEndpoint.agents, provider: EModelEndpoint.azureOpenAI },
+        VisionModes.agents,
+      ),
+    ).rejects.toThrow('Image normalization failed');
+    expect(mockPrepareImagePayload).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported stored image metadata before provider serialization', async () => {

@@ -31,16 +31,19 @@ const Files = ({ message }: { message?: TMessage }) => {
             onClick={() => setSelectedFile(file)}
           />
         ))}
+      {/* [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET) */}
       {imageFiles.length > 0 &&
         imageFiles.map((file) => (
           <Image
             key={file.file_id}
             imagePath={file.preview ?? file.filepath ?? ''}
+            fileId={file.file_id}
             height={file.height ?? 1920}
             width={file.width ?? 1080}
             altText={file.filename ?? 'Uploaded Image'}
           />
         ))}
+      {/* End [knauf] */}
       <FilePreviewDialog
         open={selectedFile !== null}
         onOpenChange={handleClose}

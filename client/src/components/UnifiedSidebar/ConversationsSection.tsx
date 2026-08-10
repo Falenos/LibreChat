@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, memo, lazy, Suspense, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { useSetRecoilState, useRecoilValue } from 'recoil';
 import { useMediaQuery } from '@librechat/client';
 import { PermissionTypes, Permissions } from 'librechat-data-provider';
@@ -38,6 +39,8 @@ const ConversationsSection = memo(() => {
   });
 
   const search = useRecoilValue(store.search);
+  const activeConversation = useRecoilValue(store.conversationByIndex(0));
+  const { conversationId } = useParams();
 
   const { data, fetchNextPage, isFetchingNextPage, isLoading, isFetching } =
     useConversationsInfiniteQuery(
@@ -77,8 +80,21 @@ const ConversationsSection = memo(() => {
   });
 
   const conversations = useMemo(() => {
-    return data ? data.pages.flatMap((page) => page.conversations) : [];
-  }, [data]);
+    const listedConversations = data ? data.pages.flatMap((page) => page.conversations) : [];
+
+    // [knauf] Keep an opened message-search result visible when its title does not match.
+    if (
+      search.query &&
+      conversationId &&
+      activeConversation?.conversationId === conversationId &&
+      !listedConversations.some((conversation) => conversation?.conversationId === conversationId)
+    ) {
+      return [activeConversation, ...listedConversations];
+    }
+    // End [knauf]
+
+    return listedConversations;
+  }, [activeConversation, conversationId, data, search.query]);
 
   const toggleNav = useCallback(() => {
     if (isSmallScreen) {

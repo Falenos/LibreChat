@@ -2,6 +2,11 @@ import {
   buildSandpackOptions,
   detectArtifactTypeFromFile,
   fileToArtifact,
+  // [knauf] NO-TICKET — native SVG artifact mapping assertions.
+  getArtifactFilename,
+  getDependencies,
+  getTemplate,
+  // End [knauf]
   isCodeOnlyArtifact,
   isPreviewOnlyArtifact,
   languageForFilename,
@@ -10,6 +15,16 @@ import {
 import type { ToolArtifactType } from '../artifacts';
 
 const TAILWIND_CDN = 'https://cdn.tailwindcss.com/3.4.17#tailwind.js';
+
+// [knauf] NO-TICKET — native SVG artifacts use a stable static, dependency-free source file.
+describe('native SVG artifact mapping', () => {
+  it('maps image/svg+xml to an editable SVG file without runtime dependencies', () => {
+    expect(getArtifactFilename('image/svg+xml')).toBe('artwork.svg');
+    expect(getTemplate('image/svg+xml')).toBe('static');
+    expect(getDependencies('image/svg+xml')).toEqual({});
+  });
+});
+// End [knauf]
 
 describe('buildSandpackOptions', () => {
   it('includes externalResources with .js fragment hint for static template', () => {
@@ -65,6 +80,9 @@ describe('detectArtifactTypeFromFile', () => {
     ['legacy.xls', TOOL_ARTIFACT_TYPES.SPREADSHEET],
     ['sheet.ods', TOOL_ARTIFACT_TYPES.SPREADSHEET],
     ['slides.pptx', TOOL_ARTIFACT_TYPES.PRESENTATION],
+    // [knauf] NO-TICKET — uploaded SVG source becomes a native artifact.
+    ['mark.svg', TOOL_ARTIFACT_TYPES.SVG],
+    // End [knauf]
   ])('classifies %s by extension', (filename, expected) => {
     /* Office types require `textFormat: 'html'` to route to their HTML
      * preview buckets — the security gate added for Codex P1 review on
@@ -585,6 +603,33 @@ describe('fileToArtifact', () => {
     // End [knauf]
     expect(artifact!.lastUpdateTime).toBe(new Date(baseFile.updatedAt).getTime());
   });
+
+  // [knauf] NO-TICKET — preserve exact Unicode SVG source in the artifact panel.
+  it('builds a native SVG artifact from an uploaded file', () => {
+    const source =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><text x="1" y="12">Grüße ✓</text></svg>';
+    const artifact = fileToArtifact({
+      ...baseFile,
+      filename: 'brand.svg',
+      type: 'image/svg+xml',
+      text: source,
+    });
+
+    expect(artifact).toMatchObject({
+      type: 'image/svg+xml',
+      title: 'brand.svg',
+      content: source,
+    });
+  });
+
+  // [knauf] NO-TICKET — MIME fallback covers server attachments without an extension.
+  it('classifies canonical SVG MIME without a filename extension', () => {
+    expect(
+      detectArtifactTypeFromFile({ filename: 'brand', type: 'image/svg+xml', text: '<svg />' }),
+    ).toBe('image/svg+xml');
+  });
+  // End [knauf]
+  // End [knauf]
 
   it('returns null for unsupported types so callers can fall through', () => {
     expect(fileToArtifact({ ...baseFile, filename: 'photo.jpg', type: 'image/jpeg' })).toBeNull();

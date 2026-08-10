@@ -251,6 +251,7 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
           ))}
         </div>
       )}
+      {/* [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET) */}
       {imageAttachments?.map((attachment, index) => (
         <Image
           width={attachment.width}
@@ -258,8 +259,10 @@ const LogContent: React.FC<LogContentProps> = ({ output = '', renderImages, atta
           key={renderAttachmentKey('image', attachment, index)}
           altText={attachment.filename}
           imagePath={attachment.filepath}
+          fileId={attachment.file_id}
         />
       ))}
+      {/* End [knauf] */}
     </>
   );
 };

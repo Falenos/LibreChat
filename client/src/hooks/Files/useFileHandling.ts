@@ -819,6 +819,17 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           effectiveToolResource = EToolResources.execute_code;
         }
         // End [knauf]
+        // SVG is XML source: preserve it as message context so the artifact panel and
+        // model receive the exact vector markup. Raster images remain vision inputs.
+        const isSvgFile =
+          /^(?:image\/svg(?:\+xml)?)$/i.test(originalFile.type) ||
+          /\.svg$/i.test(originalFile.name);
+        let effectiveToolResource = _toolResource;
+        if (isSvgFile) {
+          effectiveToolResource = EToolResources.context;
+        } else if (_toolResource === EToolResources.file_search && isImageFile) {
+          effectiveToolResource = undefined;
+        }
         if (effectiveToolResource != null && effectiveToolResource !== '') {
           initialExtendedFile.tool_resource = effectiveToolResource;
         }
@@ -845,6 +856,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     for (const { originalFile, file_id, initialPreview, initialExtendedFile } of queuedFiles) {
       try {
         const originalFileName = originalFile.name.toLowerCase();
+        // [knauf] NO-TICKET — SVG must bypass every raster resize/vision branch.
+        const isSvgSource =
+          /^image\/svg(?:\+xml)?$/i.test(originalFile.type) || /\.svg$/i.test(originalFile.name);
+        // End [knauf]
 
         // Check if HEIC conversion is needed and show toast
         const isHEIC =
@@ -875,7 +890,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         let finalProcessedFile = heicProcessedFile;
 
         // Apply client-side resizing if available and appropriate
-        if (heicProcessedFile.type.startsWith('image/')) {
+        if (heicProcessedFile.type.startsWith('image/') && !isSvgSource) {
           try {
             const resizeResult = await resizeImageIfNeeded(heicProcessedFile);
             finalProcessedFile = resizeResult.file;
@@ -916,7 +931,9 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
 
           replaceFile(updatedExtendedFile);
 
-          const isImage = finalProcessedFile.type.split('/')[0] === 'image';
+          // [knauf] NO-TICKET — native SVG uploads use the normal text-context mutation.
+          const isImage = finalProcessedFile.type.split('/')[0] === 'image' && !isSvgSource;
+          // End [knauf]
           if (isImage) {
             loadImage(updatedExtendedFile, newPreview);
             continue;
@@ -925,7 +942,9 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           await startUpload(updatedExtendedFile);
         } else {
           // File wasn't processed, proceed with original
-          const isImage = originalFile.type.split('/')[0] === 'image';
+          // [knauf] NO-TICKET — native SVG uploads use the normal text-context mutation.
+          const isImage = originalFile.type.split('/')[0] === 'image' && !isSvgSource;
+          // End [knauf]
 
           // Update progress to show ready for upload
           const readyExtendedFile = {

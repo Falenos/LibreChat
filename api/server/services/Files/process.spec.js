@@ -49,6 +49,9 @@ jest.mock('@librechat/api', () => {
   return {
     sanitizeFilename: jest.fn((n) => n),
     parseText: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
+    // [knauf] NO-TICKET — source-preserving reader for uploaded SVG artifacts.
+    parseTextNative: jest.fn().mockResolvedValue({ text: '', bytes: 0 }),
+    // End [knauf]
     processAudioFile: jest.fn(),
     getStorageMetadata: jest.fn(() => ({})),
     recordFileIndexEmbed: jest.fn(),
@@ -287,6 +290,35 @@ describe('processAgentFileUpload', () => {
   });
 
   describe('OCR strategy selection', () => {
+    // [knauf] NO-TICKET — uploaded SVG source is preserved for artifact rendering and AI context.
+    test('stores exact SVG source as a message text attachment', async () => {
+      const source =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text y="8">Grüße ✓</text></svg>';
+      const { parseText, parseTextNative } = require('@librechat/api');
+      parseTextNative.mockResolvedValueOnce({ text: source, bytes: Buffer.byteLength(source) });
+      const req = makeReq({ mimetype: 'image/svg+xml' });
+      req.file.originalname = 'brand.svg';
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), message_file: true },
+      });
+
+      expect(parseTextNative).toHaveBeenCalledWith(req.file);
+      expect(parseText).not.toHaveBeenCalled();
+      expect(db.createFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filename: 'brand.svg',
+          source: FileSources.text,
+          text: source,
+          type: 'image/svg+xml',
+          context: FileContext.message_attachment,
+        }),
+        true,
+      );
+    });
+    // End [knauf]
     test.each([
       ['PDF', PDF_MIME],
       ['DOCX', DOCX_MIME],
@@ -1627,7 +1659,7 @@ describe('startExpiredFileSweep', () => {
 });
 
 // [knauf] filterFile per-category size caps (KK20-190). Documents 25 / data 50 /
-// images 20 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
+// images 20 MB / SVG source 8 MB, enforced on top of the endpoint fileSizeLimit, scoped to the
 // endpoints that carry the Knauf allow-list (azureOpenAI + agents) and skipped
 // for avatars. Endpoint fileSizeLimit is set high here so the per-category cap is
 // what fires.
@@ -1675,6 +1707,13 @@ describe('filterFile per-category size caps', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/png', size: 26 * MB });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_image');
   });
+
+  // [knauf] NO-TICKET — SVG source uses the artifact-size boundary, not raster limits.
+  test('throws the SVG key above 8 MB on azureOpenAI', () => {
+    const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/svg+xml', size: 9 * MB });
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_svg');
+  });
+  // End [knauf]
 
   test('allows a PDF exactly at the 25 MB cap (strict > boundary)', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 25 * MB });
@@ -2241,6 +2280,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 
   test('async acceptance flag ON — 202 + indexing projection, no in-request embed (WP3b)', async () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     try {
       const queuedAt = new Date('2026-07-16T00:00:00.000Z');
       db.getAssetByAssetId.mockResolvedValueOnce({
@@ -2272,11 +2312,28 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect(fileInfo.embedded).toBe(false); // flips on generation activation (WP4)
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+      delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
     }
   });
 
+  // KK20-232 PR2 — async acceptance is safe only with a draining worker.
+  test('acceptance flag without worker falls back to synchronous indexing', async () => {
+    process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
+    try {
+      await processAgentFileUpload({ req: fsReq(), res: mockRes, metadata: fsMeta() });
+
+      expect(db.markQueued).toHaveBeenCalled();
+      expect(db.claimAsset).toHaveBeenCalled();
+      expect(mockEmbedGeneration).toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+    } finally {
+      delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+    }
+  });
   test('async acceptance over the backlog cap — 429, reservation compensated (WP3c/R7)', async () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     process.env.KNAUF_INDEX_MAX_QUEUED_FILES = '2';
     try {
       // R7 reserve-then-recheck: the count INCLUDES this request's own
@@ -2300,6 +2357,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
       expect(db.createFile).not.toHaveBeenCalled();
     } finally {
       delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+      delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
       delete process.env.KNAUF_INDEX_MAX_QUEUED_FILES;
     }
   });
@@ -2356,6 +2414,7 @@ describe('processAgentFileUpload content-hash dedup (KK20-204/KK20-195)', () => 
 // user with access to the agent can retrieve them, and are NOT per-user deduped.
 describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', () => {
   const { computeContentHash } = require('~/server/services/Files/knauf/contentDedup');
+  const { isAzureSearchEnabledForAgents } = require('~/server/services/Files/VectorDB/crud');
   const db = require('~/models');
   const handleFileUpload = jest
     .fn()
@@ -2380,9 +2439,10 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     mergeFileConfig.mockReturnValue(makeFileConfig());
     getStrategyFunctions.mockReturnValue({ handleFileUpload });
     computeContentHash.mockResolvedValue('agentHashABC');
+    isAzureSearchEnabledForAgents.mockReturnValue(false);
   });
 
-  test('embeds AGENT-scoped, skips per-user dedup, and adds to the agent library', async () => {
+  test('falls Agent Knowledge back to pgvector when Azure Search is disabled', async () => {
     await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
 
     // No dedup work on the library path — but the physical asset IS reserved
@@ -2394,7 +2454,8 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
         asset_id: 'mock-uuid',
         scope_type: 'agent',
         scope_id: 'agent-abc',
-        embed_route: '/agent/embed',
+        vector_backend: 'pgvector',
+        embed_route: '/embed',
         dedup_key: undefined,
       }),
     );
@@ -2403,7 +2464,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
       expect.objectContaining({
         asset_id: 'mock-uuid',
         generation: 1,
-        embed_route: '/agent/embed',
+        embed_route: '/embed',
         scope: { userId: 'user-123', entityId: 'agent-abc' },
       }),
     );
@@ -2415,6 +2476,22 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
     expect(fileInfo.knauf_dedup_owner).toBeUndefined();
     // Added to the agent's persistent file_search library.
     expect(db.addAgentResourceFile).toHaveBeenCalled();
+  });
+
+  test('uses the Agent Knowledge route when Azure Search is enabled', async () => {
+    isAzureSearchEnabledForAgents.mockReturnValue(true);
+
+    await processAgentFileUpload({ req: libReq(), res: mockRes, metadata: libMeta() });
+
+    expect(db.reserveAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vector_backend: 'azure_search',
+        embed_route: '/agent/embed',
+      }),
+    );
+    expect(mockEmbedGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({ embed_route: '/agent/embed' }),
+    );
   });
 
   test('repairs an incomplete agent-library finalization using the existing ready asset', async () => {
@@ -2460,6 +2537,7 @@ describe('processAgentFileUpload agent-library file_search (KK20-204 sharing)', 
       status: 'processing',
       lease_expires_at: new Date(0),
       vector_backend: 'azure_search',
+      embed_route: '/agent/embed',
       scope_type: 'agent',
       scope_id: 'agent-abc',
       blob: {
