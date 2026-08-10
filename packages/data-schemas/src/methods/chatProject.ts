@@ -385,6 +385,11 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
     const ChatProjectSource = mongoose.models.ChatProjectSource as Model<IChatProjectSourceDocument>;
+    const ConversationTag = mongoose.models.ConversationTag as Model<{
+      user: string;
+      tag: string;
+      count: number;
+    }>;
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const Message = mongoose.models.Message as Model<IMessage>;
     const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
@@ -418,6 +423,14 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
 
     if ((conversationResult.deletedCount ?? 0) > 0) {
       await decrementTagCounts(mongoose, user, tagDecrements);
+      const affectedTags = [...new Set(tagDecrements.filter(Boolean))];
+      if (affectedTags.length > 0) {
+        await ConversationTag.deleteMany({
+          user,
+          tag: { $in: affectedTags },
+          count: { $lte: 0 },
+        });
+      }
     }
 
     return {

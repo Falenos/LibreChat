@@ -356,7 +356,7 @@ describe('ChatProject methods', () => {
     expect(message).toBeNull();
     expect(sources).toEqual([]);
     expect(workTag?.count).toBe(1);
-    expect(personalTag?.count).toBe(0);
+    expect(personalTag).toBeNull();
   });
   // End [knauf]
 

@@ -31,6 +31,8 @@ interface ProjectRequest extends Request {
 
 type FileOwner = { user: string; tenantId?: string | null };
 
+type ProjectDeleteCleanupFinalizer = (() => Promise<void>) | void;
+
 type ProjectHandlerDependencies = Pick<
   ChatProjectMethods,
   | 'listChatProjects'
@@ -45,7 +47,12 @@ type ProjectHandlerDependencies = Pick<
     ChatProjectSourceMethods,
     'createChatProjectSource' | 'listChatProjectSources' | 'deleteChatProjectSource'
   > &
-  Pick<FileMethods, 'getFiles'>;
+  Pick<FileMethods, 'getFiles'> & {
+    prepareProjectDeleteCleanup?: (
+      req: ProjectRequest,
+      projectId: string,
+    ) => Promise<ProjectDeleteCleanupFinalizer>;
+  };
 // End [knauf]
 
 const getUserId = (req: ProjectRequest): string => req.user?.id ?? req.user?._id?.toString() ?? '';
@@ -286,10 +293,16 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     }
 
     try {
+      const finalizeCleanup = deps.prepareProjectDeleteCleanup
+        ? await deps.prepareProjectDeleteCleanup(req, projectId)
+        : undefined;
       const userId = getUserId(req);
       const result = await deps.deleteChatProject(userId, projectId);
       if (!result.deletedCount) {
         return res.status(404).json({ error: PROJECT_NOT_FOUND });
+      }
+      if (finalizeCleanup) {
+        await finalizeCleanup();
       }
       return res.status(200).json(result);
     } catch (error) {

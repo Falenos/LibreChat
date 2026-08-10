@@ -25,6 +25,7 @@ const createDeps = (overrides: Record<string, unknown> = {}) =>
     listChatProjectSources: jest.fn(),
     deleteChatProjectSource: jest.fn(),
     getFiles: jest.fn(),
+    prepareProjectDeleteCleanup: jest.fn(),
     ...overrides,
   }) as any;
 
@@ -224,8 +225,10 @@ describe('createProjectHandlers project files [knauf]', () => {
   });
 
   it('deletes a project through the aggregate delete path only', async () => {
+    const finalizeCleanup = jest.fn(async () => undefined);
     const deps = createDeps({
       deleteChatProject: jest.fn(async () => ({ deletedCount: 1, modifiedCount: 2 })),
+      prepareProjectDeleteCleanup: jest.fn(async () => finalizeCleanup),
     });
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
@@ -235,8 +238,32 @@ describe('createProjectHandlers project files [knauf]', () => {
       res,
     );
 
+    expect(deps.prepareProjectDeleteCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { projectId }, user: { id: userId } }),
+      projectId,
+    );
     expect(deps.deleteChatProject).toHaveBeenCalledWith(userId, projectId);
+    expect(finalizeCleanup).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ deletedCount: 1, modifiedCount: 2 });
+  });
+
+  it('does not run project cleanup finalizer when the project is not found', async () => {
+    const finalizeCleanup = jest.fn(async () => undefined);
+    const deps = createDeps({
+      deleteChatProject: jest.fn(async () => ({ deletedCount: 0, modifiedCount: 0 })),
+      prepareProjectDeleteCleanup: jest.fn(async () => finalizeCleanup),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.deleteProject(
+      { params: { projectId }, user: { id: userId } } as any,
+      res,
+    );
+
+    expect(finalizeCleanup).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Project not found' });
   });
 });

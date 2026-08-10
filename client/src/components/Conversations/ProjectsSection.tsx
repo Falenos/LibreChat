@@ -304,7 +304,7 @@ const ProjectItem = memo(
       () => [
         {
           id: `${menuId}-open`,
-          label: localize('com_ui_open_project'),
+          label: localize('com_ui_edit'),
           icon: <Folder className="size-4 text-text-secondary" aria-hidden="true" />,
           onClick: openProject,
         },

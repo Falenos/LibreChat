@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, DragEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EModelEndpoint, EToolResources, QueryKeys } from 'librechat-data-provider';
 import type { TChatProjectFile, TFile, TFileUpload } from 'librechat-data-provider';
@@ -34,7 +34,8 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<TChatProjectFile | null>(null);
-  const [pendingUpload, setPendingUpload] = useState<TChatProjectFile | null>(null);
+  const [pendingUploads, setPendingUploads] = useState<TChatProjectFile[]>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
   const { data, isLoading } = useProjectFilesQuery(projectId);
   const addProjectFile = useAddProjectFileMutation();
   const deleteProjectFile = useDeleteProjectFileMutation();
@@ -44,15 +45,18 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
     }
   };
   const uploadFile = useUploadFileMutation({
-    onSuccess: async (file) => {
-      setPendingUpload((pending) =>
-        pending
-          ? {
-              ...pending,
-              file_id: file.file_id,
-              status: file.embedded ? 'ready' : 'processing',
-            }
-          : pending,
+    onSuccess: async (file, formData) => {
+      const tempFileId = String(formData.get('file_id') ?? '');
+      setPendingUploads((pending) =>
+        pending.map((item) =>
+          item.file_id === tempFileId
+            ? {
+                ...item,
+                file_id: file.file_id,
+                status: file.embedded ? 'ready' : 'processing',
+              }
+            : item,
+        ),
       );
       try {
         await addProjectFile.mutateAsync({
@@ -73,13 +77,14 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
         resetUploadInput();
       } catch (_error) {
         setError(localize('com_ui_upload_error'));
-        setPendingUpload(null);
+        setPendingUploads((pending) => pending.filter((item) => item.file_id !== file.file_id));
         resetUploadInput();
       }
     },
-    onError: () => {
+    onError: (_error, formData) => {
+      const tempFileId = String(formData.get('file_id') ?? '');
       setError(localize('com_ui_upload_error'));
-      setPendingUpload(null);
+      setPendingUploads((pending) => pending.filter((item) => item.file_id !== tempFileId));
       resetUploadInput();
     },
   });
@@ -104,46 +109,98 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
   }, [files, queryClient]);
 
   useEffect(() => {
-    if (pendingUpload && files.some((file) => file.file_id === pendingUpload.file_id)) {
-      setPendingUpload(null);
+    if (pendingUploads.length === 0) {
+      return;
     }
-  }, [files, pendingUpload]);
+    setPendingUploads((pending) =>
+      pending.filter((item) => !files.some((file) => file.file_id === item.file_id)),
+    );
+  }, [files, pendingUploads.length]);
 
-  const visibleFiles =
-    pendingUpload && !files.some((file) => file.file_id === pendingUpload.file_id)
-      ? [pendingUpload, ...files]
-      : files;
+  const pendingVisibleFiles = pendingUploads.filter(
+    (pendingFile) => !files.some((file) => file.file_id === pendingFile.file_id),
+  );
+  const visibleFiles = [...pendingVisibleFiles, ...files];
   const displayNameFor = (file: TChatProjectFile) => file.filename?.trim() || file.file_id;
 
-  const onUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || isBusy) {
+  const uploadFiles = (selectedFiles: File[]) => {
+    if (selectedFiles.length === 0 || isBusy) {
       return;
     }
     setError(null);
-    const fileId = crypto.randomUUID();
-    setPendingUpload({
-      projectId,
-      file_id: fileId,
-      sourceType: 'file',
-      user: '',
-      status: 'uploading',
-      filename: file.name,
-      type: file.type,
-      bytes: file.size,
+    const uploads = selectedFiles.map((file) => {
+      const fileId = crypto.randomUUID();
+      const pendingFile: TChatProjectFile = {
+        projectId,
+        file_id: fileId,
+        sourceType: 'file',
+        user: '',
+        status: 'uploading',
+        filename: file.name,
+        type: file.type,
+        bytes: file.size,
+      };
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('file_id', fileId);
+      formData.append('endpoint', EModelEndpoint.agents);
+      formData.append('endpointType', EModelEndpoint.agents);
+      formData.append('tool_resource', EToolResources.file_search);
+      formData.append('message_file', 'true');
+      return { pendingFile, formData };
     });
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('file_id', fileId);
-    formData.append('endpoint', EModelEndpoint.agents);
-    formData.append('endpointType', EModelEndpoint.agents);
-    formData.append('tool_resource', EToolResources.file_search);
-    formData.append('message_file', 'true');
-    uploadFile.mutate(formData);
+    setPendingUploads((pending) => [...uploads.map((upload) => upload.pendingFile), ...pending]);
+    uploads.forEach((upload) => uploadFile.mutate(upload.formData));
+  };
+
+  const onUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    uploadFiles(Array.from(event.target.files ?? []));
+  };
+
+  const onDragEnter = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (!isBusy) {
+      setIsDragActive(true);
+    }
+  };
+
+  const onDragOver = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (!isBusy && !isDragActive) {
+      setIsDragActive(true);
+    }
+  };
+
+  const onDragLeave = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setIsDragActive(false);
+  };
+
+  const onDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setIsDragActive(false);
+    if (isBusy) {
+      return;
+    }
+    uploadFiles(Array.from(event.dataTransfer.files ?? []));
   };
 
   return (
-    <section className="mt-6 rounded-2xl border border-border-light bg-surface-secondary p-4">
+    <section
+      className={cn(
+        'mt-6 rounded-2xl border bg-surface-secondary p-4 transition-colors',
+        isDragActive
+          ? 'border-blue-500 bg-surface-hover'
+          : 'border-border-light',
+      )}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-medium text-text-primary">{localize('com_ui_files')}</h2>
@@ -159,7 +216,14 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
         >
           <Upload className="h-4 w-4" aria-hidden="true" />
           {localize('com_ui_upload')}
-          <input ref={inputRef} type="file" className="sr-only" onChange={onUpload} disabled={isBusy} />
+          <input
+            ref={inputRef}
+            type="file"
+            className="sr-only"
+            onChange={onUpload}
+            disabled={isBusy}
+            multiple
+          />
         </label>
       </div>
 

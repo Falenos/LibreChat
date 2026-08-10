@@ -1,5 +1,6 @@
 import { useRecoilCallback } from 'recoil';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { dataService, QueryKeys } from 'librechat-data-provider';
 import type { UseMutationResult } from '@tanstack/react-query';
 import type {
@@ -15,6 +16,7 @@ import type {
   TDeleteChatProjectFileRequest,
   TDeleteChatProjectFileResponse,
 } from 'librechat-data-provider';
+import { useNewConvo } from '~/hooks';
 import store from '~/store';
 
 export const useCreateProjectMutation = (): UseMutationResult<
@@ -53,6 +55,15 @@ export const useDeleteProjectMutation = (): UseMutationResult<
   unknown
 > => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { newConversation } = useNewConvo();
+  const getActiveConversation = useRecoilCallback(
+    ({ snapshot }) =>
+      async () => {
+        return await snapshot.getPromise(store.conversationByIndex(0));
+      },
+    [],
+  );
   const clearActiveConversationProject = useRecoilCallback(
     ({ snapshot, set }) =>
       async (projectId: string) => {
@@ -62,22 +73,51 @@ export const useDeleteProjectMutation = (): UseMutationResult<
             ...conversation,
             chatProjectId: null,
           });
+          return true;
         }
+        return false;
       },
     [],
   );
+
   return useMutation((projectId: string) => dataService.deleteProject(projectId), {
-    onSuccess: (_result, projectId) => {
-      clearActiveConversationProject(projectId);
-      // Invalidate so an *active* project-detail observer refetches and settles into a
-      // not-found state — consumers (e.g. ChatRoute) can then react to the deletion.
-      // (Removing it instead leaves observers stuck loading under `refetchOnMount: false`.)
+    onSuccess: async (_result, projectId) => {
+      const activeConversation = await getActiveConversation();
+      const deletedOpenProject = activeConversation?.chatProjectId === projectId;
+      await clearActiveConversationProject(projectId);
+
+      const projectFilesQueries = queryClient
+        .getQueryCache()
+        .findAll({ queryKey: [QueryKeys.projectFiles, projectId] });
+      const deletedFileIds = new Set<string>();
+      projectFilesQueries.forEach((query) => {
+        const cached = queryClient.getQueryData<{ files?: Array<{ file_id: string }> }>(query.queryKey);
+        cached?.files?.forEach((file) => {
+          if (file.file_id) {
+            deletedFileIds.add(file.file_id);
+          }
+        });
+      });
+
+      if (deletedFileIds.size > 0) {
+        queryClient.setQueryData([QueryKeys.files], (files: TChatProjectFile[] | undefined) =>
+          (files ?? []).filter((file) => !deletedFileIds.has(file.file_id)),
+        );
+      }
+
+      queryClient.removeQueries([QueryKeys.projectFiles, projectId], { exact: false });
+      queryClient.invalidateQueries([QueryKeys.files]);
+      queryClient.invalidateQueries([QueryKeys.conversationTags]);
       queryClient.invalidateQueries([QueryKeys.project, projectId]);
-      // Drop any *inactive* cached detail so a later visit to the deleted project
-      // refetches (→ not-found) rather than rendering stale cache within `cacheTime`.
       queryClient.removeQueries([QueryKeys.project, projectId], { type: 'inactive' });
       queryClient.invalidateQueries([QueryKeys.projects]);
       queryClient.invalidateQueries([QueryKeys.allConversations]);
+      queryClient.invalidateQueries([QueryKeys.projectConversations]);
+
+      if (deletedOpenProject) {
+        newConversation();
+        navigate('/c/new', { replace: true });
+      }
     },
   });
 };

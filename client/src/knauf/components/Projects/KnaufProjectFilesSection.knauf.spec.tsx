@@ -11,17 +11,25 @@ const mockDeleteMutate = jest.fn();
 let mockProjectFiles: unknown[] = [];
 let mockCapturedPreviewProps: Record<string, unknown> | null = null;
 let mockUploadShouldResolve = true;
+let mockUploadedFileCount = 0;
 
 jest.mock('~/data-provider', () => ({
-  useUploadFileMutation: (options: { onSuccess: (file: { file_id: string; embedded?: boolean }) => void }) => ({
+  useUploadFileMutation: (options: {
+    onSuccess: (file: { file_id: string; filename: string; embedded?: boolean }, formData: FormData) => void;
+  }) => ({
     isLoading: false,
     mutate: mockUploadMutate.mockImplementation((formData: FormData) => {
       if (mockUploadShouldResolve) {
-        options.onSuccess({
-          file_id: 'uploaded-file',
-          filename: 'doc.txt',
-          embedded: false,
-        });
+        mockUploadedFileCount += 1;
+        const uploadedName = (formData.get('file') as File).name;
+        options.onSuccess(
+          {
+            file_id: `uploaded-file-${mockUploadedFileCount}`,
+            filename: uploadedName,
+            embedded: false,
+          },
+          formData,
+        );
       }
       return formData;
     }),
@@ -77,11 +85,16 @@ beforeEach(() => {
   mockProjectFiles = [];
   mockCapturedPreviewProps = null;
   mockUploadShouldResolve = true;
+  mockUploadedFileCount = 0;
   mockUploadMutate.mockClear();
   mockAddMutateAsync.mockResolvedValue({});
   mockAddMutateAsync.mockClear();
   mockDeleteMutate.mockClear();
-  jest.spyOn(crypto, 'randomUUID').mockReturnValue('client-file-id');
+  let mockClientFileCount = 0;
+  jest.spyOn(crypto, 'randomUUID').mockImplementation(() => {
+    mockClientFileCount += 1;
+    return `client-file-id-${mockClientFileCount}`;
+  });
 });
 
 afterEach(() => {
@@ -98,14 +111,57 @@ describe('[knauf] KnaufProjectFilesSection', () => {
 
     expect(mockUploadMutate).toHaveBeenCalledTimes(1);
     const formData = mockUploadMutate.mock.calls[0][0] as FormData;
-    expect(formData.get('file_id')).toBe('client-file-id');
+    expect(formData.get('file_id')).toBe('client-file-id-1');
     expect(formData.get('message_file')).toBe('true');
     expect(formData.get('tool_resource')).toBe('file_search');
 
     await waitFor(() =>
       expect(mockAddMutateAsync).toHaveBeenCalledWith({
         projectId: 'project-1',
-        file_id: 'uploaded-file',
+        file_id: 'uploaded-file-1',
+        status: 'processing',
+      }),
+    );
+  });
+
+  it('uploads all selected files from the picker', async () => {
+    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+
+    fireEvent.change(screen.getByLabelText('Upload'), {
+      target: {
+        files: [
+          new File(['hello'], 'doc-1.txt', { type: 'text/plain' }),
+          new File(['world'], 'doc-2.txt', { type: 'text/plain' }),
+        ],
+      },
+    });
+
+    expect(mockUploadMutate).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(mockAddMutateAsync).toHaveBeenNthCalledWith(2, {
+        projectId: 'project-1',
+        file_id: 'uploaded-file-2',
+        status: 'processing',
+      }),
+    );
+  });
+
+  it('uploads dropped files with the same project attach flow', async () => {
+    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+
+    fireEvent.drop(screen.getByText('Files').closest('section') as HTMLElement, {
+      dataTransfer: {
+        files: [new File(['hello'], 'dropped.txt', { type: 'text/plain' })],
+      },
+    });
+
+    expect(mockUploadMutate).toHaveBeenCalledTimes(1);
+    const formData = mockUploadMutate.mock.calls[0][0] as FormData;
+    expect((formData.get('file') as File).name).toBe('dropped.txt');
+    await waitFor(() =>
+      expect(mockAddMutateAsync).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        file_id: 'uploaded-file-1',
         status: 'processing',
       }),
     );
@@ -128,7 +184,7 @@ describe('[knauf] KnaufProjectFilesSection', () => {
 
     await waitFor(() => expect(mockAddMutateAsync).toHaveBeenCalled());
     expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([
-      expect.objectContaining({ file_id: 'uploaded-file', filename: 'doc.txt' }),
+      expect.objectContaining({ file_id: 'uploaded-file-1', filename: 'doc.txt' }),
       expect.objectContaining({ file_id: 'existing-file' }),
     ]);
     expect(invalidateSpy).toHaveBeenCalledWith([QueryKeys.files]);
@@ -217,7 +273,7 @@ describe('[knauf] KnaufProjectFilesSection', () => {
     mockProjectFiles = [
       {
         projectId: 'project-1',
-        file_id: 'uploaded-file',
+        file_id: 'uploaded-file-1',
         filename: 'doc.txt',
         status: 'processing',
       },
