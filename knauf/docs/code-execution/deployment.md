@@ -21,7 +21,7 @@ code-interpreter half of the older
 | Nonprod subscription                    | `ad3f0a71-cc5b-4d00-8289-23623cf2064c` (CT-SHARED-RESOURCES)                                                                                       | `az account list`                                                |
 | Prod subscription                       | `e0515a24-7205-481b-b657-944901020e32`                                                                                                             | infra-context skill                                              |
 | Tenant                                  | `ad200093-0cba-48cb-9853-16fb53354a4d`                                                                                                             | ESO values                                                       |
-| AKS (nonprod / prod)                    | `aks-sxsx-nonprod-001` (`rg-sxsx-nonprod-westeurope`) / `aks-sxsx-prod-001` (`rg-sxsx-prod-westeurope`)                                            | `az aks list`                                                    |
+| AKS (nonprod / prod)                    | `aks-agk-nonprod-001` (`rg-agk-nonprod-westeurope`) / `aks-agk-prod-001` (`rg-agk-prod-westeurope`) — corrected; the `sxsx` names once written here exist nowhere | `agk-infrastructure` `locals.tf` (authoritative)                 |
 | **AKS OIDC issuer + workload identity** | **both `enabled: true`** on nonprod and prod                                                                                                       | `az aks list` — the workload-identity prerequisite is met (S3 ✓) |
 | ACR (nonprod / prod)                    | `acragkhubnonprod001` / `acragkhubprod001`                                                                                                         | infra-context skill, release pipeline                            |
 | Key Vault (nonprod / prod)              | `kv-agntkarl-nonprod-001` / `kv-agntkarl-prod-001`                                                                                                 | ESO SecretStore values                                           |
@@ -46,8 +46,10 @@ private-endpoint allow-list (§3, verify item).
   If it renders the annotation but not the label, add the label via the chart's
   pod-labels value or a vendored `templates/serviceaccount.yaml` (langfuse-clickhouse
   escape-hatch precedent). This is the one chart unknown.
-- **V2 — OIDC issuer URL** for the federated credential:
-  `az aks show -n aks-sxsx-nonprod-001 -g rg-sxsx-nonprod-westeurope --query oidcIssuerProfile.issuerURL -o tsv`.
+- ~~**V2 — OIDC issuer URL**~~ **RESOLVED — there was nothing to look up.** The
+  `agk-infrastructure` tenant root already declares `data "azurerm_kubernetes_cluster" "aks"`,
+  so the federated credential references `data.azurerm_kubernetes_cluster.aks.oidc_issuer_url`
+  directly, exactly as both ESO credentials do. Never hardcode the issuer.
 - **V3 — Mongo egress**: confirm `MONGO_URI`'s host/port is covered by
   `allow-egress-private-endpoints` (the app already connects to Mongo from this
   namespace, so it almost certainly is); if not, add a `customPolicies` entry.
@@ -67,18 +69,38 @@ identity + KV key)   ─┘
 
 ---
 
-## 2. agk-infrastructure — Terraform (Phase B)
+## 2. agk-infrastructure — Terraform (Phase B) — SHIPPED for dev + stage
 
-Repo not cloned here; author against its module conventions. Resources (nonprod
-first). The **session pool is the built-in code-interpreter (PythonLTS) type** —
-one pool for both languages (see backend-decision.md). No `azurerm` resource
-exists for session pools, so use the **AzAPI** provider.
+**Done: [agk-infrastructure#73](https://github.com/Knauf-Group/agk-infrastructure/pull/73)**
+adds this for `dev` and `stage`. Prod is still to do (see §8). The block below is kept as
+the reference contract, corrected against what the code actually validated — the original
+draft of it was wrong in four ways, all of which are worth knowing before writing the prod
+twin:
+
+- **`dynamicPoolConfiguration` shape.** The flat `{ executionType, cooldownPeriodInSeconds }`
+  is the *preview* schema. `2025-07-01` GA nests it under `lifecycleConfiguration` and
+  renames `executionType` → `lifecycleType`. Caught by `terraform validate` with azapi
+  schema validation on; most ACA blog posts still show the preview form.
+- **Identity name.** `id-agk-code-adapter-nonprod` matches nothing in that repo. The
+  tenant-root convention is
+  `mi-${var.application_family}-<dev|stage>-${local.location}-aks-<purpose>-${var.kv_name_suffix}`
+  → `mi-agentic-karl-dev-westeurope-aks-code-adapter-001`.
+- **Cluster names.** `aks-sxsx-*` / `rg-sxsx-*` (below and in §1) appear nowhere in the
+  infra repo. Real: `aks-agk-nonprod-001` in `rg-agk-nonprod-westeurope`.
+- **The OIDC issuer was never an unknown** (V2). The tenant root already has
+  `data "azurerm_kubernetes_cluster" "aks"`, so the credential just uses
+  `data.azurerm_kubernetes_cluster.aks.oidc_issuer_url`, as both ESO credentials do.
+
+Also: `azapi` is already declared in that root (pinned `>= 2.0, < 2.9.0` → resolves 2.8.0,
+which does embed the `2025-07-01` sessionPools schema), so **leave
+`schema_validation_enabled` alone** — switching it off is what would have let the preview
+shape through to ARM.
 
 ```hcl
 # Session pool — Microsoft.App/sessionPools, mgmt api-version 2025-07-01 (GA)
 resource "azapi_resource" "code_pool" {
   type      = "Microsoft.App/sessionPools@2025-07-01"
-  name      = "sp-agk-code-nonprod"
+  name      = "sp-agentic-karl-dev-westeurope-001"
   location  = "westeurope"
   parent_id = <tenant-nonprod resource group id>   # rg-agentic-karl-tenant-nonprod-westeurope
   body = {
@@ -86,7 +108,10 @@ resource "azapi_resource" "code_pool" {
       poolManagementType   = "Dynamic"
       containerType        = "PythonLTS"            # has bash + python3 + pandas/numpy/matplotlib
       scaleConfiguration   = { maxConcurrentSessions = 20 }
-      dynamicPoolConfiguration = { executionType = "Timed", cooldownPeriodInSeconds = 300 }
+      # GA shape — NOT the preview `{ executionType, cooldownPeriodInSeconds }`.
+      dynamicPoolConfiguration = {
+        lifecycleConfiguration = { lifecycleType = "Timed", cooldownPeriodInSeconds = 300 }
+      }
       sessionNetworkConfiguration = { status = "EgressDisabled" }
     }
   }
@@ -94,18 +119,18 @@ resource "azapi_resource" "code_pool" {
 
 # User-assigned managed identity for the adapter pod
 resource "azurerm_user_assigned_identity" "code_adapter" {
-  name                = "id-agk-code-adapter-nonprod"
+  name                = "mi-agentic-karl-dev-westeurope-aks-code-adapter-001"
   resource_group_name = <tenant-nonprod rg>
   location            = "westeurope"
 }
 
 # Federated credential: trust the adapter's k8s ServiceAccount
 resource "azurerm_federated_identity_credential" "code_adapter" {
-  name                = "code-adapter-agentic-karl-dev"
+  name                = "sa-code-adapter-dev-001"
   resource_group_name = <tenant-nonprod rg>
   parent_id           = azurerm_user_assigned_identity.code_adapter.id
   audience            = ["api://AzureADTokenExchange"]
-  issuer              = <OIDC issuer URL from V2>
+  issuer              = data.azurerm_kubernetes_cluster.aks.oidc_issuer_url
   subject             = "system:serviceaccount:agentic-karl-dev:sa-code-adapter"
 }
 
