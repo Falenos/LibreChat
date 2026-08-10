@@ -114,6 +114,14 @@ describe('Startup readiness wiring', () => {
 describe('Migration gate wiring', () => {
   const source = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
 
+  it('lets enabled public share reads reach their route-level authorization', () => {
+    const publicShareCheck = source.indexOf('isPublicSharedLinkRead(req) ||');
+    const jwtGate = source.indexOf('return requireJwtAuth(req, res', publicShareCheck);
+
+    expect(publicShareCheck).toBeGreaterThan(-1);
+    expect(jwtGate).toBeGreaterThan(publicShareCheck);
+  });
+
   it('lets the API-key-protected file-asset migration route reach its own authentication', () => {
     const exemptionStart = source.indexOf('const MIGRATION_GATE_EXEMPT = [');
     const exemptionEnd = source.indexOf('];', exemptionStart);

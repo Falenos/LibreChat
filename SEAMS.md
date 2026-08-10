@@ -1217,6 +1217,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Chat/KnaufModelSelector.knauf.spec.ts` | Subject under test; LibreChat endpoint enum | Low — pins raw Azure fallback as replaceable and model-spec/custom-agent selections as authoritative | Self | KK20-256 |
 | `client/src/knauf/pwa/serviceWorkerConfig.knauf.spec.ts` | None — reads the upstream Vite configuration through Node `fs`/`path` | Low — test-only guard proving production builds cannot re-import the Edge activation-time client reloader | Self | KK20-259 |
 | `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`; Sandpack export shell and preview iframe DOM | Medium — preserves the existing unchanged-markup readiness path while allowing clocks and other live previews to export after a longer stable-layout interval | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
+| `api/server/index.js` | `isPublicSharedLinkRead` migration-gate branch | 55–59, 289–314 | Lets explicitly enabled anonymous shared-link reads reach the existing route-level ACL while retaining JWT and migration enforcement for owner lookups, mutations, and unrelated API routes | `api/server/index.spec.js` (`Migration gate wiring`), `api/server/middleware/isPublicSharedLinkRead.spec.js` | NO-TICKET |
+| `api/server/middleware/isPublicSharedLinkRead.js` | `PUBLIC_SHARED_LINK_READ`, `isPublicSharedLinkRead` | 1–17 | Allow-lists only the existing read-only shared artifact/config/file URL shapes when both shared-link flags permit public access | `api/server/middleware/isPublicSharedLinkRead.spec.js` | NO-TICKET |
+| `api/server/middleware/isPublicSharedLinkRead.spec.js` | public-read and protected-route table | 1–49 | Pins the migration-gate trust boundary: public reads pass only when enabled; owner lookup, mutation, unknown, and disabled routes remain gated | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

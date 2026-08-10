@@ -55,6 +55,7 @@ const noIndex = require('./middleware/noIndex');
 // [knauf] Migration access enforcement on protected API routes.
 const requireJwtAuth = require('./middleware/requireJwtAuth');
 const requireMigrationAccess = require('./middleware/requireMigrationAccess');
+const isPublicSharedLinkRead = require('./middleware/isPublicSharedLinkRead');
 // End [knauf]
 const routes = require('./routes');
 
@@ -285,9 +286,9 @@ const startServer = async () => {
   //   /knauf/migration/file-assets — API-key-protected operational backfill
   //   /knauf/artifact-export/render — one-time-secret snapshot for headless export
   //
-  // Note: /api/share is intentionally NOT exempt. With ALLOW_SHARED_LINKS_PUBLIC=false
-  // (our current setting) share links already required login before this gate existed.
-  // This is a temporary rollout gate and will be removed post-migration.
+  // Public shared-link reads skip this gate only when explicitly enabled. Their
+  // route-level canAccessSharedLink middleware still enforces the link ACL.
+  // Owner lookups and all mutations remain behind JWT + migration access.
   if (process.env.MIGRATION_ALLOWLIST_ENABLED === 'true') {
     const MIGRATION_GATE_EXEMPT = [
       '/auth',
@@ -302,6 +303,7 @@ const startServer = async () => {
     ];
     app.use('/api', (req, res, next) => {
       if (
+        isPublicSharedLinkRead(req) ||
         MIGRATION_GATE_EXEMPT.some(
           (prefix) => req.path === prefix || req.path.startsWith(prefix + '/'),
         )
