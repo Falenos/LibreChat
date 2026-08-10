@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { CODE_ENV_KINDS } from './types/contract.js';
 import type { CodeEnvIdentity, CodeEnvKind } from './types/contract.js';
 
@@ -17,6 +17,26 @@ export function isValidSessionId(value: unknown): value is string {
 
 export function mintSessionId(): string {
   return `karl-${randomBytes(16).toString('hex')}`;
+}
+
+/**
+ * Derive a stable session id from the caller's `runtime_session_hint`.
+ *
+ * `@librechat/agents` (3.2.65) sends that hint — the conversation's `thread_id`, or an
+ * explicit host override — but only when the host sets
+ * `toolExecution.sandbox.statefulSessions = true`. Same hint ⇒ same sandbox, which is how
+ * a conversation gets continuity rather than a fresh sandbox per execution.
+ *
+ * The hint is NOT used as the ACA identifier directly, for two reasons: it is a LibreChat
+ * conversation id (sending it to Azure would leak an internal identifier into a
+ * third-party resource name and into ACA logs), and it is guessable, whereas identifiers
+ * double as the isolation boundary between conversations. Hashing with a per-deployment
+ * secret gives a stable, unguessable id inside our own `karl-<32hex>` namespace, so every
+ * existing validation and log line keeps working unchanged.
+ */
+export function deriveSessionId(hint: string, secret: string): string {
+  const digest = createHmac('sha256', secret).update(hint).digest('hex');
+  return `karl-${digest.slice(0, 32)}`;
 }
 
 export const SUPPORTED_LANGS = ['py', 'bash'] as const;

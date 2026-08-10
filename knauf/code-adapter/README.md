@@ -64,8 +64,13 @@ Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
 
 ## How /exec works
 
-1. **Session** — adapter-minted `karl-<32hex>` doubles as the ACA `identifier`
-   (foreign inbound ids are re-minted, never forwarded — no identifier injection).
+1. **Session** — a `karl-<32hex>` id doubles as the ACA `identifier`. Resolution order:
+   a valid inbound `session_id`; else `runtime_session_hint` hashed with a per-deployment
+   secret (`deriveSessionId` — the hint is a LibreChat conversation id, so it is never
+   forwarded to Azure or used raw); else freshly minted. Anything else inbound is ignored,
+   never forwarded — no identifier injection. Note the current client sends **neither**
+   field unless the host enables `toolExecution.sandbox.statefulSessions`, so the default
+   is one fresh sandbox per execution.
 2. **Staged inputs** — uploads land in blob (`code-adapter-staging/<sid>/<fileId>`)
    plus a Mongo row (`code_adapter_files`, TTL 24 h) because LibreChat uploads
    before any session exists. At exec time they are pushed into the session
@@ -83,7 +88,8 @@ Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
    are persisted to blob + Mongo under the exec session so `/download` works
    after the session cooldown destroys the sandbox.
 5. **Retries** — `SessionWithIdentifierNotFound` (cooldown expiry) → transparent
-   re-mint + re-push + one re-run. Pool 401/403 → single-flight token refresh +
+   one re-run with the same identifier + re-push (ACA allocates a fresh sandbox for a
+   key with no live session). Pool 401/403 → single-flight token refresh +
    one retry. Exec 5xx is **not** retried (not idempotent).
 
 ## Documented divergences from the ClickHouse/codeapi backend

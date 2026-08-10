@@ -91,6 +91,43 @@ describe('POST /v1/exec contract', () => {
     expect(aca.pushed).toHaveLength(0);
   });
 
+  // [knauf] KK20-257 review F5. `runtime_session_hint` is the only continuity field the
+  // locked client puts on the wire (and only when the host sets
+  // toolExecution.sandbox.statefulSessions). Same hint ⇒ same sandbox; the hint itself is
+  // never used as the ACA identifier, since it is a guessable LibreChat conversation id.
+  it('derives one stable sandbox from runtime_session_hint, and echoes it back', async () => {
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+
+    const first = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(1)', runtime_session_hint: 'thread-abc' });
+    const second = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(2)', runtime_session_hint: 'thread-abc' });
+    const other = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(3)', runtime_session_hint: 'thread-xyz' });
+
+    expect(first.body.session_id).toBe(second.body.session_id);
+    expect(other.body.session_id).not.toBe(first.body.session_id);
+    // Stays inside our own namespace, and does not leak the conversation id.
+    expect(first.body.session_id).toMatch(/^karl-[0-9a-f]{32}$/);
+    expect(JSON.stringify(first.body)).not.toContain('thread-abc');
+    // Echoed for observability only when the session came from a hint.
+    expect(first.body.runtime_session_id).toBe(first.body.session_id);
+  });
+
+  it('mints a fresh sandbox per exec when no hint and no session_id are sent', async () => {
+    // The default path with the current client: continuity is off, so each execution is
+    // isolated. Pinned so enabling statefulSessions later is a visible behaviour change.
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+    const a = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+    const b = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(a.body.session_id).not.toBe(b.body.session_id);
+    expect(a.body.runtime_session_id).toBeUndefined();
+  });
+
   it('unsupported lang → 501 (adapter contract)', async () => {
     const response = await request(app)
       .post('/v1/exec')
@@ -149,6 +186,100 @@ describe('POST /v1/exec contract', () => {
     const echoed = response.body.files.find((f: { name: string }) => f.name === 'notes.txt');
     expect(echoed.inherited).toBe(true);
     expect(echoed.storage_session_id).toBe(doc.sessionId);
+  });
+
+  // [knauf] KK20-257 review F3. Byte length does not prove a writable input is untouched:
+  // `abc` → `xyz` keeps the size. Echoing that as inherited:true returns the ORIGINAL file
+  // and throws the user's edit away, while the exec reports success. The pre-exec baseline
+  // (taken after inputs are pushed) is what makes the difference detectable.
+  it('captures a same-size overwrite of a writable input instead of echoing it', async () => {
+    const doc = await repo.insertStaged({
+      sessionId: 'karl-' + 'b'.repeat(32),
+      filename: 'data.csv',
+      size: 3,
+      contentType: 'text/csv',
+      origin: 'upload',
+      readOnly: false,
+      identity: { kind: 'user', id: 'local' },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(doc.blobPath, Buffer.from('abc'), 'text/csv');
+
+    // Same size before and after; only the modification time moves, exactly as an
+    // in-place rewrite behaves.
+    let listedAt = '2026-08-10T10:00:00Z';
+    aca.sessionFiles = [
+      { name: 'data.csv', type: 'File', sizeInBytes: 3, lastModifiedAt: listedAt },
+    ];
+    aca.fileContents.set('data.csv', Buffer.from('xyz'));
+    aca.executeImpl = async (_sid, code) => {
+      listedAt = '2026-08-10T10:00:05Z';
+      aca.sessionFiles = [
+        { name: 'data.csv', type: 'File', sizeInBytes: 3, lastModifiedAt: listedAt },
+      ];
+      return sentinelOutcome(code, 0, '');
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: "open('data.csv','w').write('xyz')",
+        files: [
+          { id: doc.fileId, name: 'data.csv', storage_session_id: doc.sessionId, kind: 'user' },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(0);
+    const returned = response.body.files.find((f: { name: string }) => f.name === 'data.csv');
+    // Captured as this exec's output, NOT echoed as the untouched original.
+    expect(returned.inherited).toBeUndefined();
+    expect(returned.storage_session_id).toBe(response.body.session_id);
+  });
+
+  // [knauf] KK20-257 review F6. `@librechat/agents` (3.2.65 and 3.2.46) formats only
+  // stdout/stderr and never reads `result.code`, so a silent non-zero exit renders as
+  // "stdout: Empty" and reads as success. The adapter has to put the failure where the
+  // caller will actually show it.
+  it('synthesizes stderr when a non-zero exit produced no output at all', async () => {
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 7, '', '');
+    const response = await request(app).post('/v1/exec').send({ lang: 'bash', code: 'exit 7' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(7);
+    expect(response.body.stderr).toMatch(/exit status 7/i);
+    expect(response.body.stderr).toMatch(/failure, not an empty result/i);
+  });
+
+  it('leaves a real stderr alone on a non-zero exit', async () => {
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 1, '', 'Traceback: boom');
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'raise' });
+
+    expect(response.body.code).toBe(1);
+    expect(response.body.stderr).toContain('Traceback: boom');
+    expect(response.body.stderr).not.toMatch(/exit status/i);
+  });
+
+  // [knauf] KK20-257 review F7. A capture failure used to drop the file and still return
+  // code:0, so a generated deliverable could disappear while the tool reported success.
+  it('reports generated files it could not persist instead of silently dropping them', async () => {
+    aca.sessionFiles = [{ name: 'chart.png', type: 'File', sizeInBytes: 10 }];
+    // Present in the sandbox, but unfetchable — stands in for an ACA/Blob/Mongo failure.
+    aca.fetchFileContent = async () => {
+      throw new Error('blob write failed');
+    };
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: "open('chart.png','wb').write(b'x')" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(0);
+    expect(response.body.files).toHaveLength(0);
+    expect(response.body.stderr).toMatch(/could not be saved/i);
   });
 
   it('expired staged input → 200 {code:1} explaining re-attach (not 5xx)', async () => {

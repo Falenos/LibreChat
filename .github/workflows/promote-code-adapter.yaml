@@ -56,18 +56,30 @@ jobs:
       PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl-code-adapter
     steps:
       - name: Validate inputs
+        # Both inputs arrive through `env`, never interpolated into the script body.
+        # `${{ }}` is substituted before bash parses the line, so a crafted tag could
+        # otherwise break quoting and run commands — and this job holds an Azure login
+        # with write access to the PROD registry. Validation has to happen on the
+        # variable, after substitution can no longer inject anything.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag }}"
-          CONFIRM="${{ inputs.confirm }}"
+          TAG="$INPUT_TAG"
+          CONFIRM="$INPUT_CONFIRM"
           # Two-field confirmation: this writes to the prod registry, and a mistyped tag
           # would publish an unintended image under a name prod values may already point at.
           if [ "$TAG" != "$CONFIRM" ]; then
-            echo "::error::confirm ($CONFIRM) does not match tag ($TAG)"
+            echo "::error::confirm does not match tag"
             exit 1
           fi
-          if ! grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$TAG"; then
-            echo "::error::tag must be semver without a leading v (got '$TAG'); the adapter is tagged from knauf/code-adapter/VERSION"
+          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'; then
+            echo "::error::tag must be semver without a leading v (e.g. 0.1.0); the adapter is tagged from knauf/code-adapter/VERSION"
+            exit 1
+          fi
+          if [ "${#TAG}" -gt 64 ]; then
+            echo "::error::tag longer than 64 characters"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_ENV"

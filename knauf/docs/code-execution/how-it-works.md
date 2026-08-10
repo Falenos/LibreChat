@@ -63,7 +63,7 @@ credential anywhere.**
 3. **Auth bridge** — verify LibreChat's JWT inbound; acquire an Entra token outbound. Neither side sees the other's auth.
 4. **File staging** — uploads land in Blob + a Mongo TTL row _before_ any session exists, get (re-)pushed into the fresh sandbox **sequentially** on every exec that references them, and generated files get captured back to Blob so downloads outlive the sandbox.
 5. **Filling ACA's gaps** — real exit codes and output past the ~4000-char cap, via the wrapper (below).
-6. **Resilience** — expired-session re-mint, friendly timeouts, capacity handling — never a 5xx into the tool loop.
+6. **Resilience** — vanished-session retry, friendly timeouts, capacity handling — never a 5xx into the tool loop. Also: a non-zero exit with no output gets an explanatory stderr line, because the caller formats stdout/stderr and never reads the exit code.
 
 ---
 
@@ -187,14 +187,37 @@ the adapter's staging store on every call:
 > agent/skill-kind → same tenant), so a guessed identifier still can't reach
 > another user's bytes.
 
-### The re-mint safety net
+### The vanished-session safety net
 
-The adapter still handles `SessionWithIdentifierNotFound` (a cooled-down
-identifier): it re-mints and re-runs once. With today's client this path is
-rarely taken — since each call already starts fresh — but it keeps the
-"supplied `session_id`" case correct if a future client version starts reusing
-sessions. Either way, output files download fine because they live in Blob, not
-in the dead session.
+The adapter handles `SessionWithIdentifierNotFound` (a cooled-down identifier) by retrying
+once — with the **same** identifier, not a new one. An ACA identifier is only a key:
+posting to one with no live session allocates a fresh sandbox, so the retry lands in
+exactly the clean sandbox a re-mint would have produced, the staged inputs are re-pushed
+into it, and the `session_id` the caller sees stays the one it asked for. (Earlier notes
+here claimed a re-mint; the code never did that, and shouldn't — re-minting would silently
+fork a conversation's sandbox.) If the second attempt also reports the session missing, the
+adapter stops and returns the friendly timeout message rather than looping. Either way,
+output files download fine because they live in Blob, not in the dead session.
+
+### Continuity is possible — it is just switched off
+
+Everything above describes the default. There _is_ a supported way to give a conversation
+one persistent sandbox, and it is worth knowing before anyone designs around
+fresh-per-exec:
+
+`@librechat/agents` 3.2.65 sends a `runtime_session_hint` on the wire — the conversation's
+`thread_id`, or an explicit host override — but **only when the host sets
+`toolExecution.sandbox.statefulSessions = true`**. KARL does not set it today (there is no
+such plumbing in `api/` or `packages/`), so the field never arrives and every execution is
+independent.
+
+The adapter already honours it: a hint is hashed with a per-deployment secret into a stable
+`karl-<32hex>` id (`deriveSessionId`), so the same conversation reaches the same sandbox
+while the conversation id itself is never sent to Azure or used as a guessable identifier.
+It also echoes `runtime_session_id` back so continuity shows up in traces. Flipping
+`statefulSessions` on is therefore a one-line host change — but a real product decision, not
+a cleanup: it trades today's per-execution isolation for warm sandboxes that hold a
+conversation's files (and its cost) for as long as the pool keeps them alive.
 
 ---
 
@@ -214,15 +237,15 @@ permanently checked; the yaml comment says so at the switch.
 
 **Tabular files go to the sandbox, not the search index.** A `.xlsx`, `.csv` or
 `.json` attachment is routed to `/mnt/data` instead of the RAG corpus, because
-embedding a spreadsheet yields chunked *text*: searchable, but impossible to
+embedding a spreadsheet yields chunked _text_: searchable, but impossible to
 aggregate, pivot or chart — which is what people attach a spreadsheet for. The rule
 lives at one choke point (`useFileHandling`), so it applies to the picker, drag-drop,
-paste and SharePoint alike, and it only redirects the *default* destination — a
+paste and SharePoint alike, and it only redirects the _default_ destination — a
 destination you pick explicitly still wins. It is gated on code being genuinely
 available for that conversation; otherwise the file stays on file search exactly as
 before, which is also what happens if `LIBRECHAT_CODE_BASEURL` is unconfigured.
 
-> **Accepted trade-off:** CSV and XLSX *do* embed successfully today (the RAG service
+> **Accepted trade-off:** CSV and XLSX _do_ embed successfully today (the RAG service
 > has dedicated CSV/Excel loaders), so routing them to the sandbox gives up semantic
 > search over their contents, and the destination is fixed at upload time. Content
 > questions still work — the model reads the file with pandas instead of retrieving
@@ -242,7 +265,7 @@ upstream wording; that is a different surface.
 An environment that enabled the capability without setting that variable would have
 uploaded Knauf files to a third party, at attach time, before the user sent anything.
 `packages/api/src/knauf/code/codeEnvGuard.ts` treats unset / unparseable /
-`api.librechat.ai` as *not configured* and strips the capability, which switches off
+`api.librechat.ai` as _not configured_ and strips the capability, which switches off
 the upload gate, the menu row, tabular routing and tool registration together. It also
 makes the runbook's "unset the variable to turn it off" step true, which it was not
 before.

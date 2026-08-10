@@ -74,14 +74,32 @@ jobs:
 
       - name: Resolve image tag
         id: tag
+        # `inputs.tag` arrives through `env`, never interpolated into the script body:
+        # `${{ }}` is substituted before bash parses the line, so a crafted tag could
+        # otherwise close the quoting and run arbitrary commands — with a later step
+        # holding an Azure login and write access to the ACR. Validating after the fact
+        # would be too late, because the injection happens at substitution time.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
+            TAG="$INPUT_TAG"
           else
             TAG="$(tr -d '[:space:]' < "$ADAPTER_DIR/VERSION")"
           fi
           [ -n "$TAG" ] || { echo "::error::empty tag"; exit 1; }
+          # Docker tag grammar, deliberately narrower than the spec allows: the adapter is
+          # tagged from VERSION, so semver plus an optional short pre-release suffix is
+          # everything a legitimate build needs.
+          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'; then
+            echo "::error::invalid tag '$TAG' — expected semver like 0.1.0 or 0.1.0-rc.1"
+            exit 1
+          fi
+          if [ "${#TAG}" -gt 64 ]; then
+            echo "::error::tag longer than 64 characters"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Building $ACR_NAME / $IMAGE_REPOSITORY:$TAG"
 

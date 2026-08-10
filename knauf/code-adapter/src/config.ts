@@ -8,6 +8,14 @@ export interface Config {
   port: number;
   logLevel: string;
   localMode: boolean;
+  /**
+   * HMAC key for turning a caller's `runtime_session_hint` into a session id
+   * (see `deriveSessionId`). Only needs to be stable per deployment and unguessable —
+   * it is not an authentication secret. Defaults to the JWT public key, which is already
+   * per-deployment and present wherever the adapter runs, so no new value has to be
+   * provisioned; `SESSION_HINT_SECRET` overrides it if a deployment prefers its own.
+   */
+  sessionHintSecret: string;
 
   jwt: {
     publicKeyPem: string | null;
@@ -113,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: int('PORT', 8080),
     logLevel: str('LOG_LEVEL') ?? 'info',
     localMode,
+    sessionHintSecret: str('SESSION_HINT_SECRET') ?? publicKeyPem ?? 'knauf-code-adapter-local',
     jwt: {
       publicKeyPem,
       allowedAlgs: (str('CODEAPI_JWT_ALLOWED_ALGS') ?? 'EdDSA').split(',').map((s) => s.trim()),

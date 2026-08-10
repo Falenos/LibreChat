@@ -40,6 +40,14 @@ export interface ExecRequest {
   session_id?: string | undefined;
   user_id?: string | undefined;
   entity_id?: string | undefined;
+  /**
+   * Sandbox-continuity hint. `@librechat/agents` (3.2.65+) sends this — the conversation's
+   * `thread_id`, or an explicit host override — but ONLY when the host sets
+   * `toolExecution.sandbox.statefulSessions = true`. It never sends `session_id` in the
+   * body, so this is the one wire field that can tie consecutive executions to one
+   * sandbox. See `deriveSessionId`.
+   */
+  runtime_session_hint?: string | undefined;
 }
 
 export interface ExecResponseFile {
@@ -56,9 +64,21 @@ export interface ExecResponse {
   session_id: string;
   stdout: string;
   stderr: string;
-  /** Numeric exit code; real rc via the sentinel wrapper, else 0/1 synthesized. */
+  /**
+   * Numeric exit code; real rc via the sentinel wrapper, else 0/1 synthesized.
+   *
+   * Callers must not assume this is read: `@librechat/agents` (3.2.65 and 3.2.46) formats
+   * only stdout/stderr and never inspects it, which is why a non-zero exit with no output
+   * also gets an explanatory line written into `stderr`.
+   */
   code: number;
   files: ExecResponseFile[];
+  /**
+   * Echoed only when the caller supplied `runtime_session_hint`. The client surfaces it on
+   * the tool artifact for observability (it does not feed it back — the hint is derived
+   * from `thread_id` each turn), so it exists to make continuity visible in traces.
+   */
+  runtime_session_id?: string;
 }
 
 /** crud.js hard-checks message === 'success' and reads files[0].fileId. */

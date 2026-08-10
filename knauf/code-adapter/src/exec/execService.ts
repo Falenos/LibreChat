@@ -1,5 +1,5 @@
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
-import { isValidSessionId, mintSessionId } from '../validate.js';
+import { deriveSessionId, isValidSessionId, mintSessionId } from '../validate.js';
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { WrapperPlan } from './wrapper.js';
 import { resolveInputs, movePlan, pushInputs, StagedFileMissingError } from './stagePush.js';
@@ -52,14 +52,40 @@ export async function runExec(
 ): Promise<ExecResponse> {
   const { logger, metrics } = deps;
 
-  const sessionId = isValidSessionId(body.session_id) ? body.session_id : mintSessionId();
-  if (body.session_id != null && sessionId !== body.session_id) {
-    logger.warn({ supplied: String(body.session_id).slice(0, 64) }, 'invalid session_id re-minted');
+  // Session resolution, most specific first:
+  //   1. an explicit valid `session_id` — honoured, but note the current client never
+  //      sends one (it reads ToolNode's session id and drops it before the POST), so this
+  //      is really for direct API callers and our own smoke script;
+  //   2. `runtime_session_hint` — the one continuity field `@librechat/agents` 3.2.65 does
+  //      put on the wire, and only when the host enables
+  //      `toolExecution.sandbox.statefulSessions`. Same hint ⇒ same sandbox, so a
+  //      conversation keeps its /mnt/data across turns instead of starting cold;
+  //   3. otherwise a fresh id, i.e. a fresh sandbox for this execution.
+  const hint = typeof body.runtime_session_hint === 'string' ? body.runtime_session_hint : '';
+  let sessionId: string;
+  let derivedFromHint = false;
+  if (isValidSessionId(body.session_id)) {
+    sessionId = body.session_id;
+  } else if (hint !== '') {
+    sessionId = deriveSessionId(hint, deps.config.sessionHintSecret);
+    derivedFromHint = true;
+  } else {
+    sessionId = mintSessionId();
+  }
+  if (body.session_id != null && !isValidSessionId(body.session_id)) {
+    logger.warn({ supplied: String(body.session_id).slice(0, 64) }, 'invalid session_id ignored');
   }
 
   const fail = (stderr: string, outcome: string): ExecResponse => {
     metrics.execTotal.inc({ lang, outcome });
-    return { session_id: sessionId, stdout: '', stderr, code: 1, files: [] };
+    return {
+      session_id: sessionId,
+      stdout: '',
+      stderr,
+      code: 1,
+      files: [],
+      ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
+    };
   };
 
   let inputs;
@@ -75,14 +101,24 @@ export async function runExec(
     throw err;
   }
 
-  const runOnce = () => executeOnce(body, lang, auth, sessionId, inputs, deps);
+  const runOnce = () => executeOnce(body, lang, auth, sessionId, inputs, deps, derivedFromHint);
   return runWithRecovery(runOnce, { sessionId, logger, fail });
 }
 
 /**
- * Run an exec attempt, recovering from the two retryable infra faults —
- * cooldown-expired session (re-mint + retry once) and short-`Retry-After`
- * capacity (sleep + retry once) — and mapping the rest to friendly results.
+ * Run an exec attempt, recovering from the two retryable infra faults — a vanished session
+ * and short-`Retry-After` capacity (sleep + retry once) — and mapping the rest to friendly
+ * results.
+ *
+ * The vanished-session retry deliberately reuses the SAME identifier rather than minting a
+ * new one, which is the opposite of what earlier comments here claimed. An ACA identifier
+ * is just a key: posting to one that has no live session allocates a fresh sandbox, so the
+ * retry gets exactly the clean sandbox a re-mint would have produced, and `executeOnce`
+ * re-pushes the staged inputs into it. Keeping the identifier also keeps the contract the
+ * caller sees — the `session_id` in the response is the one it asked for, and a
+ * hint-derived session stays stable for the conversation instead of silently forking.
+ * If the second attempt also reports the session missing we stop and return the friendly
+ * timeout message rather than looping.
  */
 async function runWithRecovery(
   runOnce: () => Promise<ExecResponse>,
@@ -97,25 +133,42 @@ async function runWithRecovery(
     return await runOnce();
   } catch (err) {
     if (err instanceof AcaSessionNotFoundError) {
-      logger.info({ sessionId }, 'session expired mid-run — re-running once');
-      try {
-        return await runOnce();
-      } catch (retryErr) {
-        return retryErr instanceof AcaSessionNotFoundError
+      logger.info(
+        { sessionId },
+        'session vanished mid-run — retrying once with the same identifier',
+      );
+      return retryOnce(runOnce, (retryErr) =>
+        retryErr instanceof AcaSessionNotFoundError
           ? fail(TIMEOUT_STDERR, 'session_lost')
-          : mapTerminalError(retryErr, fail);
-      }
+          : mapTerminalError(retryErr, fail),
+      );
     }
-    if (err instanceof AcaError && err.statusCode === 429 && (err.retryAfterSeconds ?? 99) <= 5) {
+    if (isRetryableCapacity(err)) {
       await sleep((err.retryAfterSeconds ?? 0) * 1000);
-      try {
-        return await runOnce();
-      } catch {
-        return fail(CAPACITY_STDERR, 'capacity');
-      }
+      return retryOnce(runOnce, () => fail(CAPACITY_STDERR, 'capacity'));
     }
     return mapTerminalError(err, fail);
   }
+}
+
+/** Run the attempt once more, funnelling whatever it throws through one handler. */
+async function retryOnce(
+  runOnce: () => Promise<ExecResponse>,
+  onFailure: (err: unknown) => ExecResponse,
+): Promise<ExecResponse> {
+  try {
+    return await runOnce();
+  } catch (err) {
+    return onFailure(err);
+  }
+}
+
+/**
+ * A 429 worth waiting for. A long `Retry-After` is not retried inline — the caller has its
+ * own timeout and would rather hear "at capacity" than block.
+ */
+function isRetryableCapacity(err: unknown): err is AcaError {
+  return err instanceof AcaError && err.statusCode === 429 && (err.retryAfterSeconds ?? 99) <= 5;
 }
 
 /** One execution attempt (push → snapshot → run → resolve → capture). */
@@ -126,6 +179,7 @@ async function executeOnce(
   sessionId: string,
   inputs: Awaited<ReturnType<typeof resolveInputs>>,
   deps: ExecDeps,
+  derivedFromHint = false,
 ): Promise<ExecResponse> {
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
@@ -134,7 +188,7 @@ async function executeOnce(
     await pushInputs(inputs, sessionId, deps);
   }
 
-  const baseline = await snapshotBaseline(sessionId, body.session_id, deps);
+  const baseline = await snapshotBaseline(sessionId, body.session_id, inputs.length > 0, deps);
 
   // Everything runs on the code-interpreter (Python) pool, so the wrapper is
   // always a Python program (it runs bash via subprocess). It is mandatory for
@@ -148,12 +202,32 @@ async function executeOnce(
 
   let files = echoInputs(inputs);
   let stderr = out.stderr;
+  const notes: string[] = [];
   if (out.code === 0) {
     const capture = await captureOutputs({ sessionId, inputs, baseline, auth, config, deps });
     files = capture.files;
     if (capture.overflowNote != null) {
-      stderr = stderr === '' ? capture.overflowNote : `${stderr}\n${capture.overflowNote}`;
+      notes.push(capture.overflowNote);
     }
+    // A file the code demonstrably wrote but we could not persist must not vanish
+    // silently: the caller formats stdout/stderr only, so without this the model is told
+    // the run succeeded and simply never sees the deliverable it just produced.
+    if (capture.failedNote != null) {
+      notes.push(capture.failedNote);
+    }
+  } else if (stderr === '') {
+    // The exit code is real, but the caller drops it: `@librechat/agents` (3.2.65,
+    // and 3.2.46 before it) formats only `stdout`/`stderr` and never reads `result.code`.
+    // A silent `exit 7` therefore renders as "stdout: Empty" and reads as success, so the
+    // model retries nothing and reports a non-existent result. Put the failure somewhere
+    // it will actually be shown.
+    notes.push(
+      `Command failed with exit status ${out.code} and produced no error output. ` +
+        'Nothing was written to stdout or stderr, so treat this as a failure, not an empty result.',
+    );
+  }
+  if (notes.length > 0) {
+    stderr = [stderr, ...notes].filter((part) => part !== '').join('\n');
   }
 
   const outcomeLabel = out.code === 0 ? 'ok' : 'user_error';
@@ -175,21 +249,42 @@ async function executeOnce(
     'exec completed',
   );
 
-  return { session_id: sessionId, stdout: out.stdout, stderr, code: out.code, files };
+  return {
+    session_id: sessionId,
+    stdout: out.stdout,
+    stderr,
+    code: out.code,
+    files,
+    // Echoed only for a hint-derived session. The client puts it on the tool artifact, so
+    // continuity is visible in traces instead of having to be inferred.
+    ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
+  };
 }
 
 /**
- * Snapshot the sandbox's files before running user code, so capture returns only
- * this exec's new/changed files — not everything accumulated in a reused session.
- * A freshly minted session_id has no prior files (skip the call); a supplied
- * (reused) id might, and may also not exist yet (→ empty baseline).
+ * Snapshot the sandbox's files before running user code (but AFTER inputs are pushed), so
+ * capture can tell this exec's work from what was already there.
+ *
+ * Taken in two cases, for two different reasons:
+ *  - a supplied (reused) session id may carry files from earlier execs, which must not be
+ *    re-returned as if this exec produced them;
+ *  - THIS exec pushed input files, and the baseline is the only way to notice that user
+ *    code rewrote one of them. Size alone cannot: `abc` → `xyz` keeps the byte count, and
+ *    without a baseline that edit is reported as `inherited` and the modified content is
+ *    thrown away. Since the current client never sends a session id, this is the case that
+ *    actually fires in production.
+ *
+ * Skipped when there is neither — a fresh session with no inputs has nothing to compare
+ * against, and skipping keeps one ACA round-trip out of the latency-sensitive pure-read
+ * path (`readSandboxFile` has a 15s client budget).
  */
 async function snapshotBaseline(
   sessionId: string,
   suppliedSessionId: string | undefined,
+  hasInputs: boolean,
   deps: ExecDeps,
 ): Promise<Map<string, string>> {
-  if (!isValidSessionId(suppliedSessionId)) {
+  if (!isValidSessionId(suppliedSessionId) && !hasInputs) {
     return new Map();
   }
   try {

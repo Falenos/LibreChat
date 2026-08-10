@@ -52,7 +52,12 @@ export async function captureOutputs(params: {
   auth: AuthContext;
   config: Config;
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
-}): Promise<{ files: ExecResponseFile[]; overflowNote: string | null }> {
+}): Promise<{
+  files: ExecResponseFile[];
+  overflowNote: string | null;
+  /** Set when a file existed in the sandbox but could not be persisted (see below). */
+  failedNote: string | null;
+}> {
   const { sessionId, inputs, baseline, auth, config, deps } = params;
 
   let listing: AcaSessionFile[];
@@ -60,7 +65,17 @@ export async function captureOutputs(params: {
     listing = await deps.aca.listFiles(sessionId);
   } catch (err) {
     deps.logger.warn({ err: (err as Error).message }, 'post-exec file listing failed');
-    return { files: echoInputs(inputs), overflowNote: null };
+    return {
+      files: echoInputs(inputs),
+      overflowNote: null,
+      // The exec itself succeeded, so this is not a user error — but any file the code
+      // wrote is now invisible, and saying nothing would present that as "produced no
+      // files".
+      failedNote:
+        'Note: the sandbox file list could not be read after the run, so any files the ' +
+        'code produced are not attached. The code itself ran successfully — re-run it to ' +
+        'get the files.',
+    };
   }
 
   const byPushedName = new Map(inputs.map((i) => [i.pushedAs, i] as const));
@@ -71,6 +86,7 @@ export async function captureOutputs(params: {
   let captured = 0;
   let capturedBytes = 0;
   let overflow = false;
+  let failed = 0;
 
   for (const entry of listing) {
     const name = entry.name;
@@ -78,16 +94,15 @@ export async function captureOutputs(params: {
       continue;
     }
 
-    const input = byFinalName.get(name) ?? byPushedName.get(name);
-    if (input != null) {
-      seenInputs.add(input);
-      const unchanged = (entry.sizeInBytes ?? 0) === input.doc.size;
-      if (unchanged || input.doc.readOnly) {
-        files.push(echoInput(input));
-        continue;
-      }
-    } else if (baseline.get(name) === fileSignature(entry)) {
-      // Not an input, and unchanged since before this exec → already delivered.
+    const plan = planEntry(entry, name, { byFinalName, byPushedName, baseline });
+    if (plan.input != null) {
+      seenInputs.add(plan.input);
+    }
+    if (plan.action === 'skip') {
+      continue;
+    }
+    if (plan.action === 'echo' && plan.input != null) {
+      files.push(echoInput(plan.input));
       continue;
     }
 
@@ -107,7 +122,12 @@ export async function captureOutputs(params: {
     );
     if (result === 'overflow') {
       overflow = true;
-    } else if (result != null) {
+    } else if (result == null) {
+      // The file is really in the sandbox; we just could not persist it (ACA fetch, Mongo
+      // upsert or Blob write failed). Counted so the caller can say so — dropping it
+      // silently would report success with the deliverable missing.
+      failed += 1;
+    } else {
       captured += 1;
       capturedBytes += result.bytes;
       files.push(result.file);
@@ -122,10 +142,60 @@ export async function captureOutputs(params: {
 
   return {
     files,
+    failedNote:
+      failed > 0
+        ? `Note: ${failed} file(s) the code produced could not be saved and are not attached. ` +
+          'The code itself ran successfully — re-run it to try again.'
+        : null,
     overflowNote: overflow
       ? `Note: some generated files were not captured (limit ${config.exec.captureMaxFiles} files / ${Math.round(config.exec.captureMaxTotalBytes / 1_048_576)} MB per execution).`
       : null,
   };
+}
+
+/** What `captureOutputs` should do with one listing entry. */
+interface EntryPlan {
+  action: 'echo' | 'skip' | 'capture';
+  /** The staged input this entry corresponds to, if any. */
+  input: ResolvedInput | null;
+}
+
+/**
+ * Decide whether a listed file is an untouched input (echo it), something already
+ * delivered by an earlier exec (skip it), or this exec's work (capture it).
+ *
+ * The change test is deliberately signature-based, not size-based. Size alone cannot show
+ * a file is untouched — rewriting `abc` to `xyz` keeps the byte count — and reporting such
+ * an edit as `inherited` throws the user's modified spreadsheet away while the exec
+ * reports success. The pre-exec baseline is captured after inputs are pushed precisely so
+ * this comparison is possible; the size check remains only as a fallback for the case
+ * where no baseline exists at all.
+ */
+function planEntry(
+  entry: AcaSessionFile,
+  name: string,
+  ctx: {
+    byFinalName: Map<string, ResolvedInput>;
+    byPushedName: Map<string, ResolvedInput>;
+    baseline: Map<string, string>;
+  },
+): EntryPlan {
+  const input = ctx.byFinalName.get(name) ?? ctx.byPushedName.get(name) ?? null;
+  const baselineSignature = ctx.baseline.get(name);
+
+  if (input != null) {
+    const unchanged =
+      baselineSignature != null
+        ? baselineSignature === fileSignature(entry)
+        : (entry.sizeInBytes ?? 0) === input.doc.size;
+    return { action: unchanged || input.doc.readOnly ? 'echo' : 'capture', input };
+  }
+
+  // Not an input, and unchanged since before this exec → already delivered.
+  if (baselineSignature === fileSignature(entry)) {
+    return { action: 'skip', input: null };
+  }
+  return { action: 'capture', input: null };
 }
 
 /** A listing entry is capturable if it's a real, non-wrapper, non-directory file. */
