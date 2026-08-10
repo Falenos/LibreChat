@@ -1195,6 +1195,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/fileAssetMigration.js` | `mongoose.models.{File,KnaufFileAsset,Agent}` via injected mongoose; `./dedupKey` | Medium — migrates Agent Knowledge assets with an embed route that matches the configured pgvector or Azure Search backend | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | KK20-232 |
 | `api/server/services/Files/knauf/fileAssetMigration.spec.js` | Subject under test; real schemas from `@librechat/data-schemas`; mongodb-memory-server | Low — test-only migration backend/route alignment regression | Self | KK20-232 |
 | `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`; Sandpack export shell and preview iframe DOM | Medium — waits for the outer Sandpack startup state, then fits the iframe to stable rendered content before capture so slow charts and long dashboards cannot produce loading-only or clipped PDF/PNG output | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
+| `client/src/knauf/components/Chat/KnaufModelSelector.tsx` | `~/components/Chat/Menus/Endpoints/*`, `~/hooks`, `~/store`, Recoil, LibreChat data provider | Medium — repairs first-login raw-endpoint fallback by auto-binding the configured KARL default on fresh chats while preserving model-spec and custom-agent selections | `KnaufModelSelector.knauf.spec.ts` | KK20-256 |
+| `client/src/knauf/components/Chat/KnaufModelSelector.knauf.spec.ts` | Subject under test; LibreChat endpoint enum | Low — pins raw Azure fallback as replaceable and model-spec/custom-agent selections as authoritative | Self | KK20-256 |
 <!-- seams:new:end -->
 
 ## Static Assets
