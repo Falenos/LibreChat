@@ -16,7 +16,7 @@ keys to paste. Capacity expectations for what you are switching on are in
 | --- | --- | --- |
 | `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open** |
 | `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open** — plan green (12 add / 0 change / 0 destroy), all checks pass, waiting on approval |
-| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **Not started — nothing exists yet** |
+| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR |
 
 ---
 
@@ -112,14 +112,16 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
 
 ---
 
-## Phase D — agk-deployment-configs (the missing middle)
+## Phase D — agk-deployment-configs (**PR #347**)
 
-Nothing for the adapter exists in this repo yet. Five pieces, all modelled on
-`agentic-karl-worker` (the most recent single-source service).
+Written and open: [agk-deployment-configs#347](https://github.com/Knauf-Group/agk-deployment-configs/pull/347).
+It covers D1–D3 and D5 below; **D4 (the switch) is deliberately a second PR**, so "the adapter
+is healthy" and "the feature is live" stay separately revertable. What follows is what that PR
+contains and what still has to be filled in before it can merge.
 
 **D1 · Service chart** — `agentic-karl/dev/services/agentic-karl-code-adapter/Chart.yaml`,
-wrapper on `ct-shared-chart` (match the newest version a live service pins; the worker pins
-`2.7.0`).
+wrapper on `ct-shared-chart` **2.15.0** (the newest a live service pins — the worker; check
+again at merge time, this number moves).
 
 **D2 · Values** — the essentials:
 
@@ -139,11 +141,13 @@ agentic-karl-code-adapter:
     ports:
       containerPort: 3112
 
+  # The SA itself is minted in common-namespace-resources' `aadServiceAccounts` — the one
+  # mechanism on this cluster already proven to render an AAD-annotated ServiceAccount
+  # (it produces sa-external-secrets). The service chart only binds to it.
   serviceAccount:
-    create: true
-    name: sa-code-adapter
-    annotations:
-      azure.workload.identity/client-id: "<code_adapter_dev_client_id>"
+    create: false
+    annotations: {}
+    name: "sa-code-adapter"
   podLabels:
     azure.workload.identity/use: "true"     # ← see the blocker below
 
