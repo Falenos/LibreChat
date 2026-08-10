@@ -835,6 +835,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Localizes the 4 MiB SVG rejection and the dedicated editable-vector group in the supported-upload dialog (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Localizes the cost disclaimer that tells users the euro amounts are informational and will not be charged now or in the future. |
+| `.github/workflows/promote_pipeline.yaml` | Locks both the promoted production tag and its manifest digest against writes and deletion before GitOps deploys it, preventing ACR cleanup or retagging from making the active release unpullable. |
 
 ## Net-New Files
 

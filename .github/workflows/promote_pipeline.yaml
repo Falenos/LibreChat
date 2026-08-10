@@ -365,6 +365,40 @@ jobs:
             exit 1
           fi
 
+      - name: Lock AGK prod image
+        env:
+          EXPECTED_DIGEST: ${{ steps.provenance.outputs.image-digest }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          for IMAGE in \
+            "$AGK_PROD_IMAGE_REPOSITORY@$EXPECTED_DIGEST" \
+            "$AGK_PROD_IMAGE_REPOSITORY:$VERSION"; do
+            az acr repository update \
+              --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+              --name "$AGK_PROD_ACR_NAME" \
+              --image "$IMAGE" \
+              --delete-enabled false \
+              --write-enabled false \
+              -o none
+
+            DELETE_ENABLED=$(az acr repository show \
+              --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+              --name "$AGK_PROD_ACR_NAME" \
+              --image "$IMAGE" \
+              --query changeableAttributes.deleteEnabled -o tsv)
+            WRITE_ENABLED=$(az acr repository show \
+              --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
+              --name "$AGK_PROD_ACR_NAME" \
+              --image "$IMAGE" \
+              --query changeableAttributes.writeEnabled -o tsv)
+            if [ "$DELETE_ENABLED" != "false" ] || [ "$WRITE_ENABLED" != "false" ]; then
+              echo "::error::Failed to lock PROD image $IMAGE"
+              exit 1
+            fi
+          done
+
       # agk-deployment-configs main is protected (PR required, Sonar "test"
       # check, no direct pushes), so the prod bump is landed via an auto-merged
       # PR instead of a direct `git push origin main`.
