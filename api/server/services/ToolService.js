@@ -79,6 +79,12 @@ const { loadTools } = require('~/app/clients/tools/util');
 const { findPluginAuthsByKeys } = require('~/models');
 const { getFlowStateManager, getMCPServersRegistry } = require('~/config');
 const { getLogStores } = require('~/cache');
+// [knauf] NO-TICKET — model context for exact, revision-checked artifact edits.
+const {
+  TOOL_NAME: EDIT_ARTIFACT_TOOL,
+  buildArtifactEditContext,
+} = require('~/server/services/Artifacts/knauf/edit');
+// End [knauf]
 
 const domainSeparatorRegex = new RegExp(actionDomainSeparator, 'g');
 
@@ -511,7 +517,14 @@ async function processRequiredActions(client, requiredActions) {
  * }>} The agent tools and registry.
  */
 /** Native LibreChat tools that are not in the manifest */
-const nativeTools = new Set([Tools.execute_code, Tools.file_search, Tools.web_search]);
+const nativeTools = new Set([
+  Tools.execute_code,
+  Tools.file_search,
+  Tools.web_search,
+  // [knauf] NO-TICKET — injected at runtime when agent.artifacts is enabled.
+  EDIT_ARTIFACT_TOOL,
+  // End [knauf]
+]);
 
 // [knauf] KK20-194 — use open_url only for links in the current user message.
 // Open-ended discovery stays on Azure Responses `web_search`; OpenUrl performs
@@ -994,6 +1007,20 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   const hasWebSearch = filteredTools.includes(Tools.web_search);
   const hasFileSearch = filteredTools.includes(Tools.file_search);
   const hasExecuteCode = filteredTools.includes(Tools.execute_code);
+
+  // [knauf] NO-TICKET — give the model an opaque current-revision token. The
+  // source already exists in conversation history; repeating it here would
+  // defeat the token-saving purpose of the tool.
+  if (filteredTools.includes(EDIT_ARTIFACT_TOOL)) {
+    const context = await buildArtifactEditContext({
+      userId: req.user.id,
+      conversationId: req.body?.conversationId,
+    });
+    if (context) {
+      toolContextMap[EDIT_ARTIFACT_TOOL] = context;
+    }
+  }
+  // End [knauf]
 
   if (hasWebSearch) {
     // [knauf] KK20-201 — deterministic locale/timezone context (Accept-Language

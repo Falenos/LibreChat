@@ -32,7 +32,6 @@ jest.mock(
     getRenderSnapshot: jest.fn(),
     renderArtifact: (...args) => mockRenderArtifact(...args),
   }),
-  { virtual: true },
 );
 
 const artifactExportRouter = require('./artifactExport');
@@ -51,8 +50,8 @@ const createApp = () => {
 
 describe('artifact PNG/PDF export routes', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockRenderArtifact.mockResolvedValue({
+    mockGetSharedMessages.mockReset();
+    mockRenderArtifact.mockReset().mockResolvedValue({
       buffer: Buffer.from('rendered'),
       mime: 'image/png',
       extension: 'png',

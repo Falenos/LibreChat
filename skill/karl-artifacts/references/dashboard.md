@@ -25,9 +25,9 @@ the `KNAUF` const.**
 
 | Token | Styles |
 |---|---|
-| `KNAUF.brand.accessibleBlue` | the header bar field |
+| `KNAUF.surface.card` / `KNAUF.surface.border` | fixed white logo header / its hairline |
+| `KNAUF.ink.heading` / `KNAUF.ink.muted` | dashboard title / toggle label in the fixed header |
 | `KNAUF.brand.cyanBlue` | KPI tile icons |
-| `KNAUF.ink.accentOnBrand` | header subtitle, dark-toggle label |
 | `theme.text` / `theme.muted` | values, titles / labels, axes |
 | `theme.card` / `theme.page` / `theme.border` | tile + panel fill / page / hairlines |
 | `theme.palette[i]` | chart series, by index |
@@ -36,9 +36,11 @@ the `KNAUF` const.**
 
 ## Brand + layout guidance
 
-- **The real wordmark** — `<KnaufWordmark fill="#FFFFFF" />` on the `accessibleBlue`
-  header, with "Performance Dashboard" as separate text beside it. Padding and the
-  gap to that label are at least the 28px mark height.
+- **The real wordmark** — the whole header is white in both modes, never a small
+  white logo box inside a coloured header. Render
+  `<KnaufWordmark fill={KNAUF.brand.logoCyan} />` directly on the full-width band,
+  with "Performance Dashboard" as separate fixed-ink text beside it. Padding and
+  the gap to that label are at least the 28px mark height.
 - **One palette, both modes.** The chart steps are validated on the light *and* dark
   surface, so there is no palette swap — only surfaces and ink change. Everything
   routes through `useKnaufTheme(dark)`.
@@ -162,33 +164,36 @@ export default function KnaufKpiDashboard() {
   );
 
   return (
-    <div className="min-h-screen w-full p-6" style={{ backgroundColor: theme.page, color: theme.text }}>
-      <div
-        className="mb-5 flex items-center justify-between rounded-lg px-7 py-7"
-        style={{ backgroundColor: KNAUF.brand.accessibleBlue }}
+    <div className="min-h-screen w-full" style={{ backgroundColor: theme.page, color: theme.text }}>
+      <header
+        className="w-full border-b px-6 py-5"
+        style={{ backgroundColor: KNAUF.surface.card, borderColor: KNAUF.surface.border }}
       >
-        <div className="flex items-center gap-7">
-          <KnaufWordmark height={28} fill="#FFFFFF" />
-          <span className="text-sm font-medium" style={{ color: KNAUF.ink.accentOnBrand }}>
-            Performance Dashboard
-          </span>
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <div className="flex items-center gap-7">
+            <KnaufWordmark height={28} fill={KNAUF.brand.logoCyan} />
+            <span className="text-sm font-medium" style={{ color: KNAUF.ink.heading }}>
+              Performance Dashboard
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="dark" className="text-xs" style={{ color: KNAUF.ink.muted }}>Dark</Label>
+            <Switch id="dark" checked={dark} onCheckedChange={setDark} />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Label htmlFor="dark" className="text-xs" style={{ color: KNAUF.ink.accentOnBrand }}>Dark</Label>
-          <Switch id="dark" checked={dark} onCheckedChange={setDark} />
+      </header>
+
+      <main className="mx-auto max-w-7xl p-6">
+        <div className="mb-5 flex items-center gap-3">
+          <span className="text-sm font-medium" style={{ color: theme.muted }}>Time range</span>
+          <ToggleGroup type="single" value={range} onValueChange={(v) => v && setRange(v)}>
+            {Object.keys(RANGES).map((r) => (
+              <ToggleGroupItem key={r} value={r} className="px-4">{r}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </div>
-      </div>
 
-      <div className="mb-5 flex items-center gap-3">
-        <span className="text-sm font-medium" style={{ color: theme.muted }}>Time range</span>
-        <ToggleGroup type="single" value={range} onValueChange={(v) => v && setRange(v)}>
-          {Object.keys(RANGES).map((r) => (
-            <ToggleGroupItem key={r} value={r} className="px-4">{r}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {kpis.map(({ label, value, delta, Icon }) => (
           <Card key={label} className="p-4" style={{ backgroundColor: theme.card, borderColor: theme.border }}>
             <div className="flex items-center justify-between">
@@ -281,7 +286,8 @@ export default function KnaufKpiDashboard() {
             </ResponsiveContainer>
           </div>
         </Card>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

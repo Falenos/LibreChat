@@ -2,12 +2,70 @@ import { Providers } from '@librechat/agents';
 import { ReasoningResponseKey } from 'librechat-data-provider';
 import { ToolMessage, AIMessage, HumanMessage } from '@librechat/agents/langchain/messages';
 import {
+  applyKnaufModelRouterStreamIdleTimeout,
   extractDiscoveredToolsFromHistory,
   getReasoningKey,
   isDeepSeekReasoningProvider,
   shouldReplayReasoningContent,
   anyAgentReplaysReasoningContent,
 } from './run';
+
+// [knauf] NO-TICKET — Model Router streams must not outlive the configured
+// timeout when Azure stops emitting chunks after returning response headers.
+describe('applyKnaufModelRouterStreamIdleTimeout', () => {
+  it('aborts an idle response body and preserves the configured fetch', async () => {
+    const baseFetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), {
+            once: true,
+          });
+        },
+      });
+      return new Response(body, { headers: { 'x-test': 'kept' } });
+    });
+    const configuration = { fetch: baseFetch };
+    const cfg = { model: 'model-router', timeout: 5, configuration };
+
+    applyKnaufModelRouterStreamIdleTimeout(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+
+    await expect(response.body?.getReader().read()).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(baseFetch).toHaveBeenCalledTimes(1);
+    expect(configuration.fetch).toBe(baseFetch);
+    expect(response.headers.get('x-test')).toBe('kept');
+  });
+
+  it('keeps caller cancellation and leaves other models unchanged', async () => {
+    let forwardedSignal: AbortSignal | null | undefined;
+    const baseFetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      forwardedSignal = init?.signal;
+      return new Response('ok');
+    });
+    const routerConfiguration = { fetch: baseFetch };
+    const routerConfig = {
+      model: 'model-router-chat',
+      timeout: 60_000,
+      configuration: routerConfiguration,
+    };
+    const caller = new AbortController();
+
+    applyKnaufModelRouterStreamIdleTimeout(routerConfig);
+    await routerConfig.configuration.fetch('https://example.test', { signal: caller.signal });
+    caller.abort();
+
+    expect(forwardedSignal?.aborted).toBe(true);
+
+    const directConfiguration = { fetch: baseFetch };
+    applyKnaufModelRouterStreamIdleTimeout({
+      model: 'gpt-5.5',
+      timeout: 60_000,
+      configuration: directConfiguration,
+    });
+    expect(directConfiguration.fetch).toBe(baseFetch);
+  });
+});
+// End [knauf]
 
 describe('extractDiscoveredToolsFromHistory', () => {
   it('extracts tool names from tool_search JSON output', () => {

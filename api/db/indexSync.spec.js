@@ -16,6 +16,7 @@ const mockLogger = {
 
 const mockMeiliHealth = jest.fn();
 const mockMeiliIndex = jest.fn();
+const mockMeiliGetStats = jest.fn();
 const mockBatchResetMeiliFlags = jest.fn();
 const mockIsEnabled = jest.fn();
 const mockGetLogStores = jest.fn();
@@ -101,9 +102,11 @@ describe('performSync() - syncThreshold logic', () => {
     mockMeiliHealth.mockResolvedValue({ status: 'available' });
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: ['user'] }),
+      getStats: mockMeiliGetStats,
       updateSettings: jest.fn().mockResolvedValue({}),
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
+    mockMeiliGetStats.mockResolvedValue({ numberOfDocuments: Number.MAX_SAFE_INTEGER });
 
     mockBatchResetMeiliFlags.mockResolvedValue(undefined);
   });
@@ -156,6 +159,61 @@ describe('performSync() - syncThreshold logic', () => {
     // Assert: Conversation sync NOT triggered (already complete)
     expect(Conversation.syncWithMeili).not.toHaveBeenCalled();
   });
+
+  // [knauf] Persisted Mongo flags must not hide documents lost with an ephemeral Meili pod.
+  test('forces a full message sync when the Meilisearch index disappeared', async () => {
+    Message.getSyncProgress
+      .mockResolvedValueOnce({ totalProcessed: 100, totalDocuments: 100, isComplete: true })
+      .mockResolvedValueOnce({ totalProcessed: 0, totalDocuments: 100, isComplete: false });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats
+      .mockRejectedValueOnce({ code: 'index_not_found' })
+      .mockResolvedValueOnce({ numberOfDocuments: 50 });
+    Message.syncWithMeili.mockResolvedValue(undefined);
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockBatchResetMeiliFlags).toHaveBeenCalledWith(Message.collection);
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalledWith(Conversation.collection);
+    expect(Message.syncWithMeili).toHaveBeenCalledTimes(1);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      '[indexSync] Messages index has 0 documents but Mongo marks 100 indexed. Forcing full re-sync.',
+    );
+  });
+
+  test('periodic reconciliation stays silent while counts agree', async () => {
+    jest.useFakeTimers();
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 100,
+      totalDocuments: 100,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats
+      .mockResolvedValueOnce({ numberOfDocuments: 100 })
+      .mockResolvedValueOnce({ numberOfDocuments: 50 });
+
+    const indexSync = require('./indexSync');
+    indexSync.startReconciliation();
+    await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+    indexSync.stopReconciliation();
+
+    expect(mockMeiliHealth).not.toHaveBeenCalled();
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      '[indexSync] Starting index synchronization check...',
+    );
+    jest.useRealTimers();
+  });
+  // End [knauf]
 
   test('skips sync when unindexed messages are below syncThreshold', async () => {
     // Arrange: 50 unindexed messages < 1000 threshold
@@ -351,6 +409,7 @@ describe('performSync() - syncThreshold logic', () => {
     // Mock settings update scenario
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
+      getStats: mockMeiliGetStats,
       updateSettings: jest.fn().mockResolvedValue({}),
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
@@ -394,6 +453,7 @@ describe('performSync() - syncThreshold logic', () => {
     // Mock settings update scenario
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
+      getStats: mockMeiliGetStats,
       updateSettings: jest.fn().mockResolvedValue({}),
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
@@ -439,6 +499,7 @@ describe('performSync() - syncThreshold logic', () => {
     // Mock settings update scenario
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
+      getStats: mockMeiliGetStats,
       updateSettings: jest.fn().mockResolvedValue({}),
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });

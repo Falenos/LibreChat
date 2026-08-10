@@ -194,9 +194,9 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
 
       return message.toObject();
     } catch (err: unknown) {
-      const mongoErr = err as { code?: number; message?: string };
-      if (mongoErr.code === 11000 && mongoErr.message?.includes('duplicate key error')) {
-        // [knauf] recover expected concurrent upserts without losing the final response
+      // [knauf] recover expected concurrent upserts without relying on vendor-specific wording
+      const mongoErr = err as { code?: number };
+      if (mongoErr.code === 11000) {
         const targetMessageId = update.messageId as string | undefined;
         logger.warn(`Duplicate messageId detected: ${targetMessageId}. Retrying update.`);
 
@@ -226,8 +226,8 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
           logger.info(`---\`saveMessage\` context: ${metadata?.context}`);
           throw recoveryError;
         }
-        // End [knauf]
       }
+      // End [knauf]
 
       logger.error('Error saving message:', err);
       logger.info(`---\`saveMessage\` context: ${metadata?.context}`);

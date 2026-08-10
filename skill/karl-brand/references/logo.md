@@ -28,10 +28,16 @@ Prebuilt. A React artifact imports it and never carries the path data:
 import { KnaufWordmark } from '/knauf/brand';
 ```
 
-Call site on a brand-blue bar: `<KnaufWordmark height={28} fill="#FFFFFF" />` — props
-are `height` (default 28) and `fill` (default `KNAUF.brand.logoCyan`, safe on a light
-surface); width follows from the aspect ratio. Always pass white explicitly on the
-`#003778` brand bar.
+Call site in an artifact header:
+
+```tsx
+<header style={{ backgroundColor: KNAUF.surface.card }}>
+  <KnaufWordmark height={28} fill={KNAUF.brand.logoCyan} />
+</header>
+```
+
+Props are `height` (default 28) and `fill` (default `KNAUF.brand.logoCyan`); width
+follows from the aspect ratio.
 
 Never re-type the `d` string into an artifact. It is 903 characters of coordinate
 data with no redundancy — any edit silently deforms the letterforms, and there is no
@@ -51,13 +57,25 @@ Paste the `<svg>` from the block above directly into the markup and size it in C
 Ship the block above as the whole file. Keep `xmlns` and `viewBox`; omit `width`
 and `height` so the mark scales to its container.
 
-## Fill and placement rules
+## Generated artifact header — mandatory
+
+Whenever the mark appears in a generated artifact layout, the **entire artifact
+header band is white** in light and dark mode. Render the cyan mark directly on that
+band. Never place a small white tile, card, pill or box around the logo inside a dark,
+blue, gradient or image header. Adjacent titles use fixed light-surface ink
+(`KNAUF.ink.heading`, `KNAUF.ink.primary`, `KNAUF.ink.muted`), not `theme.*`, because
+the header deliberately stays white while the page theme changes.
+
+The official inverse mark remains valid for externally supplied brand layouts, but
+generated artifact headers do not use it.
+
+## Fill and placement reference
 
 | Background | Fill | Ratio |
 |---|---|---|
-| The `#003778` brand bar | `#FFFFFF` | 11.55 |
-| White or a light surface | `#00A0E6` | 2.93 — logotype exemption |
-| A clean dark surface | `#FFFFFF` | use the inverse mark; never logo cyan on dark |
+| Generated artifact header (`#FFFFFF`) | `#00A0E6` | 2.93 — logotype exemption; required artifact pattern |
+| Externally supplied `#003778` brand field | `#FFFFFF` | 11.55 |
+| Externally supplied clean dark surface | `#FFFFFF` | inverse mark |
 
 **Never `#003778`** — the brand book states Accessible Blue is never used for the
 logo. The 2.93:1 figure is deliberate and legal: WCAG 1.4.11 exempts logotypes from
@@ -69,6 +87,8 @@ Placement:
 - Product naming — "KARL", a deck title, a report title — is a **separate text label
   beside the mark**, divided by a hairline or a gap. Never fused into it, never
   re-typeset as part of the logo. A logo is not typography you edit.
+- In generated artifacts, make the white header the full available width. Do not
+  shrink the white surface to the logo bounds.
 - Leave clear space around the mark at least equal to the height of the "K".
 - Minimum height 20px on screen; below that the counters close up.
 - Never rotate, stretch, skew, outline, add a shadow, or place the mark on a busy

@@ -28,6 +28,7 @@ const SLOW_COUNTED_REPLY_MARKER = 'E2E_SLOW_COUNTED_REPLY:';
 const RESUME_ICON_REPLY_MARKER = 'E2E_RESUME_ICON_REPLY:';
 const FORCED_ERROR_MARKER = 'E2E_FORCED_ERROR:';
 const MARKDOWN_REPLY_MARKER = 'E2E_MARKDOWN_REPLY';
+const ARTIFACT_REPLY_MARKER = 'E2E_ARTIFACT_REPLY';
 const CREATE_FILE_AUTHORING_FINAL_TEXT = 'E2E file authoring complete';
 const EDIT_FILE_AUTHORING_FINAL_TEXT = 'E2E file edit complete';
 const MODEL_SPEC_SKILL_ASSERTION_FINAL_TEXT = 'E2E model spec skill assertion passed';
@@ -266,6 +267,24 @@ function quoteAssertionResponses({ messages, text }) {
 }
 
 function replyResponses(text) {
+  if (text.includes(ARTIFACT_REPLY_MARKER)) {
+    return {
+      responses: [
+        [
+          'Created the E2E artifact.',
+          '',
+          ':::artifact{identifier="e2e-react-artifact" type="application/vnd.react" title="E2E React Artifact"}',
+          '```tsx',
+          'export default function App() {',
+          '  return <main data-testid="e2e-artifact-preview">E2E artifact preview</main>;',
+          '}',
+          '```',
+          ':::',
+        ].join('\n'),
+      ],
+    };
+  }
+
   if (text.includes(MARKDOWN_REPLY_MARKER)) {
     return {
       responses: [

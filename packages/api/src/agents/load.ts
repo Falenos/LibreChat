@@ -17,6 +17,9 @@ import { requiresEphemeralUserConnection } from '~/mcp/utils';
 import { getCustomEndpointConfig } from '~/app/config';
 
 const { mcp_all, mcp_delimiter } = Constants;
+// [knauf] NO-TICKET — runtime-only tool for exact, owned artifact edits.
+const EDIT_ARTIFACT_TOOL = 'edit_artifact';
+// End [knauf]
 type ModelParametersWithPromptPrefix = AgentModelParameters & { promptPrefix?: string | null };
 
 export interface LoadAgentDeps {
@@ -81,6 +84,12 @@ export async function loadEphemeralAgent(
   // registry, not the AgentCapabilities/Tools enum.
   if (ephemeralAgent?.image_gen === true) {
     tools.push('image_gen_oai');
+  }
+  // End [knauf]
+  // [knauf] NO-TICKET — every artifact-enabled default chat can patch its
+  // existing owned artifact without re-emitting the complete source.
+  if (ephemeralAgent?.artifacts) {
+    tools.push(EDIT_ARTIFACT_TOOL);
   }
   // End [knauf]
 
@@ -202,7 +211,16 @@ export async function loadAgent(
   }
 
   // Set version count from versions array length
-  const agentWithVersion = agent as Agent & { versions?: unknown[]; version?: number };
+  // [knauf] NO-TICKET — expose edit_artifact to Agent Builder agents whenever
+  // their existing artifacts field is enabled. Runtime clone only: never write
+  // this internal tool name back to the persisted builder configuration.
+  const artifactEditingEnabled = typeof agent.artifacts === 'string' && agent.artifacts !== '';
+  const agentWithVersion = (
+    artifactEditingEnabled && !agent.tools?.includes(EDIT_ARTIFACT_TOOL)
+      ? { ...agent, tools: [...(agent.tools ?? []), EDIT_ARTIFACT_TOOL] }
+      : agent
+  ) as Agent & { versions?: unknown[]; version?: number };
+  // End [knauf]
   agentWithVersion.version = agentWithVersion.versions ? agentWithVersion.versions.length : 0;
-  return agent;
+  return agentWithVersion;
 }

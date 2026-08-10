@@ -59,7 +59,9 @@ jest.mock('../ToolCall', () => ({
 
 jest.mock('../Image', () => ({
   __esModule: true,
-  default: () => <div data-testid="image" />,
+  // [knauf] Expose the file identity passed to the resilient image renderer. (NO-TICKET)
+  default: ({ fileId }: { fileId?: string }) => <div data-testid="image" data-file-id={fileId} />,
+  // End [knauf]
 }));
 
 jest.mock('~/utils', () => ({
@@ -132,3 +134,20 @@ describe('Part tool renderer selection', () => {
     expect(screen.queryByTestId('tool-call')).not.toBeInTheDocument();
   });
 });
+
+// [knauf] IMAGE_FILE parts must retain file identity for authenticated URL recovery. (NO-TICKET)
+describe('Part image recovery contract', () => {
+  it('passes the image file id to Image', () => {
+    renderPart({
+      type: ContentTypes.IMAGE_FILE,
+      [ContentTypes.IMAGE_FILE]: {
+        file_id: 'image-file-1',
+        filepath: '/api/share/share-1/files/image-file-1',
+        filename: 'image.png',
+      },
+    } as unknown as TMessageContentParts);
+
+    expect(screen.getByTestId('image')).toHaveAttribute('data-file-id', 'image-file-1');
+  });
+});
+// End [knauf]

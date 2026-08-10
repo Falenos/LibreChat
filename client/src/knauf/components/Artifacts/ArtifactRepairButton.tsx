@@ -5,6 +5,7 @@ import { useSandpack } from '@codesandbox/sandpack-react/unstyled';
 import type { Artifact } from '~/common';
 import { useArtifactsContext, useChatContext } from '~/Providers';
 import { useLocalize } from '~/hooks';
+import { getSlideDeckContractError } from './slideDeckContract';
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 2000;
 const autoRepairAttempts = new Set<string>();
@@ -49,7 +50,10 @@ export function buildArtifactRepairPrompt(artifact: Artifact, error: ArtifactPre
   ].join('\n\n');
 }
 
-export default function ArtifactRepairButton({ artifact }: Readonly<{ artifact: Artifact }>) {
+export default function ArtifactRepairButton({
+  artifact,
+  sourceCode,
+}: Readonly<{ artifact: Artifact; sourceCode?: string }>) {
   const localize = useLocalize();
   const { sandpack } = useSandpack();
   const { ask } = useChatContext();
@@ -57,7 +61,7 @@ export default function ArtifactRepairButton({ artifact }: Readonly<{ artifact: 
   // Only a generation observed by this preview can trigger automatic repair. Reopening an old
   // broken artifact must not submit a message or spend tokens without a user action.
   const observedGenerationRef = useRef(isSubmitting);
-  const error = sandpack.error;
+  const error = sandpack.error ?? getSlideDeckContractError(sourceCode ?? artifact.content);
 
   const repair = useCallback(() => {
     if (!error || !isRepairableArtifactError(error) || !artifact.messageId || isSubmitting) {
@@ -118,7 +122,7 @@ export default function ArtifactRepairButton({ artifact }: Readonly<{ artifact: 
       type="button"
       size="sm"
       variant="submit"
-      className="absolute bottom-2 right-2 z-[70] gap-1.5 shadow-lg"
+      className="absolute left-1/2 top-1/2 z-[70] -translate-x-1/2 -translate-y-1/2 gap-1.5 shadow-xl"
       disabled={isSubmitting}
       onClick={repair}
     >

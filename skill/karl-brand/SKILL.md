@@ -7,7 +7,7 @@ description: >-
   KNAUF logo.
 argument-hint: "[what to brand]"
 user-invocable: true
-version: "1.0.0"
+version: "1.0.1"
 ---
 
 # Knauf brand — the single source of truth
@@ -91,6 +91,10 @@ quiet clear-space area for the real wordmark. Never ask an image model to draw,
 spell or reinterpret the KNAUF logo: generate the imagery without a mark, then add
 the exact SVG wordmark in the artifact or layout stage. If the output medium cannot
 preserve that SVG exactly, omit the logo rather than ship a synthetic one.
+
+In generated artifacts, place that wordmark only in a full-width white header band
+with the cyan logo fill. The header stays white in dark mode. Never simulate this by
+putting a small white logo box inside a dark or coloured header.
 
 ## Tokens
 

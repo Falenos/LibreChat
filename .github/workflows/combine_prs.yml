@@ -36,7 +36,7 @@ jobs:
           kv_name: ${{ env.SHARED_KEY_VAULT_NAME }}
           kv_secrets: ${{ env.SHARED_KEY_VAULT_SECRETS }}
 
-      - uses: actions/github-script@v9
+      - uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         id: create-combined-pr
         name: Create Combined PR
         with:

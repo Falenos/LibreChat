@@ -5,6 +5,9 @@ import type { SchemaWithMeiliMethods } from '~/models/plugins/mongoMeili';
 import type * as t from '~/types';
 import { activeExpirationFilter } from '~/utils/retention';
 import logger from '~/config/winston';
+// [knauf] Rewrite shared Markdown file links without expanding this upstream method
+import { rewriteSharedMarkdown, rewriteSharedTextPart } from '~/knauf/sharedMarkdown';
+// End [knauf]
 
 class ShareServiceError extends Error {
   code: string;
@@ -238,6 +241,9 @@ function anonymizeMessages(
   newConvoId: string,
   shareId: string,
   snapshotIds: Set<string>,
+  // [knauf] Supply snapshotted filenames to shared Markdown citation rewriting
+  fileSnapshots: t.SharedFileSnapshot[],
+  // End [knauf]
   includeFiles: boolean,
 ): t.SharedMessage[] {
   if (!Array.isArray(messages)) {
@@ -288,8 +294,10 @@ function anonymizeMessages(
         anonymizeMessageId(message.parentMessageId || ''),
       conversationId: newConvoId,
       sender: message.sender,
-      text: message.text,
-      content: message.content,
+      // [knauf] Shared citations must use the same share-authorized routes as file cards
+      text: rewriteSharedMarkdown(message.text, fileSnapshots, shareId),
+      content: message.content?.map((part) => rewriteSharedTextPart(part, fileSnapshots, shareId)),
+      // End [knauf]
       ...(message.iconURL && { iconURL: message.iconURL }),
       ...(model && { model }),
       isCreatedByUser: message.isCreatedByUser,
@@ -505,6 +513,9 @@ export function createShareMethods(mongoose: typeof import('mongoose')): {
           newConvoId,
           resolvedShareId,
           snapshotIds,
+          // [knauf] Use the resolved snapshot set for cross-message Markdown citations
+          includeFiles ? (fileSnapshots ?? []) : [],
+          // End [knauf]
           includeFiles,
         ),
       };

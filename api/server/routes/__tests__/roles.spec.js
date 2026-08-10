@@ -161,9 +161,9 @@ describe('GET /api/roles/:roleName — isOwnRole authorization', () => {
   });
 });
 
-// [knauf] Pin legacy Admin prompt writes to the protected USER policy.
-describe('PUT /api/roles/:roleName/prompts — Knauf USER policy', () => {
-  it('preserves peer sharing but forces public sharing off', async () => {
+// [knauf] Pin Admin UI ownership on the legacy prompt-permission route.
+describe('PUT /api/roles/:roleName/prompts — Admin-managed permissions', () => {
+  it('preserves the complete USER prompt-sharing choice from Admin', async () => {
     const previous = process.env.KNAUF_RESTRICT_USER_PERMISSIONS;
     process.env.KNAUF_RESTRICT_USER_PERMISSIONS = 'true';
     const role = {
@@ -198,7 +198,7 @@ describe('PUT /api/roles/:roleName/prompts — Knauf USER policy', () => {
             [Permissions.USE]: true,
             [Permissions.CREATE]: true,
             [Permissions.SHARE]: true,
-            [Permissions.SHARE_PUBLIC]: false,
+            [Permissions.SHARE_PUBLIC]: true,
           },
         },
       });

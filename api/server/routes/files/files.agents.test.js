@@ -740,9 +740,9 @@ describe('File Routes - Agent Files Endpoint', () => {
 
 // [knauf] KK20-190 — the POST /files encryption call-site. filterFile (mocked
 // here) passes, then the route inspects the bytes via detectEncryptedFileAtPath
-// and rejects an encrypted PDF/OOXML with the localized i18n key. This pins the
-// route WIRING (not just the lib fn): an encrypted file is rejected, and an
-// unreadable path is tolerated (fail-open) rather than 500-ing the upload.
+// and rejects encrypted OOXML with the localized i18n key. This pins the route
+// WIRING (not just the lib fn): an encrypted container is rejected while PDF
+// encryption decisions are delegated to the isolated access probe.
 describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', () => {
   const fs = require('node:fs');
   const os = require('node:os');
@@ -792,13 +792,16 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
     return app;
   };
 
-  it('rejects an encrypted PDF (message attachment) with the localized key', async () => {
-    const encPdf = Buffer.from('%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF', 'binary');
-    const filePath = writeTmp(encPdf, 'enc.pdf');
+  it('rejects an encrypted OOXML container with the localized key', async () => {
+    const encryptedOoxml = Buffer.concat([
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+      Buffer.alloc(64),
+    ]);
+    const filePath = writeTmp(encryptedOoxml, 'encrypted.docx');
     const app = buildApp({
-      originalname: 'enc.pdf',
-      mimetype: 'application/pdf',
-      size: encPdf.length,
+      originalname: 'encrypted.docx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      size: encryptedOoxml.length,
       path: filePath,
     });
 
@@ -814,13 +817,16 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
     expect(processAgentFileUpload).not.toHaveBeenCalled();
   });
 
-  it('does not reject a plain PDF on the encryption check (proceeds past it)', async () => {
-    const plainPdf = Buffer.from('%PDF-1.4\nplain content, no encrypt dict\n%%EOF', 'binary');
-    const filePath = writeTmp(plainPdf, 'plain.pdf');
+  it('leaves PDF encryption decisions to the PDF access probe', async () => {
+    const permissionEncryptedPdf = Buffer.from(
+      '%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF',
+      'binary',
+    );
+    const filePath = writeTmp(permissionEncryptedPdf, 'permission-encrypted.pdf');
     const app = buildApp({
-      originalname: 'plain.pdf',
+      originalname: 'permission-encrypted.pdf',
       mimetype: 'application/pdf',
-      size: plainPdf.length,
+      size: permissionEncryptedPdf.length,
       path: filePath,
     });
 

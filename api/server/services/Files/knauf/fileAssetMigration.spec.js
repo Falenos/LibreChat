@@ -15,6 +15,7 @@ let mongoServer;
 let File;
 let KnaufFileAsset;
 let Agent;
+const originalAzureSearchEnabled = process.env.AZURE_SEARCH_ENABLED;
 
 const seedFile = (overrides = {}) =>
   File.create({
@@ -52,6 +53,14 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await Promise.all([File.deleteMany({}), KnaufFileAsset.deleteMany({}), Agent.deleteMany({})]);
+});
+
+afterEach(() => {
+  if (originalAzureSearchEnabled === undefined) {
+    delete process.env.AZURE_SEARCH_ENABLED;
+  } else {
+    process.env.AZURE_SEARCH_ENABLED = originalAzureSearchEnabled;
+  }
 });
 
 describe('migrateFileAssetsBatch (KK20-195 WP2)', () => {
@@ -116,7 +125,8 @@ describe('migrateFileAssetsBatch (KK20-195 WP2)', () => {
     ]);
   });
 
-  test('agent rows: asset_id = file_id, agent scope resolved via tool_resources, pointer backfilled', async () => {
+  test('agent rows use pgvector fallback when Azure Search is disabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'false';
     await Agent.create({
       id: 'agent-77',
       tool_resources: { file_search: { file_ids: ['agent-file-1'] } },
@@ -130,10 +140,26 @@ describe('migrateFileAssetsBatch (KK20-195 WP2)', () => {
     const asset = await KnaufFileAsset.findOne({ asset_id: 'agent-file-1' }).lean();
     expect(asset.scope_type).toBe('agent');
     expect(asset.scope_id).toBe('agent-77');
-    expect(asset.embed_route).toBe('/agent/embed');
+    expect(asset.vector_backend).toBe('pgvector');
+    expect(asset.embed_route).toBe('/embed');
     expect(asset.dedup_key).toBeUndefined();
     const row = await File.findOne({ file_id: 'agent-file-1' }).lean();
     expect(row.knauf_asset_id).toBe('agent-file-1');
+  });
+
+  test('agent rows use Azure Search when it is enabled', async () => {
+    process.env.AZURE_SEARCH_ENABLED = 'true';
+    await Agent.create({
+      id: 'agent-azure',
+      tool_resources: { file_search: { file_ids: ['agent-file-azure'] } },
+    });
+    await seedFile({ file_id: 'agent-file-azure', context: 'agents' });
+
+    await migrateFileAssetsBatch({ mongoose });
+
+    const asset = await KnaufFileAsset.findOne({ asset_id: 'agent-file-azure' }).lean();
+    expect(asset.vector_backend).toBe('azure_search');
+    expect(asset.embed_route).toBe('/agent/embed');
   });
 
   test('a detached agent file falls back to user scope and is counted', async () => {

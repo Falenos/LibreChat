@@ -125,8 +125,10 @@ modelSpecs:
     - name: 'e2e-soft-default'
       label: 'E2E Soft Default'
       softDefault: true
+      artifacts: 'default'
       preset:
         endpoint: 'Mock Provider A'
+        endpointType: 'custom'
         model: 'mock-model-a'
 
     - name: 'e2e-branded'

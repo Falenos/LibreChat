@@ -1,8 +1,8 @@
 // [knauf] KK20-195 WP3b — the async-indexing feature flags (plan §12).
 //
-// Three INDEPENDENT switches (never one flag for acceptance and execution —
-// rollback must stop new async uploads while queued work drains):
-//   KNAUF_ASYNC_FILE_INDEXING_ACCEPT  upload returns 202 after blob + queued
+// Three independently configurable switches (never one flag for acceptance and
+// execution — rollback must stop new async uploads while queued work drains):
+//   KNAUF_ASYNC_FILE_INDEXING_ACCEPT  permits upload to return 202 after queued
 //   KNAUF_INDEXING_WORKER_ENABLED     the dedicated worker claims queued work
 //   KNAUF_ASYNC_INDEXING_TENANTS      optional tenant allow-list gating the
 //                                     accept flag during canary (empty = all)
@@ -30,13 +30,15 @@ const getTenantAllowlist = () =>
     .filter(Boolean);
 
 /**
- * Async acceptance for THIS request: the accept flag must be on, and when a
- * tenant allow-list is configured the requester's tenant must be in it.
+ * Async acceptance for THIS request: both acceptance and worker execution must
+ * be enabled, and when a tenant allow-list is configured the requester's tenant
+ * must be in it. A mismatched deployment therefore falls back to the bounded
+ * synchronous claim/embed path instead of stranding queued uploads.
  * @param {{ tenantId?: string | null } | undefined} user
  * @returns {boolean}
  */
 const isAsyncAcceptedForUser = (user) => {
-  if (!isAsyncAcceptEnabled()) {
+  if (!isAsyncAcceptEnabled() || !isIndexingWorkerEnabled()) {
     return false;
   }
   const allowlist = getTenantAllowlist();

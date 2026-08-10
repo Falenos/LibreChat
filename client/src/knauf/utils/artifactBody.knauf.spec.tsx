@@ -103,4 +103,11 @@ A clean, branded summary with citations that must not compile.`;
 
     expect(extractSharedArtifactBody(persisted, 'application/vnd.react')).toBe(CODE);
   });
+
+  it('returns only source from a persisted fenced SVG snapshot', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1" />';
+    const persisted = `\`\`\`svg\n${svg}\n\`\`\`\nTrailing prose`;
+
+    expect(extractSharedArtifactBody(persisted, 'image/svg+xml')).toBe(svg);
+  });
 });

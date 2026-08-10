@@ -85,4 +85,30 @@ describe('RedisEventTransport', () => {
     transport.destroy();
   });
   // End [knauf]
+
+  // [knauf] Sequence allocation and its safety TTL must remain one Redis operation.
+  it('allocates the first sequence and safety TTL in one Redis evaluation', async () => {
+    const mockPublisher = createMockPublisher();
+    const transport = new RedisEventTransport(
+      mockPublisher as unknown as Redis,
+      createMockSubscriber() as unknown as Redis,
+    );
+    const streamId = 'atomic-sequence-ttl-test';
+    const generationId = 'generation-1';
+
+    await transport.emitChunk(streamId, { text: 'hello' }, generationId);
+
+    expect(mockPublisher.eval).toHaveBeenCalledWith(
+      expect.stringMatching(/redis\.call\('TTL'.*redis\.call\('EXPIRE'/s),
+      1,
+      `stream:{${streamId}}:generation:${generationId}:seq`,
+      '86400',
+    );
+    expect(mockPublisher.expire).toHaveBeenCalledWith(
+      `stream:{${streamId}}:generation:${generationId}:seq`,
+      86400,
+    );
+    transport.destroy();
+  });
+  // End [knauf]
 });

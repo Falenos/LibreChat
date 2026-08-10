@@ -22,6 +22,7 @@ import type {
   RunConfig,
   IState,
   LCTool,
+  LangfuseConfig,
 } from '@librechat/agents';
 import type {
   Agent,
@@ -881,8 +882,27 @@ function buildSubagentConfigs(
   return configs;
 }
 
-// [knauf] Correlate the agent and its detached title trace by source message.
-function buildLangfuseConfig(tenantIdInput?: unknown, sourceMessageIdInput?: unknown) {
+// [knauf] KK20-199 — correlate text runs, but disable capture when an image
+// input would place private bytes or identity metadata in Langfuse/OTEL.
+export function buildLangfuseConfig(
+  tenantIdInput?: unknown,
+  sourceMessageIdInput?: unknown,
+  messages?: BaseMessage[],
+): LangfuseConfig {
+  const hasImageInput =
+    messages?.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some(
+          (part) =>
+            part != null &&
+            typeof part === 'object' &&
+            ['image_url', 'input_image', 'image'].includes((part as { type?: string }).type ?? ''),
+        ),
+    ) === true;
+  if (hasImageInput) {
+    return { enabled: false };
+  }
   const tenantId = typeof tenantIdInput === 'string' ? tenantIdInput.trim() : '';
   const sourceMessageId =
     typeof sourceMessageIdInput === 'string' ? sourceMessageIdInput.trim() : '';
@@ -895,6 +915,78 @@ function buildLangfuseConfig(tenantIdInput?: unknown, sourceMessageIdInput?: unk
     ...(Object.keys(metadata).length > 0 && { metadata }),
     ...(tenantId !== '' && { tags: [`tenant:${tenantId}`] }),
   };
+}
+// End [knauf]
+
+// [knauf] NO-TICKET — the OpenAI client timeout ends when response headers
+// arrive, so a Model Router stream can otherwise remain open indefinitely.
+// Abort only while a body read is idle; active streams and caller cancellation
+// retain their existing behavior.
+export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unknown>): void {
+  const model = typeof cfg.model === 'string' ? cfg.model.toLowerCase() : '';
+  const timeout = cfg.timeout;
+  if (!model.includes('model-router') || typeof timeout !== 'number' || timeout <= 0) {
+    return;
+  }
+
+  const sourceConfiguration = (cfg.configuration ?? {}) as Record<string, unknown>;
+  const configuration = { ...sourceConfiguration };
+  const baseFetch =
+    typeof sourceConfiguration.fetch === 'function'
+      ? (sourceConfiguration.fetch as typeof fetch)
+      : globalThis.fetch;
+
+  configuration.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
+    const [input, init] = args;
+    const idleController = new AbortController();
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, idleController.signal])
+      : idleController.signal;
+    const response = await baseFetch(input, { ...init, signal });
+    if (response.body == null) {
+      return response;
+    }
+
+    const reader = response.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const timer = setTimeout(
+          () =>
+            idleController.abort(new DOMException('Model Router stream timed out', 'TimeoutError')),
+          timeout,
+        );
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            controller.close();
+          } else {
+            controller.enqueue(chunk.value);
+          }
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      async cancel(reason) {
+        idleController.abort(reason);
+        await reader.cancel(reason);
+      },
+    });
+
+    const wrappedResponse = new Response(body, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+    Object.defineProperties(wrappedResponse, {
+      redirected: { value: response.redirected },
+      type: { value: response.type },
+      url: { value: response.url },
+    });
+    return wrappedResponse;
+  };
+  cfg.configuration = configuration;
 }
 // End [knauf]
 
@@ -1042,6 +1134,11 @@ export async function createRun({
       user: createSafeUser(user),
       body: requestBody,
     });
+
+    // [knauf] NO-TICKET — enforce the configured timeout between streamed
+    // Model Router chunks; the OpenAI client only applies it before headers.
+    applyKnaufModelRouterStreamIdleTimeout(llmConfig as Record<string, unknown>);
+    // End [knauf]
 
     /** Resolves issues with new OpenAI usage field */
     if (
@@ -1220,8 +1317,8 @@ export async function createRun({
     // feedback can be scored against the trace without a lookup (see the
     // feedback route in api/server/routes/messages.js). No-op unless Langfuse
     // tracing is enabled. Requires @librechat/agents >= 3.2.21.
-    // [knauf] The title run inherits this source-message correlation metadata.
-    langfuse: buildLangfuseConfig(tenantId ?? user?.tenantId, runId),
+    // [knauf] KK20-199 — share source correlation and image-trace omission inputs.
+    langfuse: buildLangfuseConfig(tenantId ?? user?.tenantId, runId, messages),
     // End [knauf]
     ...(enableToolOutputReferences && {
       toolOutputReferences: { enabled: true },

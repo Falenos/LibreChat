@@ -1,7 +1,9 @@
 import { useState, memo, useRef, useCallback, useId, useMemo } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Ellipsis, Eye, SquarePen, Trash, EarthIcon, User } from 'lucide-react';
+// [knauf] Add peer sharing to the prompt overflow menu without granting public sharing.
+import { Ellipsis, Eye, SquarePen, Trash, EarthIcon, User, Share2Icon } from 'lucide-react';
+// End [knauf]
 import { PermissionBits, ResourceType } from 'librechat-data-provider';
 import type { TPromptGroup } from 'librechat-data-provider';
 import {
@@ -15,6 +17,9 @@ import {
   useToastContext,
 } from '@librechat/client';
 import { useLocalize, useAuthContext, useSubmitMessage, useResourcePermissions } from '~/hooks';
+// [knauf] Keep permission-aware prompt sharing outside the upstream list component.
+import usePromptShareMenu from '~/knauf/components/Prompts/usePromptShareMenu';
+// End [knauf]
 import { useRecordPromptUsage, useDeletePromptGroup } from '~/data-provider';
 import { useLiveAnnouncer } from '~/Providers';
 import VariableDialog from '../dialogs/VariableDialog';
@@ -54,6 +59,9 @@ function ChatGroupItem({
   const canDelete = hasPermission(PermissionBits.DELETE);
 
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  // [knauf] Add the existing recipient dialog as a permission-aware overflow-menu action.
+  const { canShare, openShareDialog, shareDialog } = usePromptShareMenu(group, menuButtonRef);
+  // End [knauf]
 
   const deleteGroup = useDeletePromptGroup({
     onSuccess: () => {
@@ -117,6 +125,15 @@ function ChatGroupItem({
         icon: <Eye className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
       },
     ];
+    // [knauf] Expose peer sharing in the overflow menu even when SHARE_PUBLIC is false.
+    if (canShare) {
+      items.push({
+        label: localize('com_ui_share'),
+        onClick: openShareDialog,
+        icon: <Share2Icon className="icon-sm mr-2 text-text-primary" aria-hidden="true" />,
+      });
+    }
+    // End [knauf]
     if (canEdit) {
       items.push({
         label: localize('com_ui_edit'),
@@ -132,7 +149,7 @@ function ChatGroupItem({
       });
     }
     return items;
-  }, [localize, canEdit, canDelete, group._id, navigate]);
+  }, [localize, canShare, openShareDialog, canEdit, canDelete, group._id, navigate]);
 
   return (
     <>
@@ -236,6 +253,9 @@ function ChatGroupItem({
           });
         }}
       />
+      {/* [knauf] Keep the controlled share dialog mounted after the menu closes. */}
+      {shareDialog}
+      {/* End [knauf] */}
       {isChatRoute && (
         <VariableDialog
           open={isVariableDialogOpen}

@@ -2407,17 +2407,14 @@ describe('updateInterfacePermissions - permissions', () => {
     });
   });
 
-  // [knauf] Built-in USER lockdown must override permissive YAML defaults
-  // without changing ADMIN permissions.
+  // [knauf] Built-in USER lockdown must override permissive non-prompt YAML
+  // defaults without changing Admin-managed prompt or people-picker permissions.
   const knaufUserRestrictionEnvVars = [
     'KNAUF_RESTRICT_USER_PERMISSIONS',
     'KNAUF_RESTRICT_PROD_USER_PERMISSIONS',
   ] as const;
 
   const expectedKnaufRestrictedUserPermissions = {
-    [PermissionTypes.PROMPTS]: {
-      [Permissions.SHARE_PUBLIC]: false,
-    },
     [PermissionTypes.AGENTS]: {
       [Permissions.USE]: true,
       [Permissions.CREATE]: false,
@@ -2514,7 +2511,7 @@ describe('updateInterfacePermissions - permissions', () => {
     },
   );
 
-  it('should preserve Admin prompt and people-picker choices across restart', async () => {
+  it('should preserve Admin-managed prompt and people-picker choices across restart', async () => {
     await withKnaufUserRestrictionEnv('KNAUF_RESTRICT_USER_PERMISSIONS', async () => {
       mockGetRoleByName.mockImplementation(async (roleName: SystemRoles) => ({
         permissions:
@@ -2551,9 +2548,7 @@ describe('updateInterfacePermissions - permissions', () => {
         (call) => call[0] === SystemRoles.USER,
       );
 
-      expect(userCall?.[1][PermissionTypes.PROMPTS]).toEqual({
-        [Permissions.SHARE_PUBLIC]: false,
-      });
+      expect(userCall?.[1]).not.toHaveProperty(PermissionTypes.PROMPTS);
       expect(userCall?.[1]).not.toHaveProperty(PermissionTypes.PEOPLE_PICKER);
     });
   });
@@ -2597,6 +2592,12 @@ describe('updateInterfacePermissions - permissions', () => {
 
       expect(userCall?.[1]).toEqual({
         ...expectedKnaufRestrictedUserPermissions,
+        [PermissionTypes.PROMPTS]: {
+          [Permissions.USE]: true,
+          [Permissions.CREATE]: true,
+          [Permissions.SHARE]: true,
+          [Permissions.SHARE_PUBLIC]: true,
+        },
         [PermissionTypes.PEOPLE_PICKER]: {
           [Permissions.VIEW_USERS]: true,
           [Permissions.VIEW_GROUPS]: true,

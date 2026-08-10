@@ -115,6 +115,9 @@ RUN attempt=1; \
 COPY api ./api
 COPY config ./config
 COPY skill ./skill
+# [knauf] KK20-232 — include server sources referenced by @knauf/knauf package exports.
+COPY packages/knauf/src ./packages/knauf/src
+# End [knauf]
 # [knauf] Run Chromium as the unprivileged node user while the multi-stage API remains root. (NO-TICKET)
 COPY knauf/docker/chromium-wrapper.sh ./knauf/docker/chromium-wrapper.sh
 # End [knauf]

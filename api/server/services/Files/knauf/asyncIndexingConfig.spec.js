@@ -1,7 +1,6 @@
-// [knauf] KK20-195 WP3b — seam test for the async-indexing flags: acceptance
-// and worker execution are INDEPENDENT switches, and the tenant allow-list
-// only gates acceptance (plan §12: rollback stops new async uploads while
-// queued work drains).
+// [knauf] KK20-195 WP3b / KK20-232 PR2 — seam test for independently
+// configurable async-indexing flags. Effective request acceptance requires a
+// running worker; the tenant allow-list remains an additional acceptance gate.
 const {
   isAsyncAcceptEnabled,
   isIndexingWorkerEnabled,
@@ -44,9 +43,13 @@ describe('async-indexing flags (KK20-195 WP3b)', () => {
     expect(isAsyncAcceptEnabled()).toBe(false); // worker on ≠ acceptance on
   });
 
-  test('acceptance for a user honors the tenant allow-list', () => {
+  test('effective acceptance requires both flags and honors the tenant allow-list', () => {
     process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT = 'true';
 
+    delete process.env.KNAUF_INDEXING_WORKER_ENABLED;
+    expect(isAsyncAcceptedForUser({ tenantId: 't1' })).toBe(false);
+
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     delete process.env.KNAUF_ASYNC_INDEXING_TENANTS;
     expect(isAsyncAcceptedForUser({ tenantId: 't1' })).toBe(true); // empty list = all
 
@@ -58,6 +61,7 @@ describe('async-indexing flags (KK20-195 WP3b)', () => {
 
   test('acceptance is hard-off regardless of allow-list when the flag is off', () => {
     delete process.env.KNAUF_ASYNC_FILE_INDEXING_ACCEPT;
+    process.env.KNAUF_INDEXING_WORKER_ENABLED = 'true';
     process.env.KNAUF_ASYNC_INDEXING_TENANTS = 't1';
     expect(isAsyncAcceptedForUser({ tenantId: 't1' })).toBe(false);
   });

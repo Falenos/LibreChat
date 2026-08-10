@@ -703,6 +703,30 @@ describe('useFileHandling', () => {
       expect(mockAddFile).toHaveBeenCalledTimes(1);
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
     });
+
+    // [knauf] NO-TICKET — SVG is readable artifact source, not a vision image.
+    it('routes an SVG upload to exact text context', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const svgFile = new File(
+        [
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>',
+        ],
+        'mark.svg',
+        { type: 'image/svg+xml' },
+      );
+
+      await act(async () => {
+        await result.current.handleFiles([svgFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.context);
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('tool_resource')).toBe(EToolResources.context);
+      expect(formData.get('width')).toBeNull();
+      expect(formData.get('height')).toBeNull();
+    });
+    // End [knauf]
   });
   // End [knauf]
 
@@ -975,9 +999,19 @@ describe('useFileHandling', () => {
       mockMutate.mockImplementation(() => Promise.resolve());
     });
 
+    // KK20-232: PDF probe infrastructure failures retain the stable
+    // localization code while using the existing bounded 503 retry path.
     it('uses exponential backoff for three retries before succeeding', async () => {
       jest.useFakeTimers();
-      const transientError = { response: { status: 503 } };
+      const transientError = {
+        response: {
+          status: 503,
+          data: {
+            message: 'com_knauf_error_pdf_probe_unavailable',
+            code: 'com_knauf_error_pdf_probe_unavailable',
+          },
+        },
+      };
       mockMutate
         .mockRejectedValueOnce(transientError)
         .mockRejectedValueOnce(transientError)
@@ -1021,7 +1055,6 @@ describe('useFileHandling', () => {
       jest.useRealTimers();
       mockMutate.mockImplementation(() => Promise.resolve());
     });
-
     it('does not retry a non-transient document upload failure', async () => {
       mockMutate.mockRejectedValueOnce({ response: { status: 400 } });
 

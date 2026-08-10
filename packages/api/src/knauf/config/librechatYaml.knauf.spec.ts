@@ -53,7 +53,7 @@ interface LibreChatYaml {
   summarization?: { enabled?: boolean };
   modelSpecs?: { list?: ModelSpec[] };
   endpoints?: { agents?: { capabilities?: string[] } };
-  interface?: { runCode?: boolean };
+  interface?: { runCode?: boolean; prompts?: unknown; peoplePicker?: unknown };
 }
 
 let config: LibreChatYaml;
@@ -76,6 +76,30 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
       expect(spec.preset?.endpoint).toBeTruthy();
       expect(spec.preset?.model).toBeTruthy();
     }
+  });
+});
+
+describe('[knauf] librechat.yaml — default KARL response latency', () => {
+  it('uses task-sized prose budgets without truncating requested source', () => {
+    const karl = specs.find((spec) => spec.name === 'karl');
+    const prompt = karl?.preset?.promptPrefix ?? '';
+
+    expect(karl?.preset).not.toHaveProperty('verbosity');
+    expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*40[–-]120 words/i);
+    expect(prompt).toMatch(/ordinary questions[^\n]*80[–-]180 words/i);
+    expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*150[–-]300 words/i);
+    expect(prompt).toMatch(/exceed 300 words only when the user requests detail/i);
+    expect(prompt).toMatch(/do not repeat facts in a concluding summary/i);
+    expect(prompt).toMatch(/do not append a follow-up offer unless clarification/i);
+    expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
+    expect(prompt).toMatch(/never truncate valid source/i);
+  });
+});
+
+describe('[knauf] librechat.yaml — Admin-managed prompt sharing', () => {
+  it('does not override prompt or People Picker permissions', () => {
+    expect(config.interface).not.toHaveProperty('prompts');
+    expect(config.interface).not.toHaveProperty('peoplePicker');
   });
 });
 
@@ -186,6 +210,14 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
       .filter((spec) => /file generation is not supported/i.test(spec.preset!.promptPrefix!))
       .map((spec) => spec.name);
     expect(offenders).toEqual([]);
+  });
+
+  it('uses the runtime edit tool instead of re-emitting small artifact changes', () => {
+    for (const spec of karlChatSpecs()) {
+      expect(spec.preset?.promptPrefix).toContain('use edit_artifact');
+      expect(spec.preset?.promptPrefix).toMatch(/do not re-emit it/i);
+      expect(spec.preset?.promptPrefix).toMatch(/Full artifact emission is the fallback/i);
+    }
   });
 
   it('never tells the model to respond only as text in the chat', () => {

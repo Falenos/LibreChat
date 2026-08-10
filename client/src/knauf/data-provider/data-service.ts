@@ -5,7 +5,12 @@
  * Axios singleton directly because `request.post` does not accept response options.
  */
 import axios from 'axios';
-import { request, type TMarketplaceCategory } from 'librechat-data-provider';
+import {
+  request,
+  type TConversation,
+  type TMarketplaceCategory,
+  type TMessage,
+} from 'librechat-data-provider';
 import * as endpoints from './api-endpoints';
 
 export function postAgentCategory(body: { label: string }): Promise<TMarketplaceCategory> {
@@ -118,6 +123,32 @@ export async function postArtifactExport(
     { responseType: 'blob' },
   );
   return response.data;
+}
+
+export interface SharedArtifactContinuationResponse {
+  conversation: TConversation;
+  messages: TMessage[];
+  artifactId: string;
+}
+
+export function postSharedArtifactContinuation(
+  shareId: string,
+  conversation: TConversation,
+): Promise<SharedArtifactContinuationResponse> {
+  return request.post(endpoints.artifactContinuation(shareId), { conversation });
+}
+
+export interface ArtifactRevisionSnapshot extends ArtifactExportSnapshot {
+  type: string;
+  version: number;
+}
+
+export function getArtifactRevision(params: {
+  messageId: string;
+  identifier: string;
+  version: number;
+}): Promise<ArtifactRevisionSnapshot> {
+  return request.get(endpoints.artifactRevision(params));
 }
 
 // KK20-195 WP5 — async file-indexing status + retry (plan §6.3/§6.4).

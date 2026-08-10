@@ -120,8 +120,9 @@ function retryAfterMs(error) {
 }
 
 /**
- * §5.3 backoff: next = now + max(provider Retry-After, full-jitter bounded
- * exponential). attempt is the CURRENT attempt count (≥1 after a claim).
+ * §5.3 backoff: Retry-After is a floor plus full-jitter bounded exponential;
+ * otherwise use full jitter alone. attempt is the CURRENT attempt count (≥1
+ * after a claim).
  * @param {{ attempt: number, retryAfter?: number, baseMs: number, maxMs: number, now?: Date }} params
  * @returns {Date}
  */
@@ -131,7 +132,8 @@ function computeNextAttemptAt({ attempt, retryAfter = 0, baseMs, maxMs, now = ne
   // Cap the provider's Retry-After at the backoff max: a hostile/bogus value
   // (e.g. `Retry-After: 86400`) must not park a claimed asset a day out.
   const cappedRetryAfter = Math.min(Math.max(0, retryAfter), maxMs);
-  return new Date(now.getTime() + Math.max(cappedRetryAfter, jitter));
+  const delay = cappedRetryAfter ? Math.min(maxMs, cappedRetryAfter + jitter) : jitter;
+  return new Date(now.getTime() + delay);
 }
 
 /**
