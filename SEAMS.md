@@ -783,6 +783,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/index.js` | `startServer` Meilisearch reconciliation startup | 110–112 | Starts the bounded reconciliation loop after the initial background sync so Meilisearch data loss is detected while API pods remain alive | `api/db/indexSync.spec.js` | NO-TICKET |
 | `api/server/index.js` | `sendIndexHtml` local-network permissions policy | 176–178 | Disables Local Network Access for the top-level document so Chrome blocks accidental private-network requests without prompting users | `api/server/index.spec.js` (`should not cache index page`) | NO-TICKET |
 | `api/server/index.spec.js` | `should not cache index page` permissions-policy assertion | 200–202 | Proves the HTML response denies Local Network Access through the browser-enforced policy header | Self | NO-TICKET |
+| `client/src/components/Conversations/ProjectsSection.tsx` | — | 307–309 | KK20-248 — label the primary project action as "Edit" because it routes to the project workspace editor, not a read-only project detail view. | — | — |
 <!-- seams:auto:end -->
 
 ## Configuration

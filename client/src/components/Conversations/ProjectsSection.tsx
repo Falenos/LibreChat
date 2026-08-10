@@ -304,7 +304,9 @@ const ProjectItem = memo(
       () => [
         {
           id: `${menuId}-open`,
+          // [knauf] KK20-248 — label the primary project action as "Edit" because it routes to the project workspace editor, not a read-only project detail view.
           label: localize('com_ui_edit'),
+          // End [knauf]
           icon: <Folder className="size-4 text-text-secondary" aria-hidden="true" />,
           onClick: openProject,
         },
