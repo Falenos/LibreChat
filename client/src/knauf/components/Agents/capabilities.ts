@@ -194,7 +194,7 @@ const useKnaufSkills: KnaufCapability = {
 };
 
 /**
- * "Analyse data" — KK20-257. Runs Python and Bash in an Azure Container Apps
+ * "Execute code" — KK20-257. Runs Python and Bash in an Azure Container Apps
  * dynamic session via the Knauf code-adapter: pandas, charts, spreadsheet
  * read/write, and files delivered back to the user as real downloads.
  *
@@ -214,9 +214,9 @@ const useKnaufSkills: KnaufCapability = {
  * composer chip and the manual Run button), so an agent with this enabled runs
  * code for whoever uses it.
  */
-const analyseData: KnaufCapability = {
+const executeCode: KnaufCapability = {
   id: 'code',
-  label: 'Analyse data',
+  label: 'Execute code',
   description: 'Run calculations on spreadsheets and data files, and build charts from them.',
   labelKey: 'com_knauf_capability_code_label',
   descriptionKey: 'com_knauf_capability_code_description',
@@ -235,12 +235,12 @@ const analyseData: KnaufCapability = {
  * Registry. Order here is render order in the V6 panel. New capabilities
  * append to this list; if the new capability needs `endpoints.agents.
  * capabilities` to include a flag (e.g. `execute_code`), wire that into
- * `isEnabled` — see `analyseData` above, which is the worked example the
+ * `isEnabled` — see `executeCode` above, which is the worked example the
  * template comment here used to describe.
  */
 export const KNAUF_CAPABILITIES: ReadonlyArray<KnaufCapability> = [
   browseInternet,
   buildVisuals,
-  analyseData,
+  executeCode,
   useKnaufSkills,
 ];
