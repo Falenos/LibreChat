@@ -61,7 +61,7 @@ credential anywhere.**
 1. **Protocol translation** — Code API ⇄ the ACA data-plane call, both directions.
 2. **Language handling** — `py` and `bash` (else `501`) both run on the one code-interpreter pool; the wrapper picks the interpreter.
 3. **Auth bridge** — verify LibreChat's JWT inbound; acquire an Entra token outbound. Neither side sees the other's auth.
-4. **File staging** — uploads land in Blob + a Mongo TTL row _before_ any session exists, get pushed into the session at exec time, and generated files get captured back to Blob so downloads outlive the sandbox.
+4. **File staging** — uploads land in Blob + a Mongo TTL row _before_ any session exists, get (re-)pushed into the fresh sandbox **sequentially** on every exec that references them, and generated files get captured back to Blob so downloads outlive the sandbox.
 5. **Filling ACA's gaps** — real exit codes and output past the ~4000-char cap, via the wrapper (below).
 6. **Resilience** — expired-session re-mint, friendly timeouts, capacity handling — never a 5xx into the tool loop.
 
@@ -118,9 +118,10 @@ bash, runs the script via `subprocess.run(['bash', …])`:
 >
 > The fix — implemented — is to route **both** languages to the **code-interpreter
 > pool**, which already has `bash` + the data-science stack. One change closes
-> every gap: pandas is present for bash, `py`/`bash` share one sandbox per
-> conversation (files visible across both), real exit codes come from the
-> subprocess, and it needs **no custom image and no egress** (the secure default;
+> every gap: pandas is present for bash, there's no second sandbox _type_ to keep
+> in sync (files land in the same `/mnt/data` layout whichever language runs),
+> real exit codes come from the subprocess, and it needs **no custom image and no
+> egress** (the secure default;
 > the image is Microsoft-maintained). The rejected alternatives — a
 > `CustomContainer` image (own + patch it; only if KARL ever needs libraries the
 > code-interpreter image lacks) and egress-enabled + `pip install` (verified ~7 s
@@ -129,53 +130,71 @@ bash, runs the script via `subprocess.run(['bash', …])`:
 
 ---
 
-## Sessions and sandboxes — "is it the same sandbox for the same user?" (verified)
+## Sessions and sandboxes — "is the sandbox still there when I come back?" (verified)
 
-Each ACA sandbox is keyed by an **`identifier`** string. The adapter mints
-`karl-<32 hex>` ids and uses them as that identifier; LibreChat returns the
-`session_id` from the first exec and sends it back on the next, so **one
-conversation reuses one identifier** — and, because everything runs on the one
-code-interpreter pool, one conversation reuses **one sandbox** across both
-languages.
+**No — every `/exec` runs in a brand-new sandbox.** This is the most
+counter-intuitive part, so it's worth being exact about what actually persists.
 
-Consequences, all verified live against the pool (Aug 2026):
+Each ACA sandbox is keyed by an **`identifier`** string, and the adapter mints
+`karl-<32 hex>` ids to use as that identifier. The adapter _would_ reuse a
+sandbox if a caller sent back a prior `session_id` — but the current client
+doesn't. The compiled code tool in **`@librechat/agents` (v3.2.46)** reads a
+`session_id` from its context but **never puts it in the `POST /exec` body**
+(verified in `CodeExecutor.cjs`, and in the adapter's own logs: every exec in a
+conversation arrives with no `session_id` and gets a fresh `karl-…` id). So in
+practice:
 
-- **Same `session_id` → the same sandbox is reused** (until it self-destructs
-  after the cooldown, minimum 300 s idle). Files written to `/mnt/data` in one
-  exec are there in the next.
-- **Different `session_id` → a different, fully isolated sandbox.** A second
-  identifier could not see the first's `/mnt/data` file. So two users (or two
-  conversations) never share a sandbox — isolation is by identifier, and
-  identifiers are per-conversation, server-minted, and unguessable.
-- **`py` and `bash` share the same sandbox** in a conversation. Since both run
-  on the one code-interpreter pool under the same identifier, a file a Python
-  step writes to `/mnt/data` **is** visible to a later bash step, and vice versa
-  — so "the shell can manipulate the files Python wrote" is now **true**. (It was
-  not, under the earlier two-pool design.)
-- **Files persist across calls; in-memory variables do not.** Because the
-  wrapper runs each exec as a fresh subprocess, a Python variable set in one
-  call is gone in the next (verified: `var persists: False`), but a file written
-  to `/mnt/data` remains (`file persists: True`). `/tmp` is per-call scratch and
-  does not persist. The model is expected to persist state to `/mnt/data`, not
-  to memory — which is also what the read_file tool and the timeout message tell
-  it to do.
+- **Each exec = a fresh, empty, fully isolated Hyper-V sandbox.** It is never
+  "still there" from a previous run; ACA sessions also self-destruct after the
+  cooldown (≥300 s idle) regardless.
+- **In-memory state never carries over.** A Python variable, `/tmp`, an
+  installed package — all gone next exec. (The subprocess wrapper means state
+  doesn't even survive _within_ a conversation, and the fresh sandbox means it
+  wouldn't anyway.)
 
-> **Security note:** "same user" is _not_ what shares a sandbox — _same
-> conversation_ is. A shared/marketplace agent used by two people runs each
-> person's turns under their own conversation's identifier, so their sandboxes
-> are separate. Cross-user leakage would require guessing another conversation's
-> random 32-hex identifier, which the download/objects/delete paths additionally
-> gate with a Mongo ownership check (user-kind → same `sub`; agent/skill-kind →
-> same tenant).
+### So why do the files look like they're "still there"?
 
-### What happens when a sandbox has expired
+Because file continuity is **not** the sandbox's job — it's re-materialised from
+the adapter's staging store on every call:
 
-If a session has cooled down and vanished, the next call gets
-`SessionWithIdentifierNotFound`. The adapter catches it, transparently re-mints
-the session, re-pushes any staged input files, and re-runs once — so from the
-user's side the conversation just continues. Output files from the _previous_
-sandbox still download fine because they were captured to Blob, not left in the
-dead session.
+- LibreChat re-sends the relevant **file references on every `/exec`** (its
+  `_injected_files` mechanism — it carries files forward instead of relying on a
+  live session). The adapter pulls each referenced file's bytes from Blob and
+  **re-pushes them into the fresh sandbox's `/mnt/data`** before running the
+  code. So `data.csv` "is there" every run — mechanically it is re-uploaded each
+  time.
+- Files the code **generates** are captured to Blob + Mongo and handed back as
+  refs, so they get re-injected/re-pushed the same way on later runs (and remain
+  downloadable even though the sandbox that made them is long gone).
+- The staging copy has a **sliding 24 h TTL** — every push/download bumps
+  `expiresAt` — so an active conversation keeps its files available
+  indefinitely. Only after ~24 h of no use does a file expire; the next exec
+  that references it then returns `code:1` + "re-attach the file and retry"
+  rather than crashing.
+
+> **Push order matters:** the re-push is **sequential, one file at a time**. ACA
+> dynamic-sessions file upload is _not_ concurrency-safe — pushing several files
+> in parallel to a session clobbers all but one (verified live, Aug 2026:
+> 4 concurrent pushes → 1 random survivor; sequential → all 4). This was a real
+> bug (a model would `ls` and see a file, then `pd.read_excel` it in another exec
+> and get `FileNotFoundError`); the fix is `pushInputs` in
+> [`stagePush.ts`](../../code-adapter/src/exec/stagePush.ts).
+
+> **Security / isolation:** every exec is its own sandbox, so users and
+> conversations never share one — isolation is inherent, not dependent on
+> identifier reuse. Access to a staged/generated file is additionally gated by a
+> Mongo ownership check on download/objects/delete (user-kind → same `sub`;
+> agent/skill-kind → same tenant), so a guessed identifier still can't reach
+> another user's bytes.
+
+### The re-mint safety net
+
+The adapter still handles `SessionWithIdentifierNotFound` (a cooled-down
+identifier): it re-mints and re-runs once. With today's client this path is
+rarely taken — since each call already starts fresh — but it keeps the
+"supplied `session_id`" case correct if a future client version starts reusing
+sessions. Either way, output files download fine because they live in Blob, not
+in the dead session.
 
 ---
 
@@ -185,8 +204,9 @@ dead session.
    `POST /upload` → the adapter stages it to Blob (`code-adapter-staging/<sid>/<fileId>`)
    plus a Mongo row (`state: staged`, TTL 24 h). No session exists yet.
 2. The agent runs `pd.read_csv('data.csv')`. LibreChat calls `POST /exec` with
-   the file _referenced_. The adapter pulls the bytes from Blob, pushes them into
-   the session's `/mnt/data`, then runs the wrapped code.
+   the file _referenced_ (it re-sends the ref on every exec). The adapter mints a
+   fresh sandbox, pulls the bytes from Blob, pushes them into that sandbox's
+   `/mnt/data` (sequentially), then runs the wrapped code.
 3. The code writes `chart.png`. After a `code:0` exec the adapter lists the
    session files, sees the new PNG, captures it to Blob + Mongo under the exec
    session, and returns it in `files[]`.

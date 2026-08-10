@@ -67,8 +67,8 @@ built-in **code-interpreter (PythonLTS) pool** and drop the Shell pool. Verified
 live: that pool already has `bash` (`/usr/bin/bash`) + pandas 2.2.2/numpy/
 matplotlib, so the adapter's wrapper runs bash via `subprocess.run(['bash', …])`
 there (still yielding a real exit code). This closes every gap with **no image to
-build/own and no egress**: pandas is present for bash; `py`/`bash` share one
-sandbox per conversation; egress stays disabled. It was an adapter change only
+build/own and no egress**: pandas is present for bash; both languages use the
+same sandbox type and `/mnt/data` layout; egress stays disabled. It was an adapter change only
 (both languages → `/code/execute`); the infra is now a single pool.
 
 Alternatives considered and rejected:

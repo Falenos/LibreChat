@@ -19,9 +19,12 @@ KK20-108 spike found it already has `bash` (`/usr/bin/bash`) + `python3` +
 pandas/numpy/matplotlib, so both `lang=py` and `lang=bash` route here — and the
 adapter always submits a **Python wrapper** that runs the user's code (python or
 bash) as a subprocess (see [`src/exec/wrapper.ts`](src/exec/wrapper.ts)). This
-gives one sandbox per conversation (files shared across languages), pandas for
-bash, and real exit codes — with no custom image and no egress. Raw response
-fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
+gives one sandbox _type_ for both languages (same `/mnt/data` layout), pandas for
+bash, and real exit codes — with no custom image and no egress. (Each exec runs
+in a **fresh** sandbox — the client doesn't send `session_id` back — so input
+files are re-pushed from staging on every call; see the sandbox/file model in
+[`../docs/code-execution/how-it-works.md`](../docs/code-execution/how-it-works.md).)
+Raw response fixtures live in [`test/fixtures/aca/`](test/fixtures/aca/).
 
 |              | Code-interpreter pool (both `lang=py` and `lang=bash`)                                                                                                                     |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
