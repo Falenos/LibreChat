@@ -807,29 +807,29 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // and SharePoint all funnel through handleFiles — so the rule lives here rather
         // than in each caller. `validateFiles` has already normalised/inferred the MIME
         // by now, so extension-only files classify correctly.
+        // SVG is XML source: preserve it as message context so the artifact panel and
+        // model receive the exact vector markup. Raster images remain vision inputs.
         const isImageFile = originalFile.type?.startsWith('image/') ?? false;
-        let effectiveToolResource =
-          _toolResource === EToolResources.file_search && isImageFile ? undefined : _toolResource;
-        if (
+        const isSvgFile =
+          /^(?:image\/svg(?:\+xml)?)$/i.test(originalFile.type) ||
+          /\.svg$/i.test(originalFile.name);
+
+        // One decision, most specific first. SVG wins over the image rule below because an
+        // SVG is both (it matches `image/*`) and the markup is the point; tabular only
+        // redirects the file_search default, so an explicitly chosen destination still wins.
+        let effectiveToolResource = _toolResource;
+        if (isSvgFile) {
+          effectiveToolResource = EToolResources.context;
+        } else if (_toolResource === EToolResources.file_search && isImageFile) {
+          effectiveToolResource = undefined;
+        } else if (
           _toolResource === EToolResources.file_search &&
-          !isImageFile &&
           canRouteTabularToCode &&
           isKnaufTabularMimeType(originalFile.type)
         ) {
           effectiveToolResource = EToolResources.execute_code;
         }
         // End [knauf]
-        // SVG is XML source: preserve it as message context so the artifact panel and
-        // model receive the exact vector markup. Raster images remain vision inputs.
-        const isSvgFile =
-          /^(?:image\/svg(?:\+xml)?)$/i.test(originalFile.type) ||
-          /\.svg$/i.test(originalFile.name);
-        let effectiveToolResource = _toolResource;
-        if (isSvgFile) {
-          effectiveToolResource = EToolResources.context;
-        } else if (_toolResource === EToolResources.file_search && isImageFile) {
-          effectiveToolResource = undefined;
-        }
         if (effectiveToolResource != null && effectiveToolResource !== '') {
           initialExtendedFile.tool_resource = effectiveToolResource;
         }
