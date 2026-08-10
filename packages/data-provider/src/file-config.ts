@@ -859,6 +859,35 @@ export function knaufCategorySizeErrorKey(mimetype?: string | null): string {
   return knaufCategorySizeErrorKeys[classifyKnaufCategory(mimetype) ?? 'document'];
 }
 
+/** JSON, which `classifyKnaufCategory` treats as a document but code can parse. */
+const knaufJsonMimeTypes = /^application\/json$/;
+
+/**
+ * True for structured/tabular data a code sandbox should analyse rather than the RAG
+ * corpus index: spreadsheets, CSV and JSON. KK20-257 routes these to `execute_code`
+ * on upload (see `useFileHandling`), because embedding a spreadsheet yields chunked
+ * text — searchable, but impossible to aggregate, pivot or chart.
+ *
+ * Reuses the same regexes as the size-cap cascade so the two can never disagree about
+ * what "data" means. Deliberately NOT included:
+ *   - `.tsv` (`text/tab-separated-values`) and `.xls` (`application/vnd.ms-excel`) are
+ *     not in the upload allow-list at all (`&knauf_allowed_mime` in librechat.yaml;
+ *     `.xls` is a deliberate rejection with "save as .xlsx" guidance), so routing them
+ *     would be dead code until that policy changes.
+ *   - `.txt`/`.md`/`.pdf`/`.docx` — prose belongs in file search.
+ * The caller still decides whether code execution is actually available.
+ */
+export function isKnaufTabularMimeType(mimetype?: string | null): boolean {
+  if (!mimetype) {
+    return false;
+  }
+  return (
+    excelMimeTypes.test(mimetype) ||
+    knaufCsvMimeTypes.test(mimetype) ||
+    knaufJsonMimeTypes.test(mimetype)
+  );
+}
+
 /**
  * Single source for the chat file-picker `accept` attribute (extensions + image
  * MIME types). Mirrors the server-side allow-list (`supportedMimeTypes:

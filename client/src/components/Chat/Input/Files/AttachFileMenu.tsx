@@ -2,6 +2,13 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
+  FileUpload,
+  TooltipAnchor,
+  DropdownPopup,
+  AttachmentIcon,
+  SharePointIcon,
+} from '@librechat/client';
+import {
   Info,
   FileSearch,
   ImageUpIcon,
@@ -9,13 +16,6 @@ import {
   FileImageIcon,
   TerminalSquareIcon,
 } from 'lucide-react';
-import {
-  FileUpload,
-  TooltipAnchor,
-  DropdownPopup,
-  AttachmentIcon,
-  SharePointIcon,
-} from '@librechat/client';
 import {
   Providers,
   EToolResources,
@@ -29,7 +29,6 @@ import {
   knaufChatUploadAccept,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
-import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
   useAgentCapabilities,
@@ -39,6 +38,7 @@ import {
 } from '~/hooks';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
+import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
@@ -318,7 +318,14 @@ const AttachFileMenu = ({
 
       if (capabilities.codeEnabled && codeAllowedByAgent) {
         items.push({
-          label: localize('com_ui_upload_code_environment'),
+          // [knauf] KK20-257 — "Upload file changes" instead of upstream's "Upload to
+          // Code Environment": the same principle as the "Upload files" row above, which
+          // names the outcome rather than the plumbing (KK20-190). Uses a namespaced
+          // Knauf key so upstream's `com_ui_upload_code_environment` value stays intact
+          // for locale syncs. Most tabular files reach the sandbox automatically now
+          // (see useFileHandling), so this row is the deliberate-choice path.
+          label: localize('com_knauf_upload_code_environment'),
+          // End [knauf]
           onClick: () => {
             setToolResource(EToolResources.execute_code);
             // [knauf] updater lifted to module scope to satisfy S2004 (max nesting). KK20-190.

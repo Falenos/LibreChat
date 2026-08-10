@@ -51,6 +51,11 @@ const mockLocalize = jest.fn((key: string) => key);
 let mockConversation: Record<string, string | null | undefined> = {};
 let mockIsTemporary = false;
 let mockFileConfig: Record<string, unknown> | null = null;
+// [knauf] KK20-257 — the two halves of the tabular→code routing gate, mutable so a test
+// can prove routing stops when either one is off.
+let mockCodeEnabled = true;
+let mockCodeAllowedByAgent = true;
+// End [knauf]
 // [knauf] KK20-195 — mutable chat files fixture for duplicate-batch regressions.
 let mockFiles = new Map<string, ExtendedFile>();
 // End [knauf]
@@ -88,6 +93,23 @@ jest.mock('@tanstack/react-query', () => ({
     refetchQueries: mockRefetchQueries,
   })),
 }));
+
+// [knauf] KK20-257 — the tabular→code routing gate reads the global capability and the
+// per-conversation tool permission. Stubbed here so the hook stays testable without the
+// agents-map / react-query providers those hooks would otherwise need.
+jest.mock('~/hooks/Agents/useGetAgentsConfig', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ agentsConfig: { capabilities: [] } })),
+}));
+jest.mock('~/hooks/Agents/useAgentCapabilities', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ codeEnabled: mockCodeEnabled })),
+}));
+jest.mock('~/hooks/Agents/useAgentToolPermissions', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ codeAllowedByAgent: mockCodeAllowedByAgent })),
+}));
+// End [knauf]
 
 jest.mock('~/data-provider', () => ({
   useGetFileConfig: jest.fn(() => ({ data: mockFileConfig })),
@@ -680,6 +702,103 @@ describe('useFileHandling', () => {
 
       expect(mockAddFile).toHaveBeenCalledTimes(1);
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+  });
+  // End [knauf]
+
+  // [knauf] KK20-257 — tabular data belongs in the code sandbox, not the RAG corpus:
+  // embedding a spreadsheet gives searchable chunks but nothing you can aggregate or
+  // chart. Both halves of the gate matter, because each prevents a different silent
+  // failure (an opaque 500 on upload, or a file the model never learns about).
+  describe('tabular→code tool_resource routing', () => {
+    const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    beforeEach(() => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+      mockCodeEnabled = true;
+      mockCodeAllowedByAgent = true;
+    });
+
+    it.each([
+      ['a spreadsheet', 'report.xlsx', XLSX_MIME],
+      ['a CSV', 'data.csv', 'text/csv'],
+      ['JSON', 'payload.json', 'application/json'],
+    ])('routes %s to the code sandbox', async (_label, name, type) => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], name, { type });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+    });
+
+    it('leaves prose documents on file search', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'notes.md', { type: 'text/markdown' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('falls back to file search when the capability is off', async () => {
+      mockCodeEnabled = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('falls back to file search when the conversation cannot run code', async () => {
+      mockCodeAllowedByAgent = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('does not override a destination the user chose explicitly', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.context);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.context);
+    });
+
+    it('still sends a spreadsheet-shaped image down the vision path', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'chart.png', { type: 'image/png' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
     });
   });
   // End [knauf]

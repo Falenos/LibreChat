@@ -15,6 +15,9 @@ import {
   isAssistantsEndpoint,
   getEndpointFileConfig,
   defaultAssistantsVersion,
+  // [knauf] KK20-257 — tabular (spreadsheet/CSV/JSON) classifier for code-sandbox routing.
+  isKnaufTabularMimeType,
+  // End [knauf]
 } from 'librechat-data-provider';
 import type { EModelEndpoint, TEndpointsConfig, TError } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
@@ -22,6 +25,11 @@ import type { ExtendedFile, FileSetter } from '~/common';
 import { logger, validateFiles, cachePreview, getCachedPreview, removePreviewEntry } from '~/utils';
 import { useGetFileConfig, useUploadFileMutation } from '~/data-provider';
 import useLocalize, { TranslationKeys } from '~/hooks/useLocalize';
+// [knauf] KK20-257 — inputs to the tabular-routing availability gate (see handleFiles).
+import useAgentCapabilities from '~/hooks/Agents/useAgentCapabilities';
+import useGetAgentsConfig from '~/hooks/Agents/useGetAgentsConfig';
+import useAgentToolPermissions from '~/hooks/Agents/useAgentToolPermissions';
+// End [knauf]
 import { useDelayedUploadToast } from './useDelayedUploadToast';
 import { useChatContext } from '~/Providers/ChatContext';
 import store, { ephemeralAgentByConvoId } from '~/store';
@@ -271,6 +279,30 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     () => endpointOverride ?? conversation?.endpoint ?? 'default',
     [endpointOverride, conversation?.endpoint],
   );
+
+  // [knauf] KK20-257 — may tabular files be routed to the code sandbox for THIS
+  // conversation? Both halves are required, and each prevents a different silent
+  // failure:
+  //   * `codeEnabled` (global capability) — without it the server throws on upload
+  //     ("Code execution is not enabled for Agents") and the route turns that into an
+  //     opaque 500. It is also what the fail-closed LIBRECHAT_CODE_BASEURL guard
+  //     (packages/api/src/knauf/code/codeEnvGuard.ts) switches off, so a misconfigured
+  //     deployment stops routing here rather than uploading somewhere unintended.
+  //   * `codeAllowedByAgent` — the per-conversation half. The upload can succeed while
+  //     the model never learns the file exists, because primeCodeFiles is gated on the
+  //     resolved tool list (api/server/services/ToolService.js). For default KARL chats
+  //     this is true via `executeCode: true` on the spec; for custom agents it means the
+  //     agent actually has execute_code installed.
+  // When either is false we leave the file on its original destination (file search),
+  // which is exactly the pre-KK20-257 behaviour.
+  const ephemeralAgentValue = useRecoilValue(
+    ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
+  );
+  const { agentsConfig } = useGetAgentsConfig();
+  const { codeEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
+  const { codeAllowedByAgent } = useAgentToolPermissions(agent_id, ephemeralAgentValue);
+  const canRouteTabularToCode = codeEnabled && codeAllowedByAgent;
+  // End [knauf]
 
   const { data: fileConfig = null } = useGetFileConfig({
     select: (data) => mergeFileConfig(data),
@@ -761,13 +793,35 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // but images must stay on the vision path — the server rejects images
         // for the file_search tool_resource. Drop tool_resource for image
         // files so they upload as normal vision attachments. KK20-190.
+        //
+        // KK20-257 adds a second per-file override on the same principle: tabular data
+        // (spreadsheet / CSV / JSON) goes to the code sandbox instead of the RAG corpus.
+        // Embedding a spreadsheet produces chunked text — searchable, but it cannot be
+        // aggregated, pivoted or charted, which is what people actually attach one for.
+        // Only the file_search default is redirected, so an explicit destination the user
+        // picked in the paperclip menu or the drop dialog still wins. Accepted trade-off:
+        // a redirected file is no longer semantically searchable, and the destination is
+        // fixed at upload time (see knauf/docs/code-execution/how-it-works.md).
+        //
+        // This is the single choke point for every upload path — picker, drag-drop, paste
+        // and SharePoint all funnel through handleFiles — so the rule lives here rather
+        // than in each caller. `validateFiles` has already normalised/inferred the MIME
+        // by now, so extension-only files classify correctly.
         const isImageFile = originalFile.type?.startsWith('image/') ?? false;
-        const effectiveToolResource =
+        let effectiveToolResource =
           _toolResource === EToolResources.file_search && isImageFile ? undefined : _toolResource;
+        if (
+          _toolResource === EToolResources.file_search &&
+          !isImageFile &&
+          canRouteTabularToCode &&
+          isKnaufTabularMimeType(originalFile.type)
+        ) {
+          effectiveToolResource = EToolResources.execute_code;
+        }
+        // End [knauf]
         if (effectiveToolResource != null && effectiveToolResource !== '') {
           initialExtendedFile.tool_resource = effectiveToolResource;
         }
-        // End [knauf]
 
         // [knauf] KK20-227 — complete accepted-slot reservation bookkeeping.
         addFile(initialExtendedFile);

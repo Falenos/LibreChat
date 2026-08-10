@@ -198,6 +198,57 @@ in the dead session.
 
 ---
 
+## What the user actually sees (KK20-257)
+
+Three deliberate product choices sit on top of the machinery above.
+
+**Code execution is always on, and there is no chip for it.** KARL chats do not ask
+you to enable code — the same model as artifacts, skills and file search, whose chips
+are all suppressed here too. This is pure configuration, no UI code: the capability
+plus `executeCode: true` on all four user-facing specs turn the tool on, while
+`interface.runCode: false` keeps the composer chip, the tools-menu row and the manual
+per-code-block Run button away. The two gates are independent — the RUN_CODE
+permission never gates agent auto-run — which is what makes "on, but invisible"
+reachable at Tier 0. Flipping `runCode` true later would bring the chip back
+permanently checked; the yaml comment says so at the switch.
+
+**Tabular files go to the sandbox, not the search index.** A `.xlsx`, `.csv` or
+`.json` attachment is routed to `/mnt/data` instead of the RAG corpus, because
+embedding a spreadsheet yields chunked *text*: searchable, but impossible to
+aggregate, pivot or chart — which is what people attach a spreadsheet for. The rule
+lives at one choke point (`useFileHandling`), so it applies to the picker, drag-drop,
+paste and SharePoint alike, and it only redirects the *default* destination — a
+destination you pick explicitly still wins. It is gated on code being genuinely
+available for that conversation; otherwise the file stays on file search exactly as
+before, which is also what happens if `LIBRECHAT_CODE_BASEURL` is unconfigured.
+
+> **Accepted trade-off:** CSV and XLSX *do* embed successfully today (the RAG service
+> has dedicated CSV/Excel loaders), so routing them to the sandbox gives up semantic
+> search over their contents, and the destination is fixed at upload time. Content
+> questions still work — the model reads the file with pandas instead of retrieving
+> chunks. `.tsv` and `.xls` are deliberately not included: neither is in the upload
+> allow-list (`.xls` is a deliberate rejection with "save as .xlsx" guidance), so
+> routing them would be dead code until that policy changes.
+
+**The menu row is called "Upload file changes."** It names the outcome rather than the
+plumbing, the same principle that renamed upstream's "Upload to Provider" to plain
+"Upload files" (KK20-190). It uses a namespaced `com_knauf_*` key so upstream's own
+string is untouched at sync time, and the drag-drop picker uses the same words — one
+destination must not have two names. The agent builder's code-files button keeps the
+upstream wording; that is a different surface.
+
+**Fail-closed, by design.** `@librechat/agents` resolves the Code API as
+`LIBRECHAT_CODE_BASEURL ?? 'https://api.librechat.ai/v1'` — LibreChat's hosted SaaS.
+An environment that enabled the capability without setting that variable would have
+uploaded Knauf files to a third party, at attach time, before the user sent anything.
+`packages/api/src/knauf/code/codeEnvGuard.ts` treats unset / unparseable /
+`api.librechat.ai` as *not configured* and strips the capability, which switches off
+the upload gate, the menu row, tabular routing and tool registration together. It also
+makes the runbook's "unset the variable to turn it off" step true, which it was not
+before.
+
+---
+
 ## A file's journey (CSV → analysis → chart), verified end to end
 
 1. You attach `data.csv` in chat. LibreChat stores it, then (at exec time) calls

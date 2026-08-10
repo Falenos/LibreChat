@@ -533,6 +533,7 @@
   "com_knauf_total_size_partial": "Added {{0}} file(s). {{1}} file(s) were not added because attachments in one message are limited to {{2}} MB.",
   "com_knauf_upload_backlog_full": "This agent has many files waiting to be processed. KARL will wait and retry automatically.",
   "com_knauf_upload_backlog_retry_later": "This file couldn't enter the processing queue yet. Use Retry after the current files finish.",
+  "com_knauf_upload_code_environment": "Upload file changes",
   "com_knauf_upload_formats_cap": "up to {{mb}} MB",
   "com_knauf_upload_formats_data_items": "Excel (.xlsx) · CSV (.csv)",
   "com_knauf_upload_formats_data_label": "Spreadsheets & data",

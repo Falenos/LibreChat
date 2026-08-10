@@ -253,23 +253,35 @@ exactly, or JWT verification 401s.
 
 ---
 
-## 5. Flip the capability (Phase E, agentic-karl PR)
+## 5. Flip the capability (Phase E) — ALREADY MERGED
 
-Only after §1–4 are green in dev:
+**This step is done in code.** KK20-257 landed it rather than leaving it as a
+follow-up, so there is nothing to edit here — but read this section before you
+deploy, because the ordering constraint it used to enforce still applies.
 
-- `librechat.yaml`: add `execute_code` to `endpoints.agents.capabilities`
-  (rewrite the "excluded on purpose" comment). Keep `interface.runCode: false`
-  (KK20-252) — execution is agent auto-run only.
-- Re-enable both code-execution skills and update the guard spec
-  (`packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts`):
-  ```bash
-  git mv skill/_disabled/karl-data-analysis skill/karl-data-analysis
-  git mv skill/_disabled/karl-xlsx          skill/karl-xlsx
-  ```
-  Their `bash_tool` / `/mnt/data` / pandas / xlsx promises are all true on the
-  one pool once the capability is on. (`karl-data-analysis` = general data work;
-  `karl-xlsx` = spreadsheets.)
-- Ships via the release pipeline (the yaml is baked into the image).
+What is already committed:
+
+- `librechat.yaml`: `execute_code` is in `endpoints.agents.capabilities`, and
+  `executeCode: true` is on all four user-facing specs (`karl` plus the three
+  personalities — the parity rule in that file). `interface.runCode: false` is
+  **kept** (KK20-252): execution is agent auto-run only, with no composer chip, no
+  tools-menu row and no manual Run button.
+- Both code-execution skills ship from `skill/`, and
+  `KNAUF_EXPECTED_DEPLOYMENT_SKILLS` lists them.
+- Tabular attachments (`.xlsx`/`.csv`/`.json`) route to the sandbox instead of the
+  RAG corpus, and the attach-menu row reads "Upload file changes".
+
+**The ordering constraint, restated as a deploy gate.** Because `librechat.yaml` is
+baked into the image and stage/prod are re-tags of the dev image, the capability
+travels with the release. It is safe only because it is inert without a configured
+adapter: `packages/api/src/knauf/code/codeEnvGuard.ts` strips `execute_code` unless
+`LIBRECHAT_CODE_BASEURL` names a host we control. So:
+
+- Deploy §1–4 (pool, workload identity, adapter, `LIBRECHAT_CODE_BASEURL`) **first**.
+  Until then the release is a no-op for code execution — users see no code tool and
+  no broken chip, and no file is sent anywhere.
+- After §1–4, code execution turns itself on. There is no second PR to merge, so
+  §6's verification is the real gate.
 
 ---
 
@@ -300,8 +312,23 @@ between two execs transparently re-mints the session.
 
 ## 7. Rollback (in escalating order)
 
-1. **Fast off-switch:** unset `LIBRECHAT_CODE_BASEURL` (values change) — LibreChat
-   falls back to the vendored default and code execution stops; nothing else moves.
+1. **Fast off-switch:** unset `LIBRECHAT_CODE_BASEURL` (values change) — code
+   execution stops and nothing else moves.
+
+   > **This step used to be wrong, and dangerously so.** Unsetting the variable does
+   > *not* stop `@librechat/agents`: it computes
+   > `LIBRECHAT_CODE_BASEURL ?? 'https://api.librechat.ai/v1'`, so an unset value
+   > silently redirects code execution — and every attached file — to LibreChat's
+   > **hosted SaaS**. An operator following the old wording during an incident would
+   > have caused the data egress they were trying to prevent.
+   >
+   > KK20-257 made the step behave as written:
+   > `packages/api/src/knauf/code/codeEnvGuard.ts` treats "unset, unparseable, or
+   > `api.librechat.ai`" as *not configured* and strips the `execute_code` capability,
+   > which switches off the upload gate, the attach-menu row, tabular auto-routing and
+   > tool registration together. Nothing is sent anywhere. Do not remove that guard as
+   > "redundant" — it is what makes this line true.
+
 2. Revert the capability flip PR (a release).
 3. Revert the GitOps PR (removes the service). The pool costs ~nothing idle.
 4. Compromise: rotate `AGK-CODEAPI-JWT-PRIVATE-KEY` in KV + the adapter's public

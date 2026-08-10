@@ -125,7 +125,12 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     }
     if (capabilities.codeEnabled && codeAllowedByAgent) {
       _options.push({
-        label: localize('com_ui_upload_code_environment'),
+        // [knauf] KK20-257 — same destination, same words as the paperclip menu row
+        // (AttachFileMenu). This picker is the drop-path twin of that menu, so the two
+        // must not name one destination two ways. The agent builder's own code-files
+        // button deliberately keeps the upstream wording — different surface.
+        label: localize('com_knauf_upload_code_environment'),
+        // End [knauf]
         value: EToolResources.execute_code,
         icon: <TerminalSquareIcon className="icon-md" />,
       });

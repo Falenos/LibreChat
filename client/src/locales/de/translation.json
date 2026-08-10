@@ -530,6 +530,7 @@
   "com_knauf_total_size_partial": "{{0}} Datei(en) hinzugefügt. {{1}} Datei(en) wurden nicht hinzugefügt, da Anhänge pro Nachricht auf {{2}} MB begrenzt sind.",
   "com_knauf_upload_backlog_full": "Für diesen Agenten warten viele Dateien auf die Verarbeitung. KARL wartet und versucht es automatisch erneut.",
   "com_knauf_upload_backlog_retry_later": "Diese Datei konnte noch nicht in die Verarbeitungswarteschlange aufgenommen werden. Verwenden Sie „Wiederholen“, sobald die aktuellen Dateien fertig sind.",
+  "com_knauf_upload_code_environment": "Dateiänderungen hochladen",
   "com_knauf_upload_formats_cap": "bis zu {{mb}} MB",
   "com_knauf_upload_formats_data_items": "Excel (.xlsx) · CSV (.csv)",
   "com_knauf_upload_formats_data_label": "Tabellen & Daten",
