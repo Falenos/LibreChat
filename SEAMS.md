@@ -758,6 +758,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/__tests__/Files.knauf.spec.tsx` | `Files image recovery contract` | 1–40 | Proves message-level image files preserve stable identity at the Image boundary | Self | NO-TICKET |
 | `api/server/services/Files/images/encode.js` | `encodeAndFormat()` `needsBlobBytes` guard | 132–144 | Treat Azure Blob storage as the authoritative private-media signal even after serverless Foundry normalizes its provider to `openAI`, preventing signed or expired SAS URLs from reaching the Responses API | `api/server/services/Files/images/knauf/encode.spec.js` (`still embeds Azure blob bytes after serverless Foundry normalizes the provider`) | KK20-199 |
 | `client/vite.config.ts` | `VitePWA` plugin registration | 73–76 | Keeps Workbox auto-update, precaching, and guarded stale-asset recovery while removing the activation-time script that force-navigated Edge chat tabs after accepted POSTs | `client/src/knauf/pwa/serviceWorkerConfig.knauf.spec.ts` | KK20-259 |
+| `client/src/components/UnifiedSidebar/ConversationsSection.tsx` | `conversations` active search merge | 85–94 | Keeps the opened message-search result visible and selected when the sidebar title search does not return that conversation | `client/src/knauf/components/Conversations/ConversationsSectionProjectFilter.knauf.spec.tsx` | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
