@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels } from '~/models';
-import type { IChatProject, IConversation } from '~/types';
+import type { IChatProject, IConversation, IMessage } from '~/types';
 import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
 
 jest.mock('~/config/winston', () => ({
@@ -14,6 +14,7 @@ jest.mock('~/config/winston', () => ({
 let mongoServer: InstanceType<typeof MongoMemoryServer>;
 let ChatProject: mongoose.Model<IChatProject>;
 let Conversation: mongoose.Model<IConversation>;
+let Message: mongoose.Model<IMessage>;
 let methods: ChatProjectMethods;
 let modelsToCleanup: string[] = [];
 
@@ -27,6 +28,7 @@ beforeAll(async () => {
 
   ChatProject = mongoose.models.ChatProject as mongoose.Model<IChatProject>;
   Conversation = mongoose.models.Conversation as mongoose.Model<IConversation>;
+  Message = mongoose.models.Message as mongoose.Model<IMessage>;
   methods = createChatProjectMethods(mongoose);
 
   await mongoose.connect(mongoUri);
@@ -46,6 +48,7 @@ afterAll(async () => {
 afterEach(async () => {
   await ChatProject.deleteMany({});
   await Conversation.deleteMany({});
+  await Message.deleteMany({});
 });
 
 async function createConversation(user: string, conversationId: string, title: string) {
@@ -278,9 +281,16 @@ describe('ChatProject methods', () => {
   // End [knauf]
 
   // [knauf] KK20-248 — deleting a project must delete chats still assigned to it.
-  it('deleting a project deletes linked chats', async () => {
+  it('deleting a project deletes linked chats and their messages', async () => {
     const project = await methods.createChatProject(user, { name: 'Delete me' });
     await createConversation(user, 'convo-1', 'First');
+    await Message.create({
+      messageId: 'msg-1',
+      conversationId: 'convo-1',
+      user,
+      text: 'hello',
+      isCreatedByUser: true,
+    });
     await methods.assignConversationToProject(user, 'convo-1', project._id!.toString());
 
     const result = await methods.deleteChatProject(user, project._id!.toString());
@@ -288,10 +298,15 @@ describe('ChatProject methods', () => {
       user,
       conversationId: 'convo-1',
     }).lean<IConversation>();
+    const message = await Message.findOne({
+      user,
+      conversationId: 'convo-1',
+    }).lean<IMessage>();
 
     expect(result.deletedCount).toBe(1);
     expect(result.modifiedCount).toBe(1);
     expect(conversation).toBeNull();
+    expect(message).toBeNull();
   });
   // End [knauf]
 

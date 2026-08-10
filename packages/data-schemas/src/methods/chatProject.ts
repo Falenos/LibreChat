@@ -3,7 +3,7 @@ import logger from '~/config/winston';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { buildRetentionVisibilityFilter } from '~/utils/retention';
 import { escapeRegExp } from '~/utils/string';
-import type { IChatProject, IChatProjectDocument, IConversation } from '~/types';
+import type { IChatProject, IChatProjectDocument, IConversation, IMessage } from '~/types';
 
 export type ChatProjectSortBy = 'name' | 'createdAt' | 'lastConversationAt';
 export type ChatProjectSortDirection = 'asc' | 'desc';
@@ -378,15 +378,25 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const Message = mongoose.models.Message as Model<IMessage>;
     const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
     const project = await ChatProject.findOne(projectFilter).select('_id').lean<IChatProject>();
     if (!project) {
       return { deletedCount: 0, modifiedCount: 0 };
     }
 
-    const [conversationResult, deleteResult] = await Promise.all([
-      // [knauf] KK20-248 — deleting a project also deletes its linked chats.
+    const conversations = await Conversation.find({ user, chatProjectId: projectId })
+      .select('conversationId')
+      .lean<Array<Pick<IConversation, 'conversationId'>>>();
+    const conversationIds = conversations.map((conversation) => conversation.conversationId).filter(Boolean);
+
+    const [conversationResult, _messageResult, deleteResult] = await Promise.all([
+      // [knauf] KK20-248 — deleting a project also deletes its linked chats and
+      // their messages so no dangling message rows remain.
       Conversation.deleteMany({ user, chatProjectId: projectId }),
+      conversationIds.length > 0
+        ? Message.deleteMany({ user, conversationId: { $in: conversationIds } })
+        : Promise.resolve({ deletedCount: 0 }),
       // End [knauf]
       ChatProject.deleteOne(projectFilter),
     ]);
