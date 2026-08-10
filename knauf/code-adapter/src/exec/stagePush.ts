@@ -75,27 +75,28 @@ export function movePlan(inputs: ResolvedInput[]): MoveInstruction[] {
     .map((i) => ({ from: i.pushedAs, to: i.finalName }));
 }
 
+/**
+ * Push staged inputs into the ACA session **sequentially**.
+ *
+ * ACA dynamic-sessions file upload is NOT concurrency-safe: parallel uploads to
+ * the same (cold) session clobber each other and only one file survives — which
+ * one is a race. Verified live against sp-code-py-spike (Aug 2026): pushing 4
+ * files with any concurrency left a single random file in /mnt/data; pushing one
+ * at a time reliably lands all of them. Uploads are few and small, so the serial
+ * cost is negligible; correctness wins. Do NOT reintroduce a worker pool here.
+ */
 export async function pushInputs(
   inputs: ResolvedInput[],
   sessionId: string,
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger },
 ): Promise<void> {
-  const CONCURRENCY = 4;
-  const queue = [...inputs];
-  const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
-    for (;;) {
-      const input = queue.shift();
-      if (input == null) {
-        return;
-      }
-      const data = await deps.blob.getBuffer(input.doc.blobPath);
-      await deps.aca.pushFile(sessionId, input.pushedAs, data, input.doc.contentType);
-      await deps.repo.touch(input.doc.sessionId, input.doc.fileId);
-      deps.logger.debug(
-        { sessionId, file: input.finalName, bytes: data.length },
-        'staged file pushed to session',
-      );
-    }
-  });
-  await Promise.all(workers);
+  for (const input of inputs) {
+    const data = await deps.blob.getBuffer(input.doc.blobPath);
+    await deps.aca.pushFile(sessionId, input.pushedAs, data, input.doc.contentType);
+    await deps.repo.touch(input.doc.sessionId, input.doc.fileId);
+    deps.logger.debug(
+      { sessionId, file: input.finalName, bytes: data.length },
+      'staged file pushed to session',
+    );
+  }
 }

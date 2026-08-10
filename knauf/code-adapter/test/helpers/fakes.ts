@@ -136,13 +136,21 @@ export class FakeAcaClient implements AcaClient {
   pushed: { identifier: string; name: string; data: Buffer }[] = [];
   sessionFiles: AcaSessionFile[] = [];
   fileContents = new Map<string, Buffer>();
+  /** Peak number of pushFile calls in flight at once (ACA uploads must not overlap). */
+  maxConcurrentPushes = 0;
+  private activePushes = 0;
 
   async execute(identifier: string, code: string): Promise<AcaExecOutcome> {
     return this.executeImpl(identifier, code);
   }
 
   async pushFile(identifier: string, name: string, data: Buffer): Promise<void> {
+    this.activePushes += 1;
+    this.maxConcurrentPushes = Math.max(this.maxConcurrentPushes, this.activePushes);
+    // Yield so any overlapping caller is observed before this one resolves.
+    await new Promise((r) => setImmediate(r));
     this.pushed.push({ identifier, name, data });
+    this.activePushes -= 1;
   }
 
   async listFiles(): Promise<AcaSessionFile[]> {
