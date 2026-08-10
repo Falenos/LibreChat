@@ -396,6 +396,37 @@ describe('AttachFileMenu', () => {
       expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
       expect(screen.getByText('Upload file changes')).toBeInTheDocument();
     });
+
+    // [knauf] KK20-257 — "Supported file types" is help text, not a destination, so it
+    // belongs after every upload choice. It previously sat between two of them, which
+    // split the destinations apart and read as a third thing to upload to.
+    it('lists the supported-formats row last, after every upload destination', () => {
+      setupMocks();
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: true,
+        fileSearchEnabled: true,
+        codeEnabled: true,
+      });
+      mockUseAgentToolPermissions.mockReturnValue({
+        fileSearchAllowedByAgent: true,
+        codeAllowedByAgent: true,
+        provider: undefined,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      openMenu();
+
+      const labels = screen
+        .getAllByTestId(/^menu-item-\d+$/)
+        .map((item) => item.textContent?.trim())
+        .filter((label): label is string => label != null && label !== '');
+
+      expect(labels).toContain('Supported file types');
+      expect(labels[labels.length - 1]).toBe('Supported file types');
+      expect(labels.indexOf('Upload file changes')).toBeLessThan(
+        labels.indexOf('Supported file types'),
+      );
+    });
+    // End [knauf]
   });
 
   // [knauf] KK20-190 — on a Knauf Azure chat, "Upload files" routes

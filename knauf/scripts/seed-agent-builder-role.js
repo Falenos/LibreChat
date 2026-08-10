@@ -40,12 +40,18 @@ const PERMISSIONS = {
   AGENTS:         { USE: true, CREATE: true, SHARE: false, SHARE_PUBLIC: false },
   MULTI_CONVO:    { USE: true },
   TEMPORARY_CHAT: { USE: true },
-  // KK20-252 — Run Code is off platform-wide. `interface.runCode: false` in
-  // librechat.yaml only re-seeds USER and ADMIN (permissions.ts:125), so leaving
-  // this true would have left AI Champions as the one role still holding
-  // RUN_CODE.USE — backed by a sandbox that is not deployed on AGK, so the Run
-  // button would fail every time. Explicit false rather than deleted: the update
-  // below is a full `$set` replace, and the next reader should see the intent.
+  // KK20-252 / KK20-257 — stays false, and the reason has changed: do not "fix" this.
+  // `interface.runCode: false` in librechat.yaml only re-seeds USER and ADMIN
+  // (permissions.ts:125), so leaving this true would make AI Champions the one role
+  // still holding RUN_CODE.USE. Originally that mattered because no sandbox existed.
+  // A sandbox exists now (KK20-257, the code-adapter), but this permission was never
+  // what enabled it: code execution runs from the `execute_code` capability plus the
+  // per-spec `executeCode` flag, and RUN_CODE.USE gates only the composer chip, its
+  // tools-menu row and the manual per-code-block Run button. KARL deliberately has
+  // none of those — code execution is always on and has no toggle — so granting this
+  // would not add a feature, it would add a chip we removed on purpose. Explicit false
+  // rather than deleted: the update below is a full `$set` replace, and the next
+  // reader should see the intent.
   RUN_CODE:       { USE: false },
   WEB_SEARCH:     { USE: true },
   PEOPLE_PICKER:  { VIEW_USERS: false, VIEW_GROUPS: false, VIEW_ROLES: false },
