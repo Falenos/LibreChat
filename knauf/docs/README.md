@@ -39,6 +39,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [code-execution/backend-decision.md](code-execution/backend-decision.md)                       | Why ACA dynamic sessions, not a self-hosted sandbox or Azure OpenAI Assistants                                                                                            |
 | [code-execution/placement-and-justification.md](code-execution/placement-and-justification.md) | Why the adapter is a separate sidecar rather than code inside LibreChat — re-verified after building it                                                                   |
 | [code-execution/deployment.md](code-execution/deployment.md)                                   | Infra deployment runbook — Terraform (pool + workload identity) → GitOps service → LibreChat wiring → capability flip; verified-environment table, verification, rollback |
+| [code-execution/scaling.md](code-execution/scaling.md)                                         | Capacity & scaling — the four concurrency domains, pool-slot cost per execution (exec + 300 s cooldown), throughput math, adapter memory sizing, timeout ladder, knobs    |
 
 Operational reference (env, contract, run/test/deploy) lives with the service: [`knauf/code-adapter/README.md`](../code-adapter/README.md).
 
