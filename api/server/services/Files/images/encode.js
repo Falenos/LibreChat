@@ -130,13 +130,17 @@ async function encodeAndFormat(req, files, params, mode) {
 
     const preparePayload = encodingMethods[source].prepareImagePayload;
     /* Base64-only providers and private Azure Foundry inputs need blob bytes. */
-    // [knauf] KK20-199 — Foundry's Chat Completions image fetcher cannot access
-    // private Blob Storage even through the application's short-lived SAS URL.
+    // [knauf] KK20-199 — Foundry's image fetcher cannot access private Blob
+    // Storage even through the application's short-lived SAS URL. Match the
+    // storage source too because serverless Foundry normalizes its provider to
+    // `openAI` before this function runs.
     // Read through the existing authenticated storage strategy and send the
     // provider-supported data URL. Image-bearing agent tracing is disabled at
     // Run creation so these bytes never enter OTEL/Langfuse payloads.
     const needsBlobBytes =
-      base64Only.has(effectiveEndpoint) || provider === EModelEndpoint.azureOpenAI;
+      source === FileSources.azure_blob ||
+      base64Only.has(effectiveEndpoint) ||
+      provider === EModelEndpoint.azureOpenAI;
     if (blobStorageSources.has(source) && needsBlobBytes) {
       try {
         const downloadStream = encodingMethods[source].getDownloadStream;
