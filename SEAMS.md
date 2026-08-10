@@ -1213,6 +1213,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/components/Chat/KnaufModelSelector.tsx` | `~/components/Chat/Menus/Endpoints/*`, `~/hooks`, `~/store`, Recoil, LibreChat data provider | Medium — repairs first-login raw-endpoint fallback by auto-binding the configured KARL default on fresh chats while preserving model-spec and custom-agent selections | `KnaufModelSelector.knauf.spec.ts` | KK20-256 |
 | `client/src/knauf/components/Chat/KnaufModelSelector.knauf.spec.ts` | Subject under test; LibreChat endpoint enum | Low — pins raw Azure fallback as replaceable and model-spec/custom-agent selections as authoritative | Self | KK20-256 |
 | `client/src/knauf/pwa/serviceWorkerConfig.knauf.spec.ts` | None — reads the upstream Vite configuration through Node `fs`/`path` | Low — test-only guard proving production builds cannot re-import the Edge activation-time client reloader | Self | KK20-259 |
+| `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`; Sandpack export shell and preview iframe DOM | Medium — preserves the existing unchanged-markup readiness path while allowing clocks and other live previews to export after a longer stable-layout interval | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

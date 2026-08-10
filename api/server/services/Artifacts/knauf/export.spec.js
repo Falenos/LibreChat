@@ -332,6 +332,46 @@ describe('artifact renderer', () => {
     delete global.document;
   });
 
+  it('exports a live preview once its layout remains stable', async () => {
+    await renderArtifact(artifact, 'png');
+    const readiness = mockPreviewWaitForFunction.mock.calls[0][0];
+    const now = jest
+      .spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(2000)
+      .mockReturnValueOnce(3001);
+    const body = {
+      childElementCount: 1,
+      innerText: '15:16:07',
+      innerHTML: '<main>15:16:07</main>',
+      scrollWidth: 1440,
+      scrollHeight: 900,
+    };
+    global.window = {};
+    global.document = {
+      body,
+      documentElement: { scrollWidth: 1440, scrollHeight: 900 },
+      getElementsByTagName: () => ({ length: 2 }),
+      querySelector: () => null,
+    };
+
+    expect(readiness(false)).toBe(false);
+    body.innerText = '15:16:08';
+    body.innerHTML = '<main>15:16:08</main>';
+    expect(readiness(false)).toBe(false);
+    body.innerText = '15:16:09';
+    body.innerHTML = '<main>15:16:09</main>';
+    expect(readiness(false)).toBe(false);
+    body.innerText = '15:16:10';
+    body.innerHTML = '<main>15:16:10</main>';
+    expect(readiness(false)).toBe(true);
+
+    now.mockRestore();
+    delete global.window;
+    delete global.document;
+  });
+
   it('removes legacy prose outside a compiled shared artifact fence', async () => {
     let renderedSnapshot;
     mockGoto.mockImplementation(async (url) => {
