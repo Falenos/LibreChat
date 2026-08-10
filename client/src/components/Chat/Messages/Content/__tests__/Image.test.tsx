@@ -196,6 +196,24 @@ describe('Image', () => {
         expect(screen.getByTestId('dialog-image')).toHaveAttribute('data-src', 'blob:owned-image'),
       );
     });
+
+    it('retries a transient recovery failure while the dialog stays open', async () => {
+      mockDownloadOwned
+        .mockResolvedValueOnce({ data: undefined, error: new Error('503') })
+        .mockResolvedValueOnce({ data: 'blob:owned-image' });
+      render(
+        <Image
+          {...defaultProps}
+          fileId="file-1"
+          imagePath="https://storage.example/image.png?se=2000-01-01T00:00:00Z"
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button'));
+
+      await waitFor(() => expect(mockDownloadOwned).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+      expect(screen.getByTestId('dialog-image')).toHaveAttribute('data-src', 'blob:owned-image');
+    });
     // End [knauf]
   });
 
