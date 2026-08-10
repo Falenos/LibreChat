@@ -37,6 +37,7 @@ jobs:
       AGK_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
       AGK_PROD_ACR_NAME: acragkhubprod001
       AGK_PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl
+      AGK_PROD_SMOKE_IMAGE_REPOSITORY: agentic-karl-prod/smoke/agentic-karl
       AGK_PROD_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl
       AGK_PROD_MEILI_CONFIG_DIRECTORY: agentic-karl/prod/services/agentic-karl-meilisearch
       AGK_PROD_DOMAIN: https://agentic-karl.knauf.com
@@ -114,9 +115,9 @@ jobs:
 
           cleanup() {
             az acr repository delete \
-              --subscription "$AGK_SUBSCRIPTION_ID" \
+              --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
               --name "$AGK_PROD_ACR_NAME" \
-              --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
+              --image "$AGK_PROD_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
               --yes >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
@@ -126,13 +127,13 @@ jobs:
             --name "$AGK_PROD_ACR_NAME" \
             --registry "$SOURCE_REGISTRY_ID" \
             --source "$AGK_IMAGE_REPOSITORY:$VERSION" \
-            --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --image "$AGK_PROD_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --force
 
           az acr repository show-tags \
             --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
             --name "$AGK_PROD_ACR_NAME" \
-            --repository "$AGK_PROD_IMAGE_REPOSITORY" \
+            --repository "$AGK_PROD_SMOKE_IMAGE_REPOSITORY" \
             --query "[?@=='$SMOKE_TAG']" \
             -o tsv | grep -Fx "$SMOKE_TAG"
           echo "Smoke import succeeded"
@@ -140,7 +141,7 @@ jobs:
           az acr repository delete \
             --subscription "$AGK_PROD_SUBSCRIPTION_ID" \
             --name "$AGK_PROD_ACR_NAME" \
-            --image "$AGK_PROD_IMAGE_REPOSITORY:$SMOKE_TAG" \
+            --image "$AGK_PROD_SMOKE_IMAGE_REPOSITORY:$SMOKE_TAG" \
             --yes
           trap - EXIT
         env:
