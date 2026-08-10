@@ -100,6 +100,9 @@ export default function OpenAIImageGen({
     height: imageHeight,
     filepath = null,
     filename = '',
+    // [knauf] Authenticated image recovery needs the stable file id. (NO-TICKET)
+    file_id,
+    // End [knauf]
   } = (attachment as TFile & TAttachmentMetadata) || {};
 
   let origWidth = width ?? imageWidth;
@@ -240,15 +243,18 @@ export default function OpenAIImageGen({
                 height={dimensions.height}
               />
             )}
+            {/* [knauf] Pass stable identity so failed/expired image URLs can use authenticated recovery. (NO-TICKET) */}
             {filepath && (
               <Image
                 altText={filename}
                 imagePath={filepath}
+                fileId={file_id}
                 width={Number(dimensions.width?.split('px')[0])}
                 height={Number(dimensions.height?.split('px')[0])}
                 args={parsedArgs}
               />
             )}
+            {/* End [knauf] */}
           </div>
         </div>
       )}
