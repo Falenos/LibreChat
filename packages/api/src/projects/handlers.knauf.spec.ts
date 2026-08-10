@@ -189,4 +189,22 @@ describe('createProjectHandlers project files [knauf]', () => {
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'Project file not found' });
   });
+
+  it('deletes a project through the aggregate delete path only', async () => {
+    const deps = createDeps({
+      deleteChatProject: jest.fn(async () => ({ deletedCount: 1, modifiedCount: 2 })),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.deleteProject(
+      { params: { projectId }, user: { id: userId } } as any,
+      res,
+    );
+
+    expect(deps.deleteChatProject).toHaveBeenCalledWith(userId, projectId);
+    expect(deps.deleteChatProjectSourcesForProject).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ deletedCount: 1, modifiedCount: 2 });
+  });
 });

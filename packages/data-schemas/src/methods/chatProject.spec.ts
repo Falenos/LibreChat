@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels } from '~/models';
-import type { IChatProject, IConversation, IMessage } from '~/types';
+import type { IChatProject, IChatProjectSource, IConversation, IMessage } from '~/types';
 import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
 
 jest.mock('~/config/winston', () => ({
@@ -21,6 +21,7 @@ let ConversationTag: mongoose.Model<{
   count: number;
   position: number;
 }>;
+let ChatProjectSource: mongoose.Model<IChatProjectSource>;
 let methods: ChatProjectMethods;
 let modelsToCleanup: string[] = [];
 
@@ -41,6 +42,7 @@ beforeAll(async () => {
     count: number;
     position: number;
   }>;
+  ChatProjectSource = mongoose.models.ChatProjectSource as mongoose.Model<IChatProjectSource>;
   methods = createChatProjectMethods(mongoose);
 
   await mongoose.connect(mongoUri);
@@ -62,6 +64,7 @@ afterEach(async () => {
   await Conversation.deleteMany({});
   await Message.deleteMany({});
   await ConversationTag.deleteMany({});
+  await ChatProjectSource.deleteMany({});
 });
 
 async function createConversation(user: string, conversationId: string, title: string) {
@@ -294,9 +297,16 @@ describe('ChatProject methods', () => {
   // End [knauf]
 
   // [knauf] KK20-248 — deleting a project must delete chats still assigned to it.
-  it('deleting a project deletes linked chats, messages, and updates tag counts', async () => {
+  it('deleting a project deletes linked chats, messages, sources, and updates tag counts', async () => {
     const project = await methods.createChatProject(user, { name: 'Delete me' });
     await createConversation(user, 'convo-1', 'First');
+    await ChatProjectSource.create({
+      user,
+      projectId: project._id!.toString(),
+      file_id: 'project-file-1',
+      sourceType: 'file',
+      status: 'ready',
+    });
     await Conversation.updateOne(
       { user, conversationId: 'convo-1' },
       { $set: { tags: ['work', 'work', 'personal'] } },
@@ -323,6 +333,10 @@ describe('ChatProject methods', () => {
       user,
       conversationId: 'convo-1',
     }).lean<IMessage>();
+    const sources = await ChatProjectSource.find({
+      user,
+      projectId: project._id!.toString(),
+    }).lean<IChatProjectSource[]>();
     const workTag = await ConversationTag.findOne({ user, tag: 'work' }).lean<{
       user: string;
       tag: string;
@@ -340,6 +354,7 @@ describe('ChatProject methods', () => {
     expect(result.modifiedCount).toBe(1);
     expect(conversation).toBeNull();
     expect(message).toBeNull();
+    expect(sources).toEqual([]);
     expect(workTag?.count).toBe(1);
     expect(personalTag?.count).toBe(0);
   });

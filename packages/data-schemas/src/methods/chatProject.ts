@@ -3,7 +3,13 @@ import logger from '~/config/winston';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { buildRetentionVisibilityFilter } from '~/utils/retention';
 import { escapeRegExp } from '~/utils/string';
-import type { IChatProject, IChatProjectDocument, IConversation, IMessage } from '~/types';
+import type {
+  IChatProject,
+  IChatProjectDocument,
+  IChatProjectSourceDocument,
+  IConversation,
+  IMessage,
+} from '~/types';
 import { decrementTagCounts } from './conversationTag';
 
 export type ChatProjectSortBy = 'name' | 'createdAt' | 'lastConversationAt';
@@ -378,6 +384,7 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const ChatProjectSource = mongoose.models.ChatProjectSource as Model<IChatProjectSourceDocument>;
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
     const Message = mongoose.models.Message as Model<IMessage>;
     const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
@@ -400,16 +407,14 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
       }
     }
 
-    const [conversationResult, _messageResult, deleteResult] = await Promise.all([
-      // [knauf] KK20-248 — deleting a project also deletes its linked chats and
-      // their messages so no dangling message rows remain.
-      Conversation.deleteMany({ user, chatProjectId: projectId }),
-      conversationIds.length > 0
-        ? Message.deleteMany({ user, conversationId: { $in: conversationIds } })
-        : Promise.resolve({ deletedCount: 0 }),
-      // End [knauf]
-      ChatProject.deleteOne(projectFilter),
-    ]);
+    // [knauf] KK20-248 — delete bottom-up: children first, aggregate root last.
+    if (conversationIds.length > 0) {
+      await Message.deleteMany({ user, conversationId: { $in: conversationIds } });
+    }
+    await ChatProjectSource.deleteMany({ user, projectId, sourceType: 'file' });
+    const conversationResult = await Conversation.deleteMany({ user, chatProjectId: projectId });
+    const deleteResult = await ChatProject.deleteOne(projectFilter);
+    // End [knauf]
 
     if ((conversationResult.deletedCount ?? 0) > 0) {
       await decrementTagCounts(mongoose, user, tagDecrements);

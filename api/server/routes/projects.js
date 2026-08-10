@@ -74,7 +74,6 @@ router.delete('/:projectId', async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    await db.deleteChatProjectSourcesForProject(req.user.id, projectId);
     return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({ error: 'Error deleting project' });

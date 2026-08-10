@@ -84,9 +84,8 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(db.getFiles).not.toHaveBeenCalled();
   });
 
-  it('deletes the project and its source associations without deleting library files', async () => {
+  it('deletes the project via the aggregate delete path without deleting library files', async () => {
     db.deleteChatProject.mockResolvedValue({ deletedCount: 1, modifiedCount: 0 });
-    db.deleteChatProjectSourcesForProject.mockResolvedValue(2);
 
     const response = await request(app).delete('/api/projects/project-1');
 
@@ -95,7 +94,7 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(db.listChatProjectSources).not.toHaveBeenCalled();
     expect(db.getFiles).not.toHaveBeenCalled();
     expect(db.deleteChatProject).toHaveBeenCalledWith('user-1', 'project-1');
-    expect(db.deleteChatProjectSourcesForProject).toHaveBeenCalledWith('user-1', 'project-1');
+    expect(db.deleteChatProjectSourcesForProject).not.toHaveBeenCalled();
   });
 });
 // End [knauf]

@@ -293,7 +293,6 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
       if (!result.deletedCount) {
         return res.status(404).json({ error: PROJECT_NOT_FOUND });
       }
-      await deps.deleteChatProjectSourcesForProject(userId, projectId);
       return res.status(200).json(result);
     } catch (error) {
       logger.error('[projects] Error deleting project', error);
