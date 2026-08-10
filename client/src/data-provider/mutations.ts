@@ -512,7 +512,7 @@ export const useDeleteConversationMutation = (
   t.TDeleteConversationResponse,
   unknown,
   t.TDeleteConversationRequest,
-  unknown
+  { deletedFileIds: string[] }
 > => {
   const queryClient = useQueryClient();
 
@@ -520,10 +520,26 @@ export const useDeleteConversationMutation = (
     (payload: t.TDeleteConversationRequest) =>
       dataService.deleteConversation(payload) as Promise<t.TDeleteConversationResponse>,
     {
-      onMutate: async () => {
+      onMutate: async (vars) => {
         await queryClient.cancelQueries([QueryKeys.allConversations]);
         await queryClient.cancelQueries([QueryKeys.archivedConversations]);
-        // could store old state if needed for rollback
+        const deletedMessages = vars.conversationId
+          ? queryClient.getQueryData<t.TMessage[]>([QueryKeys.messages, vars.conversationId])
+          : undefined;
+        const deletedFileIds = new Set<string>();
+        deletedMessages?.forEach((message) => {
+          message.files?.forEach((file) => {
+            if (file?.file_id) {
+              deletedFileIds.add(file.file_id);
+            }
+          });
+          message.attachments?.forEach((attachment) => {
+            if (attachment?.file_id) {
+              deletedFileIds.add(attachment.file_id);
+            }
+          });
+        });
+        return { deletedFileIds: [...deletedFileIds] };
       },
       onError: () => {
         // TODO: CHECK THIS, no-op; restore if needed
@@ -532,6 +548,10 @@ export const useDeleteConversationMutation = (
         const deletedConversation = vars.conversationId
           ? queryClient.getQueryData<t.TConversation>([QueryKeys.conversation, vars.conversationId])
           : undefined;
+        // [knauf] KK20-203 — evict deleted chat attachment rows from the global
+        // files cache immediately so the left rail stays in sync without a refresh.
+        const deletedFileIds = new Set(context?.deletedFileIds ?? []);
+        // End [knauf]
         let deletedProjectId = deletedConversation?.chatProjectId;
         if (!deletedProjectId && vars.conversationId) {
           const cacheKeys = [QueryKeys.allConversations, QueryKeys.projectConversations];
@@ -588,7 +608,21 @@ export const useDeleteConversationMutation = (
           queryKey: [QueryKeys.conversation, vars.conversationId],
           exact: true,
         });
+        queryClient.removeQueries({
+          queryKey: [QueryKeys.messages, vars.conversationId],
+          exact: true,
+        });
 
+        // [knauf] KK20-203 — prune deleted chat files from the shared library cache
+        // before the background refetch so stale rows do not linger in the UI.
+        if (deletedFileIds.size > 0) {
+          queryClient.setQueryData([QueryKeys.files], (files: t.TFile[] | undefined) =>
+            (files ?? []).filter((file) => !deletedFileIds.has(file.file_id)),
+          );
+        }
+
+        queryClient.invalidateQueries([QueryKeys.files]);
+        // End [knauf]
         queryClient.invalidateQueries({
           queryKey: [QueryKeys.allConversations],
           refetchPage: (_, index) => index === 0,
