@@ -16,11 +16,13 @@ jest.mock('librechat-data-provider', () => {
     dataService: {
       ...actual.dataService,
       getFileDownload: jest.fn(() => Promise.resolve({ data: new Blob(), headers: {} })),
+      getProjectFileDownload: jest.fn(() => Promise.resolve({ data: new Blob(), headers: {} })),
     },
   };
 });
 
 const mockGetFileDownload = dataService.getFileDownload as jest.Mock;
+const mockGetProjectFileDownload = dataService.getProjectFileDownload as jest.Mock;
 
 const createWrapper = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -34,7 +36,10 @@ beforeAll(() => {
   global.URL.createObjectURL = jest.fn(() => 'blob:mock');
 });
 
-beforeEach(() => mockGetFileDownload.mockClear());
+beforeEach(() => {
+  mockGetFileDownload.mockClear();
+  mockGetProjectFileDownload.mockClear();
+});
 
 describe('[knauf] KK20-221 — useFileDownload AbortSignal', () => {
   it('forwards an AbortSignal as the third arg to getFileDownload', async () => {
@@ -51,5 +56,23 @@ describe('[knauf] KK20-221 — useFileDownload AbortSignal', () => {
     expect(userId).toBe('user-1');
     expect(fileId).toBe('file-1');
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('uses the project-scoped download route when projectId is provided', async () => {
+    const { result } = renderHook(
+      () => useFileDownload(undefined, 'file-1', { direct: false, projectId: 'project-1' }),
+      { wrapper: createWrapper() },
+    );
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(mockGetProjectFileDownload).toHaveBeenCalled();
+    const [projectId, fileId, signal] = mockGetProjectFileDownload.mock.calls[0];
+    expect(projectId).toBe('project-1');
+    expect(fileId).toBe('file-1');
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(mockGetFileDownload).not.toHaveBeenCalled();
   });
 });

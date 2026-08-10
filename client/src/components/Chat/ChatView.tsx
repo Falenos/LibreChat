@@ -19,7 +19,6 @@ import { useGetMessagesByConvoId } from '~/data-provider';
 // [knauf] Conversation-scoped transaction cost state for message chrome and composer totals.
 import { KnaufChatCostProvider } from '~/knauf/components/Chat/KnaufCostContext';
 // End [knauf]
-import ProjectLandingChip from './ProjectLandingChip';
 import MessagesView from './Messages/MessagesView';
 import Presentation from './Presentation';
 import ChatForm from './Input/ChatForm';
@@ -106,7 +105,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
           <KnaufChatCostProvider conversationId={conversationId}>
             <Presentation>
               <div className="relative flex h-full w-full flex-col">
-                <Header />
+                <Header project={project} />
                 <>
                   <div
                     className={cn(
@@ -118,8 +117,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                   >
                     {content}
                     {/* [knauf] Keep the composer wrapped for landing-page centering; fold in
-                        upstream's project-landing chip + ChatForm placeholder. */}
-                    {isProjectLandingPage && project && <ProjectLandingChip project={project} />}
+                        upstream's project-scoped ChatForm placeholder. */}
                     <div
                       className={cn(
                         'w-full',

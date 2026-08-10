@@ -78,7 +78,8 @@ const { logger } = require('@librechat/data-schemas');
 // [knauf] KK20-243 — `Role` for the SKILLS.USE chat-path gate regression test.
 const { User, AclEntry, Role } = require('~/db/models');
 // End [knauf]
-const { createAgent, createSkill } = require('~/models');
+const db = require('~/models');
+const { createAgent, createSkill } = db;
 
 jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
@@ -283,6 +284,54 @@ describe('initializeClient — processAgent ACL gate', () => {
     const initializeParams = mockInitializeAgent.mock.calls[0][0];
     expect(initializeParams.accessibleSkillIds.map(String)).toContain(skill._id.toString());
     expect(initializeParams.skillAuthoringAvailable).toBe(false);
+  });
+
+  it('adds ready project knowledge files to the primary agent request files', async () => {
+    const projectId = new mongoose.Types.ObjectId();
+    await mongoose.models.ChatProject.create({
+      _id: projectId,
+      user: testUser._id,
+      name: 'Sample Project',
+      instructions: 'Use project docs',
+    });
+    await mongoose.models.File.create({
+      user: testUser._id,
+      file_id: 'project-file-1',
+      filename: 'project-knowledge.txt',
+      filepath: '/uploads/project-knowledge.txt',
+      type: 'text/plain',
+      source: 'azure_blob',
+      embedded: true,
+      bytes: 16,
+    });
+    await mongoose.models.ChatProjectSource.create({
+      user: testUser._id,
+      projectId,
+      file_id: 'project-file-1',
+      sourceType: 'file',
+      status: 'ready',
+    });
+
+    const endpointOption = makeEndpointOption();
+    endpointOption.chatProjectId = projectId.toString();
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+
+    await initializeClient({
+      req: makeReq(),
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption,
+    });
+
+    expect(mockInitializeAgent.mock.calls[0][0].requestFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file_id: 'project-file-1',
+          filename: 'project-knowledge.txt',
+          embedded: true,
+        }),
+      ]),
+    );
   });
 
   // [knauf] KK20-243 — SKILLS.USE must gate the CHAT path, not only the REST routes.

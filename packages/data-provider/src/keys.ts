@@ -47,6 +47,9 @@ export enum QueryKeys {
   promptGroup = 'promptGroup',
   projects = 'projects',
   project = 'project',
+  // [knauf] KK20-248 — cache key for project knowledge files.
+  projectFiles = 'projectFiles',
+  // End [knauf]
   projectConversations = 'projectConversations',
   categories = 'categories',
   randomPrompts = 'randomPrompts',

@@ -884,6 +884,39 @@ export function assignConversationToProject(
   return request.put(endpoints.projectConversation(conversationId), { projectId });
 }
 
+// [knauf] KK20-248 — project knowledge file API clients.
+export function listProjectFiles(projectId: string): Promise<t.TChatProjectFilesResponse> {
+  return request.get(endpoints.projectFiles(projectId));
+}
+
+export function addProjectFile(
+  payload: t.TAddChatProjectFileRequest,
+): Promise<t.TChatProjectFile> {
+  const { projectId, ...data } = payload;
+  return request.post(endpoints.projectFiles(projectId), data);
+}
+
+export function deleteProjectFile(
+  payload: t.TDeleteChatProjectFileRequest,
+): Promise<t.TDeleteChatProjectFileResponse> {
+  return request.delete(endpoints.projectFile(payload.projectId, payload.file_id));
+}
+
+export function getProjectFileDownload(
+  projectId: string,
+  file_id: string,
+  signal?: AbortSignal,
+): Promise<AxiosResponse> {
+  return request.getResponse(endpoints.projectFileDownload(projectId, file_id), {
+    responseType: 'blob',
+    headers: {
+      Accept: 'application/octet-stream',
+    },
+    signal,
+  });
+}
+// End [knauf]
+
 export function pinConversation(
   payload: t.TPinConversationRequest,
 ): Promise<t.TPinConversationResponse> {

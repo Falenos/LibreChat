@@ -1458,6 +1458,30 @@ class BaseClient {
       }
     }
 
+    // [knauf] KK20-248 — project knowledge files are explicit project resources.
+    // They are fetched through project-source ownership checks, then injected only
+    // into the latest message context so ordinary chat uploads remain private to
+    // their conversation history.
+    const projectFileIds =
+      this.options.chatProjectId && this.options.req?.user?.id
+        ? await db.listReadyChatProjectSourceFileIds(
+            this.options.req.user.id,
+            this.options.chatProjectId,
+          )
+        : [];
+    const projectFileFilter = buildOwnerFileFilter(projectFileIds, this.options.req?.user);
+    const projectFiles = [];
+    if (projectFileFilter) {
+      const files = (await db.getFiles(projectFileFilter, {}, {})) ?? [];
+      for (const file of files) {
+        if (file?.file_id && !contextSeen.has(file.file_id)) {
+          projectFiles.push(file);
+        }
+      }
+    }
+    const latestMessage = _messages[_messages.length - 1];
+    // End [knauf]
+
     /**
      *
      * @param {TMessage} message
@@ -1483,6 +1507,17 @@ class BaseClient {
           }
         }
       }
+      // [knauf] KK20-248 — project files are shared at project scope, but only the
+      // latest outbound turn receives them as retrieval context.
+      if (message === latestMessage && projectFiles.length > 0) {
+        for (const file of projectFiles) {
+          if (!contextSeen.has(file.file_id)) {
+            contextFiles.push(file);
+            contextSeen.add(file.file_id);
+          }
+        }
+      }
+      // End [knauf]
 
       const rehydratedFiles = rehydrateMessageFileRefs(message.files, authorizedFilesById);
       if (rehydratedFiles) {
@@ -1518,10 +1553,13 @@ class BaseClient {
     const promises = [];
 
     for (const message of _messages) {
-      if (!message.files && !message.attachments) {
+      // [knauf] KK20-248 — process the latest turn even without chat attachments
+      // when project knowledge files should be injected.
+      if (!message.files && !message.attachments && !(message === latestMessage && projectFiles.length)) {
         promises.push(message);
         continue;
       }
+      // End [knauf]
 
       promises.push(processMessage(message));
     }

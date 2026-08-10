@@ -3,7 +3,14 @@ import logger from '~/config/winston';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { buildRetentionVisibilityFilter } from '~/utils/retention';
 import { escapeRegExp } from '~/utils/string';
-import type { IChatProject, IChatProjectDocument, IConversation } from '~/types';
+import type {
+  IChatProject,
+  IChatProjectDocument,
+  IChatProjectSourceDocument,
+  IConversation,
+  IMessage,
+} from '~/types';
+import { decrementTagCounts } from './conversationTag';
 
 export type ChatProjectSortBy = 'name' | 'createdAt' | 'lastConversationAt';
 export type ChatProjectSortDirection = 'asc' | 'desc';
@@ -11,6 +18,9 @@ export type ChatProjectSortDirection = 'asc' | 'desc';
 export type CreateChatProjectInput = {
   name: string;
   description?: string | null;
+  // [knauf] KK20-248 — project-level instructions shared by project chats.
+  instructions?: string | null;
+  // End [knauf]
 };
 
 export type UpdateChatProjectInput = Partial<CreateChatProjectInput>;
@@ -90,6 +100,9 @@ function sanitizeProjectInput(input: CreateChatProjectInput): CreateChatProjectI
   return {
     name: input.name.trim().slice(0, 100),
     description: input.description?.trim().slice(0, 1000) ?? '',
+    // [knauf] KK20-248 — cap project instructions before persistence.
+    instructions: input.instructions?.trim().slice(0, 8000) ?? '',
+    // End [knauf]
   };
 }
 
@@ -338,7 +351,7 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
-    const update: Partial<Pick<IChatProject, 'name' | 'description'>> = {};
+    const update: Partial<Pick<IChatProject, 'name' | 'description' | 'instructions'>> = {};
     if (typeof input.name === 'string') {
       const name = input.name.trim().slice(0, 100);
       if (!name) {
@@ -349,6 +362,11 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     if (input.description !== undefined) {
       update.description = input.description?.trim().slice(0, 1000) ?? '';
     }
+    // [knauf] KK20-248 — update project-level instructions independently of name/description.
+    if (input.instructions !== undefined) {
+      update.instructions = input.instructions?.trim().slice(0, 8000) ?? '';
+    }
+    // End [knauf]
 
     return await ChatProject.findOneAndUpdate(
       { _id: new mongoose.Types.ObjectId(projectId), user },
@@ -366,24 +384,58 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const ChatProjectSource = mongoose.models.ChatProjectSource as Model<IChatProjectSourceDocument>;
+    const ConversationTag = mongoose.models.ConversationTag as Model<{
+      user: string;
+      tag: string;
+      count: number;
+    }>;
     const Conversation = mongoose.models.Conversation as Model<IConversation>;
+    const Message = mongoose.models.Message as Model<IMessage>;
     const projectFilter = { _id: new mongoose.Types.ObjectId(projectId), user };
     const project = await ChatProject.findOne(projectFilter).select('_id').lean<IChatProject>();
     if (!project) {
       return { deletedCount: 0, modifiedCount: 0 };
     }
 
-    const [conversationResult, deleteResult] = await Promise.all([
-      Conversation.updateMany(
-        { user, chatProjectId: projectId },
-        { $unset: { chatProjectId: '' } },
-      ),
-      ChatProject.deleteOne(projectFilter),
-    ]);
+    const conversations = await Conversation.find({ user, chatProjectId: projectId })
+      .select('conversationId tags')
+      .lean<Array<Pick<IConversation, 'conversationId' | 'tags'>>>();
+    const conversationIds = conversations.map((conversation) => conversation.conversationId).filter(Boolean);
+    const tagDecrements: string[] = [];
+    for (const conversation of conversations) {
+      if (!conversation.tags?.length) {
+        continue;
+      }
+      for (const tag of new Set(conversation.tags)) {
+        tagDecrements.push(tag);
+      }
+    }
+
+    // [knauf] KK20-248 — delete bottom-up: children first, aggregate root last.
+    if (conversationIds.length > 0) {
+      await Message.deleteMany({ user, conversationId: { $in: conversationIds } });
+    }
+    await ChatProjectSource.deleteMany({ user, projectId, sourceType: 'file' });
+    const conversationResult = await Conversation.deleteMany({ user, chatProjectId: projectId });
+    const deleteResult = await ChatProject.deleteOne(projectFilter);
+    // End [knauf]
+
+    if ((conversationResult.deletedCount ?? 0) > 0) {
+      await decrementTagCounts(mongoose, user, tagDecrements);
+      const affectedTags = [...new Set(tagDecrements.filter(Boolean))];
+      if (affectedTags.length > 0) {
+        await ConversationTag.deleteMany({
+          user,
+          tag: { $in: affectedTags },
+          count: { $lte: 0 },
+        });
+      }
+    }
 
     return {
       deletedCount: deleteResult.deletedCount ?? 0,
-      modifiedCount: conversationResult.modifiedCount ?? 0,
+      modifiedCount: conversationResult.deletedCount ?? conversationResult.modifiedCount ?? 0,
     };
   }
 

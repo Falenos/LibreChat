@@ -44,6 +44,9 @@ import { createConversationTagMethods, type ConversationTagMethods } from './con
 import { createMessageMethods, type MessageMethods } from './message';
 import { createConversationMethods, type ConversationMethods } from './conversation';
 import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
+// [knauf] KK20-248 — expose project-scoped knowledge source methods.
+import { createChatProjectSourceMethods, type ChatProjectSourceMethods } from './chatProjectSource';
+// End [knauf]
 export type {
   AssignConversationToProjectResult,
   ChatProjectSortBy,
@@ -54,6 +57,12 @@ export type {
   ListChatProjectsResult,
   UpdateChatProjectInput,
 } from './chatProject';
+// [knauf] KK20-248 — export project-scoped knowledge source method input types.
+export type {
+  CreateChatProjectSourceInput,
+  UpdateChatProjectSourceInput,
+} from './chatProjectSource';
+// End [knauf]
 /* Tier 3 — Complex (heavier injection) */
 import {
   createTxMethods,
@@ -148,6 +157,9 @@ export type AllMethods = UserMethods &
   MessageMethods &
   ConversationMethods &
   ChatProjectMethods &
+  // [knauf] KK20-248 — include project-scoped knowledge source methods in db surface.
+  ChatProjectSourceMethods &
+  // End [knauf]
   TxMethods &
   TransactionMethods &
   SpendTokensMethods &
@@ -280,6 +292,9 @@ export function createMethods(
     ...messageMethods,
     ...conversationMethods,
     ...createChatProjectMethods(mongoose),
+    // [knauf] KK20-248 — register project-scoped knowledge source methods.
+    ...createChatProjectSourceMethods(mongoose),
+    // End [knauf]
     /* Tier 3 */
     ...txMethods,
     ...transactionMethods,
@@ -326,6 +341,9 @@ export type {
   MessageMethods,
   ConversationMethods,
   ChatProjectMethods,
+  // [knauf] KK20-248 — export project-scoped knowledge source method type.
+  ChatProjectSourceMethods,
+  // End [knauf]
   TxMethods,
   TransactionMethods,
   SpendTokensMethods,

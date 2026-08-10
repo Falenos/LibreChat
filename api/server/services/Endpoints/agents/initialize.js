@@ -329,7 +329,25 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   /** Event-driven mode: only load tool definitions, not full instances */
   const loadTools = createToolLoader(signal, streamId, true);
   /** @type {Array<MongoFile>} */
-  const requestFiles = req.body.files ?? [];
+  let requestFiles = req.body.files ?? [];
+  // [knauf] KK20-248 — hydrate agent runs with ready project knowledge files so
+  // project-scoped chats carry their attached library context into initialization.
+  if (endpointOption.chatProjectId && req.user?.id) {
+    const projectFileIds = await db.listReadyChatProjectSourceFileIds(
+      req.user.id,
+      endpointOption.chatProjectId,
+    );
+    if (projectFileIds.length > 0) {
+      const projectFiles = (await db.getFiles(
+        { file_id: { $in: projectFileIds }, user: req.user.id },
+        null,
+        { text: 0 },
+      )) ?? [];
+      const seenFileIds = new Set(requestFiles.map((file) => file.file_id));
+      requestFiles = requestFiles.concat(projectFiles.filter((file) => !seenFileIds.has(file.file_id)));
+    }
+  }
+  // End [knauf]
   /** @type {string} */
   const conversationId = req.body.conversationId;
   /** @type {string | undefined} */

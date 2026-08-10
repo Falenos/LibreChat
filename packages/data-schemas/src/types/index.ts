@@ -6,6 +6,9 @@ export * from './user';
 export * from './token';
 export * from './convo';
 export * from './chatProject';
+// [knauf] KK20-248 — export project-scoped knowledge source types.
+export * from './chatProjectSource';
+// End [knauf]
 export * from './session';
 export * from './balance';
 export * from './banner';

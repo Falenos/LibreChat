@@ -8,6 +8,7 @@
 // See knauf/docs/implementation-plans/async-file-indexing-production.md §5.
 import crypto from 'node:crypto';
 import type { Model, UpdateQuery } from 'mongoose';
+import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import type { IKnaufFileAsset, FileAssetEmbedRoute, FileAssetScopeType } from '~/types';
 
 const ERROR_DETAIL_MAX = 2000;
@@ -122,6 +123,8 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
     const KnaufFileAsset = getModel();
     const key =
       params.dedup_key != null ? { dedup_key: params.dedup_key } : { asset_id: params.asset_id };
+    const tenantId = getTenantId();
+    const tenantScopedInsert = tenantId && tenantId !== SYSTEM_TENANT_ID ? { tenantId } : {};
     try {
       // includeResultMetadata: the driver's updatedExisting flag is the only
       // reliable created-vs-found signal (comparing asset_id fails on the
@@ -132,6 +135,7 @@ export function createFileAssetMethods(mongoose: typeof import('mongoose')): {
         {
           $setOnInsert: {
             ...params,
+            ...tenantScopedInsert,
             status: 'uploading',
             active_index_profile: null,
             active_generation: null,

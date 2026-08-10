@@ -147,6 +147,17 @@ export const projects = (params: q.ProjectListParams = {}) => {
 
 export const projectById = (id: string) => `${projectsRoot}/${encodeURIComponent(id)}`;
 
+// [knauf] KK20-248 — project knowledge file endpoints.
+export const projectFiles = (projectId: string) =>
+  `${projectsRoot}/${encodeURIComponent(projectId)}/files`;
+
+export const projectFile = (projectId: string, fileId: string) =>
+  `${projectFiles(projectId)}/${encodeURIComponent(fileId)}`;
+
+export const projectFileDownload = (projectId: string, fileId: string) =>
+  `${projectFile(projectId, fileId)}/download`;
+// End [knauf]
+
 export const projectConversation = (conversationId: string) =>
   `${projectsRoot}/conversations/${encodeURIComponent(conversationId)}`;
 

@@ -5,7 +5,12 @@ import type {
   QueryObserverResult,
   UseQueryOptions,
 } from '@tanstack/react-query';
-import type { ProjectListParams, ProjectListResponse, TChatProject } from 'librechat-data-provider';
+import type {
+  ProjectListParams,
+  ProjectListResponse,
+  TChatProject,
+  TChatProjectFilesResponse,
+} from 'librechat-data-provider';
 
 export const useProjectsInfiniteQuery = (
   params: ProjectListParams = {},
@@ -47,3 +52,21 @@ export const useProjectQuery = (
     },
   );
 };
+
+// [knauf] KK20-248 — project knowledge files query for the project workspace.
+export const useProjectFilesQuery = (
+  projectId?: string | null,
+  config?: UseQueryOptions<TChatProjectFilesResponse>,
+): QueryObserverResult<TChatProjectFilesResponse, unknown> => {
+  return useQuery<TChatProjectFilesResponse>(
+    [QueryKeys.projectFiles, projectId],
+    () => dataService.listProjectFiles(projectId ?? ''),
+    {
+      enabled: Boolean(projectId),
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      ...config,
+    },
+  );
+};
+// End [knauf]
