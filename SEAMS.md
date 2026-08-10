@@ -756,6 +756,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/ArtifactRouting.test.tsx` | raster image recovery contract | 43–47, 134–148 | Proves ordinary raster attachments preserve file identity after attachment routing | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/Parts/__tests__/LogContent.test.tsx` | generated raster recovery contract | 45–49, 102–116 | Proves generated raster log attachments preserve file identity at the Image boundary | Self | NO-TICKET |
 | `client/src/components/Chat/Messages/Content/__tests__/Files.knauf.spec.tsx` | `Files image recovery contract` | 1–40 | Proves message-level image files preserve stable identity at the Image boundary | Self | NO-TICKET |
+| `client/vite.config.ts` | `VitePWA` plugin registration | 73–76 | Keeps Workbox auto-update, precaching, and guarded stale-asset recovery while removing the activation-time script that force-navigated Edge chat tabs after accepted POSTs | `client/src/knauf/pwa/serviceWorkerConfig.knauf.spec.ts` | KK20-259 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1209,6 +1210,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`; Sandpack export shell and preview iframe DOM | Medium — waits for the outer Sandpack startup state, then fits the iframe to stable rendered content before capture so slow charts and long dashboards cannot produce loading-only or clipped PDF/PNG output | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
 | `client/src/knauf/components/Chat/KnaufModelSelector.tsx` | `~/components/Chat/Menus/Endpoints/*`, `~/hooks`, `~/store`, Recoil, LibreChat data provider | Medium — repairs first-login raw-endpoint fallback by auto-binding the configured KARL default on fresh chats while preserving model-spec and custom-agent selections | `KnaufModelSelector.knauf.spec.ts` | KK20-256 |
 | `client/src/knauf/components/Chat/KnaufModelSelector.knauf.spec.ts` | Subject under test; LibreChat endpoint enum | Low — pins raw Azure fallback as replaceable and model-spec/custom-agent selections as authoritative | Self | KK20-256 |
+| `client/src/knauf/pwa/serviceWorkerConfig.knauf.spec.ts` | None — reads the upstream Vite configuration through Node `fs`/`path` | Low — test-only guard proving production builds cannot re-import the Edge activation-time client reloader | Self | KK20-259 |
 <!-- seams:new:end -->
 
 ## Static Assets

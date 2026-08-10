@@ -1,5 +1,4 @@
 import react from '@vitejs/plugin-react';
-import fs from 'fs';
 import path from 'path';
 import { defineConfig } from 'vite';
 import { createRequire } from 'module';
@@ -71,17 +70,10 @@ export default defineConfig(({ command }) => ({
       },
     },
     nodePolyfills(),
-    {
-      name: 'emit-sw-heal',
-      apply: 'build',
-      generateBundle() {
-        this.emitFile({
-          type: 'asset',
-          fileName: 'sw-heal.js',
-          source: fs.readFileSync(path.resolve(__dirname, 'sw/heal.js'), 'utf8'),
-        });
-      },
-    },
+    // [knauf] KK20-259 — keep PWA auto-updates, but do not ship the activation-time
+    // client reloader: Edge can force-navigate an active chat after its POST is accepted.
+    // Actual stale-asset failures still use the guarded recovery in index.html.
+    // End [knauf]
     VitePWA({
       injectRegister: 'auto', // 'auto' | 'manual' | 'disabled'
       registerType: 'autoUpdate', // 'prompt' | 'autoUpdate'
@@ -103,7 +95,6 @@ export default defineConfig(({ command }) => ({
           'images/**/*',
           '**/*.map',
           'index.html',
-          'sw-heal.js',
           'assets/rum.*.js',
           'assets/locale-*.js',
           'assets/query-devtools*.js',
@@ -111,10 +102,6 @@ export default defineConfig(({ command }) => ({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         /** LibreChat mutates index.html per request for subpath and language support. */
         navigateFallback: null,
-        /** Reloads window clients that cannot answer a ping after activation —
-         * pages stuck on a previous build's purged precache (stale index.html)
-         * have no working code of their own to recover with. */
-        importScripts: ['sw-heal.js'],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => /\/assets\/locale-[^/]+\.js$/.test(url.pathname),
