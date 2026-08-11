@@ -532,12 +532,12 @@ jobs:
 
           curl -fsS \
             "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP?refresh=true" \
-            -H "Authorization: ******" -H "Accept: application/json" > /dev/null 2>&1 || true
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" > /dev/null 2>&1 || true
 
           for attempt in {1..60}; do
             APP_JSON=$(curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
-              -H "Authorization: ******" -H "Accept: application/json" 2>/dev/null || true)
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" 2>/dev/null || true)
 
             if [ -z "$APP_JSON" ]; then
               echo "Attempt $attempt: API blip — retrying"
@@ -560,7 +560,7 @@ jobs:
 
             curl -fsS \
               "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP?refresh=true" \
-              -H "Authorization: ******" -H "Accept: application/json" > /dev/null 2>&1 || true
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" > /dev/null 2>&1 || true
             sleep 10
           done
 

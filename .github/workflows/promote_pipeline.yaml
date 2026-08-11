@@ -183,9 +183,9 @@ jobs:
           echo "::add-mask::$ARGOCD_TOKEN"
 
           APP_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
-            -H "Authorization: ******" -H "Accept: application/json")
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
           WORKER_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_WORKER_ARGOCD_APP" \
-            -H "Authorization: ******" -H "Accept: application/json")
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
 
           for STATE in "$APP_JSON" "$WORKER_JSON"; do
             jq -e --arg image "$EXPECTED_IMAGE" \
@@ -332,9 +332,9 @@ jobs:
                 -H "Content-Type: application/json" -d @- | jq -er '.token')
           echo "::add-mask::$ARGOCD_TOKEN"
           APP_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
-            -H "Authorization: ******" -H "Accept: application/json")
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
           WORKER_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_WORKER_ARGOCD_APP" \
-            -H "Authorization: ******" -H "Accept: application/json")
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
 
           for STATE in "$APP_JSON" "$WORKER_JSON"; do
             jq -e --arg image "$EXPECTED_IMAGE" \
