@@ -24,7 +24,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.repository }}-release
+  group: ${{ github.repository }}-promote
   cancel-in-progress: false
 
 jobs:
