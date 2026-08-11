@@ -137,6 +137,17 @@ describe('detectArtifactTypeFromFile', () => {
     },
   );
 
+  // [knauf] NO-TICKET — persisted messages omit SVG text until the authenticated preview fetch.
+  it.each([
+    ['diagram.svg', ''],
+    ['diagram', 'image/svg+xml'],
+  ])('classifies source-less SVG %s by extension or MIME', (filename, type) => {
+    expect(detectArtifactTypeFromFile({ filename, type, text: undefined })).toBe(
+      TOOL_ARTIFACT_TYPES.SVG,
+    );
+  });
+  // End [knauf]
+
   it.each([
     [
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

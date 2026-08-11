@@ -4,6 +4,9 @@ export interface IChatProject {
   _id?: Types.ObjectId;
   name: string;
   description?: string;
+  // [knauf] KK20-248 — project-level instructions shared by project chats.
+  instructions?: string;
+  // End [knauf]
   user: string;
   conversationCount: number;
   lastConversationAt?: Date | null;

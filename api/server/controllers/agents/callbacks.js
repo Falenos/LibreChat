@@ -31,8 +31,11 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { saveBase64Image } = require('~/server/services/Files/process');
-// [knauf] KK20-194 — preserve the authoritative final Responses phase for native web search.
-const { getFinalWebSearchResponseText } = require('~/server/knauf/nativeWebSearchOutput');
+// [knauf] KK20-194 — preserve the final phase and hide phase-less native-search drafts.
+const {
+  getFinalWebSearchResponseText,
+  shouldStreamNativeWebSearchDelta,
+} = require('~/server/knauf/nativeWebSearchOutput');
 // End [knauf]
 
 // [knauf] NO-TICKET — Model Router can occasionally return this gateway-style
@@ -621,6 +624,11 @@ function getDefaultHandlers({
        */
       handle: async (event, data, metadata) => {
         aggregateContent({ event, data });
+        // [knauf] KK20-194 — v3.2.65 drops Responses phase metadata before this
+        // callback. Keep the accumulated text for persistence, but publish it
+        // only once the authoritative terminal response is available.
+        if (!shouldStreamNativeWebSearchDelta(nativeWebSearchOutputSink)) return;
+        // End [knauf]
         if (checkIfLastAgent(metadata?.last_agent_id, metadata?.langgraph_node)) {
           await emitEvent(res, streamId, { event, data });
         } else if (!metadata?.hide_sequential_outputs) {

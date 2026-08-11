@@ -109,6 +109,19 @@ const isOAuthToolCallContent = (part?: Partial<TMessageContentParts>) => {
   return isOAuthToolCallName(name);
 };
 
+// [knauf] Reconcile replayed tool steps by stable tool-call ID (NO-TICKET)
+const getToolCallContentIndex = (message: TMessage, toolCallId: string, fallbackIndex: number) => {
+  if (!toolCallId) {
+    return fallbackIndex;
+  }
+  const existingIndex = message.content?.findIndex(
+    (part) =>
+      part?.type === ContentTypes.TOOL_CALL && part[ContentTypes.TOOL_CALL]?.id === toolCallId,
+  );
+  return existingIndex != null && existingIndex >= 0 ? existingIndex : fallbackIndex;
+};
+// End [knauf]
+
 export default function useStepHandler({
   setMessages,
   getMessages,
@@ -680,10 +693,13 @@ export default function useStepHandler({
               },
             };
 
-            // Use the pre-calculated contentIndex which handles parallel agent indexing
+            // [knauf] Keep replayed starts in their original content slot (NO-TICKET)
+            const currentIndex = getToolCallContentIndex(updatedResponse, toolCallId, contentIndex);
+            // Stable ID wins; the server index remains the fallback for calls without IDs.
+            // End [knauf]
             updatedResponse = updateContent(
               updatedResponse,
-              contentIndex,
+              currentIndex,
               contentPart,
               false,
               getStepMetadata(runStep),
@@ -898,8 +914,13 @@ export default function useStepHandler({
               contentPart.tool_call.expires_at = runStepDelta.delta.expires_at;
             }
 
-            // Use server's index, offset by initialContent for edit scenarios
-            const currentIndex = runStep.index + initialContent.length;
+            // [knauf] Keep replayed deltas in their original content slot (NO-TICKET)
+            const currentIndex = getToolCallContentIndex(
+              updatedResponse,
+              toolCallId,
+              runStep.index + initialContent.length,
+            );
+            // End [knauf]
             updatedResponse = updateContent(
               updatedResponse,
               currentIndex,
@@ -946,8 +967,13 @@ export default function useStepHandler({
             tool_call: result.tool_call,
           };
 
-          // Use server's index, offset by initialContent for edit scenarios
-          const currentIndex = runStep.index + initialContent.length;
+          // [knauf] Keep replayed completions in their original content slot (NO-TICKET)
+          const currentIndex = getToolCallContentIndex(
+            updatedResponse,
+            result.tool_call.id ?? '',
+            runStep.index + initialContent.length,
+          );
+          // End [knauf]
           updatedResponse = updateContent(
             updatedResponse,
             currentIndex,

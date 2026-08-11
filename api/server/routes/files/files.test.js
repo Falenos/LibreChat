@@ -223,6 +223,43 @@ describe('File Routes - Delete with Agent Access', () => {
       expect(deleteFilesWithDedupAwareness).toHaveBeenCalled();
     });
 
+    it('removes project file associations when deleting an owned library file', async () => {
+      const projectFileId = uuidv4();
+      const project = await methods.createChatProject(otherUserId.toString(), {
+        name: 'Project files',
+      });
+      await createFile({
+        user: otherUserId,
+        file_id: projectFileId,
+        filename: 'project-file.txt',
+        filepath: '/uploads/project-file.txt',
+        bytes: 200,
+        type: 'text/plain',
+      });
+      await methods.createChatProjectSource(otherUserId.toString(), {
+        projectId: project._id.toString(),
+        file_id: projectFileId,
+        status: 'ready',
+      });
+
+      const response = await request(app)
+        .delete('/files')
+        .send({
+          files: [
+            {
+              file_id: projectFileId,
+              filepath: '/uploads/project-file.txt',
+            },
+          ],
+        });
+
+      expect(response.status).toBe(200);
+      expect(deleteFilesWithDedupAwareness).toHaveBeenCalled();
+      expect(
+        await methods.listChatProjectSources(otherUserId.toString(), project._id.toString()),
+      ).toEqual([]);
+    });
+
     it('should prevent deleting files not owned by user without agent context', async () => {
       const response = await request(app)
         .delete('/files')

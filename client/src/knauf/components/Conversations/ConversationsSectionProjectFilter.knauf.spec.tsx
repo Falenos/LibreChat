@@ -107,19 +107,53 @@ describe('[knauf] project conversations in the sidebar', () => {
       debouncedQuery: 'text found only inside a message',
       isTyping: false,
     };
-    mockActiveConversation = {
+    const selectedConversation = {
       conversationId: 'selected-conversation',
       title: 'A different conversation title',
     } as TConversation;
+    mockUseConversationsInfiniteQuery.mockReturnValue({
+      data: {
+        pages: [
+          {
+            conversations: [
+              {
+                conversationId: 'irrelevant-title-match',
+                title: "AI's Current Mood Inquiry",
+              } as TConversation,
+            ],
+            nextCursor: null,
+          },
+        ],
+      },
+      fetchNextPage: jest.fn(),
+      isFetchingNextPage: false,
+      isLoading: false,
+      isFetching: false,
+    });
 
-    render(
+    const view = render(
       <MemoryRouter initialEntries={['/c/selected-conversation']}>
         <Routes>
-          <Route path="/c/:conversationId" element={<ConversationsSection />} />
+          <Route path="/" element={<ConversationsSection />}>
+            <Route path="c/:conversationId" element={null} />
+          </Route>
         </Routes>
       </MemoryRouter>,
     );
 
-    expect(mockRenderedConversations).toEqual([mockActiveConversation]);
+    expect(mockRenderedConversations).toEqual([]);
+
+    mockActiveConversation = selectedConversation;
+    view.rerender(
+      <MemoryRouter initialEntries={['/c/selected-conversation']}>
+        <Routes>
+          <Route path="/" element={<ConversationsSection />}>
+            <Route path="c/:conversationId" element={null} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(mockRenderedConversations).toEqual([selectedConversation]);
   });
 });

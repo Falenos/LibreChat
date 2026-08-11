@@ -11,6 +11,18 @@ function getFinalWebSearchResponseText(output) {
     .join('');
 }
 
+function hasNativeWebSearchTool(agentConfigs = []) {
+  return agentConfigs.some((config) =>
+    config?.tools?.some(
+      (tool) => typeof tool?.type === 'string' && tool.type.startsWith('web_search'),
+    ),
+  );
+}
+
+function shouldStreamNativeWebSearchDelta(outputSink) {
+  return outputSink?.deferDeltas !== true;
+}
+
 function replaceLastTextPart(contentParts, text) {
   if (!Array.isArray(contentParts) || text === '') {
     return contentParts;
@@ -22,4 +34,9 @@ function replaceLastTextPart(contentParts, text) {
   return contentParts.with(index, { ...contentParts[index], text });
 }
 
-module.exports = { getFinalWebSearchResponseText, replaceLastTextPart };
+module.exports = {
+  getFinalWebSearchResponseText,
+  hasNativeWebSearchTool,
+  replaceLastTextPart,
+  shouldStreamNativeWebSearchDelta,
+};

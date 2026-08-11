@@ -52,13 +52,40 @@ type ChatHelpers = Pick<
 // [knauf] surface structured stream-start errors as readable messages instead of raw JSON
 const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResData => {
   let text = 'Error connecting to server, try refreshing the page.';
-  if (errorData) {
+  if (errorData?.error === 'file_indexing_not_ready') {
+    text = 'Some project files are still being indexed. Please wait until they are ready and try again.';
+  } else if (errorData?.error === 'file_readiness_unavailable') {
+    text = 'File readiness is temporarily unavailable. Please try again shortly.';
+  } else if (
+    errorData?.error === 'provider_bad_request' ||
+    errorData?.error === 'provider_request_failed' ||
+    errorData?.error === 'ERR_BAD_REQUEST'
+  ) {
+    text = 'The model rejected this request before it could answer. Please try again; if it repeats, check the server logs for the provider bad-request details.';
+  } else if (errorData) {
     text = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData);
   }
   return {
     text,
     metadata: markStreamStartFailedMetadata(),
   } as unknown as TResData;
+};
+
+const parseStreamErrorData = (raw: unknown): Record<string, unknown> | undefined => {
+  if (raw == null) {
+    return undefined;
+  }
+  if (typeof raw === 'object') {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { error: raw };
+  }
 };
 // End [knauf]
 
@@ -944,14 +971,16 @@ export default function useResumableSSE(
             console.log('[ResumableSSE] Error type check:', { isKnownError, errorString });
 
             // Display the error to user via errorHandler
+            // [knauf] map stable pre-stream/provider codes to readable UI copy.
             errorHandler({
-              data: { text: errorString } as unknown as Parameters<typeof errorHandler>[0]['data'],
+              data: getStreamStartFailureData(errorData),
               submission: currentSubmission as EventSubmission,
             });
+            // End [knauf]
           } catch (parseError) {
             console.error('[ResumableSSE] Failed to parse server error:', parseError);
             errorHandler({
-              data: { text: e.data } as unknown as Parameters<typeof errorHandler>[0]['data'],
+              data: getStreamStartFailureData(parseStreamErrorData(e.data)),
               submission: currentSubmission as EventSubmission,
             });
           }
@@ -964,6 +993,27 @@ export default function useResumableSSE(
           reconnectAttemptRef.current = 0;
           return;
         }
+
+        // [knauf] Known pre-stream HTTP errors are terminal. Do not reconnect and
+        // replace the readable error bubble with a silent "working" state.
+        if (responseCode === 400 || responseCode === 409) {
+          console.log('[ResumableSSE] Terminal stream-start error:', { responseCode, data: e.data });
+          sse.close();
+          removeActiveJob(currentStreamId);
+          resetLive({ ...currentSubmission, userMessage });
+          errorHandler({
+            data: getStreamStartFailureData(parseStreamErrorData(e.data)),
+            submission: currentSubmission as EventSubmission,
+          });
+          setIsSubmitting(false);
+          setShowStopButton(false);
+          setStreamId(null);
+          optimisticStreamIdsRef.current.delete(currentStreamId);
+          createdStreamIdsRef.current.delete(currentStreamId);
+          reconnectAttemptRef.current = 0;
+          return;
+        }
+        // End [knauf]
 
         // Network failure or unknown HTTP error - attempt reconnection with backoff
         console.log('[ResumableSSE] Stream error (network failure) - will attempt reconnect', {

@@ -176,16 +176,18 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          # Anchor to the image.tag key path to avoid corrupting other tag: lines
-          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
-          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_CONFIG_DIRECTORY/values.yaml"
-          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          # Anchor to the exact key path, but replace whatever value is there so
+          # preview tags can be promoted back onto the normal semver release rail.
+          sed -i -E 's#^([[:space:]]+tag:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$AGK_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E 's#^([[:space:]]+LANGFUSE_RELEASE:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -Eq "^[[:space:]]+tag:[[:space:]]*\"$VERSION\"$" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -Eq "^[[:space:]]+LANGFUSE_RELEASE:[[:space:]]*\"$VERSION\"$" "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           CONFIG_FILES=("$AGK_CONFIG_DIRECTORY/values.yaml")
           WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
           if [ -f "$WORKER_VALUES" ]; then
-            sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
-            grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+            sed -i -E 's#^([[:space:]]+tag:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$WORKER_VALUES"
+            grep -Eq "^[[:space:]]+tag:[[:space:]]*\"$VERSION\"$" "$WORKER_VALUES"
             CONFIG_FILES+=("$WORKER_VALUES")
           fi
 

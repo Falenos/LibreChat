@@ -29,6 +29,9 @@ const {
   createToolEndCallback,
   getDefaultHandlers,
 } = require('~/server/controllers/agents/callbacks');
+// [knauf] KK20-194 — identify requests whose provider can emit phase-less search drafts.
+const { hasNativeWebSearchTool } = require('~/server/knauf/nativeWebSearchOutput');
+// End [knauf]
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const {
@@ -133,7 +136,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
    */
   const collectedThoughtSignatures = {};
   // [knauf] KK20-194 — final native-search Responses text shared by handler and client.
-  const nativeWebSearchOutputSink = { text: '' };
+  const nativeWebSearchOutputSink = { text: '', deferDeltas: false };
   // End [knauf]
   /** @type {ArtifactPromises} */
   const artifactPromises = [];
@@ -329,7 +332,25 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   /** Event-driven mode: only load tool definitions, not full instances */
   const loadTools = createToolLoader(signal, streamId, true);
   /** @type {Array<MongoFile>} */
-  const requestFiles = req.body.files ?? [];
+  let requestFiles = req.body.files ?? [];
+  // [knauf] KK20-248 — hydrate agent runs with ready project knowledge files so
+  // project-scoped chats carry their attached library context into initialization.
+  if (endpointOption.chatProjectId && req.user?.id) {
+    const projectFileIds = await db.listReadyChatProjectSourceFileIds(
+      req.user.id,
+      endpointOption.chatProjectId,
+    );
+    if (projectFileIds.length > 0) {
+      const projectFiles = (await db.getFiles(
+        { file_id: { $in: projectFileIds }, user: req.user.id },
+        null,
+        { text: 0 },
+      )) ?? [];
+      const seenFileIds = new Set(requestFiles.map((file) => file.file_id));
+      requestFiles = requestFiles.concat(projectFiles.filter((file) => !seenFileIds.has(file.file_id)));
+    }
+  }
+  // End [knauf]
   /** @type {string} */
   const conversationId = req.body.conversationId;
   /** @type {string | undefined} */
@@ -888,6 +909,14 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
     primaryConfig,
     ...agentConfigs.values(),
   ]);
+
+  // [knauf] KK20-194 — phase-aware streaming arrives in @librechat/agents 3.4;
+  // until that upgrade, native-search-capable runs publish only terminal text.
+  nativeWebSearchOutputSink.deferDeltas = hasNativeWebSearchTool([
+    primaryConfig,
+    ...agentConfigs.values(),
+  ]);
+  // End [knauf]
 
   let endpointConfig = appConfig.endpoints?.[primaryConfig.endpoint];
   if (!isAgentsEndpoint(primaryConfig.endpoint) && !endpointConfig) {

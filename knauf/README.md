@@ -32,6 +32,15 @@ npm run build:packages     # data-provider, data-schemas, api, client-package â€
 npm run frontend           # full client build
 npm run build              # turbo build across all workspaces
 
+# rebuild only @librechat/api when backend needs packages/api/dist
+npm run build:api         
+
+# rebuild only data-schemas when backend needs packages/data-schemas/dist
+npm run build:data-schemas
+
+# If backend:dev fails with "Cannot find module ... @librechat/api/dist/index.cjs",
+# run `npm run build:api` (or `npm run build:packages` after a fresh clone/reinstall).
+
 # Supporting services (mongo, meilisearch, vectordb, rag_api â€” not the api service)
 docker compose up -d mongodb meilisearch vectordb rag_api
 

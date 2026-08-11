@@ -129,6 +129,29 @@ describe('useChatFunctions — Knauf analytics', () => {
     });
   });
 
+  // [knauf] KK20-248 — project scope must survive reload into outgoing chat payloads.
+  it('keeps a restored conversation project id in the submission payload', () => {
+    const setSubmission = jest.fn();
+    const { result } = renderUseChatFunctions({
+      conversation: {
+        conversationId: 'conversation-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        model: 'gpt-5.4',
+        chatProjectId: '64b64c7f90d3f49f3a000010',
+      } as TConversation,
+      setSubmission,
+    });
+
+    act(() => {
+      result.current.ask({ text: 'Use the restored project' });
+    });
+
+    const submission = setSubmission.mock.calls.at(-1)?.[0] as TSubmission;
+    expect(submission.conversation.chatProjectId).toBe('64b64c7f90d3f49f3a000010');
+    expect(submission.endpointOption.chatProjectId).toBe('64b64c7f90d3f49f3a000010');
+  });
+  // End [knauf]
+
   it('emits a privacy-safe interaction when a user message is submitted', () => {
     const { result } = renderUseChatFunctions();
 

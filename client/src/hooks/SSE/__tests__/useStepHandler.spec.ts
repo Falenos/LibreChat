@@ -1447,6 +1447,58 @@ describe('useStepHandler', () => {
       expect(toolCallContent?.tool_call?.progress).toBe(1);
     });
 
+    // [knauf] Reconcile replayed tool steps by stable tool-call ID (NO-TICKET)
+    it('keeps one live tool part when the same tool call is replayed at a new index', () => {
+      const responseMessage = createResponseMessage();
+      mockGetMessages.mockReturnValue([responseMessage]);
+
+      const { result } = renderHook(() => useStepHandler(createHookParams()));
+      const submission = createSubmission();
+
+      act(() => {
+        result.current.stepHandler(
+          { event: StepEvents.ON_RUN_STEP, data: createToolCallRunStep() },
+          submission,
+        );
+        result.current.stepHandler(
+          {
+            event: StepEvents.ON_RUN_STEP,
+            data: createToolCallRunStep({ id: 'step-tool-replay', index: 1 }),
+          },
+          submission,
+        );
+        result.current.stepHandler(
+          {
+            event: StepEvents.ON_RUN_STEP_COMPLETED,
+            data: {
+              result: {
+                id: 'step-tool-replay',
+                index: 1,
+                tool_call: {
+                  id: 'tool-call-1',
+                  name: 'image_gen_oai',
+                  args: '{}',
+                  output: 'Image created',
+                  type: ToolCallTypes.TOOL_CALL,
+                },
+              },
+            },
+          },
+          submission,
+        );
+      });
+
+      const lastCall = mockSetMessages.mock.calls.at(-1)?.[0] as TMessage[];
+      const toolParts = lastCall
+        .find((message) => !message.isCreatedByUser)
+        ?.content?.filter((part) => part.type === ContentTypes.TOOL_CALL);
+      expect(toolParts).toHaveLength(1);
+      expect(toolParts?.[0]?.tool_call).toEqual(
+        expect.objectContaining({ id: 'tool-call-1', output: 'Image created', progress: 1 }),
+      );
+    });
+    // End [knauf]
+
     it('signals skill authoring when a completed create_file call targets a skill path', () => {
       const responseMessage = createResponseMessage();
       mockGetMessages.mockReturnValue([responseMessage]);

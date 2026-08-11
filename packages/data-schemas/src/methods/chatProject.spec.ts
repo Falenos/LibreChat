@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels } from '~/models';
-import type { IChatProject, IConversation } from '~/types';
+import type { IChatProject, IChatProjectSource, IConversation, IMessage } from '~/types';
 import { createChatProjectMethods, type ChatProjectMethods } from './chatProject';
 
 jest.mock('~/config/winston', () => ({
@@ -14,6 +14,14 @@ jest.mock('~/config/winston', () => ({
 let mongoServer: InstanceType<typeof MongoMemoryServer>;
 let ChatProject: mongoose.Model<IChatProject>;
 let Conversation: mongoose.Model<IConversation>;
+let Message: mongoose.Model<IMessage>;
+let ConversationTag: mongoose.Model<{
+  user: string;
+  tag: string;
+  count: number;
+  position: number;
+}>;
+let ChatProjectSource: mongoose.Model<IChatProjectSource>;
 let methods: ChatProjectMethods;
 let modelsToCleanup: string[] = [];
 
@@ -27,6 +35,14 @@ beforeAll(async () => {
 
   ChatProject = mongoose.models.ChatProject as mongoose.Model<IChatProject>;
   Conversation = mongoose.models.Conversation as mongoose.Model<IConversation>;
+  Message = mongoose.models.Message as mongoose.Model<IMessage>;
+  ConversationTag = mongoose.models.ConversationTag as mongoose.Model<{
+    user: string;
+    tag: string;
+    count: number;
+    position: number;
+  }>;
+  ChatProjectSource = mongoose.models.ChatProjectSource as mongoose.Model<IChatProjectSource>;
   methods = createChatProjectMethods(mongoose);
 
   await mongoose.connect(mongoUri);
@@ -46,6 +62,9 @@ afterAll(async () => {
 afterEach(async () => {
   await ChatProject.deleteMany({});
   await Conversation.deleteMany({});
+  await Message.deleteMany({});
+  await ConversationTag.deleteMany({});
+  await ChatProjectSource.deleteMany({});
 });
 
 async function createConversation(user: string, conversationId: string, title: string) {
@@ -257,9 +276,52 @@ describe('ChatProject methods', () => {
     expect(refreshedSecond?.conversationCount).toBe(1);
   });
 
-  it('deleting a project unassigns chats instead of deleting them', async () => {
+  // [knauf] KK20-248 — removing a chat from a project must stop future project context.
+  it('unassigns a moved conversation when projectId is null', async () => {
+    const project = await methods.createChatProject(user, { name: 'Movable' });
+    const projectId = project._id!.toString();
+    await createConversation(user, 'convo-1', 'Movable chat');
+
+    const assigned = await methods.assignConversationToProject(user, 'convo-1', projectId);
+    const unassigned = await methods.assignConversationToProject(user, 'convo-1', null);
+
+    const conversation = await Conversation.findOne({ user, conversationId: 'convo-1' }).lean<IConversation>();
+    const refreshedProject = await methods.getChatProject(user, projectId);
+
+    expect(assigned?.projectId).toBe(projectId);
+    expect(unassigned?.previousProjectId).toBe(projectId);
+    expect(unassigned?.projectId).toBeNull();
+    expect(conversation?.chatProjectId).toBeUndefined();
+    expect(refreshedProject?.conversationCount).toBe(0);
+  });
+  // End [knauf]
+
+  // [knauf] KK20-248 — deleting a project must delete chats still assigned to it.
+  it('deleting a project deletes linked chats, messages, sources, and updates tag counts', async () => {
     const project = await methods.createChatProject(user, { name: 'Delete me' });
     await createConversation(user, 'convo-1', 'First');
+    await ChatProjectSource.create({
+      user,
+      projectId: project._id!.toString(),
+      file_id: 'project-file-1',
+      sourceType: 'file',
+      status: 'ready',
+    });
+    await Conversation.updateOne(
+      { user, conversationId: 'convo-1' },
+      { $set: { tags: ['work', 'work', 'personal'] } },
+    );
+    await ConversationTag.create([
+      { user, tag: 'work', count: 2, position: 1 },
+      { user, tag: 'personal', count: 1, position: 2 },
+    ]);
+    await Message.create({
+      messageId: 'msg-1',
+      conversationId: 'convo-1',
+      user,
+      text: 'hello',
+      isCreatedByUser: true,
+    });
     await methods.assignConversationToProject(user, 'convo-1', project._id!.toString());
 
     const result = await methods.deleteChatProject(user, project._id!.toString());
@@ -267,12 +329,36 @@ describe('ChatProject methods', () => {
       user,
       conversationId: 'convo-1',
     }).lean<IConversation>();
+    const message = await Message.findOne({
+      user,
+      conversationId: 'convo-1',
+    }).lean<IMessage>();
+    const sources = await ChatProjectSource.find({
+      user,
+      projectId: project._id!.toString(),
+    }).lean<IChatProjectSource[]>();
+    const workTag = await ConversationTag.findOne({ user, tag: 'work' }).lean<{
+      user: string;
+      tag: string;
+      count: number;
+      position: number;
+    }>();
+    const personalTag = await ConversationTag.findOne({ user, tag: 'personal' }).lean<{
+      user: string;
+      tag: string;
+      count: number;
+      position: number;
+    }>();
 
     expect(result.deletedCount).toBe(1);
     expect(result.modifiedCount).toBe(1);
-    expect(conversation).not.toBeNull();
-    expect(conversation?.chatProjectId).toBeUndefined();
+    expect(conversation).toBeNull();
+    expect(message).toBeNull();
+    expect(sources).toEqual([]);
+    expect(workTag?.count).toBe(1);
+    expect(personalTag).toBeNull();
   });
+  // End [knauf]
 
   it('isolates projects and assignments by user', async () => {
     const project = await methods.createChatProject(user, { name: 'Mine' });

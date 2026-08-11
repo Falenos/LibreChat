@@ -1,7 +1,9 @@
 import { memo, useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
+import { Folder } from 'lucide-react';
 import { useMediaQuery } from '@librechat/client';
 import { getConfigDefaults, PermissionTypes, Permissions } from 'librechat-data-provider';
+import type { TChatProject } from 'librechat-data-provider';
 // [knauf] Agents-only picker with locked-default + user pins (KK20-128).
 import ModelSelector from '~/knauf/components/Chat/KnaufModelSelector';
 // End [knauf]
@@ -17,7 +19,7 @@ import store from '~/store';
 
 const defaultInterface = getConfigDefaults().interface;
 
-function Header() {
+function Header({ project }: { project?: TChatProject }) {
   const { data: startupConfig } = useGetStartupConfig();
   const navVisible = useRecoilValue(store.sidebarExpanded);
 
@@ -56,6 +58,14 @@ function Header() {
               )}
             >
               <ModelSelector startupConfig={startupConfig} />
+              {project && (
+                // [knauf] KK20-248 — keep project context visible after the
+                // landing composer disappears and the conversation has messages.
+                <div className="inline-flex h-8 max-w-[220px] items-center gap-1.5 rounded-full border border-border-light bg-surface-secondary/80 px-2.5 text-xs font-medium text-text-secondary">
+                  <Folder className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{project.name}</span>
+                </div>
+              )}
               {interfaceConfig.presets === true && interfaceConfig.modelSelect && <PresetsMenu />}
               {hasAccessToBookmarks === true && <BookmarkMenu />}
               {/* [knauf] honor `interface.multiConvo` from librechat.yaml (KK20-128) */}

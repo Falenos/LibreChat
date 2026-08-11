@@ -789,7 +789,10 @@ export function detectArtifactTypeFromFile(
     !attachment.text &&
     type !== TOOL_ARTIFACT_TYPES.PLAIN_TEXT &&
     type !== TOOL_ARTIFACT_TYPES.MARKDOWN &&
-    type !== TOOL_ARTIFACT_TYPES.CODE
+    type !== TOOL_ARTIFACT_TYPES.CODE &&
+    // [knauf] Classify persisted SVGs before their stripped source is re-fetched. (NO-TICKET)
+    type !== TOOL_ARTIFACT_TYPES.SVG
+    // End [knauf]
   ) {
     /* HTML, REACT, MERMAID, and the office preview buckets all require
      * real content — their renderers (sandpack iframes / mermaid.js /

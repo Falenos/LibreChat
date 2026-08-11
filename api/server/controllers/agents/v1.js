@@ -39,6 +39,7 @@ const {
 } = require('~/server/services/PermissionService');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
+const { deleteFilesWithDedupAwareness } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
 const { getFileStrategy, getFileURLRefreshCacheTime } = require('~/server/utils/getFileStrategy');
 const { filterFile } = require('~/server/services/Files/process');
 const { getCachedTools } = require('~/server/services/Config');
@@ -935,7 +936,27 @@ const deleteAgentHandler = async (req, res) => {
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
     }
+
+    // [knauf] KK20-204 — deleting an agent must also clean up its owned
+    // knowledge files. Collect first, delete the agent to remove self-protecting
+    // tool_resource references, then route the files through the dedup-aware path.
+    const referencedFileIds = collectToolResourceFileIds(agent.tool_resources);
+    const agentFiles = referencedFileIds.length
+      ? ((await db.getFiles({ file_id: { $in: referencedFileIds } })) ?? []).filter(
+          (file) => String(file.user) === String(req.user.id),
+        )
+      : [];
+
     await db.deleteAgent({ id });
+
+    if (agentFiles.length) {
+      await deleteFilesWithDedupAwareness({ req, files: agentFiles });
+      await Promise.all(
+        agentFiles.map((file) => db.deleteChatProjectSourcesByFileId(req.user.id, file.file_id)),
+      );
+    }
+    // End [knauf]
+
     return res.json({ message: 'Agent deleted' });
   } catch (error) {
     logger.error('[/Agents/:id] Error deleting Agent', error);

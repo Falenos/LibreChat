@@ -5,7 +5,29 @@ import type {
   QueryObserverResult,
   UseQueryOptions,
 } from '@tanstack/react-query';
-import type { ProjectListParams, ProjectListResponse, TChatProject } from 'librechat-data-provider';
+import type {
+  ProjectListParams,
+  ProjectListResponse,
+  TChatProject,
+  TChatProjectFilesResponse,
+} from 'librechat-data-provider';
+// [knauf] KK20-248 — project files use the agent upload lifecycle's terminal-state predicate.
+import { agentFilesRefetchInterval } from '~/knauf/common/fileIndexing';
+// End [knauf]
+
+// [knauf] KK20-248 — make project file indexing poll cadence configurable for slower async environments.
+const DEFAULT_PROJECT_FILE_INDEX_POLL_MS = 3_000;
+const rawProjectFileIndexPollMs = Number.parseInt(
+  import.meta.env.VITE_PROJECT_FILE_INDEX_POLL_MS ?? '',
+  10,
+);
+const PROJECT_FILE_INDEX_POLL_MS =
+  Number.isFinite(rawProjectFileIndexPollMs) && rawProjectFileIndexPollMs > 0
+    ? rawProjectFileIndexPollMs
+    : DEFAULT_PROJECT_FILE_INDEX_POLL_MS;
+const projectFilesRefetchInterval = (data?: TChatProjectFilesResponse): number | false =>
+  agentFilesRefetchInterval(data?.files, PROJECT_FILE_INDEX_POLL_MS);
+// End [knauf]
 
 export const useProjectsInfiniteQuery = (
   params: ProjectListParams = {},
@@ -47,3 +69,22 @@ export const useProjectQuery = (
     },
   );
 };
+
+// [knauf] KK20-248 — project knowledge files query for the project workspace.
+export const useProjectFilesQuery = (
+  projectId?: string | null,
+  config?: UseQueryOptions<TChatProjectFilesResponse>,
+): QueryObserverResult<TChatProjectFilesResponse, unknown> => {
+  return useQuery<TChatProjectFilesResponse>(
+    [QueryKeys.projectFiles, projectId],
+    () => dataService.listProjectFiles(projectId ?? ''),
+    {
+      enabled: Boolean(projectId),
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchInterval: projectFilesRefetchInterval,
+      ...config,
+    },
+  );
+};
+// End [knauf]

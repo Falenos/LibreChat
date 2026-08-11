@@ -159,6 +159,7 @@ export function KnaufConversationCostTotal({
     >
       <Coins className="h-4 w-4" aria-hidden="true" />
       <span className="tabular-nums">
+        {summary.isEstimated ? '≤' : ''}
         {formatCurrency(summary.cost)}
         {summary.hasUnsupported ? '+' : ''}
       </span>

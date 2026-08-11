@@ -82,14 +82,9 @@ const ConversationsSection = memo(() => {
   const conversations = useMemo(() => {
     const listedConversations = data ? data.pages.flatMap((page) => page.conversations) : [];
 
-    // [knauf] Keep an opened message-search result visible when its title does not match.
-    if (
-      search.query &&
-      conversationId &&
-      activeConversation?.conversationId === conversationId &&
-      !listedConversations.some((conversation) => conversation?.conversationId === conversationId)
-    ) {
-      return [activeConversation, ...listedConversations];
+    // [knauf] Show only the opened message-search result, never unrelated title matches.
+    if (search.query && conversationId) {
+      return activeConversation?.conversationId === conversationId ? [activeConversation] : [];
     }
     // End [knauf]
 

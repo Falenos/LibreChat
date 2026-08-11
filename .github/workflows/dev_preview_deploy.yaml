@@ -1,0 +1,333 @@
+name: Deploy Branch to Dev Preview
+
+run-name: Deploy ${{ inputs.ref }} to AGK dev preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit SHA to deploy to AGK dev preview.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.repository }}-dev-preview
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev-preview:
+    name: Build and deploy branch to AGK dev preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      AGK_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      AGK_ACR_NAME: acragkhubnonprod001
+      AGK_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl
+      AGK_CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      AGK_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl
+      AGK_WORKER_CONFIG_DIRECTORY: agentic-karl/dev/services/agentic-karl-worker
+      AGK_ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
+      AGK_ARGOCD_APP: agentic-karl-dev-agentic-karl
+      AGK_WORKER_ARGOCD_APP: agentic-karl-dev-agentic-karl-worker
+      AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
+      AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
+    steps:
+      - name: Validate workflow input
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$INPUT_REF" ]; then
+            echo "::error::ref input is required"
+            exit 1
+          fi
+          if ! grep -Eq '^[A-Za-z0-9._/-]{1,120}$' <<< "$INPUT_REF"; then
+            echo "::error::Invalid ref. Use a branch, tag, or commit SHA without spaces."
+            exit 1
+          fi
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get release support secrets
+        run: |
+          set -euo pipefail
+          GITHUB_PAT=$(az keyvault secret show --vault-name kv-ct-shared-devops-001 --name GITHUB-PAT --query value -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
+
+      - name: Check out repository code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GITHUB_PAT }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Determine preview version
+        id: version
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short=12 HEAD)
+          SANITIZED_REF=$(printf '%s' "$INPUT_REF" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's#[^a-z0-9._/-]+#-#g; s#/#-#g; s#\.+#-#g; s#_+#-#g; s#-+#-#g; s#^-+##; s#-+$##')
+          SANITIZED_REF=${SANITIZED_REF:-preview}
+          SANITIZED_REF=${SANITIZED_REF:0:35}
+          VERSION="preview-${SANITIZED_REF}-${SHORT_SHA}"
+
+          echo "source-sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "short-sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Dev preview deployment"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Source ref | \`$INPUT_REF\` |"
+            echo "| Source commit | \`$SOURCE_SHA\` |"
+            echo "| Preview tag | \`$VERSION\` |"
+            echo "| Image | \`${AGK_ACR_NAME}.azurecr.io/$AGK_IMAGE_REPOSITORY:$VERSION\` |"
+            echo "| Quality gates | skipped by design for preview deploys |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push preview Docker image (ACR Tasks)
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if az acr repository show-tags \
+               --subscription "$AGK_SUBSCRIPTION_ID" \
+               --name "$AGK_ACR_NAME" \
+               --repository "$AGK_IMAGE_REPOSITORY" \
+               --query "[?@=='$VERSION']" \
+               -o tsv 2>/dev/null | grep -Fxq "$VERSION"; then
+            echo "Image $AGK_IMAGE_REPOSITORY:$VERSION already exists in ACR — skipping build"
+            exit 0
+          fi
+
+          az acr build \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --registry "$AGK_ACR_NAME" \
+            --image "$AGK_IMAGE_REPOSITORY:$VERSION" \
+            .
+
+      - name: Check out AGK deployment config repository
+        run: git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
+
+      - name: Update AGK dev deployment config values
+        working-directory: agk-deployment-configs
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          INPUT_REF: ${{ inputs.ref }}
+          SOURCE_SHA: ${{ steps.version.outputs.source-sha }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          SHORT_SHA="${{ steps.version.outputs.short-sha }}"
+          BRANCH="preview/agk-dev-$SHORT_SHA"
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git pull --ff-only origin main
+
+          sed -i -E "/^[[:space:]]+tag:/s#tag:.*#tag: \"$VERSION\"#" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s#LANGFUSE_RELEASE:.*#LANGFUSE_RELEASE: \"$VERSION\"#" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -F "tag: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_CONFIG_DIRECTORY/values.yaml"
+
+          CONFIG_FILES=("$AGK_CONFIG_DIRECTORY/values.yaml")
+          WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
+          if [ -f "$WORKER_VALUES" ]; then
+            sed -i -E "/^[[:space:]]+tag:/s#tag:.*#tag: \"$VERSION\"#" "$WORKER_VALUES"
+            grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+            CONFIG_FILES+=("$WORKER_VALUES")
+          fi
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
+            echo "AGK dev deployment config already points at $VERSION"
+            echo "| Deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git checkout -B "$BRANCH"
+          git add "${CONFIG_FILES[@]}"
+          git commit -m "Deploy agentic-karl dev preview $VERSION"
+          git push --force origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main --head "$BRANCH" \
+              --title "Deploy agentic-karl dev preview $VERSION" \
+              --body "Manual DEV preview deployment from ref \`$INPUT_REF\` at commit \`$SOURCE_SHA\` (run ${{ github.run_id }}). This preview workflow intentionally skips the normal app quality gates so a branch can be validated quickly on DEV before opening a PR.")
+          fi
+          echo "Deployment config PR: $PR_URL"
+
+          gh pr merge "$PR_URL" --auto --squash --delete-branch \
+            || gh pr merge "$PR_URL" --squash --delete-branch \
+            || true
+
+          STATE=""
+          for attempt in {1..90}; do
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
+            echo "Attempt $attempt: PR state=$STATE"
+            if [ "$STATE" = "MERGED" ]; then
+              break
+            fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "DEV preview deployment config PR was closed without merging"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "DEV preview deployment config PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled, so it will merge once required checks pass; re-run this workflow afterwards or check $PR_URL."
+            exit 1
+          fi
+
+          {
+            echo "| Deployment config PR | $PR_URL (merged) |"
+            echo "| Deployment config file | \`$AGK_CONFIG_REPOSITORY/$AGK_CONFIG_DIRECTORY/values.yaml\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refresh AGK ArgoCD application
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_IMAGE_REPOSITORY:$VERSION"
+          echo "Waiting for AGK ArgoCD app $AGK_ARGOCD_APP to report Synced/Healthy on image $EXPECTED_IMAGE"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value \
+            -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" \
+                -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          curl -fsS \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" \
+            -H "Accept: application/json" \
+            > /dev/null 2>&1 || true
+
+          for attempt in {1..60}; do
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" 2>/dev/null || true)
+
+            if [ -z "$APP_JSON" ]; then
+              echo "Attempt $attempt: API blip — retrying"
+              sleep 10
+              continue
+            fi
+
+            SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
+            HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
+            CURRENT_IMAGES=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | tr '\n' ',' | sed 's/,$//')
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | grep -F "$EXPECTED_IMAGE" || true)
+
+            echo "Attempt $attempt: sync=$SYNC_STATUS health=$HEALTH_STATUS expected_image=${IMAGE_MATCH:-missing} current_images=${CURRENT_IMAGES:-none}"
+
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              {
+                echo "| Final ArgoCD sync | \`$SYNC_STATUS\` |"
+                echo "| Final ArgoCD health | \`$HEALTH_STATUS\` |"
+                echo "| Final ArgoCD images | \`${CURRENT_IMAGES:-none}\` |"
+                echo "| AGK dev URL | https://agentic-karl.agk.dev.knauf.digital |"
+                echo "| Next step | Validate on DEV, then open a PR for the branch if the preview looks good |"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" \
+              > /dev/null 2>&1 || true
+            sleep 10
+          done
+
+          echo "AGK ArgoCD did not report $VERSION as Synced/Healthy in time"
+          {
+            echo "| Final ArgoCD sync | \`${SYNC_STATUS:-unknown}\` |"
+            echo "| Final ArgoCD health | \`${HEALTH_STATUS:-unknown}\` |"
+            echo "| Final ArgoCD images | \`${CURRENT_IMAGES:-none}\` |"
+            echo "| Failure | AGK ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Refresh AGK worker ArgoCD application (best-effort)
+        if: success()
+        run: |
+          set -uo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_IMAGE_REPOSITORY:$VERSION"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          PROBE_FILE="$RUNNER_TEMP/agk-worker-argocd-probe.json"
+          PROBE_STATUS=$(curl -sS -o "$PROBE_FILE" -w '%{http_code}' \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+          PROBE_EXIT=$?
+          if [ "$PROBE_STATUS" = "404" ]; then
+            echo "Worker ArgoCD app $AGK_WORKER_ARGOCD_APP not found — skipping"
+            echo "| Worker ArgoCD app | not registered yet (skipped) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$PROBE_EXIT" -ne 0 ] || [ "$PROBE_STATUS" != "200" ]; then
+            echo "::warning::Worker ArgoCD probe failed (curl exit=$PROBE_EXIT, HTTP ${PROBE_STATUS:-unknown})"
+            echo "| Worker ArgoCD app | probe failed: HTTP \`${PROBE_STATUS:-unknown}\` (non-blocking) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for attempt in {1..30}; do
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" > /dev/null 2>&1 || true
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_WORKER_ARGOCD_APP" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" 2>/dev/null || true)
+            SYNC_STATUS=$(jq -r '.status.sync.status // "unknown"' <<< "${APP_JSON:-}")
+            HEALTH_STATUS=$(jq -r '.status.health.status // "unknown"' <<< "${APP_JSON:-}")
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "${APP_JSON:-}" | grep -F "$EXPECTED_IMAGE" || true)
+            echo "Attempt $attempt: worker sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              echo "| Worker ArgoCD app | Synced/Healthy on \`$EXPECTED_IMAGE\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Worker ArgoCD app did not converge on $EXPECTED_IMAGE in time (non-blocking)"
+          echo "| Worker ArgoCD app | not converged (non-blocking) — check $AGK_WORKER_ARGOCD_APP |" >> "$GITHUB_STEP_SUMMARY"
+          exit 0

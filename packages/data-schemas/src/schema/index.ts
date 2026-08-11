@@ -7,6 +7,9 @@ export { default as balanceSchema } from './balance';
 export { default as bannerSchema } from './banner';
 export { default as categoriesSchema } from './categories';
 export { default as chatProjectSchema } from './chatProject';
+// [knauf] KK20-248 — export project-scoped knowledge source schema.
+export { default as chatProjectSourceSchema } from './chatProjectSource';
+// End [knauf]
 export { default as conversationTagSchema } from './conversationTag';
 export { default as convoSchema } from './convo';
 export { default as fileSchema } from './file';

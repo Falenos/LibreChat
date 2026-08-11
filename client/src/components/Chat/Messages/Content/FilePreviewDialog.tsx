@@ -34,6 +34,9 @@ interface FilePreviewDialogProps {
   pageRelevance?: Record<number, number>;
   fileType?: string;
   fileSize?: number;
+  // [knauf] KK20-248 — use project-scoped file download for Project Knowledge files.
+  projectId?: string;
+  // End [knauf]
 }
 
 function getFileExtension(filename: string): string {
@@ -149,6 +152,7 @@ export default function FilePreviewDialog({
   pageRelevance,
   fileType,
   fileSize,
+  projectId,
 }: FilePreviewDialogProps) {
   const localize = useLocalize();
   // [knauf] KK20-221 — cancel the download query when the dialog closes
@@ -156,7 +160,10 @@ export default function FilePreviewDialog({
   // End [knauf]
   const user = useRecoilValue(store.user);
   const { shareId } = useShareContext();
-  const { refetch: downloadOwned } = useFileDownload(user?.id ?? '', fileId, { direct: false });
+  const { refetch: downloadOwned } = useFileDownload(user?.id ?? '', fileId, {
+    direct: false,
+    projectId,
+  });
   const { refetch: downloadShared } = useSharedFileDownload(shareId, fileId);
   // Use the share route only for snapshotted files (filepath rewritten to the
   // share path); otherwise fall back to the owner route.

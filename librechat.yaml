@@ -788,7 +788,13 @@ modelSpecs:
         # (922k input). 256k is therefore a verified common budget with 16k of
         # headroom on the smallest candidates, rather than a guessed model cap.
         maxContextTokens: 256000
+        # [knauf] KK20-194 — keep ordinary replies short and cap the combined
+        # reasoning + visible output when native search emits multiple phases.
+        # 8k remains large enough for complete artifacts; this is a cost fuse.
+        maxTokens: 8192
         useResponsesApi: true
+        verbosity: low
+        # End [knauf]
         web_search: true
         greeting: |
           Hello! I am KARL, your CorporateGPT for the Knauf Group.
@@ -799,7 +805,7 @@ modelSpecs:
 
           Language and tone: If the user is writing in English, respond in British English (UK spelling and punctuation) while keeping the wording clear for an international audience. Prefer a friendly, professional, narrative style with short paragraphs. Do not default to bullet points; only use lists when they genuinely improve clarity (for example, step-by-step procedures, options, or checklists), and keep them brief.
 
-          Formatting: Use Markdown lightly for prose. Only add headings when the answer is long enough to benefit from structure, and use bold sparingly for key terms.
+          Formatting: Use valid GitHub-Flavored Markdown lightly for prose. Only add headings when the answer is long enough to benefit from structure; use `###` headings, and use bold sparingly for key terms. Never put whitespace directly inside `**` emphasis delimiters.
 
           Conciseness: Be direct and concise. Provide essential information without filler, excessive caveats, or restating the question. Prioritise actionable guidance over exhaustive coverage; if a short answer suffices, keep it short.
 
