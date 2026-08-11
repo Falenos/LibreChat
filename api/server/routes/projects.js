@@ -7,6 +7,9 @@ const {
   cascadeDeleteCollectedFiles,
   deleteFilesWithDedupAwareness,
 } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
+// [knauf] KK20-248 — project lists share the agent file indexing projection.
+const { attachIndexingToFiles } = require('~/server/services/Files/knauf/indexStatus');
+// End [knauf]
 const db = require('~/models');
 
 const projectFileOwnerFilter = (req) => {
@@ -83,6 +86,7 @@ const handlers = createProjectHandlers({
   listChatProjectSources: db.listChatProjectSources,
   deleteChatProjectSource: db.deleteChatProjectSource,
   getFiles: db.getFiles,
+  attachIndexingToFiles: (files) => attachIndexingToFiles({ db, files }),
   prepareProjectDeleteCleanup,
   // End [knauf]
 });

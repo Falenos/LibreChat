@@ -37,6 +37,12 @@ const mockHandlers = {
   deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
 };
 
+const mockAttachIndexingToFiles = jest.fn(async ({ files }) => files);
+
+jest.mock('~/server/services/Files/knauf/indexStatus', () => ({
+  attachIndexingToFiles: (...args) => mockAttachIndexingToFiles(...args),
+}));
+
 jest.mock('~/server/services/Files/knauf/cascadeDeleteConvoFiles', () => ({
   collectConvoFilesForCleanup: jest.fn(),
   cascadeDeleteCollectedFiles: jest.fn(),
@@ -87,6 +93,13 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(response.headers.location).toBe('/api/files/download/user-1/file-1');
     expect(mockHandlers.downloadProjectFile).toHaveBeenCalled();
     expect(db.listChatProjectSources).not.toHaveBeenCalled();
+  });
+
+  it('injects the shared agent-file indexing projector', async () => {
+    const files = [{ file_id: 'file-1', knauf_asset_id: 'asset-1' }];
+
+    await expect(injectedDeps.attachIndexingToFiles(files)).resolves.toBe(files);
+    expect(mockAttachIndexingToFiles).toHaveBeenCalledWith({ db, files });
   });
 
   it('delegates project file deletion to the project handler layer', async () => {

@@ -11,6 +11,9 @@ import type {
   IMongoFile,
   UpdateChatProjectInput,
 } from '@librechat/data-schemas';
+// [knauf] KK20-248 — project files expose the shared async-indexing projection.
+import type { TChatProjectFileIndexing } from 'librechat-data-provider';
+// End [knauf]
 import type { Request, Response } from 'express';
 
 const PROJECT_NOT_FOUND = 'Project not found';
@@ -48,6 +51,7 @@ type ProjectHandlerDependencies = Pick<
     'createChatProjectSource' | 'listChatProjectSources' | 'deleteChatProjectSource'
   > &
   Pick<FileMethods, 'getFiles'> & {
+    attachIndexingToFiles: (files: IMongoFile[]) => Promise<IndexedProjectFile[]>;
     prepareProjectDeleteCleanup?: (
       req: ProjectRequest,
       projectId: string,
@@ -68,6 +72,7 @@ const projectFileOwnerFilter = (req: ProjectRequest): FileOwner & Record<string,
     // [knauf] KK20-248 — include legacy user-owned file rows that predate
     // tenantId persistence; otherwise valid project files appear as missing.
     $or: [{ tenantId }, { tenantId: { $exists: false } }, { tenantId: null }],
+    // End [knauf]
   };
 };
 
@@ -122,8 +127,11 @@ const createProjectInput = (req: ProjectRequest): CreateChatProjectInput | null 
 };
 
 // [knauf] KK20-248 — merge project-source lifecycle state with authorized File metadata.
+type IndexedProjectFile = IMongoFile & { indexing?: TChatProjectFileIndexing };
 type ProjectFileResponse = IChatProjectSource &
-  Partial<Pick<IMongoFile, 'filename' | 'type' | 'bytes' | 'embedded'>>;
+  Partial<Pick<IMongoFile, 'filename' | 'type' | 'bytes' | 'embedded'>> & {
+    indexing?: TChatProjectFileIndexing;
+  };
 
 const deriveProjectFileStatus = (
   source: IChatProjectSource,
@@ -143,7 +151,7 @@ const deriveProjectFileStatus = (
 
 const buildProjectFileResponse = (
   source: IChatProjectSource,
-  file?: IMongoFile,
+  file?: IndexedProjectFile,
 ): ProjectFileResponse => {
   const { status, error } = deriveProjectFileStatus(source, file);
   return {
@@ -154,6 +162,7 @@ const buildProjectFileResponse = (
     type: file?.type,
     bytes: file?.bytes,
     embedded: file?.embedded,
+    indexing: file?.indexing,
   };
 };
 // End [knauf]
@@ -328,12 +337,15 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
               ...projectFileOwnerFilter(req),
             },
             {},
-            { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+            { filename: 1, type: 1, bytes: 1, embedded: 1, knauf_asset_id: 1, file_id: 1 },
           )) ?? [])
         : [];
-      const filesById = new Map(fileRows.map((file) => [file.file_id, file]));
+      const indexedFileRows = await deps.attachIndexingToFiles(fileRows);
+      const filesById = new Map(indexedFileRows.map((file) => [file.file_id, file]));
       return res.status(200).json({
-        files: sources.map((source) => buildProjectFileResponse(source, filesById.get(source.file_id))),
+        files: sources.map((source) =>
+          buildProjectFileResponse(source, filesById.get(source.file_id)),
+        ),
       });
     } catch (error) {
       logger.error('[projects] Error listing project files', error);
@@ -359,7 +371,7 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
             ...projectFileOwnerFilter(req),
           },
           {},
-          { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+          { filename: 1, type: 1, bytes: 1, embedded: 1, knauf_asset_id: 1, file_id: 1 },
         )) ?? [];
       if (!authorizedFile) {
         return res.status(404).json({ error: 'File not found' });
@@ -373,7 +385,8 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
       if (!source) {
         return res.status(404).json({ error: PROJECT_NOT_FOUND });
       }
-      return res.status(201).json(buildProjectFileResponse(source, authorizedFile));
+      const [indexedFile = authorizedFile] = await deps.attachIndexingToFiles([authorizedFile]);
+      return res.status(201).json(buildProjectFileResponse(source, indexedFile));
     } catch (error) {
       logger.error('[projects] Error adding project file', error);
       return res.status(500).json({ error: 'Error adding project file' });

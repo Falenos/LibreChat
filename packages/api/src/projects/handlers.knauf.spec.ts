@@ -25,6 +25,9 @@ const createDeps = (overrides: Record<string, unknown> = {}) =>
     listChatProjectSources: jest.fn(),
     deleteChatProjectSource: jest.fn(),
     getFiles: jest.fn(),
+    // [knauf] KK20-248 — default identity; route tests override to project shared indexing state.
+    attachIndexingToFiles: jest.fn(async (files: unknown[]) => files),
+    // End [knauf]
     prepareProjectDeleteCleanup: jest.fn(),
     ...overrides,
   }) as any;
@@ -37,6 +40,16 @@ const source = (file_id: string, status = 'processing') => ({
   error: null,
 });
 
+// [knauf] KK20-248 — project polling consumes the shared async-indexing projection.
+const pendingIndexing = {
+  status: 'processing',
+  ready: false,
+  retryable: false,
+  error_code: null,
+  queued_at: null,
+};
+// End [knauf]
+
 describe('createProjectHandlers project files [knauf]', () => {
   it('lists only file metadata authorized for the current user and tenant', async () => {
     const deps = createDeps({
@@ -47,9 +60,15 @@ describe('createProjectHandlers project files [knauf]', () => {
           filename: 'ready.pdf',
           type: 'application/pdf',
           bytes: 123,
-          embedded: true,
+          embedded: false,
+          knauf_asset_id: 'asset-ready',
         },
       ]),
+      // [knauf] KK20-248 — same batch enrichment used by GET /files/agent/:agent_id.
+      attachIndexingToFiles: jest.fn(async (files: Array<Record<string, unknown>>) =>
+        files.map((file) => ({ ...file, indexing: pendingIndexing })),
+      ),
+      // End [knauf]
     });
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
@@ -66,16 +85,22 @@ describe('createProjectHandlers project files [knauf]', () => {
         $or: [{ tenantId: 'tenant-a' }, { tenantId: { $exists: false } }, { tenantId: null }],
       },
       {},
-      { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+      // [knauf] KK20-248 — project reads use the same indexing state as agent reads.
+      { filename: 1, type: 1, bytes: 1, embedded: 1, knauf_asset_id: 1, file_id: 1 },
+      // End [knauf]
     );
+    expect(deps.attachIndexingToFiles).toHaveBeenCalledWith([
+      expect.objectContaining({ file_id: 'file-ready', knauf_asset_id: 'asset-ready' }),
+    ]);
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       files: [
         expect.objectContaining({
           file_id: 'file-ready',
           filename: 'ready.pdf',
-          status: 'ready',
-          embedded: true,
+          status: 'processing',
+          embedded: false,
+          indexing: pendingIndexing,
         }),
         expect.objectContaining({
           file_id: 'file-other-user',
@@ -114,7 +139,9 @@ describe('createProjectHandlers project files [knauf]', () => {
         $or: [{ tenantId: 'tenant-a' }, { tenantId: { $exists: false } }, { tenantId: null }],
       },
       {},
-      { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+      // [knauf] KK20-248 — projection includes the asset pointer needed for shared enrichment.
+      { filename: 1, type: 1, bytes: 1, embedded: 1, knauf_asset_id: 1, file_id: 1 },
+      // End [knauf]
     );
     expect(res.json).toHaveBeenCalledWith({
       files: [
@@ -143,7 +170,9 @@ describe('createProjectHandlers project files [knauf]', () => {
     expect(deps.getFiles).toHaveBeenCalledWith(
       { file_id: { $in: ['foreign-file'] }, user: userId },
       {},
-      { filename: 1, type: 1, bytes: 1, embedded: 1, file_id: 1 },
+      // [knauf] KK20-248 — keep authorization reads aligned with project list projections.
+      { filename: 1, type: 1, bytes: 1, embedded: 1, knauf_asset_id: 1, file_id: 1 },
+      // End [knauf]
     );
     expect(deps.createChatProjectSource).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(404);
