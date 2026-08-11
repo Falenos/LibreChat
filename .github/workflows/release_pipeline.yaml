@@ -43,6 +43,16 @@ jobs:
       AGK_WORKER_ARGOCD_APP: agentic-karl-dev-agentic-karl-worker
       AGK_ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
+      # [knauf] KK20-195 — continuous delivery to stage: once DEV health smoke
+      # passes, the same version is auto-deployed to stage (image import +
+      # GitOps bump + ArgoCD wait), inlined here as this pipeline's own stage
+      # steps (there is no separate deploy-to-stage workflow anymore — see
+      # SEAMS.md).
+      AGK_STAGE_IMAGE_REPOSITORY: agentic-karl-stage/agentic-karl
+      AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
+      AGK_STAGE_WORKER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-worker
+      AGK_STAGE_ARGOCD_APP: agentic-karl-stage-agentic-karl
+      AGK_STAGE_WORKER_ARGOCD_APP: agentic-karl-stage-agentic-karl-worker
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -363,7 +373,262 @@ jobs:
           gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
           echo "DEV health smoke passed"
           echo "| DEV health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Stage promotion | manual; full STAGE E2E gates PROD promotion for \`$VERSION\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Stage deploy | automatic — see below |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Prod promotion | manual only, via promote_pipeline.yaml; fresh STAGE E2E gates every promotion |" >> "$GITHUB_STEP_SUMMARY"
+
+      # [knauf] KK20-195 — continuous delivery to stage. Once DEV health smoke
+      # passes, import the exact dev image digest into stage's ACR namespace
+      # (idempotent, immutable-tag-safe). This step and the two that follow
+      # absorb the logic that used to live in the now-removed
+      # deploy_stage_pipeline.yaml (see SEAMS.md).
+      - name: Import exact dev image into AGK stage ACR namespace
+        id: stage-image
+        if: success()
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          DEV_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --image "$AGK_IMAGE_REPOSITORY:$VERSION" \
+            --query digest -o tsv)
+          grep -Eq '^sha256:[0-9a-f]{64}$' <<< "$DEV_DIGEST"
+          SOURCE_REGISTRY_ID=$(az acr show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --query id -o tsv)
+
+          EXISTING_STAGE_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" --name "$AGK_ACR_NAME" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" --query digest -o tsv 2>/dev/null || true)
+          if [ -n "$EXISTING_STAGE_DIGEST" ]; then
+            if [ "$EXISTING_STAGE_DIGEST" != "$DEV_DIGEST" ]; then
+              echo "::error::Refusing to retarget immutable STAGE tag $VERSION from $EXISTING_STAGE_DIGEST to $DEV_DIGEST"
+              exit 1
+            fi
+            echo "STAGE tag $VERSION already points at $DEV_DIGEST; reusing it"
+          else
+            az acr import \
+              --subscription "$AGK_SUBSCRIPTION_ID" \
+              --name "$AGK_ACR_NAME" \
+              --registry "$SOURCE_REGISTRY_ID" \
+              --source "$AGK_IMAGE_REPOSITORY@$DEV_DIGEST" \
+              --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          fi
+          STAGE_DIGEST=$(az acr repository show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --name "$AGK_ACR_NAME" \
+            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
+            --query digest -o tsv)
+          if [ "$STAGE_DIGEST" != "$DEV_DIGEST" ]; then
+            echo "::error::Stage digest $STAGE_DIGEST differs from imported dev digest $DEV_DIGEST"
+            exit 1
+          fi
+
+      # [knauf] KK20-195 — bump stage's GitOps config (app + worker image tags)
+      # via an auto-merged PR, reusing the exact idiom from this workflow's own
+      # "Update AGK deployment config values" step above (dev bump). This
+      # replaces the equivalent step that used to live in the now-removed
+      # deploy_stage_pipeline.yaml.
+      - name: Update AGK stage deployment config values
+        if: success()
+        working-directory: agk-deployment-configs
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          BRANCH="release/agk-stage-$VERSION"
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # The previous "Update AGK deployment config values" step left this
+          # clone checked out on its own release/agk-dev-* branch; return to
+          # main and pull the (possibly just-merged) dev bump before editing.
+          git checkout main
+          git pull --ff-only origin main
+
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+
+          WORKER_VALUES="$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
+          test -f "$WORKER_VALUES"
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+          grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+
+          CONFIG_FILES=(
+            "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+            "$WORKER_VALUES"
+          )
+
+          if git diff --quiet -- "${CONFIG_FILES[@]}"; then
+            echo "AGK stage deployment config already points at $VERSION"
+            echo "| Stage deployment config | already at \`$VERSION\` (no PR needed) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git checkout -b "$BRANCH"
+          git add "${CONFIG_FILES[@]}"
+          git commit -m "Update agentic-karl stage to $VERSION"
+          git push --force origin "$BRANCH"
+
+          PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -z "$PR_URL" ]; then
+            PR_URL=$(gh pr create \
+              --base main --head "$BRANCH" \
+              --title "Update agentic-karl stage to $VERSION" \
+              --body "Automated stage GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps the app and async-indexing worker image tags, plus the app Langfuse release, to \`$VERSION\`.")
+          fi
+          echo "Stage deployment config PR: $PR_URL"
+
+          gh pr merge "$PR_URL" --auto --squash --delete-branch \
+            || gh pr merge "$PR_URL" --squash --delete-branch \
+            || true
+
+          STATE=""
+          for attempt in {1..90}; do
+            STATE=$(gh pr view "$PR_URL" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)
+            echo "Attempt $attempt: PR state=$STATE"
+            if [ "$STATE" = "MERGED" ]; then break; fi
+            if [ "$STATE" = "CLOSED" ]; then
+              echo "Stage deployment config PR was closed without merging"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "Stage deployment config PR did not merge in time (state=$STATE)."
+            echo "Auto-merge stays enabled — check $PR_URL."
+            exit 1
+          fi
+
+          {
+            echo "| Stage deployment config PR | $PR_URL (merged) |"
+            echo "| Stage deployment config file | \`$AGK_CONFIG_REPOSITORY/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refresh AGK stage ArgoCD application
+        if: success()
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+          echo "Waiting for AGK ArgoCD app $AGK_STAGE_ARGOCD_APP to report Synced/Healthy on image $EXPECTED_IMAGE"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          curl -fsS \
+            "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP?refresh=true" \
+            -H "Authorization: ******" -H "Accept: application/json" > /dev/null 2>&1 || true
+
+          for attempt in {1..60}; do
+            APP_JSON=$(curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
+              -H "Authorization: ******" -H "Accept: application/json" 2>/dev/null || true)
+
+            if [ -z "$APP_JSON" ]; then
+              echo "Attempt $attempt: API blip — retrying"
+              sleep 10
+              continue
+            fi
+
+            SYNC_STATUS=$(jq -r '.status.sync.status' <<< "$APP_JSON")
+            HEALTH_STATUS=$(jq -r '.status.health.status' <<< "$APP_JSON")
+            CURRENT_IMAGES=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | tr '\n' ',' | sed 's/,$//')
+            IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "$APP_JSON" | grep -F "$EXPECTED_IMAGE" || true)
+
+            echo "Attempt $attempt: sync=$SYNC_STATUS health=$HEALTH_STATUS expected_image=${IMAGE_MATCH:-missing} current_images=${CURRENT_IMAGES:-none}"
+
+            if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+              echo "| Stage ArgoCD sync | \`$SYNC_STATUS\` |" >> "$GITHUB_STEP_SUMMARY"
+              echo "| Stage ArgoCD health | \`$HEALTH_STATUS\` |" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            curl -fsS \
+              "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP?refresh=true" \
+              -H "Authorization: ******" -H "Accept: application/json" > /dev/null 2>&1 || true
+            sleep 10
+          done
+
+          echo "AGK stage ArgoCD did not report $VERSION as Synced/Healthy in time"
+          echo "| Failure | AGK stage ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # [knauf] KK20-195 — informational E2E run on stage, for early-warning
+      # visibility only. This does NOT gate anything: promote_pipeline.yaml
+      # always re-runs STAGE E2E fresh right before promoting to prod, so this
+      # run here is continuous-delivery visibility, not a promotion gate.
+      # `continue-on-error: true` keeps a failing E2E run from failing the
+      # overall release job.
+      - name: Run STAGE E2E (informational, non-gating)
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          CORRELATION_ID="agentic-karl-release-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$(uuidgen)-e2e"
+          run_id=""
+          run_url=""
+
+          echo "Dispatching STAGE E2E (informational) correlation_id=$CORRELATION_ID"
+          gh workflow run stage-e2e.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f correlation_id="$CORRELATION_ID" \
+            -f application_version="$VERSION" \
+            -f worker_version="$VERSION"
+
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
+              --repo "$QUALITY_REPOSITORY" \
+              --workflow stage-e2e.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 50 \
+              --jq "map(select(.displayTitle == \"Stage E2E $CORRELATION_ID\")) | first // empty")
+
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
+            fi
+
+            echo "Waiting for STAGE E2E run to appear: attempt=$attempt"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::warning::Timed out finding STAGE E2E run correlation_id=$CORRELATION_ID"
+            echo "| STAGE E2E (informational) | timed out waiting for run to appear (non-blocking) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "STAGE E2E run: $run_url"
+          if gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status; then
+            echo "STAGE E2E (informational) passed"
+            echo "| STAGE E2E (informational) | $run_url — passed |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::STAGE E2E (informational) failed for $VERSION — see $run_url. Non-blocking; promote_pipeline.yaml re-runs E2E fresh before any prod promotion."
+            echo "| STAGE E2E (informational) | $run_url — FAILED (non-blocking, see warning) |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
       # Best-effort visibility only: the app deploy above is the release's success

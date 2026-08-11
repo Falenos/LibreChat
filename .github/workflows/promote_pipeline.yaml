@@ -14,10 +14,6 @@ on:
         description: 'Version to promote, for example v0.54.0. Defaults to the current AGK stage GitOps tag.'
         type: string
         required: false
-      stage_run_id:
-        description: 'Successful Deploy Dev to Stage run ID whose E2E-tested artifact will be promoted. Leave blank to auto-resolve the latest successful run.'
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -65,120 +61,19 @@ jobs:
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
       QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
     steps:
-      # [knauf] KK20-195 — stage_run_id is optional: when left blank, resolve
-      # it to the most recent successful "Deploy Dev to Stage" run on main so
-      # operators don't have to hunt for/copy-paste a run ID by hand. This is
-      # purely a lookup convenience; the manual workflow_dispatch trigger and
-      # every downstream provenance/drift check below are unchanged.
-      - name: Resolve STAGE run ID
-        id: resolve-run-id
+      # [knauf] KK20-195 — validate the version input shape only. There is no
+      # longer an old stage-run/provenance artifact to trust: this pipeline
+      # snapshots and re-tests STAGE live, every time it runs (see the
+      # "Snapshot STAGE" and "Run STAGE E2E" steps below).
+      - name: Validate workflow inputs
         env:
-          GH_TOKEN: ${{ github.token }}
-          INPUT_STAGE_RUN_ID: ${{ inputs.stage_run_id }}
-        run: |
-          set -euo pipefail
-          if [ -n "$INPUT_STAGE_RUN_ID" ]; then
-            echo "Using explicitly provided STAGE run ID $INPUT_STAGE_RUN_ID"
-            echo "stage-run-id=$INPUT_STAGE_RUN_ID" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          WORKFLOW_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy_stage_pipeline.yaml" --jq '.id')
-          RESOLVED_RUN_ID=$(gh api \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/runs?branch=main&event=workflow_dispatch&status=success&per_page=1" \
-            --jq '.workflow_runs[0].id // empty')
-          if [ -z "$RESOLVED_RUN_ID" ]; then
-            echo "::error::No successful Deploy Dev to Stage run found on main. Pass stage_run_id explicitly."
-            exit 1
-          fi
-          echo "No stage_run_id provided — auto-resolved to the latest successful Deploy Dev to Stage run: $RESOLVED_RUN_ID"
-          echo "stage-run-id=$RESOLVED_RUN_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Validate trusted STAGE run and provenance
-        id: provenance
-        env:
-          GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
-          INPUT_STAGE_RUN_ID: ${{ steps.resolve-run-id.outputs.stage-run-id }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT_VERSION" ] && ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$INPUT_VERSION"; then
             echo "::error::Invalid version"
             exit 1
           fi
-          if ! grep -Eq '^[1-9][0-9]*$' <<< "$INPUT_STAGE_RUN_ID"; then
-            echo "::error::Invalid STAGE run ID"
-            exit 1
-          fi
-
-          RUN_JSON=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_STAGE_RUN_ID")
-          WORKFLOW_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy_stage_pipeline.yaml" --jq '.id')
-          jq -e \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --argjson workflow_id "$WORKFLOW_ID" \
-            '.workflow_id == $workflow_id and .event == "workflow_dispatch" and
-             .status == "completed" and .conclusion == "success" and
-             .head_branch == "main" and .head_repository.full_name == $repository' \
-            <<< "$RUN_JSON" > /dev/null
-          RUN_ATTEMPT=$(jq -er '.run_attempt' <<< "$RUN_JSON")
-          RUN_HEAD_SHA=$(jq -er '.head_sha' <<< "$RUN_JSON")
-          ARTIFACT_NAME="stage-validation-provenance-$RUN_ATTEMPT"
-          ARTIFACTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INPUT_STAGE_RUN_ID/artifacts")
-          ARTIFACT_COUNT=$(jq --arg name "$ARTIFACT_NAME" \
-            '[.artifacts[] | select(.name == $name and .expired == false)] | length' <<< "$ARTIFACTS")
-          if [ "$ARTIFACT_COUNT" != 1 ]; then
-            echo "::error::Expected exactly one unexpired $ARTIFACT_NAME artifact, found $ARTIFACT_COUNT"
-            exit 1
-          fi
-
-          PROVENANCE_DIR="$RUNNER_TEMP/stage-provenance"
-          mkdir -p "$PROVENANCE_DIR"
-          gh run download "$INPUT_STAGE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name "$ARTIFACT_NAME" --dir "$PROVENANCE_DIR"
-          PROVENANCE_FILE="$PROVENANCE_DIR/stage-validation.json"
-          test -f "$PROVENANCE_FILE"
-          test "$(find "$PROVENANCE_DIR" -type f | wc -l | tr -d ' ')" = 1
-          EXPECTED_WORKFLOW_REF="$GITHUB_REPOSITORY/.github/workflows/deploy_stage_pipeline.yaml@refs/heads/main"
-          jq -e \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg workflow_ref "$EXPECTED_WORKFLOW_REF" \
-            --arg workflow_sha "$RUN_HEAD_SHA" \
-            --argjson run_id "$INPUT_STAGE_RUN_ID" \
-            --argjson run_attempt "$RUN_ATTEMPT" \
-            '.schema == 2 and .repository == $repository and .workflow_ref == $workflow_ref and
-             .workflow_sha == $workflow_sha and .stage_run_id == $run_id and
-             .stage_run_attempt == $run_attempt and
-             (.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
-             (.image_digest | test("^sha256:[0-9a-f]{64}$")) and
-             (.app_revision | test("^[0-9a-f]{40}$")) and
-             (.app_gitops_revision | test("^[0-9a-f]{40}$")) and
-             (.worker_revision | test("^[0-9a-f]{40}$")) and
-             (.gitops_revision | test("^[0-9a-f]{40}$")) and
-             .app_gitops_revision == .worker_revision and .app_gitops_revision == .gitops_revision and
-             (.app_config_sha256 | test("^[0-9a-f]{64}$")) and
-             (.worker_config_sha256 | test("^[0-9a-f]{64}$")) and
-             .app_runtime_digest == .image_digest and
-             .worker_runtime_digest == .image_digest and
-             .quality_repository == "Knauf-Group/agentic-karl-quality" and
-             (.quality_run_id | type == "number")' \
-            "$PROVENANCE_FILE" > /dev/null
-
-          VERSION=$(jq -er '.version' "$PROVENANCE_FILE")
-          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$VERSION" ]; then
-            echo "::error::Requested version $INPUT_VERSION differs from tested version $VERSION"
-            exit 1
-          fi
-          {
-            echo "version=$VERSION"
-            echo "image-digest=$(jq -er '.image_digest' "$PROVENANCE_FILE")"
-            echo "app-revision=$(jq -er '.app_revision' "$PROVENANCE_FILE")"
-            echo "app-gitops-revision=$(jq -er '.app_gitops_revision' "$PROVENANCE_FILE")"
-            echo "worker-revision=$(jq -er '.worker_revision' "$PROVENANCE_FILE")"
-            echo "app-config-sha=$(jq -er '.app_config_sha256' "$PROVENANCE_FILE")"
-            echo "worker-config-sha=$(jq -er '.worker_config_sha256' "$PROVENANCE_FILE")"
-            echo "workflow-sha=$RUN_HEAD_SHA"
-          } >> "$GITHUB_OUTPUT"
-          echo "Validated successful STAGE run $INPUT_STAGE_RUN_ID for $VERSION"
 
       - name: Azure login
         uses: azure/login@v2
@@ -210,10 +105,9 @@ jobs:
       - name: Determine version to promote
         id: version
         env:
-          PROVENANCE_VERSION: ${{ steps.provenance.outputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-
 
           APP_VALUES="agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           WORKER_VALUES="agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
@@ -222,15 +116,15 @@ jobs:
 
           STAGE_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$APP_VALUES" | tr -d "\"'")
           STAGE_WORKER_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$WORKER_VALUES" | tr -d "\"'")
-          VERSION="$PROVENANCE_VERSION"
+          VERSION="$STAGE_VERSION"
 
           if [ "$STAGE_WORKER_VERSION" != "$STAGE_VERSION" ]; then
             echo "::error::STAGE app tag $STAGE_VERSION and worker tag $STAGE_WORKER_VERSION differ"
             exit 1
           fi
 
-          if [ "$VERSION" != "$STAGE_VERSION" ]; then
-            echo "::error::Requested version $VERSION is not the current STAGE GitOps tag $STAGE_VERSION"
+          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$STAGE_VERSION" ]; then
+            echo "::error::Requested version $INPUT_VERSION is not the current STAGE GitOps tag $STAGE_VERSION"
             exit 1
           fi
 
@@ -242,19 +136,12 @@ jobs:
           echo "Version to promote: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Validate current STAGE state and prod config shape
-        env:
-          EXPECTED_DIGEST: ${{ steps.provenance.outputs.image-digest }}
-          EXPECTED_APP_REVISION: ${{ steps.provenance.outputs.app-revision }}
-          EXPECTED_APP_GITOPS_REVISION: ${{ steps.provenance.outputs.app-gitops-revision }}
-          EXPECTED_WORKER_REVISION: ${{ steps.provenance.outputs.worker-revision }}
-          EXPECTED_APP_CONFIG_SHA: ${{ steps.provenance.outputs.app-config-sha }}
-          EXPECTED_WORKER_CONFIG_SHA: ${{ steps.provenance.outputs.worker-config-sha }}
-          STAGE_WORKFLOW_SHA: ${{ steps.provenance.outputs.workflow-sha }}
+      # [knauf] KK20-195 — validate prod GitOps config shape up front. This is
+      # unchanged from the old provenance-based flow; it doesn't depend on any
+      # STAGE snapshot.
+      - name: Validate prod config shape
         run: |
           set -euo pipefail
-
-          VERSION="${{ steps.version.outputs.version }}"
 
           test -f "agk-deployment-configs/$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           test -f "agk-deployment-configs/$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
@@ -271,43 +158,169 @@ jobs:
           grep -F "MEILI_MASTER_KEY: AGK-MEILI-MASTER-KEY" \
             "agk-deployment-configs/$AGK_PROD_MEILI_CONFIG_DIRECTORY/values.yaml"
 
-          CURRENT_DIGEST=$(az acr repository show \
+      # [knauf] KK20-195 — replaces the old "trust an old provenance artifact"
+      # model. Snapshots STAGE's live state (image digest, both git revisions,
+      # and content-hash of the app+worker values.yaml at the current STAGE
+      # config paths) directly from ArgoCD/ACR. This becomes the "candidate"
+      # snapshot that an identical "after" snapshot must match once fresh E2E
+      # has run, before promoting.
+      - name: Snapshot STAGE state (before E2E)
+        id: stage-before
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
             --subscription "$AGK_STAGE_SUBSCRIPTION_ID" \
-            --name "$AGK_STAGE_ACR_NAME" \
-            --image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
-            --query digest -o tsv)
-          if [ "$CURRENT_DIGEST" != "$EXPECTED_DIGEST" ]; then
-            echo "::error::Current STAGE digest differs from the E2E-tested digest"
-            exit 1
-          fi
+            --vault-name "$AGK_STAGE_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_STAGE_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- | jq -er '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
 
-          git merge-base --is-ancestor "$STAGE_WORKFLOW_SHA" HEAD
-          git -C agk-deployment-configs fetch origin "$EXPECTED_APP_GITOPS_REVISION"
+          APP_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
+            -H "Authorization: ******" -H "Accept: application/json")
+          WORKER_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_WORKER_ARGOCD_APP" \
+            -H "Authorization: ******" -H "Accept: application/json")
+
+          for STATE in "$APP_JSON" "$WORKER_JSON"; do
+            jq -e --arg image "$EXPECTED_IMAGE" \
+              '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
+               any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
+              <<< "$STATE" > /dev/null
+          done
+
+          revision_for_repo() {
+            local repository_suffix="$1"
+            jq -er --arg suffix "$repository_suffix" '
+              .status.sync.comparedTo.sources as $sources
+              | .status.sync.revisions as $revisions
+              | [range(0; ($sources | length)) as $index
+                 | select($sources[$index].repoURL | endswith($suffix))
+                 | $revisions[$index]]
+              | if length == 1 then .[0] else error("expected one matching Argo source") end
+            ' <<< "$APP_JSON"
+          }
+          APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
+          APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
+          WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
+          grep -Eq '^[0-9a-f]{40}$' <<< "$APP_REVISION"
+          grep -Eq '^[0-9a-f]{40}$' <<< "$APP_GITOPS_REVISION"
+          grep -Eq '^[0-9a-f]{40}$' <<< "$WORKER_REVISION"
+
+          IMAGE_DIGEST=$(az acr repository show \
+            --subscription "$AGK_STAGE_SUBSCRIPTION_ID" --name "$AGK_STAGE_ACR_NAME" \
+            --image "$EXPECTED_IMAGE" --query digest -o tsv)
+          grep -Eq '^sha256:[0-9a-f]{64}$' <<< "$IMAGE_DIGEST"
+
+          git -C agk-deployment-configs fetch origin "$APP_GITOPS_REVISION" "$WORKER_REVISION"
           APP_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${EXPECTED_APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+            show "${APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${EXPECTED_WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
-          if [ "$APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
-            || [ "$WORKER_CONFIG_SHA" != "$EXPECTED_WORKER_CONFIG_SHA" ]; then
-            echo "::error::Tested STAGE GitOps config hashes do not match provenance"
+            show "${WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+
+          export ARGOCD_BASE_URL="https://$AGK_STAGE_ARGOCD_DOMAIN"
+          export ARGOCD_TOKEN EXPECTED_IMAGE
+          export EXPECTED_DIGEST="$IMAGE_DIGEST"
+          APP_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_STAGE_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+          WORKER_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_STAGE_WORKER_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+
+          {
+            echo "image-digest=$IMAGE_DIGEST"
+            echo "app-revision=$APP_REVISION"
+            echo "app-gitops-revision=$APP_GITOPS_REVISION"
+            echo "worker-revision=$WORKER_REVISION"
+            echo "app-config-sha=$APP_CONFIG_SHA"
+            echo "worker-config-sha=$WORKER_CONFIG_SHA"
+            echo "app-runtime-digest=$APP_RUNTIME_DIGEST"
+            echo "worker-runtime-digest=$WORKER_RUNTIME_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+          echo "| STAGE snapshot (before E2E) | digest \`$IMAGE_DIGEST\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      # [knauf] KK20-195 — fresh, live E2E run against STAGE every time this
+      # pipeline is triggered. No old run's results or provenance artifact are
+      # reused: this is the actual gate to prod.
+      - name: Run STAGE E2E tests
+        id: stage-e2e
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$GITHUB_PAT"
+          VERSION="${{ steps.version.outputs.version }}"
+          GITOPS_REVISION="${{ steps.stage-before.outputs.app-gitops-revision }}"
+          CORRELATION_ID="agentic-karl-promote-${{ github.run_id }}-${{ github.run_attempt }}-$VERSION-$(uuidgen)-e2e"
+          run_id=""
+          run_url=""
+
+          echo "Dispatching STAGE E2E correlation_id=$CORRELATION_ID"
+          gh workflow run stage-e2e.yaml \
+            --repo "$QUALITY_REPOSITORY" \
+            --ref main \
+            -f correlation_id="$CORRELATION_ID" \
+            -f application_version="$VERSION" \
+            -f worker_version="$VERSION" \
+            -f gitops_revision="$GITOPS_REVISION"
+
+          for attempt in {1..30}; do
+            RUN_JSON=$(gh run list \
+              --repo "$QUALITY_REPOSITORY" \
+              --workflow stage-e2e.yaml \
+              --event workflow_dispatch \
+              --json databaseId,displayTitle,url \
+              --limit 50 \
+              --jq "map(select(.displayTitle == \"Stage E2E $CORRELATION_ID\")) | first // empty")
+
+            if [ -n "$RUN_JSON" ]; then
+              run_id=$(jq -r '.databaseId' <<< "$RUN_JSON")
+              run_url=$(jq -r '.url' <<< "$RUN_JSON")
+              break
+            fi
+
+            echo "Waiting for STAGE E2E run to appear: attempt=$attempt"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::Timed out finding STAGE E2E run correlation_id=$CORRELATION_ID"
             exit 1
           fi
 
-          # [knauf] KK20-195 — the two file-hash checks above already prove the
-          # tested STAGE config content hasn't drifted (they're evaluated at the
-          # revisions recorded in provenance). The block below additionally
-          # confirms ArgoCD's *live* app-repo revision and *live* config-path
-          # content still match what was tested, without relying on whole-repo
-          # HEAD-SHA equality: agk-deployment-configs is a monorepo shared by
-          # dev/stage/prod and multiple services, so any unrelated commit
-          # elsewhere in the repo (e.g. a dev version bump, an unrelated
-          # service's values.yaml fix) advances ArgoCD's reported
-          # comparedTo.sources revision for STAGE even though nothing under
-          # $AGK_STAGE_CONFIG_DIRECTORY or $AGK_STAGE_WORKER_CONFIG_DIRECTORY
-          # changed. A raw SHA1 equality check on that revision therefore
-          # produces false-positive "STAGE changed" failures. Comparing the
-          # live config-path content hash instead correctly detects only real
-          # drift in the paths that matter to this promotion.
+          echo "STAGE E2E run: $run_url"
+          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          echo "STAGE E2E passed"
+          echo "| STAGE E2E (fresh, this run) | $run_url |" >> "$GITHUB_STEP_SUMMARY"
+
+      # [knauf] KK20-195 — re-snapshot STAGE using the identical logic as the
+      # "before" snapshot, and compare byte-for-byte. If STAGE was redeployed
+      # during/after the E2E run, this fails the job for safety — we never
+      # promote a version that wasn't stably tested end-to-end.
+      - name: Snapshot STAGE state (after E2E) and verify no drift
+        env:
+          EXPECTED_DIGEST: ${{ steps.stage-before.outputs.image-digest }}
+          EXPECTED_APP_REVISION: ${{ steps.stage-before.outputs.app-revision }}
+          EXPECTED_APP_GITOPS_REVISION: ${{ steps.stage-before.outputs.app-gitops-revision }}
+          EXPECTED_WORKER_REVISION: ${{ steps.stage-before.outputs.worker-revision }}
+          EXPECTED_APP_CONFIG_SHA: ${{ steps.stage-before.outputs.app-config-sha }}
+          EXPECTED_WORKER_CONFIG_SHA: ${{ steps.stage-before.outputs.worker-config-sha }}
+          EXPECTED_APP_RUNTIME_DIGEST: ${{ steps.stage-before.outputs.app-runtime-digest }}
+          EXPECTED_WORKER_RUNTIME_DIGEST: ${{ steps.stage-before.outputs.worker-runtime-digest }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+
+          CURRENT_DIGEST=$(az acr repository show \
+            --subscription "$AGK_STAGE_SUBSCRIPTION_ID" --name "$AGK_STAGE_ACR_NAME" \
+            --image "$EXPECTED_IMAGE" --query digest -o tsv)
+          if [ "$CURRENT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::STAGE was redeployed during/after the E2E run (image digest changed from $EXPECTED_DIGEST to $CURRENT_DIGEST) — aborting promotion for safety. Re-run this workflow to test the new version fresh."
+            exit 1
+          fi
 
           ARGOCD_PASSWORD=$(az keyvault secret show \
             --subscription "$AGK_STAGE_SUBSCRIPTION_ID" \
@@ -319,9 +332,17 @@ jobs:
                 -H "Content-Type: application/json" -d @- | jq -er '.token')
           echo "::add-mask::$ARGOCD_TOKEN"
           APP_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_ARGOCD_APP" \
-            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+            -H "Authorization: ******" -H "Accept: application/json")
           WORKER_JSON=$(curl -fsS "https://$AGK_STAGE_ARGOCD_DOMAIN/api/v1/applications/$AGK_STAGE_WORKER_ARGOCD_APP" \
-            -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json")
+            -H "Authorization: ******" -H "Accept: application/json")
+
+          for STATE in "$APP_JSON" "$WORKER_JSON"; do
+            jq -e --arg image "$EXPECTED_IMAGE" \
+              '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
+               any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
+              <<< "$STATE" > /dev/null
+          done
+
           revision_for_repo() {
             local repository_suffix="$1"
             jq -er --arg suffix "$repository_suffix" '
@@ -335,44 +356,47 @@ jobs:
           }
           CURRENT_APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
           CURRENT_APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
-          if [ "$CURRENT_APP_REVISION" != "$EXPECTED_APP_REVISION" ]; then
-            echo "::error::Current STAGE app image revision differs from E2E provenance"
-            exit 1
-          fi
-          git -C agk-deployment-configs fetch origin "$CURRENT_APP_GITOPS_REVISION"
+          CURRENT_WORKER_REVISION=$(jq -er '.status.sync.revision' <<< "$WORKER_JSON")
+
+          # [knauf] KK20-195 — content-hash-based drift check (brought forward
+          # from PR #290's approach), rather than brittle whole-repo git SHA
+          # equality: agk-deployment-configs is a monorepo shared by
+          # dev/stage/prod and multiple services, so unrelated commits
+          # elsewhere in the repo advance ArgoCD's reported comparedTo.sources
+          # revision even when nothing under the STAGE app/worker config paths
+          # changed. Comparing the live config-path content hash instead only
+          # flags real drift in the paths that matter to this promotion.
+          git -C agk-deployment-configs fetch origin "$CURRENT_APP_GITOPS_REVISION" "$CURRENT_WORKER_REVISION"
           CURRENT_APP_CONFIG_SHA=$(git -C agk-deployment-configs \
             show "${CURRENT_APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
           CURRENT_WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
-            show "${CURRENT_APP_GITOPS_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
-          if [ "$CURRENT_APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
-            || [ "$CURRENT_WORKER_CONFIG_SHA" != "$EXPECTED_WORKER_CONFIG_SHA" ]; then
-            echo "::error::Current STAGE GitOps config content differs from E2E provenance"
-            exit 1
-          fi
-          jq -e --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
-            '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
-             any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
-            <<< "$APP_JSON" > /dev/null
-          jq -e --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
-            '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
-             any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
-            <<< "$WORKER_JSON" > /dev/null
+            show "${CURRENT_WORKER_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
 
           export ARGOCD_BASE_URL="https://$AGK_STAGE_ARGOCD_DOMAIN"
-          export ARGOCD_TOKEN
-          export EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
-          export EXPECTED_DIGEST
-          ARGOCD_APPLICATION="$AGK_STAGE_ARGOCD_APP" \
-            .github/scripts/verify-argocd-runtime-digest.sh > /dev/null
-          ARGOCD_APPLICATION="$AGK_STAGE_WORKER_ARGOCD_APP" \
-            .github/scripts/verify-argocd-runtime-digest.sh > /dev/null
+          export ARGOCD_TOKEN EXPECTED_IMAGE EXPECTED_DIGEST
+          APP_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_STAGE_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
+          WORKER_RUNTIME_DIGEST=$(ARGOCD_APPLICATION="$AGK_STAGE_WORKER_ARGOCD_APP" \
+            .github/scripts/verify-argocd-runtime-digest.sh)
 
-          echo "Validated current STAGE state against the successful E2E run"
-          echo "| STAGE provenance | exact run, digest and Argo revisions verified |" >> "$GITHUB_STEP_SUMMARY"
+          DRIFTED=""
+          [ "$CURRENT_APP_REVISION" = "$EXPECTED_APP_REVISION" ] || DRIFTED="app_revision"
+          [ "$CURRENT_APP_CONFIG_SHA" = "$EXPECTED_APP_CONFIG_SHA" ] || DRIFTED="${DRIFTED:+$DRIFTED,}app_config_sha256"
+          [ "$CURRENT_WORKER_CONFIG_SHA" = "$EXPECTED_WORKER_CONFIG_SHA" ] || DRIFTED="${DRIFTED:+$DRIFTED,}worker_config_sha256"
+          [ "$APP_RUNTIME_DIGEST" = "$EXPECTED_APP_RUNTIME_DIGEST" ] || DRIFTED="${DRIFTED:+$DRIFTED,}app_runtime_digest"
+          [ "$WORKER_RUNTIME_DIGEST" = "$EXPECTED_WORKER_RUNTIME_DIGEST" ] || DRIFTED="${DRIFTED:+$DRIFTED,}worker_runtime_digest"
+
+          if [ -n "$DRIFTED" ]; then
+            echo "::error::STAGE state changed during/after the E2E run (drifted fields: $DRIFTED) — aborting promotion for safety. STAGE was redeployed while being tested, so this run cannot promote a stably-tested version. Re-run this workflow to test the new version fresh."
+            exit 1
+          fi
+
+          echo "Verified STAGE state is byte-for-byte identical before and after the fresh E2E run"
+          echo "| STAGE snapshot (after E2E) | matches before-E2E snapshot — no drift |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Import image into AGK prod ACR
         env:
-          IMAGE_DIGEST: ${{ steps.provenance.outputs.image-digest }}
+          IMAGE_DIGEST: ${{ steps.stage-before.outputs.image-digest }}
         run: |
           set -euo pipefail
 
@@ -403,7 +427,7 @@ jobs:
 
       - name: Verify AGK prod image tag
         env:
-          EXPECTED_DIGEST: ${{ steps.provenance.outputs.image-digest }}
+          EXPECTED_DIGEST: ${{ steps.stage-before.outputs.image-digest }}
         run: |
           set -euo pipefail
 
@@ -420,7 +444,7 @@ jobs:
 
       - name: Lock AGK prod image
         env:
-          EXPECTED_DIGEST: ${{ steps.provenance.outputs.image-digest }}
+          EXPECTED_DIGEST: ${{ steps.stage-before.outputs.image-digest }}
         run: |
           set -euo pipefail
 

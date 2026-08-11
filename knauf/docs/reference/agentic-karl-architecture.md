@@ -894,7 +894,7 @@ The admin panel is intentionally separated from the main app so it can have its 
 
 ## Release And Promotion Flow
 
-### Main App Release To Dev
+### Main App Release To Dev, Then Continuous Delivery To Stage
 
 Workflow: `.github/workflows/release_pipeline.yaml`
 
@@ -906,8 +906,12 @@ flowchart TB
   values["Update app + worker GitOps and LANGFUSE_RELEASE"]
   argo["Refresh app and worker ArgoCD apps"]
   healthy["Wait for app Synced/Healthy; run dev smoke"]
+  importStage["Import exact dev digest into stage repository"]
+  updateStage["Update app + worker stage GitOps"]
+  argoStage["Wait for app + worker Synced/Healthy"]
+  e2e["Run stage E2E (informational, non-gating)"]
 
-  merge --> build --> release --> values --> argo --> healthy
+  merge --> build --> release --> values --> argo --> healthy --> importStage --> updateStage --> argoStage --> e2e
 ```
 
 Dev release steps:
@@ -917,6 +921,13 @@ Dev release steps:
 3. The workflow creates the semantic tag and GitHub release.
 4. An auto-merged GitOps PR updates the app and worker tags plus `LANGFUSE_RELEASE`; it does not update the service-repo overlay tag.
 5. The workflow waits for the app ArgoCD application and dev smoke; the worker has separate rollout gates and refresh handling.
+
+Stage continuous-delivery steps (same workflow, run automatically once dev smoke passes — there is no separate deploy-to-stage workflow):
+
+6. The exact dev image digest is imported into stage's ACR namespace (idempotent; refuses to retarget an existing immutable stage tag).
+7. An auto-merged GitOps PR bumps the app and worker stage tags.
+8. The workflow waits for the stage app and worker ArgoCD applications to report Synced/Healthy.
+9. STAGE E2E (`stage-e2e.yaml` in `agentic-karl-quality`) is dispatched for early-warning visibility only — a failure warns and is recorded in the step summary but does not fail the release job. It does **not** gate prod promotion; `promote_pipeline.yaml` always re-runs E2E fresh immediately before promoting (see below).
 
 ### Smoke Workflow
 
@@ -933,30 +944,23 @@ Purpose:
 
 It should not change production release tags.
 
-### Deploy Dev To Stage
+### Promote Tested Stage To Prod
 
-Workflow: `.github/workflows/deploy_stage_pipeline.yaml`
+Workflow: `.github/workflows/promote_pipeline.yaml` — manual (`workflow_dispatch`) only, and the **sole gate to prod**.
 
 ```mermaid
 flowchart TB
   manual["Manual workflow_dispatch"]
-  importStage["Import exact dev digest into stage repository"]
-  updateStage["Update app + worker stage GitOps"]
-  argoStage["Wait for app + worker Synced/Healthy"]
-  e2e["Run stage E2E"]
-  perf["Optional selected k6 profiles"]
-  provenance["Record immutable validation provenance"]
+  version["Determine version from live stage GitOps tag"]
+  before["Snapshot STAGE state (digest, git revisions, config hashes)"]
+  e2e["Run STAGE E2E fresh (always, never reused)"]
+  after["Snapshot STAGE state again; fail on any drift"]
+  promote["Import + lock digest into prod, update prod GitOps, refresh ArgoCD, prod smoke"]
 
-  manual --> importStage --> updateStage --> argoStage --> e2e --> perf --> provenance
+  manual --> version --> before --> e2e --> after --> promote
 ```
 
-The workflow captures the image digest, GitOps revisions, rendered runtime digests, and config hashes before tests. It rechecks them after tests so the provenance artifact represents the exact stage state that passed.
-
-### Promote Tested Stage To Prod
-
-Workflow: `.github/workflows/promote_pipeline.yaml`
-
-Production promotion requires a successful stage workflow run and its provenance artifact. It verifies that stage still matches the recorded digest/revisions/config, imports the exact digest into prod, updates prod app and worker GitOps in lock-step, refreshes ArgoCD, and runs the production health smoke.
+There is no separate deploy-to-stage workflow or provenance artifact anymore (removed — see SEAMS.md, KK20-195). Instead, this workflow snapshots stage's live state (image digest, app + GitOps git revisions, and content-hash of the app/worker `values.yaml`) immediately before dispatching a fresh STAGE E2E run, then re-snapshots the identical state after E2E completes. If anything drifted between the two snapshots (stage was redeployed during/after its own test run), the promotion aborts for safety. Only if the before/after snapshots match exactly does it import the exact digest into prod, update prod app and worker GitOps in lock-step, refresh ArgoCD, and run the production health smoke.
 
 The main app workflow promotes the app image used by both app and worker. RAG promotion remains owned by the RAG repository.
 
@@ -1023,9 +1027,8 @@ Important source-of-truth files:
 | `packages/api/src/knauf/permissions/userRestrictions.ts`            | Knauf permission restrictions                                      |
 | `agentic-karl-rag-api/app/routes/document_routes.py`                | pgvector ingestion/query/delete routes                             |
 | `agentic-karl-rag-api/app/routes/agent_routes.py`                   | Azure AI Search ingestion/query/delete routes                      |
-| `.github/workflows/release_pipeline.yaml`                           | Main release to dev                                                |
-| `.github/workflows/deploy_stage_pipeline.yaml`                      | Main app dev-to-stage deployment, E2E, optional k6, and provenance |
-| `.github/workflows/promote_pipeline.yaml`                           | Tested stage-to-prod promotion                                     |
+| `.github/workflows/release_pipeline.yaml`                           | Main release to dev, then continuous delivery to stage (informational E2E) |
+| `.github/workflows/promote_pipeline.yaml`                           | Sole gate to prod: live stage snapshot, fresh E2E, snapshot-drift check, then promote |
 | `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`      | RAG build and dev deployment                                       |
 | `agentic-karl-rag-api/.github/workflows/deploy_stage_pipeline.yaml` | RAG dev-to-stage deployment                                        |
 | `agentic-karl-rag-api/.github/workflows/promote_pipeline.yaml`      | RAG dev-to-prod promotion                                          |
@@ -1125,7 +1128,6 @@ Local source references:
 - `agentic-karl-rag-api/app/routes/document_routes.py`
 - `agentic-karl-rag-api/app/routes/agent_routes.py`
 - `agentic-karl/.github/workflows/release_pipeline.yaml`
-- `agentic-karl/.github/workflows/deploy_stage_pipeline.yaml`
 - `agentic-karl/.github/workflows/promote_pipeline.yaml`
 - `agentic-karl/.github/workflows/agk-deploy-smoke.yaml`
 - `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`
