@@ -22,6 +22,17 @@ Last verified: 2026-07-14.
 - Before adding a Terraform root, backend key, GitHub workflow, or pipeline state, prove that no existing root/workflow owns the resource. Default to the smallest existing layer that owns the lifecycle.
 - For external providers such as Datadog, do not create a separate root/workflow just because the provider is not Azure. State ownership follows the app/platform lifecycle, not the vendor.
 
+### Azure Model Router request invariant
+
+Verified in dev on 2026-08-11:
+
+- `model-router-chat` selects from heterogeneous Foundry model deployments. A request option is safe only when every router candidate accepts the same option and value.
+- Never add `verbosity` to the default KARL model spec, Azure endpoint defaults, agent parameters, or the resulting Responses request without an end-to-end compatibility test against every configured candidate.
+- In particular, `verbosity: low` becomes `text.verbosity: low` and has repeatedly caused Foundry HTTP 400 `unsupported_value` failures before tools such as `image_gen_oai` can run. It is not a latency optimization for this router.
+- Keep concise behavior in the shared KARL prompt. Keep the provider-side `maxTokens: 8192` safety fuse unless production truncation evidence justifies a reviewed change.
+- `maxTokens` maps to Responses `max_output_tokens` and covers reasoning plus visible output. AGK detects an output-limit stop and uses the existing same-provider fallback for one retry with a complete, compact replacement instruction. The failed partial text or tool call is removed before persistence. If the bounded retry also reaches the cap, the turn fails instead of saving a truncated answer.
+- A larger cap such as 24k increases the worst-case token cost, latency, and context reserve threefold. Do not raise it to compensate for an incompatible request parameter.
+
 ## Architecture Reference
 
 For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agentic-karl-rag-api`, `agk-infrastructure`, and `agk-deployment-configs`.

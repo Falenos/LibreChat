@@ -73,9 +73,16 @@ test('Karl instructions require valid Markdown section headings', () => {
   assert.match(config, /use `###` headings/);
 });
 
-test('Karl bounds routed output cost while keeping enough room for complete artifacts', () => {
+test('Karl bounds routed output without provider-specific verbosity', () => {
   const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
 
   assert.match(config, /maxTokens: 8192/);
-  assert.match(config, /verbosity: low/);
+  assert.doesNotMatch(config, /^\s*verbosity:/m);
+});
+
+test('Karl keeps basic stable questions concise without web search', () => {
+  const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
+
+  assert.match(config, /Do not use web search for stable facts, definitions, or explanations/i);
+  assert.match(config, /Web search does not increase the response-length budget/i);
 });

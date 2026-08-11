@@ -1151,9 +1151,9 @@ export async function createRun({
       llmConfig.usage = true;
     }
 
-    // [knauf] NO-TICKET — provide one same-provider fallback. A host callback
-    // turns Model Router's zero-usage generic refusal into an error, and the
-    // SDK retries only that model call without repeating completed tools.
+    // [knauf] KK20-194 — provide one same-provider fallback. A host callback
+    // turns Model Router's zero-usage refusal or an output-limit stop into an
+    // error, and the SDK retries only that model call without repeating tools.
     if (!Array.isArray(llmConfig.fallbacks) || llmConfig.fallbacks.length === 0) {
       const { provider: _provider, fallbacks: _fallbacks, ...retryClientOptions } = llmConfig;
       llmConfig.fallbacks = [

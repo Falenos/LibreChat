@@ -42,7 +42,6 @@ interface SpecPreset {
   promptPrefix?: string;
   maxContextTokens?: number;
   maxTokens?: number;
-  verbosity?: string;
 }
 interface ModelSpec {
   name: string;
@@ -82,14 +81,16 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
 });
 
 describe('[knauf] librechat.yaml — default KARL response latency', () => {
-  it('uses task-sized prose budgets without truncating requested source', () => {
+  it('uses task-sized prose ceilings without truncating requested source', () => {
     const karl = specs.find((spec) => spec.name === 'karl');
     const prompt = karl?.preset?.promptPrefix ?? '';
 
-    expect(karl?.preset).toMatchObject({ maxTokens: 8192, verbosity: 'low' });
-    expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*40[–-]120 words/i);
-    expect(prompt).toMatch(/ordinary questions[^\n]*80[–-]180 words/i);
-    expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*150[–-]300 words/i);
+    expect(karl?.preset).toMatchObject({ maxTokens: 8192 });
+    expect(karl?.preset).not.toHaveProperty('verbosity');
+    expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*at most 80 words/i);
+    expect(prompt).toMatch(/ordinary questions[^\n]*at most 160 words/i);
+    expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*at most 300 words/i);
+    expect(prompt).toMatch(/ceilings, not targets/i);
     expect(prompt).toMatch(/exceed 300 words only when the user requests detail/i);
     expect(prompt).toMatch(/do not repeat facts in a concluding summary/i);
     expect(prompt).toMatch(/do not append a follow-up offer unless clarification/i);

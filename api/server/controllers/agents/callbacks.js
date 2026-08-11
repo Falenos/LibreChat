@@ -38,10 +38,20 @@ const {
 } = require('~/server/knauf/nativeWebSearchOutput');
 // End [knauf]
 
-// [knauf] NO-TICKET — Model Router can occasionally return this gateway-style
-// response with zero usage instead of raising an error. Convert it into a model
-// failure so the SDK's provider fallback retries only the current model call.
+// [knauf] KK20-194 — bounded model refusal and output-limit recovery.
+// Model Router can occasionally return this gateway-style
+// response with zero usage instead of raising an error. Output-limit stops also
+// need one clean replacement instead of persisting a partial answer. Convert
+// both into model failures so the SDK fallback retries only the current call.
+const { HumanMessage } = require('@librechat/agents/langchain/messages');
+
 const GENERIC_ZERO_USAGE_REFUSAL = "i'm sorry, but i cannot assist with that request.";
+const OUTPUT_LIMIT_VALUES = new Set(['length', 'max_tokens', 'max_output_tokens']);
+const OUTPUT_LIMIT_RETRY_INSTRUCTION =
+  'The previous attempt hit the output limit and was discarded. Retry the original request ' +
+  'from scratch as one complete replacement, not a continuation. For prose, use at most 300 ' +
+  'words unless the user explicitly requested more detail. Preserve required code or artifact ' +
+  'content, but remove commentary, repetition, and optional detail.';
 
 function getGenerationText(result) {
   const generation = result?.generations?.[0]?.[0];
@@ -73,6 +83,20 @@ function isZeroUsageGenericRefusal(result) {
     tokenCounts.length >= 2 &&
     tokenCounts.every((value) => value === 0) &&
     text === GENERIC_ZERO_USAGE_REFUSAL
+  );
+}
+
+function isOutputTruncated(result) {
+  const message = result?.generations?.[0]?.[0]?.message;
+  const metadata = message?.response_metadata;
+  const values = [
+    metadata?.finish_reason,
+    metadata?.stop_reason,
+    metadata?.stopReason,
+    metadata?.incomplete_details?.reason,
+  ];
+  return values.some(
+    (value) => typeof value === 'string' && OUTPUT_LIMIT_VALUES.has(value.trim().toLowerCase()),
   );
 }
 
@@ -112,10 +136,22 @@ function repairModelRouterToolHistory(messages) {
   return complete.length === paired.length ? paired : sanitizeOrphanToolBlocks(complete);
 }
 
-function createZeroUsageRefusalRetryHandler(metadata) {
-  const state = { refusalCount: 0 };
+function createModelRetryHandler(metadata) {
+  const state = {
+    refusalCount: 0,
+    truncationCount: 0,
+    recoveryInstructionCount: 0,
+    truncatedTexts: [],
+    truncatedToolCallIds: [],
+  };
   const handler = BaseCallbackHandler.fromMethods({
     handleChatModelStart(_llm, messageBatches, _runId, _parentRunId, _tags, runMetadata) {
+      if (state.truncationCount > state.recoveryInstructionCount) {
+        for (const messages of messageBatches) {
+          messages.push(new HumanMessage(OUTPUT_LIMIT_RETRY_INSTRUCTION));
+        }
+        state.recoveryInstructionCount = state.truncationCount;
+      }
       const model = runMetadata?.ls_model_name;
       if (typeof model !== 'string' || !model.toLowerCase().includes('model-router')) {
         return;
@@ -131,6 +167,34 @@ function createZeroUsageRefusalRetryHandler(metadata) {
       // Must stay synchronous: this handler is registered before Langfuse, so
       // Langfuse sees Azure's routed model instead of the `model-router` alias.
       stampLangfuseResponseModel(result);
+      if (isOutputTruncated(result)) {
+        state.truncationCount += 1;
+        const text = getGenerationText(result);
+        if (text !== '') {
+          state.truncatedTexts.push(text);
+        }
+        const message = result?.generations?.[0]?.[0]?.message;
+        const toolCalls = [
+          ...(message?.tool_calls ?? []),
+          ...(message?.tool_call_chunks ?? []),
+          ...(message?.invalid_tool_calls ?? []),
+        ];
+        for (const toolCall of toolCalls) {
+          if (typeof toolCall?.id === 'string' && toolCall.id !== '') {
+            state.truncatedToolCallIds.push(toolCall.id);
+          }
+        }
+        logger.warn('[AgentClient] Retrying output-limit truncation', {
+          ...metadata,
+          attempt: state.truncationCount,
+        });
+        throw new Error(
+          JSON.stringify({
+            type: 'output_truncated',
+            info: { reason: 'max_output_tokens', retryable: true },
+          }),
+        );
+      }
       if (!isZeroUsageGenericRefusal(result)) {
         return;
       }
@@ -165,6 +229,38 @@ function stripRetriedGenericRefusal(contentParts) {
     const text = part.text.slice(refusalEnd).trimStart();
     return text === '' ? [] : [{ ...part, text }];
   });
+}
+
+function stripTextPrefix(contentParts, prefix) {
+  let remaining = prefix;
+  return contentParts.flatMap((part) => {
+    if (remaining === '' || part?.type !== ContentTypes.TEXT || typeof part.text !== 'string') {
+      return [part];
+    }
+    if (remaining.startsWith(part.text)) {
+      remaining = remaining.slice(part.text.length);
+      return [];
+    }
+    if (!part.text.startsWith(remaining)) {
+      return [part];
+    }
+    const text = part.text.slice(remaining.length);
+    remaining = '';
+    return text === '' ? [] : [{ ...part, text }];
+  });
+}
+
+function stripRetriedModelOutput(contentParts, state) {
+  let cleaned = state.refusalCount > 0 ? stripRetriedGenericRefusal(contentParts) : contentParts;
+  for (const text of state.truncatedTexts) {
+    cleaned = stripTextPrefix(cleaned, text);
+  }
+  const truncatedToolCallIds = new Set(state.truncatedToolCallIds);
+  return cleaned.filter(
+    (part) =>
+      part?.type !== ContentTypes.TOOL_CALL ||
+      !truncatedToolCallIds.has(part[ContentTypes.TOOL_CALL]?.id),
+  );
 }
 // End [knauf]
 
@@ -1450,10 +1546,11 @@ module.exports = {
   getResponseModel,
   buildSummarizationHandlers,
   createResponsesToolEndCallback,
-  // [knauf] NO-TICKET — zero-usage refusal recovery helpers.
-  createZeroUsageRefusalRetryHandler,
+  // [knauf] KK20-194 — bounded model refusal and output-limit recovery helpers.
+  createModelRetryHandler,
+  isOutputTruncated,
   isZeroUsageGenericRefusal,
   stampLangfuseResponseModel,
-  stripRetriedGenericRefusal,
+  stripRetriedModelOutput,
   // End [knauf]
 };

@@ -53,9 +53,9 @@ const {
   appendYouTubeVideoParts,
   resolveYouTubeInjectionConfig,
 } = require('@librechat/api');
-// [knauf] NO-TICKET — retry Model Router's zero-usage generic refusal at the
-// current model boundary and remove its streamed placeholder before persist.
-const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
+// [knauf] KK20-194 — retry Model Router refusals and output-limit stops at the
+// current model boundary, then remove the failed partial output before persist.
+const { createModelRetryHandler, stripRetriedModelOutput } = require('./callbacks');
 // End [knauf]
 // [knauf] KK20-199 — provider errors may contain request bodies, image data,
 // signed URLs, and identity fields. Keep only bounded diagnostic attributes.
@@ -1492,14 +1492,14 @@ class AgentClient extends BaseClient {
 
         /** @deprecated Agent Chain */
         config.configurable.last_agent_id = agents[agents.length - 1].id;
-        // [knauf] NO-TICKET — `raiseError` hands the narrow refusal signal to
-        // the SDK's fallback loop; completed tools are not executed again.
-        const refusalRetry = createZeroUsageRefusalRetryHandler({
+        // [knauf] KK20-194 — `raiseError` hands bounded refusal/truncation signals
+        // to the SDK fallback; completed tools are not executed again.
+        const modelRetry = createModelRetryHandler({
           userId: this.user ?? this.options.req.user?.id,
           messageId: this.responseMessageId,
           conversationId: this.conversationId,
         });
-        config.callbacks = [...(config.callbacks ?? []), refusalRetry.handler];
+        config.callbacks = [...(config.callbacks ?? []), modelRetry.handler];
         try {
           await run.processStream({ messages }, config, {
             callbacks: {
@@ -1507,8 +1507,8 @@ class AgentClient extends BaseClient {
             },
           });
         } finally {
-          if (refusalRetry.state.refusalCount > 0) {
-            this.contentParts = stripRetriedGenericRefusal(this.contentParts);
+          if (modelRetry.state.refusalCount > 0 || modelRetry.state.truncationCount > 0) {
+            this.contentParts = stripRetriedModelOutput(this.contentParts, modelRetry.state);
           }
         }
         // End [knauf]
