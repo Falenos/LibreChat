@@ -423,10 +423,25 @@ kubectl -n agentic-karl-dev get pods -l app=agentic-karl-code-adapter
 kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- \
   wget -qO- localhost:3112/readyz
 
-# 2. Workload identity actually landed (the podLabels question, answered empirically)
+# 2. Workload identity actually landed. This single step answers BOTH chart unknowns —
+#    whether `podLabels` renders, and whether the chart reads `serviceAccountName` or the
+#    nested `serviceAccount.name` (the values set both, so this confirms one of them worked).
+kubectl -n agentic-karl-dev get pod -l app=agentic-karl-code-adapter \
+  -o jsonpath='{.items[0].spec.serviceAccountName}{"\n"}'
+#    expect: sa-code-adapter    — if it prints `default` or nothing, neither SA key was
+#    consumed and the federated credential (which trusts sa-code-adapter and nothing else)
+#    cannot be used, so every ACA call will fail.
+
+kubectl -n agentic-karl-dev get pod -l app=agentic-karl-code-adapter \
+  -o jsonpath='{.items[0].metadata.labels}{"\n"}' | grep -o 'azure.workload.identity/use'
+#    expect a match — this is the podLabels question. The webhook only mutates pods carrying
+#    it, and without the mutation the three AZURE_ vars below are absent.
+
 kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- \
   env | grep AZURE_       # expect AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE
 kubectl -n agentic-karl-dev logs deploy/agentic-karl-code-adapter | grep "Entra token acquired"
+#    NOTE: that log line only appears after the first token request, which is lazy — see the
+#    Phase 0 note. Absence here is not evidence of failure; the three env vars are.
 
 # 3. Auth boundary: unauthenticated is rejected
 kubectl -n agentic-karl-dev exec deploy/agentic-karl -- \
