@@ -227,13 +227,22 @@ Three deliberate product choices sit on top of the machinery above.
 
 **Code execution is always on, and there is no chip for it.** KARL chats do not ask
 you to enable code — the same model as artifacts, skills and file search, whose chips
-are all suppressed here too. This is pure configuration, no UI code: the capability
-plus `executeCode: true` on all four user-facing specs turn the tool on, while
-`interface.runCode: false` keeps the composer chip, the tools-menu row and the manual
-per-code-block Run button away. The two gates are independent — the RUN_CODE
-permission never gates agent auto-run — which is what makes "on, but invisible"
-reachable at Tier 0. Flipping `runCode` true later would bring the chip back
-permanently checked; the yaml comment says so at the switch.
+are all suppressed here too. The capability plus `executeCode: true` on all four
+user-facing specs turn the tool on.
+
+Suppressing the controls is **not** pure configuration, which is the one thing to get
+right here. `interface.runCode` is `true`: the RUN_CODE permission is granted, because
+it is the only thing that makes the manual execution path work at all
+(`POST /tools/:toolId/call`), and switching it off to hide a chip would also
+permanently disable that path for admins debugging the sandbox. So the three surfaces
+are hidden in the components instead — `KNAUF_HIDE_CODE_INTERPRETER_CHIP`
+(CodeInterpreter.tsx), `KNAUF_HIDE_CODE_INTERPRETER_TOOL` (ToolsDropdown.tsx),
+`KNAUF_HIDE_CODE_BLOCK_RUN_BUTTON` (MarkdownComponents.tsx) — the same treatment as the
+file-search chip (KK20-190) and the skills chip (KK20-243). All three move together;
+flipping one alone ships an inconsistent chat UI. The two gates remain independent: the
+RUN_CODE permission never gated agent auto-run, which comes from the capability plus the
+per-spec flag. Flipping the yaml flag on its own changes nothing visible, because those
+three constants are hardcoded `true`.
 
 **Tabular files go to the sandbox, not the search index.** A `.xlsx`, `.csv` or
 `.json` attachment is routed to `/mnt/data` instead of the RAG corpus, because
@@ -253,7 +262,7 @@ before, which is also what happens if `LIBRECHAT_CODE_BASEURL` is unconfigured.
 > allow-list (`.xls` is a deliberate rejection with "save as .xlsx" guidance), so
 > routing them would be dead code until that policy changes.
 
-**The menu row is called "Upload file changes."** It names the outcome rather than the
+**The menu row is called "Upload files to edit."** It names the outcome rather than the
 plumbing, the same principle that renamed upstream's "Upload to Provider" to plain
 "Upload files" (KK20-190). It uses a namespaced `com_knauf_*` key so upstream's own
 string is untouched at sync time, and the drag-drop picker uses the same words — one

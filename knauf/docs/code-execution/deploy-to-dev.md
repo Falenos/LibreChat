@@ -9,14 +9,19 @@ state of each piece, the ordering traps that will bite if steps are reordered, a
 keys to paste. Capacity expectations for what you are switching on are in
 [scaling.md](scaling.md).
 
-> **State as of 2026-08-10.** Nothing is deployed. Three repos have to move, in order, and
-> two of the three PRs are open but unmerged.
+> **State as of 2026-08-11.** Nothing is deployed. Three repos have to move, in order, and
+> all three PRs are open but unmerged.
 
 | Repo | What it contributes | State |
 | --- | --- | --- |
-| `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open** |
-| `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open** — plan green (12 add / 0 change / 0 destroy), all checks pass, waiting on approval |
-| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR |
+| `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open** — `main` merged in (`b33d29c34`); review round 2 addressed |
+| `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open** — plan green (12 add / 0 change / 0 destroy), all checks pass, waiting on approval. Untouched since 2026-08-06 |
+| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR. Repo is busy (five app version bumps merged on 08-11 alone), so re-check `ct-shared-chart` and the ApplicationSet line numbers at merge time |
+
+**Exactly one hard unknown remains** (everything else below is sequencing you control): whether
+`ct-shared-chart` 2.15.0 renders `podLabels`. See the blocker in Phase D. It cannot be answered
+from the repos — the chart is an OCI artifact in a private ACR — and if the answer is no, every
+execution fails 502.
 
 ---
 
@@ -48,11 +53,20 @@ keys to paste. Capacity expectations for what you are switching on are in
       `blob-dev.tf`) carries it because policy stamps those two tags. The plan shows *0 to
       change* only because these are new resources — the drift appears on the next plan, and
       then every apply tries to strip a policy-applied `CostCenter`.
-- [ ] **#258:** land the `/download` stream-error handler at minimum. An unhandled `'error'`
-      on `download.stream.pipe(res)` exits the process, and that is the path every generated
-      chart and spreadsheet is served on.
-- [ ] **#258:** push the local commits (the PR head lags the branch) and re-merge `origin/main`.
+- [x] **#258:** the `/download` stream-error handler — **done** (`1666f852b`). `pipeline()`
+      instead of `.pipe()`, plus the floating `repo.touch()` caught. Either one exited the
+      process, on the path every generated chart and spreadsheet is served over.
+- [x] **#258:** `main` merged in (`b33d29c34`) and the review round-2 findings addressed
+      (`d6fad8068`, `ed7dcc043`) — sandbox ownership, capture time budget, drain, upload count
+      cap, the code-env allowlist, the destination-gate invariant, and the CI test gate.
 - [ ] Get #73 approved — it is blocked on review, nothing technical.
+- [ ] **Answer the `podLabels` question before #347 merges.** This is the only step that can
+      still make the whole rollout a no-op, and it needs registry auth rather than a repo read:
+      ```bash
+      helm registry login acrctshared001.azurecr.io
+      helm template agentic-karl/dev/services/agentic-karl-code-adapter \
+        | grep -A5 'kind: Deployment' | grep -i 'workload.identity'
+      ```
 
 ---
 
@@ -151,21 +165,45 @@ agentic-karl-code-adapter:
   podLabels:
     azure.workload.identity/use: "true"     # ← see the blocker below
 
-  envConfig:
-    - name: CODEAPI_JWT_ISSUER
-      value: "agentic-karl"
-    - name: CODEAPI_JWT_AUDIENCE
-      value: "codeapi"
-    - name: CODEAPI_JWT_KID
-      value: "lc-codeapi-dev-2026-08"
-    - name: CODEAPI_JWT_PUBLIC_KEY          # public half — safe in values/ConfigMap
-      value: |
-        -----BEGIN PUBLIC KEY-----
-        ...lc-codeapi-dev.pub...
-        -----END PUBLIC KEY-----
-    # Capacity/memory guardrails — see scaling.md §3. The 256 MB default does not fit a 1 Gi pod.
-    - name: CAPTURE_MAX_TOTAL_BYTES
-      value: "67108864"
+  # Datadog will not scrape this pod without BOTH halves: this annotation, and the
+  # NetworkPolicy in D5. The namespace is defaultDenyAll, so one without the other is silent.
+  podAnnotations:
+    ad.datadoghq.com/agentic-karl-code-adapter.checks: |-
+      { "openmetrics": { "init_config": {}, "instances": [ {
+          "openmetrics_endpoint": "http://%%host%%:3112/metrics",
+          "namespace": "agentic_karl",
+          "tags": ["env:dev", "service:agentic-karl-code-adapter"],
+          "metrics": [ {"code_adapter_exec_total": "code_adapter.exec_total"} ]
+      } ] } }
+      # (abbreviated — the PR maps all six code_adapter_* metrics. No Authorization
+      #  header, unlike the app and worker: this /metrics is unauthenticated by design.)
+
+  configmap:
+    CODEAPI_JWT_ISSUER: "agentic-karl"
+    CODEAPI_JWT_AUDIENCE: "codeapi"
+    CODEAPI_JWT_KID: "lc-codeapi-dev-2026-08"
+    CODEAPI_JWT_ALLOWED_ALGS: "EdDSA"
+    CODEAPI_JWT_PUBLIC_KEY: |               # public half — safe in values/ConfigMap
+      -----BEGIN PUBLIC KEY-----
+      ...lc-codeapi-dev.pub...
+      -----END PUBLIC KEY-----
+    ACA_API_VERSION: "2024-02-02-preview"   # bump only with the adapter's aca fixtures
+    # Capacity guardrails — see scaling.md §3. The 256 MB default does not fit this pod.
+    CAPTURE_MAX_TOTAL_BYTES: "67108864"
+    CAPTURE_MAX_FILES: "20"                 # also caps files per /upload/batch request
+    # Cap the V8 heap as the app (6144) and worker (2048) do. This pod is memory-bound by
+    # design; without a cap an overrun is a kernel OOM-kill (exit 137, no stack) rather than
+    # a JS heap error naming the allocation.
+    NODE_OPTIONS: "--max-old-space-size=1536"
+
+  # MUST be >= the adapter's drain budget, which is
+  # execTimeoutMs + fileOpTimeoutMs + captureMaxTotalMs + slack (~350s with the defaults in
+  # knauf/code-adapter/src/index.ts). Lower, and the kubelet SIGKILLs mid-drain and the drain
+  # is decorative — which is what the original 60s did. These two move together.
+  terminationGracePeriodSeconds: 360
+  strategy:                                 # surge before terminating; never lose capacity
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
 
   externalSecret:
     enabled: true
@@ -240,10 +278,45 @@ Two failure modes worth stating plainly, because neither produces an obvious err
   `CODEAPI_AUTH_PROVIDER` and the capability switches on, no `Authorization` header is minted,
   and every execution 401s into "Execution error". Ship D4 as one atomic change.
 
-**D5 · Network policy** — most likely nothing to do. The adapter's outbound is all HTTPS/443
-(Entra, `*.dynamicsessions.io`, Blob), which `allowEgressInternet` already permits
-namespace-wide, and Mongo goes over the private-endpoint policy (`podSelector: {}`). Confirm
-Mongo's port is in that allow-list; add a `customPolicies` entry only if it is not.
+**D5 · Network policy** — **there is something to do.** An earlier version of this doc said
+"most likely nothing"; that was wrong, and wrong in the quiet direction.
+
+Right: the adapter's *outbound* needs nothing. Entra, `*.dynamicsessions.io` and Blob are all
+HTTPS/443, which `allowEgressInternet` permits namespace-wide; Mongo goes over
+`allow-egress-private-endpoints` (`podSelector: {}`, 10.160.0.0/16, includes 443 and 10260);
+and app→adapter is covered by `allowSameNamespace`.
+
+Wrong: `agentic-karl/dev/network-policy/values.yaml` sets **`defaultDenyAll: true`**, and every
+service in that namespace that wants to be scraped carries its *own* `customPolicies` entry —
+`allow-datadog-metrics-scrape` (app, 3000), `allow-datadog-worker-metrics-scrape` (worker,
+3081), `allow-egress-rag-datadog` (rag-api). The adapter had none, so all six
+`code_adapter_*` metrics were unreachable and a brand-new execution backend would have gone
+into UAT blind. Added in #347:
+
+```yaml
+    - name: allow-datadog-code-adapter-metrics-scrape
+      spec:
+        podSelector:
+          matchLabels:
+            app: agentic-karl-code-adapter
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    kubernetes.io/metadata.name: monitoring
+            ports:
+              - protocol: TCP
+                port: 3112
+```
+
+**Ingress only, deliberately.** The adapter has no tracer: its dependencies are
+`express`/`pino`/`prom-client`/`undici` plus the two Azure SDKs, it imports neither `dd-trace`
+nor any OpenTelemetry SDK, and it reads no `DD_*`, `DATADOG_*` or `OTEL_*` variable. So there is
+no APM or OTLP flow to permit and an egress rule would authorise traffic that does not exist —
+which also means the `DATADOG_ENV`/`SERVICE`/`SITE` configmap entries are inert for this image
+(harmless, left in place). If Datadog single-step instrumentation is ever switched on for this
+pod, that is when an egress rule to `monitoring`/`datadog` becomes real.
 
 `selfHeal + prune` means **merge = deploy**. Split D1–D3 (adapter only, inert) from D4 (the
 switch) into two PRs if you want a checkpoint between "adapter is healthy" and "feature is on"
@@ -279,6 +352,20 @@ curl -s -XPOST http://agentic-karl-code-adapter/v1/exec \
 # 5. Capability is live in the served config
 kubectl -n agentic-karl-dev exec deploy/agentic-karl -- \
   curl -s localhost:3000/api/endpoints | grep -o 'execute_code'
+
+# 6. Metrics are actually collected, not merely exposed (D5 + the annotation, both halves)
+kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- \
+  wget -qO- localhost:3112/metrics | grep code_adapter_          # exposed?
+kubectl -n monitoring exec ds/datadog -- agent status \
+  | grep -A5 'openmetrics'                                        # collected?
+# If (6a) shows metrics and (6b) does not list this pod, the NetworkPolicy or the
+# podAnnotations half is missing — they fail independently and both fail silently.
+
+# 7. The drain is real, not decorative. Start a long exec, then delete the pod: it should
+#    stay Terminating while the exec finishes, and the exec should still return 200.
+kubectl -n agentic-karl-dev delete pod -l app=agentic-karl-code-adapter --wait=false
+kubectl -n agentic-karl-dev logs -l app=agentic-karl-code-adapter --tail=20 \
+  | grep -E 'draining in-flight|drain complete'
 ```
 
 Then in the UI, in this order — each one exercises a different half of the feature:
@@ -288,8 +375,18 @@ Then in the UI, in this order — each one exercises a different half of the fea
 - [ ] Ask for a chart → a PNG comes back as a **real download**, not an inline image.
 - [ ] Ask for a spreadsheet → an `.xlsx` download.
 - [ ] Attach a `.pdf` → still goes to file search (the tabular rule must not have caught it).
+- [ ] Attach an `.xlsx`, ask KARL to edit a cell → the **edited** file comes back, not the
+      original. (Covers the same-size-rewrite path, flat and nested — the baseline comparison
+      is what makes an in-place edit detectable at all.)
 - [ ] Agent builder → the **Execute code** capability row is present and toggles.
-- [ ] Composer → **no** code-interpreter chip and no per-block Run button (`runCode: false`).
+- [ ] Composer → **no** code-interpreter chip and no per-block Run button. Note
+      `interface.runCode` is now **`true`**, not false: the permission is granted so the manual
+      execution path is not dead code, and all three surfaces are hidden in the components by
+      `KNAUF_HIDE_CODE_*`. Flipping the yaml flag alone changes nothing visible.
+- [ ] Open an **existing** conversation that predates the spec change and attach a `.csv` → it
+      should go to **file search**, not the sandbox. The client only offers the sandbox where
+      the server would actually register the tool; if this routes to code, the destination gate
+      has drifted from `packages/api/src/agents/load.ts`.
 
 Finally, the capacity baseline from [scaling.md](scaling.md) §2 — run the 25-parallel-exec
 test, confirm roughly 20 succeed and the rest report "at capacity", wait 5 minutes, confirm
@@ -326,8 +423,28 @@ Not blockers for a dev rollout, but do not lose them:
   same five-minute window**, because a user five steps into an analysis holds five slots at once
   ([scaling.md](scaling.md) §2). Comfortable for a handful of UAT testers; the number to
   re-measure and re-size before any wider audience.
-- Session identity is not bound to the caller. Inert today; must be fixed **before** anyone
-  enables `statefulSessions` ([scaling.md](scaling.md) §5).
+- ~~Session identity is not bound to the caller.~~ **Fixed** (`d6fad8068`). Every session id
+  now carries an 8-hex owner tag derived from the caller's subject, so `/exec` only honours a
+  supplied `session_id` bearing the caller's own tag, and `runtime_session_hint` derivation
+  mixes in the user id. What remains: `SESSION_HINT_SECRET` is unset, so it falls back to the
+  JWT public key. Ownership holds regardless (the check is against the caller's own identity),
+  but a *predictable* secret makes a hint-derived id guessable from a known conversation id —
+  so **set a real `SESSION_HINT_SECRET` before enabling `statefulSessions`**. The adapter warns
+  at boot while it is unset.
+- Staged blobs are now reaped by reachability, not age (`ed7dcc043`). The Mongo TTL slides on
+  every use, so an age-based lifecycle rule would delete blobs that are still referenced —
+  hence the sweep in `src/store/reaper.ts` rather than a storage management policy. A lifecycle
+  rule is still worth adding as a backstop for bytes whose Mongo row never landed; it is
+  **not** in #73.
+- The pod is pinned to **spot** nodes with a hard `requiredDuringScheduling` affinity. This is
+  copied verbatim from the worker, so it is a platform pattern rather than this service's
+  choice — but Azure gives ~30s of eviction notice against executions that run for minutes, so
+  no `terminationGracePeriodSeconds` saves an evicted execution. `preferred` would cost nothing
+  here and is worth arguing for before prod.
+- Nonprod image tags are mutable (`az acr build` overwrites) while `promote-code-adapter.yaml`
+  deliberately refuses `--force`. So a rebuilt `0.1.0` in nonprod can differ from `0.1.0` in
+  prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
+  digest before prod.
 - `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` is published to Key Vault but cannot be consumed
   by ESO — the ServiceAccount annotation is rendered by Helm, not injected from a Secret. It
   stays a lookup convenience. `agentic-karl-dev-CODE-POOL-ENDPOINT` **is** consumable, and D2

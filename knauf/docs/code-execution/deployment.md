@@ -32,16 +32,28 @@ code-interpreter half of the older
 | Key Vault (nonprod / prod)              | `kv-agntkarl-nonprod-001` / `kv-agntkarl-prod-001`                                                                                                 | ESO SecretStore values                                           |
 | ESO                                     | SA `sa-external-secrets` (client `b573fdae-1009-46d4-8c58-16694e48f65f`), `SecretStore kv-agntkarl-nonprod-001`, `authType: WorkloadIdentity`      | `agentic-karl/dev/common-namespace-resources/values.yaml`        |
 | Namespace                               | `agentic-karl-dev`                                                                                                                                 | GitOps repo                                                      |
-| ct-shared-chart                         | worker pins `2.7.0` (use the newest a live service pins at PR time)                                                                                | worker `Chart.yaml`                                              |
+| ct-shared-chart                         | worker pins `2.15.0` (verified 2026-08-11; use the newest a live service pins at PR time — this number moves)                                       | worker `Chart.yaml`                                              |
 | Egress policy                           | `defaultDenyAll` + `allowEgressInternet` (TCP 443/80, namespace-wide) + `allow-egress-private-endpoints` (`podSelector: {}`, CIDR `10.160.0.0/16`) | `agentic-karl/dev/network-policy/values.yaml`                    |
 
-**Consequence for the adapter's egress (important):** the adapter's outbound is
-all HTTPS/443 — Entra (`login.microsoftonline.com`), the dynamic-sessions
-data-plane (`*.dynamicsessions.io`), and Azure Blob — which `allowEgressInternet`
-**already permits namespace-wide**. Mongo is reached over the private-endpoint
-policy (`podSelector: {}` applies to all pods). So **the adapter most likely
-needs no new NetworkPolicy** — confirm only that Mongo's port is in the
-private-endpoint allow-list (§3, verify item).
+**Consequence for the adapter's egress:** the adapter's outbound is all HTTPS/443
+— Entra (`login.microsoftonline.com`), the dynamic-sessions data-plane
+(`*.dynamicsessions.io`), and Azure Blob — which `allowEgressInternet` **already
+permits namespace-wide**. Mongo is reached over the private-endpoint policy
+(`podSelector: {}` applies to all pods, and its allow-list includes 443 and
+10260). So the adapter needs no new **egress** policy.
+
+**But it does need an ingress one.** An earlier version of this section concluded
+"needs no new NetworkPolicy" full stop; that was wrong for observability.
+`defaultDenyAll` means Datadog cannot reach `/metrics` on 3112 unless a policy
+says so, and in this namespace that is always a per-service entry — the app, the
+worker and the RAG API each have their own. Without it the adapter's six
+`code_adapter_*` metrics are exposed but uncollectable, which for a new execution
+backend is the worst possible time to be blind. `allow-datadog-code-adapter-metrics-scrape`
+is in agk-deployment-configs#347, and it needs the matching `podAnnotations`
+openmetrics check on the service to be any use — the two halves fail
+independently and both fail silently. Ingress only: the adapter carries no tracer
+and reads no `DD_*`/`DATADOG_*`/`OTEL_*` variable, so there is no APM or OTLP flow
+to authorise. See `deploy-to-dev.md` Phase D5.
 
 **Verify-before-apply** (small, front-loaded):
 
@@ -180,7 +192,7 @@ version: 0.1.0
 dependencies:
   - name: ct-shared-chart
     alias: agentic-karl-code-adapter
-    version: '2.7.0' # confirm newest at PR time
+    version: '2.15.0' # confirm newest at PR time; the worker pinned 2.15.0 on 2026-08-11
     repository: oci://acrctshared001.azurecr.io/helm
 ```
 
@@ -242,8 +254,10 @@ all that's needed; the workload-identity webhook injects `AZURE_CLIENT_ID`,
 `DefaultAzureCredential` consumes. We set none of those by hand.
 
 **Network:** per §0, `allowEgressInternet` (443) + the private-endpoint policy
-already cover the adapter — add a `customPolicies` entry only if V3 shows Mongo's
-port isn't allowed.
+already cover the adapter's **egress**, so nothing is needed there. An **ingress**
+`customPolicies` entry IS needed so Datadog can scrape `/metrics` on 3112 —
+`defaultDenyAll` blocks it otherwise, and every other scraped service in this
+namespace carries its own entry. See §0 and `deploy-to-dev.md` D5.
 
 **ApplicationSet registration** (`infra/nonprod/argocd/projects/services.yaml`,
 same PR — langfuse precedent):
@@ -293,13 +307,16 @@ What is already committed:
 
 - `librechat.yaml`: `execute_code` is in `endpoints.agents.capabilities`, and
   `executeCode: true` is on all four user-facing specs (`karl` plus the three
-  personalities — the parity rule in that file). `interface.runCode: false` is
-  **kept** (KK20-252): execution is agent auto-run only, with no composer chip, no
-  tools-menu row and no manual Run button.
+  personalities — the parity rule in that file). `interface.runCode` is now
+  **`true`** (KK20-252 had it false): the permission is granted so the manual
+  execution path is not dead code, and the three surfaces it would otherwise add —
+  composer chip, tools-menu row, per-code-block Run button — are suppressed in the
+  components by `KNAUF_HIDE_CODE_*`. Net user-visible behaviour is unchanged from
+  the `false` era: agent auto-run only, no chip, no Run button.
 - Both code-execution skills ship from `skill/`, and
   `KNAUF_EXPECTED_DEPLOYMENT_SKILLS` lists them.
 - Tabular attachments (`.xlsx`/`.csv`/`.json`) route to the sandbox instead of the
-  RAG corpus, and the attach-menu row reads "Upload file changes".
+  RAG corpus, and the attach-menu row reads "Upload files to edit".
 
 **The ordering constraint, restated as a deploy gate.** Because `librechat.yaml` is
 baked into the image and stage/prod are re-tags of the dev image, the capability
