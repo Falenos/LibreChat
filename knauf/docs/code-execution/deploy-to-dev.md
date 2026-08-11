@@ -19,9 +19,13 @@ keys to paste. Capacity expectations for what you are switching on are in
 | `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR. Repo is busy (five app version bumps merged on 08-11 alone), so re-check `ct-shared-chart` and the ApplicationSet line numbers at merge time |
 
 **Exactly one hard unknown remains** (everything else below is sequencing you control): whether
-`ct-shared-chart` 2.15.0 renders `podLabels`. See the blocker in Phase D. It cannot be answered
-from the repos — the chart is an OCI artifact in a private ACR — and if the answer is no, every
-execution fails 502.
+`ct-shared-chart` 2.15.0 renders `podLabels`. It cannot be answered from the repos — the chart
+is an OCI artifact in a private ACR — and if the answer is no, every execution fails 502.
+
+It is a blocker for the **switch** (D4), *not* for #347: merging #347 with a broken workload
+identity deploys a pod that nothing calls. So the cheapest order is merge #347, run one
+`kubectl exec` to read the injected `AZURE_*` variables, and fix the label if they are absent —
+all before D4. Both routes are spelled out in Phase 0.
 
 ---
 
@@ -43,30 +47,103 @@ execution fails 502.
 
 ## Phase 0 — before anything merges
 
-- [ ] **#73:** add the missing tag lifecycle to both `azapi_resource.code_pool_*`:
+- [ ] **#73:** add the missing tag lifecycle to both `azapi_resource.code_pool_dev` and
+      `azapi_resource.code_pool_stage` (in `code-adapter-dev.tf` / `code-adapter-stage.tf`):
       ```hcl
       lifecycle {
         ignore_changes = [tags["ACM"], tags["CostCenter"]]
       }
       ```
-      Every other tagged resource in that root (`rg.tf`, `mi-dev.tf`, the KV secrets in
-      `blob-dev.tf`) carries it because policy stamps those two tags. The plan shows *0 to
-      change* only because these are new resources — the drift appears on the next plan, and
-      then every apply tries to strip a policy-applied `CostCenter`.
+
+      **What this is about.** An Azure Policy stamps `ACM` and `CostCenter` onto resources
+      after creation. Terraform doesn't know that, so on the *next* plan it sees tags it didn't
+      write and proposes removing them — and the apply after that puts them back via policy,
+      forever. The two managed identities in the same PR already carry this block because they
+      were copied from `mi-dev.tf`; the pools were written fresh and missed it. Every other
+      tagged resource in the root (`rg.tf`, `mi-dev.tf`, the KV secrets in `blob-dev.tf`) has it.
+
+      **Why the green plan doesn't reassure you.** #73's plan says *12 to add, 0 to change, 0
+      to destroy* — correct, because nothing exists yet and no policy has run. The drift only
+      appears on the plan *after* the first apply, i.e. on somebody else's unrelated PR to this
+      root, which is where it will look mysterious. Cheap to add now, annoying to diagnose later.
+
+      Note the pools also pass `tags = { for k, v in local.tags : k => tostring(v) }` rather
+      than `local.tags` directly. That coercion is required, not accidental: ARM tag values must
+      be strings and `local.tags` carries `Shared = false` as a bool. Don't "simplify" it.
 - [x] **#258:** the `/download` stream-error handler — **done** (`1666f852b`). `pipeline()`
       instead of `.pipe()`, plus the floating `repo.touch()` caught. Either one exited the
       process, on the path every generated chart and spreadsheet is served over.
 - [x] **#258:** `main` merged in (`b33d29c34`) and the review round-2 findings addressed
       (`d6fad8068`, `ed7dcc043`) — sandbox ownership, capture time budget, drain, upload count
       cap, the code-env allowlist, the destination-gate invariant, and the CI test gate.
-- [ ] Get #73 approved — it is blocked on review, nothing technical.
-- [ ] **Answer the `podLabels` question before #347 merges.** This is the only step that can
-      still make the whole rollout a no-op, and it needs registry auth rather than a repo read:
+- [ ] **Get #73 approved.** Blocked on review, not on anything technical — the plan is green
+      and the checks pass. Three things the reviewer will reasonably want answered, so put them
+      in the PR conversation rather than making them ask:
+
+      1. **Is `Microsoft.App` registered** on `ad3f0a71-cc5b-4d00-8289-23623cf2064c`? There is
+         no Container Apps footprint anywhere in that repo, so this is genuinely unknown, and
+         an unregistered resource provider fails at **apply**, not at plan — i.e. after merge.
+         `az provider show --namespace Microsoft.App --query registrationState -o tsv`
+      2. **Can the pipeline service principal write a role assignment at pool scope?** It
+         already creates them on the Key Vault in this root, so it has RBAC-writer inside the
+         tenant resource group — but the session pool is a new scope.
+      3. **Naming.** `sp-agentic-karl-dev-westeurope-001` follows the tenant root's raw-resource
+         family (matching the identity beside it) rather than the module family
+         (`…-agk-nonprod-…`). There is no ACA precedent to copy, so it is a choice, not a
+         convention — worth an explicit yes.
+
+      Also worth saying out loud in the review: `schema_validation_enabled = false` is on both
+      pools, and it is not laziness. azapi 2.8.0's embedded schema wrongly rejects hyphens in a
+      session-pool name; the real API only constrains length (3–63). The body *was* validated
+      against that schema before the flag went on, which is how the preview-shaped
+      `dynamicPoolConfiguration` got caught. Anyone changing `body` should flip it back on
+      temporarily.
+- [ ] **Answer the `podLabels` question before the *switch* PR** (D4). Not before #347 — see
+      the note below on why #347 is safe to merge either way.
+
+      What has to be true: the pod carries the label `azure.workload.identity/use: "true"` on
+      its **pod template**, not on the Deployment's own metadata. The webhook only mutates
+      pods; a label in the wrong place looks right in a diff and does nothing.
+
+      The chart is an OCI artifact, so the dependency has to be pulled before `helm template`
+      will render anything:
+
       ```bash
-      helm registry login acrctshared001.azurecr.io
-      helm template agentic-karl/dev/services/agentic-karl-code-adapter \
-        | grep -A5 'kind: Deployment' | grep -i 'workload.identity'
+      cd agentic-karl/dev/services/agentic-karl-code-adapter
+      az acr login --name acrctshared001            # or: helm registry login acrctshared001.azurecr.io
+      helm dependency update .                      # pulls ct-shared-chart 2.15.0 into charts/
+
+      # Read the POD template labels specifically. Do NOT use `grep -A5 'kind: Deployment'` —
+      # that window only covers the Deployment's own metadata and will report a false negative.
+      helm template . \
+        | python3 -c 'import sys,yaml; [print(yaml.safe_dump(d["spec"]["template"]["metadata"].get("labels",{}))) for d in yaml.safe_load_all(sys.stdin) if d and d.get("kind")=="Deployment"]'
       ```
+
+      Expect `azure.workload.identity/use: "true"` in that output. If it is absent, the chart
+      does not plumb `podLabels` and the label has to come from somewhere else — either the
+      chart gains support, or vendor a `templates/` override in the service directory
+      (`langfuse-clickhouse` already does this for its PDB, so the escape hatch is established).
+
+> **The cheaper route: merge #347 and just look.** #347 is inert — nothing routes to the
+> adapter until `LIBRECHAT_CODE_BASEURL` is set — so deploying it with a broken workload
+> identity costs nothing and answers the question definitively in one command:
+>
+> ```bash
+> kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- env | grep AZURE_
+> # want: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE
+> # all three are injected by the webhook; the adapter never sets them itself
+> ```
+>
+> Those three variables either exist or they don't, which beats reasoning about chart
+> internals. `helm template` is worth doing to avoid a surprise, but it is the harder way to
+> get the same answer.
+>
+> **Why you must check rather than wait for an error:** the adapter acquires its Entra token
+> lazily, on the first ACA call. So a missing workload identity produces *no* boot-time
+> failure and *no* log line — the pod is Ready (`/readyz` only pings Mongo) and looks healthy
+> right up until the first execution 502s. Nothing tells you until a user tries. If you would
+> rather have that fail loudly, the fix is a boot-time `tokens.getToken()` probe alongside the
+> JWT-key check in `index.ts`, which would turn it into a CrashLoopBackOff.
 
 ---
 
