@@ -293,6 +293,22 @@ jobs:
             exit 1
           fi
 
+          # [knauf] KK20-195 — the two file-hash checks above already prove the
+          # tested STAGE config content hasn't drifted (they're evaluated at the
+          # revisions recorded in provenance). The block below additionally
+          # confirms ArgoCD's *live* app-repo revision and *live* config-path
+          # content still match what was tested, without relying on whole-repo
+          # HEAD-SHA equality: agk-deployment-configs is a monorepo shared by
+          # dev/stage/prod and multiple services, so any unrelated commit
+          # elsewhere in the repo (e.g. a dev version bump, an unrelated
+          # service's values.yaml fix) advances ArgoCD's reported
+          # comparedTo.sources revision for STAGE even though nothing under
+          # $AGK_STAGE_CONFIG_DIRECTORY or $AGK_STAGE_WORKER_CONFIG_DIRECTORY
+          # changed. A raw SHA1 equality check on that revision therefore
+          # produces false-positive "STAGE changed" failures. Comparing the
+          # live config-path content hash instead correctly detects only real
+          # drift in the paths that matter to this promotion.
+
           ARGOCD_PASSWORD=$(az keyvault secret show \
             --subscription "$AGK_STAGE_SUBSCRIPTION_ID" \
             --vault-name "$AGK_STAGE_ARGOCD_KEY_VAULT_NAME" \
@@ -319,18 +335,26 @@ jobs:
           }
           CURRENT_APP_REVISION=$(revision_for_repo 'Knauf-Group/agentic-karl.git')
           CURRENT_APP_GITOPS_REVISION=$(revision_for_repo 'Knauf-Group/agk-deployment-configs.git')
-          if [ "$CURRENT_APP_REVISION" != "$EXPECTED_APP_REVISION" ] \
-            || [ "$CURRENT_APP_GITOPS_REVISION" != "$EXPECTED_APP_GITOPS_REVISION" ]; then
-            echo "::error::Current STAGE app revisions differ from E2E provenance"
+          if [ "$CURRENT_APP_REVISION" != "$EXPECTED_APP_REVISION" ]; then
+            echo "::error::Current STAGE app image revision differs from E2E provenance"
+            exit 1
+          fi
+          git -C agk-deployment-configs fetch origin "$CURRENT_APP_GITOPS_REVISION"
+          CURRENT_APP_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${CURRENT_APP_GITOPS_REVISION}:$AGK_STAGE_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          CURRENT_WORKER_CONFIG_SHA=$(git -C agk-deployment-configs \
+            show "${CURRENT_APP_GITOPS_REVISION}:$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml" | sha256sum | awk '{print $1}')
+          if [ "$CURRENT_APP_CONFIG_SHA" != "$EXPECTED_APP_CONFIG_SHA" ] \
+            || [ "$CURRENT_WORKER_CONFIG_SHA" != "$EXPECTED_WORKER_CONFIG_SHA" ]; then
+            echo "::error::Current STAGE GitOps config content differs from E2E provenance"
             exit 1
           fi
           jq -e --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
             '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
              any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
             <<< "$APP_JSON" > /dev/null
-          jq -e --arg revision "$EXPECTED_WORKER_REVISION" --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
+          jq -e --arg image "$AGK_STAGE_IMAGE_REPOSITORY:$VERSION" \
             '.status.sync.status == "Synced" and .status.health.status == "Healthy" and
-             .status.sync.revision == $revision and
              any(.status.summary.images[]?; . == $image or endswith("/" + $image))' \
             <<< "$WORKER_JSON" > /dev/null
 
