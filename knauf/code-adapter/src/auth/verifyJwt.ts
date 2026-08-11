@@ -20,18 +20,32 @@ declare module 'express-serve-static-core' {
  * LOCAL_MODE injects a synthetic auth context — local dev only; config
  * refuses LOCAL_MODE under NODE_ENV=production.
  */
+/**
+ * Parse the configured verification key. One source of truth for two callers: this
+ * module's middleware, and the boot-time check in index.ts.
+ *
+ * The boot call is the point. Parsing lazily on first request means a malformed
+ * `CODEAPI_JWT_PUBLIC_KEY` — a placeholder never substituted, a PEM mangled by YAML
+ * block-scalar indentation — cannot fail the startup probe: the pod reports healthy
+ * and then answers every single request with a bare `unauthorized`, because the
+ * rejection is indistinguishable from a bad token inside the middleware's catch.
+ * Worse, `keyPromise` would cache the rejected promise, so it never recovers. Doing
+ * it at boot turns a silent 100%-401 deployment into an obvious CrashLoopBackOff.
+ */
+export async function importCodeApiKey(config: Config): Promise<KeyLike> {
+  const pem = config.jwt.publicKeyPem;
+  if (pem == null) {
+    throw new Error('CODEAPI_JWT_PUBLIC_KEY is not configured');
+  }
+  const alg = config.jwt.allowedAlgs[0] ?? 'EdDSA';
+  return importSPKI(pem, alg);
+}
+
 export function createJwtMiddleware(config: Config, logger: Logger) {
   let keyPromise: Promise<KeyLike> | null = null;
 
   const getKey = (): Promise<KeyLike> => {
-    if (keyPromise == null) {
-      const pem = config.jwt.publicKeyPem;
-      if (pem == null) {
-        throw new Error('JWT public key is not configured');
-      }
-      const alg = config.jwt.allowedAlgs[0] ?? 'EdDSA';
-      keyPromise = importSPKI(pem, alg);
-    }
+    keyPromise ??= importCodeApiKey(config);
     return keyPromise;
   };
 

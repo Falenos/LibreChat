@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
+import { importCodeApiKey } from './auth/verifyJwt.js';
 import { connectMongo } from './store/mongo.js';
 import { FilesRepo } from './store/filesRepo.js';
 import { createBlobStore } from './azure/blobStore.js';
@@ -11,6 +12,16 @@ import { createApp } from './app.js';
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config.logLevel);
+
+  // Fail fast on an unusable verification key, before the port opens. `loadConfig` only
+  // checks that CODEAPI_JWT_PUBLIC_KEY is *present*; parsing is what catches an
+  // unsubstituted placeholder or a PEM mangled by YAML block-scalar indentation. Left to
+  // the middleware's lazy import, either of those produces a pod that passes /readyz and
+  // then 401s every request with a bare `unauthorized`. Skipped in LOCAL_MODE, which has
+  // no key by design (config refuses LOCAL_MODE under NODE_ENV=production).
+  if (!config.localMode) {
+    await importCodeApiKey(config);
+  }
 
   const mongo = await connectMongo(config);
   const repo = new FilesRepo(mongo.files, config.fileTtlHours);
