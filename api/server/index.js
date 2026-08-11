@@ -55,7 +55,7 @@ const noIndex = require('./middleware/noIndex');
 // [knauf] Migration access enforcement on protected API routes.
 const requireJwtAuth = require('./middleware/requireJwtAuth');
 const requireMigrationAccess = require('./middleware/requireMigrationAccess');
-const isPublicSharedLinkRead = require('./middleware/isPublicSharedLinkRead');
+const isPublicSharedLinkRead = require('./middleware/knauf/isPublicSharedLinkRead');
 // End [knauf]
 const routes = require('./routes');
 
