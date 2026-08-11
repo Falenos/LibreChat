@@ -51,18 +51,24 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
    * Use definition for agents endpoint for ephemeral agents
    * */
   const capabilities = useAgentCapabilities(agentsConfig?.capabilities ?? defaultAgentCapabilities);
-  const { conversationId, agentId, endpoint, endpointType, useResponsesApi } = useDragDropContext();
+  const { conversationId, agentId, endpoint, endpointType, useResponsesApi, spec } =
+    useDragDropContext();
   const ephemeralAgent = useRecoilValue(ephemeralAgentByConvoId(conversationId ?? ''));
   const { fileSearchAllowedByAgent, codeAllowedByAgent, provider } = useAgentToolPermissions(
     agentId,
     ephemeralAgent,
   );
 
-  // [knauf] KK20-257 — shared code-destination gate (see the hook). No conversation object
-  // is available on this surface, so it resolves against the hard default spec.
+  // [knauf] KK20-257 — shared code-destination gate (see the hook). The spec and
+  // conversation id come through DragDropContext, so this picker answers from the same
+  // inputs as the paperclip menu. Review finding A5: resolving against the hard default
+  // instead offered the sandbox on an existing conversation whose spec does not enable it,
+  // where the upload succeeds but the model is never given the tool.
   const codeDestinationAllowed = useKnaufCodeDestinationAllowed({
     codeEnabled: capabilities.codeEnabled,
     codeAllowedByAgent,
+    specName: spec,
+    conversationId,
   });
   // End [knauf]
 

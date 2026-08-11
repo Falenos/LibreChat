@@ -35,4 +35,7 @@ if (typeof globalThis.File === 'undefined') {
  * exported; the guard's negative branch is covered explicitly by
  * src/knauf/code/codeEnvGuard.knauf.spec.ts, which sets this var itself.
  */
-process.env.LIBRECHAT_CODE_BASEURL ??= 'https://code-adapter.test.invalid/v1';
+// Must be an in-cluster shape: the guard is an allowlist, so a `*.test.invalid` host
+// would read as external and strip the capability — the very thing this line prevents.
+process.env.LIBRECHAT_CODE_BASEURL ??=
+  'http://agentic-karl-code-adapter.agentic-karl-test.svc.cluster.local/v1';

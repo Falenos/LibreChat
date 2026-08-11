@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Constants } from 'librechat-data-provider';
 import { useGetStartupConfig } from '~/data-provider';
 
 /**
@@ -35,23 +36,52 @@ export default function useKnaufCodeDestinationAllowed(params: {
   codeEnabled: boolean;
   /** Upstream's per-agent answer, from `useAgentToolPermissions`. */
   codeAllowedByAgent: boolean;
-  /** `conversation?.spec`, where the caller has the conversation. */
+  /** `conversation?.spec`. Pass it wherever a conversation is in scope. */
   specName?: string | null;
+  /**
+   * `conversation?.conversationId`. The discriminator for "will be submitted with the hard
+   * default" — see `specAllowsCode`. Absent, empty, or `Constants.NEW_CONVO` all mean a
+   * conversation that has not been submitted yet, which is what a fresh chat looks like
+   * before `newConversation` resolves an id.
+   */
+  conversationId?: string | null;
 }): boolean {
-  const { codeEnabled, codeAllowedByAgent, specName } = params;
+  const { codeEnabled, codeAllowedByAgent, specName, conversationId } = params;
   const { data: startupConfig } = useGetStartupConfig();
 
+  /**
+   * The spec half, mirroring `modelSpec?.executeCode === true` on the server
+   * (packages/api/src/agents/load.ts) — including the cases where the server says no.
+   *
+   * Three outcomes, and the middle one is review finding A5. The original version fell
+   * back to the hard default whenever the named spec was not found, which inverts the
+   * invariant this hook exists to hold: the server resolves an unknown spec to `null` and
+   * registers no tool, so a client that quietly substitutes the (code-enabled) default
+   * offers a destination the backend will refuse. The upload then succeeds and the model
+   * never learns the file exists — the exact silent failure the docblock above warns about.
+   *
+   *   named + found    → that spec's flag, whatever it says
+   *   named + unknown  → false; the server has nothing to resolve either
+   *   unnamed + fresh  → the hard default, because `knaufHardDefaultSpecApplies` means a
+   *                      fresh conversation really will be submitted with it
+   *   unnamed + not fresh → false; an existing conversation carrying no spec gives the
+   *                      server nothing to OR against, so neither may the client
+   */
   const specAllowsCode = useMemo(() => {
     const list = startupConfig?.modelSpecs?.list;
     if (!list?.length) {
       return false;
     }
-    const spec =
-      (specName != null && specName !== ''
-        ? list.find((entry) => entry.name === specName)
-        : undefined) ?? list.find((entry) => entry.default);
-    return spec?.executeCode === true;
-  }, [startupConfig?.modelSpecs?.list, specName]);
+    if (specName != null && specName !== '') {
+      return list.find((entry) => entry.name === specName)?.executeCode === true;
+    }
+    const isFreshConversation =
+      conversationId == null || conversationId === '' || conversationId === Constants.NEW_CONVO;
+    if (!isFreshConversation) {
+      return false;
+    }
+    return list.find((entry) => entry.default)?.executeCode === true;
+  }, [startupConfig?.modelSpecs?.list, specName, conversationId]);
 
   // The capability is the hard gate — it is what the fail-closed LIBRECHAT_CODE_BASEURL
   // guard strips (packages/api/src/knauf/code/codeEnvGuard.ts), so nothing may pass it.

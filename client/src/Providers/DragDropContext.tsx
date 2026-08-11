@@ -11,6 +11,12 @@ interface DragDropContextValue {
   endpoint: string | null | undefined;
   endpointType?: EModelEndpoint | string | undefined;
   useResponsesApi?: boolean;
+  // [knauf] KK20-257 — the conversation's model spec. The drop picker decides whether to
+  // offer the code sandbox, and that answer depends on the spec's `executeCode` flag
+  // exactly as it does in the paperclip menu. Without it the picker had to guess from the
+  // hard default and would offer the destination on an existing non-code conversation.
+  spec?: string | null;
+  // End [knauf]
 }
 
 const DragDropContext = createContext<DragDropContextValue | undefined>(undefined);
@@ -71,6 +77,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       endpoint: conversation?.endpoint,
       endpointType: endpointType,
       useResponsesApi: useResponsesApi,
+      // [knauf] KK20-257. End [knauf]
+      spec: conversation?.spec,
     }),
     [
       conversation?.conversationId,
@@ -78,6 +86,8 @@ export function DragDropProvider({ children }: { children: React.ReactNode }) {
       conversation?.endpoint,
       useResponsesApi,
       endpointType,
+      // [knauf] KK20-257. End [knauf]
+      conversation?.spec,
     ],
   );
 
@@ -90,6 +100,8 @@ const defaultDragDropValue: DragDropContextValue = {
   endpoint: undefined,
   endpointType: undefined,
   useResponsesApi: undefined,
+  // [knauf] KK20-257. End [knauf]
+  spec: undefined,
 };
 
 export function useDragDropContext() {

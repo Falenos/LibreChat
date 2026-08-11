@@ -136,6 +136,19 @@ export class FakeBlobStore implements BlobStore {
   async delete(blobPath: string): Promise<void> {
     this.blobs.delete(blobPath);
   }
+
+  /** Creation times, for the reaper. Absent unless a test sets one. */
+  createdOn = new Map<string, Date>();
+
+  list() {
+    const entries = [...this.blobs.keys()];
+    const createdOn = this.createdOn;
+    return (async function* () {
+      for (const name of entries) {
+        yield { name, createdOn: createdOn.get(name) };
+      }
+    })();
+  }
 }
 
 /** Programmable ACA client (single code-interpreter pool). */

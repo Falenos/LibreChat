@@ -310,6 +310,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     codeEnabled,
     codeAllowedByAgent,
     specName: conversation?.spec,
+    conversationId: conversation?.conversationId,
   });
   // End [knauf]
 

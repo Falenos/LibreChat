@@ -753,6 +753,11 @@ describe('useFileHandling', () => {
         conversationId: 'convo-1',
         endpoint: EModelEndpoint.azureOpenAI,
         endpointType: undefined,
+        // [knauf] KK20-257 review A5 — a KARL conversation always carries its spec, and the
+        // gate now reads it rather than assuming the hard default. Omitting it here made the
+        // fixture describe a conversation the *server* would refuse code for, which is not
+        // what these cases are about.
+        spec: 'karl',
       };
       mockCodeEnabled = true;
       mockCodeAllowedByAgent = true;
@@ -835,6 +840,30 @@ describe('useFileHandling', () => {
       });
 
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+    });
+
+    // [knauf] KK20-257 review A5 — the other side of the same invariant. An *existing*
+    // conversation carrying no spec gives the server nothing to resolve, so it registers no
+    // tool. Routing the spreadsheet to the sandbox anyway would upload it successfully and
+    // then never tell the model it exists — and the destination is fixed at upload time, so
+    // the user cannot recover it. File search is the correct answer here.
+    it('does not route to code on an existing conversation with no spec', async () => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+      mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = true; // the default spec would allow it — but this convo is not on it
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
     });
 
     it('does not override a destination the user chose explicitly', async () => {

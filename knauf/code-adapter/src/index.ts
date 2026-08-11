@@ -7,6 +7,7 @@ import { createBlobStore } from './azure/blobStore.js';
 import { createTokenProvider } from './azure/credential.js';
 import { createAcaClient } from './azure/acaClient.js';
 import { createMetrics } from './middleware/metrics.js';
+import { createReaper } from './store/reaper.js';
 import { createApp } from './app.js';
 
 async function main(): Promise<void> {
@@ -43,6 +44,17 @@ async function main(): Promise<void> {
   const tokens = createTokenProvider(config, logger);
   const aca = createAcaClient(config, logger, tokens);
   const metrics = createMetrics();
+
+  // Deletes staged bytes once no Mongo row can reach them. Not optional bookkeeping: the
+  // TTL removes the row that holds the blob path and its owner, so without this the bytes
+  // are retained indefinitely and unattributably. See store/reaper.ts (finding A1).
+  const reaper = createReaper({
+    blob,
+    repo,
+    logger,
+    ttlHours: config.fileTtlHours,
+    intervalMs: config.reaperIntervalMs,
+  });
 
   const app = createApp({ config, logger, aca, blob, repo, mongo, metrics });
 
@@ -91,6 +103,7 @@ async function main(): Promise<void> {
       return;
     }
     shuttingDown = true;
+    reaper.stop();
     logger.info({ signal, drainBudgetMs }, 'shutting down — draining in-flight executions');
     server.close(() => {
       logger.info('drain complete');

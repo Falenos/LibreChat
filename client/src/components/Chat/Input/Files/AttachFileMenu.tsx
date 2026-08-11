@@ -154,6 +154,7 @@ const AttachFileMenu = ({
     codeEnabled: capabilities.codeEnabled,
     codeAllowedByAgent,
     specName: conversation?.spec,
+    conversationId: conversation?.conversationId,
   });
   // End [knauf]
 

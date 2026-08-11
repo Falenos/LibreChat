@@ -9,11 +9,15 @@ export interface Config {
   logLevel: string;
   localMode: boolean;
   /**
-   * HMAC key for turning a caller's `runtime_session_hint` into a session id
-   * (see `deriveSessionId`). Only needs to be stable per deployment and unguessable —
-   * it is not an authentication secret. Defaults to the JWT public key, which is already
-   * per-deployment and present wherever the adapter runs, so no new value has to be
-   * provisioned; `SESSION_HINT_SECRET` overrides it if a deployment prefers its own.
+   * HMAC key behind two things: the owner tag every session id carries, and the derivation
+   * of a session id from `runtime_session_hint` (both in validate.ts).
+   *
+   * It must be stable per deployment. Its *secrecy* matters only for the second use —
+   * ownership checks compare a supplied id against the caller's own tag, so they hold even
+   * if this value is public. Defaulting to the JWT public key is therefore sound today, and
+   * needs no new provisioning; `SESSION_HINT_SECRET` overrides it, and must be set to a real
+   * secret before `toolExecution.sandbox.statefulSessions` is ever enabled, or a known
+   * conversation id yields a predictable session id. index.ts warns when it is unset.
    */
   sessionHintSecret: string;
 
@@ -72,6 +76,8 @@ export interface Config {
   };
 
   fileTtlHours: number;
+  /** How often the orphaned-blob reaper sweeps. See store/reaper.ts. */
+  reaperIntervalMs: number;
   metricsEnabled: boolean;
 }
 
@@ -171,6 +177,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       container: str('BLOB_CONTAINER') ?? 'code-adapter-staging',
     },
     fileTtlHours: int('FILE_TTL_HOURS', 24),
+    // Hourly is ample: the reaper only deletes what is already past the TTL, so the sweep
+    // interval sets how long an orphan lingers, not whether it is collected.
+    reaperIntervalMs: int('REAPER_INTERVAL_MS', 3_600_000),
     metricsEnabled: bool('METRICS_ENABLED', true),
   };
 

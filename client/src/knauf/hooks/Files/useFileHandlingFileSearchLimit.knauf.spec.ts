@@ -42,7 +42,14 @@ jest.mock('@tanstack/react-query', () => ({
   }),
 }));
 
+// Deliberately NOT `requireActual` here, unlike the `~/utils` mock below: the real
+// `~/data-provider` pulls in the whole TanStack Query layer and would need a
+// QueryClientProvider around every render. Missing exports are added explicitly instead —
+// `useGetEndpointsQuery` is needed because the import graph reaching this hook grew
+// (upstream #12163, via the main merge) to include DragDropContext.
 jest.mock('~/data-provider', () => ({
+  useGetEndpointsQuery: jest.fn(() => ({ data: undefined })),
+  useGetAgentByIdQuery: jest.fn(() => ({ data: undefined })),
   // [knauf] KK20-257 — `useKnaufCodeDestinationAllowed` reads the spec list to mirror the
   // server's `ephemeralAgent.execute_code || modelSpec.executeCode`. Default spec enables
   // code, matching librechat.yaml, so these suites exercise the production shape.
@@ -104,7 +111,15 @@ jest.mock('~/hooks/Files/useUpdateFiles', () => ({
   }),
 }));
 
+// Spread the real module rather than replacing it. This mock used to list only the five
+// helpers the hook calls directly, which silently removed everything else `~/utils` exports
+// — including `cn`. That was survivable only while nothing else in the import graph needed
+// it; the upstream tool-call UI redesign (#12163, arriving via the main merge) pulled
+// SourceHovercard into the chain `useFileHandling → useAgentToolPermissions → ~/Providers`,
+// and the suite started failing with `(0, _utils.cn) is not a function` — a module-loading
+// error with nothing to do with what these tests assert.
 jest.mock('~/utils', () => ({
+  ...jest.requireActual('~/utils'),
   logger: { log: jest.fn() },
   validateFiles: jest.fn(() => true),
   cachePreview: jest.fn(),

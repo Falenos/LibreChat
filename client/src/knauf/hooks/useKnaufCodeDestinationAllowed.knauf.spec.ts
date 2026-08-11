@@ -1,4 +1,5 @@
 import { renderHook } from '@testing-library/react';
+import { Constants } from 'librechat-data-provider';
 import useKnaufCodeDestinationAllowed from './useKnaufCodeDestinationAllowed';
 
 /**
@@ -49,9 +50,9 @@ describe('[knauf] useKnaufCodeDestinationAllowed', () => {
     expect(run({ codeEnabled: true, codeAllowedByAgent: false, specName: 'karl' })).toBe(true);
   });
 
-  it('falls back to the hard default spec when no spec name is known', () => {
-    // The drag-drop picker has no conversation object; a fresh chat is submitted with the
-    // default spec, so that is the right thing to answer from.
+  it('falls back to the hard default spec on a not-yet-submitted conversation', () => {
+    // A fresh chat is submitted with the default spec, so that is the right thing to answer
+    // from. An *existing* conversation with no spec is a different case — see A5 below.
     expect(run({ codeEnabled: true, codeAllowedByAgent: false })).toBe(true);
   });
 
@@ -81,9 +82,52 @@ describe('[knauf] useKnaufCodeDestinationAllowed', () => {
     expect(run({ codeEnabled: true, codeAllowedByAgent: true })).toBe(true);
   });
 
-  it('tolerates an unknown spec name by falling back to the default', () => {
-    expect(run({ codeEnabled: true, codeAllowedByAgent: false, specName: 'not-a-spec' })).toBe(
-      true,
-    );
+  /**
+   * Review finding A5. The hook previously fell back to the hard default whenever the named
+   * spec was not found, which inverts the invariant it exists to hold: the server resolves
+   * an unknown spec to `null` and registers no tool, so substituting the code-enabled
+   * default offers a destination the backend refuses. The upload then succeeds and the
+   * model is never told the file exists.
+   */
+  describe('client and server cannot disagree (A5)', () => {
+    it('is false for an explicitly named spec that does not exist', () => {
+      expect(run({ codeEnabled: true, codeAllowedByAgent: false, specName: 'not-a-spec' })).toBe(
+        false,
+      );
+    });
+
+    it('does not offer code on an existing conversation that carries no spec', () => {
+      // Nothing for the server to OR against: no agent flag and no resolvable spec.
+      expect(run({ codeEnabled: true, codeAllowedByAgent: false, conversationId: 'abc-123' })).toBe(
+        false,
+      );
+    });
+
+    it('still inherits the default on a genuinely fresh conversation', () => {
+      // `knaufHardDefaultSpecApplies` means this chat really will be submitted with the
+      // default spec, so answering from it is not a guess.
+      expect(
+        run({ codeEnabled: true, codeAllowedByAgent: false, conversationId: Constants.NEW_CONVO }),
+      ).toBe(true);
+    });
+
+    it('treats an explicit spec as authoritative even on a fresh conversation', () => {
+      expect(
+        run({
+          codeEnabled: true,
+          codeAllowedByAgent: false,
+          specName: 'karl-legacy',
+          conversationId: Constants.NEW_CONVO,
+        }),
+      ).toBe(false);
+    });
+
+    it('still routes on an existing no-spec conversation when the agent asks for code', () => {
+      // The agent half is independent of the spec half — an agent with execute_code
+      // installed works regardless.
+      expect(run({ codeEnabled: true, codeAllowedByAgent: true, conversationId: 'abc-123' })).toBe(
+        true,
+      );
+    });
   });
 });

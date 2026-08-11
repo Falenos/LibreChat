@@ -56,6 +56,34 @@ describe('[knauf] locked @librechat/agents code client', () => {
     return a! * 1e6 + b! * 1e3 + c! >= x! * 1e6 + y! * 1e3 + z!;
   };
 
+  /**
+   * Review finding A6/#7. Every assertion below is `skipIf(!available)`, and the client is
+   * NOT a dependency of this package — it resolves out of the monorepo root. So in the
+   * adapter's own CI job the whole suite silently skipped and still reported green: the one
+   * test written to catch client drift was guarding nothing, which is indistinguishable
+   * from it passing. Worse, the 3.2.65 gate below *inverts* its assertion on an older
+   * install, so a stale tree made the skip look like a pass.
+   *
+   * Locally the skip is correct — the adapter is standalone and you may not have the root
+   * installed. `KNAUF_REQUIRE_LOCKED_CLIENT=true` is how CI says "the tripwire must be
+   * armed"; build-code-adapter.yaml installs the client and sets it.
+   */
+  it('is armed when CI requires it', () => {
+    if (process.env.KNAUF_REQUIRE_LOCKED_CLIENT !== 'true') {
+      return;
+    }
+    expect(
+      available,
+      '@librechat/agents is not resolvable — install it before running this suite, or the ' +
+        'drift assertions below all skip and the suite passes without testing anything',
+    ).toBe(true);
+    expect(
+      atLeast('3.2.65'),
+      `installed @librechat/agents is ${version()}, which predates runtime_session_hint ` +
+        '(3.2.65) — the continuity assertion would run inverted',
+    ).toBe(true);
+  });
+
   it.skipIf(!available)('is inspectable, and reports which build is asserted', () => {
     // eslint-disable-next-line no-console
     console.info(`[knauf] asserting against @librechat/agents ${version()}`);

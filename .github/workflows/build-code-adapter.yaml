@@ -24,13 +24,25 @@ on:
     paths:
       - knauf/code-adapter/**
       - .github/workflows/build-code-adapter.yaml
+  # Review finding A6 — the adapter had NO test gate on a PR. This workflow ran only on
+  # dispatch or post-merge, and test_pipeline.yaml covers the root workspaces only (the
+  # adapter is a separate package with its own dependency tree, excluded from the monorepo
+  # eslint config). So adapter changes reached main untested and the first signal was a
+  # post-merge build. The test job now runs on PRs touching the adapter; the build job is
+  # guarded to non-PR events so a fork PR can never reach the ACR.
+  pull_request:
+    paths:
+      - knauf/code-adapter/**
+      - .github/workflows/build-code-adapter.yaml
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  # PRs cancel superseded runs; main/dispatch builds must not cancel each other, because a
+  # cancelled `az acr build` can leave a half-pushed tag.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -52,15 +64,37 @@ jobs:
       - name: Install
         run: npm ci
 
+      # lockedClient.spec.ts asserts against the INSTALLED @librechat/agents, which lives in
+      # the monorepo root's node_modules — the adapter does not depend on it. Without this
+      # the spec finds nothing and degrades to a loud skip, so the one test written to catch
+      # client drift (the `runtime_session_hint` field and the never-read `result.code` that
+      # the adapter compensates for) never actually ran in CI. Root install is scoped to that
+      # package to keep the job fast.
+      - name: Install the locked code client (for the drift tripwire)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # The declared range lives in api/package.json, not the root manifest.
+          RANGE="$(node -p "require('./api/package.json').dependencies['@librechat/agents']")"
+          echo "Installing @librechat/agents@$RANGE for the contract tripwire"
+          npm install --no-save --ignore-scripts --no-audit --no-fund "@librechat/agents@$RANGE"
+
       - name: Type-check
         run: npm run lint
 
+      # KNAUF_REQUIRE_LOCKED_CLIENT turns lockedClient.spec.ts's graceful skip into a hard
+      # failure. Locally the skip is right (the adapter is standalone); in CI a skip means
+      # the tripwire is not guarding anything, which is indistinguishable from green.
       - name: Test
         run: npm test
+        env:
+          KNAUF_REQUIRE_LOCKED_CLIENT: 'true'
 
   build:
     name: Build adapter into AGK ACR
     needs: test
+    # Never on a pull_request: this job holds an Azure login with write access to the ACR.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
