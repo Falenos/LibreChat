@@ -31,7 +31,13 @@ export function createUploadRouter(deps: UploadDeps): Router {
   const router = Router();
   const upload = multer({
     dest: process.env.UPLOAD_TMP_DIR ?? tmpdir(),
-    limits: { fileSize: deps.config.uploadMaxBytes },
+    // `files` matters as much as `fileSize` here. /upload/batch takes an unbounded array,
+    // and every item is spooled to the container's writable layer and then read whole into
+    // a Buffer — so without a count cap a single request can exhaust ephemeral storage
+    // (which has no request/limit in the GitOps values) long before the memory limit bites.
+    // The cap matches CAPTURE_MAX_FILES: a batch larger than what one execution can hand
+    // back is not a shape we serve.
+    limits: { fileSize: deps.config.uploadMaxBytes, files: deps.config.exec.captureMaxFiles },
   });
 
   const stageOne = async (
@@ -83,7 +89,7 @@ export function createUploadRouter(deps: UploadDeps): Router {
           res.status(401).json({ error: 'unauthorized' });
           return;
         }
-        const sessionId = mintSessionId();
+        const sessionId = mintSessionId(auth.userId, deps.config.sessionHintSecret);
         const doc = await stageOne(file, identity, auth, sessionId, false);
         res.status(200).json({
           message: 'success',
@@ -114,7 +120,7 @@ export function createUploadRouter(deps: UploadDeps): Router {
           return;
         }
         const readOnly = body.read_only === 'true' || body.read_only === true;
-        const sessionId = mintSessionId();
+        const sessionId = mintSessionId(auth.userId, deps.config.sessionHintSecret);
 
         const results: BatchUploadFileResult[] = [];
         for (const file of files) {

@@ -23,6 +23,20 @@ async function main(): Promise<void> {
     await importCodeApiKey(config);
   }
 
+  // Session ids carry an owner tag derived from this secret, and ownership holds even if
+  // the secret is public (the check is against the caller's own identity — see
+  // validate.ts). What a weak secret does expose is *prediction* of a hint-derived id from
+  // a known conversation id, which only matters once the host enables
+  // `toolExecution.sandbox.statefulSessions`. KARL does not, so this is a warning rather
+  // than a boot failure — but it must be fixed before continuity is switched on.
+  if (!config.localMode && process.env.SESSION_HINT_SECRET == null) {
+    logger.warn(
+      'SESSION_HINT_SECRET is unset — falling back to the JWT public key, which is not ' +
+        'secret. Harmless while session continuity is off, but set a real secret before ' +
+        'enabling toolExecution.sandbox.statefulSessions.',
+    );
+  }
+
   const mongo = await connectMongo(config);
   const repo = new FilesRepo(mongo.files, config.fileTtlHours);
   const blob = await createBlobStore(config);
@@ -31,6 +45,15 @@ async function main(): Promise<void> {
   const metrics = createMetrics();
 
   const app = createApp({ config, logger, aca, blob, repo, mongo, metrics });
+
+  // An /exec response legitimately takes execTimeoutMs (230s) plus the baseline listing
+  // and the capture phase. Node's default requestTimeout is 300s, which lands inside that
+  // window: it would abort the response after the files were already persisted, so the
+  // caller sees a socket error and the model never hears about work that did happen.
+  // Sized from the same numbers rather than a round guess, so the three move together.
+  const requestBudgetMs =
+    config.aca.execTimeoutMs + config.aca.fileOpTimeoutMs + config.exec.captureMaxTotalMs + 30_000;
+
   const server = app.listen(config.port, () => {
     logger.info(
       {
@@ -41,13 +64,43 @@ async function main(): Promise<void> {
       'code-adapter listening',
     );
   });
+  server.requestTimeout = requestBudgetMs;
+  // Must exceed requestTimeout, or a slow-but-legal request is cut by the keep-alive
+  // reaper instead. `headersTimeout` bounds only the header phase, so it stays short.
+  server.keepAliveTimeout = requestBudgetMs + 5_000;
 
+  /**
+   * Drain rather than kill. An execution runs for up to `requestBudgetMs`, so the old
+   * flat 10s force-exit terminated every in-flight run on any rollout — and it silently
+   * overrode the Pod's own `terminationGracePeriodSeconds`, making that value a lie.
+   *
+   * `server.close()` stops accepting new connections and fires once the in-flight ones
+   * finish; `closeIdleConnections()` is what actually lets that happen promptly, since a
+   * keep-alive socket sitting idle would otherwise hold the server open for the full
+   * budget. The force-exit is the backstop for a genuinely wedged request, and is now
+   * derived from the request budget so the two cannot drift apart.
+   *
+   * NOTE for the GitOps side: `terminationGracePeriodSeconds` must be >= this bound, or
+   * the kubelet SIGKILLs mid-drain and the drain is decorative. See
+   * knauf/docs/code-execution/scaling.md.
+   */
+  const drainBudgetMs = requestBudgetMs + 10_000;
+  let shuttingDown = false;
   const shutdown = (signal: string) => {
-    logger.info({ signal }, 'shutting down');
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    logger.info({ signal, drainBudgetMs }, 'shutting down — draining in-flight executions');
     server.close(() => {
+      logger.info('drain complete');
       void mongo.close().finally(() => process.exit(0));
     });
-    setTimeout(() => process.exit(1), 10_000).unref();
+    server.closeIdleConnections();
+    setTimeout(() => {
+      logger.error({ drainBudgetMs }, 'drain budget exhausted — forcing exit');
+      process.exit(1);
+    }, drainBudgetMs).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

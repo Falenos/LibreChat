@@ -87,11 +87,20 @@ export async function captureOutputs(params: {
   let capturedBytes = 0;
   let overflow = false;
   let failed = 0;
+  // Wall-clock deadline for the whole phase. Without it the file/byte caps still allow
+  // captureMaxFiles sequential fetches at fileOpTimeoutMs each, which outlives the HTTP
+  // response and loses every already-persisted file with it.
+  const deadline = Date.now() + config.exec.captureMaxTotalMs;
+  let timedOut = false;
 
   for (const entry of listing) {
     const name = entry.name;
     if (!isCapturable(name, entry)) {
       continue;
+    }
+    if (Date.now() > deadline) {
+      timedOut = true;
+      break;
     }
 
     const plan = planEntry(entry, name, { byFinalName, byPushedName, baseline });
@@ -140,6 +149,13 @@ export async function captureOutputs(params: {
     }
   }
 
+  if (timedOut) {
+    deps.logger.warn(
+      { sessionId, captured, budgetMs: config.exec.captureMaxTotalMs },
+      'capture budget exhausted — remaining files skipped',
+    );
+  }
+
   return {
     files,
     failedNote:
@@ -147,10 +163,26 @@ export async function captureOutputs(params: {
         ? `Note: ${failed} file(s) the code produced could not be saved and are not attached. ` +
           'The code itself ran successfully — re-run it to try again.'
         : null,
-    overflowNote: overflow
-      ? `Note: some generated files were not captured (limit ${config.exec.captureMaxFiles} files / ${Math.round(config.exec.captureMaxTotalBytes / 1_048_576)} MB per execution).`
-      : null,
+    overflowNote: buildOverflowNote(overflow, timedOut, config),
   };
+}
+
+/**
+ * One note covering both ways capture can stop short. Both are told to the model rather
+ * than logged only: it just wrote those files, and silence reads as "produced none".
+ */
+function buildOverflowNote(overflow: boolean, timedOut: boolean, config: Config): string | null {
+  if (timedOut) {
+    return (
+      'Note: some generated files were not captured — collecting them took longer than ' +
+      `${Math.round(config.exec.captureMaxTotalMs / 1000)}s. Write fewer or smaller files, ` +
+      'or produce them across separate runs.'
+    );
+  }
+  if (overflow) {
+    return `Note: some generated files were not captured (limit ${config.exec.captureMaxFiles} files / ${Math.round(config.exec.captureMaxTotalBytes / 1_048_576)} MB per execution).`;
+  }
+  return null;
 }
 
 /** What `captureOutputs` should do with one listing entry. */
@@ -170,6 +202,14 @@ interface EntryPlan {
  * reports success. The pre-exec baseline is captured after inputs are pushed precisely so
  * this comparison is possible; the size check remains only as a fallback for the case
  * where no baseline exists at all.
+ *
+ * A **moved** input has to be looked up under its push name, not its final one. Nested
+ * inputs are pushed flat as `.karl_in_<n>` and renamed to `dir/file` by the wrapper
+ * preamble, i.e. *inside* the execution and therefore after the baseline was taken. Keying
+ * the lookup on the listed (final) name misses the baseline entirely and falls through to
+ * the size comparison — which is exactly the same-size-rewrite bug the baseline exists to
+ * prevent, just on the nested path. `rename` preserves size and mtime, so the flat entry's
+ * signature is directly comparable to the renamed one.
  */
 function planEntry(
   entry: AcaSessionFile,
@@ -181,7 +221,8 @@ function planEntry(
   },
 ): EntryPlan {
   const input = ctx.byFinalName.get(name) ?? ctx.byPushedName.get(name) ?? null;
-  const baselineSignature = ctx.baseline.get(name);
+  const wasMoved = input != null && input.pushedAs !== input.finalName;
+  const baselineSignature = ctx.baseline.get(wasMoved ? input.pushedAs : name);
 
   if (input != null) {
     const unchanged =

@@ -27,6 +27,10 @@ export function createErrorHandler(logger: Logger) {
       res.status(413).json({ error: 'file exceeds the 128MB upload limit' });
       return;
     }
+    if ((err as MulterLikeError).code === 'LIMIT_FILE_COUNT') {
+      res.status(413).json({ error: 'too many files in one upload' });
+      return;
+    }
     if (err instanceof AcaError) {
       logger.error({ err: err.message, acaCode: err.acaCode }, 'pool backend error');
       res.status(err.statusCode >= 500 || err.statusCode === 429 ? 502 : err.statusCode).json({

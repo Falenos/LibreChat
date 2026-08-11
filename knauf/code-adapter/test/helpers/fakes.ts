@@ -5,6 +5,7 @@ import type { KeyLike } from 'jose';
 import { createLogger } from '../../src/logger.js';
 import { createMetrics } from '../../src/middleware/metrics.js';
 import { loadConfig } from '../../src/config.js';
+import { mintSessionId } from '../../src/validate.js';
 import type { Config } from '../../src/config.js';
 import type { AcaClient } from '../../src/azure/acaClient.js';
 import type { BlobStore } from '../../src/azure/blobStore.js';
@@ -24,6 +25,18 @@ export function testConfig(overrides: Record<string, string> = {}): Config {
 
 export const testLogger = () => createLogger('silent');
 export const testMetrics = () => createMetrics();
+
+/**
+ * A session id the caller actually owns.
+ *
+ * `/exec` ignores a supplied `session_id` that does not bear the caller's owner tag, so a
+ * hand-written `karl-<32 d's>` no longer exercises the reuse path — it exercises the
+ * rejection path. Tests that mean to reuse a session must mint through the same helper the
+ * adapter does. `'local'` is the LOCAL_MODE subject (see verifyJwt).
+ */
+export function ownedSessionId(config: Config, userId = 'local'): string {
+  return mintSessionId(userId, config.sessionHintSecret);
+}
 
 /** In-memory FilesRepo — same public surface as the Mongo-backed class. */
 export class FakeFilesRepo {

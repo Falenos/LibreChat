@@ -46,6 +46,16 @@ export interface Config {
     stderrMaxBytes: number;
     captureMaxFiles: number;
     captureMaxTotalBytes: number;
+    /**
+     * Wall-clock ceiling on the whole post-exec capture phase.
+     *
+     * The file and byte caps do not bound time: `captureMaxFiles` (20) fetches run
+     * sequentially, each with its own `fileOpTimeoutMs` (30s), so capture alone could
+     * run 10 minutes on top of a 230s execution. Node's own `server.requestTimeout`
+     * would then cut the response at 300s, losing files that were already persisted.
+     * Stopping early and saying so beats delivering nothing.
+     */
+    captureMaxTotalMs: number;
   };
 
   uploadMaxBytes: number;
@@ -146,6 +156,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       stderrMaxBytes: int('STDERR_MAX_BYTES', 65_536),
       captureMaxFiles: int('CAPTURE_MAX_FILES', 20),
       captureMaxTotalBytes: int('CAPTURE_MAX_TOTAL_BYTES', 268_435_456),
+      // Sized against the response budget, not against the file caps: execTimeoutMs
+      // (230s) + this must stay comfortably under `server.requestTimeout` (index.ts).
+      captureMaxTotalMs: int('CAPTURE_MAX_TOTAL_MS', 60_000),
     },
     uploadMaxBytes: int('UPLOAD_MAX_BYTES', 134_217_728),
     mongo: {

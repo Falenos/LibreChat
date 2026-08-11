@@ -1,5 +1,5 @@
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
-import { deriveSessionId, isValidSessionId, mintSessionId } from '../validate.js';
+import { deriveSessionId, isValidSessionId, mintSessionId, sessionBelongsTo } from '../validate.js';
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { WrapperPlan } from './wrapper.js';
 import { resolveInputs, movePlan, pushInputs, StagedFileMissingError } from './stagePush.js';
@@ -62,18 +62,33 @@ export async function runExec(
   //      conversation keeps its /mnt/data across turns instead of starting cold;
   //   3. otherwise a fresh id, i.e. a fresh sandbox for this execution.
   const hint = typeof body.runtime_session_hint === 'string' ? body.runtime_session_hint : '';
+  const secret = deps.config.sessionHintSecret;
+  // A supplied id must be well-formed AND bear the caller's own owner tag. Without the
+  // second half, `session_id` is an unauthenticated pointer at any sandbox in the pool —
+  // the sandbox is the isolation boundary, and nothing else in the request binds it to a
+  // user. Foreign ids are ignored rather than rejected: the contract is to run the code,
+  // and running it in a fresh sandbox of the caller's own is both safe and useful.
+  const suppliedIsOwn =
+    isValidSessionId(body.session_id) && sessionBelongsTo(body.session_id, auth.userId, secret);
   let sessionId: string;
   let derivedFromHint = false;
-  if (isValidSessionId(body.session_id)) {
+  if (suppliedIsOwn && isValidSessionId(body.session_id)) {
     sessionId = body.session_id;
   } else if (hint !== '') {
-    sessionId = deriveSessionId(hint, deps.config.sessionHintSecret);
+    sessionId = deriveSessionId(hint, secret, auth.userId);
     derivedFromHint = true;
   } else {
-    sessionId = mintSessionId();
+    sessionId = mintSessionId(auth.userId, secret);
   }
   if (body.session_id != null && !isValidSessionId(body.session_id)) {
     logger.warn({ supplied: String(body.session_id).slice(0, 64) }, 'invalid session_id ignored');
+  } else if (isValidSessionId(body.session_id) && !suppliedIsOwn) {
+    // Worth a louder line than a malformed id: well-formed but not the caller's means
+    // either a client bug or someone probing another user's sandbox.
+    logger.warn(
+      { supplied: body.session_id.slice(0, 16), userId: auth.userId },
+      'session_id does not belong to the caller — ignored, fresh session allocated',
+    );
   }
 
   const fail = (stderr: string, outcome: string): ExecResponse => {
@@ -101,7 +116,11 @@ export async function runExec(
     throw err;
   }
 
-  const runOnce = () => executeOnce(body, lang, auth, sessionId, inputs, deps, derivedFromHint);
+  const runOnce = () =>
+    executeOnce(body, lang, auth, sessionId, inputs, deps, {
+      derivedFromHint,
+      reused: suppliedIsOwn,
+    });
   return runWithRecovery(runOnce, { sessionId, logger, fail });
 }
 
@@ -171,6 +190,14 @@ function isRetryableCapacity(err: unknown): err is AcaError {
   return err instanceof AcaError && err.statusCode === 429 && (err.retryAfterSeconds ?? 99) <= 5;
 }
 
+/** How this attempt's session id was arrived at — drives the baseline and the echo. */
+interface SessionOrigin {
+  /** From `runtime_session_hint`; echoed back as `runtime_session_id`. */
+  derivedFromHint: boolean;
+  /** The caller supplied one of its own — it may already hold files from earlier execs. */
+  reused: boolean;
+}
+
 /** One execution attempt (push → snapshot → run → resolve → capture). */
 async function executeOnce(
   body: ExecRequest,
@@ -179,8 +206,9 @@ async function executeOnce(
   sessionId: string,
   inputs: Awaited<ReturnType<typeof resolveInputs>>,
   deps: ExecDeps,
-  derivedFromHint = false,
+  origin: SessionOrigin,
 ): Promise<ExecResponse> {
+  const { derivedFromHint, reused: reusedSession } = origin;
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
 
@@ -188,7 +216,7 @@ async function executeOnce(
     await pushInputs(inputs, sessionId, deps);
   }
 
-  const baseline = await snapshotBaseline(sessionId, body.session_id, inputs.length > 0, deps);
+  const baseline = await snapshotBaseline(sessionId, reusedSession, inputs.length > 0, deps);
 
   // Everything runs on the code-interpreter (Python) pool, so the wrapper is
   // always a Python program (it runs bash via subprocess). It is mandatory for
@@ -280,11 +308,11 @@ async function executeOnce(
  */
 async function snapshotBaseline(
   sessionId: string,
-  suppliedSessionId: string | undefined,
+  reusedSession: boolean,
   hasInputs: boolean,
   deps: ExecDeps,
 ): Promise<Map<string, string>> {
-  if (!isValidSessionId(suppliedSessionId) && !hasInputs) {
+  if (!reusedSession && !hasInputs) {
     return new Map();
   }
   try {

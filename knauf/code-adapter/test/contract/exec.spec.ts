@@ -6,6 +6,7 @@ import {
   FakeAcaClient,
   FakeBlobStore,
   FakeFilesRepo,
+  ownedSessionId,
   testConfig,
   testLogger,
   testMetrics,
@@ -239,6 +240,67 @@ describe('POST /v1/exec contract', () => {
     expect(returned.storage_session_id).toBe(response.body.session_id);
   });
 
+  // The same bug, on the nested path — review finding A3. A nested input is pushed flat as
+  // `.karl_in_<n>` and renamed by the wrapper *inside* the execution, so the baseline holds
+  // the flat name while the post-exec listing shows the nested one. Keying the baseline
+  // lookup on the listed name misses it and falls back to comparing byte length, which a
+  // same-size rewrite passes — so the edit was reported inherited and discarded.
+  it('captures a same-size overwrite of a NESTED writable input (A3 regression)', async () => {
+    const doc = await repo.insertStaged({
+      sessionId: 'karl-' + 'c'.repeat(32),
+      filename: 'reports/data.csv', // nested ⇒ pushed as .karl_in_0, then renamed
+      size: 3,
+      contentType: 'text/csv',
+      origin: 'upload',
+      readOnly: false,
+      identity: { kind: 'user', id: 'local' },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(doc.blobPath, Buffer.from('abc'), 'text/csv');
+
+    // Pre-exec the sandbox lists the FLAT push name (the rename has not happened yet).
+    aca.sessionFiles = [
+      { name: '.karl_in_0', type: 'File', sizeInBytes: 3, lastModifiedAt: '2026-08-10T10:00:00Z' },
+    ];
+    aca.fileContents.set('reports/data.csv', Buffer.from('xyz'));
+    aca.executeImpl = async (_sid, code) => {
+      // Post-exec it lists the nested name, same size, later mtime — an in-place rewrite.
+      aca.sessionFiles = [
+        {
+          name: 'reports/data.csv',
+          type: 'File',
+          sizeInBytes: 3,
+          lastModifiedAt: '2026-08-10T10:00:05Z',
+        },
+      ];
+      return sentinelOutcome(code, 0, '');
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: "open('reports/data.csv','w').write('xyz')",
+        files: [
+          {
+            id: doc.fileId,
+            name: 'reports/data.csv',
+            storage_session_id: doc.sessionId,
+            kind: 'user',
+          },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(0);
+    const returned = response.body.files.find(
+      (f: { name: string }) => f.name === 'reports/data.csv',
+    );
+    expect(returned.inherited).toBeUndefined();
+    expect(returned.storage_session_id).toBe(response.body.session_id);
+  });
+
   // [knauf] KK20-257 review F6. `@librechat/agents` (3.2.65 and 3.2.46) formats only
   // stdout/stderr and never reads `result.code`, so a silent non-zero exit renders as
   // "stdout: Empty" and reads as success. The adapter has to put the failure where the
@@ -369,7 +431,9 @@ describe('POST /v1/exec contract', () => {
     // Same session across three execs. The sandbox is reused, so /mnt/data
     // accumulates — but each exec must return only the file it created, or the
     // growing set breaks the follow-up model request (the pandas-chart 400).
-    const S = 'karl-' + 'd'.repeat(32);
+    // Must be an id this caller owns — /exec ignores a foreign one and allocates fresh,
+    // which would silently turn this reuse test into a no-reuse test.
+    const S = ownedSessionId(testConfig());
     const addFile = (name: string, content: string, t: string) => {
       aca.sessionFiles.push({ name, type: 'File', sizeInBytes: content.length, lastModifiedAt: t });
       aca.fileContents.set(name, Buffer.from(content));

@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deriveSessionId,
   isValidSessionId,
   mintSessionId,
   parseIdentity,
   sanitizeFilename,
+  sessionBelongsTo,
   ValidationError,
 } from '../../src/validate.js';
 
+const SECRET = 'test-session-secret';
+
 describe('session ids', () => {
   it('mints karl-<32hex> ids that validate', () => {
-    const id = mintSessionId();
+    const id = mintSessionId('user-1', SECRET);
     expect(id).toMatch(/^karl-[0-9a-f]{32}$/);
     expect(isValidSessionId(id)).toBe(true);
+  });
+
+  it('mints unique ids for one user', () => {
+    const a = mintSessionId('user-1', SECRET);
+    const b = mintSessionId('user-1', SECRET);
+    expect(a).not.toBe(b);
   });
 
   it('rejects foreign ids', () => {
@@ -19,6 +29,47 @@ describe('session ids', () => {
     expect(isValidSessionId('karl-XYZ')).toBe(false);
     expect(isValidSessionId('karl-' + 'a'.repeat(31))).toBe(false);
     expect(isValidSessionId(42)).toBe(false);
+  });
+});
+
+/**
+ * The sandbox is the isolation boundary — whoever names a session id gets its /mnt/data.
+ * `/exec` accepts a caller-supplied id, so an id must prove whose it is.
+ */
+describe('session ownership', () => {
+  it('recognises a caller’s own minted id', () => {
+    const id = mintSessionId('user-1', SECRET);
+    expect(sessionBelongsTo(id, 'user-1', SECRET)).toBe(true);
+  });
+
+  it('rejects another user’s minted id', () => {
+    const victim = mintSessionId('user-victim', SECRET);
+    expect(sessionBelongsTo(victim, 'user-attacker', SECRET)).toBe(false);
+  });
+
+  it('rejects another user’s hint-derived id', () => {
+    // Same conversation, two users: without userId in the derivation both would land in
+    // one sandbox and read each other's files.
+    const victim = deriveSessionId('thread-abc', SECRET, 'user-victim');
+    const attacker = deriveSessionId('thread-abc', SECRET, 'user-attacker');
+    expect(victim).not.toBe(attacker);
+    expect(sessionBelongsTo(victim, 'user-attacker', SECRET)).toBe(false);
+  });
+
+  it('derives the same id for the same user and hint (continuity)', () => {
+    expect(deriveSessionId('thread-abc', SECRET, 'user-1')).toBe(
+      deriveSessionId('thread-abc', SECRET, 'user-1'),
+    );
+  });
+
+  it('keeps derived ids inside the karl-<32hex> namespace', () => {
+    const id = deriveSessionId('thread-abc', SECRET, 'user-1');
+    expect(isValidSessionId(id)).toBe(true);
+  });
+
+  it('does not leak the hint into the id', () => {
+    // The hint is a LibreChat conversation id; it must not reach Azure resource names.
+    expect(deriveSessionId('thread-abc', SECRET, 'user-1')).not.toContain('thread-abc');
   });
 });
 
