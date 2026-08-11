@@ -216,7 +216,10 @@ export type SpeechToTextResponse = {
 export type VoiceResponse = string[];
 
 export type UploadMutationOptions = {
-  onSuccess?: (data: TFileUpload, variables: FormData, context?: unknown) => void;
+  // [knauf] KK20-248 — target association may be asynchronous and must remain
+  // inside TanStack Query's mutation lifecycle so transport retry can observe failures.
+  onSuccess?: (data: TFileUpload, variables: FormData, context?: unknown) => void | Promise<void>;
+  // End [knauf]
   onMutate?: (variables: FormData) => void | Promise<unknown>;
   onError?: (error: unknown, variables: FormData, context?: unknown) => void;
 };

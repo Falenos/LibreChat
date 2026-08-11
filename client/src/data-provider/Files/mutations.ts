@@ -40,11 +40,17 @@ export const useUploadFileMutation = (
       return dataService.uploadFile(body, signal);
     },
     ...options,
-    onSuccess: (data, formData, context) => {
-      queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (_files) => [
-        data,
-        ...(_files ?? []),
-      ]);
+    // [knauf] KK20-248 — await target callbacks so their transient failures stay
+    // observable to the shared upload retry lifecycle.
+    onSuccess: async (data, formData, context) => {
+      // End [knauf]
+      // [knauf] KK20-248 — association retries reuse the upload's file_id; keep
+      // the global library cache idempotent when the success pipeline runs again.
+      queryClient.setQueryData<t.TFile[] | undefined>([QueryKeys.files], (_files) => {
+        const files = _files ?? [];
+        return files.some((file) => file.file_id === data.file_id) ? files : [data, ...files];
+      });
+      // End [knauf]
 
       const endpoint = formData.get('endpoint');
       const message_file = formData.get('message_file');
@@ -53,7 +59,9 @@ export const useUploadFileMutation = (
       const tool_resource = (formData.get('tool_resource') as string | undefined) ?? '';
 
       if (message_file === 'true') {
-        onSuccess?.(data, formData, context);
+        // [knauf] KK20-248 — see the async mutation seam above.
+        await onSuccess?.(data, formData, context);
+        // End [knauf]
         return;
       }
 
@@ -89,7 +97,9 @@ export const useUploadFileMutation = (
       }
 
       if (!assistant_id) {
-        onSuccess?.(data, formData, context);
+        // [knauf] KK20-248 — see the async mutation seam above.
+        await onSuccess?.(data, formData, context);
+        // End [knauf]
         return;
       }
 
@@ -133,7 +143,9 @@ export const useUploadFileMutation = (
           };
         },
       );
-      onSuccess?.(data, formData, context);
+      // [knauf] KK20-248 — see the async mutation seam above.
+      await onSuccess?.(data, formData, context);
+      // End [knauf]
     },
   });
 };
@@ -179,13 +191,18 @@ export const useDeleteFilesMutation = (
         .getQueryCache()
         .findAll({ queryKey: [QueryKeys.projectFiles] })
         .forEach((query) => {
-          queryClient.setQueryData<t.TChatProjectFilesResponse | undefined>(query.queryKey, (cached) => {
-            if (!cached?.files?.length) {
-              return cached;
-            }
-            const nextFiles = cached.files.filter((file) => !deletedIds.has(file.file_id));
-            return nextFiles.length === cached.files.length ? cached : { ...cached, files: nextFiles };
-          });
+          queryClient.setQueryData<t.TChatProjectFilesResponse | undefined>(
+            query.queryKey,
+            (cached) => {
+              if (!cached?.files?.length) {
+                return cached;
+              }
+              const nextFiles = cached.files.filter((file) => !deletedIds.has(file.file_id));
+              return nextFiles.length === cached.files.length
+                ? cached
+                : { ...cached, files: nextFiles };
+            },
+          );
         });
       // End [knauf]
 

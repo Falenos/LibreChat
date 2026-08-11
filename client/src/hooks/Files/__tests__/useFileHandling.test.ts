@@ -40,7 +40,7 @@ const mockUpdateFileById = jest.fn();
 const mockDeleteFileById = jest.fn();
 const mockRefetchQueries = jest.fn();
 let mockUploadOptions: {
-  onSuccess?: (data: Record<string, unknown>, body: FormData) => void;
+  onSuccess?: (data: Record<string, unknown>, body: FormData) => void | Promise<void>;
   onError?: (error: unknown, body: FormData) => void;
 } = {};
 const mockProcessFileForUpload = jest.fn(
@@ -599,8 +599,8 @@ describe('useFileHandling', () => {
       });
 
       const formData = mockMutate.mock.calls[0][0] as FormData;
-      act(() => {
-        mockUploadOptions.onSuccess?.(
+      await act(async () => {
+        await mockUploadOptions.onSuccess?.(
           {
             temp_file_id: formData.get('file_id'),
             file_id: 'accepted-file',
@@ -611,6 +611,93 @@ describe('useFileHandling', () => {
 
       expect(mockRefetchQueries).toHaveBeenCalledWith(DynamicQueryKeys.agentFiles('agent-123'));
     });
+
+    // [knauf] KK20-248 — non-agent targets reuse the full upload engine before association.
+    it('awaits a target callback inside the existing file-search upload pipeline', async () => {
+      const onUploadSuccess = jest.fn(async () => undefined);
+      mockMutate.mockImplementation(async (formData: FormData) => {
+        const data = {
+          temp_file_id: formData.get('file_id'),
+          file_id: 'project-file-1',
+          filename: 'project.pdf',
+        };
+        await mockUploadOptions.onSuccess?.(data, formData);
+      });
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() =>
+        useFileHandling({
+          endpointOverride: EModelEndpoint.agents,
+          endpointTypeOverride: EModelEndpoint.agents,
+          additionalMetadata: { tool_resource: EToolResources.file_search },
+          onUploadSuccess,
+        }),
+      );
+      const file = new File(['hello'], 'project.pdf', { type: 'application/pdf' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('message_file')).toBe('true');
+      expect(formData.get('tool_resource')).toBe(EToolResources.file_search);
+      expect(onUploadSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({ file_id: 'project-file-1' }),
+      );
+    });
+
+    it('retries a transient target callback inside the existing upload retry loop', async () => {
+      jest.useFakeTimers();
+      const transientError = { response: { status: 502 } };
+      const onUploadSuccess = jest
+        .fn<Promise<void>, []>()
+        .mockRejectedValueOnce(transientError)
+        .mockResolvedValueOnce(undefined);
+      mockMutate.mockImplementation(async (formData: FormData) => {
+        const data = {
+          temp_file_id: formData.get('file_id'),
+          file_id: 'project-file-1',
+          filename: 'project.pdf',
+        };
+        try {
+          await mockUploadOptions.onSuccess?.(data, formData);
+        } catch (error) {
+          mockUploadOptions.onError?.(error, formData);
+          throw error;
+        }
+      });
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() =>
+        useFileHandling({
+          endpointOverride: EModelEndpoint.agents,
+          additionalMetadata: { tool_resource: EToolResources.file_search },
+          onUploadSuccess,
+        }),
+      );
+      const file = new File(['hello'], 'project.pdf', { type: 'application/pdf' });
+      let upload!: Promise<void>;
+
+      await act(async () => {
+        upload = result.current.handleFiles([file], EToolResources.file_search);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(onUploadSuccess).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+        await upload;
+      });
+
+      expect(onUploadSuccess).toHaveBeenCalledTimes(2);
+      expect(mockUpdateFileById).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ progress: -1 }),
+        expect.anything(),
+      );
+      jest.useRealTimers();
+    });
+    // End [knauf]
 
     it('awaits HEIC conversion before uploading the converted file', async () => {
       const convertedFile = new File(['jpeg data'], 'photo.jpg', { type: 'image/jpeg' });
