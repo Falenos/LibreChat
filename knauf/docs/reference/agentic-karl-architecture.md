@@ -954,7 +954,7 @@ The workflow captures the image digest, GitOps revisions, rendered runtime diges
 
 ### Promote Tested Stage To Prod
 
-Workflow: `.github/workflows/promote_pipeline.yaml`
+Workflow: `.github/workflows/deploy_prod_pipeline.yaml`
 
 Production promotion requires a successful stage workflow run and its provenance artifact. It verifies that stage still matches the recorded digest/revisions/config, imports the exact digest into prod, updates prod app and worker GitOps in lock-step, refreshes ArgoCD, and runs the production health smoke.
 
@@ -1025,7 +1025,7 @@ Important source-of-truth files:
 | `agentic-karl-rag-api/app/routes/agent_routes.py`                   | Azure AI Search ingestion/query/delete routes                      |
 | `.github/workflows/release_pipeline.yaml`                           | Main release to dev                                                |
 | `.github/workflows/deploy_stage_pipeline.yaml`                      | Main app dev-to-stage deployment, E2E, optional k6, and provenance |
-| `.github/workflows/promote_pipeline.yaml`                           | Tested stage-to-prod promotion                                     |
+| `.github/workflows/deploy_prod_pipeline.yaml`                           | Tested stage-to-prod promotion                                     |
 | `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`      | RAG build and dev deployment                                       |
 | `agentic-karl-rag-api/.github/workflows/deploy_stage_pipeline.yaml` | RAG dev-to-stage deployment                                        |
 | `agentic-karl-rag-api/.github/workflows/promote_pipeline.yaml`      | RAG dev-to-prod promotion                                          |
@@ -1126,7 +1126,7 @@ Local source references:
 - `agentic-karl-rag-api/app/routes/agent_routes.py`
 - `agentic-karl/.github/workflows/release_pipeline.yaml`
 - `agentic-karl/.github/workflows/deploy_stage_pipeline.yaml`
-- `agentic-karl/.github/workflows/promote_pipeline.yaml`
+- `agentic-karl/.github/workflows/deploy_prod_pipeline.yaml`
 - `agentic-karl/.github/workflows/agk-deploy-smoke.yaml`
 - `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`
 - `agentic-karl-rag-api/.github/workflows/deploy_stage_pipeline.yaml`

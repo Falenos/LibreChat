@@ -246,7 +246,7 @@ Low-priority polish that didn't justify its own commit on this PR:
 | Cluster | AKS via ArgoCD | dev = `argocd-shared-dev.knauf.digital`, prod = `argocd-shared-prod.knauf.digital` |
 | ACR | `acrctshared001.azurecr.io` | `tools-non-prod/agentic-karl:<tag>` for dev, `tools-prod/agentic-karl:<tag>` for prod |
 
-The on-merge-to-main release pipeline does the full dev rollout end-to-end. Prod is gated behind a manual `workflow_dispatch` (`promote_pipeline.yaml`) that promotes the dev-tagged image to prod ACR and updates the prod values.
+The on-merge-to-main release pipeline does the full dev rollout end-to-end. Prod is gated behind a manual `workflow_dispatch` (`deploy_prod_pipeline.yaml`) that promotes the dev-tagged image to prod ACR and updates the prod values.
 
 ### What the dev values look like today (relevant slices)
 

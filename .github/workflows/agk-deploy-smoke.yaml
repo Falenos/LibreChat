@@ -11,7 +11,7 @@ on:
     paths:
       - .github/workflows/agk-deploy-smoke.yaml
       - .github/workflows/release_pipeline.yaml
-      - .github/workflows/promote_pipeline.yaml
+      - .github/workflows/deploy_prod_pipeline.yaml
   workflow_dispatch:
 
 permissions:

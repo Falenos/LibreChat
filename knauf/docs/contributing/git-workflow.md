@@ -81,7 +81,7 @@ Five test suites: `test:client:coverage`, `test:api`, `test:packages:api`, `test
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `release_pipeline.yaml` | PR merge to `main` | Build → push to ACR → ArgoCD deploy |
-| `promote_pipeline.yaml` | Manual dispatch | Promote between environments |
+| `deploy_prod_pipeline.yaml` | Manual dispatch | Promote between environments |
 | `test_pipeline.yaml` | PR | `test:coverage` via shared workflow (5 suites) |
 | `upstream-release-watcher.yml` | Weekday 08:00 / manual | Poll upstream releases, create tracking issues |
 | `seam-validator.yml` | PR to `main` | Validate `[knauf]` ↔ SEAMS.md via `seams.js` |
