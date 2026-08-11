@@ -4,6 +4,10 @@
 import fileSchema from './file';
 
 describe('file schema — KK20-195 async-indexing seam', () => {
+  test('persists an explicit physical storage source', () => {
+    expect(fileSchema.path('storageSource')).toBeDefined();
+  });
+
   test('carries knauf_upload_batch_id', () => {
     expect(fileSchema.path('knauf_upload_batch_id')).toBeDefined();
     expect(fileSchema.path('knauf_upload_finalized')).toBeDefined();

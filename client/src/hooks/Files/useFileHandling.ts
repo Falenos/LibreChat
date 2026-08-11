@@ -19,7 +19,12 @@ import {
   isKnaufTabularMimeType,
   // End [knauf]
 } from 'librechat-data-provider';
-import type { EModelEndpoint, TEndpointsConfig, TError } from 'librechat-data-provider';
+import type {
+  EModelEndpoint,
+  TEndpointsConfig,
+  TError,
+  TFileUpload,
+} from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import { logger, validateFiles, cachePreview, getCachedPreview, removePreviewEntry } from '~/utils';
@@ -46,7 +51,7 @@ import type { KnaufFileIndexing } from '~/knauf/common/fileIndexing';
 import { useUploadBeforeUnloadGuard } from '~/knauf/hooks/Files/useUploadBeforeUnloadGuard';
 // End [knauf]
 
-type UseFileHandling = {
+export type UseFileHandling = {
   fileSetter?: FileSetter;
   fileFilter?: (file: File) => boolean;
   additionalMetadata?: Record<string, string | undefined>;
@@ -54,6 +59,10 @@ type UseFileHandling = {
   endpointOverride?: EModelEndpoint | string;
   /** Overrides `endpointType` independently from `endpointOverride` */
   endpointTypeOverride?: EModelEndpoint | string;
+  // [knauf] KK20-248 — let non-agent targets associate a successful upload
+  // without duplicating validation, serialization, retries, or progress state.
+  onUploadSuccess?: (data: TFileUpload) => void | Promise<void>;
+  // End [knauf]
 };
 
 export type FileHandlingState = {
@@ -354,10 +363,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
 
   const uploadFile = useUploadFileMutation(
     {
-      onSuccess: (data) => {
+      onSuccess: async (data) => {
+        console.log('upload success', data);
+        // [knauf] KK20-248 — association stays inside the mutation lifecycle, so
+        // the existing idempotent transport retry also covers transient target failures.
+        await params?.onUploadSuccess?.(data);
+        // End [knauf]
         clearUploadTimer(data.temp_file_id);
         documentUploadAttemptsRef.current.delete(data.temp_file_id);
-        console.log('upload success', data);
         if (agent_id) {
           queryClient.refetchQueries([QueryKeys.agent, agent_id]);
           // [knauf] The agent-files query owns live indexing projections. Refetch

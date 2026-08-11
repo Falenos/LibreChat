@@ -1,5 +1,8 @@
 require('events').EventEmitter.defaultMaxListeners = 100;
 const { logger } = require('@librechat/data-schemas');
+// [knauf] NO-TICKET — title generation needs a fresh trace, not the active agent trace.
+const { context, ROOT_CONTEXT } = require('@opentelemetry/api');
+// End [knauf]
 const { getBufferString, HumanMessage } = require('@librechat/agents/langchain/messages');
 const {
   createRun,
@@ -53,9 +56,9 @@ const {
   appendYouTubeVideoParts,
   resolveYouTubeInjectionConfig,
 } = require('@librechat/api');
-// [knauf] NO-TICKET — retry Model Router's zero-usage generic refusal at the
-// current model boundary and remove its streamed placeholder before persist.
-const { createZeroUsageRefusalRetryHandler, stripRetriedGenericRefusal } = require('./callbacks');
+// [knauf] KK20-194 — retry Model Router refusals and output-limit stops at the
+// current model boundary, then remove the failed partial output before persist.
+const { createModelRetryHandler, stripRetriedModelOutput } = require('./callbacks');
 // End [knauf]
 // [knauf] KK20-199 — provider errors may contain request bodies, image data,
 // signed URLs, and identity fields. Keep only bounded diagnostic attributes.
@@ -1492,14 +1495,14 @@ class AgentClient extends BaseClient {
 
         /** @deprecated Agent Chain */
         config.configurable.last_agent_id = agents[agents.length - 1].id;
-        // [knauf] NO-TICKET — `raiseError` hands the narrow refusal signal to
-        // the SDK's fallback loop; completed tools are not executed again.
-        const refusalRetry = createZeroUsageRefusalRetryHandler({
+        // [knauf] KK20-194 — `raiseError` hands bounded refusal/truncation signals
+        // to the SDK fallback; completed tools are not executed again.
+        const modelRetry = createModelRetryHandler({
           userId: this.user ?? this.options.req.user?.id,
           messageId: this.responseMessageId,
           conversationId: this.conversationId,
         });
-        config.callbacks = [...(config.callbacks ?? []), refusalRetry.handler];
+        config.callbacks = [...(config.callbacks ?? []), modelRetry.handler];
         try {
           await run.processStream({ messages }, config, {
             callbacks: {
@@ -1507,8 +1510,8 @@ class AgentClient extends BaseClient {
             },
           });
         } finally {
-          if (refusalRetry.state.refusalCount > 0) {
-            this.contentParts = stripRetriedGenericRefusal(this.contentParts);
+          if (modelRetry.state.refusalCount > 0 || modelRetry.state.truncationCount > 0) {
+            this.contentParts = stripRetriedModelOutput(this.contentParts, modelRetry.state);
           }
         }
         // End [knauf]
@@ -1848,28 +1851,34 @@ class AgentClient extends BaseClient {
     });
 
     try {
-      const titleResult = await this.run.generateTitle({
-        provider,
-        clientOptions,
-        inputText: text,
-        contentParts: immediate ? [] : this.contentParts,
-        titleMethod: endpointConfig?.titleMethod,
-        titlePrompt: endpointConfig?.titlePrompt,
-        titlePromptTemplate: endpointConfig?.titlePromptTemplate,
-        chainOptions: {
-          runName: 'TitleRun',
-          signal: abortController.signal,
-          callbacks: [
-            {
-              handleLLMEnd,
+      // [knauf] NO-TICKET — `generateTitle` owns a deterministic `title-*` Langfuse
+      // trace, but @librechat/agents 3.2.65 otherwise prefers the concurrently
+      // active agent trace. Detach before the title handler creates its root span.
+      const titleResult = await context.with(ROOT_CONTEXT, () =>
+        this.run.generateTitle({
+          provider,
+          clientOptions,
+          inputText: text,
+          contentParts: immediate ? [] : this.contentParts,
+          titleMethod: endpointConfig?.titleMethod,
+          titlePrompt: endpointConfig?.titlePrompt,
+          titlePromptTemplate: endpointConfig?.titlePromptTemplate,
+          chainOptions: {
+            runName: 'TitleRun',
+            signal: abortController.signal,
+            callbacks: [
+              {
+                handleLLMEnd,
+              },
+            ],
+            configurable: {
+              thread_id: this.conversationId,
+              user_id: this.user ?? this.options.req.user?.id,
             },
-          ],
-          configurable: {
-            thread_id: this.conversationId,
-            user_id: this.user ?? this.options.req.user?.id,
           },
-        },
-      });
+        }),
+      );
+      // End [knauf]
 
       const collectedUsage = collectedMetadata.map((item) => {
         let input_tokens, output_tokens;

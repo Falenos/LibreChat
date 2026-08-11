@@ -846,6 +846,30 @@ describe('Azure crud.js - URL refresh tests', () => {
       expect(out).toBe(original);
     });
 
+    // [knauf] NO-TICKET — text context rows retain logical source but Azure owns their bytes.
+    it('refreshes according to storageSource when logical source is text', async () => {
+      getAzureContainerClient.mockResolvedValue({
+        getBlockBlobClient: jest.fn().mockReturnValue({ url: undefined }),
+      });
+      const expired = new Date(Date.now() - 3_600_000).toISOString();
+      const original = `https://test.blob.core.windows.net/files/uploads/user/context.pdf?se=${encodeURIComponent(
+        expired,
+      )}&sp=r&sig=redacted`;
+
+      await expect(
+        refreshAzureUrl({
+          source: 'text',
+          storageSource: 'azure_blob',
+          filepath: original,
+        }),
+      ).resolves.toBe(original);
+
+      expect(logger.warn).toHaveBeenCalledWith('[refreshAzureUrl] Azure URL refresh unavailable', {
+        operation: 'azure_file_refresh',
+      });
+    });
+    // End [knauf]
+
     // [knauf] KK20-199 — failed refresh diagnostics must not disclose the Blob path or SAS.
     it('does not log the signed URL or file identity when refresh is unavailable', async () => {
       getAzureContainerClient.mockResolvedValue({

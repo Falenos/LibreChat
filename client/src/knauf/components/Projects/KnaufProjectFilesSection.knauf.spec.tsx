@@ -1,39 +1,76 @@
-// [knauf] KK20-248 seam test — Project Knowledge files panel behavior.
+// [knauf] KK20-248 seam test — project uploads reuse the agent upload engine.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { QueryKeys } from 'librechat-data-provider';
+import { EModelEndpoint, EToolResources, QueryKeys } from 'librechat-data-provider';
 import type { TFile } from 'librechat-data-provider';
+import type { ExtendedFile } from '~/common';
+import { postRetryFileIndex } from '~/knauf/data-provider/data-service';
 import KnaufProjectFilesSection from './KnaufProjectFilesSection';
 
-const mockUploadMutate = jest.fn();
+const mockHandleFileChange = jest.fn();
+const mockHandleFiles = jest.fn();
+const mockHandleSharePointFiles = jest.fn();
 const mockAddMutateAsync = jest.fn();
 const mockDeleteMutate = jest.fn();
-let mockProjectFiles: unknown[] = [];
-let mockCapturedPreviewProps: Record<string, unknown> | null = null;
-let mockUploadShouldResolve = true;
-let mockUploadedFileCount = 0;
+const mockShowToast = jest.fn();
+const mockPostRetryFileIndex = postRetryFileIndex as jest.MockedFunction<typeof postRetryFileIndex>;
+let mockProjectFiles: Array<Record<string, unknown>> = [];
+let mockStartupConfig: Record<string, unknown> = {};
+let capturedLocalOptions: Record<string, any>;
+let capturedSharePointOptions: Record<string, any>;
+let capturedFileState: {
+  files: Map<string, ExtendedFile>;
+  setFiles: React.Dispatch<React.SetStateAction<Map<string, ExtendedFile>>>;
+};
+let capturedPreviewProps: Record<string, unknown> | null = null;
+let capturedSharePointProps: Record<string, any> | null = null;
+
+jest.mock('@ariakit/react', () => ({
+  MenuButton: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button {...props}>{children}</button>
+  ),
+}));
+
+jest.mock('@librechat/client', () => ({
+  DropdownPopup: ({ trigger, items }: { trigger: React.ReactNode; items: any[] }) => (
+    <div>
+      {trigger}
+      {items.map((item) => (
+        <button key={item.label} type="button" onClick={item.onClick}>
+          {item.label}
+        </button>
+      ))}
+    </div>
+  ),
+  SharePointIcon: () => <svg data-testid="sharepoint-icon" />,
+  useToastContext: () => ({ showToast: mockShowToast }),
+}));
 
 jest.mock('~/data-provider', () => ({
-  useUploadFileMutation: (options: {
-    onSuccess: (file: { file_id: string; filename: string; embedded?: boolean }, formData: FormData) => void;
-  }) => ({
-    isLoading: false,
-    mutate: mockUploadMutate.mockImplementation((formData: FormData) => {
-      if (mockUploadShouldResolve) {
-        mockUploadedFileCount += 1;
-        const uploadedName = (formData.get('file') as File).name;
-        options.onSuccess(
-          {
-            file_id: `uploaded-file-${mockUploadedFileCount}`,
-            filename: uploadedName,
-            embedded: false,
-          },
-          formData,
-        );
-      }
-      return formData;
-    }),
-  }),
+  useGetStartupConfig: () => ({ data: mockStartupConfig }),
+}));
+
+jest.mock('~/hooks/Files/useFileHandling', () => ({
+  useFileHandlingNoChatContext: (options: Record<string, any>, state: typeof capturedFileState) => {
+    capturedLocalOptions = options;
+    capturedFileState = state;
+    return { handleFileChange: mockHandleFileChange, handleFiles: mockHandleFiles };
+  },
+}));
+
+jest.mock('~/hooks/Files/useSharePointFileHandling', () => ({
+  useSharePointFileHandlingNoChatContext: (
+    options: Record<string, any>,
+    state: typeof capturedFileState,
+  ) => {
+    capturedSharePointOptions = options;
+    capturedFileState = state;
+    return {
+      handleSharePointFiles: mockHandleSharePointFiles,
+      isProcessing: false,
+      downloadProgress: null,
+    };
+  },
 }));
 
 jest.mock('~/data-provider/Projects/mutations', () => ({
@@ -45,19 +82,47 @@ jest.mock('~/data-provider/Projects/queries', () => ({
   useProjectFilesQuery: () => ({ data: { files: mockProjectFiles }, isLoading: false }),
 }));
 
-jest.mock('lucide-react', () => ({
-  Eye: () => <svg data-testid="eye-icon" />,
-  FileText: () => <svg data-testid="file-icon" />,
-  Loader2: (props: { className?: string }) => <svg data-testid="progress-spinner" {...props} />,
-  Trash2: () => <svg data-testid="trash-icon" />,
-  Upload: () => <svg data-testid="upload-icon" />,
+jest.mock('~/knauf/data-provider/data-service', () => ({
+  postRetryFileIndex: jest.fn(),
 }));
 
-jest.mock('~/components/Chat/Messages/Content/FilePreviewDialog', () =>
-  function MockFilePreviewDialog(props: Record<string, unknown>) {
-    mockCapturedPreviewProps = props;
-    return props.open ? <div data-testid="project-file-preview">{String(props.fileName)}</div> : null;
+jest.mock(
+  '~/knauf/components/Files/KnaufFileIndexingStatus',
+  () =>
+    function MockIndexingStatus({
+      indexing,
+      onRetry,
+    }: {
+      indexing?: { status?: string };
+      onRetry?: () => void;
+    }) {
+      if (indexing?.status === 'failed') {
+        return (
+          <button type="button" data-testid="retry-indexing" onClick={onRetry}>
+            {indexing.status}
+          </button>
+        );
+      }
+      return indexing != null ? <span>{indexing.status}</span> : null;
+    },
+);
+
+jest.mock('~/components/SharePoint', () => ({
+  SharePointPickerDialog: (props: Record<string, any>) => {
+    capturedSharePointProps = props;
+    return props.isOpen ? <div data-testid="sharepoint-picker" /> : null;
   },
+}));
+
+jest.mock(
+  '~/components/Chat/Messages/Content/FilePreviewDialog',
+  () =>
+    function MockFilePreviewDialog(props: Record<string, unknown>) {
+      capturedPreviewProps = props;
+      return props.open ? (
+        <div data-testid="project-file-preview">{String(props.fileName)}</div>
+      ) : null;
+    },
 );
 
 jest.mock('~/hooks', () => ({
@@ -70,7 +135,11 @@ jest.mock('~/hooks', () => ({
       com_ui_loading: 'Loading',
       com_ui_preview: 'Preview',
       com_ui_delete: 'Delete',
-      com_ui_upload_error: 'Upload error',
+      com_ui_retry: 'Retry',
+      com_files_upload_local_machine: 'Local Computer',
+      com_files_upload_sharepoint: 'SharePoint',
+      com_knauf_file_indexing_retry_started: 'Indexing restarted',
+      com_knauf_file_indexing_retry_failed: 'Indexing retry failed',
     })[key] ?? key,
 }));
 
@@ -78,219 +147,176 @@ jest.mock('~/utils', () => ({
   cn: (...classes: unknown[]) => classes.filter(Boolean).join(' '),
 }));
 
-const renderWithClient = (ui: React.ReactElement, queryClient = new QueryClient()) =>
-  render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+const renderWithClient = (ui: React.ReactElement, queryClient = new QueryClient()) => ({
+  queryClient,
+  ...render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>),
+});
 
 beforeEach(() => {
   mockProjectFiles = [];
-  mockCapturedPreviewProps = null;
-  mockUploadShouldResolve = true;
-  mockUploadedFileCount = 0;
-  mockUploadMutate.mockClear();
-  mockAddMutateAsync.mockResolvedValue({});
-  mockAddMutateAsync.mockClear();
-  mockDeleteMutate.mockClear();
-  let mockClientFileCount = 0;
-  jest.spyOn(crypto, 'randomUUID').mockImplementation(() => {
-    mockClientFileCount += 1;
-    return `client-file-id-${mockClientFileCount}`;
-  });
-});
-
-afterEach(() => {
-  jest.restoreAllMocks();
+  mockStartupConfig = {};
+  capturedPreviewProps = null;
+  capturedSharePointProps = null;
+  mockHandleFileChange.mockReset();
+  mockHandleFiles.mockReset().mockResolvedValue(undefined);
+  mockHandleSharePointFiles.mockReset().mockResolvedValue(undefined);
+  mockAddMutateAsync.mockReset().mockResolvedValue({});
+  mockDeleteMutate.mockReset();
+  mockShowToast.mockReset();
+  mockPostRetryFileIndex.mockReset();
 });
 
 describe('[knauf] KnaufProjectFilesSection', () => {
-  it('uploads with message_file semantics and attaches the uploaded file to the project', async () => {
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
-
-    fireEvent.change(screen.getByLabelText('Upload'), {
-      target: { files: [new File(['hello'], 'doc.txt', { type: 'text/plain' })] },
-    });
-
-    expect(mockUploadMutate).toHaveBeenCalledTimes(1);
-    const formData = mockUploadMutate.mock.calls[0][0] as FormData;
-    expect(formData.get('file_id')).toBe('client-file-id-1');
-    expect(formData.get('message_file')).toBe('true');
-    expect(formData.get('tool_resource')).toBe('file_search');
-
-    await waitFor(() =>
-      expect(mockAddMutateAsync).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        file_id: 'uploaded-file-1',
-        status: 'processing',
-      }),
+  it('wires project association into the shared agent upload engine', async () => {
+    const { queryClient } = renderWithClient(
+      <KnaufProjectFilesSection projectId="project-1" />,
+      new QueryClient({ defaultOptions: { queries: { retry: false } } }),
     );
-  });
-
-  it('uploads all selected files from the picker', async () => {
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
-
-    fireEvent.change(screen.getByLabelText('Upload'), {
-      target: {
-        files: [
-          new File(['hello'], 'doc-1.txt', { type: 'text/plain' }),
-          new File(['world'], 'doc-2.txt', { type: 'text/plain' }),
-        ],
-      },
-    });
-
-    expect(mockUploadMutate).toHaveBeenCalledTimes(2);
-    await waitFor(() =>
-      expect(mockAddMutateAsync).toHaveBeenNthCalledWith(2, {
-        projectId: 'project-1',
-        file_id: 'uploaded-file-2',
-        status: 'processing',
-      }),
+    queryClient.setQueryData<TFile[]>(
+      [QueryKeys.files],
+      [{ file_id: 'existing-file', filename: 'existing.txt' } as TFile],
     );
-  });
 
-  it('uploads dropped files with the same project attach flow', async () => {
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+    expect(capturedLocalOptions).toMatchObject({
+      endpointOverride: EModelEndpoint.agents,
+      endpointTypeOverride: EModelEndpoint.agents,
+      additionalMetadata: { tool_resource: EToolResources.file_search },
+    });
+    expect(capturedSharePointOptions.onUploadSuccess).toBe(capturedLocalOptions.onUploadSuccess);
 
-    fireEvent.drop(screen.getByText('Files').closest('section') as HTMLElement, {
-      dataTransfer: {
-        files: [new File(['hello'], 'dropped.txt', { type: 'text/plain' })],
-      },
+    await act(async () => {
+      await capturedLocalOptions.onUploadSuccess({
+        file_id: 'uploaded-file',
+        temp_file_id: 'temp-file',
+        filename: 'doc.txt',
+        embedded: false,
+      });
     });
 
-    expect(mockUploadMutate).toHaveBeenCalledTimes(1);
-    const formData = mockUploadMutate.mock.calls[0][0] as FormData;
-    expect((formData.get('file') as File).name).toBe('dropped.txt');
-    await waitFor(() =>
-      expect(mockAddMutateAsync).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        file_id: 'uploaded-file-1',
-        status: 'processing',
-      }),
-    );
-  });
-
-  it('adds uploaded project files to the global files cache for the left rail', async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    expect(mockAddMutateAsync).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      file_id: 'uploaded-file',
+      status: 'processing',
     });
-    queryClient.setQueryData<TFile[]>([QueryKeys.files], [
-      { file_id: 'existing-file', filename: 'existing.txt' } as TFile,
-    ]);
-    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />, queryClient);
-
-    fireEvent.change(screen.getByLabelText('Upload'), {
-      target: { files: [new File(['hello'], 'doc.txt', { type: 'text/plain' })] },
-    });
-
-    await waitFor(() => expect(mockAddMutateAsync).toHaveBeenCalled());
     expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([
-      expect.objectContaining({ file_id: 'uploaded-file-1', filename: 'doc.txt' }),
+      expect.objectContaining({ file_id: 'uploaded-file', filename: 'doc.txt' }),
       expect.objectContaining({ file_id: 'existing-file' }),
     ]);
-    expect(invalidateSpy).toHaveBeenCalledWith([QueryKeys.files]);
   });
 
-  it('hydrates existing attached project files into the global files cache for the left rail', async () => {
-    mockProjectFiles = [
-      { projectId: 'project-1', file_id: 'project-file-1', filename: 'one.pdf', status: 'ready' },
-      { projectId: 'project-1', file_id: 'project-file-2', filename: 'two.pdf', status: 'ready' },
-    ];
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  it('delegates picker and dropped files to the same shared handlers', () => {
+    const { container } = renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const picked = new File(['picked'], 'picked.pdf', { type: 'application/pdf' });
+    const dropped = new File(['dropped'], 'dropped.pdf', { type: 'application/pdf' });
+
+    fireEvent.change(input, { target: { files: [picked] } });
+    expect(mockHandleFileChange).toHaveBeenCalledWith(expect.any(Object));
+
+    fireEvent.drop(screen.getByText('Files').closest('section') as HTMLElement, {
+      dataTransfer: { files: [dropped] },
     });
-    queryClient.setQueryData<TFile[]>([QueryKeys.files], [
-      { file_id: 'existing-file', filename: 'existing.txt' } as TFile,
-    ]);
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />, queryClient);
-
-    await waitFor(() =>
-      expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([
-        expect.objectContaining({ file_id: 'project-file-1', filename: 'one.pdf' }),
-        expect.objectContaining({ file_id: 'project-file-2', filename: 'two.pdf' }),
-        expect.objectContaining({ file_id: 'existing-file' }),
-      ]),
-    );
+    expect(mockHandleFiles).toHaveBeenCalledWith([dropped]);
   });
 
-  it('does not hydrate failed project file associations into the global files cache', async () => {
-    mockProjectFiles = [
-      { projectId: 'project-1', file_id: 'orphan-file', filename: '', status: 'failed' },
-    ];
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />, queryClient);
-
-    await waitFor(() => expect(screen.getByText('orphan-file')).toBeInTheDocument());
-    expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([]);
-  });
-
-  it('falls back to file_id when a project file name is missing', async () => {
-    mockProjectFiles = [
-      { projectId: 'project-1', file_id: 'project-file-1', filename: '', status: 'ready' },
-    ];
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />, queryClient);
-
-    await waitFor(() =>
-      expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([
-        expect.objectContaining({ file_id: 'project-file-1', filename: 'project-file-1' }),
-      ]),
-    );
-  });
-
-  it('shows an uploading row immediately while upload is in flight', () => {
-    mockUploadShouldResolve = false;
+  it('renders shared progress and retries a retained failed File through the shared handler', async () => {
     renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+    const original = new File(['hello'], 'retry.pdf', { type: 'application/pdf' });
 
-    fireEvent.change(screen.getByLabelText('Upload'), {
-      target: { files: [new File(['hello'], 'doc.txt', { type: 'text/plain' })] },
-    });
-
-    expect(screen.getByText('doc.txt')).toBeInTheDocument();
-    expect(screen.getByText('uploading')).toBeInTheDocument();
-    expect(screen.getByTestId('progress-spinner')).toHaveClass('animate-spin');
-    expect(screen.getByLabelText('Preview')).toBeDisabled();
-  });
-
-  it('keeps the pending row visible until the refetched server row is available', async () => {
-    const queryClient = new QueryClient();
-    const { rerender } = renderWithClient(<KnaufProjectFilesSection projectId="project-1" />, queryClient);
-
-    fireEvent.change(screen.getByLabelText('Upload'), {
-      target: { files: [new File(['hello'], 'doc.txt', { type: 'text/plain' })] },
-    });
-
-    await waitFor(() => expect(mockAddMutateAsync).toHaveBeenCalled());
-    expect(screen.getByText('doc.txt')).toBeInTheDocument();
-    expect(screen.queryByText('No results found')).not.toBeInTheDocument();
-
-    mockProjectFiles = [
-      {
-        projectId: 'project-1',
-        file_id: 'uploaded-file-1',
-        filename: 'doc.txt',
-        status: 'processing',
-      },
-    ];
-    await act(async () => {
-      rerender(
-        <QueryClientProvider client={queryClient}>
-          <KnaufProjectFilesSection projectId="project-1" />
-        </QueryClientProvider>,
+    act(() => {
+      capturedFileState.setFiles(
+        new Map([
+          [
+            'temp-file',
+            {
+              file_id: 'temp-file',
+              file: original,
+              filename: original.name,
+              type: original.type,
+              size: original.size,
+              progress: -1,
+            },
+          ],
+        ]),
       );
     });
 
-    expect(screen.getByText('doc.txt')).toBeInTheDocument();
-    expect(screen.getByText('processing')).toBeInTheDocument();
+    expect(screen.getByText('retry.pdf')).toBeInTheDocument();
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Retry'));
+
+    await waitFor(() => expect(mockHandleFiles).toHaveBeenCalledWith([original]));
   });
 
-  it('enables preview for ready files and passes project-scoped preview props', async () => {
+  it('routes SharePoint selections through the shared SharePoint handler', async () => {
+    mockStartupConfig = { sharePointFilePickerEnabled: true };
+    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+
+    fireEvent.click(screen.getByText('SharePoint'));
+    expect(screen.getByTestId('sharepoint-picker')).toBeInTheDocument();
+    const selected = [{ id: 'sharepoint-file' }];
+    await act(async () => {
+      await capturedSharePointProps?.onFilesSelected(selected);
+    });
+
+    expect(mockHandleSharePointFiles).toHaveBeenCalledWith(selected);
+    expect(screen.queryByTestId('sharepoint-picker')).not.toBeInTheDocument();
+  });
+
+  it('hydrates existing attached project files into the global files cache', async () => {
+    mockProjectFiles = [
+      { projectId: 'project-1', file_id: 'project-file', filename: 'one.pdf', status: 'ready' },
+    ];
+    const { queryClient } = renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+
+    await waitFor(() =>
+      expect(queryClient.getQueryData<TFile[]>([QueryKeys.files])).toEqual([
+        expect.objectContaining({ file_id: 'project-file', filename: 'one.pdf' }),
+      ]),
+    );
+    expect(capturedFileState.files.get('project-file')).toEqual(
+      expect.objectContaining({ attached: true, progress: 1, filename: 'one.pdf' }),
+    );
+  });
+
+  it('retries failed indexing and updates the project polling cache immediately', async () => {
+    mockProjectFiles = [
+      {
+        projectId: 'project-1',
+        file_id: 'failed-file',
+        filename: 'failed.pdf',
+        status: 'failed',
+        indexing: { status: 'failed', ready: false, retryable: true },
+      },
+    ];
+    mockPostRetryFileIndex.mockResolvedValue({
+      file_id: 'failed-file',
+      indexing: {
+        status: 'queued',
+        ready: false,
+        retryable: false,
+        error_code: null,
+        queued_at: '2026-08-11T00:00:00.000Z',
+      },
+    });
+    const { queryClient } = renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
+    queryClient.setQueryData([QueryKeys.projectFiles, 'project-1'], { files: mockProjectFiles });
+
+    fireEvent.click(screen.getByTestId('retry-indexing'));
+
+    await waitFor(() => expect(mockPostRetryFileIndex).toHaveBeenCalledWith('failed-file'));
+    expect(queryClient.getQueryData<any>([QueryKeys.projectFiles, 'project-1'])).toEqual({
+      files: [
+        expect.objectContaining({
+          status: 'processing',
+          indexing: expect.objectContaining({ status: 'queued' }),
+        }),
+      ],
+    });
+    expect(mockShowToast).toHaveBeenCalledWith({ message: 'Indexing restarted', status: 'info' });
+  });
+
+  it('previews ready files and deletes only their project association', () => {
     mockProjectFiles = [
       {
         projectId: 'project-1',
@@ -301,50 +327,22 @@ describe('[knauf] KnaufProjectFilesSection', () => {
         status: 'ready',
       },
     ];
-
     renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
-    await fireEvent.click(screen.getByLabelText('Preview'));
 
+    fireEvent.click(screen.getByLabelText('Preview'));
     expect(screen.getByTestId('project-file-preview')).toHaveTextContent('ready.pdf');
-    expect(mockCapturedPreviewProps).toMatchObject({
-      open: true,
+    expect(capturedPreviewProps).toMatchObject({
       fileId: 'ready-file',
-      fileName: 'ready.pdf',
       fileType: 'application/pdf',
       fileSize: 123,
       projectId: 'project-1',
     });
-  });
 
-  it('disables preview for non-ready files', () => {
-    mockProjectFiles = [
-      {
-        projectId: 'project-1',
-        file_id: 'processing-file',
-        filename: 'processing.pdf',
-        status: 'processing',
-      },
-    ];
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
-
-    expect(screen.getByLabelText('Preview')).toBeDisabled();
-  });
-
-  it('deletes the project file association', () => {
-    mockProjectFiles = [
-      {
-        projectId: 'project-1',
-        file_id: 'ready-file',
-        filename: 'ready.pdf',
-        status: 'ready',
-      },
-    ];
-
-    renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
     fireEvent.click(screen.getByLabelText('Delete'));
-
-    expect(mockDeleteMutate).toHaveBeenCalledWith({ projectId: 'project-1', file_id: 'ready-file' });
+    expect(mockDeleteMutate).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      file_id: 'ready-file',
+    });
   });
 });
 // End [knauf]

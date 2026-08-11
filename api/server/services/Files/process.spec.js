@@ -209,6 +209,7 @@ const {
 } = require('librechat-data-provider');
 const { mergeFileConfig } = require('librechat-data-provider');
 const { checkCapability } = require('~/server/services/Config');
+const { getFileStrategy } = require('~/server/utils/getFileStrategy');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const db = require('~/models');
 const {
@@ -290,6 +291,57 @@ describe('processAgentFileUpload', () => {
   });
 
   describe('OCR strategy selection', () => {
+    // [knauf] NO-TICKET — context bytes must be promoted before stable metadata is exposed.
+    test('keeps context downloads readable after the upload replica staging directory disappears', async () => {
+      const fs = require('node:fs');
+      const os = require('node:os');
+      const path = require('node:path');
+      const replicaA = fs.mkdtempSync(path.join(os.tmpdir(), 'agk-replica-a-'));
+      const durableStore = fs.mkdtempSync(path.join(os.tmpdir(), 'agk-durable-store-'));
+      const stagedPath = path.join(replicaA, 'upload.pdf');
+      const durablePath = path.join(durableStore, 'file-uuid-123.pdf');
+      fs.writeFileSync(stagedPath, 'durable context bytes');
+
+      try {
+        const parseDocument = jest.fn().mockResolvedValue({
+          text: 'extracted context',
+          bytes: 17,
+          filepath: 'parser://temporary-result',
+        });
+        const uploadDurable = jest.fn(async ({ file }) => {
+          await fs.promises.copyFile(file.path, durablePath);
+          return { filepath: durablePath, bytes: (await fs.promises.stat(durablePath)).size };
+        });
+        getFileStrategy.mockReturnValueOnce(FileSources.azure_blob);
+        getStrategyFunctions.mockImplementation((source) =>
+          source === FileSources.document_parser
+            ? { handleFileUpload: parseDocument }
+            : { handleFileUpload: uploadDurable },
+        );
+        const req = makeReq({ mimetype: PDF_MIME, ocrConfig: null });
+        req.config.fileStrategy = FileSources.azure_blob;
+        req.file.path = stagedPath;
+        req.file.originalname = 'upload.pdf';
+
+        await processAgentFileUpload({ req, res: mockRes, metadata: makeMetadata() });
+
+        const stored = db.createFile.mock.calls.at(-1)[0];
+        fs.rmSync(replicaA, { recursive: true, force: true });
+        expect(stored).toEqual(
+          expect.objectContaining({
+            source: FileSources.text,
+            storageSource: FileSources.azure_blob,
+            filepath: durablePath,
+          }),
+        );
+        expect(await fs.promises.readFile(stored.filepath, 'utf8')).toBe('durable context bytes');
+      } finally {
+        fs.rmSync(replicaA, { recursive: true, force: true });
+        fs.rmSync(durableStore, { recursive: true, force: true });
+      }
+    });
+    // End [knauf]
+
     // [knauf] NO-TICKET — uploaded SVG source is preserved for artifact rendering and AI context.
     test('stores exact SVG source as a message text attachment', async () => {
       const source =
@@ -1184,6 +1236,33 @@ describe('processDeleteRequest', () => {
     expect(db.deleteFiles).toHaveBeenCalledWith(['expired-file']);
     expect(result).toEqual({ deletedFileIds: ['expired-file'], failedFileIds: [] });
   });
+
+  // [knauf] NO-TICKET — text context keeps logical source while durable storage owns cleanup.
+  it('deletes text context bytes through their physical storage source', async () => {
+    const deleteFile = jest.fn().mockResolvedValue(undefined);
+    getStrategyFunctions.mockReturnValue({ deleteFile });
+
+    await processDeleteRequest({
+      req: { body: {}, config: {}, user: { id: 'user-123', tenantId: 'tenant-a' } },
+      files: [
+        {
+          file_id: 'context-file',
+          filepath: 'https://storage.example/files/context-file.pdf',
+          source: FileSources.text,
+          storageSource: FileSources.azure_blob,
+        },
+      ],
+    });
+
+    expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.azure_blob);
+    expect(deleteFile).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ file_id: 'context-file' }),
+      undefined,
+    );
+    expect(db.deleteFiles).toHaveBeenCalledWith(['context-file']);
+  });
+  // End [knauf]
 
   // [knauf] KK20-195 WP3d — deleted rows settle their FileAsset ledger entry.
   it('tombstones and removes the asset when the deleted row was its last reference (WP3d)', async () => {

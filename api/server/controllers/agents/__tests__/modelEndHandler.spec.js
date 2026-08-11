@@ -26,10 +26,11 @@ const { AIMessage, HumanMessage, ToolMessage } = require('@librechat/agents/lang
 
 const {
   ModelEndHandler,
-  createZeroUsageRefusalRetryHandler,
+  createModelRetryHandler,
+  isOutputTruncated,
   isZeroUsageGenericRefusal,
   stampLangfuseResponseModel,
-  stripRetriedGenericRefusal,
+  stripRetriedModelOutput,
 } = require('../callbacks');
 
 const buildGraph = () => ({
@@ -251,7 +252,7 @@ describe('ModelEndHandler — Vertex thoughtSignature capture (issue #13006 foll
   });
 });
 
-// [knauf] NO-TICKET — regression coverage for Model Router's successful-looking refusal.
+// [knauf] KK20-194 — regression coverage for bounded model recovery.
 describe('zero-usage generic refusal recovery', () => {
   const refusalResult = {
     generations: [
@@ -285,7 +286,7 @@ describe('zero-usage generic refusal recovery', () => {
       }),
     ).toBe(false);
 
-    const { handler, state } = createZeroUsageRefusalRetryHandler({ messageId: 'm1' });
+    const { handler, state } = createModelRetryHandler({ messageId: 'm1' });
     expect(() => handler.handleLLMEnd(refusalResult)).toThrow('zero_usage_generic_refusal');
     expect(state.refusalCount).toBe(1);
     expect(handler.raiseError).toBe(true);
@@ -293,10 +294,13 @@ describe('zero-usage generic refusal recovery', () => {
 
   it('removes the failed streamed refusal while preserving fallback text', () => {
     expect(
-      stripRetriedGenericRefusal([
-        { type: 'text', text: "I'm sorry, but I cannot assist with that request." },
-        { type: 'text', text: 'Here is the requested chart.' },
-      ]),
+      stripRetriedModelOutput(
+        [
+          { type: 'text', text: "I'm sorry, but I cannot assist with that request." },
+          { type: 'text', text: 'Here is the requested chart.' },
+        ],
+        { refusalCount: 1, truncatedTexts: [] },
+      ),
     ).toEqual([{ type: 'text', text: 'Here is the requested chart.' }]);
   });
 
@@ -324,7 +328,7 @@ describe('zero-usage generic refusal recovery', () => {
   });
 
   it('repairs only structurally invalid Model Router tool history', () => {
-    const { handler } = createZeroUsageRefusalRetryHandler({ messageId: 'm1' });
+    const { handler } = createModelRetryHandler({ messageId: 'm1' });
     const valid = [
       new HumanMessage('question'),
       new AIMessage({
@@ -352,6 +356,104 @@ describe('zero-usage generic refusal recovery', () => {
 
     expect(orphaned).toHaveLength(1);
     expect(orphaned[0].getType()).toBe('human');
+  });
+});
+
+describe('output-limit recovery', () => {
+  const truncatedResult = {
+    generations: [
+      [
+        {
+          message: {
+            content: 'Partial answer that must be discarded.',
+            response_metadata: {
+              incomplete_details: { reason: 'max_output_tokens' },
+            },
+          },
+        },
+      ],
+    ],
+  };
+
+  it('retries a truncated turn once with a concise replacement instruction', () => {
+    expect(isOutputTruncated(truncatedResult)).toBe(true);
+    expect(
+      isOutputTruncated({
+        generations: [
+          [
+            {
+              message: {
+                response_metadata: { incomplete_details: { reason: 'content_filter' } },
+              },
+            },
+          ],
+        ],
+      }),
+    ).toBe(false);
+
+    const { handler, state } = createModelRetryHandler({ messageId: 'm1' });
+    const initialMessages = [new HumanMessage('Explain this.')];
+    handler.handleChatModelStart(null, [initialMessages], null, null, null, {
+      ls_model_name: 'model-router',
+    });
+    expect(initialMessages).toHaveLength(1);
+
+    expect(() => handler.handleLLMEnd(truncatedResult)).toThrow('output_truncated');
+    expect(state.truncationCount).toBe(1);
+
+    const retryMessages = [new HumanMessage('Explain this.')];
+    handler.handleChatModelStart(null, [retryMessages], null, null, null, {
+      ls_model_name: 'model-router',
+    });
+    expect(retryMessages).toHaveLength(2);
+    expect(retryMessages.at(-1).content).toMatch(/complete replacement/i);
+    expect(retryMessages.at(-1).content).toMatch(/300 words/i);
+  });
+
+  it('removes the failed partial text before persisting the retry', () => {
+    expect(
+      stripRetriedModelOutput(
+        [{ type: 'text', text: 'Partial answer that must be discarded.Complete answer.' }],
+        {
+          refusalCount: 0,
+          truncatedTexts: ['Partial answer that must be discarded.'],
+          truncatedToolCallIds: [],
+        },
+      ),
+    ).toEqual([{ type: 'text', text: 'Complete answer.' }]);
+  });
+
+  it('removes a truncated tool call before persisting the retry', () => {
+    const result = {
+      generations: [
+        [
+          {
+            message: {
+              content: '',
+              tool_calls: [{ id: 'partial-call', name: 'image_gen_oai', args: {} }],
+              response_metadata: {
+                incomplete_details: { reason: 'max_output_tokens' },
+              },
+            },
+          },
+        ],
+      ],
+    };
+    const { handler, state } = createModelRetryHandler({ messageId: 'm1' });
+
+    expect(() => handler.handleLLMEnd(result)).toThrow('output_truncated');
+    expect(
+      stripRetriedModelOutput(
+        [
+          {
+            type: 'tool_call',
+            tool_call: { id: 'partial-call', name: 'image_gen_oai', args: '{}' },
+          },
+          { type: 'text', text: 'Complete retry.' },
+        ],
+        state,
+      ),
+    ).toEqual([{ type: 'text', text: 'Complete retry.' }]);
   });
 });
 // End [knauf]
@@ -479,6 +581,46 @@ describe('[knauf] ModelEndHandler — Azure content filter', () => {
     const collectedUsage = await handleWith({ finish_reason: 'content_filter' });
     expect(collectedUsage).toHaveLength(1);
     expect(collectedUsage[0]).toMatchObject({ input_tokens: 10, output_tokens: 5 });
+  });
+});
+// End [knauf]
+
+// [knauf] NO-TICKET — make output-cap truncation visible in production logs.
+describe('[knauf] ModelEndHandler — incomplete output', () => {
+  const { logger } = require('@librechat/data-schemas');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('warns with usage and identifiers when the provider reaches its output cap', async () => {
+    const handler = new ModelEndHandler([]);
+
+    await handler.handle(
+      'on_chat_model_end',
+      {
+        output: {
+          usage_metadata: { input_tokens: 100, output_tokens: 8192, total_tokens: 8292 },
+          response_metadata: {
+            status: 'incomplete',
+            incomplete_details: { reason: 'max_output_tokens' },
+          },
+        },
+      },
+      { ls_model_name: 'model-router', run_id: 'r1', user_id: 'u1', thread_id: 'c1' },
+      buildGraph(),
+    );
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ModelEndHandler] Completion reached its output limit',
+      expect.objectContaining({
+        userId: 'u1',
+        messageId: 'r1',
+        conversationId: 'c1',
+        outputTokens: 8192,
+        incompleteDetails: { reason: 'max_output_tokens' },
+      }),
+    );
   });
 });
 // End [knauf]

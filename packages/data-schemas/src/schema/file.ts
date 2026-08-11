@@ -45,6 +45,11 @@ const file: Schema<IMongoFile> = new Schema(
     storageRegion: {
       type: String,
     },
+    // [knauf] NO-TICKET — physical owner when `source` carries logical processing semantics.
+    storageSource: {
+      type: String,
+    },
+    // End [knauf]
     object: {
       type: String,
       required: true,

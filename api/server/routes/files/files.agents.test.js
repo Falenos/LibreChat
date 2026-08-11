@@ -3,7 +3,7 @@ const request = require('supertest');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 const { MongoMemoryServer } = require('mongodb-memory-server');
-const { createMethods, SystemCapabilities } = require('@librechat/data-schemas');
+const { createMethods, SystemCapabilities, logger } = require('@librechat/data-schemas');
 const {
   SystemRoles,
   AccessRoleIds,
@@ -70,7 +70,7 @@ jest.mock('fs', () => {
   };
 });
 
-const { processAgentFileUpload } = require('~/server/services/Files/process');
+const { filterFile, processAgentFileUpload } = require('~/server/services/Files/process');
 
 // Import the router
 const router = require('~/server/routes/files/files');
@@ -750,6 +750,15 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
   const router = require('./files');
 
   const tmpFiles = [];
+
+  beforeEach(() => {
+    jest.spyOn(logger, 'info').mockImplementation(() => {});
+    jest.spyOn(logger, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
   const writeTmp = (buf, name) => {
     const file = path.join(os.tmpdir(), `knauf-files-enc-${uuidv4()}-${name}`);
     fs.writeFileSync(file, buf);
@@ -817,6 +826,67 @@ describe('[knauf] POST /files — encrypted-file rejection (call-site wiring)', 
     expect(processAgentFileUpload).not.toHaveBeenCalled();
   });
 
+  // End [knauf]
+
+  // [knauf] NO-TICKET — payload-size rejections are expected client input, not server faults.
+  it.each([
+    'com_knauf_error_file_too_large_document',
+    'com_knauf_error_file_too_large_data',
+    'com_knauf_error_file_too_large_image',
+    'com_knauf_error_file_too_large_svg',
+  ])('returns 413 and a bounded non-error log for %s', async (code) => {
+    const filePath = writeTmp(Buffer.from('oversized fixture'), 'oversized.bin');
+    const app = buildApp({
+      originalname: 'oversized.bin',
+      mimetype: 'application/octet-stream',
+      size: 18,
+      path: filePath,
+    });
+    filterFile.mockImplementationOnce(() => {
+      throw new Error(code);
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({ message: code, code });
+    expect(logger.info).toHaveBeenCalledWith('[/files] Rejected oversized upload', {
+      operation: 'file_upload',
+      category: 'payload_too_large',
+      code,
+    });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps unexpected processing failures at 500/error', async () => {
+    const filePath = writeTmp(Buffer.from('failure fixture'), 'failure.bin');
+    const app = buildApp({
+      originalname: 'failure.bin',
+      mimetype: 'application/octet-stream',
+      size: 15,
+      path: filePath,
+    });
+    filterFile.mockImplementationOnce(() => {
+      throw new Error('unexpected processing failure');
+    });
+
+    const response = await request(app)
+      .post('/files')
+      .send({ endpoint: 'azureOpenAI', file_id: uuidv4() });
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('[/files] File processing failed'),
+      expect.objectContaining({ operation: 'file_upload' }),
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+  // End [knauf]
+
+  // [knauf] KK20-190 — PDF access remains delegated to the isolated probe.
   it('leaves PDF encryption decisions to the PDF access probe', async () => {
     const permissionEncryptedPdf = Buffer.from(
       '%PDF-1.6\n... /Encrypt 1 0 R ... trailer\n%%EOF',

@@ -12,6 +12,7 @@ jest.mock('~/app/clients/prompts', () => ({
 // End [knauf]
 
 const { Providers } = require('@librechat/agents');
+const { context, ROOT_CONTEXT } = require('@opentelemetry/api');
 const { Constants, ContentTypes, EModelEndpoint } = require('librechat-data-provider');
 const AgentClient = require('./client');
 
@@ -176,6 +177,21 @@ describe('AgentClient - titleConvo', () => {
       expect(call.contentParts).toEqual([]);
       expect(call.inputText).toBe('Hello there');
     });
+
+    // [knauf] NO-TICKET — title tracing must not inherit the concurrently active agent trace.
+    it('starts title generation outside the active agent trace context', async () => {
+      const contextWithSpy = jest.spyOn(context, 'with');
+
+      await client.titleConvo({
+        text: 'Hello there',
+        abortController: new AbortController(),
+        immediate: true,
+      });
+
+      expect(contextWithSpy).toHaveBeenCalledWith(ROOT_CONTEXT, expect.any(Function));
+      contextWithSpy.mockRestore();
+    });
+    // End [knauf]
 
     it('uses live contentParts in non-immediate (final) mode', async () => {
       client.contentParts = [{ type: 'text', text: 'Full response' }];

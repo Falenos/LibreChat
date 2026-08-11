@@ -877,7 +877,11 @@ async function refreshAzureFileUrls(files, batchUpdateFiles, bufferSeconds = 360
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    if (!file?.file_id || file.source !== FileSources.azure_blob || !file.filepath) {
+    if (
+      !file?.file_id ||
+      (file.storageSource ?? file.source) !== FileSources.azure_blob ||
+      !file.filepath
+    ) {
       continue;
     }
     if (!needsRefreshAzure(file.filepath, bufferSeconds)) {
@@ -925,10 +929,13 @@ async function refreshAzureFileUrls(files, batchUpdateFiles, bufferSeconds = 360
  * @returns {Promise<string>} A promise that resolves to the (possibly refreshed) Azure Blob file URL.
  */
 async function refreshAzureUrl(fileObj, bufferSeconds = 3600) {
-  if (!fileObj || fileObj.source !== FileSources.azure_blob || !fileObj.filepath) {
+  if (
+    !fileObj ||
+    (fileObj.storageSource ?? fileObj.source) !== FileSources.azure_blob ||
+    !fileObj.filepath
+  ) {
     return fileObj?.filepath || '';
   }
-
   if (!needsRefreshAzure(fileObj.filepath, bufferSeconds)) {
     return fileObj.filepath;
   }

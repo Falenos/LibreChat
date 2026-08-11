@@ -42,7 +42,6 @@ interface SpecPreset {
   promptPrefix?: string;
   maxContextTokens?: number;
   maxTokens?: number;
-  verbosity?: string;
 }
 interface ModelSpec {
   name: string;
@@ -82,19 +81,31 @@ describe('[knauf] librechat.yaml — model spec sanity', () => {
 });
 
 describe('[knauf] librechat.yaml — default KARL response latency', () => {
-  it('uses task-sized prose budgets without truncating requested source', () => {
+  it('uses task-sized prose ceilings without truncating requested source', () => {
     const karl = specs.find((spec) => spec.name === 'karl');
     const prompt = karl?.preset?.promptPrefix ?? '';
 
-    expect(karl?.preset).toMatchObject({ maxTokens: 8192, verbosity: 'low' });
-    expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*40[–-]120 words/i);
-    expect(prompt).toMatch(/ordinary questions[^\n]*80[–-]180 words/i);
-    expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*150[–-]300 words/i);
+    expect(karl?.preset).toMatchObject({ maxTokens: 8192 });
+    expect(karl?.preset).not.toHaveProperty('verbosity');
+    expect(prompt).toMatch(/simple fact[^\n]*1[–-]3 sentences[^\n]*at most 80 words/i);
+    expect(prompt).toMatch(/ordinary question[^\n]*at most 160 words/i);
+    expect(prompt).toMatch(
+      /comparison, troubleshooting request, or decision[^\n]*at most 300 words/i,
+    );
+    expect(prompt).toMatch(/ceilings, not targets/i);
+    expect(prompt).toMatch(/answer the user's exact question first[^\n]*stop when it is answered/i);
+    expect(prompt).toMatch(/preserve the conclusion[^\n]*evidence[^\n]*material caveat/i);
+    expect(prompt).toMatch(
+      /omit introductions[^\n]*generic background[^\n]*repeated explanations/i,
+    );
+    expect(prompt).toMatch(/tool or source availability never justifies extra detail/i);
+    expect(prompt).toMatch(/why is the sky blue[^\n]*1[–-]3 sentence/i);
+    expect(prompt).not.toMatch(/narrative style/i);
     expect(prompt).toMatch(/exceed 300 words only when the user requests detail/i);
-    expect(prompt).toMatch(/do not repeat facts in a concluding summary/i);
-    expect(prompt).toMatch(/do not append a follow-up offer unless clarification/i);
     expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
     expect(prompt).toMatch(/never truncate valid source/i);
+    expect(prompt).toMatch(/complete all search calls before emitting any user-visible text/i);
+    expect(prompt).toMatch(/stream only the final answer after searching finishes/i);
   });
 });
 

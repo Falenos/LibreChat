@@ -22,6 +22,17 @@ Last verified: 2026-07-14.
 - Before adding a Terraform root, backend key, GitHub workflow, or pipeline state, prove that no existing root/workflow owns the resource. Default to the smallest existing layer that owns the lifecycle.
 - For external providers such as Datadog, do not create a separate root/workflow just because the provider is not Azure. State ownership follows the app/platform lifecycle, not the vendor.
 
+### Azure Model Router request invariant
+
+Verified in dev on 2026-08-11:
+
+- `model-router-chat` selects from heterogeneous Foundry model deployments. A request option is safe only when every router candidate accepts the same option and value.
+- Never add `verbosity` to the default KARL model spec, Azure endpoint defaults, agent parameters, or the resulting Responses request without an end-to-end compatibility test against every configured candidate.
+- In particular, `verbosity: low` becomes `text.verbosity: low` and has repeatedly caused Foundry HTTP 400 `unsupported_value` failures before tools such as `image_gen_oai` can run. It is not a latency optimization for this router.
+- Keep concise behavior in the shared KARL prompt. Keep the provider-side `maxTokens: 8192` safety fuse unless production truncation evidence justifies a reviewed change.
+- `maxTokens` maps to Responses `max_output_tokens` and covers reasoning plus visible output. AGK detects an output-limit stop and uses the existing same-provider fallback for one retry with a complete, compact replacement instruction. The failed partial text or tool call is removed before persistence. If the bounded retry also reaches the cap, the turn fails instead of saving a truncated answer.
+- A larger cap such as 24k increases the worst-case token cost, latency, and context reserve threefold. Do not raise it to compensate for an incompatible request parameter.
+
 ## Architecture Reference
 
 For full top-down architecture, dependency maps, onboarding handoffs, or README updates, read `$KNAUF_ROOT/agentic-karl/knauf/docs/reference/agentic-karl-architecture.md` after fetching the latest main branches for `agentic-karl`, `agentic-karl-rag-api`, `agk-infrastructure`, and `agk-deployment-configs`.
@@ -453,7 +464,7 @@ Terraform declares the following deployments in both environments. Capacity is s
 
 `GlobalStandard` is consumption/pay-per-token capacity, not provisioned throughput. Capacity reserves rate-limit quota but does not create a fixed PTU charge. Router capacity is independent from every direct deployment; direct GPT deployments are not replicas or backends of Model Router.
 
-The intended router mode is `balanced` with the pinned OpenAI-only pool `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. Live GET checks on 2026-07-15 still returned `properties.routing: null`, and probes selected unapproved models. Do not run representative router load tests until the module persists and verifies that exact subset. GPT-5.6 Sol is deliberately outside the router pool and is selected directly for created agents and prompt drafting.
+The router pool is pinned to `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. Live ARM GETs on 2026-08-11 confirmed `quality` mode in nonprod and `balanced` mode in prod with that exact pool. Use API version `2026-03-01` for verification: `az cognitiveservices account deployment show` currently uses an older API and can report `properties.routing: null` even when the routing policy is present. GPT-5.6 Sol is deliberately outside the router pool and is selected directly for created agents and prompt drafting.
 
 Infrastructure ownership and release order:
 
@@ -487,6 +498,11 @@ Access and validation rules:
 Safe live checks:
 
 ```bash
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/<hub-resource-group>/providers/Microsoft.CognitiveServices/accounts/<foundry-account>/deployments/model-router?api-version=2026-03-01" \
+  --query "{state:properties.provisioningState,routing:properties.routing}" \
+  -o json
+
 az cognitiveservices account deployment list \
   --subscription <subscription-id> \
   --resource-group <hub-resource-group> \

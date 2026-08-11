@@ -1,18 +1,14 @@
 import { useCallback } from 'react';
-import type { EModelEndpoint } from 'librechat-data-provider';
 import type { SharePointFile } from '~/data-provider/Files/sharepoint';
-import type { FileHandlingState } from './useFileHandling';
+import type { FileHandlingState, UseFileHandling } from './useFileHandling';
 import useFileHandling, { useFileHandlingNoChatContext } from './useFileHandling';
 import useSharePointDownload from './useSharePointDownload';
 
-interface UseSharePointFileHandlingProps {
-  fileSetter?: any;
+// [knauf] KK20-248 — SharePoint and local uploads share the same target callback contract.
+interface UseSharePointFileHandlingProps extends UseFileHandling {
   toolResource?: string;
-  fileFilter?: (file: File) => boolean;
-  additionalMetadata?: Record<string, string | undefined>;
-  endpointOverride?: EModelEndpoint | string;
-  endpointTypeOverride?: EModelEndpoint | string;
 }
+// End [knauf]
 
 interface UseSharePointFileHandlingReturn {
   handleSharePointFiles: (files: SharePointFile[]) => Promise<void>;

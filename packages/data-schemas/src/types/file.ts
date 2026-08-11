@@ -1,5 +1,5 @@
 import { Document, Types } from 'mongoose';
-import type { CodeEnvRef } from 'librechat-data-provider';
+import type { CodeEnvRef, FileSources } from 'librechat-data-provider';
 
 export interface IMongoFile extends Omit<Document, 'model'> {
   user: Types.ObjectId;
@@ -53,6 +53,9 @@ export interface IMongoFile extends Omit<Document, 'model'> {
   filepath: string;
   storageKey?: string;
   storageRegion?: string;
+  // [knauf] NO-TICKET — physical owner when source is the logical `text` classifier.
+  storageSource?: FileSources;
+  // End [knauf]
   object: 'file';
   embedded?: boolean;
   type: string;
