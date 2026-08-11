@@ -78,12 +78,16 @@ const UserAvatar = memo(
         className={cn('relative flex items-center justify-center', className ?? '')}
       >
         {resolved.type === 'image' ? (
-          <img
-            className="rounded-full"
-            src={resolved.src}
-            alt="avatar"
-            onError={() => setResolved(markAvatarFailed(userId, resolved.src))}
-          />
+          <>
+            {/* [knauf] Decorative avatars must not add "avatar" to copied chat text. */}
+            <img
+              className="rounded-full"
+              src={resolved.src}
+              alt=""
+              onError={() => setResolved(markAvatarFailed(userId, resolved.src))}
+            />
+            {/* End [knauf] */}
+          </>
         ) : (
           <div
             style={{

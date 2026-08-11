@@ -29,6 +29,9 @@ const {
   createToolEndCallback,
   getDefaultHandlers,
 } = require('~/server/controllers/agents/callbacks');
+// [knauf] KK20-194 — identify requests whose provider can emit phase-less search drafts.
+const { hasNativeWebSearchTool } = require('~/server/knauf/nativeWebSearchOutput');
+// End [knauf]
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const {
@@ -133,7 +136,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
    */
   const collectedThoughtSignatures = {};
   // [knauf] KK20-194 — final native-search Responses text shared by handler and client.
-  const nativeWebSearchOutputSink = { text: '' };
+  const nativeWebSearchOutputSink = { text: '', deferDeltas: false };
   // End [knauf]
   /** @type {ArtifactPromises} */
   const artifactPromises = [];
@@ -906,6 +909,14 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
     primaryConfig,
     ...agentConfigs.values(),
   ]);
+
+  // [knauf] KK20-194 — phase-aware streaming arrives in @librechat/agents 3.4;
+  // until that upgrade, native-search-capable runs publish only terminal text.
+  nativeWebSearchOutputSink.deferDeltas = hasNativeWebSearchTool([
+    primaryConfig,
+    ...agentConfigs.values(),
+  ]);
+  // End [knauf]
 
   let endpointConfig = appConfig.endpoints?.[primaryConfig.endpoint];
   if (!isAgentsEndpoint(primaryConfig.endpoint) && !endpointConfig) {

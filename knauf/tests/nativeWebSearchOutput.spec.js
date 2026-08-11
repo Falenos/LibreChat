@@ -1,8 +1,12 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const {
   getFinalWebSearchResponseText,
+  hasNativeWebSearchTool,
   replaceLastTextPart,
+  shouldStreamNativeWebSearchDelta,
 } = require('../../api/server/knauf/nativeWebSearchOutput');
 
 test('persists only the authoritative final-answer phase after native web search', () => {
@@ -47,4 +51,24 @@ test('does not rewrite ordinary Responses output', () => {
     ]),
     '',
   );
+});
+
+test('defers visible deltas only when a native web-search tool is configured', () => {
+  assert.equal(
+    hasNativeWebSearchTool([
+      { tools: [{ type: 'function' }] },
+      { tools: [{ type: 'web_search', user_location: { timezone: 'Europe/Berlin' } }] },
+    ]),
+    true,
+  );
+  assert.equal(hasNativeWebSearchTool([{ tools: [{ type: 'function' }] }]), false);
+  assert.equal(shouldStreamNativeWebSearchDelta({ deferDeltas: true }), false);
+  assert.equal(shouldStreamNativeWebSearchDelta({ deferDeltas: false }), true);
+});
+
+test('Karl instructions require valid Markdown section headings', () => {
+  const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
+
+  assert.match(config, /valid GitHub-Flavored Markdown/);
+  assert.match(config, /use `###` headings/);
 });

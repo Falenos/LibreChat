@@ -805,6 +805,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/components/Chat/Messages/Content/__tests__/Image.test.tsx` | transient image-recovery retry regression | 200–216 | Proves an expired SAS preview replaces its broken source after an initial authenticated download failure without requiring close/reopen or page refresh | Self | NO-TICKET |
 | `api/server/index.js` | `isPublicSharedLinkRead` migration-gate branch | 55–59, 289–314 | Lets explicitly enabled anonymous shared-link reads reach the existing route-level ACL while retaining JWT and migration enforcement for owner lookups, mutations, and unrelated API routes | `api/server/index.spec.js` (`Migration gate wiring`), `api/server/middleware/isPublicSharedLinkRead.spec.js` | NO-TICKET |
 | `api/server/index.spec.js` | public shared-link migration-gate wiring assertion | 117–123 | Pins the public-read classifier ahead of the global JWT migration gate so deployment cannot silently restore anonymous `401` responses | Self | NO-TICKET |
+| `api/server/controllers/agents/callbacks.js` | native-search import and `ON_MESSAGE_DELTA` terminal-only gate | 34–39, 627–631 | Suppresses phase-concatenated visible answer deltas for native-search-capable runs while preserving aggregation for authoritative completion persistence | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `api/server/services/Endpoints/agents/initialize.js` | `nativeWebSearchOutputSink.deferDeltas` request policy | 32–34, 138–140, 913–919 | Detects provider-native web search across resolved run agents and selects terminal-only answer publication until the pinned SDK preserves phases | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `client/src/components/Endpoints/Icon.tsx` | `UserAvatar` decorative image alternative | 82–89 | Marks the visual-only avatar image decorative so copied conversation text no longer contains the literal word “avatar” | `client/src/knauf/branding/UserAvatarColor.knauf.spec.tsx` | KK20-194 |
 | `api/server/routes/projects.js` | `attachIndexingToFiles` import and `createProjectHandlers` injection | 10–12, 97–104 | Injects the existing batched agent-file indexing projector into project file reads so both surfaces expose one lifecycle model | `api/server/routes/projects.knauf.test.js` | KK20-248 |
 | `api/server/routes/projects.knauf.test.js` | shared indexing projector dependency assertion | 1–195 | Seam test — proves project routing delegates indexing enrichment to the existing file service with the shared DB surface | Self | KK20-248 |
 | `client/src/data-provider/Projects/queries.ts` | `agentFilesRefetchInterval`, `projectFilesRefetchInterval` | 14–30 | Replaces the project-only status machine with the agent upload lifecycle's shared pending/terminal predicate while retaining the project poll cadence | `client/src/knauf/common/fileIndexing.knauf.spec.ts` | KK20-248 |
@@ -892,6 +895,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | Updates the SVG upload rejection copy to the product-facing 8 MB limit (NO-TICKET) |
 | `client/src/locales/{en,de}/translation.json` | Localizes the cost disclaimer that tells users the euro amounts are informational and will not be charged now or in the future. |
 | `.github/workflows/promote_pipeline.yaml` | Locks both the promoted production tag and its manifest digest against writes and deletion before GitOps deploys it, preventing ACR cleanup or retagging from making the active release unpullable. |
+| `librechat.yaml` | KK20-194 follow-up — shared KARL prompt requires valid GitHub-Flavored Markdown, `###` section headings, and no whitespace inside emphasis delimiters so native-search answers do not expose raw `**` markers |
 
 ## Net-New Files
 
@@ -1286,6 +1290,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`; Sandpack export shell and preview iframe DOM | Medium — preserves the existing unchanged-markup readiness path while allowing clocks and other live previews to export after a longer stable-layout interval | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
 | `api/server/middleware/isPublicSharedLinkRead.js` | `@librechat/api` `isEnabled`; Express request method/path | Low — bounded predicate for the existing read-only share URL shapes; final access remains in `canAccessSharedLink` | `api/server/middleware/isPublicSharedLinkRead.spec.js` | NO-TICKET |
 | `api/server/middleware/isPublicSharedLinkRead.spec.js` | Subject under test; Jest | Low — test-only migration-gate trust-boundary table | Self | NO-TICKET |
+| `api/server/knauf/nativeWebSearchOutput.js` | None — pure native-search config/output decisions | Low — identifies native provider search tools and centralises whether visible deltas may stream without changing ordinary runs | `knauf/tests/nativeWebSearchOutput.spec.js` | KK20-194 |
+| `knauf/tests/nativeWebSearchOutput.spec.js` | Subject plus Node `fs`/`path`/`test`/`assert` | Low — pins terminal-only native-search publication decisions and the committed KARL Markdown contract | Self | KK20-194 |
+| `client/src/knauf/branding/UserAvatarColor.knauf.spec.tsx` | Upstream endpoint/share message icons and Testing Library | Low — proves decorative user images carry an empty alternative while retaining Knauf fallback-colour coverage | Self | KK20-194 |
 <!-- seams:new:end -->
 
 ## Static Assets
