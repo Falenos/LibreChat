@@ -1,3 +1,4 @@
+import { DefaultAzureCredential } from '@azure/identity';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { importCodeApiKey } from './auth/verifyJwt.js';
@@ -40,8 +41,12 @@ async function main(): Promise<void> {
 
   const mongo = await connectMongo(config);
   const repo = new FilesRepo(mongo.files, config.fileTtlHours);
-  const blob = await createBlobStore(config);
-  const tokens = createTokenProvider(config, logger);
+  // One credential for both Azure clients: the pod federates once and both the ACA data plane
+  // and (when configured for it) Blob ride on the same workload identity. Blob falls back to
+  // the account key only if AZURE_STORAGE_ACCOUNT_NAME is unset — see blobStore.ts.
+  const credential = new DefaultAzureCredential();
+  const blob = await createBlobStore(config, credential);
+  const tokens = createTokenProvider(config, logger, credential);
   const aca = createAcaClient(config, logger, tokens);
   const metrics = createMetrics();
 

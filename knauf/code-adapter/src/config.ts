@@ -71,7 +71,21 @@ export interface Config {
   };
 
   blob: {
-    connectionString: string;
+    /**
+     * Connection string auth. Legacy path, and a credential-scope problem: the value in
+     * `agentic-karl-BLOB-STORAGE-CONNECTION-STRING` is the storage account's **primary key**
+     * (`module.storage_blob_dev.storage_primary_connection_string` in agk-infrastructure), so
+     * it grants this pod full control of every container on the account, including the app's
+     * own `files`. Prefer `accountUrl` + workload identity, which can be scoped to one
+     * container by role assignment. Null when `accountUrl` is used instead.
+     */
+    connectionString: string | null;
+    /**
+     * Workload-identity auth: `https://<account>.blob.core.windows.net`. Uses the same
+     * `DefaultAzureCredential` the pod already federates with for ACA, so no new credential
+     * is introduced — and the pod's access becomes exactly the role assignments it holds.
+     */
+    accountUrl: string | null;
     container: string;
   };
 
@@ -83,6 +97,25 @@ export interface Config {
 
 function normalizePem(value: string): string {
   return value.replace(/\\n/g, '\n').trim();
+}
+
+/**
+ * The Blob endpoint for workload-identity auth, from either an explicit URL or an account
+ * name. Accepting the name is the ergonomic half: a values file should not have to spell out
+ * `https://<account>.blob.core.windows.net` when the account name is the only variable.
+ */
+function resolveBlobAccountUrl(str: (name: string) => string | null): string | null {
+  const explicit = str('AZURE_STORAGE_ACCOUNT_URL');
+  if (explicit != null) {
+    // Trimmed with a loop rather than /\/+$/ — the quantifier makes that regex backtrack.
+    let url = explicit;
+    while (url.endsWith('/')) {
+      url = url.slice(0, -1);
+    }
+    return url;
+  }
+  const account = str('AZURE_STORAGE_ACCOUNT_NAME');
+  return account != null ? `https://${account}.blob.core.windows.net` : null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -133,6 +166,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     missing.push('CODEAPI_JWT_PUBLIC_KEY (or CODEAPI_JWT_PUBLIC_KEY_BASE64)');
   }
 
+  // Blob auth is one-of, not both-optional: without either the store cannot be constructed,
+  // and silently starting with no staging store would fail at first upload instead of at boot.
+  const blobAccountUrl = resolveBlobAccountUrl(str);
+  if (str('AZURE_STORAGE_CONNECTION_STRING') == null && blobAccountUrl == null) {
+    missing.push(
+      'AZURE_STORAGE_ACCOUNT_NAME (or AZURE_STORAGE_ACCOUNT_URL) for workload-identity Blob ' +
+        'auth, or AZURE_STORAGE_CONNECTION_STRING for key auth',
+    );
+  }
+
   const config: Config = {
     port: int('PORT', 8080),
     logLevel: str('LOG_LEVEL') ?? 'info',
@@ -173,7 +216,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       filesCollection: str('MONGO_FILES_COLLECTION') ?? 'code_adapter_files',
     },
     blob: {
-      connectionString: required('AZURE_STORAGE_CONNECTION_STRING'),
+      connectionString: str('AZURE_STORAGE_CONNECTION_STRING'),
+      accountUrl: blobAccountUrl,
       container: str('BLOB_CONTAINER') ?? 'code-adapter-staging',
     },
     fileTtlHours: int('FILE_TTL_HOURS', 24),
