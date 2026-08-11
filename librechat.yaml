@@ -414,7 +414,7 @@ interface:
   #     permissions.ts re-seeds only USER and ADMIN from this file.
   # Agent authors are unaffected either way: the builder's Code Interpreter section
   # reads the capability, not this permission.
-  runCode: false
+  runCode: true
   fileSearch: true
   agents:
     use: true
