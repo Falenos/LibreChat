@@ -322,8 +322,10 @@ Not blockers for a dev rollout, but do not lose them:
   the 2 Gi limit and the lowered `CAPTURE_MAX_TOTAL_BYTES` above. The durable fix is to stream
   capture into Blob — worth doing before prod ([scaling.md](scaling.md) §3).
 - Pool throughput is ~4 executions/minute sustained across all users at
-  `maxConcurrentSessions: 20` ([scaling.md](scaling.md) §2). Fine for UAT, sized deliberately
-  for prod.
+  `maxConcurrentSessions: 20` — which works out to roughly **4 people doing data analysis in the
+  same five-minute window**, because a user five steps into an analysis holds five slots at once
+  ([scaling.md](scaling.md) §2). Comfortable for a handful of UAT testers; the number to
+  re-measure and re-size before any wider audience.
 - Session identity is not bound to the caller. Inert today; must be fixed **before** anyone
   enables `statefulSessions` ([scaling.md](scaling.md) §5).
 - `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` is published to Key Vault but cannot be consumed

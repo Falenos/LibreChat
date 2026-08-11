@@ -27,7 +27,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | LibreChat → adapter | none | nothing — `CodeExecutor` uses `node-fetch` with no timeout | `@librechat/agents` |
 | Adapter process | none (no queue, no semaphore) | pod memory, then Node's socket pool | `knauf/code-adapter` |
-| Adapter fleet | 2 replicas × ~1 Gi | `replicaCount` / `resources` | `agk-deployment-configs` values |
+| Adapter fleet | 2 replicas × 2 Gi limit | `replicaCount` / `resources` | `agk-deployment-configs` values |
 | **ACA session pool** | **20 concurrent sessions** | `maxConcurrentSessions` | `agk-infrastructure` Terraform |
 | One sandbox | 1 exec, ~220 s, no network | ACA platform | Microsoft |
 
@@ -71,6 +71,59 @@ turn commonly costs 3–6 executions (`ls`, inspect, compute, plot, write), so i
 
 Burst behaviour is better than sustained: 20 executions can start simultaneously. It is the
 recovery that is slow — the pool is empty again only ~5 minutes after the burst.
+
+### How many users is that?
+
+The number people actually want. It follows from one step that is easy to miss: **executions
+within a turn are sequential, but their slots are not.** Each `/exec` mints a *new* identifier,
+so step 2 allocates a second session while step 1's is still cooling. A user five steps into an
+analysis is holding **five slots at once** — one running, four idle-but-not-yet-released.
+
+```
+slots held by one user mid-analysis  ≈  executions in the turn        (3–6)
+concurrent analyses the pool supports ≈  maxConcurrentSessions / that (20 / ~5)
+```
+
+| Pool | Concurrent users mid-analysis | Analysis turns / hour | Executions / hour |
+| --- | --- | --- | --- |
+| **20** (dev, stage — today) | **~4** | ~47 | ~236 |
+| 50 (prod, planned) | ~10 | ~118 | ~590 |
+| 100 | ~20 | ~236 | ~1 180 |
+
+"Concurrent" means *inside the same ~5-minute window*, which is the right unit here: a user who
+finishes an analysis keeps their slots for five more minutes regardless.
+
+To go from concurrent to population, divide by how often a person actually runs one:
+
+| Profile | Analyses / hour each | Users supported on the dev pool (20) |
+| --- | --- | --- |
+| Power analyst (one every 10 min) | 6 | ~8 |
+| Regular (one every 30 min) | 2 | ~23 |
+| Occasional (one every 2 hours) | 0.5 | ~94 |
+
+Read those as *simultaneously-online users of that type during the peak hour*, not licence
+count. Most KARL turns run no code at all — chat, web search and artifacts never touch the pool
+— so the population that maps onto these numbers is only the slice doing data work at that
+moment.
+
+**What this means in practice.** For dev UAT with a handful of testers, 20 is comfortable. For a
+department-wide rollout it is not: ~8 concurrent power users is a plausible Monday morning, and
+the 21st execution gets "The sandbox is at capacity."
+
+**Two assumptions carry all of this, and both are cheap to replace with measurements:**
+
+- *executions per analysis turn = 3–6* — estimated from the workflow the skills prescribe
+  (`ls` → inspect → compute → plot → write), not measured. The adapter's `exec completed` log
+  line has everything needed to count it for real.
+- *a cooling session still occupies a slot* — follows from the documented ACA semantics, and is
+  what the validation below actually tests. If ACA releases slots earlier than the cooldown,
+  every number in these tables improves, in some cases by a lot.
+
+**The lever that changes the shape, not just the size:** session reuse (§2, option 2) makes a
+whole *conversation* cost one slot instead of one per execution. On the dev pool that moves
+"~4 concurrent analysts" to roughly "~20 concurrent conversations" — a bigger win than any
+plausible increase to `maxConcurrentSessions`, and cheaper, since idle sessions bill by the
+hour. It needs the identity fix in §5 first.
 
 > **Validate this before UAT.** The slot-accounting above follows from the documented ACA
 > semantics (`maxConcurrentSessions` counts *allocated* sessions; `cooldownPeriodInSeconds` is
@@ -127,11 +180,13 @@ pod memory limit  ≥  (largest single file you allow)  ×  (concurrent execs yo
 ```
 
 With a 1 Gi limit — the value the worker service uses and the obvious thing to copy — **three
-concurrent executions each capturing a 256 MB output OOM-kill the pod.** Practical guidance:
+concurrent executions each capturing a 256 MB output OOM-kill the pod.** So the dev service
+deliberately does not copy it:
 
-- Start dev at **1 Gi request / 2 Gi limit** with 2 replicas.
-- Lower `CAPTURE_MAX_TOTAL_BYTES` to something matched to the limit (32–64 MB is generous for
-  charts and spreadsheets) rather than relying on the 256 MB default.
+- **1 Gi request / 2 Gi limit**, 2 replicas — as deployed.
+- **`CAPTURE_MAX_TOTAL_BYTES: 67108864`** (64 MB) in the values rather than the adapter's 256 MB
+  default, which is generous for charts and spreadsheets and fits the limit with room for
+  concurrency. These two move together: raising one without the other is how the pod OOMs.
 - The durable fix is to stream capture straight from ACA into Blob instead of buffering
   (`BlobStore.put` already accepts a `Readable`); that removes the coupling entirely and is
   worth doing before prod.
@@ -192,6 +247,7 @@ The adapter exposes Prometheus metrics on `/metrics` (unauthenticated, ClusterIP
 | Signal | Metric | What it tells you |
 | --- | --- | --- |
 | Saturation | `code_adapter_exec_total{outcome="capacity"}` | Pool is full — raise `maxConcurrentSessions` or enable reuse |
+| **Executions per turn** | `code_adapter_exec_total` ÷ distinct conversations | The assumption the §2 user math rests on. Measure it in UAT and replace the 3–6 estimate |
 | Timeouts | `code_adapter_exec_total{outcome="timeout"}` | Work exceeding ~220 s — a prompt/skill problem more often than a capacity one |
 | Lost sandboxes | `code_adapter_exec_total{outcome="session_lost"}` | Retry-once exhausted; correlate with pool restarts |
 | Latency | `code_adapter_exec_duration_seconds` | Success path only — failures are counted but not observed |
@@ -237,3 +293,16 @@ Not a copy of dev. Before the prod pool is created:
    for average load. The planned 50 assumes fresh-per-exec and roughly 10 executions/minute
    sustained; verify against the dev numbers rather than inheriting the assumption.
 4. Fix the capture buffering (§3) or set memory limits that account for it.
+
+Sizing shortcut, once step 1 has a real number for executions-per-turn (`E`):
+
+```
+maxConcurrentSessions  ≈  peak concurrent analysts  ×  E          (fresh-per-exec)
+maxConcurrentSessions  ≈  peak concurrent conversations           (with session reuse)
+```
+
+At the planned 50 and `E ≈ 5`, prod supports roughly **10 people doing data analysis in the same
+five-minute window** — which is the number to sanity-check against the actual audience before
+the pool is created, not after. If that is too few, decide between a larger pool (linear, cheap
+— idle sessions bill by the hour) and session reuse (§2, which divides the requirement by `E`),
+and remember the second one needs the §5 identity fix first.
