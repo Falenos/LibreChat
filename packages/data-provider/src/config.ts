@@ -1262,6 +1262,12 @@ export const interfaceSchema = z
          */
         imageGen: z.boolean().optional(),
         /**
+         * Exposes the Knauf scheduler panel. The API and worker retain their
+         * independent server-side feature flags, so this only controls client
+         * discovery and remains disabled by default. KK20-255.
+         */
+        scheduler: z.boolean().optional(),
+        /**
          * Starter prompt templates for the agent builder. Each entry is
          * rendered as a selectable card in the template picker when the
          * instructions field is empty. KK20-179.

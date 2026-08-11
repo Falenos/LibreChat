@@ -38,6 +38,12 @@ const getNewAvatarUrlBySource = {
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { getAppConfig } = require('~/server/services/Config');
 const { getLogStores } = require('~/cache');
+// [knauf] quiesce scheduler work and purge Knauf-owned schedule data during account deletion
+const {
+  prepareSchedulerUserDeletion,
+  purgeSchedulerDataForUser,
+} = require('~/knauf/scheduler/userLifecycle');
+// End [knauf]
 const db = require('~/models');
 
 const PUBLIC_USER_RESPONSE_FIELDS = [
@@ -379,6 +385,9 @@ const deleteUserController = async (req, res) => {
       }
     }
 
+    // [knauf] establish the scheduler deletion barrier before any user-owned data is removed
+    await prepareSchedulerUserDeletion(user);
+    // End [knauf]
     await db.deleteMessages({ user: user.id });
     await db.deleteAllUserSessions({ userId: user.id });
     await db.deleteTransactions({ user: user.id });
@@ -408,6 +417,9 @@ const deleteUserController = async (req, res) => {
     await db.deleteTokens({ userId: user.id });
     await db.removeUserFromAllGroups(user.id);
     await db.deleteAclEntries({ principalId: user._id });
+    // [knauf] catch scheduler writes that passed admission immediately before the barrier
+    await purgeSchedulerDataForUser(user.id);
+    // End [knauf]
     logger.info(`User deleted account. Email: ${user.email} ID: ${user.id}`);
     res.status(200).send({ message: 'User deleted' });
   } catch (err) {

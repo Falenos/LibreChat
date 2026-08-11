@@ -45,3 +45,8 @@ export const batchIndexStatus = (batchId: string) =>
   `${filesBase}/index-status?batch_id=${encodeURIComponent(batchId)}`;
 export const retryFileIndex = (fileId: string) =>
   `${filesBase}/${encodeURIComponent(fileId)}/index/retry`;
+
+const schedulesBase = `${apiBaseUrl()}/api/schedules`;
+export const schedules = () => schedulesBase;
+export const schedule = (id: string) => `${schedulesBase}/${encodeURIComponent(id)}`;
+export const scheduleRun = (id: string) => `${schedule(id)}/run`;

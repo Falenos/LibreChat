@@ -1,5 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import ControlCombobox from './ControlCombobox';
+// [knauf] Exercise the combobox through the same modal stack used by scheduler.
+import { OGDialog, OGDialogContent } from './OriginalDialog';
+// End [knauf]
 
 type CapturedObserver = {
   callback: ResizeObserverCallback;
@@ -196,6 +199,56 @@ describe('ControlCombobox popover sizing', () => {
 
     expect(getPopoverWidth()).toBe('275px');
   });
+
+  // [knauf] Guard modal compatibility for the scheduler's portalled agent picker.
+  it('keeps the portalled popover pointer-interactive inside modal body locks', () => {
+    renderCombobox(275);
+    openPopover();
+
+    expect(document.querySelector('.animate-popover')).toHaveClass('[pointer-events:auto]');
+  });
+  // End [knauf]
+
+  // [knauf] Guard the scheduler selector's modal stacking contract.
+  it('stacks its portalled popover above the owning dialog', () => {
+    render(
+      <OGDialog open>
+        <OGDialogContent>
+          <ControlCombobox
+            selectedValue=""
+            items={items}
+            setValue={() => undefined}
+            ariaLabel="Modal combobox"
+            isCollapsed={false}
+          />
+        </OGDialogContent>
+      </OGDialog>,
+    );
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Modal combobox' }));
+
+    expect(document.querySelector('.animate-popover')).toHaveStyle({ zIndex: '150' });
+  });
+  // End [knauf]
+
+  // [knauf] Guard selectors whose options arrive after their initial render.
+  it('renders options that load asynchronously', () => {
+    const props = {
+      selectedValue: '',
+      items: [] as typeof items,
+      setValue: jest.fn(),
+      ariaLabel: 'Async combobox',
+      isCollapsed: false,
+    };
+    const { rerender } = render(<ControlCombobox {...props} />);
+
+    rerender(<ControlCombobox {...props} items={items} />);
+    fireEvent.click(screen.getByRole('combobox'));
+
+    expect(screen.getByRole('option', { name: 'Option A' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Option B' })).toBeInTheDocument();
+  });
+  // End [knauf]
 });
 
 // [knauf] Pin the searched-value extension used by agent custom groups.

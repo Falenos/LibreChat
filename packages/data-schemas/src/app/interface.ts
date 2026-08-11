@@ -64,6 +64,9 @@ export async function loadDefaultInterface({
     remoteAgents: interfaceConfig?.remoteAgents,
     skills: interfaceConfig?.skills,
     sharedLinks: interfaceConfig?.sharedLinks,
+    // [knauf] Preserve namespaced Knauf UI flags through AppService processing. KK20-255.
+    knauf: interfaceConfig?.knauf,
+    // End [knauf]
   });
 
   return loadedInterface;

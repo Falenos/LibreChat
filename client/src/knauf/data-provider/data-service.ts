@@ -12,6 +12,13 @@ import {
   type TMessage,
 } from 'librechat-data-provider';
 import * as endpoints from './api-endpoints';
+import type {
+  CreateSchedule,
+  Schedule,
+  ScheduleRunNowResponse,
+  SchedulesResponse,
+  UpdateSchedule,
+} from '~/knauf/common/schedules';
 
 export function postAgentCategory(body: { label: string }): Promise<TMarketplaceCategory> {
   return request.post(endpoints.agentCategories(), body);
@@ -177,4 +184,24 @@ export function getBatchIndexStatus(batchId: string): Promise<BatchIndexStatusRe
 
 export function postRetryFileIndex(fileId: string): Promise<FileIndexStatusResponse> {
   return request.post(endpoints.retryFileIndex(fileId), {});
+}
+
+export function getSchedules(): Promise<SchedulesResponse> {
+  return request.get(endpoints.schedules());
+}
+
+export function postSchedule(payload: CreateSchedule): Promise<Schedule> {
+  return request.post(endpoints.schedules(), payload);
+}
+
+export function updateSchedule(id: string, payload: UpdateSchedule): Promise<Schedule> {
+  return request.patch(endpoints.schedule(id), payload);
+}
+
+export function deleteSchedule(id: string): Promise<void> {
+  return request.delete(endpoints.schedule(id));
+}
+
+export function postScheduleRun(id: string): Promise<ScheduleRunNowResponse> {
+  return request.post(endpoints.scheduleRun(id), {});
 }

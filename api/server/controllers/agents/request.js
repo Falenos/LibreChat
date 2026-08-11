@@ -24,6 +24,9 @@ const {
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage, getMessages, getConvo } = require('~/models');
+// [knauf] Release the distributed scheduler admission fence only after the generation job exists.
+const { releaseSchedulerAdmission } = require('~/knauf/scheduler/internalRequest');
+// End [knauf]
 // [knauf] NO-TICKET — provider failures are logged and persisted only as safe,
 // bounded operational classifications.
 const { summarizeProviderError } = require('./knauf/providerError');
@@ -363,6 +366,9 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     });
 
     const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    // [knauf] Account deletion can now safely enumerate and abort this admitted scheduler job.
+    await releaseSchedulerAdmission(req);
+    // End [knauf]
     jobGenerationId = job.generationId;
     req._resumableStreamId = streamId;
     getMCPRequestContext(req, undefined, { cleanupOnResponse: false });
@@ -847,7 +853,9 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           // [knauf] Do not leak Axios/provider library codes like ERR_BAD_REQUEST
           // to the UI; expose a stable public class while logs keep diagnostics.
           const publicError =
-            errorSummary.providerStatus === 400 ? 'provider_bad_request' : 'provider_request_failed';
+            errorSummary.providerStatus === 400
+              ? 'provider_bad_request'
+              : 'provider_request_failed';
           // End [knauf]
           logger.error('[ResumableAgentController] Generation failed', errorSummary);
           await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
@@ -1068,6 +1076,9 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     // Create job in GenerationJobManager for abort handling
     // streamId === conversationId (pre-generated above)
     const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    // [knauf] Account deletion can now safely enumerate and abort this admitted scheduler job.
+    await releaseSchedulerAdmission(req);
+    // End [knauf]
 
     // Store endpoint metadata for abort handling
     GenerationJobManager.updateMetadata(streamId, {

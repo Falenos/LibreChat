@@ -15,6 +15,9 @@ import { Search, ChevronDown, Plus, X } from 'lucide-react';
 // End [knauf]
 import { SelectRenderer } from '@ariakit/react-core/select/select-renderer';
 import type { OptionWithIcon } from '~/common';
+// [knauf] Stack body-portalled selectors above their owning OGDialog.
+import { usePopoverZIndex } from './OriginalDialog';
+// End [knauf]
 import './AnimatePopover.css';
 import { JSX } from 'react/jsx-runtime';
 import { cn } from '~/utils';
@@ -92,6 +95,9 @@ function ControlCombobox({
   const createInputRef = useRef<HTMLInputElement>(null);
   // End [knauf]
   const [buttonWidth, setButtonWidth] = useState<number | null>(null);
+  // [knauf] Resolve the portal layer from the current dialog nesting depth.
+  const popoverZIndex = usePopoverZIndex();
+  // End [knauf]
 
   const getItem = (option: OptionWithIcon) => ({
     // [knauf] Custom group labels may contain spaces or punctuation; keep DOM ids valid.
@@ -102,8 +108,10 @@ function ControlCombobox({
     icon: option.icon,
   });
 
+  // [knauf] Keep Ariakit stores synchronized when options load asynchronously.
+  const storeItems = useMemo(() => items.map(getItem), [items]);
   const combobox = Ariakit.useComboboxStore({
-    defaultItems: items.map(getItem),
+    items: storeItems,
     resetValueOnHide: true,
     value: searchValue,
     setValue: setSearchValue,
@@ -111,11 +119,12 @@ function ControlCombobox({
 
   const select = Ariakit.useSelectStore({
     combobox,
-    defaultItems: items.map(getItem),
+    items: storeItems,
     value: selectedValue,
     setValue,
     placement,
   });
+  // End [knauf]
 
   // [knauf] Persist the inline form value through the selector's existing create path.
   useEffect(() => {
@@ -251,8 +260,16 @@ function ControlCombobox({
         portal
         className={cn(
           'animate-popover z-40 overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
+          // [knauf] Keep portalled comboboxes clickable while a modal locks body pointer events.
+          '[pointer-events:auto]',
+          // End [knauf]
         )}
-        style={{ width: isCollapsed ? '300px' : (buttonWidth ?? '300px') }}
+        // [knauf] Keep the body portal visible above OGDialog content and overlay.
+        style={{
+          zIndex: popoverZIndex,
+          width: isCollapsed ? '300px' : (buttonWidth ?? '300px'),
+        }}
+        // End [knauf]
       >
         <div className="py-1.5">
           <div className="relative">

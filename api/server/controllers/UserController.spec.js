@@ -89,6 +89,13 @@ jest.mock('~/cache', () => ({
   getLogStores: jest.fn(),
 }));
 
+// [knauf] verify scheduler account-deletion fencing and cleanup remain wired
+jest.mock('~/knauf/scheduler/userLifecycle', () => ({
+  prepareSchedulerUserDeletion: jest.fn().mockResolvedValue(undefined),
+  purgeSchedulerDataForUser: jest.fn().mockResolvedValue(undefined),
+}));
+// End [knauf]
+
 let mongoServer;
 
 beforeAll(async () => {
@@ -275,6 +282,14 @@ describe('deleteUserController', () => {
 
     expect(mockRes.status).toHaveBeenCalledWith(200);
     expect(mockRes.send).toHaveBeenCalledWith({ message: 'User deleted' });
+    // [knauf] pin both scheduler lifecycle phases to the upstream deletion controller
+    const {
+      prepareSchedulerUserDeletion,
+      purgeSchedulerDataForUser,
+    } = require('~/knauf/scheduler/userLifecycle');
+    expect(prepareSchedulerUserDeletion).toHaveBeenCalledWith(req.user);
+    expect(purgeSchedulerDataForUser).toHaveBeenCalledWith(req.user.id);
+    // End [knauf]
   });
 
   it('should remove the user from all groups via $pullAll', async () => {
