@@ -3,11 +3,12 @@ title: Files — RAG File Search
 spec-id: AGK-ARCH-files-rag-search
 status: implemented
 owners: ['@jorgecostak']
-last-reviewed: 2026-07-16
+last-reviewed: 2026-08-11
 code-refs:
   - api/server/services/Files/process.js
   - api/server/services/Files/VectorDB/crud.js
   - api/app/clients/tools/util/fileSearch.js
+  - api/server/services/Files/knauf/fileSearchRetrieval.js
 tests:
   - api/server/services/Files/process.spec.js
   - api/server/services/Files/VectorDB/crud.spec.js
@@ -27,14 +28,15 @@ This document owns the vector side of uploaded files: ingestion, backend selecti
 
 ## 1. The invariant
 
-| Upload origin                              | Persisted context    | Owner/scope  | Vector backend      | Available in                                  |
-| ------------------------------------------ | -------------------- | ------------ | ------------------- | --------------------------------------------- |
-| A conversation turn in normal KARL         | `message_attachment` | user         | PostgreSQL/pgvector | that user's conversation file context         |
-| A conversation turn while using an agent   | `message_attachment` | user         | PostgreSQL/pgvector | that user's conversation file context         |
-| Persistent agent builder — Agent Knowledge | `agents`             | agent        | Azure AI Search     | every authorized conversation with that agent |
-| Image in any chat                          | `message_attachment` | user/message | none                | direct multimodal message only                |
+| Upload origin                              | Persisted context                        | Owner/scope               | Vector backend      | Available in                                      |
+| ------------------------------------------ | ---------------------------------------- | ------------------------- | ------------------- | ------------------------------------------------- |
+| A conversation turn in normal KARL         | `message_attachment`                     | user                      | PostgreSQL/pgvector | that user's conversation file context             |
+| A conversation turn while using an agent   | `message_attachment`                     | user                      | PostgreSQL/pgvector | that user's conversation file context             |
+| Project Knowledge in a chat project        | user-owned file plus `ChatProjectSource` | user (project-associated) | PostgreSQL/pgvector | authorized conversations assigned to that project |
+| Persistent agent builder — Agent Knowledge | `agents`                                 | agent                     | Azure AI Search     | every authorized conversation with that agent     |
+| Image in any chat                          | `message_attachment`                     | user/message              | none                | direct multimodal message only                    |
 
-The active chat endpoint does not select the vector backend. Upload origin and persisted ownership do. An agent run may search both its persistent Azure AI Search knowledge and the current user's pgvector conversation uploads.
+The active chat endpoint does not select the vector backend. Upload origin and persisted ownership do. Project Knowledge adds an explicit project association to a user-owned pgvector file; it does not promote the file to Azure AI Search. An agent run may search both its persistent Azure AI Search knowledge and the current user's pgvector conversation uploads.
 
 Do not conflate these services:
 
@@ -53,6 +55,7 @@ Do not conflate these services:
 flowchart LR
     Chat["Conversation upload\nnormal or agent chat"]
     Builder["Persistent agent-builder\nAgent Knowledge"]
+    Project["Project workspace\nProject Knowledge"]
     Image["Chat image"]
     API["agentic-karl API"]
     Blob["Azure Blob Storage\noriginal bytes"]
@@ -65,10 +68,12 @@ flowchart LR
 
     Chat --> API
     Builder --> API
+    Project --> API
     Image --> API
     API --> Blob
     API --> Mongo
     Chat -->|"/embed"| RAG
+    Project -->|"/embed"| RAG
     Builder -->|"/agent/embed"| RAG
     RAG --> PG
     RAG --> Search
@@ -111,6 +116,10 @@ An agent-builder upload has `tool_resource=file_search`, no `message_file`, an `
 
 Current compatibility behavior: when `AZURE_SEARCH_ENABLED` is false, `uploadVectors()` falls Agent Knowledge back to `/embed` and pgvector. AGK environments are expected to enable Azure AI Search; this fallback is not the target storage architecture.
 
+### Project Knowledge
+
+The project workspace uploads a normal user-owned File Search asset, then creates a `ChatProjectSource` association through `POST /api/projects/:projectId/files`. Only ready, authorized files are loaded for a project conversation, and they are injected into the latest outbound turn. Moving the conversation out of the project stops loading those files. Project list/download/delete routes recheck user and project ownership.
+
 ### Images
 
 The server rejects images as `file_search` resources. Images use the message attachment/vision path and reach the model as multimodal `image_url` content. They are never embedded into pgvector or Azure AI Search.
@@ -119,21 +128,22 @@ The server rejects images as `file_search` resources. Images use the message att
 
 ## 4. Retrieval
 
-`primeFiles()` in [`fileSearch.js`](../../../../api/app/clients/tools/util/fileSearch.js) combines:
+[`primeFiles()`](../../../../api/app/clients/tools/util/fileSearch.js) combines the authorized candidates. [`createKnaufFileSearchTool()`](../../../../api/server/services/Files/knauf/fileSearchRetrieval.js) groups and queries them:
 
 - persistent agent resource IDs from `agent.tool_resources.file_search.file_ids`; and
-- request/conversation files attached by the current user.
+- request/conversation files attached by the current user; and
+- ready Project Knowledge injected into the current turn after project ownership checks.
 
 It marks persistent resources with `fromAgent=true` and carries each file's persisted `context`.
 
-Current per-file routing:
+Current batch routing:
 
-| Candidate                                        | Query route         | Request scope                                            |
-| ------------------------------------------------ | ------------------- | -------------------------------------------------------- |
-| `context=agents` and `AZURE_SEARCH_ENABLED=true` | `POST /agent/query` | `entity_id=agent_id` when `fromAgent=true`               |
-| Everything else                                  | `POST /query`       | authenticated user; no agent entity for chat attachments |
+| Candidate backend              | Query route                                                                                 | Request scope                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| PostgreSQL/pgvector candidates | one `POST /query_multiple` request containing all physical IDs and active generations       | authenticated user; optional entity context |
+| Azure AI Search candidates     | one `POST /agent/query-multiple` request containing all physical IDs and active generations | requires `entity_id=agent_id`               |
 
-Therefore one `file_search` invocation can already query both backends when an agent run contains both file classes. Results return to one tool call and one model run; users do not select a backend.
+Both requests run concurrently with `Promise.all`. A partial backend failure preserves results from the surviving backend and adds a warning. Backend-ordered results are deduplicated, fused with deterministic application-level RRF, capped, and returned to one tool call/model run. Users do not select a backend.
 
 ### Ranking boundary
 
@@ -158,8 +168,7 @@ Do not expose a shared physical asset ID as the user-visible citation ID. The or
 
 ### Current implementation caveats
 
-- The tool currently sends one HTTP query per file. The RAG API also exposes `/query_multiple` and `/agent/query-multiple`, but the app does not use them yet.
-- Backend choice currently keys on persisted `context`; `fromAgent` controls agent `entity_id`. The hardened invariant should require both agent-resource membership and agent context before using Azure AI Search.
+- Persisted `knauf_vector_backend` is authoritative when present. Legacy rows fall back to Azure only when `AZURE_SEARCH_ENABLED=true`, `fromAgent=true`, and `context=agents`; everything else falls back to pgvector.
 - Azure semantic ranking exists only on the Azure Agent Knowledge path. pgvector remains vector similarity only. Mixed results must be merged by backend ordinal rank, not by comparing raw Azure scores with pgvector distances.
 - Non-`agents` chat clients can also run legacy `createContextHandlers` augmentation for embedded files. When the same run has `file_search`, this duplicates retrieval and inflates the model context. It is current behavior, not the desired architecture.
 

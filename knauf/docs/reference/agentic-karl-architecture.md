@@ -1,6 +1,6 @@
 # Agentic Karl Architecture README
 
-Last updated: 2026-07-16
+Last updated: 2026-08-11
 
 Audience: engineers, platform owners, and technical stakeholders who need to understand how Agentic Karl is wired from infrastructure through application features.
 
@@ -19,9 +19,20 @@ Non-goals:
 - This document does not replace Terraform state, ArgoCD state, Key Vault, or Helm values as the source of truth.
 - This document is an architecture handoff, not a step-by-step production change runbook.
 
+## Contents
+
+- [System context and ownership](#top-level-system-context)
+- [Environments and infrastructure](#environment-matrix)
+- [GitOps, secrets, and runtime services](#gitops-and-helm-layout)
+- [Application, authentication, and AI](#application-source-layout)
+- [Files, RAG, search, and admin](#file-storage-and-azure-blob)
+- [Release and promotion](#release-and-promotion-flow)
+- [Operations and failure routing](#operational-checks)
+- [Source references](#source-references)
+
 ## Executive Summary
 
-Agentic Karl is a Knauf fork of LibreChat deployed on the AGK Azure platform. The user-facing application is a Node/Express API plus React client. It uses MongoDB for core LibreChat data, Redis for caching/session support, Azure Blob Storage for raw files and images, Meilisearch for text search, Azure OpenAI/Foundry for model inference and image generation, and a separate RAG API with two vector backends: Azure PostgreSQL/pgvector for user conversation uploads and Azure AI Search for persistent Agent Knowledge.
+Agentic Karl is a Knauf fork of LibreChat deployed on the AGK Azure platform. The user-facing application is a Node/Express API plus React client. It uses MongoDB for core LibreChat and Project Knowledge metadata, Redis for caching/session support, Azure Blob Storage for raw files and images, Meilisearch for text search, AGK Azure AI Foundry for model, embedding, image, and Document Intelligence workloads, and a separate RAG API with two vector backends: Azure PostgreSQL/pgvector for user-owned conversation and Project Knowledge files, and Azure AI Search for persistent Agent Knowledge.
 
 Deployment is GitOps-driven. Application images are built and imported into AGK Azure Container Registries, Helm values live in `agk-deployment-configs`, and ArgoCD reconciles services into AKS namespaces. Terraform in `agk-infrastructure` owns the AGK hub/spoke Azure infrastructure, tenant resources, Key Vaults, databases, storage accounts, managed identities, and workload-identity wiring used by External Secrets Operator.
 
@@ -37,7 +48,7 @@ Users
 Knauf DNS
   |
   v
-Traefik ingress on AGK AKS
+Traefik ingress on AGK AKS (public services only)
   |
   +--> agentic-karl web/API service
   |       |
@@ -45,15 +56,19 @@ Traefik ingress on AGK AKS
   |       +--> Redis
   |       +--> Azure Blob Storage
   |       +--> Meilisearch
-  |       +--> Azure OpenAI / Azure AI Services
+  |       +--> AGK Azure AI Foundry
   |       +--> agentic-karl-rag-api
   |       +--> Okta / OpenID Connect
   |
   +--> agentic-karl-admin-panel service
   |
-  +--> agentic-karl-rag-api service
-  |
-  +--> agentic-karl-meilisearch service
+  +--> Langfuse web service
+
+Internal namespace services:
+  +-- agentic-karl-rag-api
+  +-- agentic-karl-worker
+  +-- agentic-karl-meilisearch
+  +-- Langfuse worker/ClickHouse/Redis
 
 Terraform: agk-infrastructure
 GitOps:    agk-deployment-configs
@@ -68,13 +83,15 @@ flowchart TB
   app["agentic-karl app\nReact client + Express API"]
   admin["admin panel"]
   rag["agentic-karl-rag-api\nFastAPI RAG service"]
+  worker["agentic-karl-worker\nasync file indexing"]
+  langfuse["Langfuse\nweb + worker + ClickHouse + Redis"]
   meili["Meilisearch"]
   mongo["MongoDB vCore\nLibreChat data"]
   redis["Redis"]
   blob["Azure Blob Storage\nraw files/images"]
   pg["Azure PostgreSQL + pgvector\nuser conversation vectors"]
   search["Azure AI Search\npersistent Agent Knowledge"]
-  openai["Azure OpenAI / Azure AI Services"]
+  openai["AGK Azure AI Foundry"]
   okta["Okta / OpenID Connect"]
   kv["Azure Key Vault"]
   eso["External Secrets Operator"]
@@ -85,18 +102,30 @@ flowchart TB
   user --> dns --> ingress
   ingress --> app
   ingress --> admin
+  ingress --> langfuse
   app --> okta
   app --> mongo
   app --> redis
   app --> blob
   app --> meili
   app --> rag
+  worker --> rag
+  worker --> mongo
+  worker --> blob
   app --> openai
   rag --> pg
   rag --> search
   rag --> openai
   rag --> blob
-  gitops --> argo --> ingress
+  app --> langfuse
+  worker --> langfuse
+  gitops --> argo
+  argo --> app
+  argo --> admin
+  argo --> rag
+  argo --> worker
+  argo --> langfuse
+  argo --> meili
   terraform --> kv
   kv --> eso --> app
   kv --> eso --> rag
@@ -104,36 +133,52 @@ flowchart TB
 
 ## Repositories And Ownership
 
-| Repository | Role | Important paths |
-|---|---|---|
-| `agentic-karl` | LibreChat fork and application source. Contains API, client, packages, Helm overlay values, release workflows, Knauf seams, and docs. | `api/`, `client/`, `packages/`, `librechat.yaml`, `infrastructure/`, `.github/workflows/`, `knauf/`, `SEAMS.md` |
-| `agentic-karl-rag-api` | Knauf RAG service. Owns document parsing, embeddings, pgvector routes, Azure AI Search routes, and its release pipeline. | `app/routes/document_routes.py`, `app/routes/agent_routes.py`, `app/services/vector_store/azure_search.py`, `.github/workflows/` |
-| `agk-infrastructure` | Terraform for AGK hub/spoke platform and Agentic Karl tenant resources. | `terraform/subscription/*/base/hub`, `terraform/subscription/*/base/*`, `terraform/subscription/*/tenant/agentic-karl` |
-| `agk-deployment-configs` | GitOps source for AGK ArgoCD applications and Helm values. | `agentic-karl/dev/services/*`, `agentic-karl/prod/services/*`, `agentic-karl/*/common-namespace-resources` |
-| `ct-shared-deployment-configs` | Legacy CT deployment configuration used for migration context. | Legacy `agentic-karl` app configuration |
-| Upstream LibreChat | Upstream application framework, config conventions, agents, files, RAG, Meilisearch behavior. | Official docs at `librechat.ai/docs` |
+| Repository                     | Role                                                                                                                                  | Important paths                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `agentic-karl`                 | LibreChat fork and application source. Contains API, client, packages, Helm overlay values, release workflows, Knauf seams, and docs. | `api/`, `client/`, `packages/`, `librechat.yaml`, `infrastructure/`, `.github/workflows/`, `knauf/`, `SEAMS.md`                  |
+| `agentic-karl-rag-api`         | Knauf RAG service. Owns document parsing, embeddings, pgvector routes, Azure AI Search routes, and its release pipeline.              | `app/routes/document_routes.py`, `app/routes/agent_routes.py`, `app/services/vector_store/azure_search.py`, `.github/workflows/` |
+| `agk-infrastructure`           | Terraform for AGK hub/spoke platform and Agentic Karl tenant resources.                                                               | `terraform/subscription/*/base/hub`, `terraform/subscription/*/base/*`, `terraform/subscription/*/tenant/agentic-karl`           |
+| `agk-deployment-configs`       | GitOps source for AGK ArgoCD applications and Helm values.                                                                            | `agentic-karl/{dev,stage,prod}/services/*`, `agentic-karl/*/common-namespace-resources`                                          |
+| Admin panel upstream           | `ghcr.io/clickhouse/librechat-admin-panel`; AGK import and deployment lifecycle is owned by `agk-deployment-configs`.                 | `.github/workflows/promote-admin-panel.yaml`, `scripts/promote-admin-panel.sh`                                                   |
+| Langfuse upstream              | Upstream Langfuse/ClickHouse/Redis images; AGK promotion/GitOps live in `agk-deployment-configs`, data resources in infrastructure.   | `.github/workflows/promote-langfuse.yaml`, `scripts/promote-langfuse.sh`, tenant `langfuse/` Terraform root                      |
+| `Customer-Tech-Shared`         | Shared Terraform modules consumed by AGK infrastructure.                                                                              | `infrastructure/terraform/modules/*`                                                                                             |
+| `agentic-karl-quality`         | Stage E2E and k6 quality gates used by the app promotion rail.                                                                        | GitHub Actions workflows and test profiles                                                                                       |
+| `ct-shared-deployment-configs` | Legacy CT deployment configuration used for migration context.                                                                        | Legacy `agentic-karl` app configuration                                                                                          |
+| Upstream LibreChat             | Upstream application framework, config conventions, agents, files, RAG, Meilisearch behavior.                                         | Official docs at `librechat.ai/docs`                                                                                             |
 
 ## Environment Matrix
 
-| Environment | Namespace | Public app URL | Admin URL | AKS cluster | ACR | Key Vault | Subscription |
-|---|---|---|---|---|---|---|---|
-| Dev / nonprod | `agentic-karl-dev` | `https://agentic-karl.agk.dev.knauf.digital` | `https://agentic-karl-admin.agk.dev.knauf.digital` | `aks-agk-nonprod-001` | `acragkhubnonprod001` | `kv-agntkarl-nonprod-001` | `CT-SHARED-RESOURCES` (`ad3f0a71-cc5b-4d00-8289-23623cf2064c`) |
-| Prod | `agentic-karl-prod` | `https://agentic-karl.knauf.com` | `https://agentic-karl-admin.knauf.com` | `aks-agk-prod-001` | `acragkhubprod001` | `kv-agntkarl-prod-001` | `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`) |
-| Legacy CT dev | legacy namespace | `https://agentic-karl.dev.knauf.digital` | n/a | legacy CT shared AKS | `acrctshared001` | legacy CT KV | legacy CT shared platform |
+| Environment   | Namespace            | Public app URL                                 | Admin URL                                            | AKS cluster           | ACR                   | Key Vault                 | Subscription                                                        |
+| ------------- | -------------------- | ---------------------------------------------- | ---------------------------------------------------- | --------------------- | --------------------- | ------------------------- | ------------------------------------------------------------------- |
+| Dev / nonprod | `agentic-karl-dev`   | `https://agentic-karl.agk.dev.knauf.digital`   | `https://agentic-karl-admin.agk.dev.knauf.digital`   | `aks-agk-nonprod-001` | `acragkhubnonprod001` | `kv-agntkarl-nonprod-001` | `CT-SHARED-RESOURCES` (`ad3f0a71-cc5b-4d00-8289-23623cf2064c`)      |
+| Stage         | `agentic-karl-stage` | `https://agentic-karl.agk.stage.knauf.digital` | `https://agentic-karl-admin.agk.stage.knauf.digital` | `aks-agk-nonprod-001` | `acragkhubnonprod001` | `kv-agntkarl-nonprod-001` | `CT-SHARED-RESOURCES` (`ad3f0a71-cc5b-4d00-8289-23623cf2064c`)      |
+| Prod          | `agentic-karl-prod`  | `https://agentic-karl.knauf.com`               | `https://agentic-karl-admin.knauf.digital`           | `aks-agk-prod-001`    | `acragkhubprod001`    | `kv-agntkarl-prod-001`    | `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`) |
+| Legacy CT dev | legacy namespace     | `https://agentic-karl.dev.knauf.digital`       | n/a                                                  | legacy CT shared AKS  | `acrctshared001`      | legacy CT KV              | legacy CT shared platform                                           |
 
-Versions observed from fetched `agk-deployment-configs/origin/main` on 2026-07-16. GitOps remains authoritative:
+Versions observed from fetched `agk-deployment-configs/origin/main` on 2026-08-11. This is a dated snapshot; GitOps remains authoritative:
 
-| Component | Dev image | Prod image | Dev tag | Prod tag |
-|---|---|---|---|---|
-| Main app | `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl` | `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl` | `v0.118.0` | `v0.107.0` |
-| RAG API | `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-rag-api` | `acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl-rag-api` | `v0.8.0.5` | `v0.8.0.2` |
-| Meilisearch | `getmeili/meilisearch` | `getmeili/meilisearch` | `v1.35.1` | `v1.35.1` |
-| Admin panel | `acragkhubnonprod001.azurecr.io/agentic-karl-dev/librechat-admin-panel` | `acragkhubprod001.azurecr.io/agentic-karl-prod/librechat-admin-panel` | `eaba3220a57f51184b8c790220f07a59227b6d1a` | same |
+| Component                  | Dev desired image/tag                                                             | Stage desired image/tag                                                             | Prod desired image/tag                                                             |
+| -------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Main app + indexing worker | `agentic-karl-dev/agentic-karl:v0.237.0`                                          | `agentic-karl-stage/agentic-karl:v0.236.0`                                          | `agentic-karl-prod/agentic-karl:v0.223.0`                                          |
+| RAG API                    | `agentic-karl-dev/agentic-karl-rag-api:v0.8.0.15`                                 | `agentic-karl-stage/agentic-karl-rag-api:v0.8.0.14`                                 | `agentic-karl-prod/agentic-karl-rag-api:v0.8.0.15`                                 |
+| Meilisearch                | `getmeili/meilisearch:v1.52.0`                                                    | `getmeili/meilisearch:v1.52.0`                                                      | `getmeili/meilisearch:v1.52.0`                                                     |
+| Admin panel                | `agentic-karl-dev/librechat-admin-panel:eaba3220a57f51184b8c790220f07a59227b6d1a` | `agentic-karl-stage/librechat-admin-panel:eaba3220a57f51184b8c790220f07a59227b6d1a` | `agentic-karl-prod/librechat-admin-panel:eaba3220a57f51184b8c790220f07a59227b6d1a` |
+| Langfuse web + worker      | `agentic-karl-dev/{langfuse,langfuse-worker}:3.194.1`                             | `agentic-karl-stage/{langfuse,langfuse-worker}:3.194.1`                             | `agentic-karl-prod/{langfuse,langfuse-worker}:3.194.1`                             |
+| Langfuse ClickHouse        | `agentic-karl-dev/clickhouse-server:24.10.3`                                      | `agentic-karl-stage/clickhouse-server:24.10.3`                                      | `agentic-karl-prod/clickhouse-server:24.10.3`                                      |
+| Langfuse Redis             | `agentic-karl-dev/redis:7-alpine`                                                 | `agentic-karl-stage/redis:7-alpine`                                                 | `agentic-karl-prod/redis:7-alpine`                                                 |
 
-Current local checkout note:
+All AGK-owned repositories use the environment’s ACR: `acragkhubnonprod001.azurecr.io` for dev/stage and `acragkhubprod001.azurecr.io` for prod.
 
-- The local branch used while preparing this document was `codex/agk-ui-filesearch-review`.
-- The branch was behind `origin/main`; deployed-mainline facts in this document use fetched `origin/main` and GitOps `origin/main` values, not stale local branch overlays.
+### Live stage verification boundary
+
+Read-only Azure and HTTPS checks on 2026-08-11 confirmed the stage Search, Mongo, Redis, Blob, workload identity, PostgreSQL databases, private endpoints, ACR image, Key Vault secret-name inventory, and public app/admin/Langfuse endpoints. No secret values were read.
+
+This did **not** prove Kubernetes deployment/pod readiness, ExternalSecret refresh state, or ArgoCD sync/health: private AKS DNS was unavailable from the audit host and the cached ArgoCD session was invalid. Reconnect VPN/private DNS and authenticate to nonprod ArgoCD before making those claims.
+
+Hardening/ownership drift to resolve rather than copy:
+
+- The stage storage account and tenant Key Vault currently report public-network access enabled; Blob public access is disabled and containers are private.
+- Dev, stage, and prod Mongo Terraform currently reference the `Customer-Tech-Shared` Cosmos module with mutable `ref=main` rather than an immutable tag or commit.
 
 ## Infrastructure Topology
 
@@ -208,33 +253,40 @@ flowchart LR
 
 ### Environment Infrastructure Details
 
-| Area | Dev / nonprod | Prod |
-|---|---|---|
-| Hub RG | `rg-agk-hub-nonprod-westeurope` | `rg-agk-hub-prod-westeurope` |
-| Spoke RG | `rg-agk-nonprod-westeurope` | `rg-agk-prod-westeurope` |
-| Tenant RG | `rg-agentic-karl-tenant-nonprod-westeurope` | `rg-agentic-karl-tenant-prod-westeurope` |
-| AKS | `aks-agk-nonprod-001` | `aks-agk-prod-001` |
-| ACR | `acragkhubnonprod001` | `acragkhubprod001` |
-| App Key Vault | `kv-agntkarl-nonprod-001` | `kv-agntkarl-prod-001` |
-| Mongo | `cosmos-agk-nonprod-westeurope-001` | `cosmos-agk-prod-westeurope-001` |
-| Redis | `redis-agk-nonprod-westeurope-redis-agk-dev-001` | `redis-agk-prod-westeurope-redis-agk-prod-001` |
-| Blob storage | `agkblobdevwesteu` | `agkblobprodwesteu` |
-| Blob container | `files` | `files` |
-| Postgres server | `pgsql-agk-hub-nonprod-westeurope-001.postgres.database.azure.com` | `pgsql-agk-hub-prod-westeurope-001.postgres.database.azure.com` |
-| RAG database | `agentic-karl-dev` | `agentic-karl-prod` |
-| ESO managed identity | `mi-agentic-karl-dev-westeurope-aks-external-secrets-001` | `mi-agentic-karl-prod-westeurope-aks-external-secrets-001` |
+Stage deliberately shares the nonprod platform substrate while isolating application data and workload identity. Its resources are owned by the existing nonprod tenant and tenant-app Terraform roots; there is no separate stage state file.
+
+| Area                     | Dev                                                                | Stage                                                       | Prod                                                            |
+| ------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| Hub RG                   | `rg-agk-hub-nonprod-westeurope`                                    | same as dev                                                 | `rg-agk-hub-prod-westeurope`                                    |
+| Spoke RG                 | `rg-agk-nonprod-westeurope`                                        | same as dev                                                 | `rg-agk-prod-westeurope`                                        |
+| Tenant RG                | `rg-agentic-karl-tenant-nonprod-westeurope`                        | same as dev                                                 | `rg-agentic-karl-tenant-prod-westeurope`                        |
+| AKS                      | `aks-agk-nonprod-001`                                              | `aks-agk-nonprod-001`                                       | `aks-agk-prod-001`                                              |
+| ACR                      | `acragkhubnonprod001`                                              | `acragkhubnonprod001`                                       | `acragkhubprod001`                                              |
+| App Key Vault            | `kv-agntkarl-nonprod-001`                                          | `kv-agntkarl-nonprod-001`                                   | `kv-agntkarl-prod-001`                                          |
+| Mongo                    | `cosmos-agk-nonprod-westeurope-001`                                | `cosmos-agk-nonprod-westeurope-stage-001`                   | `cosmos-agk-prod-westeurope-001`                                |
+| Redis                    | `redis-agk-nonprod-westeurope-redis-agk-dev-001`                   | `redis-agk-nonprod-westeurope-redis-agk-stage-001`          | `redis-agk-prod-westeurope-redis-agk-prod-001`                  |
+| Blob storage             | `agkblobdevwesteu`                                                 | `agkblobstagewesteu`                                        | `agkblobprodwesteu`                                             |
+| Blob container           | `files`                                                            | `files`                                                     | `files`                                                         |
+| Postgres server          | `pgsql-agk-hub-nonprod-westeurope-001.postgres.database.azure.com` | same as dev                                                 | `pgsql-agk-hub-prod-westeurope-001.postgres.database.azure.com` |
+| RAG database             | `agentic-karl-dev`                                                 | `agentic-karl-stage`                                        | `agentic-karl-prod`                                             |
+| Langfuse database        | `langfuse-dev`                                                     | `langfuse-stage`                                            | `langfuse-prod`                                                 |
+| Langfuse Blob containers | `langfuse-events`, `langfuse-media`, `langfuse-exports`            | same names in stage storage                                 | same names in prod storage                                      |
+| Azure AI Search          | `agentic-karl-search-dev`                                          | `agentic-karl-search-stage`                                 | `agentic-karl-search-prod`                                      |
+| ESO managed identity     | `mi-agentic-karl-dev-westeurope-aks-external-secrets-001`          | `mi-agentic-karl-stage-westeurope-aks-external-secrets-001` | `mi-agentic-karl-prod-westeurope-aks-external-secrets-001`      |
 
 ### Networking
 
 AGK AKS uses Azure CNI pod subnet mode.
 
-| Network | Dev / nonprod | Prod |
-|---|---|---|
-| Spoke CIDR | `10.160.0.0/16` | `10.161.0.0/16` |
-| Node subnet | `10.160.0.0/22` | `10.161.0.0/22` |
-| Ingress subnet | `10.160.4.0/28` | `10.161.4.0/28` |
-| ACI subnet | `10.160.5.0/24` | `10.161.5.0/24` |
-| Pod subnet | `10.160.32.0/19` | `10.161.32.0/19` |
+Stage uses the same nonprod VNet and subnet ranges as dev. Namespace and network policies provide workload isolation; Mongo, Redis, and Search have distinct approved private endpoints. The stage Blob account is the current exception: it has no private endpoint and its public network default is `Allow`.
+
+| Network        | Dev / nonprod    | Prod             |
+| -------------- | ---------------- | ---------------- |
+| Spoke CIDR     | `10.160.0.0/16`  | `10.161.0.0/16`  |
+| Node subnet    | `10.160.0.0/22`  | `10.161.0.0/22`  |
+| Ingress subnet | `10.160.4.0/28`  | `10.161.4.0/28`  |
+| ACI subnet     | `10.160.5.0/24`  | `10.161.5.0/24`  |
+| Pod subnet     | `10.160.32.0/19` | `10.161.32.0/19` |
 
 Network policies are default-deny with explicit allows for:
 
@@ -253,36 +305,58 @@ agk-deployment-configs/
   agentic-karl/
     dev/
       common-namespace-resources/
+      network-policy/
       services/
         agentic-karl/
+        agentic-karl-worker/
         agentic-karl-rag-api/
         agentic-karl-meilisearch/
         agentic-karl-admin-panel/
+        langfuse-web/
+        langfuse-worker/
+        langfuse-clickhouse/
+        langfuse-redis/
+    stage/
+      common-namespace-resources/
+      network-policy/
+      services/                 # same nine-service shape as dev/prod
     prod/
       common-namespace-resources/
+      network-policy/
       services/
         agentic-karl/
+        agentic-karl-worker/
         agentic-karl-rag-api/
         agentic-karl-meilisearch/
         agentic-karl-admin-panel/
+        langfuse-web/
+        langfuse-worker/
+        langfuse-clickhouse/
+        langfuse-redis/
 ```
 
 Service ownership:
 
-| Service | Role | Notes |
-|---|---|---|
-| `agentic-karl` | Main web/API application | Multi-source ArgoCD application: GitOps values plus service repo values |
-| `agentic-karl-rag-api` | RAG/vector API | Local GitOps service values; image is built from Knauf overlay |
-| `agentic-karl-meilisearch` | Text search index | Local GitOps service values |
-| `agentic-karl-admin-panel` | Admin UI | Separate image and ingress |
-| `common-namespace-resources` | Shared namespace resources | Service account, SecretStore, External Secrets identity wiring |
+| Service                      | Role                           | Notes                                                                             |
+| ---------------------------- | ------------------------------ | --------------------------------------------------------------------------------- |
+| `agentic-karl`               | Main web/API application       | Multi-source ArgoCD application: GitOps values plus service repo values           |
+| `agentic-karl-worker`        | Async file-indexing worker     | Uses the app image; promoted in lock-step with the main app                       |
+| `agentic-karl-rag-api`       | RAG/vector API                 | Local GitOps service values; image is built from Knauf overlay                    |
+| `agentic-karl-meilisearch`   | Text search index              | Local GitOps service values                                                       |
+| `agentic-karl-admin-panel`   | Admin UI                       | Separate image and ingress                                                        |
+| `langfuse-web`               | Langfuse UI/API                | Separate per-environment ingress and project bootstrap                            |
+| `langfuse-worker`            | Langfuse background processing | Consumes the same environment’s PostgreSQL, ClickHouse, Redis, and Blob resources |
+| `langfuse-clickhouse`        | Trace/event storage            | Private namespace service with persistent volume                                  |
+| `langfuse-redis`             | Langfuse queue/cache           | Namespace-local Redis deployment                                                  |
+| `common-namespace-resources` | Shared namespace resources     | Service account, SecretStore, External Secrets identity wiring                    |
 
 ### ArgoCD
 
-| Environment | ArgoCD URL | Main app | Namespace |
-|---|---|---|---|
-| Dev / nonprod | `https://argocd.agk.nonprod.knauf.digital` | `agentic-karl-dev-agentic-karl` | `agentic-karl-dev` |
-| Prod | `https://argocd.agk.prod.knauf.digital` | `agentic-karl-prod-agentic-karl` | `agentic-karl-prod` |
+| Environment   | ArgoCD URL                                 | Main app                          | Namespace            |
+| ------------- | ------------------------------------------ | --------------------------------- | -------------------- |
+| Dev / nonprod | `https://argocd.agk.nonprod.knauf.digital` | `agentic-karl-dev-agentic-karl`   | `agentic-karl-dev`   |
+| Stage         | `https://argocd.agk.nonprod.knauf.digital` | `agentic-karl-stage-agentic-karl` | `agentic-karl-stage` |
+| Prod          | `https://argocd.agk.prod.knauf.digital`    | `agentic-karl-prod-agentic-karl`  | `agentic-karl-prod`  |
 
 ### Value Precedence
 
@@ -326,43 +400,57 @@ sequenceDiagram
 
 Common secret/config categories:
 
-| Category | Examples | Consumer |
-|---|---|---|
-| Mongo | `MONGO_URI` | Main app |
-| Redis | `REDIS_URI` | Main app |
-| Blob storage | `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_CONTAINER_NAME` | Main app, file services |
-| OpenAI / Azure OpenAI | API keys and Azure OpenAI credentials | Main app, RAG API |
-| OpenID | `OPENID_CLIENT_SECRET`, `OPENID_SESSION_SECRET` | Main app auth |
-| JWT/session | JWT and session signing secrets | Main app |
-| Meilisearch | master/API key | Main app, Meilisearch |
-| RAG database | Postgres credentials | RAG API |
+| Category         | Examples                                                                                | Consumer                  |
+| ---------------- | --------------------------------------------------------------------------------------- | ------------------------- |
+| Mongo            | `MONGO_URI`                                                                             | Main app                  |
+| Redis            | `REDIS_URI`                                                                             | Main app                  |
+| Blob storage     | `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_CONTAINER_NAME` | Main app, file services   |
+| Azure AI Foundry | Environment-specific inference, embedding, image, and Document Intelligence credentials | Main app, worker, RAG API |
+| OpenID           | `OPENID_CLIENT_SECRET`, `OPENID_SESSION_SECRET`                                         | Main app auth             |
+| JWT/session      | JWT and session signing secrets                                                         | Main app                  |
+| Meilisearch      | master/API key                                                                          | Main app, Meilisearch     |
+| RAG database     | Postgres credentials                                                                    | RAG API                   |
 
 Known External Secrets workload identity client IDs:
 
-| Environment | Client ID |
-|---|---|
+| Environment   | Client ID                              |
+| ------------- | -------------------------------------- |
 | Dev / nonprod | `b573fdae-1009-46d4-8c58-16694e48f65f` |
-| Prod | `af3876d3-0183-4213-8877-e66daff78ef2` |
+| Stage         | `d141fd36-84ad-44d5-adf7-17ff7be6b78f` |
+| Prod          | `af3876d3-0183-4213-8877-e66daff78ef2` |
+
+Dev and stage share the nonprod Key Vault but use separate workload identities. Terraform-generated stage secrets use `agentic-karl-stage-*` or `langfuse-stage-*` names. The app’s stage OpenID client secret is the manually managed `AGK-STAGE-OPENID-CLIENT-SECRET`; shared application secrets retain their established `AGK-*` names. Inspect mappings in each service’s GitOps values instead of inferring reuse from the shared vault.
+
+Langfuse environment wiring:
+
+| Env   | URL                                        | Namespace            | Project public key                 |
+| ----- | ------------------------------------------ | -------------------- | ---------------------------------- |
+| Dev   | `https://langfuse.agk.dev.knauf.digital`   | `agentic-karl-dev`   | `pk-lf-agk-dev-agentic-karl-001`   |
+| Stage | `https://langfuse.agk.stage.knauf.digital` | `agentic-karl-stage` | `pk-lf-agk-stage-agentic-karl-001` |
+| Prod  | `https://langfuse.knauf.digital`           | `agentic-karl-prod`  | `pk-lf-agk-prod-agentic-karl-001`  |
+
+Current stage drift: Langfuse web consumes `langfuse-stage-LANGFUSE-INIT-PROJECT-SECRET-KEY`, and the secret exists, but the main app’s `LANGFUSE_SECRET_KEY` mapping remains commented out while `LANGFUSE_ENABLED=true`. Stage SDK trace export is therefore not proven until the mapping is enabled and verified.
 
 Do not copy secret values into docs, PRs, tickets, or logs.
 
 ## Runtime Service Map
 
-| Runtime component | Technology | Primary responsibility | Main dependencies |
-|---|---|---|---|
-| React client | Vite/React/TypeScript | Browser UI, chat, agents, files, branding, analytics consent | Main API, startup config, user auth state |
-| Express API | Node.js/Express | Auth, conversation APIs, files, agents, config, OpenAI/Azure OpenAI calls, Knauf routes | Mongo, Redis, Blob, RAG API, Meilisearch, OpenID, Azure OpenAI |
-| RAG API | FastAPI/Python | Document ingestion, parsing, embeddings, and vector search across two backends | PostgreSQL/pgvector, Azure AI Search, Azure OpenAI embeddings, Azure Document Intelligence |
-| Meilisearch | Meilisearch | Text search for conversations/messages | Main app, Meili master key |
-| Admin panel | Separate web app | Administrative UI | Main API, SSO |
-| MongoDB vCore | Cosmos DB for MongoDB API | LibreChat persistent data | Main API |
-| Redis | Azure Cache for Redis | Cache/session/rate-limit support depending on app config | Main API |
-| Azure Blob Storage | Azure Storage | Private raw file/image/avatar storage | Main API, browser via SAS |
-| Azure PostgreSQL | Flexible Server + pgvector | RAG documents/vectors | RAG API |
-| Azure AI Search | Azure AI Search | Persistent Agent Knowledge vectors | RAG API |
-| Azure OpenAI | Azure OpenAI | Chat, embeddings, image generation | Main API, RAG API |
-| Azure AI Services | Azure Document Intelligence endpoint | Document parsing for selected file types | RAG API |
-| Okta / OpenID Connect | Identity provider | Login and group/role checks | Main API |
+| Runtime component     | Technology                  | Primary responsibility                                                         | Main dependencies                                                                      |
+| --------------------- | --------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| React client          | Vite/React/TypeScript       | Browser UI, chat, agents, files, branding, analytics consent                   | Main API, startup config, user auth state                                              |
+| Express API           | Node.js/Express             | Auth, conversation APIs, files, agents, config, model calls, Knauf routes      | Mongo, Redis, Blob, RAG API, Meilisearch, OpenID, AGK Foundry                          |
+| Async indexing worker | Node.js                     | Pull queued file-indexing jobs and coordinate RAG ingestion                    | Mongo, Blob, RAG API, Foundry, OTEL/Datadog                                            |
+| RAG API               | FastAPI/Python              | Document ingestion, parsing, embeddings, and vector search across two backends | PostgreSQL/pgvector, Azure AI Search, AGK Foundry embeddings and Document Intelligence |
+| Meilisearch           | Meilisearch                 | Text search for conversations/messages                                         | Main app, Meili master key                                                             |
+| Admin panel           | Separate web app            | Administrative UI                                                              | Main API, SSO                                                                          |
+| Langfuse web/worker   | Node.js services            | Trace ingestion, UI, and background processing                                 | PostgreSQL, ClickHouse, Redis, Blob, Okta                                              |
+| MongoDB vCore         | Cosmos DB for MongoDB API   | LibreChat persistent data, file assets, Project Knowledge associations         | Main API, worker                                                                       |
+| Redis                 | Azure Cache for Redis       | Cache/session/rate-limit support depending on app config                       | Main API                                                                               |
+| Azure Blob Storage    | Azure Storage               | Private raw file/image/avatar storage                                          | Main API, browser via SAS                                                              |
+| Azure PostgreSQL      | Flexible Server + pgvector  | RAG documents/vectors                                                          | RAG API                                                                                |
+| Azure AI Search       | Azure AI Search             | Persistent Agent Knowledge vectors                                             | RAG API                                                                                |
+| AGK Azure AI Foundry  | Private AIServices accounts | Chat, embeddings, image generation, Document Intelligence                      | Main API, worker, RAG API                                                              |
+| Okta / OpenID Connect | Identity provider           | Login and group/role checks                                                    | Main API                                                                               |
 
 ## Application Source Layout
 
@@ -436,28 +524,28 @@ sequenceDiagram
 
 Core route families:
 
-| Route family | Purpose |
-|---|---|
-| `/oauth` | OpenID/OAuth login and callbacks |
-| `/api/auth` | Auth/session endpoints |
-| `/api/admin/*` | Admin APIs |
-| `/api/actions` | Action handling |
-| `/api/keys` | User/provider key handling |
-| `/api/user` | User profile/settings |
-| `/api/search` | Search APIs |
-| `/api/messages` | Message APIs |
-| `/api/convos` | Conversation APIs |
-| `/api/prompts` | Prompt APIs |
-| `/api/endpoints` | Endpoint/model metadata |
-| `/api/models` | Model metadata |
-| `/api/config` | Startup config |
-| `/api/assistants` | Assistants APIs |
-| `/api/files` | File upload/retrieval/deletion |
-| `/images` | Image serving/proxy paths |
-| `/api/share` | Shared conversation APIs |
-| `/api/agents` | Agent APIs |
-| `/api/mcp` | MCP integration APIs |
-| `/api/knauf` | Knauf-owned extension routes |
+| Route family      | Purpose                          |
+| ----------------- | -------------------------------- |
+| `/oauth`          | OpenID/OAuth login and callbacks |
+| `/api/auth`       | Auth/session endpoints           |
+| `/api/admin/*`    | Admin APIs                       |
+| `/api/actions`    | Action handling                  |
+| `/api/keys`       | User/provider key handling       |
+| `/api/user`       | User profile/settings            |
+| `/api/search`     | Search APIs                      |
+| `/api/messages`   | Message APIs                     |
+| `/api/convos`     | Conversation APIs                |
+| `/api/prompts`    | Prompt APIs                      |
+| `/api/endpoints`  | Endpoint/model metadata          |
+| `/api/models`     | Model metadata                   |
+| `/api/config`     | Startup config                   |
+| `/api/assistants` | Assistants APIs                  |
+| `/api/files`      | File upload/retrieval/deletion   |
+| `/images`         | Image serving/proxy paths        |
+| `/api/share`      | Shared conversation APIs         |
+| `/api/agents`     | Agent APIs                       |
+| `/api/mcp`        | MCP integration APIs             |
+| `/api/knauf`      | Knauf-owned extension routes     |
 
 ### Frontend Boot Sequence
 
@@ -485,15 +573,15 @@ browser loads app
 
 Knauf-specific code is intentionally isolated where practical.
 
-| Area | Path | Responsibility |
-|---|---|---|
-| Client overlay | `client/src/knauf` | Top bar, branding/legal pages, analytics consent, simplified agent builder, model selector, image-generation controls, pending-file drain |
-| API overlay | `api/server/routes/knauf` | Analytics diagnostics/config and prompt autogeneration |
-| API helpers | `api/server/knauf` | Model-spec compatibility helpers |
-| Shared permission policy | `packages/api/src/knauf/permissions/userRestrictions.ts` | Role and permission restriction policy |
-| RAG service | `Knauf-Group/agentic-karl-rag-api` | Knauf-owned parsing, pgvector, Azure AI Search, observability, and release behavior |
-| Docs/reference | `knauf/docs` | Knauf-owned design, reference, and planning docs |
-| Seam manifest | `SEAMS.md` | Inventory of upstream seam blocks and net-new Knauf files |
+| Area                     | Path                                                     | Responsibility                                                                                                                            |
+| ------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Client overlay           | `client/src/knauf`                                       | Top bar, branding/legal pages, analytics consent, simplified agent builder, model selector, image-generation controls, pending-file drain |
+| API overlay              | `api/server/routes/knauf`                                | Analytics diagnostics/config and prompt autogeneration                                                                                    |
+| API helpers              | `api/server/knauf`                                       | Model-spec compatibility helpers                                                                                                          |
+| Shared permission policy | `packages/api/src/knauf/permissions/userRestrictions.ts` | Role and permission restriction policy                                                                                                    |
+| RAG service              | `Knauf-Group/agentic-karl-rag-api`                       | Knauf-owned parsing, pgvector, Azure AI Search, observability, and release behavior                                                       |
+| Docs/reference           | `knauf/docs`                                             | Knauf-owned design, reference, and planning docs                                                                                          |
+| Seam manifest            | `SEAMS.md`                                               | Inventory of upstream seam blocks and net-new Knauf files                                                                                 |
 
 ## Authentication And Authorization
 
@@ -548,13 +636,13 @@ sequenceDiagram
 
 Authorization layers:
 
-| Layer | Responsibility |
-|---|---|
-| OpenID allowed domains | Restrict login to approved email domains |
-| Required role/group checks | Restrict app access to configured IdP groups/roles |
-| Admin role checks | Assign or restrict admin capabilities |
-| Knauf user restrictions | Disable or limit risky user permissions in production |
-| Agent and file ACLs | Enforce per-user access to agents, files, and conversations |
+| Layer                      | Responsibility                                              |
+| -------------------------- | ----------------------------------------------------------- |
+| OpenID allowed domains     | Restrict login to approved email domains                    |
+| Required role/group checks | Restrict app access to configured IdP groups/roles          |
+| Admin role checks          | Assign or restrict admin capabilities                       |
+| Knauf user restrictions    | Disable or limit risky user permissions in production       |
+| Agent and file ACLs        | Enforce per-user access to agents, files, and conversations |
 
 Important production controls:
 
@@ -564,54 +652,51 @@ Important production controls:
 
 OpenID client IDs, issuer URLs, and callback domains live in GitOps/service values. Client secrets and session secrets live in Key Vault.
 
+| Env   | Client ID              | Issuer                                                | Client-secret mapping            |
+| ----- | ---------------------- | ----------------------------------------------------- | -------------------------------- |
+| Dev   | `0oawcorb2pfMcXkHU417` | `https://dev.identity.knauf.digital/oauth2/default`   | `AGK-OPENID-CLIENT-SECRET`       |
+| Stage | `0oayvp3k66kqouUCa417` | `https://stage-knaufcustomer.okta.com/oauth2/default` | `AGK-STAGE-OPENID-CLIENT-SECRET` |
+| Prod  | `0oae5vnxw30lWRJmh417` | `https://login.knauf.com`                             | `AGK-OPENID-CLIENT-SECRET`       |
+
 ## Model And AI Configuration
 
 Primary config file: `librechat.yaml`.
 
-Key runtime behavior:
+Current runtime behavior:
 
-- `fileStrategy: "azure_blob"`
-- Tools include `image_gen_oai` and `calculator`
-- Memory is enabled with MongoDB
-- Azure OpenAI endpoint group: `cst-karl-dev`
-- Azure OpenAI API version: `2025-01-01-preview`
-- Main UI model alias: `gpt-5.4`
-- Azure deployment mapping: `gpt-5.4` -> `gpt-54`
-- Additional model: `gpt-4o`
-- Responses API enabled for the default Karl model spec
-- `web_search: true` passed through endpoint add params
-- Temperature/top-p and similar params are dropped where incompatible with Responses API/model behavior
+- `model-router-chat` is the stable app alias for `model-router` over the Foundry **project** endpoint Responses API. `librechat.yaml` sets `serverless: true` and `useResponsesApi: true`; the account-level endpoint does not support this route.
+- `agent-default` maps prompt drafting and created-agent personalities to `AZURE_FOUNDRY_AGENT_DEPLOYMENT`.
+- Dev currently selects direct `gpt-5.6-sol`; stage and prod select direct `gpt-5.5`.
+- All three environments currently select `gpt-image-2` for image generation.
+- RAG uses the environment’s Foundry endpoint for `text-embedding-3-large` and Document Intelligence calls.
+- `cst-karl-dev` remains a shared-resource/legacy compatibility account used by CST KARL; it is not the primary AGK model endpoint described above.
+- The default KARL model spec uses Responses API with an `8192` output safety fuse. Router candidates do not share one `verbosity` contract, so provider-side `verbosity` is intentionally absent.
 
-Model specs:
+Foundry infrastructure:
 
-| Model spec | Endpoint | Model | Purpose |
-|---|---|---|---|
-| `karl` | `azureOpenAI` | `gpt-5.4` | Default Karl chat experience with Knauf prompt |
-| `karl-personality-precise` | `azureOpenAI` | `gpt-5.4` | Precise personality preset |
-| `karl-personality-balanced` | `azureOpenAI` | `gpt-5.4` | Balanced personality preset |
-| `karl-personality-creative` | `azureOpenAI` | `gpt-5.4` | Creative personality preset |
-| `karl-autogenerate-prompt` | `azureOpenAI` | `gpt-4o` | Internal prompt autogeneration helper |
+| Env         | Subscription/RG                           | Account                                     | Project                                  | Router mode verified 2026-08-11 |
+| ----------- | ----------------------------------------- | ------------------------------------------- | ---------------------------------------- | ------------------------------- |
+| Dev + stage | nonprod / `rg-agk-hub-nonprod-westeurope` | `foundry-agk-hub-nonprod-swedencentral-001` | `proj-agk-hub-nonprod-swedencentral-001` | `quality`                       |
+| Prod        | prod / `rg-agk-hub-prod-westeurope`       | `foundry-agk-hub-prod-swedencentral-001`    | `proj-agk-hub-prod-swedencentral-001`    | `balanced`                      |
 
-Azure AI shared account:
+Both router policies contain the exact OpenAI pool `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. GPT-5.6 Sol is outside the router and selected directly where configured.
 
-| Item | Value |
-|---|---|
-| Subscription | `CT-SHARED-RESOURCES-PROD` (`e0515a24-7205-481b-b657-944901020e32`) |
-| Resource group | `rg-ct-sharedprod-westeurope` |
-| Account | `cst-karl-dev` |
-| Region | `swedencentral` |
-| OpenAI endpoint | `https://cst-karl-dev.openai.azure.com/` |
-| AI Services endpoint | `https://cst-karl-dev.services.ai.azure.com/` |
+The table records live Azure state and matches current Terraform: nonprod is `quality`; prod is `balanced`.
 
-Known deployment roles:
+Live deployment capacity observed 2026-08-11:
 
-| Deployment | Role |
-|---|---|
-| `gpt-54` | Primary chat model deployment for `gpt-5.4` |
-| `gpt-5` | Additional GPT-5 family deployment |
-| `gpt-4o` | Prompt-generation and compatibility workloads |
-| `text-embedding-3-large` | RAG embeddings |
-| `gpt-image-1` | Image generation |
+| Deployment               |   Nonprod |      Prod | Purpose                                     |
+| ------------------------ | --------: | --------: | ------------------------------------------- |
+| `model-router`           |     10000 |     10000 | Default KARL, memory, titles                |
+| `gpt-5.6-sol`            |     10000 |     15000 | Direct-agent deployment available to GitOps |
+| `gpt-5.5`, `gpt-5.5-1`   | 5000 each | 5000 each | Direct deployment/fallback capacity         |
+| `text-embedding-3-large` |      5000 |     10000 | RAG embeddings                              |
+| `gpt-image-1`            |        20 |        10 | Deployed, not currently selected            |
+| `gpt-image-2`            |        10 |        12 | Current image-generation target             |
+
+All are `GlobalStandard`. Capacity is quota, not provisioned throughput. Re-query Azure before making capacity or routing decisions; do not infer current state from this dated table.
+
+Terraform declares `gpt-5.5` with `replicas = 2`; the shared Foundry module expands it into the managed `gpt-5.5` and `gpt-5.5-1` deployments shown above.
 
 ## File Storage And Azure Blob
 
@@ -646,26 +731,27 @@ sequenceDiagram
 
 Important environment values:
 
-| Variable | Purpose |
-|---|---|
-| `AZURE_STORAGE_CONNECTION_STRING` | Storage account connection string path |
-| `AZURE_STORAGE_ACCOUNT_NAME` | Storage account name for identity-based flows |
-| `AZURE_CONTAINER_NAME` | Blob container, usually `files` |
-| `AZURE_STORAGE_PUBLIC_ACCESS` | Should remain false for private blobs |
-| `AZURE_URL_EXPIRY_SECONDS` | SAS URL lifetime |
+| Variable                          | Purpose                                       |
+| --------------------------------- | --------------------------------------------- |
+| `AZURE_STORAGE_CONNECTION_STRING` | Storage account connection string path        |
+| `AZURE_STORAGE_ACCOUNT_NAME`      | Storage account name for identity-based flows |
+| `AZURE_CONTAINER_NAME`            | Blob container, usually `files`               |
+| `AZURE_STORAGE_PUBLIC_ACCESS`     | Should remain false for private blobs         |
+| `AZURE_URL_EXPIRY_SECONDS`        | SAS URL lifetime                              |
 
 ## RAG And File Search
 
 Agentic Karl stores original bytes in Azure Blob Storage and routes searchable document content to one of two vector backends according to upload origin.
 
-| Upload origin | Mongo context | Vector owner | Backend |
-|---|---|---|---|
-| Conversation upload in normal KARL | `message_attachment` | user | PostgreSQL/pgvector |
-| Conversation upload while using an agent | `message_attachment` | user | PostgreSQL/pgvector |
-| Persistent Agent Knowledge uploaded in the agent builder | `agents` | agent | Azure AI Search when enabled |
-| Image uploaded in any chat | `message_attachment` | user/message | no vector backend; direct multimodal input |
+| Upload origin                                            | Mongo context                                        | Vector owner              | Backend                                    |
+| -------------------------------------------------------- | ---------------------------------------------------- | ------------------------- | ------------------------------------------ |
+| Conversation upload in normal KARL                       | `message_attachment`                                 | user                      | PostgreSQL/pgvector                        |
+| Conversation upload while using an agent                 | `message_attachment`                                 | user                      | PostgreSQL/pgvector                        |
+| Project Knowledge file associated with a chat project    | user-owned file plus `ChatProjectSource` association | user (project-associated) | PostgreSQL/pgvector                        |
+| Persistent Agent Knowledge uploaded in the agent builder | `agents`                                             | agent                     | Azure AI Search when enabled               |
+| Image uploaded in any chat                               | `message_attachment`                                 | user/message              | no vector backend; direct multimodal input |
 
-The active chat endpoint does not select the backend. A conversation upload remains user-scoped even when an `agent_id` is present. Persistent Agent Knowledge is the only intended Azure AI Search file class. One agent run may query both backends.
+The active chat endpoint does not select the backend. A conversation upload remains user-scoped even when an `agent_id` is present. Persistent Agent Knowledge is the only intended Azure AI Search file class. Project Knowledge associates ready user-owned files with a project and injects them into the latest outbound turn of every authorized conversation in that project. One agent run may query both vector backends.
 
 Primary app files:
 
@@ -688,7 +774,7 @@ sequenceDiagram
   participant Blob as Azure Blob Storage
   participant RAG as RAG API
   participant DI as Azure Document Intelligence
-  participant OpenAI as Azure OpenAI embeddings
+  participant OpenAI as AGK Foundry embeddings
   participant PG as PostgreSQL pgvector
   participant Search as Azure AI Search
   participant Mongo as MongoDB
@@ -720,42 +806,42 @@ sequenceDiagram
   participant RAG as RAG API
   participant PG as PostgreSQL pgvector
   participant Search as Azure AI Search
-  participant Model as Azure OpenAI
+  participant Model as AGK Foundry
 
   Chat->>API: user asks a question with file context
   API->>Tool: invoke file search
-  opt User conversation files are candidates
-    Tool->>RAG: POST /query per pgvector file
+  par User conversation files are candidates
+    Tool->>RAG: POST /query_multiple once for pgvector files
     RAG->>PG: retrieve user-owned chunks
     PG-->>RAG: relevant context
-  end
-  opt Persistent Agent Knowledge is a candidate
-    Tool->>RAG: POST /agent/query per agent file
+  and Persistent Agent Knowledge is a candidate
+    Tool->>RAG: POST /agent/query-multiple once for agent files
     RAG->>Search: retrieve agent-owned chunks
     Search-->>RAG: relevant context
   end
-  RAG-->>Tool: context payload
+  RAG-->>Tool: backend-ranked context
+  Tool->>Tool: reciprocal-rank fusion
   Tool-->>API: tool result
   API->>Model: answer with retrieved context
 ```
 
 RAG API behavior:
 
-| Endpoint / behavior | Purpose |
-|---|---|
-| `/health` | Health probe |
-| `/ids` | ID lookup/listing |
-| `/documents` | pgvector document deletion |
-| `/documents/{id}/context` | Document context retrieval |
-| `/embed` | Ingest a conversation document into pgvector |
-| `/embed-upload` | Upload and embed endpoint |
-| `/query` | Query one pgvector file |
-| `/query_multiple` | Query multiple pgvector files; available in RAG API, not yet used by the current app tool |
-| `/agent/embed` | Ingest persistent Agent Knowledge into Azure AI Search |
-| `/agent/query` | Query one Azure AI Search agent file |
-| `/agent/query-multiple` | Query multiple Azure AI Search files; available in RAG API, not yet used by the current app tool |
-| `/agent/documents/{file_id}` | Delete an Azure AI Search agent file |
-| `/evaluate` | Evaluation endpoint |
+| Endpoint / behavior          | Purpose                                                |
+| ---------------------------- | ------------------------------------------------------ |
+| `/health`                    | Health probe                                           |
+| `/ids`                       | ID lookup/listing                                      |
+| `/documents`                 | pgvector document deletion                             |
+| `/documents/{id}/context`    | Document context retrieval                             |
+| `/embed`                     | Ingest a conversation document into pgvector           |
+| `/embed-upload`              | Upload and embed endpoint                              |
+| `/query`                     | Query one pgvector file                                |
+| `/query_multiple`            | Current app batch route for pgvector candidates        |
+| `/agent/embed`               | Ingest persistent Agent Knowledge into Azure AI Search |
+| `/agent/query`               | Query one Azure AI Search agent file                   |
+| `/agent/query-multiple`      | Current app batch route for Azure AI Search candidates |
+| `/agent/documents/{file_id}` | Delete an Azure AI Search agent file                   |
+| `/evaluate`                  | Evaluation endpoint                                    |
 
 Important distinction:
 
@@ -763,7 +849,7 @@ Important distinction:
 - Azure Blob Storage is not a vector store.
 - PostgreSQL/pgvector contains user conversation-upload vectors.
 - Azure AI Search contains persistent Agent Knowledge vectors when `AZURE_SEARCH_ENABLED=true`.
-- Azure OpenAI/Foundry performs inference and content filtering. A Prompt Shield error does not indicate Azure AI Search ingestion.
+- AGK Foundry performs inference and content filtering. A Prompt Shield error does not indicate Azure AI Search ingestion.
 - Meilisearch indexes text search for app data such as conversations/messages.
 - With `AZURE_SEARCH_ENABLED=false`, current compatibility behavior falls Agent Knowledge back to pgvector. AGK environments are expected to enable the Azure AI Search path.
 
@@ -779,30 +865,30 @@ RAG service responsibilities:
 - Add bounded ingestion logging and failure classification.
 - Release and deploy independently from the main application.
 
-Detailed current behavior, including user dedup asset IDs, mixed-backend retrieval, known per-file fan-out, deletion, and citations: [`knauf/docs/architecture/files/rag-search.md`](../architecture/files/rag-search.md).
+Detailed current behavior, including user dedup asset IDs, concurrent batch retrieval, cross-backend RRF, deletion, and citations: [`knauf/docs/architecture/files/rag-search.md`](../architecture/files/rag-search.md).
 
 ## Meilisearch
 
 Meilisearch supports application search, not RAG vector retrieval.
 
-| Setting | Value |
-|---|---|
-| Image | `getmeili/meilisearch:v1.35.1` |
-| Internal host from app | `http://agentic-karl-meilisearch` |
-| Service port | 80 forwarding to container port 7700 |
-| Secret | Meili master/API key from Key Vault |
+| Setting                | Value                                                                       |
+| ---------------------- | --------------------------------------------------------------------------- |
+| Desired image          | See the dated Environment Matrix snapshot; verify current GitOps before use |
+| Internal host from app | `http://agentic-karl-meilisearch`                                           |
+| Service port           | 80 forwarding to container port 7700                                        |
+| Secret                 | Meili master/API key from Key Vault                                         |
 
 ## Admin Panel
 
 The admin panel is deployed as a separate service.
 
-| Item | Dev / nonprod | Prod |
-|---|---|---|
-| Service | `agentic-karl-admin-panel` | `agentic-karl-admin-panel` |
-| Public URL | `https://agentic-karl-admin.agk.dev.knauf.digital` | `https://agentic-karl-admin.knauf.com` |
-| Internal API URL | `http://agentic-karl` | `http://agentic-karl` |
-| Public app API base | Main app public host | Main app public host |
-| Auth | SSO only | SSO only |
+| Item                | Dev                                                | Stage                                                | Prod                                       |
+| ------------------- | -------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------ |
+| Service             | `agentic-karl-admin-panel`                         | `agentic-karl-admin-panel`                           | `agentic-karl-admin-panel`                 |
+| Public URL          | `https://agentic-karl-admin.agk.dev.knauf.digital` | `https://agentic-karl-admin.agk.stage.knauf.digital` | `https://agentic-karl-admin.knauf.digital` |
+| Internal API URL    | `http://agentic-karl`                              | `http://agentic-karl`                                | `http://agentic-karl`                      |
+| Public app API base | Main app public host                               | Main app public host                                 | Main app public host                       |
+| Auth                | SSO only                                           | SSO only                                             | SSO only                                   |
 
 The admin panel is intentionally separated from the main app so it can have its own ingress, image, and deployment lifecycle while still talking to the main app API.
 
@@ -815,23 +901,22 @@ Workflow: `.github/workflows/release_pipeline.yaml`
 ```mermaid
 flowchart TB
   merge["PR merged to main"]
-  build["Build release image"]
-  ctacr["Push to acrctshared001.azurecr.io/tools-non-prod/agentic-karl:<version>"]
-  import["Import image into AGK nonprod ACR"]
-  values["Update service repo and GitOps dev values"]
-  argo["Refresh ArgoCD app"]
-  healthy["Wait for Synced and Healthy"]
+  build["Build directly in AGK nonprod ACR"]
+  release["Create semantic tag and GitHub release"]
+  values["Update app + worker GitOps and LANGFUSE_RELEASE"]
+  argo["Refresh app and worker ArgoCD apps"]
+  healthy["Wait for app Synced/Healthy; run dev smoke"]
 
-  merge --> build --> ctacr --> import --> values --> argo --> healthy
+  merge --> build --> release --> values --> argo --> healthy
 ```
 
 Dev release steps:
 
 1. A merged PR to `main` triggers the release workflow.
-2. The workflow publishes the image to the CT shared release registry.
-3. `deploy-agk-dev` imports the same tag into `acragkhubnonprod001`.
-4. The workflow updates `agentic-karl/infrastructure/dev/values.yaml` and GitOps dev values.
-5. ArgoCD is refreshed and the workflow waits for `Synced` and `Healthy`.
+2. ACR Tasks builds the versioned image directly as `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl:<version>`.
+3. The workflow creates the semantic tag and GitHub release.
+4. An auto-merged GitOps PR updates the app and worker tags plus `LANGFUSE_RELEASE`; it does not update the service-repo overlay tag.
+5. The workflow waits for the app ArgoCD application and dev smoke; the worker has separate rollout gates and refresh handling.
 
 ### Smoke Workflow
 
@@ -842,30 +927,38 @@ Purpose:
 - Validate Azure login.
 - Validate Key Vault reads.
 - Validate GitHub writes.
-- Validate ACR import/delete permissions.
+- Validate stage-to-prod ACR import/delete permissions in isolated smoke repositories.
 - Validate deployment-config repo writes.
 - Validate ArgoCD API read access.
 
 It should not change production release tags.
 
-### Promote Dev To Prod
+### Deploy Dev To Stage
 
-Workflow: `.github/workflows/promote_pipeline.yaml`
+Workflow: `.github/workflows/deploy_stage_pipeline.yaml`
 
 ```mermaid
 flowchart TB
   manual["Manual workflow_dispatch"]
-  importApp["Import main app image from nonprod ACR to prod ACR"]
-  updateGitOps["Update prod GitOps and prod app overlay"]
-  refresh["Refresh prod ArgoCD apps"]
-  wait["Wait for Synced and Healthy"]
+  importStage["Import exact dev digest into stage repository"]
+  updateStage["Update app + worker stage GitOps"]
+  argoStage["Wait for app + worker Synced/Healthy"]
+  e2e["Run stage E2E"]
+  perf["Optional selected k6 profiles"]
+  provenance["Record immutable validation provenance"]
 
-  manual --> importApp
-  importApp --> updateGitOps
-  updateGitOps --> refresh --> wait
+  manual --> importStage --> updateStage --> argoStage --> e2e --> perf --> provenance
 ```
 
-The main app workflow promotes only the main app image. RAG API promotion is owned by the RAG repository's separate reviewed promotion workflow.
+The workflow captures the image digest, GitOps revisions, rendered runtime digests, and config hashes before tests. It rechecks them after tests so the provenance artifact represents the exact stage state that passed.
+
+### Promote Tested Stage To Prod
+
+Workflow: `.github/workflows/promote_pipeline.yaml`
+
+Production promotion requires a successful stage workflow run and its provenance artifact. It verifies that stage still matches the recorded digest/revisions/config, imports the exact digest into prod, updates prod app and worker GitOps in lock-step, refreshes ArgoCD, and runs the production health smoke.
+
+The main app workflow promotes the app image used by both app and worker. RAG promotion remains owned by the RAG repository.
 
 ### RAG API Release And Promotion
 
@@ -873,23 +966,32 @@ Owning repository: `Knauf-Group/agentic-karl-rag-api`.
 
 - Merging a RAG PR builds and deploys a versioned RAG image to AGK dev.
 - The RAG release workflow updates the dev GitOps image tag and verifies the RAG ArgoCD application.
-- The RAG promotion workflow imports the exact dev image to prod, updates prod GitOps, and verifies prod independently from the main app promotion.
+- The manual RAG stage workflow imports the dev tag with `--force`, updates stage GitOps, and verifies stage ArgoCD. It does not record an immutable digest/provenance artifact.
+- The current RAG production workflow also imports the dev tag with `--force` directly to prod, bypassing stage validation.
+- RAG deploys independently from the main app in every environment.
+
+`agentic-karl` and `agentic-karl-rag-api` have independent versions and workflows. A change spanning both repositories requires manually coordinating/bumping and releasing both; one workflow never versions the other. Release the compatible RAG contract before the dependent app image.
+
+### Admin Panel And Langfuse Promotion
+
+GitOps owns manual upstream-image import workflows for the admin panel and Langfuse. Current workflows support dev, stage, and prod independently. These components do not use the main app’s ordered digest/provenance gate. The scripts accept all three environments, although their usage banners still omit `stage`.
 
 ## Feature Wiring
 
-| Feature | Frontend area | Backend/config area | External dependencies |
-|---|---|---|---|
-| Chat | `client/src` upstream chat surfaces plus Knauf chrome | Express chat/message/conversation routes, Azure OpenAI config | Azure OpenAI, Mongo, Redis |
-| Karl default model | model selector and model specs | `librechat.yaml`, model-spec helpers | Azure OpenAI deployment `gpt-54` |
-| Custom agents | agent builder and Knauf simplified builder | `/api/agents`, `packages/api` agent logic | Mongo, files, tool config |
-| File upload | file picker/upload UI | `/api/files`, file processing service | Azure Blob, RAG API, Mongo |
-| File search | agent/tool UI and file-search tool | VectorDB CRUD, RAG query utility | RAG API, PostgreSQL/pgvector for conversation uploads, Azure AI Search for Agent Knowledge, Azure OpenAI embeddings |
-| Image generation | Knauf image-generation chip/tools | OpenAI image tool wiring | Azure OpenAI deployment `gpt-image-1` |
-| Search | app search UI | `/api/search` | Meilisearch, Mongo |
-| Auth | login/logout and auth-aware routes | OAuth/OpenID strategy | Okta/OpenID, Microsoft Graph for group overage |
-| Admin | separate admin panel | admin APIs | Main app API, SSO |
-| Analytics/consent | `client/src/knauf/analytics` | `/api/knauf` analytics config/diagnostics | Configured analytics provider, browser consent |
-| Legal/branding | `client/src/knauf/components/Public`, branding tests | startup config/footer defaults | Main API config |
+| Feature            | Frontend area                                         | Backend/config area                                        | External dependencies                                                                                          |
+| ------------------ | ----------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Chat               | `client/src` upstream chat surfaces plus Knauf chrome | Express chat/message/conversation routes, Foundry config   | AGK Foundry, Mongo, Redis                                                                                      |
+| Karl default model | model selector and model specs                        | `librechat.yaml`, model-spec helpers                       | AGK Foundry `model-router` through `model-router-chat`                                                         |
+| Custom agents      | agent builder and Knauf simplified builder            | `/api/agents`, `packages/api` agent logic                  | Mongo, files, tool config                                                                                      |
+| File upload        | file picker/upload UI                                 | `/api/files`, file processing service                      | Azure Blob, RAG API, Mongo                                                                                     |
+| File search        | agent/tool UI and file-search tool                    | VectorDB CRUD, RAG query utility                           | RAG API, PostgreSQL/pgvector for conversation uploads, Azure AI Search for Agent Knowledge, Foundry embeddings |
+| Project Knowledge  | project workspace files section                       | project source routes/models plus latest-turn file context | Mongo, Blob, PostgreSQL/pgvector, async indexing worker                                                        |
+| Image generation   | Knauf image-generation chip/tools                     | OpenAI image tool wiring                                   | Environment AGK Foundry `gpt-image-2` deployment                                                               |
+| Search             | app search UI                                         | `/api/search`                                              | Meilisearch, Mongo                                                                                             |
+| Auth               | login/logout and auth-aware routes                    | OAuth/OpenID strategy                                      | Okta/OpenID, Microsoft Graph for group overage                                                                 |
+| Admin              | separate admin panel                                  | admin APIs                                                 | Main app API, SSO                                                                                              |
+| Analytics/consent  | `client/src/knauf/analytics`                          | `/api/knauf` analytics config/diagnostics                  | Configured analytics provider, browser consent                                                                 |
+| Legal/branding     | `client/src/knauf/components/Public`, branding tests  | startup config/footer defaults                             | Main API config                                                                                                |
 
 ## Code-Level Dependency Boundaries
 
@@ -905,64 +1007,77 @@ Patterns used:
 
 Important source-of-truth files:
 
-| File/path | Purpose |
-|---|---|
-| `SEAMS.md` | Full seam manifest |
-| `librechat.yaml` | Core LibreChat application config |
-| `api/server/index.js` | Backend boot and route mounting |
-| `api/server/routes/oauth.js` | OAuth route wiring |
-| `api/strategies/openidStrategy.js` | OpenID strategy behavior |
-| `api/server/services/Files/process.js` | File processing pipeline |
-| `api/server/services/Files/Azure/crud.js` | Azure Blob file storage |
-| `api/server/services/Files/VectorDB/crud.js` | RAG/vector upload integration |
-| `api/app/clients/tools/util/fileSearch.js` | Runtime file-search tool |
-| `client/src/knauf` | Knauf UI layer |
-| `api/server/routes/knauf` | Knauf API layer |
-| `packages/api/src/knauf/permissions/userRestrictions.ts` | Knauf permission restrictions |
-| `agentic-karl-rag-api/app/routes/document_routes.py` | pgvector ingestion/query/delete routes |
-| `agentic-karl-rag-api/app/routes/agent_routes.py` | Azure AI Search ingestion/query/delete routes |
-| `.github/workflows/release_pipeline.yaml` | Main release to dev |
-| `.github/workflows/promote_pipeline.yaml` | Dev-to-prod promotion |
-| `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml` | RAG build and dev deployment |
-| `agentic-karl-rag-api/.github/workflows/promote_pipeline.yaml` | RAG dev-to-prod promotion |
+| File/path                                                           | Purpose                                                            |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `SEAMS.md`                                                          | Full seam manifest                                                 |
+| `librechat.yaml`                                                    | Core LibreChat application config                                  |
+| `api/server/index.js`                                               | Backend boot and route mounting                                    |
+| `api/server/routes/oauth.js`                                        | OAuth route wiring                                                 |
+| `api/strategies/openidStrategy.js`                                  | OpenID strategy behavior                                           |
+| `api/server/services/Files/process.js`                              | File processing pipeline                                           |
+| `api/server/services/Files/Azure/crud.js`                           | Azure Blob file storage                                            |
+| `api/server/services/Files/VectorDB/crud.js`                        | RAG/vector upload integration                                      |
+| `api/app/clients/tools/util/fileSearch.js`                          | Runtime file-search tool                                           |
+| `client/src/knauf`                                                  | Knauf UI layer                                                     |
+| `api/server/routes/knauf`                                           | Knauf API layer                                                    |
+| `packages/api/src/knauf/permissions/userRestrictions.ts`            | Knauf permission restrictions                                      |
+| `agentic-karl-rag-api/app/routes/document_routes.py`                | pgvector ingestion/query/delete routes                             |
+| `agentic-karl-rag-api/app/routes/agent_routes.py`                   | Azure AI Search ingestion/query/delete routes                      |
+| `.github/workflows/release_pipeline.yaml`                           | Main release to dev                                                |
+| `.github/workflows/deploy_stage_pipeline.yaml`                      | Main app dev-to-stage deployment, E2E, optional k6, and provenance |
+| `.github/workflows/promote_pipeline.yaml`                           | Tested stage-to-prod promotion                                     |
+| `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`      | RAG build and dev deployment                                       |
+| `agentic-karl-rag-api/.github/workflows/deploy_stage_pipeline.yaml` | RAG dev-to-stage deployment                                        |
+| `agentic-karl-rag-api/.github/workflows/promote_pipeline.yaml`      | RAG dev-to-prod promotion                                          |
 
 ## Operational Checks
 
 Use these checks to orient quickly without changing production state.
 
+Set `KNAUF_ROOT` to the directory containing the four Knauf repositories first.
+
 ```text
 # App repo
-git status --short
-git rev-list --left-right --count origin/main...HEAD
-node knauf/scripts/seams.js diff-check
-node knauf/scripts/seams.js check
+git -C "$KNAUF_ROOT/agentic-karl" status --short
+git -C "$KNAUF_ROOT/agentic-karl" rev-list --left-right --count origin/main...HEAD
+node "$KNAUF_ROOT/agentic-karl/knauf/scripts/seams.js" diff-check
+node "$KNAUF_ROOT/agentic-karl/knauf/scripts/seams.js" check
 
 # GitOps repo
-git -C /Users/ZaharA/knauf/agk-deployment-configs status --short
-git -C /Users/ZaharA/knauf/agk-deployment-configs fetch origin main
+git -C "$KNAUF_ROOT/agk-deployment-configs" status --short
+git -C "$KNAUF_ROOT/agk-deployment-configs" fetch origin main
 
 # Infrastructure repo
-git -C /Users/ZaharA/knauf/agk-infrastructure status --short
-git -C /Users/ZaharA/knauf/agk-infrastructure fetch origin main
+git -C "$KNAUF_ROOT/agk-infrastructure" status --short
+git -C "$KNAUF_ROOT/agk-infrastructure" fetch origin main
 
 # Azure account orientation
 az account show --query '{name:name,id:id,tenantId:tenantId,user:user.name}' -o table
+
+# ArgoCD application state
+argocd app get agentic-karl-dev-agentic-karl --server argocd.agk.nonprod.knauf.digital --grpc-web
+argocd app get agentic-karl-stage-agentic-karl --server argocd.agk.nonprod.knauf.digital --grpc-web
+argocd app get agentic-karl-prod-agentic-karl --server argocd.agk.prod.knauf.digital --grpc-web
+
+# Kubernetes state with an existing explicit context
+kubectl --context aks-agk-nonprod-001 -n agentic-karl-dev get deployments,pods,externalsecrets,secretstores
+kubectl --context aks-agk-nonprod-001 -n agentic-karl-stage get deployments,pods,externalsecrets,secretstores
 ```
 
 When using Azure CLI, verify the subscription before reading or changing resources. The same tenant contains nonprod and prod subscriptions, and names are similar enough that accidental cross-environment work is a real risk.
 
 ## Common Failure Points
 
-| Symptom | Likely area to inspect |
-|---|---|
-| App deploy is healthy but model calls fail | Azure OpenAI env values, Key Vault secret projection, endpoint/model deployment names, `librechat.yaml` |
-| Login works for some users but not others | OpenID allowed domains, required role/group config, group overage lookup, admin role mapping |
-| File uploads succeed but file search returns nothing | RAG API health, RAG API DB connection, embedding model/key, file embedding status in Mongo |
-| File links expire | SAS expiry and refresh path, Azure Blob signing mode, storage account credentials/identity |
-| Conversation search fails | Meilisearch service, host env, key secret, indexing jobs |
-| RAG parses PDFs poorly | RAG API image version, Azure Document Intelligence endpoint/key, supported extension config |
-| Prod behavior differs from dev | GitOps values, service repo overlay precedence, Key Vault secret drift, promotion workflow state |
-| User permissions differ after deploy | Knauf restriction env flags and startup permission payload |
+| Symptom                                              | Likely area to inspect                                                                        |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| App deploy is healthy but model calls fail           | Foundry env values, Key Vault secret projection, endpoint/deployment names, `librechat.yaml`  |
+| Login works for some users but not others            | OpenID allowed domains, required role/group config, group overage lookup, admin role mapping  |
+| File uploads succeed but file search returns nothing | RAG API health, RAG API DB connection, embedding model/key, file embedding status in Mongo    |
+| File links expire                                    | SAS expiry and refresh path, Azure Blob signing mode, storage account credentials/identity    |
+| Conversation search fails                            | Meilisearch service, host env, key secret, indexing jobs                                      |
+| RAG parses PDFs poorly                               | RAG API image version, Azure Document Intelligence endpoint/key, supported extension config   |
+| Environment behavior differs                         | Dev/stage/prod GitOps values, overlay precedence, Key Vault secret drift, and promotion state |
+| User permissions differ after deploy                 | Knauf restriction env flags and startup permission payload                                    |
 
 ## Shareable Mental Model
 
@@ -984,10 +1099,10 @@ The main app serves React and Express APIs.
   +-- Mongo stores app data.
   +-- Redis supports runtime cache/session behavior.
   +-- Blob stores private raw files/images.
-  +-- RAG API + Postgres/pgvector power user conversation file search.
+  +-- RAG API + Postgres/pgvector power user conversation and Project Knowledge search.
   +-- RAG API + Azure AI Search power persistent Agent Knowledge.
   +-- Meilisearch powers app text search.
-  +-- Azure OpenAI powers chat, embeddings, and image generation.
+  +-- AGK Foundry powers chat, embeddings, Document Intelligence, and image generation.
   +-- OpenID provider powers login and role checks.
 ```
 
@@ -1010,9 +1125,12 @@ Local source references:
 - `agentic-karl-rag-api/app/routes/document_routes.py`
 - `agentic-karl-rag-api/app/routes/agent_routes.py`
 - `agentic-karl/.github/workflows/release_pipeline.yaml`
+- `agentic-karl/.github/workflows/deploy_stage_pipeline.yaml`
 - `agentic-karl/.github/workflows/promote_pipeline.yaml`
 - `agentic-karl/.github/workflows/agk-deploy-smoke.yaml`
 - `agentic-karl-rag-api/.github/workflows/release_pipeline.yaml`
+- `agentic-karl-rag-api/.github/workflows/deploy_stage_pipeline.yaml`
+- `agentic-karl-rag-api/.github/workflows/promote_pipeline.yaml`
 - `agk-infrastructure/terraform/subscription`
 - `agk-deployment-configs/agentic-karl`
 

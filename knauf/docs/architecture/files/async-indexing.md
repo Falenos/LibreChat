@@ -1,9 +1,9 @@
 ---
 title: Files — async indexing (KK20-195), before → after
 spec-id: AGK-ARCH-files-async-indexing
-status: implemented (flag-gated; production async OFF until WP1 + WP6)
-owners: ["@jorgecostak"]
-last-reviewed: 2026-07-20
+status: implemented and enabled in dev, stage, and prod GitOps
+owners: ['@jorgecostak']
+last-reviewed: 2026-08-11
 code-refs:
   - packages/data-schemas/src/schema/fileAsset.ts
   - packages/data-schemas/src/methods/fileAsset.ts
@@ -18,16 +18,16 @@ tests:
   - api/server/services/Files/knauf/*.spec.js
   - client/src/knauf/hooks/Files/useKnaufIndexStatus.knauf.spec.tsx
 acceptance:
-  - "Before/after architecture of File Search ingestion documented with diagrams"
-  - "FileAsset state machine, fencing, and reconciliation cases documented"
-  - "Feature flags and rollout modes documented"
+  - 'Before/after architecture of File Search ingestion documented with diagrams'
+  - 'FileAsset state machine, fencing, and reconciliation cases documented'
+  - 'Feature flags and rollout modes documented'
 relations:
   - links: [AGK-ARCH-files-overview, AGK-ARCH-files-rag-search, AGK-ARCH-files-storage]
 ---
 
 # Files — async indexing (KK20-195): before → after
 
-How File Search ingestion changed from **synchronous embed inside the upload request** to a **durable, state-machined, worker-driven pipeline**. This doc is the before/after companion to the KK20-195 implementation (PR #143); the normative design is the accepted plan `knauf/docs/implementation-plans/async-file-indexing-production.md` (lands with PR #113 — until then see PR #113's branch).
+How File Search ingestion changed from **synchronous embed inside the upload request** to a **durable, state-machined, worker-driven pipeline**. This doc is the before/after companion to the implemented KK20-195 design.
 
 Read [`overview.md`](./overview.md) for the upload-path taxonomy and [`rag-search.md`](./rag-search.md) for the rag_api/pgvector mechanics — both still accurate; this doc covers what sits **between** them: the indexing lifecycle.
 
@@ -35,25 +35,25 @@ Read [`overview.md`](./overview.md) for the upload-path taxonomy and [`rag-searc
 
 ## 1. The 30-second version
 
-| Dimension | Before (main) | After (KK20-195 branch) |
-|---|---|---|
-| Embed timing | Inline in the `POST /files` request — the HTTP response waits for rag_api chunk+embed | Reservation-first: blob + `FileAsset` row written, embed either inline (sync mode, default) or by a dedicated worker (async mode, flagged) |
-| Indexing state | One boolean: `File.embedded` | 7-state `KnaufFileAsset` machine: `uploading → queued → processing → ready / failed`, plus `deleting / delete_failed` |
-| Failure surface | Generic upload error; silent orphans (BUG-05) | Typed `last_error_code` + sanitized detail, per-file status endpoint, user-visible retry |
-| Retry | None — re-upload | Authorized retry endpoint → CAS back to `queued`; worker backoff via `next_attempt_at` |
-| Concurrency safety | None (dual writes, no fencing) | Single-doc CAS + `execution_token` + generation fencing; no multi-doc transactions |
-| Delete | Direct `DELETE /documents` best-effort; vectors orphan on failure | `deleting`/`delete_failed` states + reconciler retries; every delete surface funnels through FileAsset primitives |
-| Dedup | Content-hash dedup (KK20-204) coupled to logical File rows | `dedup_key` (authorization scope + content hash) unique index on the physical asset |
-| Client UX | Progress bar 0→1, then flash/disappear (BUG-03/04) | Explicit per-file status chip, batch summary, send gating until `ready` |
-| Deployment | api container only | api + optional dedicated worker process (`npm run backend:worker`), reconciler loop |
+| Dimension          | Before KK20-195                                                                       | Current implementation                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Embed timing       | Inline in the `POST /files` request — the HTTP response waits for rag_api chunk+embed | Reservation-first: blob + `FileAsset` row written, embed either inline (sync mode, default) or by a dedicated worker (async mode, flagged) |
+| Indexing state     | One boolean: `File.embedded`                                                          | 7-state `KnaufFileAsset` machine: `uploading → queued → processing → ready / failed`, plus `deleting / delete_failed`                      |
+| Failure surface    | Generic upload error; silent orphans (BUG-05)                                         | Typed `last_error_code` + sanitized detail, per-file status endpoint, user-visible retry                                                   |
+| Retry              | None — re-upload                                                                      | Authorized retry endpoint → CAS back to `queued`; worker backoff via `next_attempt_at`                                                     |
+| Concurrency safety | None (dual writes, no fencing)                                                        | Single-doc CAS + `execution_token` + generation fencing; no multi-doc transactions                                                         |
+| Delete             | Direct `DELETE /documents` best-effort; vectors orphan on failure                     | `deleting`/`delete_failed` states + reconciler retries; every delete surface funnels through FileAsset primitives                          |
+| Dedup              | Content-hash dedup (KK20-204) coupled to logical File rows                            | `dedup_key` (authorization scope + content hash) unique index on the physical asset                                                        |
+| Client UX          | Progress bar 0→1, then flash/disappear (BUG-03/04)                                    | Explicit per-file status chip, batch summary, send gating until `ready`                                                                    |
+| Deployment         | api container only                                                                    | api + optional dedicated worker process (`npm run backend:worker`), reconciler loop                                                        |
 
-**Nothing changed** about where bytes live (blob, [`storage.md`](./storage.md)), how retrieval works (`POST /query`, the `file_search` tool, citations — [`rag-search.md`](./rag-search.md)), or the message/agent binding model ([`overview.md`](./overview.md) §3).
+Bytes still live in Blob Storage ([`storage.md`](./storage.md)). Retrieval now uses batched pgvector/Azure AI Search routes and cross-backend RRF ([`rag-search.md`](./rag-search.md)); Project Knowledge also adds a project binding alongside message and agent bindings ([`overview.md`](./overview.md) §3).
 
 ---
 
 ## 2. Before — synchronous embed in the request path
 
-On `main`, a File Search upload (chat-ephemeral §2e or agent knowledge §2f of [`overview.md`](./overview.md)) did everything inside one HTTP request:
+Before KK20-195, a File Search upload (chat-ephemeral §2e or agent knowledge §2f of [`overview.md`](./overview.md)) did everything inside one HTTP request:
 
 ```mermaid
 sequenceDiagram
@@ -77,14 +77,14 @@ sequenceDiagram
 What made this a production problem (the motivation for KK20-195):
 
 - **The request held open for the whole embed.** Large files/batches ran into upstream proxy limits (HTTP 520s), and the RAG call had **no timeout** — a hung rag_api hung the upload forever.
-- **No observable intermediate state.** The Mongo `files` doc was created only *after* embedding, so mid-ingestion files were invisible to `useGetAgentFiles()` (BUG-04) and the client's only signal was its local `progress` number (BUG-03 flash).
+- **No observable intermediate state.** The Mongo `files` doc was created only _after_ embedding, so mid-ingestion files were invisible to `useGetAgentFiles()` (BUG-04) and the client's only signal was its local `progress` number (BUG-03 flash).
 - **Failures were silent and unrecoverable.** An embed failure after blob write left orphaned bytes and sometimes orphaned vectors; the user saw a generic error with no retry (BUG-05). Compensation didn't exist.
 - **Dual writes with no fencing.** Blob write, RAG embed, `files` insert, and (for agent knowledge) the `agent.tool_resources.file_search.file_ids` push were all independent writes — any crash between them produced permanent drift that nothing reconciled.
 - **`File.embedded` was the entire state model** — a boolean that conflated "attempted", "succeeded", and "safe to query/delete".
 
 ### 2.1 WP0 — containment on the sync path (first commit series on this branch)
 
-Before any async machinery, WP0 bounded the existing inline embed. The reconciled sync path keeps one overall deadline, retries only transient failures (408/429/5xx/network), honors bounded `Retry-After`, and deletes only the failed claim's generation when a write does not activate.
+Before any async machinery, WP0 bounded the existing inline embed. The reconciled sync path keeps one overall deadline, retries only HTTP 429 with bounded `Retry-After`, and deletes only the failed claim's generation when a write does not activate. The worker owns the broader transient retry policy for 408/5xx/network failures.
 
 ---
 
@@ -95,7 +95,7 @@ Before any async machinery, WP0 bounded the existing inline embed. The reconcile
 The core structural change: the logical `File` row (what conversations and agents reference) **no longer owns physical state**. A new aggregate owns it:
 
 - **`KnaufFileAsset`** (collection `knauf_file_assets`, [schema](../../../../packages/data-schemas/src/schema/fileAsset.ts)) — one row per **physical object**: blob identity, vector generations, dedup, indexing status, retry/lease bookkeeping, deletion. `File` rows point at it via `knauf_asset_id` (seam in [file.ts](../../../../packages/data-schemas/src/schema/file.ts)); several File rows can share one asset (content dedup).
-- **The Mongo row doubles as the work queue.** There is no Redis/queue infra: the worker claims due assets with a single atomic `findOneAndUpdate`. No multi-document transactions anywhere (plan invariant #14 — works on any topology).
+- **The Mongo row doubles as the work queue.** There is no Redis/queue infra: the worker claims due assets with a single atomic `findOneAndUpdate`. No multi-document transactions are required.
 
 ```mermaid
 flowchart LR
@@ -108,11 +108,11 @@ flowchart LR
     subgraph Physical["Physical layer (new)"]
         FA[(knauf_file_assets<br/>status, generations,<br/>lease, dedup_key)]
         Blob[Blob storage]
-        Vec[pgvector generations]
+        Vec[Vector backend generations<br/>pgvector or Azure AI Search]
     end
 
     Worker[Dedicated worker<br/>api/server/worker.js]
-    Rec[Reconciler loop<br/>§8.4 seven cases]
+    Rec[Reconciler loop<br/>seven cases]
 
     Msg --> File
     Agent --> File
@@ -126,7 +126,7 @@ flowchart LR
 
 ### 3.2 The state machine
 
-Implemented exactly as planned (§5 of the plan); the enum lives in [fileAsset.ts](../../../../packages/data-schemas/src/schema/fileAsset.ts), transitions in [methods/fileAsset.ts](../../../../packages/data-schemas/src/methods/fileAsset.ts) — every transition is a CAS (`findOneAndUpdate` filtered on expected status + `execution_token` where applicable), never a blind `save()`.
+The enum lives in [fileAsset.ts](../../../../packages/data-schemas/src/schema/fileAsset.ts), transitions in [methods/fileAsset.ts](../../../../packages/data-schemas/src/methods/fileAsset.ts) — every transition is a CAS (`findOneAndUpdate` filtered on expected status + `execution_token` where applicable), never a blind `save()`.
 
 ```mermaid
 stateDiagram-v2
@@ -205,37 +205,37 @@ Upload behavior in detail:
 
 New read-side endpoints, registered in [routes/files/files.js](../../../../api/server/routes/files/files.js) and backed by [indexStatus.js](../../../../api/server/services/Files/knauf/indexStatus.js):
 
-| Endpoint | Purpose | Semantics |
-|---|---|---|
-| `GET /api/files/index-status?batch_id=<id>` | Batch progress | Owner-scoped counts per status + `terminal` flag + `failures[] {file_id, error_code, retryable}` |
-| `GET /api/files/:file_id/index-status` | Per-file projection | `fileAccess`-ACL'd `{ status, ready, retryable, error_code, queued_at }` |
-| `POST /api/files/:file_id/index/retry` | User-visible retry | CAS `failed → queued` → **202**; already in flight → 202 (join); already `ready` → 200; asset deleting or blob gone → **409** (`file_asset_deleting` / `file_reupload_required`) |
+| Endpoint                                    | Purpose             | Semantics                                                                                                                                                                        |
+| ------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/files/index-status?batch_id=<id>` | Batch progress      | Owner-scoped counts per status + `terminal` flag + `failures[] {file_id, error_code, retryable}`                                                                                 |
+| `GET /api/files/:file_id/index-status`      | Per-file projection | `fileAccess`-ACL'd `{ status, ready, retryable, error_code, queued_at }`                                                                                                         |
+| `POST /api/files/:file_id/index/retry`      | User-visible retry  | CAS `failed → queued` → **202**; already in flight → 202 (join); already `ready` → 200; asset deleting or blob gone → **409** (`file_asset_deleting` / `file_reupload_required`) |
 
 Readiness is enforced server-side, not just in the UI: [knaufFileIndexReadiness.js](../../../../api/server/middleware/knaufFileIndexReadiness.js) (registered in [routes/agents/chat.js](../../../../api/server/routes/agents/chat.js) before `buildEndpointOption`) rejects a chat send referencing not-ready File Search files with **409 `file_indexing_not_ready`**, and [fileSearch.js](../../../../api/app/clients/tools/util/fileSearch.js) drops not-ready assets at tool-hydration time as defense in depth. The client gate (§6) is UX; these are the enforcement.
 
-### 3.6 Delete lifecycle (§8.1–§8.3)
+### 3.6 Delete lifecycle
 
 Every File Search delete surface funnels through [fileAssetDelete.js](../../../../api/server/services/Files/knauf/fileAssetDelete.js): the direct `DELETE /api/files` path and the conversation cascade (both via [cascadeDeleteConvoFiles.js](../../../../api/server/services/Files/knauf/cascadeDeleteConvoFiles.js)'s dedup-aware GC), the process.js delete seam, and the reconciler. Surviving logical references delete only their own `File` row. The last reference runs: `tombstoneForDelete` CAS (instantly non-searchable and blocks claims/activation) → generation-scoped cleanup of `active_generation`, `target_generation`, and `stale_generations` → blob cleanup → logical metadata commit → `removeAsset`. A physical failure becomes `delete_failed`; a metadata failure leaves the tombstoned ledger for an idempotent retry. This uses the FileAsset ledger even when a crash left `File.embedded=false`, and closes the "delete is metadata-only" GDPR gap of [`overview.md`](./overview.md) §5 **for File Search assets** (other paths unchanged).
 
-### 3.7 The reconciler — §8.4, seven cases
+### 3.7 The reconciler — seven cases
 
-A bounded periodic loop ([indexingReconciler.js](../../../../api/server/services/Files/knauf/indexingReconciler.js)) runs inside the worker process (default every 15 min, ≤100 docs per case per pass, each case isolated so one bad doc can't stall the pass). It repairs what it safely can and **alerts** on what it can't — every alert logs a grep-stable marker `[indexingReconciler][alert][<case>]` for the WP6 monitors:
+A bounded periodic loop ([indexingReconciler.js](../../../../api/server/services/Files/knauf/indexingReconciler.js)) runs inside the worker process (default every 15 min, ≤100 docs per case per pass, each case isolated so one bad doc can't stall the pass). It repairs what it safely can and **alerts** on what it can't — every alert logs a grep-stable marker `[indexingReconciler][alert][<case>]` for operational monitoring:
 
-| # | Case | Detects | Action |
-|---|---|---|---|
-| 1 | `stale_uploading` | `uploading` reservation older than 1 h | Unreferenced → GC; referenced with blob intent → queue; referenced without intent → visible failed/re-upload state |
-| 2 | `expired_lease` | `processing` lease expired ≥30 min and never reclaimed | Alert (worker fleet not draining) |
-| 3 | `dangling_file_refs` | File rows pointing at a missing asset | Remove only unfinished (`knauf_upload_finalized=false`) recovery rows and their agent refs; alert on finalized historical corruption |
-| 4 | `orphan_assets` | `ready`/`failed` asset ≥24 h old with no File references | Tombstone + cleanup + remove |
-| 5 | `delete_failed` / stale `deleting` | Interrupted metadata commit or failed physical cleanup due for retry (15 min) | Remove surviving logical/agent references under the authoritative tombstone → `retryDelete` CAS when needed → cleanup → remove, or re-mark + alert |
-| 6 | `ready_without_generation` | `ready` with `active_generation: null` | Alert (invariant violation) |
-| 7 | `migration_inconsistent` | Backfilled asset whose legacy state disagrees | Alert (needs re-upload) |
+| #   | Case                               | Detects                                                                       | Action                                                                                                                                             |
+| --- | ---------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `stale_uploading`                  | `uploading` reservation older than 1 h                                        | Unreferenced → GC; referenced with blob intent → queue; referenced without intent → visible failed/re-upload state                                 |
+| 2   | `expired_lease`                    | `processing` lease expired ≥30 min and never reclaimed                        | Alert (worker fleet not draining)                                                                                                                  |
+| 3   | `dangling_file_refs`               | File rows pointing at a missing asset                                         | Remove only unfinished (`knauf_upload_finalized=false`) recovery rows and their agent refs; alert on finalized historical corruption               |
+| 4   | `orphan_assets`                    | `ready`/`failed` asset ≥24 h old with no File references                      | Tombstone + cleanup + remove                                                                                                                       |
+| 5   | `delete_failed` / stale `deleting` | Interrupted metadata commit or failed physical cleanup due for retry (15 min) | Remove surviving logical/agent references under the authoritative tombstone → `retryDelete` CAS when needed → cleanup → remove, or re-mark + alert |
+| 6   | `ready_without_generation`         | `ready` with `active_generation: null`                                        | Alert (invariant violation)                                                                                                                        |
+| 7   | `migration_inconsistent`           | Backfilled asset whose legacy state disagrees                                 | Alert (needs re-upload)                                                                                                                            |
 
 Every case advances a rotating `_id` cursor so successive passes sweep the whole space (not just the first page) even when a case leaves rows in place. The three alert-only cases (2, 6, 7) additionally report a **complete count** (a full indexed `countDocuments`, not the bounded page) so the alerted metric is never truncated at `batchLimit` and survives a worker redeploy; the bounded page just names a rotating sample for triage.
 
 ### 3.8 Generation-safe RAG contract
 
-[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the plan-§7.2 write contract used by `agentic-karl-rag-api#16`: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. Both worker and synchronous flag-off uploads use this contract. New physical assets receive an immutable server UUID independent of the reusable logical File id, so late cleanup from an old incarnation cannot delete a new generation. If embedding succeeds but activation loses its CAS, only that claimant's generation is deleted; a failed delete is recorded as `stale_generations` cleanup debt while the winning asset lifecycle is preserved. The persisted sanitized filename preserves the extension used by RAG parser/OCR routing. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 is reserved for migrated legacy vectors without generation metadata.
+[generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js) implements the generation-safe write contract used by the current RAG API: `embedGeneration` POSTs to the asset's `embed_route` (`/embed` or `/agent/embed`) with `generation` + `index_profile`, validates the complete `ready` response before activation, and `deleteGeneration` issues an idempotent backend-scoped `DELETE /generation`. Both worker and synchronous flag-off uploads use this contract. New physical assets receive an immutable server UUID independent of the reusable logical File id, so late cleanup from an old incarnation cannot delete a new generation. If embedding succeeds but activation loses its CAS, only that claimant's generation is deleted; a failed delete is recorded as `stale_generations` cleanup debt while the winning asset lifecycle is preserved. The persisted sanitized filename preserves the extension used by RAG parser/OCR routing. File Search sends every physical asset with its Mongo-selected `active_generation`; generation 0 is reserved for migrated legacy vectors without generation metadata.
 
 ---
 
@@ -243,64 +243,64 @@ Every case advances a rotating `_id` cursor so successive passes sweep the whole
 
 Three **independent** switches ([asyncIndexingConfig.js](../../../../api/server/services/Files/knauf/asyncIndexingConfig.js)) — acceptance and execution are deliberately separate so rollback can stop new async uploads while queued work drains:
 
-| Env var | Meaning | Default |
-|---|---|---|
-| `KNAUF_ASYNC_FILE_INDEXING_ACCEPT` | Upload returns 202 after blob + `queued` (async acceptance) | off |
-| `KNAUF_INDEXING_WORKER_ENABLED` | The dedicated worker claims queued work | off |
-| `KNAUF_ASYNC_INDEXING_TENANTS` | Optional tenant allow-list gating acceptance during canary (empty = all) | empty |
-| `KNAUF_INDEX_PROFILE` | Server-selected index profile stamped on new reservations | `legacy-v0` |
+| Env var                            | Meaning                                                                  | Default     |
+| ---------------------------------- | ------------------------------------------------------------------------ | ----------- |
+| `KNAUF_ASYNC_FILE_INDEXING_ACCEPT` | Upload returns 202 after blob + `queued` (async acceptance)              | off         |
+| `KNAUF_INDEXING_WORKER_ENABLED`    | The dedicated worker claims queued work                                  | off         |
+| `KNAUF_ASYNC_INDEXING_TENANTS`     | Optional tenant allow-list gating acceptance during canary (empty = all) | empty       |
+| `KNAUF_INDEX_PROFILE`              | Server-selected index profile stamped on new reservations                | `legacy-v0` |
 
-| Mode | ACCEPT | WORKER | Behavior |
-|---|---|---|---|
-| **Today (both off)** | off | off | Sync-through-the-asset: request waits for the generation-safe RAG write + activation; every file has a FileAsset row + status |
-| Drain / rollback | off | on | No new async uploads; worker finishes the queued backlog |
-| Canary / production | on | on | 202-accept + worker indexing (requires WP1 RAG contract + WP6 deploy/monitors) |
+| Mode                       | ACCEPT | WORKER | Behavior                                                                                                                      |
+| -------------------------- | ------ | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Local/default (both off)   | off    | off    | Sync-through-the-asset: request waits for the generation-safe RAG write + activation; every file has a FileAsset row + status |
+| Drain / rollback           | off    | on     | No new async uploads; worker finishes the queued backlog                                                                      |
+| Current AGK dev/stage/prod | on     | on     | 202-accept + dedicated worker indexing                                                                                        |
 
 The worker is a separate process: `npm run backend:worker` → [api/server/worker.js](../../../../api/server/worker.js) — claim loop + reconciler, graceful SIGTERM drain (`KNAUF_WORKER_GRACE_MS`, default 60 s: stop claiming, finish in-flight work, then exit). It authenticates to rag_api exactly like the api does — `generateShortLivedToken(<owning user>)` ([`rag-search.md`](./rag-search.md) §3).
 
 It exposes a small probe surface on `KNAUF_WORKER_PORT` (default 3081), extracted into [workerProbes.js](../../../../api/server/services/Files/knauf/workerProbes.js) so the readiness rule and the metrics mount are unit-tested:
 
-| Probe | Meaning |
-|---|---|
-| `GET /health` | Liveness — the process is up (always 200). |
-| `GET /ready` | Readiness — **Mongo connected AND the loop made progress recently**, where "progress" is an idle/claim tick **or** a live heartbeat during an in-flight claim. A valid long OCR/embed job (which blocks the loop in `await processNextDue` but keeps renewing its lease) therefore keeps `/ready` green; only a genuinely wedged loop trips it. Staleness window = `max(5·pollMs, 3·heartbeatMs)`. 200 when ready, 503 with `{ status, mongo, loop_last_progress_ms_ago }` otherwise. |
-| `GET /metrics` | Prometheus scrape (mounted at `/metrics`), served only when `METRICS_SECRET` is set. |
+| Probe          | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`  | Liveness — the process is up (always 200).                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GET /ready`   | Readiness — **Mongo connected AND the loop made progress recently**, where "progress" is an idle/claim tick **or** a live heartbeat during an in-flight claim. A valid long OCR/embed job (which blocks the loop in `await processNextDue` but keeps renewing its lease) therefore keeps `/ready` green; only a genuinely wedged loop trips it. Staleness window = `max(5·pollMs, 3·heartbeatMs)`. 200 when ready, 503 with `{ status, mongo, loop_last_progress_ms_ago }` otherwise. |
+| `GET /metrics` | Prometheus scrape (mounted at `/metrics`), served only when `METRICS_SECRET` is set.                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Worker tuning knobs ([indexingWorker.js](../../../../api/server/services/Files/knauf/indexingWorker.js) `getWorkerConfig`; process/timeout knobs in [worker.js](../../../../api/server/worker.js) + [generationRagClient.js](../../../../api/server/services/Files/knauf/generationRagClient.js)), all env-overridable:
 
-| Knob | Default | Meaning |
-|---|---|---|
-| `KNAUF_WORKER_PORT` | 3081 | Port for the `/health`, `/ready`, `/metrics` probes |
-| `KNAUF_WORKER_GRACE_MS` | 60 s | SIGTERM drain window: stop claiming, finish in-flight, then exit |
-| `KNAUF_WORKER_POLL_MS` | 5 s | Idle sleep between claim attempts (one asset per iteration) |
-| `KNAUF_WORKER_QUEUE_METRICS_MS` | 30 s | Queue depth/oldest-age sampling cadence; samples never overlap and failures do not stop claims |
-| `KNAUF_WORKER_LEASE_MS` | 5 min | Claim lease; expired `processing` leases become reclaimable |
-| `KNAUF_WORKER_HEARTBEAT_MS` | 30 s | Token-fenced lease renewal; a CAS miss = ownership lost, stop writing state. Also feeds `/ready` liveness |
-| `KNAUF_WORKER_EMBED_TIMEOUT_MS` | 30 min | Per-embed request cap (its OWN budget — NOT `RAG_EMBED_SYNC_TIMEOUT_MS`; async exists to allow long OCR) |
-| `KNAUF_WORKER_ATTEMPT_CAP` | 5 | Retryable failures before `failed` (`embed_attempts_exhausted`) |
-| `KNAUF_WORKER_AUTH_ATTEMPT_CAP` | 2 | 401/403 budget — fails fast to `embed_auth_config` and logs at error level |
-| `KNAUF_WORKER_BACKOFF_BASE_MS` / `_MAX_MS` | 10 s / 10 min | Full-jitter exponential backoff on `next_attempt_at` |
+| Knob                                       | Default       | Meaning                                                                                                   |
+| ------------------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------- |
+| `KNAUF_WORKER_PORT`                        | 3081          | Port for the `/health`, `/ready`, `/metrics` probes                                                       |
+| `KNAUF_WORKER_GRACE_MS`                    | 60 s          | SIGTERM drain window: stop claiming, finish in-flight, then exit                                          |
+| `KNAUF_WORKER_POLL_MS`                     | 5 s           | Idle sleep between claim attempts (one asset per iteration)                                               |
+| `KNAUF_WORKER_QUEUE_METRICS_MS`            | 30 s          | Queue depth/oldest-age sampling cadence; samples never overlap and failures do not stop claims            |
+| `KNAUF_WORKER_LEASE_MS`                    | 5 min         | Claim lease; expired `processing` leases become reclaimable                                               |
+| `KNAUF_WORKER_HEARTBEAT_MS`                | 30 s          | Token-fenced lease renewal; a CAS miss = ownership lost, stop writing state. Also feeds `/ready` liveness |
+| `KNAUF_WORKER_EMBED_TIMEOUT_MS`            | 30 min        | Per-embed request cap (its OWN budget — NOT `RAG_EMBED_SYNC_TIMEOUT_MS`; async exists to allow long OCR)  |
+| `KNAUF_WORKER_ATTEMPT_CAP`                 | 5             | Retryable failures before `failed` (`embed_attempts_exhausted`)                                           |
+| `KNAUF_WORKER_AUTH_ATTEMPT_CAP`            | 2             | 401/403 budget — fails fast to `embed_auth_config` and logs at error level                                |
+| `KNAUF_WORKER_BACKOFF_BASE_MS` / `_MAX_MS` | 10 s / 10 min | Full-jitter exponential backoff on `next_attempt_at`                                                      |
 
 Reconciler tuning knobs ([indexingReconciler.js](../../../../api/server/services/Files/knauf/indexingReconciler.js) `getReconcilerConfig`), env-overridable:
 
-| Knob | Default | Meaning |
-|---|---|---|
-| `KNAUF_RECONCILE_INTERVAL_MS` | 15 min | Period between passes (one pass at boot, then on this interval) |
-| `KNAUF_RECONCILE_BATCH_LIMIT` | 100 | Max docs scanned per case per pass (bounded, indexed) |
-| `KNAUF_RECONCILE_STALE_UPLOADING_MS` | 1 h | Case 1: `uploading` reservation older than this is stale |
-| `KNAUF_RECONCILE_STALE_LEASE_MS` | 30 min | Case 2: a `processing` lease expired this long ago = fleet not draining → alert |
-| `KNAUF_RECONCILE_ORPHAN_ASSET_MS` | 24 h | Case 4: `ready`/`failed` asset older than this with no File refs is an orphan |
-| `KNAUF_RECONCILE_DELETE_RETRY_MS` | 15 min | Case 5: `delete_failed`/`deleting` due for another cleanup attempt |
+| Knob                                 | Default | Meaning                                                                         |
+| ------------------------------------ | ------- | ------------------------------------------------------------------------------- |
+| `KNAUF_RECONCILE_INTERVAL_MS`        | 15 min  | Period between passes (one pass at boot, then on this interval)                 |
+| `KNAUF_RECONCILE_BATCH_LIMIT`        | 100     | Max docs scanned per case per pass (bounded, indexed)                           |
+| `KNAUF_RECONCILE_STALE_UPLOADING_MS` | 1 h     | Case 1: `uploading` reservation older than this is stale                        |
+| `KNAUF_RECONCILE_STALE_LEASE_MS`     | 30 min  | Case 2: a `processing` lease expired this long ago = fleet not draining → alert |
+| `KNAUF_RECONCILE_ORPHAN_ASSET_MS`    | 24 h    | Case 4: `ready`/`failed` asset older than this with no File refs is an orphan   |
+| `KNAUF_RECONCILE_DELETE_RETRY_MS`    | 15 min  | Case 5: `delete_failed`/`deleting` due for another cleanup attempt              |
 
 Admission + upload-path knobs ([indexAdmission.js](../../../../api/server/services/Files/knauf/indexAdmission.js), [fileSearchAssetLifecycle.js](../../../../api/server/services/Files/knauf/fileSearchAssetLifecycle.js)):
 
-| Knob | Default | Meaning |
-|---|---|---|
-| `KNAUF_INDEX_MAX_QUEUED_FILES` | 20 | Per-scope non-terminal file cap; over it → 429 `file_indexing_backlog_full` |
-| `KNAUF_INDEX_MAX_QUEUED_BYTES` | 500 MB | Per-scope non-terminal byte cap. Reserve-first: a reservation records `reserved_bytes` before the blob exists, so concurrent uploads converge on the cap instead of each reading 0 |
-| `KNAUF_ASSET_RECLAIM_STALE_MS` | 15 min | Flags-off only: how old an abandoned `uploading`/`queued` reservation must be before the upload path reclaims its dedup slot |
+| Knob                           | Default | Meaning                                                                                                                                                                            |
+| ------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KNAUF_INDEX_MAX_QUEUED_FILES` | 20      | Per-scope non-terminal file cap; over it → 429 `file_indexing_backlog_full`                                                                                                        |
+| `KNAUF_INDEX_MAX_QUEUED_BYTES` | 500 MB  | Per-scope non-terminal byte cap. Reserve-first: a reservation records `reserved_bytes` before the blob exists, so concurrent uploads converge on the cap instead of each reading 0 |
+| `KNAUF_ASSET_RECLAIM_STALE_MS` | 15 min  | Flags-off only: how old an abandoned `uploading`/`queued` reservation must be before the upload path reclaims its dedup slot                                                       |
 
-Error classification mirrors the plan §5.3 table: 408/429/5xx/connection-reset → retryable (backoff, honors `Retry-After`); other 4xx → permanent (`embed_permanent`); 401/403 → configuration/auth (limited retry + alert); heartbeat/completion CAS miss → ownership lost (no state write, clean own generation only).
+Worker error classification is: 408/429/5xx/connection-reset → retryable (backoff, honors `Retry-After`); other 4xx → permanent (`embed_permanent`); 401/403 → configuration/auth (limited retry + alert); heartbeat/completion CAS miss → ownership lost (no state write, clean own generation only).
 
 **Observability (WP0):** three Prometheus metrics in [packages/api/src/app/metrics.ts](../../../../packages/api/src/app/metrics.ts), registered only when `METRICS_SECRET` is set and carrying bounded tags only (route/outcome/status class — never ids or filenames): `knauf_file_index_embed_duration_seconds`, `knauf_file_index_provider_errors_total`, `knauf_file_index_embed_retries_total`.
 
@@ -308,9 +308,9 @@ Error classification mirrors the plan §5.3 table: 408/429/5xx/connection-reset 
 
 ## 5. Running locally (worker + async mode)
 
-Local dev runs the API and the worker **on the host**, against the compose datastores. The `api` compose service stays off (`profiles: [manual-start]`, see [CLAUDE.md](../../../../CLAUDE.md)). Nothing here needs the two flags on — with both off you still get the full FileAsset lifecycle on the sync path; turn them on only to exercise the worker/queue.
+For host-based local development, run the API and worker against the Compose datastores. Add a local Compose override that exposes the required datastore ports; the base `docker-compose.yml` does not expose Mongo or RAG to the host. With acceptance off, the full FileAsset lifecycle still runs synchronously; enable acceptance only to exercise the worker queue.
 
-> **WP1 deployment gate — read first.** This application change requires the generation-safe `agentic-karl-rag-api#16` contract (`generation`/`index_profile` fields and `DELETE /generation`) for **both** synchronous and asynchronous File Search ingestion. Deploy/release RAG #16 before this application image. A legacy RAG image will reject new File Search uploads even while async acceptance is off.
+> The application requires the generation-safe RAG contract (`generation`/`index_profile` fields and `DELETE /generation`) for both synchronous and asynchronous File Search ingestion. Current AGK RAG releases include it; do not roll an environment back to a legacy RAG image that lacks this contract.
 
 ### 5.1 Datastores
 
@@ -318,7 +318,7 @@ Local dev runs the API and the worker **on the host**, against the compose datas
 docker compose up -d mongodb meilisearch vectordb rag_api
 ```
 
-Host ports (from [docker-compose.override.yml](../../../../docker-compose.override.yml)): Mongo `localhost:27018`, rag_api `localhost:8010`.
+The example below assumes the local override exposes Mongo as `localhost:27018` and RAG as `localhost:8010`. [`docker-compose.override.yml.example`](../../../../docker-compose.override.yml.example) shows the override pattern; choose ports explicitly for your machine.
 
 ### 5.2 `.env`
 
@@ -336,7 +336,7 @@ KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false
 # METRICS_SECRET=<any-non-empty-value>
 ```
 
-Leave both flags `false` to keep production defaults; §5.4 flips acceptance on temporarily.
+For the local sync path, leave acceptance `false`; the worker may stay enabled and idle. Section 5.4 flips acceptance on temporarily.
 
 ### 5.3 Run the API and the worker
 
@@ -366,9 +366,9 @@ SIGTERM drain (§5.2 semantics): `kill -TERM <worker-pid>` → logs `stop claimi
 4. The file's retry endpoint (`POST /api/files/:file_id/index/retry`) answers `202` (re-queue) while the worker is enabled, or `409 indexing_worker_unavailable` when it is off.
 5. **Turn acceptance back OFF** (`KNAUF_ASYNC_FILE_INDEXING_ACCEPT=false`) and restart the API — the sync path resumes for everyone else.
 
-### 5.5 In-cluster (WP6, after Part A merges)
+### 5.5 In-cluster
 
-Dev deploys the worker as its own service with the acceptance flag off (an enabled worker polling an empty queue safely validates image/command/probes/metrics/SIGTERM in-cluster). `argocd app diff agentic-karl-dev-agentic-karl-worker` → sync → pod `Ready` via `/ready`; `kubectl logs` show the idle claim loop; `kubectl exec … curl localhost:3081/metrics` shows `knauf_file_index_*`. Tracked in the WP6 deployment plan, not this branch.
+GitOps declares a dedicated `agentic-karl-worker` service and async acceptance in dev, stage, and prod. Verify the desired values, ArgoCD sync/health, pod readiness via `/ready`, worker logs, and `knauf_file_index_*` metrics in the target environment; repository values alone do not prove the live worker is healthy.
 
 ---
 
@@ -387,16 +387,15 @@ This resolves the BUG-03/BUG-04 flash-and-disappear class and gives BUG-05 (sile
 
 ---
 
-## 7. What deliberately did NOT change
+## 7. Unrelated behavior
 
-- **Retrieval presentation** — ranking, citations and `RAG_USE_FULL_CONTEXT` are unchanged ([`rag-search.md`](./rag-search.md)); query requests now add the authoritative active-generation filter described in §3.8.
 - **Storage** — `fileStrategy` adapters, SAS serving: untouched ([`storage.md`](./storage.md)). FileAsset stores a **stable blob identity**, never a SAS URL.
-- **Binding model** — message-level vs agent-level visibility ([`overview.md`](./overview.md) §3).
+- **Binding model** — message, agent, and project visibility are separate from the FileAsset execution state ([`overview.md`](./overview.md) §3).
 - **Non-File-Search paths** — vision, upload-as-text, code files, provider uploads: no FileAsset involvement.
 - **Legacy files** — a File row without `knauf_asset_id` projects as `ready` (legacy compatibility); WP2d backfills FileAsset rows for existing File Search files (batched, resumable, admin-triggered via [routes/knauf/fileAssetMigration.js](../../../../api/server/routes/knauf/fileAssetMigration.js)).
 
-## 8. Open ends (tracked, not in this repo/branch)
+## 8. Operational verification
 
-- **WP1** — merge and deploy the generation-safe contract in `agentic-karl-rag-api#16`, then pass its integration/fault-test gate before enabling async acceptance.
-- **WP6** — worker deployment (agk-deployment-configs), monitors on the reconciler alert markers, fault-injection tests; only then flip the two flags.
-- **§17 assumption ledger** in the plan — naming, dedup scope, admission caps, worker identity — awaiting ratification by the plan owner.
+- Confirm app and worker use the same promoted image tag in the target GitOps environment.
+- Confirm `KNAUF_ASYNC_FILE_INDEXING_ACCEPT=true` on the app and `KNAUF_INDEXING_WORKER_ENABLED=true` on the worker.
+- Confirm ArgoCD sync/health, worker `/ready`, queue progress, retry metrics, and reconciler alert markers before calling async indexing healthy.
