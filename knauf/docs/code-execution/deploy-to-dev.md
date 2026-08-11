@@ -29,6 +29,31 @@ all before D4. Both routes are spelled out in Phase 0.
 
 ---
 
+## The sequence, at a glance
+
+Twelve steps. The **Gate** column is what tells you the step actually worked — if you cannot
+observe it, the step is not done. Detail for each is in the phase named beside it.
+
+| # | Do | Gate — how you know | Where |
+| --- | --- | --- | --- |
+| 1 | Answer #73's three open questions in the PR conversation | Reviewer has nothing left to ask | Phase 0 |
+| 2 | `az provider show --namespace Microsoft.App --query registrationState -o tsv` | `Registered`. **Not** a plan-time failure — an unregistered RP fails at *apply* | Phase 0 |
+| 3 | Get #73 approved and merge it | `apply-tenants` green on `main`; 12 resources created | Phase A |
+| 4 | Capture `terraform output code_adapter_dev_client_id` and `code_pool_dev_management_endpoint` | Both non-empty; also in Key Vault | Phase A |
+| 5 | Generate the Ed25519 keypair; private half → Key Vault | `az keyvault secret show --name AGK-CODEAPI-JWT-PRIVATE-KEY` returns | Phase B |
+| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and tag `0.1.0` appears in the ACR | Phase C |
+| 7 | Substitute #347's two placeholders (client id from 4, public key from 5) | The **`Reject committed placeholders`** check turns green. It fails today on purpose — that is the gate, not a bug | Phase D |
+| 8 | Merge #347 | ArgoCD syncs; pod `Running` and `/readyz` 200 | Phase D |
+| 9 | Read `spec.serviceAccountName` and the injected `AZURE_*` vars | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once** | Phase E |
+| 10 | Confirm the auth boundary and one real exec | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version | Phase E |
+| 11 | Ship the switch PR (`LIBRECHAT_CODE_BASEURL` + five `CODEAPI_*`) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
+| 12 | Walk the UI checklist, then run the capacity baseline | ~20 of 25 parallel execs succeed, rest report capacity, recovery after 5 min | Phase E |
+
+Steps 1–2 are the only ones that can be done today; 3 unblocks everything after it.
+**Nothing between 6 and 11 is user-visible** — the feature turns on at 11 and nowhere earlier.
+
+---
+
 ## Ordering constraints (the three that actually bite)
 
 1. **Terraform before GitOps.** The GitOps values need the MI client id and the pool
@@ -170,6 +195,35 @@ diff; no CI change needed). Creates 12 resources across dev + stage.
 - [ ] If the role assignment fails with `PrincipalNotFound`, re-run once. A brand-new
       user-assigned identity can lose a race with Entra replication; `principal_type` is set,
       which usually avoids it.
+- [ ] **Optional but recommended in the same PR — the Blob role assignment.** Review finding
+      B2: `agentic-karl-BLOB-STORAGE-CONNECTION-STRING` is the storage account's *primary key*
+      (`module.storage_blob_dev.storage_primary_connection_string`), so giving it to this pod
+      grants every container on the account, including the app's own `files`. The adapter now
+      supports workload identity for Blob (`e5ae34e23`), so this becomes a config change:
+
+      ```hcl
+      # Pre-create the container: a container-scoped role cannot create one, and the adapter
+      # only tolerates that 403 when the container already exists.
+      resource "azurerm_storage_container" "code_adapter_staging_dev" {
+        name                  = "code-adapter-staging"
+        storage_account_id    = module.storage_blob_dev.storage_account_id
+        container_access_type = "private"
+      }
+
+      resource "azurerm_role_assignment" "code_adapter_blob_dev" {
+        scope                = azurerm_storage_container.code_adapter_staging_dev.resource_manager_id
+        role_definition_name = "Storage Blob Data Contributor"
+        principal_id         = azurerm_user_assigned_identity.code_adapter_dev.principal_id
+        principal_type       = "ServicePrincipal"
+      }
+      ```
+
+      Then in D2, swap the ExternalSecret entry for `AZURE_STORAGE_ACCOUNT_NAME`. Order does
+      not matter: the adapter prefers workload identity whenever the account name is set, so
+      there is no window where the key is still the credential in effect. Check the exact
+      attribute names against the storage module's outputs before applying — they are not
+      verified here.
+
 - [ ] Record the two values the next phase needs:
       ```bash
       terraform output code_adapter_dev_client_id            # → SA annotation
@@ -302,7 +356,13 @@ agentic-karl-code-adapter:
       kind: SecretStore
       name: kv-agntkarl-nonprod-001
     secrets:
+      # Cosmos vCore ADMIN user. The adapter needs one collection and gets the cluster —
+      # see "Decisions" §1. Still unresolved; the only open security item.
       MONGO_URI: agentic-karl-MONGODB-CONNECTION-STRING
+      # Storage account PRIMARY KEY. Replace this line with the configmap entry
+      #   AZURE_STORAGE_ACCOUNT_NAME: "<account>"
+      # once the Blob role assignment from Phase A is applied — the adapter prefers workload
+      # identity whenever that is set, so the two can overlap safely during the migration.
       AZURE_STORAGE_CONNECTION_STRING: agentic-karl-BLOB-STORAGE-CONNECTION-STRING
       ACA_POOL_ENDPOINT: agentic-karl-dev-CODE-POOL-ENDPOINT
 
@@ -512,6 +572,44 @@ recovery. **Write the measured number into scaling.md.** It is the input to prod
 same string, ArgoCD sees no change and the cluster keeps the old image until some unrelated
 restart pulls the new one — and rollback-by-tag then has nothing distinct to roll back to.
 **Bump `VERSION` in every PR that touches the adapter.**
+
+---
+
+## Decisions someone has to make (not fixes — calls)
+
+These are not blockers you can clear by doing work; they need a position taken. Two of the
+three affect whether dev UAT is representative.
+
+**1 · Mongo credentials — the one open security item.** `agentic-karl-MONGODB-CONNECTION-STRING`
+is `mongodb+srv://${var.mongodb_admin_username}:${random_password.mongo_vcore_admin.result}@…`
+— the Cosmos vCore **admin user**. The adapter needs one collection (`code_adapter_files`) and
+gets the whole cluster, so a bug in this new service reaches every chat. Blob was fixed the
+same way ACA already worked (workload identity); Mongo has two routes and both touch the shared
+cluster:
+
+- a scoped Mongo user restricted to the adapter's database — simple, but a second credential to
+  rotate;
+- Entra auth on the vCore cluster — no credential at all, consistent with everything else here,
+  more work and a change to a shared resource.
+
+Acceptable for dev UAT *if* someone says so explicitly and it is tracked. Not acceptable to
+carry into prod silently, which is why it is written down rather than left in a PR thread.
+
+**2 · Spot affinity vs long executions.** The pod has a hard
+`requiredDuringSchedulingIgnoredDuringExecution` affinity to spot nodes, copied verbatim from
+the worker — so it is a platform pattern, not this service's choice. But Azure gives ~30s of
+eviction notice and executions run for minutes, so **no `terminationGracePeriodSeconds` value
+makes an evicted execution survivable**; the 360s in D2 only helps for rollouts and drains.
+Softening to `preferred` is the only thing that changes the eviction story, and it costs
+nothing on a cluster that has non-spot capacity. Someone owning the platform pattern should say
+yes or no rather than leaving 360s implying a protection it does not provide.
+
+**3 · Boot-time Entra probe (recommended before UAT).** Today a broken workload identity is
+*silent*: the token is acquired lazily on the first ACA call, `/readyz` only pings Mongo, so the
+pod is Ready and looks healthy until the first execution 502s. A `tokens.getToken()` probe next
+to the existing `importCodeApiKey` check in `index.ts` would turn that into a CrashLoopBackOff
+at boot. It is the same fail-fast argument that justified the JWT-key check, and it removes the
+single most likely first-deployment failure from the "mysterious" category. Roughly ten lines.
 
 ---
 
