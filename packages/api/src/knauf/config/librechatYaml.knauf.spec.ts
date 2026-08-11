@@ -398,22 +398,31 @@ describe('[knauf] librechat.yaml — code execution is always on, with no chip',
    *
    *   capability `execute_code`      -> the tool exists (upload gate, codeEnvAvailable)
    *   `executeCode: true` per spec   -> it is requested on every KARL turn
-   *   `interface.runCode: false`     -> STILL false, and now load-bearing: it is what
-   *                                     keeps the composer chip, the tools-menu row and
-   *                                     the manual Run button away, giving "always on,
-   *                                     nothing to toggle" without a UI hide.
+   *   `interface.runCode: true`      -> the RUN_CODE permission is granted, because it is
+   *                                     the only thing that makes the manual execution
+   *                                     path work: `POST /tools/:toolId/call` is the one
+   *                                     server route that checks it
+   *                                     (api/server/controllers/tools.js).
    *
-   * The RUN_CODE permission gates only those three UI surfaces; agent auto-run comes
-   * from the capability + per-spec flag (packages/api/src/agents/load.ts). If anyone
-   * flips runCode true, the chip returns permanently checked and needs an explicit
-   * KNAUF_HIDE_* guard — hence this assertion stays.
+   * The permission has never gated agent auto-run — that comes from the capability plus
+   * the per-spec flag (packages/api/src/agents/load.ts) — so granting it changes nothing
+   * about whether code runs. What it does change is the UI: three manual surfaces would
+   * appear (composer chip, tools-menu row, per-code-block Run button). KARL ships none of
+   * them, and they are suppressed in the components by KNAUF_HIDE_CODE_* flags, pinned by
+   * `client/src/knauf/components/Chat/{composerChipHides,codeRunSurfaces}` — which is
+   * where a regression on that half shows up, not here.
    *
-   * `RUN_CODE: { USE: false }` in knauf/scripts/seed-agent-builder-role.js must still
-   * agree; this file cannot see it (a mongosh script, not config) and
-   * `updateInterfacePermissions` re-seeds only USER and ADMIN.
+   * This assertion is `true` deliberately: reverting it to `false` would make those three
+   * client constants dead code and re-disable the manual path by permission, which is the
+   * KK20-252 state that KK20-257 moved away from.
+   *
+   * `RUN_CODE: { USE: false }` in knauf/scripts/seed-agent-builder-role.js is unrelated
+   * and stays: it grants nothing reachable now that no UI calls that endpoint. This file
+   * cannot see it (a mongosh script, not config) and `updateInterfacePermissions`
+   * re-seeds only USER and ADMIN.
    */
-  it('does not grant RUN_CODE through interface.runCode', () => {
-    expect(config.interface?.runCode).toBe(false);
+  it('grants RUN_CODE through interface.runCode, with the UI surfaces hidden client-side', () => {
+    expect(config.interface?.runCode).toBe(true);
   });
 
   it('lists execute_code as an agent capability', () => {

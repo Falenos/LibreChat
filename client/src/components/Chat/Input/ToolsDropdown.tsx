@@ -274,7 +274,14 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
   }
   // End [knauf]
 
-  if (canRunCode && codeEnabled) {
+  // [knauf] KK20-257 — don't surface the code-interpreter toggle in the composer tools
+  // menu. The chip itself is hidden (CodeInterpreter.tsx) because code execution is
+  // always on for every user-facing KARL spec, so a toggle here could only turn the
+  // sandbox off. Hidden in the UI rather than via the RUN_CODE permission, because that
+  // permission is what makes the manual Run button work (see CodeInterpreter.tsx for the
+  // full reasoning). `as boolean` keeps the upstream body reachable for clean merges.
+  const KNAUF_HIDE_CODE_INTERPRETER_TOOL = true as boolean;
+  if (!KNAUF_HIDE_CODE_INTERPRETER_TOOL && canRunCode && codeEnabled) {
     dropdownItems.push({
       onClick: handleCodeInterpreterToggle,
       hideOnClick: false,
@@ -307,6 +314,7 @@ const ToolsDropdown = ({ disabled, extraItems }: ToolsDropdownProps) => {
       ),
     });
   }
+  // End [knauf]
 
   // [knauf] Don't surface the artifacts submenu in the composer tools menu. The
   // chip itself is hidden (Artifacts.tsx) because every KARL spec sets

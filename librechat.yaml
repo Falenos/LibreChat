@@ -387,33 +387,46 @@ interface:
   # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
   # Custom roles remain Admin UI controlled.
   webSearch: true
-  # [knauf] KK20-252 / KK20-257 — Run Code stays off, and this is now load-bearing
-  # for a different reason than when it was written.
+  # [knauf] KK20-252 / KK20-257 — Run Code is ON, and every UI surface it unlocks is
+  # deliberately hidden in the client. Read both halves before changing either.
   #
-  # This flag controls the RUN_CODE.USE *permission* only, and that permission gates
-  # exactly three UI surfaces: the composer code-interpreter chip
-  # (client/src/components/Chat/Input/CodeInterpreter.tsx), its tools-menu row
-  # (ToolsDropdown.tsx), and the manual per-code-block Run button
-  # (MarkdownComponents.tsx). It does NOT gate agent auto-run: the server registers
-  # bash_tool/read_file from the capability plus the per-spec `executeCode` flag
-  # (packages/api/src/agents/load.ts), never from this permission.
+  # This flag controls the RUN_CODE.USE *permission* only. That permission gates three
+  # things, all of them manual and all of them user-initiated:
+  #   * the composer code-interpreter chip (client/src/components/Chat/Input/CodeInterpreter.tsx),
+  #   * its tools-menu row (ToolsDropdown.tsx), and
+  #   * the per-code-block Run button (MarkdownComponents.tsx → POST /tools/:toolId/call,
+  #     which is the one server path that actually checks it — api/server/controllers/tools.js).
+  # It does NOT gate agent auto-run: the server registers bash_tool/read_file from the
+  # capability plus the per-spec `executeCode` flag (packages/api/src/agents/load.ts),
+  # never from this permission.
   #
-  # KK20-257 turns code execution ON (see `endpoints.agents.capabilities` below) and
-  # wants it always-on with NO chip — the same no-toggle model as artifacts, skills
-  # and file search. Keeping this `false` delivers exactly that at Tier 0, with no
-  # source edit: the capability makes the tool work, this flag keeps the chip and the
-  # Run button away.
+  # Why `true` rather than `false`. `false` was chosen when no sandbox existed, to keep a
+  # dead Run button out of the UI. Now that the code-adapter is real, leaving the
+  # permission off would permanently disable the only manual execution path — including
+  # for admins debugging the sandbox — and it would keep KARL's behaviour dependent on a
+  # permission that has nothing to do with the feature. So the permission is ON and the
+  # UI is suppressed where it belongs, in the components:
+  #   CodeInterpreter.tsx    KNAUF_HIDE_CODE_INTERPRETER_CHIP
+  #   ToolsDropdown.tsx      KNAUF_HIDE_CODE_INTERPRETER_TOOL
+  #   MarkdownComponents.tsx KNAUF_HIDE_CODE_BLOCK_RUN_BUTTON
+  # Same shape as the file-search chip (KK20-190) and the skills chip (KK20-243): the
+  # capability flows through untouched, only the redundant control disappears. All three
+  # flags move together — flipping one on its own ships an inconsistent chat UI.
   #
-  # Consequences of flipping it to `true` later, so nobody does it casually:
-  #   * the chip comes back, and because `executeCode: true` seeds the toggle it
-  #     returns permanently checked — you would then need a
-  #     `KNAUF_HIDE_CODE_INTERPRETER_CHIP` early return in CodeInterpreter.tsx AND a
-  #     matching gate on the ToolsDropdown row, exactly as FileSearch.tsx,
-  #     Artifacts.tsx and Skills.tsx already do;
-  #   * knauf/scripts/seed-agent-builder-role.js has to move with it, because
-  #     permissions.ts re-seeds only USER and ADMIN from this file.
-  # Agent authors are unaffected either way: the builder's Code Interpreter section
-  # reads the capability, not this permission.
+  # Note for whoever reads this next: flipping this flag alone changes nothing visible,
+  # because those three constants are hardcoded `true`. It also changes nothing about
+  # whether code runs — that is `endpoints.agents.capabilities` plus `executeCode: true`
+  # on the spec, and LIBRECHAT_CODE_BASEURL pointing at the adapter. If code execution
+  # is not working, this is not the flag to look at (see
+  # packages/api/src/knauf/code/codeEnvGuard.ts and knauf/docs/code-execution/).
+  #
+  # Two knock-ons kept in sync: `knauf/scripts/seed-agent-builder-role.js` (permissions.ts
+  # re-seeds only USER and ADMIN from this file, so the AGENT_BUILDER custom role is set
+  # there), and KNAUF_RESTRICT_USER_PERMISSIONS, which forces RUN_CODE.USE false for the
+  # built-in USER role wherever it is enabled — so in those environments this flag
+  # effectively applies to ADMIN only.
+  # Agent authors are unaffected either way: the builder's Execute code capability reads
+  # the capability, not this permission.
   runCode: true
   fileSearch: true
   agents:
@@ -608,9 +621,12 @@ endpoints:
       #   * `executeCode: true` on every user-facing spec below -> the tool is
       #                                 requested on every KARL turn, with no chip
       #                                 for the user to find or forget;
-      #   * `interface.runCode: false` (unchanged, see the KK20-252 block above)
-      #                              -> no composer chip, no tools-menu row, and no
-      #                                 manual per-code-block Run button.
+      #   * `interface.runCode: true` (see the KK20-252 block above) -> the RUN_CODE
+      #                                 permission exists, so the manual execution path
+      #                                 is not dead code; the three UI surfaces it would
+      #                                 otherwise add (composer chip, tools-menu row,
+      #                                 per-code-block Run button) are suppressed in the
+      #                                 components instead, by KNAUF_HIDE_CODE_* flags.
       # Nothing here is reachable unless LIBRECHAT_CODE_BASEURL names a host we
       # control: packages/api/src/knauf/code/codeEnvGuard.ts strips this capability
       # otherwise, because upstream would fall back to LibreChat's hosted SaaS.

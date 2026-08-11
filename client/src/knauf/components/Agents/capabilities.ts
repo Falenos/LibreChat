@@ -209,10 +209,11 @@ const useKnaufSkills: KnaufCapability = {
  * `codeAllowedByAgent` reads on the chat side to decide whether a tabular
  * attachment may be routed to the sandbox.
  *
- * Note the asymmetry worth knowing when reviewing a shared agent: agent auto-run
- * is not gated by the RUN_CODE permission (KARL keeps that off to suppress the
- * composer chip and the manual Run button), so an agent with this enabled runs
- * code for whoever uses it.
+ * Note the asymmetry worth knowing when reviewing a shared agent: agent auto-run is
+ * not gated by the RUN_CODE permission at all — that permission only reaches the
+ * manual surfaces, which KARL hides in the components (KNAUF_HIDE_CODE_* in
+ * CodeInterpreter.tsx / ToolsDropdown.tsx / MarkdownComponents.tsx). So an agent with
+ * this enabled runs code for whoever uses it, whatever their role says.
  */
 const executeCode: KnaufCapability = {
   id: 'code',
