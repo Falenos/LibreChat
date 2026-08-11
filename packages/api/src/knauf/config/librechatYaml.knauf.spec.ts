@@ -41,6 +41,8 @@ interface SpecPreset {
   model?: string;
   promptPrefix?: string;
   maxContextTokens?: number;
+  maxTokens?: number;
+  verbosity?: string;
 }
 interface ModelSpec {
   name: string;
@@ -84,7 +86,7 @@ describe('[knauf] librechat.yaml — default KARL response latency', () => {
     const karl = specs.find((spec) => spec.name === 'karl');
     const prompt = karl?.preset?.promptPrefix ?? '';
 
-    expect(karl?.preset).not.toHaveProperty('verbosity');
+    expect(karl?.preset).toMatchObject({ maxTokens: 8192, verbosity: 'low' });
     expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*40[–-]120 words/i);
     expect(prompt).toMatch(/ordinary questions[^\n]*80[–-]180 words/i);
     expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*150[–-]300 words/i);

@@ -72,3 +72,10 @@ test('Karl instructions require valid Markdown section headings', () => {
   assert.match(config, /valid GitHub-Flavored Markdown/);
   assert.match(config, /use `###` headings/);
 });
+
+test('Karl bounds routed output cost while keeping enough room for complete artifacts', () => {
+  const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
+
+  assert.match(config, /maxTokens: 8192/);
+  assert.match(config, /verbosity: low/);
+});

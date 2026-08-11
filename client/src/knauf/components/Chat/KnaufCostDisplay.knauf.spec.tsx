@@ -15,6 +15,7 @@ jest.mock('~/hooks', () => ({
       com_knauf_cost_conversation_total: 'Conversation total: {{0}}',
       com_knauf_cost_disclaimer:
         'For information only — you are not charged for this usage now or in the future.',
+      com_knauf_cost_estimated: 'Upper-bound estimate because the routed model was unavailable',
       com_knauf_cost_image_tokens: 'Image tokens: {{0}} input / {{1}} output',
       com_knauf_cost_input: 'Input tokens: {{0}}',
       com_knauf_cost_message: 'Message cost: {{0}}',
@@ -167,5 +168,27 @@ describe('[knauf] KnaufCostDisplay', () => {
       expect.stringContaining('Image pricing pending'),
     );
     expect(screen.getByText(/\+$/)).toBeInTheDocument();
+  });
+
+  it('shows routed-model fallback totals as upper-bound estimates', () => {
+    mockUseKnaufConversationCosts.mockReturnValue({
+      data: {
+        ...data,
+        conversation: {
+          ...summary,
+          isEstimated: true,
+        },
+      },
+      refetch: jest.fn(),
+      getMessageCost: () => null,
+    });
+
+    render(<KnaufConversationCostTotal />);
+
+    expect(screen.getByText('≤€0.12')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Conversation total:/)).toHaveAttribute(
+      'title',
+      expect.stringContaining('Upper-bound estimate'),
+    );
   });
 });
