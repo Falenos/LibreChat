@@ -10,10 +10,6 @@ on:
         default: 'AGK stage -> AGK prod'
         options:
           - 'AGK stage -> AGK prod'
-      version:
-        description: 'Version to promote, for example v0.54.0. Defaults to the current AGK stage GitOps tag.'
-        type: string
-        required: false
 
 permissions:
   contents: read
@@ -61,20 +57,11 @@ jobs:
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
       QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
     steps:
-      # [knauf] KK20-195 — validate the version input shape only. There is no
-      # longer an old stage-run/provenance artifact to trust: this pipeline
-      # snapshots and re-tests STAGE live, every time it runs (see the
-      # "Snapshot STAGE" and "Run STAGE E2E" steps below).
-      - name: Validate workflow inputs
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if [ -n "$INPUT_VERSION" ] && ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$INPUT_VERSION"; then
-            echo "::error::Invalid version"
-            exit 1
-          fi
-
+      # [knauf] KK20-195 — no version input to validate: the promoted version
+      # always comes directly from STAGE's current live GitOps tag (see
+      # "Determine version to promote" below). This pipeline snapshots and
+      # re-tests STAGE live, every time it runs (see the "Snapshot STAGE" and
+      # "Run STAGE E2E" steps below).
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -104,8 +91,6 @@ jobs:
 
       - name: Determine version to promote
         id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
@@ -120,11 +105,6 @@ jobs:
 
           if [ "$STAGE_WORKER_VERSION" != "$STAGE_VERSION" ]; then
             echo "::error::STAGE app tag $STAGE_VERSION and worker tag $STAGE_WORKER_VERSION differ"
-            exit 1
-          fi
-
-          if [ -n "$INPUT_VERSION" ] && [ "$INPUT_VERSION" != "$STAGE_VERSION" ]; then
-            echo "::error::Requested version $INPUT_VERSION is not the current STAGE GitOps tag $STAGE_VERSION"
             exit 1
           fi
 
