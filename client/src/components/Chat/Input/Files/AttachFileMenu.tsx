@@ -300,12 +300,19 @@ const AttachFileMenu = ({
 
       if (capabilities.codeEnabled && codeAllowedByAgent) {
         items.push({
-          // [knauf] KK20-257 — "Upload file changes" instead of upstream's "Upload to
+          // [knauf] KK20-257 — "Upload files to edit" instead of upstream's "Upload to
           // Code Environment": the same principle as the "Upload files" row above, which
-          // names the outcome rather than the plumbing (KK20-190). Uses a namespaced
-          // Knauf key so upstream's `com_ui_upload_code_environment` value stays intact
-          // for locale syncs. Most tabular files reach the sandbox automatically now
-          // (see useFileHandling), so this row is the deliberate-choice path.
+          // names the outcome rather than the plumbing (KK20-190). Deliberately parallel
+          // with that row — same verb, one discriminating suffix — because the two are
+          // read against each other: "Upload files" means KARL reads and answers from the
+          // document, this one means KARL changes it and hands a file back. "Edit" covers
+          // both halves of what the sandbox does to a file (rewrite an xlsx, convert a
+          // pdf) without naming a format. Uses a namespaced Knauf key so upstream's
+          // `com_ui_upload_code_environment` value stays intact for locale syncs; the key
+          // still records which upstream string it replaces, which is why it is named for
+          // the code environment rather than the label. Most tabular files reach the
+          // sandbox automatically now (see useFileHandling), so this row is the
+          // deliberate-choice path — mainly non-tabular files someone wants manipulated.
           label: localize('com_knauf_upload_code_environment'),
           // End [knauf]
           onClick: () => {

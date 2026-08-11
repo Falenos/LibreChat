@@ -130,7 +130,7 @@ function setupMocks(overrides: { provider?: string } = {}) {
     com_ui_upload_file_search: 'Upload for File Search',
     // [knauf] KK20-257 — source renders the namespaced `com_knauf_upload_code_environment`
     // key ("Upload file changes"), not upstream's. End [knauf]
-    com_knauf_upload_code_environment: 'Upload file changes',
+    com_knauf_upload_code_environment: 'Upload files to edit',
     com_sidepanel_attach_files: 'Attach Files',
     com_files_upload_sharepoint: 'Upload from SharePoint',
     // [knauf] Label of the standalone "View supported formats" menu item. KK20-190.
@@ -368,7 +368,7 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload file changes')).toBeInTheDocument();
+      expect(screen.getByText('Upload files to edit')).toBeInTheDocument();
     });
 
     it('shows all options when all capabilities are enabled', () => {
@@ -394,7 +394,7 @@ describe('AttachFileMenu', () => {
       // Upstream's "passes File Search resource on input change" test is dropped here because it
       // clicks the (now-hidden) File Search item. End [knauf]
       expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
-      expect(screen.getByText('Upload file changes')).toBeInTheDocument();
+      expect(screen.getByText('Upload files to edit')).toBeInTheDocument();
     });
 
     // [knauf] KK20-257 — "Supported file types" is help text, not a destination, so it
