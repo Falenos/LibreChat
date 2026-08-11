@@ -74,10 +74,14 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          # The declared range lives in api/package.json, not the root manifest.
-          RANGE="$(node -p "require('./api/package.json').dependencies['@librechat/agents']")"
-          echo "Installing @librechat/agents@$RANGE for the contract tripwire"
-          npm install --no-save --ignore-scripts --no-audit --no-fund "@librechat/agents@$RANGE"
+          # The EXACT version from the lockfile, not the range from api/package.json.
+          # Installing the range resolves to the newest matching release (^3.2.65 picked up
+          # 3.4.5), which tests a client we do not ship: real drift in the shipped version
+          # could pass, and an unrelated change in a future version fails the build for no
+          # reason. The tripwire is only meaningful against what the app actually runs.
+          LOCKED="$(node -p "require('./package-lock.json').packages['node_modules/@librechat/agents'].version")"
+          echo "Installing the locked @librechat/agents@$LOCKED for the contract tripwire"
+          npm install --no-save --ignore-scripts --no-audit --no-fund "@librechat/agents@$LOCKED"
 
       - name: Type-check
         run: npm run lint

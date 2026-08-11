@@ -14,8 +14,8 @@ keys to paste. Capacity expectations for what you are switching on are in
 
 | Repo | What it contributes | State |
 | --- | --- | --- |
-| `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open** — `main` merged in (`b33d29c34`); review round 2 addressed |
-| `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open** — plan green (12 add / 0 change / 0 destroy), all checks pass, waiting on approval. Untouched since 2026-08-06 |
+| `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open, `MERGEABLE / CLEAN`** — all checks green, review round 2 addressed. Ready to merge |
+| `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open, `MERGEABLE / BLOCKED`** — plan green (12 add / 0 change / 0 destroy), all four checks pass. `BLOCKED` is the required-review gate only; **approval is the sole remaining action** |
 | `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR. Repo is busy (five app version bumps merged on 08-11 alone), so re-check `ct-shared-chart` and the ApplicationSet line numbers at merge time |
 
 **Exactly one hard unknown remains** (everything else below is sequencing you control): whether
@@ -47,35 +47,47 @@ all before D4. Both routes are spelled out in Phase 0.
 
 ## Phase 0 — before anything merges
 
-- [ ] **#73:** add the missing tag lifecycle to both `azapi_resource.code_pool_dev` and
-      `azapi_resource.code_pool_stage` (in `code-adapter-dev.tf` / `code-adapter-stage.tf`):
-      ```hcl
-      lifecycle {
-        ignore_changes = [tags["ACM"], tags["CostCenter"]]
-      }
-      ```
+- [x] **#73:** tag lifecycle on both `azapi_resource.code_pool_*` — **done** (`bff637390`).
+      `lifecycle { ignore_changes = [tags["ACM"], tags["CostCenter"]] }`, byte-identical to the
+      `mi-dev.tf` precedent. The `apply-tenants` plan job re-ran green afterwards, so the plan
+      output is unchanged (as expected — `lifecycle` is a Terraform-side meta-argument and
+      creates nothing).
 
-      **What this is about.** An Azure Policy stamps `ACM` and `CostCenter` onto resources
-      after creation. Terraform doesn't know that, so on the *next* plan it sees tags it didn't
-      write and proposes removing them — and the apply after that puts them back via policy,
-      forever. The two managed identities in the same PR already carry this block because they
-      were copied from `mi-dev.tf`; the pools were written fresh and missed it. Every other
-      tagged resource in the root (`rg.tf`, `mi-dev.tf`, the KV secrets in `blob-dev.tf`) has it.
+      Kept here because the prod twin will need the same thing: Azure Policy stamps `ACM` and
+      `CostCenter` *after* creation, Terraform then sees tags it didn't write and proposes
+      removing them, policy re-applies them, and the pair never converges. The two managed
+      identities already had the guard (copied from `mi-dev.tf`); the pools were written fresh
+      and missed it.
 
-      **Why the green plan doesn't reassure you.** #73's plan says *12 to add, 0 to change, 0
-      to destroy* — correct, because nothing exists yet and no policy has run. The drift only
-      appears on the plan *after* the first apply, i.e. on somebody else's unrelated PR to this
-      root, which is where it will look mysterious. Cheap to add now, annoying to diagnose later.
+      The trap worth remembering: a *0 to change* plan is not evidence against this. It is 0
+      only because nothing exists yet and no policy has run — the drift first appears on the
+      plan **after** the first apply, i.e. on whatever unrelated PR touches this root next.
 
-      Note the pools also pass `tags = { for k, v in local.tags : k => tostring(v) }` rather
-      than `local.tags` directly. That coercion is required, not accidental: ARM tag values must
-      be strings and `local.tags` carries `Shared = false` as a bool. Don't "simplify" it.
+      Also don't "simplify" `tags = { for k, v in local.tags : k => tostring(v) }` to
+      `local.tags`: ARM tag values must be strings and `local.tags` carries `Shared = false`
+      as a bool.
 - [x] **#258:** the `/download` stream-error handler — **done** (`1666f852b`). `pipeline()`
       instead of `.pipe()`, plus the floating `repo.touch()` caught. Either one exited the
       process, on the path every generated chart and spreadsheet is served over.
-- [x] **#258:** `main` merged in (`b33d29c34`) and the review round-2 findings addressed
-      (`d6fad8068`, `ed7dcc043`) — sandbox ownership, capture time budget, drain, upload count
-      cap, the code-env allowlist, the destination-gate invariant, and the CI test gate.
+- [x] **#258:** `main` merged in (`b33d29c34`, `33aca5a63`) and the review round-2 findings
+      addressed (`d6fad8068`, `ed7dcc043`) — sandbox ownership, capture time budget, drain,
+      upload count cap, the code-env allowlist, the destination-gate invariant, and the CI test
+      gate.
+
+      Two things that were assumptions and are now **verified in CI** on that PR:
+
+      - The adapter now has a **PR-time test gate**: `Unit + contract tests` ran on the pull
+        request (97/97), and `Build adapter into AGK ACR` correctly reported `skipping` — the
+        `if: github.event_name != 'pull_request'` guard keeping an Azure login off fork PRs.
+        Before this, adapter changes reached `main` untested.
+      - The **client-drift tripwire is armed**, not skipping. The job installs
+        `@librechat/agents` (which the adapter does not depend on) and sets
+        `KNAUF_REQUIRE_LOCKED_CLIENT=true`, which turns the graceful local skip into a hard
+        failure. Its first real run also answered a standing question: all three pinned
+        client behaviours — no `session_id` in the POST body, `result.code` never read,
+        `runtime_session_hint` present — still hold against **3.4.5**, far newer than the
+        3.2.65 the lockfile pins. That job now installs the *locked* version rather than the
+        range, so it tests what the app actually ships.
 - [ ] **Get #73 approved.** Blocked on review, not on anything technical — the plan is green
       and the checks pass. Three things the reviewer will reasonably want answered, so put them
       in the PR conversation rather than making them ask:
