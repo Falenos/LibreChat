@@ -3,7 +3,7 @@ const request = require('supertest');
 const mongoose = require('mongoose');
 const { Readable } = require('stream');
 const { v4: uuidv4 } = require('uuid');
-const { createMethods, tenantStorage } = require('@librechat/data-schemas');
+const { createMethods, tenantStorage, logger } = require('@librechat/data-schemas');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const {
   SystemRoles,
@@ -191,6 +191,10 @@ describe('File Routes - Delete with Agent Access', () => {
       bytes: 100,
       type: 'text/plain',
     });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   describe('DELETE /files', () => {
@@ -721,6 +725,61 @@ describe('File Routes - Delete with Agent Access', () => {
   });
 
   describe('GET /files/download/:userId/:file_id', () => {
+    // [knauf] NO-TICKET — physical storage ownership must outlive pod-local staging.
+    it('uses storageSource and returns a bounded 404 for a missing durable asset', async () => {
+      jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const userFileId = uuidv4();
+      const missing = Object.assign(new Error('ENOENT: /app/uploads/temp/private/file.txt'), {
+        code: 'ENOENT',
+      });
+      const stream = new Readable({
+        read() {
+          this.emit('error', missing);
+          this.push(null);
+        },
+      });
+      const getDownloadStream = jest.fn().mockResolvedValue(stream);
+      getStrategyFunctions.mockImplementation((source) => {
+        expect(source).toBe(FileSources.azure_blob);
+        return { getDownloadStream };
+      });
+
+      await createFile({
+        user: otherUserId,
+        file_id: userFileId,
+        filename: 'file.txt',
+        filepath: 'https://storage.example/files/file.txt',
+        bytes: 200,
+        type: 'text/plain',
+        source: FileSources.text,
+        storageSource: FileSources.azure_blob,
+        text: 'context text',
+      });
+      // This suite consumes the already-built workspace package. Raw update keeps
+      // the regression focused on the current route while the schema seam has its
+      // own source-level test.
+      await File.collection.updateOne(
+        { file_id: userFileId },
+        { $set: { storageSource: FileSources.azure_blob } },
+      );
+
+      const response = await request(app).get(`/files/download/${otherUserId}/${userFileId}`);
+
+      expect(response.status).toBe(404);
+      expect(response.text).toBe('File not found');
+      expect(getDownloadStream).toHaveBeenCalledWith(
+        expect.any(Object),
+        'https://storage.example/files/file.txt',
+      );
+      expect(logger.warn).toHaveBeenCalledWith('[DOWNLOAD ROUTE] File unavailable', {
+        operation: 'file_download',
+        category: 'storage_missing',
+      });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+    // End [knauf]
+
     it('streams proxied downloads by default when a direct URL is available', async () => {
       const userFileId = uuidv4();
       const getDownloadURL = jest.fn().mockResolvedValue('https://cdn.example.com/file.pdf?signed');

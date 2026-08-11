@@ -122,6 +122,9 @@ export type TFile = {
   usage: number;
   context?: FileContext;
   source?: FileSources;
+  // [knauf] NO-TICKET — physical owner when source is the logical `text` classifier.
+  storageSource?: FileSources;
+  // End [knauf]
   filterSource?: FileSources;
   width?: number;
   height?: number;

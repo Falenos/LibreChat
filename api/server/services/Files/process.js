@@ -351,7 +351,9 @@ const processDeleteRequest = async ({ req, files }) => {
       continue;
     }
     // End [knauf]
-    const source = file.source ?? FileSources.local;
+    // [knauf] NO-TICKET — text context can be Azure-owned while retaining its logical source.
+    const source = file.storageSource ?? file.source ?? FileSources.local;
+    // End [knauf]
 
     if (source === FileSources.text) {
       resolvedFileIds.add(file.file_id);
@@ -887,17 +889,33 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
      * @param {object} params
      * @param {string} params.text
      * @param {number} params.bytes
-     * @param {string} params.filepath
      * @param {string} params.type
      * @return {Promise<void>}
      */
-    const createTextFile = async ({ text, bytes, filepath, type = 'text/plain' }) => {
+    const createTextFile = async ({ text, bytes, type = 'text/plain' }) => {
       const textBytes = Buffer.byteLength(text, 'utf8');
       if (textBytes > 15 * megabyte) {
         throw new Error(
           `Extracted text from "${file.originalname}" exceeds the 15MB storage limit (${Math.round(textBytes / megabyte)}MB). Try a shorter document.`,
         );
       }
+      // [knauf] NO-TICKET — promote context bytes before publishing stable metadata.
+      const storageSource = getFileStrategy(appConfig, { isImage });
+      const { handleFileUpload } = getStrategyFunctions(storageSource);
+      const storedFile = await createSanitizedUploadWrapper(handleFileUpload)({
+        req,
+        file,
+        file_id,
+        basePath,
+        entity_id,
+      });
+      const storageMetadata = getStorageMetadata({
+        filepath: storedFile.filepath,
+        source: storageSource,
+        storageKey: storedFile.storageKey,
+        storageRegion: storedFile.storageRegion,
+      });
+      // End [knauf]
       const retentionExpiry = await getAgentFileRetentionExpiry({
         req,
         messageAttachment,
@@ -906,13 +924,18 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       const fileInfo = {
         ...removeNullishValues({
           text,
-          bytes,
           file_id,
           temp_file_id,
           user: req.user.id,
           type,
-          filepath: filepath ?? file.path,
+          // [knauf] NO-TICKET — `source=text` remains the logical context signal;
+          // `storageSource` is the durable download/delete owner.
+          bytes: storedFile.bytes ?? bytes,
+          filepath: storedFile.filepath,
           source: FileSources.text,
+          storageSource,
+          ...storageMetadata,
+          // End [knauf]
           filename: file.originalname,
           model: messageAttachment ? undefined : req.body.model,
           context: messageAttachment ? FileContext.message_attachment : FileContext.agents,
@@ -988,8 +1011,8 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
     if (shouldUseOCR) {
       const ocrResult = await resolveDocumentText();
       if (ocrResult) {
-        const { text, bytes, filepath: ocrFileURL } = ocrResult;
-        return await createTextFile({ text, bytes, filepath: ocrFileURL });
+        const { text, bytes } = ocrResult;
+        return await createTextFile({ text, bytes });
       }
       throw new Error(
         `Unable to extract text from "${file.originalname}". The document may be image-based and requires an OCR service to process.`,

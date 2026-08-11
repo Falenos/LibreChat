@@ -78,6 +78,15 @@ const db = require('~/models');
 
 const router = express.Router();
 
+// [knauf] NO-TICKET — category size caps are expected 413 client rejections.
+const OVERSIZED_UPLOAD_REJECTION_CODES = new Set([
+  'com_knauf_error_file_too_large_document',
+  'com_knauf_error_file_too_large_data',
+  'com_knauf_error_file_too_large_image',
+  'com_knauf_error_file_too_large_svg',
+]);
+// End [knauf]
+
 /**
  * Dispatch table for refreshing signed file URLs by storage source.
  * Adding a new provider only requires another entry here.
@@ -577,7 +586,9 @@ const getDirectDownloadURL = async ({
   file,
   customFilename = cleanFileName(file.filename),
 }) => {
-  const { getDownloadURL } = getStrategyFunctions(file.source);
+  // [knauf] NO-TICKET — storage ownership is independent from logical text processing.
+  const { getDownloadURL } = getStrategyFunctions(file.storageSource ?? file.source);
+  // End [knauf]
   if (!getDownloadURL) {
     return null;
   }
@@ -604,6 +615,9 @@ const DOWNLOAD_METADATA_FIELDS = [
   'filepath',
   'storageKey',
   'storageRegion',
+  // [knauf] NO-TICKET — preserve the physical owner in cached download metadata.
+  'storageSource',
+  // End [knauf]
   'object',
   'type',
   'usage',
@@ -630,6 +644,37 @@ const getDownloadFileMetadata = (file) => {
     return metadata;
   }, {});
 };
+
+// [knauf] NO-TICKET — bounded download failures without paths, identities, or stacks.
+const isMissingDownloadStorage = (error) => {
+  const code = error?.code ?? error?.status ?? error?.statusCode ?? error?.response?.status;
+  return [404, '404', 'ENOENT', 'NoSuchKey', 'NotFound', 'ResourceNotFound'].includes(code);
+};
+
+const sendDownloadFailure = (res, error) => {
+  if (res.writableEnded) {
+    return;
+  }
+  const missing = isMissingDownloadStorage(error);
+  logger[missing ? 'warn' : 'error'](
+    missing ? '[DOWNLOAD ROUTE] File unavailable' : '[DOWNLOAD ROUTE] Download failed',
+    {
+      operation: 'file_download',
+      category: missing ? 'storage_missing' : 'stream_failed',
+    },
+  );
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.removeHeader('Content-Disposition');
+  res.removeHeader('X-File-Metadata');
+  res
+    .status(missing ? 404 : 500)
+    .type('text/plain')
+    .send(missing ? 'File not found' : 'Error downloading file');
+};
+// End [knauf]
 
 router.get('/download-url/:userId/:file_id', fileAccess, async (req, res) => {
   try {
@@ -682,7 +727,10 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
       return res.status(400).send('The model used when creating this file is not available');
     }
 
-    const { getDownloadStream, getDownloadURL } = getStrategyFunctions(file.source);
+    // [knauf] NO-TICKET — use the durable owner, not the logical text source.
+    const storageSource = file.storageSource ?? file.source;
+    const { getDownloadStream, getDownloadURL } = getStrategyFunctions(storageSource);
+    // End [knauf]
     if (!getDownloadStream && !getDownloadURL) {
       logger.warn(
         `File download requested by user ${userId} has no download method implemented: ${file.source}`,
@@ -747,16 +795,17 @@ router.get('/download/:userId/:file_id', fileAccess, async (req, res) => {
 
       const fileStream = await getDownloadStream(req, file.storageKey || file.filepath);
 
-      fileStream.on('error', (streamError) => {
-        logger.error('[DOWNLOAD ROUTE] Stream error:', streamError);
-      });
+      // [knauf] NO-TICKET — fs streams report ENOENT asynchronously after creation.
+      fileStream.once('error', (streamError) => sendDownloadFailure(res, streamError));
+      // End [knauf]
 
       setHeaders();
       fileStream.pipe(res);
     }
   } catch (error) {
-    logger.error('[DOWNLOAD ROUTE] Error downloading file:', error);
-    res.status(500).send('Error downloading file');
+    // [knauf] NO-TICKET — awaited provider misses use the same bounded response/category.
+    sendDownloadFailure(res, error);
+    // End [knauf]
   }
 });
 
@@ -987,8 +1036,10 @@ router.post('/', async (req, res) => {
       'com_knauf_error_file_encrypted',
       'com_knauf_error_pdf_password_required',
       'com_knauf_error_pdf_invalid',
+      ...OVERSIZED_UPLOAD_REJECTION_CODES,
     ]);
     const isInputRejection = inputRejectionCodes.has(message);
+    const isOversizedInputRejection = OVERSIZED_UPLOAD_REJECTION_CODES.has(message);
     const logMetadata = {
       operation: 'file_upload',
       errorType: error instanceof Error ? error.name : 'UnknownError',
@@ -1000,12 +1051,20 @@ router.post('/', async (req, res) => {
       ...((isInputRejection || isProbeUnavailable) && { code: message }),
     };
     const failureDetail = `type=${logMetadata.errorType ?? 'unknown'} code=${logMetadata.errorCode ?? 'none'} status=${logMetadata.status ?? 'none'} keyPattern=${logMetadata.keyPattern ?? 'none'} keyValue=${logMetadata.keyValue ?? 'none'} cause=${logMetadata.cause ?? 'none'}`;
-    logger[isInputRejection ? 'info' : 'error'](
-      isInputRejection
-        ? `[/files] Rejected invalid file input ${failureDetail}`
-        : `[/files] File processing failed ${failureDetail}`,
-      logMetadata,
-    );
+    if (isInputRejection) {
+      logger.info(
+        isOversizedInputRejection
+          ? '[/files] Rejected oversized upload'
+          : '[/files] Rejected invalid file input',
+        {
+          operation: 'file_upload',
+          category: isOversizedInputRejection ? 'payload_too_large' : 'invalid_input',
+          code: message,
+        },
+      );
+    } else {
+      logger.error(`[/files] File processing failed ${failureDetail}`, logMetadata);
+    }
 
     try {
       await fs.unlink(req.file.path);
@@ -1014,7 +1073,9 @@ router.post('/', async (req, res) => {
       logger.error('[/files] Upload cleanup failed', { operation: 'file_upload_cleanup' });
     }
     let status = 500;
-    if (isInputRejection) {
+    if (isOversizedInputRejection) {
+      status = 413;
+    } else if (isInputRejection) {
       status = 422;
     } else if (isProbeUnavailable) {
       status = 503;
