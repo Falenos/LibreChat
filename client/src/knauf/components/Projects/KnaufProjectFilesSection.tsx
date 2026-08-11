@@ -128,6 +128,16 @@ export default function KnaufProjectFilesSection({ projectId }: { projectId: str
         file_id: file.file_id,
         status: file.embedded ? 'ready' : 'processing',
       });
+      // Project association creates the server row before the shared engine
+      // replaces its temporary ID; remove that placeholder at this boundary.
+      setUploadEntries((current) => {
+        if (!file.temp_file_id || !current.has(file.temp_file_id)) {
+          return current;
+        }
+        const next = new Map(current);
+        next.delete(file.temp_file_id);
+        return next;
+      });
       queryClient.setQueryData<TFile[] | undefined>([QueryKeys.files], (cachedFiles) => {
         const current = cachedFiles ?? [];
         return current.some((item) => item.file_id === file.file_id)

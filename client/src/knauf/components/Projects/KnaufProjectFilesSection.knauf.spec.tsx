@@ -204,6 +204,51 @@ describe('[knauf] KnaufProjectFilesSection', () => {
     ]);
   });
 
+  it('removes the temporary upload row after the server file appears', async () => {
+    const projectFile = {
+      projectId: 'project-1',
+      file_id: 'uploaded-file',
+      filename: 'doc.txt',
+      status: 'processing',
+    };
+    const { queryClient, rerender } = renderWithClient(
+      <KnaufProjectFilesSection projectId="project-1" />,
+    );
+
+    act(() => {
+      capturedFileState.setFiles(
+        new Map([
+          [
+            'temp-file',
+            {
+              file_id: 'temp-file',
+              filename: 'doc.txt',
+              progress: 0.1,
+              size: 3,
+              type: 'text/plain',
+            },
+          ],
+        ]),
+      );
+    });
+    mockProjectFiles = [projectFile];
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <KnaufProjectFilesSection projectId="project-1" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getAllByText('doc.txt')).toHaveLength(2));
+    await act(async () => {
+      await capturedLocalOptions.onUploadSuccess({
+        ...projectFile,
+        temp_file_id: 'temp-file',
+      });
+    });
+
+    expect(screen.getAllByText('doc.txt')).toHaveLength(1);
+  });
+
   it('delegates picker and dropped files to the same shared handlers', () => {
     const { container } = renderWithClient(<KnaufProjectFilesSection projectId="project-1" />);
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
