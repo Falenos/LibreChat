@@ -302,6 +302,9 @@ export function applyModelSpecEphemeralAgent({
     file_search: modelSpec.fileSearch ?? false,
     execute_code: modelSpec.executeCode ?? false,
     artifacts: modelSpec.artifacts === true ? 'default' : modelSpec.artifacts || '',
+    // [knauf] KK20-168 — new chats start image generation off; existing chats restore below.
+    image_gen: false,
+    // End [knauf]
   };
 
   // For existing conversations, layer per-conversation localStorage overrides
@@ -325,6 +328,18 @@ export function applyModelSpecEphemeralAgent({
         }
       }
     }
+
+    // [knauf] KK20-168 — image generation is sticky for this conversation until
+    // the user explicitly toggles it; unlike transient tool defaults, it does not expire.
+    const imageGenRaw = localStorage.getItem(`${LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_}${key}`);
+    if (imageGenRaw !== null) {
+      try {
+        agent.image_gen = JSON.parse(imageGenRaw) === true;
+      } catch {
+        // ignore parse errors
+      }
+    }
+    // End [knauf]
 
     const mcpRaw = localStorage.getItem(`${LocalStorageKeys.LAST_MCP_}${key}`);
     if (mcpRaw !== null) {

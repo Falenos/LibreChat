@@ -1546,6 +1546,21 @@ class BaseClient {
       await this.addFileContextToMessage(message, contextFiles);
       await this.processAttachments(message, contextFiles);
 
+      // [knauf] KK20-168 — historical image pixels are resent for vision, but
+      // image_edit_oai also needs their stable IDs to call them on a later turn.
+      const imageIds = contextFiles
+        .filter(
+          (file) => file?.file_id && file.type?.startsWith('image/') && file.height && file.width,
+        )
+        .map((file) => file.file_id);
+      if (imageIds.length > 0) {
+        const imageIdContext = `Image IDs for the attached images, in order:\n${imageIds
+          .map((fileId) => `- ${fileId}`)
+          .join('\n')}`;
+        message.fileContext = [message.fileContext, imageIdContext].filter(Boolean).join('\n\n');
+      }
+      // End [knauf]
+
       this.message_file_map[message.messageId] = contextFiles;
       return message;
     };

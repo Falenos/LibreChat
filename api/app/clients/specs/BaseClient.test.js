@@ -1447,6 +1447,33 @@ describe('BaseClient', () => {
       expect(JSON.stringify(message)).not.toContain('forged owner text');
     });
 
+    // [knauf] KK20-168 — historical image IDs remain callable by image_edit_oai.
+    test('adds owner-authorized historical image IDs to model context', async () => {
+      const ownerImage = {
+        ...ownerFile,
+        file_id: 'owner-image',
+        filename: 'sunset.png',
+        filepath: '/uploads/sunset.png',
+        type: 'image/png',
+        height: 768,
+        width: 1365,
+        text: undefined,
+      };
+      getFiles.mockResolvedValueOnce([ownerImage]);
+
+      const [message] = await TestClient.addPreviousAttachments([
+        {
+          messageId: 'msg-image',
+          files: [{ file_id: 'owner-image', filename: 'forged.png' }],
+        },
+      ]);
+
+      expect(message.fileContext).toBe(
+        'Image IDs for the attached images, in order:\n- owner-image',
+      );
+    });
+    // End [knauf]
+
     test('strips historical file context when no authenticated owner scope is available', async () => {
       TestClient.options.req = {};
 

@@ -65,6 +65,9 @@ describe('applyModelSpecEphemeralAgent', () => {
         web_search: false,
         file_search: true,
         artifacts: 'default',
+        // [knauf] KK20-168 — new-chat image generation default.
+        image_gen: false,
+        // End [knauf]
       });
     });
 
@@ -91,6 +94,24 @@ describe('applyModelSpecEphemeralAgent', () => {
       expect(agent.web_search).toBe(false);
       expect(agent.mcp).toEqual([]);
     });
+
+    // [knauf] KK20-168 — image generation starts disabled only for a new chat.
+    it('should start image generation disabled for every new conversation', () => {
+      localStorage.setItem(
+        `${LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_}${Constants.NEW_CONVO}`,
+        JSON.stringify(true),
+      );
+
+      applyModelSpecEphemeralAgent({
+        convoId: null,
+        modelSpec: createModelSpec(),
+        updateEphemeralAgent,
+      });
+
+      const agent = updateEphemeralAgent.mock.calls[0][1] as TEphemeralAgent;
+      expect(agent.image_gen).toBe(false);
+    });
+    // End [knauf]
 
     it('should handle spec with no MCP servers', () => {
       const modelSpec = createModelSpec({ mcpServers: undefined });
@@ -153,6 +174,32 @@ describe('applyModelSpecEphemeralAgent', () => {
       expect(agent.file_search).toBe(true); // user override
       expect(agent.web_search).toBe(true); // not overridden, spec value
     });
+
+    // [knauf] KK20-168 — image generation stays enabled until explicitly disabled.
+    it('should preserve image generation without an expiring timestamp', () => {
+      localStorage.setItem(
+        `${LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_}${convoId}`,
+        JSON.stringify(true),
+      );
+
+      applyModelSpecEphemeralAgent({ convoId, modelSpec: createModelSpec(), updateEphemeralAgent });
+
+      const agent = updateEphemeralAgent.mock.calls[0][1] as TEphemeralAgent;
+      expect(agent.image_gen).toBe(true);
+    });
+
+    it('should preserve an explicit image generation disable', () => {
+      localStorage.setItem(
+        `${LocalStorageKeys.LAST_IMAGE_GEN_TOGGLE_}${convoId}`,
+        JSON.stringify(false),
+      );
+
+      applyModelSpecEphemeralAgent({ convoId, modelSpec: createModelSpec(), updateEphemeralAgent });
+
+      const agent = updateEphemeralAgent.mock.calls[0][1] as TEphemeralAgent;
+      expect(agent.image_gen).toBe(false);
+    });
+    // End [knauf]
 
     it('should preserve user-added MCP servers across navigation', () => {
       // Spec has clickhouse, user also added github during the conversation
@@ -228,6 +275,9 @@ describe('applyModelSpecEphemeralAgent', () => {
         web_search: false,
         file_search: true,
         artifacts: 'default',
+        // [knauf] KK20-168 — cleared storage returns to the new-chat default.
+        image_gen: false,
+        // End [knauf]
       });
     });
 

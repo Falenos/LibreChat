@@ -837,6 +837,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/schema/file.ts` | `fileSchema.storageSource` | 48–52 | Persists the optional physical storage owner required by strict Mongoose writes | `packages/data-schemas/src/schema/file.knauf.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/types/file.ts` | `IMongoFile.storageSource` | 56–58 | Types the physical storage owner persisted for logically classified context records | `packages/data-schemas/src/schema/file.knauf.spec.ts` | NO-TICKET |
 | `packages/data-schemas/src/schema/file.knauf.spec.ts` | `storageSource` schema assertion | 1–36 | Pins the strict-schema persistence seam for physical storage ownership | Self | NO-TICKET |
+| `client/src/utils/endpoints.ts` | `applyModelSpecEphemeralAgent` image generation state | 305–342 | Starts image generation disabled only for new chats, then restores each existing conversation's explicit durable toggle so navigation and reloads cannot silently remove the backend tool | `client/src/utils/__tests__/applyModelSpecEphemeralAgent.test.ts` | KK20-168 |
+| `client/src/utils/__tests__/applyModelSpecEphemeralAgent.test.ts` | image-generation persistence regressions | 68–114, 178–202, 278–280 | Proves new chats ignore stale image-generation state while existing chats preserve both enable and explicit disable without timestamp expiry | Self | KK20-168 |
+| `api/app/clients/BaseClient.js` | `addPreviousAttachments` historical image ID context | 1549–1562 | Adds stable IDs for owner-authorized historical images beside their resent vision pixels so later `image_edit_oai` calls can target uploads without re-uploading | `api/app/clients/specs/BaseClient.test.js` | KK20-168 |
+| `api/app/clients/specs/BaseClient.test.js` | historical image ID context regression | 1450–1475 | Proves only the owner-authorized historical image record contributes its callable ID to model context | Self | KK20-168 |
 <!-- seams:auto:end -->
 
 ## Configuration
