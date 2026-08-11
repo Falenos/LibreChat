@@ -22,6 +22,10 @@ import ToolArtifactCard from './ToolArtifactCard';
 import { useAttachmentLink } from './LogLink';
 import { useLocalize, useAttachmentPreviewSync, useExpandCollapse } from '~/hooks';
 import { cn, getFileType } from '~/utils';
+// [knauf] Recover persisted SVG source through the existing authenticated preview query. (NO-TICKET)
+import { useFilePreview } from '~/data-provider';
+import { useShareContext } from '~/Providers';
+// End [knauf]
 
 const COLLAPSED_MAX_HEIGHT = 320;
 
@@ -478,18 +482,32 @@ interface PanelArtifactProps {
 const PanelArtifact = memo(({ attachment, type }: PanelArtifactProps) => {
   const localize = useLocalize();
   const placeholder = localize('com_ui_artifact_preview_pending');
+  // [knauf] Message persistence strips text; re-fetch exact SVG source before building the artifact. (NO-TICKET)
+  const file = attachment as TFile & TAttachmentMetadata;
+  const { shareId } = useShareContext();
+  const needsSvgSource = type === TOOL_ARTIFACT_TYPES.SVG && !file.text;
+  const preview = useFilePreview(file.file_id, { enabled: needsSvgSource }, shareId).data;
+  const resolvedAttachment = useMemo(
+    () => (needsSvgSource && preview ? ({ ...attachment, ...preview } as TAttachment) : attachment),
+    [attachment, needsSvgSource, preview],
+  );
+  // End [knauf]
   const artifact = useMemo(
     () =>
-      fileToArtifact(attachment as TFile & TAttachmentMetadata, {
+      fileToArtifact(resolvedAttachment as TFile & TAttachmentMetadata, {
         placeholder,
         preClassifiedType: type,
       }),
-    [attachment, type, placeholder],
+    [resolvedAttachment, type, placeholder],
   );
   if (!artifact) {
-    return null;
+    // [knauf] Source-less legacy SVGs remain downloadable instead of rendering a broken image. (NO-TICKET)
+    return type === TOOL_ARTIFACT_TYPES.SVG ? (
+      <FileAttachment attachment={resolvedAttachment} />
+    ) : null;
+    // End [knauf]
   }
-  return <ToolArtifactCard attachment={attachment} artifact={artifact} />;
+  return <ToolArtifactCard attachment={resolvedAttachment} artifact={artifact} />;
 });
 PanelArtifact.displayName = 'PanelArtifact';
 
@@ -520,8 +538,8 @@ export default function Attachment({ attachment }: { attachment?: TAttachment })
   // `PanelArtifact` -> `fileToArtifact` so the panel path doesn't
   // re-run `detectArtifactTypeFromFile` a second time.
   const artType = artifactTypeForAttachment(attachment);
-  // [knauf] NO-TICKET — source-bearing SVGs match the generic image predicate,
-  // but must stay editable and render through the native artifact Code/Preview panel.
+  // [knauf] NO-TICKET — SVGs match the generic image predicate, but must first
+  // recover persisted source and render through the native artifact Code/Preview panel.
   if (artType === TOOL_ARTIFACT_TYPES.SVG) {
     return <PanelArtifact attachment={attachment} type={artType} />;
   }
@@ -571,8 +589,8 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
       return;
     }
     const artType = artifactTypeForAttachment(attachment);
-    // [knauf] NO-TICKET — route source-bearing SVGs before the generic image
-    // bucket so uploads become editable native artifacts, never broken <img> previews.
+    // [knauf] NO-TICKET — route SVGs before the generic image bucket so persisted
+    // source can be recovered for editable artifacts, never broken <img> previews.
     if (artType === TOOL_ARTIFACT_TYPES.SVG) {
       panelRow.push({ attachment, type: artType });
       return;

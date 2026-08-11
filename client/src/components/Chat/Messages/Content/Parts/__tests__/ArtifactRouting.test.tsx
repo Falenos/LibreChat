@@ -6,6 +6,14 @@ import type { MutableSnapshot } from 'recoil';
 import Attachment, { AttachmentGroup } from '../Attachment';
 import store from '~/store';
 
+const mockUseFilePreview = jest.fn();
+jest.mock('~/data-provider', () => ({
+  // [knauf] Control persisted SVG source hydration in routing regressions. (NO-TICKET)
+  useFilePreview: (fileId: string | undefined, config?: unknown, shareId?: string) =>
+    mockUseFilePreview(fileId, config, shareId),
+  // End [knauf]
+}));
+
 jest.mock('~/hooks', () => ({
   useLocalize:
     () =>
@@ -69,6 +77,11 @@ const baseAttachment = (overrides: Partial<TAttachment> = {}): TAttachment =>
     type: 'application/octet-stream',
     ...overrides,
   }) as TAttachment;
+
+beforeEach(() => {
+  mockUseFilePreview.mockReset();
+  mockUseFilePreview.mockReturnValue({ data: undefined, isFetching: false });
+});
 
 /**
  * Seeds `isSubmittingFamily(0) = streaming` so `ToolArtifactCard`'s
@@ -205,6 +218,52 @@ describe('Attachment routing for tool artifacts', () => {
     expect(
       screen.getByRole('button', { name: /com_ui_download.*diagram\.svg/i }),
     ).toBeInTheDocument();
+  });
+  // End [knauf]
+
+  // [knauf] NO-TICKET — reload-safe SVG routing hydrates source or falls back to download.
+  it.each([
+    ['single attachment', (svg: TAttachment) => <Attachment attachment={svg} />],
+    ['attachment group', (svg: TAttachment) => <AttachmentGroup attachments={[svg]} />],
+  ])('hydrates a persisted source-less SVG as an artifact for %s', (_, renderSvg) => {
+    mockUseFilePreview.mockReturnValue({
+      data: {
+        file_id: 'persisted-svg',
+        status: 'ready',
+        text: '<svg xmlns="http://www.w3.org/2000/svg"><text>Recovered</text></svg>',
+        textFormat: 'text',
+      },
+      isFetching: false,
+    });
+    const svg = baseAttachment({
+      file_id: 'persisted-svg',
+      filename: 'persisted.svg',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(renderSvg(svg), { streaming: false });
+
+    expect(mockUseFilePreview).toHaveBeenCalledWith('persisted-svg', { enabled: true }, undefined);
+    expect(screen.queryByTestId('image')).not.toBeInTheDocument();
+    expect(screen.getByText('persisted.svg')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /com_ui_download.*persisted\.svg/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('falls back to a download card when persisted SVG source is unavailable', () => {
+    const svg = baseAttachment({
+      file_id: 'legacy-svg',
+      filename: 'legacy.svg',
+      width: 640,
+      height: 480,
+    } as Partial<TAttachment>);
+
+    renderWith(<Attachment attachment={svg} />, { streaming: false });
+
+    expect(screen.queryByTestId('image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('file-container')).toHaveTextContent('legacy.svg');
   });
   // End [knauf]
 

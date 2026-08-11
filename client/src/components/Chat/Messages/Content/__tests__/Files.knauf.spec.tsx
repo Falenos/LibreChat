@@ -1,7 +1,7 @@
 // [knauf] Message file images retain identity for authenticated URL recovery. (NO-TICKET)
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import type { TMessage } from 'librechat-data-provider';
+import type { TAttachment, TFile, TMessage } from 'librechat-data-provider';
 import Files from '../Files';
 
 jest.mock('../Image', () => ({
@@ -12,6 +12,13 @@ jest.mock('../Image', () => ({
 jest.mock('../FilePreviewDialog', () => ({
   __esModule: true,
   default: () => null,
+}));
+
+jest.mock('../Parts/Attachment', () => ({
+  __esModule: true,
+  default: ({ attachment }: { attachment?: TAttachment }) => (
+    <div data-testid="artifact" data-file-id={(attachment as Partial<TFile>)?.file_id} />
+  ),
 }));
 
 jest.mock('~/components/Chat/Input/Files/FileContainer', () => ({
@@ -35,6 +42,24 @@ describe('Files image recovery contract', () => {
     render(<Files message={message} />);
 
     expect(screen.getByTestId('image')).toHaveAttribute('data-file-id', 'message-image-1');
+  });
+
+  it('routes SVG message files to the artifact surface instead of Image', () => {
+    const message = {
+      files: [
+        {
+          file_id: 'message-svg-1',
+          filename: 'diagram.svg',
+          filepath: '/uploads/diagram.svg',
+          type: 'image/svg+xml',
+        },
+      ],
+    } as TMessage;
+
+    render(<Files message={message} />);
+
+    expect(screen.getByTestId('artifact')).toHaveAttribute('data-file-id', 'message-svg-1');
+    expect(screen.queryByTestId('image')).not.toBeInTheDocument();
   });
 });
 // End [knauf]
