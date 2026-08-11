@@ -15,9 +15,9 @@ on:
         type: string
         required: false
       stage_run_id:
-        description: 'Successful Deploy Dev to Stage run ID whose E2E-tested artifact will be promoted.'
+        description: 'Successful Deploy Dev to Stage run ID whose E2E-tested artifact will be promoted. Leave blank to auto-resolve the latest successful run.'
         type: string
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -65,12 +65,41 @@ jobs:
       AGK_ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-prod
       QUALITY_REPOSITORY: Knauf-Group/agentic-karl-quality
     steps:
+      # [knauf] KK20-195 — stage_run_id is optional: when left blank, resolve
+      # it to the most recent successful "Deploy Dev to Stage" run on main so
+      # operators don't have to hunt for/copy-paste a run ID by hand. This is
+      # purely a lookup convenience; the manual workflow_dispatch trigger and
+      # every downstream provenance/drift check below are unchanged.
+      - name: Resolve STAGE run ID
+        id: resolve-run-id
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_STAGE_RUN_ID" ]; then
+            echo "Using explicitly provided STAGE run ID $INPUT_STAGE_RUN_ID"
+            echo "stage-run-id=$INPUT_STAGE_RUN_ID" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          WORKFLOW_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy_stage_pipeline.yaml" --jq '.id')
+          RESOLVED_RUN_ID=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/runs?branch=main&event=workflow_dispatch&status=success&per_page=1" \
+            --jq '.workflow_runs[0].id // empty')
+          if [ -z "$RESOLVED_RUN_ID" ]; then
+            echo "::error::No successful Deploy Dev to Stage run found on main. Pass stage_run_id explicitly."
+            exit 1
+          fi
+          echo "No stage_run_id provided — auto-resolved to the latest successful Deploy Dev to Stage run: $RESOLVED_RUN_ID"
+          echo "stage-run-id=$RESOLVED_RUN_ID" >> "$GITHUB_OUTPUT"
+
       - name: Validate trusted STAGE run and provenance
         id: provenance
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
-          INPUT_STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+          INPUT_STAGE_RUN_ID: ${{ steps.resolve-run-id.outputs.stage-run-id }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT_VERSION" ] && ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$INPUT_VERSION"; then
