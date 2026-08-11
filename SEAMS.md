@@ -924,6 +924,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | KK20-194 follow-up — shared KARL prompt requires valid GitHub-Flavored Markdown, `###` section headings, and no whitespace inside emphasis delimiters so native-search answers do not expose raw `**` markers |
 | `librechat.yaml` | KK20-194 cost guard — sets low Responses verbosity and an 8,192-token provider-side output fuse for default KARL while retaining enough headroom for complete artifacts |
 | `librechat.yaml` | KK20-194 Model Router UX follow-up — removes unsupported `verbosity: low`, retains the 8,192-token output fuse, keeps stable basic questions off native web search, and replaces prose ranges with strict 80/160/300-word ceilings that are explicitly not targets. |
+| `librechat.yaml` | KK20-194 concise-response follow-up — replaces overlapping brevity prose with one structured response contract, removes the narrative-style cue, pins simple answers to 1–3 sentences, and includes a concrete stable-fact scale example without changing the router-safe 8,192-token fuse. |
 
 ## Net-New Files
 
@@ -1323,6 +1324,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/tests/nativeWebSearchOutput.spec.js` | Subject plus Node `fs`/`path`/`test`/`assert` | Low — regression guard forbids provider-specific preset verbosity and pins the concise native-search routing contract for stable basic questions | Self | KK20-194 |
 | `client/src/knauf/branding/UserAvatarColor.knauf.spec.tsx` | Upstream endpoint/share message icons and Testing Library | Low — proves decorative user images carry an empty alternative while retaining Knauf fallback-colour coverage | Self | KK20-194 |
 | `packages/api/src/knauf/config/librechatYaml.knauf.spec.ts` | Node filesystem/path; `js-yaml`; committed LibreChat configuration | Low — regression guard keeps the 8,192-token output fuse, forbids provider-specific `verbosity`, and pins task-sized prose ceilings for default KARL's heterogeneous Azure Model Router | Self | KK20-194 |
+| `packages/api/src/knauf/config/librechatYaml.knauf.spec.ts` | Node filesystem/path; `js-yaml`; committed LibreChat configuration | Low — pins the structured concise-response contract, preservation/omission priorities, stable-fact scale example, and removal of the narrative-style cue | Self | KK20-194 |
 <!-- seams:new:end -->
 
 ## Static Assets

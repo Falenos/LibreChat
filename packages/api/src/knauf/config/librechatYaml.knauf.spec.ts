@@ -87,13 +87,21 @@ describe('[knauf] librechat.yaml — default KARL response latency', () => {
 
     expect(karl?.preset).toMatchObject({ maxTokens: 8192 });
     expect(karl?.preset).not.toHaveProperty('verbosity');
-    expect(prompt).toMatch(/simple facts, weather, status, or definitions[^\n]*at most 80 words/i);
-    expect(prompt).toMatch(/ordinary questions[^\n]*at most 160 words/i);
-    expect(prompt).toMatch(/comparisons, troubleshooting, or decisions[^\n]*at most 300 words/i);
+    expect(prompt).toMatch(/simple fact[^\n]*1[–-]3 sentences[^\n]*at most 80 words/i);
+    expect(prompt).toMatch(/ordinary question[^\n]*at most 160 words/i);
+    expect(prompt).toMatch(
+      /comparison, troubleshooting request, or decision[^\n]*at most 300 words/i,
+    );
     expect(prompt).toMatch(/ceilings, not targets/i);
+    expect(prompt).toMatch(/answer the user's exact question first[^\n]*stop when it is answered/i);
+    expect(prompt).toMatch(/preserve the conclusion[^\n]*evidence[^\n]*material caveat/i);
+    expect(prompt).toMatch(
+      /omit introductions[^\n]*generic background[^\n]*repeated explanations/i,
+    );
+    expect(prompt).toMatch(/tool or source availability never justifies extra detail/i);
+    expect(prompt).toMatch(/why is the sky blue[^\n]*1[–-]3 sentence/i);
+    expect(prompt).not.toMatch(/narrative style/i);
     expect(prompt).toMatch(/exceed 300 words only when the user requests detail/i);
-    expect(prompt).toMatch(/do not repeat facts in a concluding summary/i);
-    expect(prompt).toMatch(/do not append a follow-up offer unless clarification/i);
     expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
     expect(prompt).toMatch(/never truncate valid source/i);
   });
