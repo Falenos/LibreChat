@@ -41,6 +41,9 @@ import { useResetChatBadges } from './useChatBadges';
 import { useApplyModelSpecEffects } from './Agents';
 import { usePauseGlobalAudio } from './Audio';
 import { useHasAccess } from '~/hooks';
+// [knauf] KK20-257 — hard-default-spec inheritance for a fresh conversation (see below).
+import { knaufHardDefaultSpecApplies } from '~/knauf/utils/knaufDefaultSpec';
+// End [knauf]
 import store from '~/store';
 
 const useNewConvo = (index = 0) => {
@@ -332,7 +335,26 @@ const useNewConvo = (index = 0) => {
             (startupConfig?.interface?.modelSelect ?? true) !== true ||
             (result?.last != null &&
               Object.keys(_template).filter((key) => key !== 'chatProjectId').length === 0);
-      if (!preset && startupConfig && shouldApplyModelSpec && defaultModelSpec) {
+      // [knauf] KK20-257 — a hard `default: true` spec also applies to a fresh chat.
+      // `shouldApplyModelSpec` never covers that case (getDefaultModelSpec returns
+      // `{ default }` early, so `last`/`softDefault` stay undefined and every disjunct is
+      // false under `prioritize: false` + `modelSelect: true`), which left the "New chat"
+      // button creating a spec-less conversation while ChatRoute's own new-convo effect
+      // applied the spec — the ephemeral agent got nulled and `execute_code`, `artifacts`,
+      // `skills` and `web_search` went with it until a refresh. See the helper for the
+      // full trace and for why `hasModelSelection` is the right discriminator.
+      const knaufHardDefaultApplies = knaufHardDefaultSpecApplies({
+        hardDefaultSpec: result?.default,
+        preset: _preset,
+        template: _template,
+      });
+      // End [knauf]
+      if (
+        !preset &&
+        startupConfig &&
+        (shouldApplyModelSpec || knaufHardDefaultApplies) &&
+        defaultModelSpec
+      ) {
         preset = getModelSpecPreset(defaultModelSpec);
       }
 

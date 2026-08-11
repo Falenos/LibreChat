@@ -43,6 +43,12 @@ jest.mock('@tanstack/react-query', () => ({
 }));
 
 jest.mock('~/data-provider', () => ({
+  // [knauf] KK20-257 — `useKnaufCodeDestinationAllowed` reads the spec list to mirror the
+  // server's `ephemeralAgent.execute_code || modelSpec.executeCode`. Default spec enables
+  // code, matching librechat.yaml, so these suites exercise the production shape.
+  useGetStartupConfig: jest.fn(() => ({
+    data: { modelSpecs: { list: [{ name: 'karl', default: true, executeCode: true }] } },
+  })),
   useGetFileConfig: jest.fn(() => ({
     data: {
       endpoints: {

@@ -55,6 +55,9 @@ let mockFileConfig: Record<string, unknown> | null = null;
 // can prove routing stops when either one is off.
 let mockCodeEnabled = true;
 let mockCodeAllowedByAgent = true;
+// [knauf] KK20-257 — the conversation's spec is the second half of the code-destination
+// answer, mirroring the server's `ephemeralAgent.execute_code || modelSpec.executeCode`.
+let mockSpecExecuteCode = true;
 // End [knauf]
 // [knauf] KK20-195 — mutable chat files fixture for duplicate-batch regressions.
 let mockFiles = new Map<string, ExtendedFile>();
@@ -112,6 +115,14 @@ jest.mock('~/hooks/Agents/useAgentToolPermissions', () => ({
 // End [knauf]
 
 jest.mock('~/data-provider', () => ({
+  // [knauf] KK20-257 — `useKnaufCodeDestinationAllowed` reads the spec list to mirror the
+  // server's `ephemeralAgent.execute_code || modelSpec.executeCode`. Default spec enables
+  // code, matching librechat.yaml, so these suites exercise the production shape.
+  useGetStartupConfig: jest.fn(() => ({
+    data: {
+      modelSpecs: { list: [{ name: 'karl', default: true, executeCode: mockSpecExecuteCode }] },
+    },
+  })),
   useGetFileConfig: jest.fn(() => ({ data: mockFileConfig })),
   useUploadFileMutation: jest.fn((opts: typeof mockUploadOptions) => {
     mockUploadOptions = opts;
@@ -745,6 +756,7 @@ describe('useFileHandling', () => {
       };
       mockCodeEnabled = true;
       mockCodeAllowedByAgent = true;
+      mockSpecExecuteCode = true;
     });
 
     it.each([
@@ -788,8 +800,13 @@ describe('useFileHandling', () => {
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
     });
 
-    it('falls back to file search when the conversation cannot run code', async () => {
+    it('falls back to file search when neither the agent nor the spec can run code', async () => {
+      // [knauf] KK20-257 — "cannot run code" now takes both halves, because the server
+      // takes both: `ephemeralAgent.execute_code || modelSpec.executeCode`
+      // (packages/api/src/agents/load.ts). Turning off only the agent flag no longer
+      // means the conversation cannot run code — see the case below.
       mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = false;
       const useFileHandling = await loadHook();
       const { result } = renderHook(() => useFileHandling());
       const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
@@ -799,6 +816,25 @@ describe('useFileHandling', () => {
       });
 
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('still routes to code when the ephemeral agent is unseeded but the spec enables it', async () => {
+      // [knauf] KK20-257 regression: clicking "New chat" nulled the ephemeral agent, so
+      // `codeAllowedByAgent` was false while the conversation still ran a spec with
+      // `executeCode: true`. The spreadsheet then went to file search — silently and
+      // irreversibly, since the destination is fixed at upload time — until a page
+      // refresh reseeded the agent. The server would have registered the tool all along.
+      mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = true;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
     });
 
     it('does not override a destination the user chose explicitly', async () => {

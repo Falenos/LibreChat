@@ -39,6 +39,9 @@ import {
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
 import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
+// [knauf] KK20-257 — shared code-destination gate.
+import useKnaufCodeDestinationAllowed from '~/knauf/hooks/useKnaufCodeDestinationAllowed';
+// End [knauf]
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
@@ -142,6 +145,17 @@ const AttachFileMenu = ({
     agentId,
     ephemeralAgent,
   );
+
+  // [knauf] KK20-257 — one shared answer for "may a file go to the code sandbox", mirroring
+  // the server's own OR of ephemeral agent and resolved spec. Shared with the drag-drop
+  // picker and the tabular auto-routing rule so the three cannot disagree; see the hook for
+  // why `codeAllowedByAgent` alone is too narrow.
+  const codeDestinationAllowed = useKnaufCodeDestinationAllowed({
+    codeEnabled: capabilities.codeEnabled,
+    codeAllowedByAgent,
+    specName: conversation?.spec,
+  });
+  // End [knauf]
 
   const handleUploadClick = useCallback(
     (fileType?: FileUploadType) => {
@@ -298,7 +312,8 @@ const AttachFileMenu = ({
       }
       // End [knauf]
 
-      if (capabilities.codeEnabled && codeAllowedByAgent) {
+      // [knauf] KK20-257 — see `codeDestinationAllowed` above. End [knauf]
+      if (codeDestinationAllowed) {
         items.push({
           // [knauf] KK20-257 — "Upload files to edit" instead of upstream's "Upload to
           // Code Environment": the same principle as the "Upload files" row above, which

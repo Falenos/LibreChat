@@ -23,6 +23,9 @@ import {
   useGetAgentsConfig,
   useLocalize,
 } from '~/hooks';
+// [knauf] KK20-257 — shared code-destination gate.
+import useKnaufCodeDestinationAllowed from '~/knauf/hooks/useKnaufCodeDestinationAllowed';
+// End [knauf]
 import { ephemeralAgentByConvoId } from '~/store';
 import { useDragDropContext } from '~/Providers';
 
@@ -54,6 +57,14 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     agentId,
     ephemeralAgent,
   );
+
+  // [knauf] KK20-257 — shared code-destination gate (see the hook). No conversation object
+  // is available on this surface, so it resolves against the hard default spec.
+  const codeDestinationAllowed = useKnaufCodeDestinationAllowed({
+    codeEnabled: capabilities.codeEnabled,
+    codeAllowedByAgent,
+  });
+  // End [knauf]
 
   const options = useMemo(() => {
     const _options: FileOption[] = [];
@@ -123,7 +134,10 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         icon: <FileSearch className="icon-md" />,
       });
     }
-    if (capabilities.codeEnabled && codeAllowedByAgent) {
+    // [knauf] KK20-257 — shared with the paperclip menu and the tabular auto-routing rule.
+    // This picker has no conversation object, so the hook falls back to the hard default
+    // spec, which is what a fresh conversation is submitted with. End [knauf]
+    if (codeDestinationAllowed) {
       _options.push({
         // [knauf] KK20-257 — same destination, same words as the paperclip menu row
         // (AttachFileMenu). This picker is the drop-path twin of that menu, so the two
@@ -154,6 +168,8 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     useResponsesApi,
     codeAllowedByAgent,
     fileSearchAllowedByAgent,
+    // [knauf] KK20-257 — shared code-destination gate. End [knauf]
+    codeDestinationAllowed,
   ]);
 
   // [knauf] A drag-drop upload picker with a single applicable option is a

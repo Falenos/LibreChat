@@ -29,6 +29,7 @@ import useLocalize, { TranslationKeys } from '~/hooks/useLocalize';
 import useAgentCapabilities from '~/hooks/Agents/useAgentCapabilities';
 import useGetAgentsConfig from '~/hooks/Agents/useGetAgentsConfig';
 import useAgentToolPermissions from '~/hooks/Agents/useAgentToolPermissions';
+import useKnaufCodeDestinationAllowed from '~/knauf/hooks/useKnaufCodeDestinationAllowed';
 // End [knauf]
 import { useDelayedUploadToast } from './useDelayedUploadToast';
 import { useChatContext } from '~/Providers/ChatContext';
@@ -288,20 +289,28 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   //     opaque 500. It is also what the fail-closed LIBRECHAT_CODE_BASEURL guard
   //     (packages/api/src/knauf/code/codeEnvGuard.ts) switches off, so a misconfigured
   //     deployment stops routing here rather than uploading somewhere unintended.
-  //   * `codeAllowedByAgent` — the per-conversation half. The upload can succeed while
-  //     the model never learns the file exists, because primeCodeFiles is gated on the
-  //     resolved tool list (api/server/services/ToolService.js). For default KARL chats
-  //     this is true via `executeCode: true` on the spec; for custom agents it means the
-  //     agent actually has execute_code installed.
-  // When either is false we leave the file on its original destination (file search),
-  // which is exactly the pre-KK20-257 behaviour.
+  //   * the per-conversation half — either the agent asks for `execute_code`, or the
+  //     conversation's model spec does. The upload can succeed while the model never
+  //     learns the file exists, because primeCodeFiles is gated on the resolved tool list
+  //     (api/server/services/ToolService.js). Both terms are needed because the server
+  //     ORs them too (packages/api/src/agents/load.ts): reading only the agent flag makes
+  //     the client narrower than the backend, and a fresh conversation whose ephemeral
+  //     agent has not been seeded yet would silently route a spreadsheet to file search.
+  // When the answer is false we leave the file on its original destination (file search),
+  // which is exactly the pre-KK20-257 behaviour. The same hook answers for the paperclip
+  // menu and the drag-drop picker, so a user cannot be offered a destination here that
+  // those refuse — or the reverse.
   const ephemeralAgentValue = useRecoilValue(
     ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
   );
   const { agentsConfig } = useGetAgentsConfig();
   const { codeEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
   const { codeAllowedByAgent } = useAgentToolPermissions(agent_id, ephemeralAgentValue);
-  const canRouteTabularToCode = codeEnabled && codeAllowedByAgent;
+  const canRouteTabularToCode = useKnaufCodeDestinationAllowed({
+    codeEnabled,
+    codeAllowedByAgent,
+    specName: conversation?.spec,
+  });
   // End [knauf]
 
   const { data: fileConfig = null } = useGetFileConfig({
