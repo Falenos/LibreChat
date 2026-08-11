@@ -2,6 +2,13 @@ import React, { useRef, useState, useMemo, useCallback } from 'react';
 import { useRecoilState } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import {
+  FileUpload,
+  TooltipAnchor,
+  DropdownPopup,
+  AttachmentIcon,
+  SharePointIcon,
+} from '@librechat/client';
+import {
   Info,
   FileSearch,
   ImageUpIcon,
@@ -9,13 +16,6 @@ import {
   FileImageIcon,
   TerminalSquareIcon,
 } from 'lucide-react';
-import {
-  FileUpload,
-  TooltipAnchor,
-  DropdownPopup,
-  AttachmentIcon,
-  SharePointIcon,
-} from '@librechat/client';
 import {
   Providers,
   EToolResources,
@@ -29,7 +29,6 @@ import {
   knaufChatUploadAccept,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation, TEphemeralAgent } from 'librechat-data-provider';
-import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
 import {
   useAgentToolPermissions,
   useAgentCapabilities,
@@ -39,6 +38,10 @@ import {
 } from '~/hooks';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
 import { useShortcutAriaKey, useShortcutHint } from '~/hooks/useKeyboardShortcuts';
+import { isEphemeralAgent, type ExtendedFile, type FileSetter } from '~/common';
+// [knauf] KK20-257 — shared code-destination gate.
+import useKnaufCodeDestinationAllowed from '~/knauf/hooks/useKnaufCodeDestinationAllowed';
+// End [knauf]
 import { SharePointPickerDialog } from '~/components/SharePoint';
 import { useGetStartupConfig } from '~/data-provider';
 import { ephemeralAgentByConvoId } from '~/store';
@@ -142,6 +145,18 @@ const AttachFileMenu = ({
     agentId,
     ephemeralAgent,
   );
+
+  // [knauf] KK20-257 — one shared answer for "may a file go to the code sandbox", mirroring
+  // the server's own OR of ephemeral agent and resolved spec. Shared with the drag-drop
+  // picker and the tabular auto-routing rule so the three cannot disagree; see the hook for
+  // why `codeAllowedByAgent` alone is too narrow.
+  const codeDestinationAllowed = useKnaufCodeDestinationAllowed({
+    codeEnabled: capabilities.codeEnabled,
+    codeAllowedByAgent,
+    specName: conversation?.spec,
+    conversationId: conversation?.conversationId,
+  });
+  // End [knauf]
 
   const handleUploadClick = useCallback(
     (fileType?: FileUploadType) => {
@@ -248,24 +263,6 @@ const AttachFileMenu = ({
           },
           icon: <FileImageIcon className="icon-md" />,
         });
-        // [knauf] On the Knauf File Search chat, add a separate "View supported
-        // formats" menu item that opens KnaufUploadFormatsDialog (accepted formats
-        // + limits + the legacy .doc/.xls/.ppt → OOXML conversion steps). It is a
-        // standalone role=menuitem row — NOT a <button> nested inside the upload
-        // item's render — so it's reachable by keyboard and screen readers (arrow
-        // keys move between menu items, never into a nested control). Same gate as
-        // the routing above. KK20-190 (upload-guidance follow-up).
-        if (useKnaufFileSearch) {
-          items.push({
-            label: localize('com_knauf_upload_formats_title'),
-            onClick: () => {
-              setIsPopoverActive(false);
-              setFormatsDialogOpen(true);
-            },
-            icon: <Info className="icon-md" />,
-          });
-        }
-        // End [knauf]
       } else {
         items.push({
           label: localize('com_ui_upload_image_input'),
@@ -316,9 +313,24 @@ const AttachFileMenu = ({
       }
       // End [knauf]
 
-      if (capabilities.codeEnabled && codeAllowedByAgent) {
+      // [knauf] KK20-257 — see `codeDestinationAllowed` above. End [knauf]
+      if (codeDestinationAllowed) {
         items.push({
-          label: localize('com_ui_upload_code_environment'),
+          // [knauf] KK20-257 — "Upload files to edit" instead of upstream's "Upload to
+          // Code Environment": the same principle as the "Upload files" row above, which
+          // names the outcome rather than the plumbing (KK20-190). Deliberately parallel
+          // with that row — same verb, one discriminating suffix — because the two are
+          // read against each other: "Upload files" means KARL reads and answers from the
+          // document, this one means KARL changes it and hands a file back. "Edit" covers
+          // both halves of what the sandbox does to a file (rewrite an xlsx, convert a
+          // pdf) without naming a format. Uses a namespaced Knauf key so upstream's
+          // `com_ui_upload_code_environment` value stays intact for locale syncs; the key
+          // still records which upstream string it replaces, which is why it is named for
+          // the code environment rather than the label. Most tabular files reach the
+          // sandbox automatically now (see useFileHandling), so this row is the
+          // deliberate-choice path — mainly non-tabular files someone wants manipulated.
+          label: localize('com_knauf_upload_code_environment'),
+          // End [knauf]
           onClick: () => {
             setToolResource(EToolResources.execute_code);
             // [knauf] updater lifted to module scope to satisfy S2004 (max nesting). KK20-190.
@@ -329,6 +341,28 @@ const AttachFileMenu = ({
           icon: <TerminalSquareIcon className="icon-md" />,
         });
       }
+
+      // [knauf] The "View supported formats" row opens KnaufUploadFormatsDialog
+      // (accepted formats + limits + the legacy .doc/.xls/.ppt → OOXML conversion
+      // steps). It is a standalone role=menuitem row — NOT a <button> nested inside
+      // the upload item's render — so it stays reachable by keyboard and screen
+      // readers (arrow keys move between menu items, never into a nested control).
+      // KK20-190 (upload-guidance follow-up).
+      //
+      // KK20-257 — pushed LAST, after every upload destination. It is help text, not a
+      // destination: listing it between two upload choices split them apart and read as
+      // if it were a third thing to upload to.
+      if (useKnaufFileSearch) {
+        items.push({
+          label: localize('com_knauf_upload_formats_title'),
+          onClick: () => {
+            setIsPopoverActive(false);
+            setFormatsDialogOpen(true);
+          },
+          icon: <Info className="icon-md" />,
+        });
+      }
+      // End [knauf]
 
       return items;
     };

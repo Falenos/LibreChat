@@ -4,10 +4,10 @@ import { useToastContext } from '@librechat/client';
 import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
 import Mermaid, { MermaidErrorBoundary } from '~/components/Messages/Content/Mermaid';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
+import { handleDoubleClick, triggerDownload } from '~/utils';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
 import { useCodeBlockContext } from '~/Providers';
-import { handleDoubleClick, triggerDownload } from '~/utils';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
 
@@ -31,10 +31,23 @@ export const code: React.ElementType = memo(function MarkdownCode({
   className,
   children,
 }: TCodeProps) {
-  const canRunCode = useHasAccess({
+  const upstreamCanRunCode = useHasAccess({
     permissionType: PermissionTypes.RUN_CODE,
     permission: Permissions.USE,
   });
+
+  // [knauf] KK20-257 — no manual Run button on model-written code blocks. KARL's model is
+  // that code execution is automatic and has no user-facing controls: the model runs code
+  // when the task needs it and the generated files come back as attachments. A Run button
+  // is a different thing — a user-initiated execution of arbitrary model-authored code,
+  // with its own cost and its own session — and we deliberately ship none of the three
+  // manual surfaces (see CodeInterpreter.tsx for the permission reasoning; the tools-menu
+  // gate is in ToolsDropdown.tsx). `interface.runCode` stays `true` so the permission is
+  // available if this is ever revisited; forcing the flag false here rather than removing
+  // `allowExecution` keeps the upstream call site intact for clean merges.
+  const KNAUF_HIDE_CODE_BLOCK_RUN_BUTTON = true as boolean;
+  const canRunCode = KNAUF_HIDE_CODE_BLOCK_RUN_BUTTON ? false : upstreamCanRunCode;
+  // End [knauf]
   const match = /language-(\w+)/.exec(className ?? '');
   const lang = match && match[1];
   const isMath = lang === 'math';

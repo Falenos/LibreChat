@@ -128,8 +128,9 @@ function setupMocks(overrides: { provider?: string } = {}) {
     com_ui_upload_image_input: 'Upload Image',
     com_ui_upload_ocr_text: 'Upload as Text',
     com_ui_upload_file_search: 'Upload for File Search',
-    // [knauf] source renders the upstream `com_ui_upload_code_environment` key. End [knauf]
-    com_ui_upload_code_environment: 'Upload to Code Environment',
+    // [knauf] KK20-257 — source renders the namespaced `com_knauf_upload_code_environment`
+    // key ("Upload file changes"), not upstream's. End [knauf]
+    com_knauf_upload_code_environment: 'Upload files to edit',
     com_sidepanel_attach_files: 'Attach Files',
     com_files_upload_sharepoint: 'Upload from SharePoint',
     // [knauf] Label of the standalone "View supported formats" menu item. KK20-190.
@@ -367,7 +368,7 @@ describe('AttachFileMenu', () => {
       });
       renderMenu({ endpointType: EModelEndpoint.openAI });
       openMenu();
-      expect(screen.getByText('Upload to Code Environment')).toBeInTheDocument();
+      expect(screen.getByText('Upload files to edit')).toBeInTheDocument();
     });
 
     it('shows all options when all capabilities are enabled', () => {
@@ -389,12 +390,43 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload files')).toBeInTheDocument();
       expect(screen.getByText('Upload as Text')).toBeInTheDocument();
       // [knauf] KK20-123 — file-search is hidden in chat (KNAUF_SHOW_FILE_SEARCH_IN_CHAT=false),
-      // so it never appears; the code item uses the upstream `com_ui_upload_code_environment` key.
+      // so it never appears; the code item uses the Knauf `com_knauf_upload_code_environment` key.
       // Upstream's "passes File Search resource on input change" test is dropped here because it
       // clicks the (now-hidden) File Search item. End [knauf]
       expect(screen.queryByText('Upload for File Search')).not.toBeInTheDocument();
-      expect(screen.getByText('Upload to Code Environment')).toBeInTheDocument();
+      expect(screen.getByText('Upload files to edit')).toBeInTheDocument();
     });
+
+    // [knauf] KK20-257 — "Supported file types" is help text, not a destination, so it
+    // belongs after every upload choice. It previously sat between two of them, which
+    // split the destinations apart and read as a third thing to upload to.
+    it('lists the supported-formats row last, after every upload destination', () => {
+      setupMocks();
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: true,
+        fileSearchEnabled: true,
+        codeEnabled: true,
+      });
+      mockUseAgentToolPermissions.mockReturnValue({
+        fileSearchAllowedByAgent: true,
+        codeAllowedByAgent: true,
+        provider: undefined,
+      });
+      renderMenu({ endpointType: EModelEndpoint.azureOpenAI, useResponsesApi: true });
+      openMenu();
+
+      const labels = screen
+        .getAllByTestId(/^menu-item-\d+$/)
+        .map((item) => item.textContent?.trim())
+        .filter((label): label is string => label != null && label !== '');
+
+      expect(labels).toContain('Supported file types');
+      expect(labels[labels.length - 1]).toBe('Supported file types');
+      expect(labels.indexOf('Upload file changes')).toBeLessThan(
+        labels.indexOf('Supported file types'),
+      );
+    });
+    // End [knauf]
   });
 
   // [knauf] KK20-190 — on a Knauf Azure chat, "Upload files" routes

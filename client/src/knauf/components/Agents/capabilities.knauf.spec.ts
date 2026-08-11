@@ -44,8 +44,15 @@ describe('[knauf] KNAUF_CAPABILITIES registry', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('exposes artifacts and skills alongside web search', () => {
-    expect(KNAUF_CAPABILITIES.map((entry) => entry.id)).toEqual(['web', 'artifacts', 'skills']);
+  it('exposes artifacts, code and skills alongside web search', () => {
+    // Order is render order in the V6 panel. `code` sits with the other
+    // output-producing capabilities, before the skills toggle. KK20-257.
+    expect(KNAUF_CAPABILITIES.map((entry) => entry.id)).toEqual([
+      'web',
+      'artifacts',
+      'code',
+      'skills',
+    ]);
   });
 
   describe('gating on endpoints.agents.capabilities', () => {
@@ -133,10 +140,54 @@ describe('[knauf] KNAUF_CAPABILITIES registry', () => {
     });
   });
 
+  // KK20-257. Unlike artifacts (a mode string), execute_code is a plain boolean, and
+  // it is the field the chat side reads as `codeAllowedByAgent` — which decides both
+  // whether the sandbox row appears in the paperclip menu and whether a tabular
+  // attachment may be routed to /mnt/data. A wrong shape here silently disables that.
+  describe('code writes the plain execute_code boolean', () => {
+    const code = capabilityById('code');
+
+    it('writes execute_code true, not a mode string', () => {
+      const { values, helpers } = makeHelpers();
+      code.applyToForm(true, helpers);
+      expect(values[AgentCapabilities.execute_code]).toBe(true);
+    });
+
+    it('writes false when switched off', () => {
+      const { values, helpers } = makeHelpers({ [AgentCapabilities.execute_code]: true });
+      code.applyToForm(false, helpers);
+      expect(values[AgentCapabilities.execute_code]).toBe(false);
+    });
+
+    it('round-trips through readFromForm', () => {
+      expect(
+        code.readFromForm(makeHelpers({ [AgentCapabilities.execute_code]: true }).helpers),
+      ).toBe(true);
+      expect(
+        code.readFromForm(makeHelpers({ [AgentCapabilities.execute_code]: false }).helpers),
+      ).toBe(false);
+      expect(code.readFromForm(makeHelpers().helpers)).toBe(false);
+    });
+
+    it('is hidden unless the endpoint enables execute_code, so a dead tool cannot be armed', () => {
+      // The fail-closed guard strips execute_code from the served capability list when
+      // LIBRECHAT_CODE_BASEURL is unset, so this gate is also what hides the row on a
+      // deployment with no reachable sandbox.
+      expect(code.isEnabled([AgentCapabilities.artifacts, AgentCapabilities.skills])).toBe(false);
+      expect(code.isEnabled([AgentCapabilities.execute_code])).toBe(true);
+    });
+
+    it('watches the field it writes, or the switch renders stale', () => {
+      expect(code.watchFields).toContain(AgentCapabilities.execute_code);
+    });
+  });
+
   it('gives every entry a label and a description for the switch row', () => {
     for (const entry of KNAUF_CAPABILITIES) {
       expect(entry.label.length).toBeGreaterThan(0);
       expect(entry.description.length).toBeGreaterThan(0);
+      // A name that does not exist in the pinned lucide-react version imports as
+      // `undefined` and the row renders iconless — this caught exactly that. KK20-257.
       expect(entry.icon).toBeDefined();
     }
   });

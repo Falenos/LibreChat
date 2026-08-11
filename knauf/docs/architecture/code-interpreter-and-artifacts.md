@@ -13,7 +13,7 @@ A hands-on guide to turning on **Code Interpreter** (sandboxed code execution) a
 | `artifacts` in `endpoints.agents.capabilities` | `librechat.yaml` — **enabled** | Whether Artifacts is offered at all. No RBAC permission exists. The `karl` spec's `artifacts: 'default'` is what makes it on for new chats. |
 | `skills` in `endpoints.agents.capabilities` | `librechat.yaml` — **enabled** | The deployment skills in `skill/`. Additionally needs the `SKILLS` permission and per-agent opt-in (`skills_enabled`, or the spec's `skills` field). |
 | `execute_code` in `endpoints.agents.capabilities` | `librechat.yaml` — **excluded** | Agent **auto-run** of code. Also needs a reachable sandbox. |
-| `interface.runCode` | `librechat.yaml` — already `true` | Only the manual **Run** button on code blocks + the composer "Run Code" badge. (Permission: `RUN_CODE`.) Not agent auto-run. |
+| `interface.runCode` | `librechat.yaml` — **`false` since KK20-252** | Only the manual **Run** button on code blocks + the composer "Run Code" badge. (Permission: `RUN_CODE`.) Not agent auto-run. Stays `false` — the prod stance is code execution via agent auto-run only. |
 
 - **Code Interpreter** additionally needs a running **sandbox backend** (below).
 - **Artifacts** needs **no backend** — it renders in the browser via Sandpack; only an egress decision.

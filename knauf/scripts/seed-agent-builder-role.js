@@ -40,12 +40,19 @@ const PERMISSIONS = {
   AGENTS:         { USE: true, CREATE: true, SHARE: false, SHARE_PUBLIC: false },
   MULTI_CONVO:    { USE: true },
   TEMPORARY_CHAT: { USE: true },
-  // KK20-252 — Run Code is off platform-wide. `interface.runCode: false` in
-  // librechat.yaml only re-seeds USER and ADMIN (permissions.ts:125), so leaving
-  // this true would have left AI Champions as the one role still holding
-  // RUN_CODE.USE — backed by a sandbox that is not deployed on AGK, so the Run
-  // button would fail every time. Keep the explicit false so the next reader
-  // sees the intent.
+  // KK20-252 / KK20-257 — stays false, and it no longer matters much: do not "fix" this.
+  // `interface.runCode` is now `true` in librechat.yaml, but permissions.ts:125 re-seeds
+  // only USER and ADMIN from that file, so this role is set here or nowhere.
+  //
+  // It is deliberately not granted, and granting it would add nothing: RUN_CODE.USE
+  // reaches only the manual execution surfaces (composer chip, tools-menu row,
+  // per-code-block Run button), and all three are hidden in the client by the
+  // KNAUF_HIDE_CODE_* flags, so no UI calls the endpoint it protects. Code execution
+  // itself has never come from this permission — it comes from the `execute_code`
+  // capability plus the per-spec `executeCode` flag. AI Champions therefore get code
+  // execution exactly like everyone else, automatically, with no toggle to find.
+  // Explicit false rather than deleted: the update below is a full `$set` replace, and
+  // the next reader should see the intent.
   RUN_CODE:       { USE: false },
   WEB_SEARCH:     { USE: true },
   MARKETPLACE:    { USE: true },

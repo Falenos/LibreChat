@@ -38,6 +38,16 @@ jest.mock('~/Providers', () => ({
     useResponsesApi: false,
   }),
 }));
+// [knauf] KK20-257 — the code-destination gate reads the spec list, so this suite needs a
+// startup config. Full mock rather than a QueryClientProvider: this file deliberately
+// renders the component without providers. Default spec enables code, matching
+// librechat.yaml, so `codeAllowedByAgent` alone no longer decides the code option.
+jest.mock('~/data-provider', () => ({
+  useGetStartupConfig: () => ({
+    data: { modelSpecs: { list: [{ name: 'karl', default: true, executeCode: true }] } },
+  }),
+}));
+// End [knauf]
 jest.mock('~/store', () => ({ ephemeralAgentByConvoId: (id: string) => id }));
 jest.mock('recoil', () => ({ useRecoilValue: () => ({}) }));
 jest.mock('@librechat/client', () => {

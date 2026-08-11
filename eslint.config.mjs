@@ -43,6 +43,10 @@ export default [
       'meili_data/**/*',
       '**/node_modules/**/*',
       '.devcontainer/**/*',
+      // [knauf] KK20-108 — standalone sidecar package: own tsconfig/deps, linted
+      // by its own `npm run lint` (tsc) + vitest CI job, not the monorepo config.
+      'knauf/code-adapter/**/*',
+      // End [knauf]
     ],
   },
   ...fixupConfigRules(

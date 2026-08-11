@@ -1,0 +1,23 @@
+# Code execution (KK20-108)
+
+How KARL runs model-authored Python and Bash: **Azure Container Apps dynamic sessions** behind the
+[`knauf/code-adapter`](../../code-adapter/) Tier-3 sidecar. This folder is the code-execution story end to end;
+Artifacts and Skills are separate features documented in
+[`../architecture/code-interpreter-and-artifacts.md`](../architecture/code-interpreter-and-artifacts.md) and the
+[artifacts + skills rollout](../implementation-plans/code-interpreter-artifacts-rollout.md).
+
+| Doc                                                              | Read it for                                                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [how-it-works.md](how-it-works.md)                               | The architecture and request flow; the exec wrapper (real exit codes + output-cap recovery); **the sandbox/file model** (every exec is a fresh, isolated sandbox — files persist only by being re-pushed from staging each call, not by session reuse; variables never persist); the file journey; local vs prod. Start here. |
+| [backend-decision.md](backend-decision.md)                       | Why ACA dynamic sessions and not a self-hosted sandbox (or Azure OpenAI Assistants) — the decision record and the platform-fit reasoning that drove it.                                                                                                                     |
+| [placement-and-justification.md](placement-and-justification.md) | Why the adapter is a separate sidecar rather than code inside LibreChat — the dimension-by-dimension comparison, re-verified after building it live.                                                                                                                        |
+| [deployment.md](deployment.md)                                   | **Infra deployment runbook** — step-by-step across agk-infrastructure (Terraform: pool + workload identity), agk-deployment-configs (GitOps service), LibreChat wiring, and the capability flip; verified-environment table, ordering constraints, verification, rollback.  |
+| [deploy-to-dev.md](deploy-to-dev.md)                             | **The execution checklist for the dev rollout** — the ordered sequence across the three repos with the current state of each, the three ordering traps (Terraform before GitOps; no adapter image until #258 merges; the capability stays inert until the base URL points at the adapter), the exact values/env keys to paste, layer-by-layer verification, and rollback. Use this to *do* the rollout; use `deployment.md` to understand it. |
+| [scaling.md](scaling.md)                                         | **Capacity and scaling** — the four concurrency domains and which one binds (the session pool, not the pods); what one execution costs in pool-slot time (exec + 300 s cooldown) and the sustained-throughput math; why adapter memory, not CPU, is the pod limit; the timeout ladder; metrics to watch and the knob-per-symptom table. |
+
+**Operational reference** (env vars, the served contract table, how to run/test/build/deploy) lives with the service:
+[`knauf/code-adapter/README.md`](../../code-adapter/README.md).
+
+**Rollout status:** the adapter is built and verified live against a spike subscription; the remaining AGK work —
+`agk-infrastructure` Terraform (one code-interpreter pool + workload identity) and the `agk-deployment-configs` deploy —
+is the step-by-step [deployment runbook](deployment.md).

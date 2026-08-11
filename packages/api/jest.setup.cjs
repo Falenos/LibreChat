@@ -22,3 +22,20 @@ if (typeof globalThis.File === 'undefined') {
     // real environment issue.
   }
 }
+
+/**
+ * [knauf] KK20-257 — represent a correctly-configured code environment by default.
+ *
+ * `isKnaufCodeEnvConfigured` (src/knauf/code/codeEnvGuard.ts) strips the
+ * `execute_code` capability unless `LIBRECHAT_CODE_BASEURL` points at a host we
+ * control, because upstream otherwise defaults the Code API to LibreChat's hosted
+ * SaaS. Suites that use `execute_code` as an incidental example of capability
+ * plumbing (e.g. endpoints.spec.ts `checkCapability`) would otherwise fail for a
+ * reason unrelated to what they assert. `??=` keeps a real value if one is
+ * exported; the guard's negative branch is covered explicitly by
+ * src/knauf/code/codeEnvGuard.knauf.spec.ts, which sets this var itself.
+ */
+// Must be an in-cluster shape: the guard is an allowlist, so a `*.test.invalid` host
+// would read as external and strip the capability — the very thing this line prevents.
+process.env.LIBRECHAT_CODE_BASEURL ??=
+  'http://agentic-karl-code-adapter.agentic-karl-test.svc.cluster.local/v1';

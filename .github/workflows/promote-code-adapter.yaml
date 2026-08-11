@@ -1,0 +1,148 @@
+name: Promote code-adapter image to prod
+
+# Promotes an existing Knauf code-adapter tag from the AGK nonprod hub ACR to the prod
+# hub ACR:
+#   acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<tag>
+#     -> acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl-code-adapter:<tag>
+#
+# WHY A SEPARATE WORKFLOW, not a step inside promote_pipeline.yaml.
+# The adapter versions independently of KARL: its tag comes from
+# knauf/code-adapter/VERSION (e.g. 0.1.0), while promote_pipeline.yaml promotes the
+# app's `vX.Y.Z` GitOps tag. Bolting the adapter onto that job would force one of the
+# two into the other's scheme, and would couple a code-adapter hotfix to a full app
+# promotion. Deliberate deviation from the "slot it into promote_pipeline.yaml" bullet in
+# knauf/docs/code-execution/deployment.md §8, which assumed lock-step versioning.
+#
+# This workflow does NOT deploy. It only makes the tag available in the prod registry —
+# the prod rollout is a values bump in Knauf-Group/agk-deployment-configs
+# (agentic-karl/prod/services/agentic-karl-code-adapter), which ArgoCD then syncs. That
+# split is intentional: image availability is reversible and safe, the values bump is the
+# actual change, and it goes through the config repo's PR review like every other service.
+#
+# Auth is the shared service principal (secrets.AZURE_CREDENTIALS), same as
+# build-code-adapter.yaml and promote_pipeline.yaml. `az acr import` is server-side —
+# no docker pull/push, no registry password.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Adapter tag to promote (must already exist in nonprod, e.g. 0.1.0)'
+        required: true
+      confirm:
+        description: 'Type the tag again to confirm the prod promotion'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Import adapter tag into AGK prod ACR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+    env:
+      NONPROD_SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      PROD_SUBSCRIPTION_ID: e0515a24-7205-481b-b657-944901020e32
+      NONPROD_ACR_NAME: acragkhubnonprod001
+      PROD_ACR_NAME: acragkhubprod001
+      NONPROD_IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-code-adapter
+      PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl-code-adapter
+    steps:
+      - name: Validate inputs
+        # Both inputs arrive through `env`, never interpolated into the script body.
+        # `${{ }}` is substituted before bash parses the line, so a crafted tag could
+        # otherwise break quoting and run commands — and this job holds an Azure login
+        # with write access to the PROD registry. Validation has to happen on the
+        # variable, after substitution can no longer inject anything.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          TAG="$INPUT_TAG"
+          CONFIRM="$INPUT_CONFIRM"
+          # Two-field confirmation: this writes to the prod registry, and a mistyped tag
+          # would publish an unintended image under a name prod values may already point at.
+          if [ "$TAG" != "$CONFIRM" ]; then
+            echo "::error::confirm does not match tag"
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'; then
+            echo "::error::tag must be semver without a leading v (e.g. 0.1.0); the adapter is tagged from knauf/code-adapter/VERSION"
+            exit 1
+          fi
+          if [ "${#TAG}" -gt 64 ]; then
+            echo "::error::tag longer than 64 characters"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_ENV"
+
+      - name: Azure login (shared service principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify the tag exists in nonprod
+        run: |
+          set -euo pipefail
+          # Fail before touching prod if the source tag was never built.
+          az acr repository show-tags \
+            --subscription "$NONPROD_SUBSCRIPTION_ID" \
+            --name "$NONPROD_ACR_NAME" \
+            --repository "$NONPROD_IMAGE_REPOSITORY" \
+            --output tsv \
+            --query "[?@=='$tag'] | [0]" | grep -qx "$tag"
+
+      - name: Import into AGK prod ACR
+        run: |
+          set -euo pipefail
+          SOURCE_REGISTRY_ID=$(az acr show \
+            --subscription "$NONPROD_SUBSCRIPTION_ID" \
+            --name "$NONPROD_ACR_NAME" \
+            --query id \
+            -o tsv)
+
+          # No --force: a tag already present in prod must not be silently replaced.
+          # Re-promoting the same version is a signal that something is wrong upstream
+          # (an unversioned rebuild), so make it fail loudly and bump VERSION instead.
+          az acr import \
+            --subscription "$PROD_SUBSCRIPTION_ID" \
+            --name "$PROD_ACR_NAME" \
+            --registry "$SOURCE_REGISTRY_ID" \
+            --source "$NONPROD_IMAGE_REPOSITORY:$tag" \
+            --image "$PROD_IMAGE_REPOSITORY:$tag"
+
+      - name: Verify the tag landed in prod
+        run: |
+          set -euo pipefail
+          az acr repository show-tags \
+            --subscription "$PROD_SUBSCRIPTION_ID" \
+            --name "$PROD_ACR_NAME" \
+            --repository "$PROD_IMAGE_REPOSITORY" \
+            --output tsv \
+            --query "[?@=='$tag'] | [0]" | grep -qx "$tag"
+
+      - name: Summary
+        run: |
+          {
+            echo "### code-adapter promoted to prod ACR"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tag | \`$tag\` |"
+            echo "| Image | \`$PROD_ACR_NAME.azurecr.io/$PROD_IMAGE_REPOSITORY:$tag\` |"
+            echo ""
+            echo "**Not deployed yet.** Point the prod values at this tag to roll it out:"
+            echo "\`agentic-karl/prod/services/agentic-karl-code-adapter/values.yaml\` in"
+            echo "Knauf-Group/agk-deployment-configs. Prod also needs its own ACA session pool,"
+            echo "managed identity and \`LIBRECHAT_CODE_BASEURL\` — until that env var points at"
+            echo "the prod adapter, code execution stays off by design"
+            echo "(packages/api/src/knauf/code/codeEnvGuard.ts)."
+          } >> "$GITHUB_STEP_SUMMARY"

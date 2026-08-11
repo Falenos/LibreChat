@@ -37,8 +37,12 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
       'agent-builder-coach',
       'karl-artifacts',
       'karl-brand',
+      // [knauf] KK20-257 — the code-execution skills ship now that the adapter does.
+      'karl-data-analysis',
       'karl-guide',
       'karl-mermaid',
+      'karl-xlsx',
+      // End [knauf]
       'web-research',
     ]);
   });
@@ -81,15 +85,16 @@ describe('[knauf] checkDeploymentSkills', () => {
   });
 
   it('treats an unlisted skill as informational, not a failure', () => {
-    // Re-enabling karl-data-analysis before updating the constant must not
-    // page anyone — CI already forces the constant to be updated.
+    // Enabling a parked skill before updating the constant must not page anyone —
+    // CI already forces the constant to be updated. (`karl-data-analysis` played
+    // this role until KK20-257 shipped it; use a still-parked name instead.)
     const result = checkDeploymentSkills({
-      loadedNames: [...KNAUF_EXPECTED_DEPLOYMENT_SKILLS, 'karl-data-analysis'],
+      loadedNames: [...KNAUF_EXPECTED_DEPLOYMENT_SKILLS, 'karl-not-yet-enabled'],
       directory: DIRECTORY,
     });
     expect(result.ok).toBe(true);
     expect(result.missing).toEqual([]);
-    expect(result.unexpected).toEqual(['karl-data-analysis']);
+    expect(result.unexpected).toEqual(['karl-not-yet-enabled']);
   });
 
   it('distinguishes missing from unexpected when a skill is renamed', () => {

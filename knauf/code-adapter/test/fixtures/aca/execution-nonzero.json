@@ -1,0 +1,11 @@
+{
+  "$id": "1",
+  "properties": {
+    "$id": "2",
+    "status": "Failure",
+    "stdout": "",
+    "stderr": "boom\n3An exception has occurred, use %tb to see the full traceback.\n\nSystemExit: 3\n\n",
+    "result": null,
+    "executionTimeInMilliseconds": 6
+  }
+}

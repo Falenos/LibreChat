@@ -1,13 +1,17 @@
 /**
- * [knauf] Seam test for the artifacts + skills composer-chip hides.
+ * [knauf] Seam test for the artifacts + skills + code-interpreter composer-chip hides.
  *
- * Every user-facing KARL spec sets `artifacts: 'default'` and `skills: true`, so
- * both capabilities are permanently on. Upstream renders a checked chip for each,
- * whose only reachable action is to turn the capability OFF — a switch users read
- * as "this is optional" for something the product treats as ambient.
+ * Every user-facing KARL spec sets `artifacts: 'default'`, `skills: true` and (KK20-257)
+ * `executeCode: true`, so all three capabilities are permanently on. Upstream renders a
+ * checked chip for each, whose only reachable action is to turn the capability OFF — a
+ * switch users read as "this is optional" for something the product treats as ambient.
  *
- * The hides are `KNAUF_HIDE_ARTIFACTS_CHIP` / `KNAUF_HIDE_SKILLS_CHIP` early
- * returns in the upstream components, mirroring the KK20-190 file-search chip.
+ * The hides are `KNAUF_HIDE_ARTIFACTS_CHIP` / `KNAUF_HIDE_SKILLS_CHIP` /
+ * `KNAUF_HIDE_CODE_INTERPRETER_CHIP` early returns in the upstream components, mirroring
+ * the KK20-190 file-search chip. The code-interpreter chip is the one whose permission
+ * (`interface.runCode`) is deliberately left ON — it is what makes the manual execution
+ * path work — so this render is the only thing keeping it off the screen. The other two
+ * RUN_CODE surfaces are covered by codeRunSurfaces.knauf.spec.ts.
  *
  * Each case below sets up the context that would make the chip visible upstream —
  * capability enabled, toggle on, chip pinned, permission granted — so the only
@@ -18,6 +22,7 @@
 import React from 'react';
 import { render } from '@testing-library/react';
 import { ArtifactModes } from 'librechat-data-provider';
+import CodeInterpreter from '~/components/Chat/Input/CodeInterpreter';
 import Artifacts from '~/components/Chat/Input/Artifacts';
 import Skills from '~/components/Chat/Input/Skills';
 
@@ -25,8 +30,12 @@ const mockUseBadgeRowContext = jest.fn();
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
-  // Both capabilities on — the chips' own gates must not be what hides them.
-  useAgentCapabilities: () => ({ artifactsEnabled: true, skillsEnabled: true }),
+  // All capabilities on — the chips' own gates must not be what hides them.
+  useAgentCapabilities: () => ({
+    artifactsEnabled: true,
+    skillsEnabled: true,
+    codeEnabled: true,
+  }),
   useHasAccess: () => true,
 }));
 
@@ -56,7 +65,13 @@ beforeEach(() => {
       isPinned: true,
       setIsPinned: jest.fn(),
     },
-    agentsConfig: { capabilities: ['artifacts', 'skills'] },
+    codeInterpreter: {
+      toggleState: true,
+      debouncedChange: jest.fn(),
+      isPinned: true,
+      setIsPinned: jest.fn(),
+    },
+    agentsConfig: { capabilities: ['artifacts', 'skills', 'execute_code'] },
   });
 });
 
@@ -71,17 +86,27 @@ describe('[knauf] composer chip hides', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('renders no code-interpreter chip even with RUN_CODE granted, toggled on and pinned', () => {
+    // `interface.runCode` is true, so `useHasAccess` above reflects production: the
+    // permission is granted and the seam is the only thing hiding the chip. KK20-257.
+    const { container } = render(<CodeInterpreter />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it('does not depend on the capability being off to stay hidden', () => {
     // Guards against a future "fix" that hides the chips by disabling the
     // capability instead — that would also switch the feature off for the model.
     const { container: artifacts } = render(<Artifacts />);
     const { container: skills } = render(<Skills />);
+    const { container: code } = render(<CodeInterpreter />);
     expect(artifacts).toBeEmptyDOMElement();
     expect(skills).toBeEmptyDOMElement();
-    // The context still reports both capabilities as active.
+    expect(code).toBeEmptyDOMElement();
+    // The context still reports every capability as active.
     expect(mockUseBadgeRowContext.mock.results[0].value.agentsConfig.capabilities).toEqual([
       'artifacts',
       'skills',
+      'execute_code',
     ]);
   });
 });

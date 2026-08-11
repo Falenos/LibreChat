@@ -51,6 +51,14 @@ const mockLocalize = jest.fn((key: string) => key);
 let mockConversation: Record<string, string | null | undefined> = {};
 let mockIsTemporary = false;
 let mockFileConfig: Record<string, unknown> | null = null;
+// [knauf] KK20-257 — the two halves of the tabular→code routing gate, mutable so a test
+// can prove routing stops when either one is off.
+let mockCodeEnabled = true;
+let mockCodeAllowedByAgent = true;
+// [knauf] KK20-257 — the conversation's spec is the second half of the code-destination
+// answer, mirroring the server's `ephemeralAgent.execute_code || modelSpec.executeCode`.
+let mockSpecExecuteCode = true;
+// End [knauf]
 // [knauf] KK20-195 — mutable chat files fixture for duplicate-batch regressions.
 let mockFiles = new Map<string, ExtendedFile>();
 // End [knauf]
@@ -89,7 +97,32 @@ jest.mock('@tanstack/react-query', () => ({
   })),
 }));
 
+// [knauf] KK20-257 — the tabular→code routing gate reads the global capability and the
+// per-conversation tool permission. Stubbed here so the hook stays testable without the
+// agents-map / react-query providers those hooks would otherwise need.
+jest.mock('~/hooks/Agents/useGetAgentsConfig', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ agentsConfig: { capabilities: [] } })),
+}));
+jest.mock('~/hooks/Agents/useAgentCapabilities', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ codeEnabled: mockCodeEnabled })),
+}));
+jest.mock('~/hooks/Agents/useAgentToolPermissions', () => ({
+  __esModule: true,
+  default: jest.fn(() => ({ codeAllowedByAgent: mockCodeAllowedByAgent })),
+}));
+// End [knauf]
+
 jest.mock('~/data-provider', () => ({
+  // [knauf] KK20-257 — `useKnaufCodeDestinationAllowed` reads the spec list to mirror the
+  // server's `ephemeralAgent.execute_code || modelSpec.executeCode`. Default spec enables
+  // code, matching librechat.yaml, so these suites exercise the production shape.
+  useGetStartupConfig: jest.fn(() => ({
+    data: {
+      modelSpecs: { list: [{ name: 'karl', default: true, executeCode: mockSpecExecuteCode }] },
+    },
+  })),
   useGetFileConfig: jest.fn(() => ({ data: mockFileConfig })),
   useUploadFileMutation: jest.fn((opts: typeof mockUploadOptions) => {
     mockUploadOptions = opts;
@@ -792,6 +825,157 @@ describe('useFileHandling', () => {
       expect(formData.get('height')).toBeNull();
     });
     // End [knauf]
+  });
+  // End [knauf]
+
+  // [knauf] KK20-257 — tabular data belongs in the code sandbox, not the RAG corpus:
+  // embedding a spreadsheet gives searchable chunks but nothing you can aggregate or
+  // chart. Both halves of the gate matter, because each prevents a different silent
+  // failure (an opaque 500 on upload, or a file the model never learns about).
+  describe('tabular→code tool_resource routing', () => {
+    const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    beforeEach(() => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+        // [knauf] KK20-257 review A5 — a KARL conversation always carries its spec, and the
+        // gate now reads it rather than assuming the hard default. Omitting it here made the
+        // fixture describe a conversation the *server* would refuse code for, which is not
+        // what these cases are about.
+        spec: 'karl',
+      };
+      mockCodeEnabled = true;
+      mockCodeAllowedByAgent = true;
+      mockSpecExecuteCode = true;
+    });
+
+    it.each([
+      ['a spreadsheet', 'report.xlsx', XLSX_MIME],
+      ['a CSV', 'data.csv', 'text/csv'],
+      ['JSON', 'payload.json', 'application/json'],
+    ])('routes %s to the code sandbox', async (_label, name, type) => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], name, { type });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+    });
+
+    it('leaves prose documents on file search', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'notes.md', { type: 'text/markdown' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('falls back to file search when the capability is off', async () => {
+      mockCodeEnabled = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('falls back to file search when neither the agent nor the spec can run code', async () => {
+      // [knauf] KK20-257 — "cannot run code" now takes both halves, because the server
+      // takes both: `ephemeralAgent.execute_code || modelSpec.executeCode`
+      // (packages/api/src/agents/load.ts). Turning off only the agent flag no longer
+      // means the conversation cannot run code — see the case below.
+      mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('still routes to code when the ephemeral agent is unseeded but the spec enables it', async () => {
+      // [knauf] KK20-257 regression: clicking "New chat" nulled the ephemeral agent, so
+      // `codeAllowedByAgent` was false while the conversation still ran a spec with
+      // `executeCode: true`. The spreadsheet then went to file search — silently and
+      // irreversibly, since the destination is fixed at upload time — until a page
+      // refresh reseeded the agent. The server would have registered the tool all along.
+      mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = true;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+    });
+
+    // [knauf] KK20-257 review A5 — the other side of the same invariant. An *existing*
+    // conversation carrying no spec gives the server nothing to resolve, so it registers no
+    // tool. Routing the spreadsheet to the sandbox anyway would upload it successfully and
+    // then never tell the model it exists — and the destination is fixed at upload time, so
+    // the user cannot recover it. File search is the correct answer here.
+    it('does not route to code on an existing conversation with no spec', async () => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+      };
+      mockCodeAllowedByAgent = false;
+      mockSpecExecuteCode = true; // the default spec would allow it — but this convo is not on it
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+
+    it('does not override a destination the user chose explicitly', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'data.csv', { type: 'text/csv' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.context);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.context);
+    });
+
+    it('still sends a spreadsheet-shaped image down the vision path', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File([new ArrayBuffer(1024)], 'chart.png', { type: 'image/png' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
+    });
   });
   // End [knauf]
 

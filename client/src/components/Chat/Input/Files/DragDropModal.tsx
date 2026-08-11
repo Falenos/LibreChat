@@ -23,6 +23,9 @@ import {
   useGetAgentsConfig,
   useLocalize,
 } from '~/hooks';
+// [knauf] KK20-257 — shared code-destination gate.
+import useKnaufCodeDestinationAllowed from '~/knauf/hooks/useKnaufCodeDestinationAllowed';
+// End [knauf]
 import { ephemeralAgentByConvoId } from '~/store';
 import { useDragDropContext } from '~/Providers';
 
@@ -48,12 +51,26 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
    * Use definition for agents endpoint for ephemeral agents
    * */
   const capabilities = useAgentCapabilities(agentsConfig?.capabilities ?? defaultAgentCapabilities);
-  const { conversationId, agentId, endpoint, endpointType, useResponsesApi } = useDragDropContext();
+  const { conversationId, agentId, endpoint, endpointType, useResponsesApi, spec } =
+    useDragDropContext();
   const ephemeralAgent = useRecoilValue(ephemeralAgentByConvoId(conversationId ?? ''));
   const { fileSearchAllowedByAgent, codeAllowedByAgent, provider } = useAgentToolPermissions(
     agentId,
     ephemeralAgent,
   );
+
+  // [knauf] KK20-257 — shared code-destination gate (see the hook). The spec and
+  // conversation id come through DragDropContext, so this picker answers from the same
+  // inputs as the paperclip menu. Review finding A5: resolving against the hard default
+  // instead offered the sandbox on an existing conversation whose spec does not enable it,
+  // where the upload succeeds but the model is never given the tool.
+  const codeDestinationAllowed = useKnaufCodeDestinationAllowed({
+    codeEnabled: capabilities.codeEnabled,
+    codeAllowedByAgent,
+    specName: spec,
+    conversationId,
+  });
+  // End [knauf]
 
   const options = useMemo(() => {
     const _options: FileOption[] = [];
@@ -123,9 +140,17 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         icon: <FileSearch className="icon-md" />,
       });
     }
-    if (capabilities.codeEnabled && codeAllowedByAgent) {
+    // [knauf] KK20-257 — shared with the paperclip menu and the tabular auto-routing rule.
+    // This picker has no conversation object, so the hook falls back to the hard default
+    // spec, which is what a fresh conversation is submitted with. End [knauf]
+    if (codeDestinationAllowed) {
       _options.push({
-        label: localize('com_ui_upload_code_environment'),
+        // [knauf] KK20-257 — same destination, same words as the paperclip menu row
+        // (AttachFileMenu). This picker is the drop-path twin of that menu, so the two
+        // must not name one destination two ways. The agent builder's own code-files
+        // button deliberately keeps the upstream wording — different surface.
+        label: localize('com_knauf_upload_code_environment'),
+        // End [knauf]
         value: EToolResources.execute_code,
         icon: <TerminalSquareIcon className="icon-md" />,
       });
@@ -149,6 +174,8 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     useResponsesApi,
     codeAllowedByAgent,
     fileSearchAllowedByAgent,
+    // [knauf] KK20-257 — shared code-destination gate. End [knauf]
+    codeDestinationAllowed,
   ]);
 
   // [knauf] A drag-drop upload picker with a single applicable option is a

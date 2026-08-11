@@ -387,19 +387,47 @@ interface:
   # KNAUF_RESTRICT_USER_PERMISSIONS in packages/api/src/app/permissions.ts.
   # Custom roles remain Admin UI controlled.
   webSearch: true
-  # [knauf] KK20-252 — Run Code is off. It was the last switch still handing out
-  # RUN_CODE.USE: `execute_code` is already excluded from
-  # `endpoints.agents.capabilities` below (KK20-108/KK20-243 — the self-hosted
-  # sandbox is not deployed on AGK, so the tool always fails), and the built-in
-  # USER role already had it forced false by KNAUF_RESTRICT_USER_PERMISSIONS.
-  # That left ADMIN seeded with a manual Run button backed by nothing. Turning it
-  # off here removes the code-interpreter chip and its tools-menu entry for every
-  # built-in role, via the permission rather than a UI hide. The AGENT_BUILDER
-  # custom role is NOT re-seeded from this file (permissions.ts:125 iterates only
-  # USER and ADMIN), so it is set false in knauf/scripts/seed-agent-builder-role.js
-  # as well — both have to move together. Flip back to `true` only once
-  # LIBRECHAT_CODE_BASEURL points at a reachable sandbox.
-  runCode: false
+  # [knauf] KK20-252 / KK20-257 — Run Code is ON, and every UI surface it unlocks is
+  # deliberately hidden in the client. Read both halves before changing either.
+  #
+  # This flag controls the RUN_CODE.USE *permission* only. That permission gates three
+  # things, all of them manual and all of them user-initiated:
+  #   * the composer code-interpreter chip (client/src/components/Chat/Input/CodeInterpreter.tsx),
+  #   * its tools-menu row (ToolsDropdown.tsx), and
+  #   * the per-code-block Run button (MarkdownComponents.tsx → POST /tools/:toolId/call,
+  #     which is the one server path that actually checks it — api/server/controllers/tools.js).
+  # It does NOT gate agent auto-run: the server registers bash_tool/read_file from the
+  # capability plus the per-spec `executeCode` flag (packages/api/src/agents/load.ts),
+  # never from this permission.
+  #
+  # Why `true` rather than `false`. `false` was chosen when no sandbox existed, to keep a
+  # dead Run button out of the UI. Now that the code-adapter is real, leaving the
+  # permission off would permanently disable the only manual execution path — including
+  # for admins debugging the sandbox — and it would keep KARL's behaviour dependent on a
+  # permission that has nothing to do with the feature. So the permission is ON and the
+  # UI is suppressed where it belongs, in the components:
+  #   CodeInterpreter.tsx    KNAUF_HIDE_CODE_INTERPRETER_CHIP
+  #   ToolsDropdown.tsx      KNAUF_HIDE_CODE_INTERPRETER_TOOL
+  #   MarkdownComponents.tsx KNAUF_HIDE_CODE_BLOCK_RUN_BUTTON
+  # Same shape as the file-search chip (KK20-190) and the skills chip (KK20-243): the
+  # capability flows through untouched, only the redundant control disappears. All three
+  # flags move together — flipping one on its own ships an inconsistent chat UI.
+  #
+  # Note for whoever reads this next: flipping this flag alone changes nothing visible,
+  # because those three constants are hardcoded `true`. It also changes nothing about
+  # whether code runs — that is `endpoints.agents.capabilities` plus `executeCode: true`
+  # on the spec, and LIBRECHAT_CODE_BASEURL pointing at the adapter. If code execution
+  # is not working, this is not the flag to look at (see
+  # packages/api/src/knauf/code/codeEnvGuard.ts and knauf/docs/code-execution/).
+  #
+  # Two knock-ons kept in sync: `knauf/scripts/seed-agent-builder-role.js` (permissions.ts
+  # re-seeds only USER and ADMIN from this file, so the AGENT_BUILDER custom role is set
+  # there), and KNAUF_RESTRICT_USER_PERMISSIONS, which forces RUN_CODE.USE false for the
+  # built-in USER role wherever it is enabled — so in those environments this flag
+  # effectively applies to ADMIN only.
+  # Agent authors are unaffected either way: the builder's Execute code capability reads
+  # the capability, not this permission.
+  runCode: true
   fileSearch: true
   agents:
     use: true
@@ -561,13 +589,6 @@ endpoints:
   #                   "Browse the internet" switch enables Azure-hosted
   #                   web_search through model parameters. Adding it here would
   #                   surface the provider-less LangChain/BYOK tool instead.
-  #   execute_code -> [knauf] KK20-108 / KK20-243: the self-hosted sandbox is
-  #                   not deployed on AGK. Enabling it without a reachable
-  #                   LIBRECHAT_CODE_BASEURL ships a tool that always fails.
-  #                   Note the built-in USER role additionally has RUN_CODE.USE
-  #                   forced false by KNAUF_RESTRICT_USER_PERMISSIONS
-  #                   (packages/api/src/knauf/permissions/userRestrictions.ts),
-  #                   but that gates the manual Run button, not agent auto-run.
   #   actions, ocr, context, deferred_tools, chain, subagents,
   #   programmatic_tools, end_after_tools, hide_sequential_outputs
   #                -> hidden from end users to reduce configuration burden.
@@ -587,9 +608,29 @@ endpoints:
     capabilities:
       - file_search
       - tools
-      # [knauf] KK20-243 — see the block above. `execute_code` stays excluded.
+      # [knauf] KK20-243 — see the block above.
       - artifacts
       - skills
+      # [knauf] KK20-257 — code execution is ON. The blocker recorded here for
+      # KK20-108/KK20-243 was "no reachable sandbox on AGK"; the Knauf code-adapter
+      # (knauf/code-adapter, ACA dynamic sessions) is that sandbox, so the exclusion
+      # no longer applies. Three things are deliberately true at once:
+      #   * this capability          -> the upload gate, the agent-builder Code
+      #                                 Interpreter section, and `codeEnvAvailable`
+      #                                 (whether bash_tool/read_file exist at all);
+      #   * `executeCode: true` on every user-facing spec below -> the tool is
+      #                                 requested on every KARL turn, with no chip
+      #                                 for the user to find or forget;
+      #   * `interface.runCode: true` (see the KK20-252 block above) -> the RUN_CODE
+      #                                 permission exists, so the manual execution path
+      #                                 is not dead code; the three UI surfaces it would
+      #                                 otherwise add (composer chip, tools-menu row,
+      #                                 per-code-block Run button) are suppressed in the
+      #                                 components instead, by KNAUF_HIDE_CODE_* flags.
+      # Nothing here is reachable unless LIBRECHAT_CODE_BASEURL names a host we
+      # control: packages/api/src/knauf/code/codeEnvGuard.ts strips this capability
+      # otherwise, because upstream would fall back to LibreChat's hosted SaaS.
+      - execute_code
       # End [knauf]
 
   azureOpenAI:
@@ -709,6 +750,14 @@ modelSpecs:
       # worse than no control.
       skills: true
       # End [knauf]
+      # [knauf] KK20-257 — code execution always on for this spec, with no chip.
+      # `applyModelSpecEphemeralAgent` maps this to `ephemeralAgent.execute_code`
+      # (client/src/utils/endpoints.ts) and the server ORs it independently of the
+      # client (packages/api/src/agents/load.ts), so the tool is requested on every
+      # turn even if a stale per-conversation toggle says otherwise. Absent means
+      # OFF, not inherit — see the parity block above the personality specs.
+      executeCode: true
+      # End [knauf]
       # Subtitle text rendered under the customWelcome title on the
       # default-spec landing (when no agent is selected). Kept short and
       # product-facing. KK20-159.
@@ -783,6 +832,8 @@ modelSpecs:
 
           Attached files: A file listed in the file_search context is attached and available for semantic search. After file_search returns excerpts, answer from them. Never claim that the file was not received or ask the user to upload it again. If the excerpts do not cover the full document, say that clearly and provide the answer supported by the available evidence.
 
+          Data files: A spreadsheet, CSV or JSON attachment does not go into the file_search corpus — it is placed in your code sandbox at /mnt/data. Read it by running code rather than searching for it or inferring what it contains, and check the real column names and types before you compute anything. Each run starts in a fresh sandbox with the attached files placed there again, so values held in memory do not carry over between runs; write anything you need later to /mnt/data. If a file you were told about is genuinely absent from /mnt/data, say so plainly and ask for it to be attached again.
+
           Branding: Apply the official Knauf brand to every user-facing visual deliverable that represents Knauf or KARL, even when the user does not explicitly ask for branding. Before producing an artifact, document, deck, spreadsheet or generated image, load and follow the karl-brand skill. Use Knauf Screen for body copy, Knauf Screen Head for headings, and the exact official SVG wordmark with its required clear space; never type, redraw or ask an image model to generate the logo. For generated imagery, use the Knauf palette and reserve a quiet area for the exact wordmark to be added later in an SVG-capable layout. If the requested work belongs to another named brand, follow that brand instead of mixing identities.
 
           Artifacts: You can build artifacts — React components, standalone HTML pages, Mermaid diagrams, SVG, and Markdown documents — which render in a live preview panel beside the chat.
@@ -807,7 +858,7 @@ modelSpecs:
 
           Keeping it in the chat: ordinary conversation stays inline. Answers, explanations, short comparisons, quick lists, clarifying questions and anything that fits comfortably in a screenful belong in the chat — turning those into artifacts is noise. When it is genuinely borderline, answer in the chat and offer to build it out.
 
-          Files: What you cannot produce is a downloadable binary or document file — PDF, PPT/PPTX, DOC/DOCX, XLS/XLSX/CSV, ZIP or other archives, audio, and video. Do not offer, suggest, or promise one, and do not ask the user whether they would like one. If a user asks for such a file, say plainly that you cannot generate that format, then deliver the content the best way available to you: as an artifact when the content suits one, otherwise inline in chat, or as concise steps for producing the file with common tools. Only generate images when explicitly requested, using the available image tool. This rule is about file formats, not about the words people use: a request for a presentation, a deck, a report, a one-pager, a document or a table is a request for content — build it, and say nothing at all about file formats. Only state that you cannot produce a file when the user has actually named one of the formats above.
+          Files: What you cannot produce is a downloadable binary or document file — PDF, PPT/PPTX, DOC/DOCX, ZIP or other archives, audio, and video. Data files are the exception and this rule does not restrict them: a spreadsheet (.xlsx), a CSV, a Markdown file or a chart image that you write to /mnt/data by running code is delivered to the user as a real download, so build those by running code and never say you cannot produce a spreadsheet or a CSV. A chart you plot in code is such a file, not an image-tool generation, so the image rule below does not apply to it. For the formats you genuinely cannot produce: do not offer, suggest, or promise one, and do not ask the user whether they would like one. If a user asks for such a file, say plainly that you cannot generate that format, then deliver the content the best way available to you: as an artifact when the content suits one, otherwise inline in chat, or as concise steps for producing the file with common tools. Only generate images when explicitly requested, using the available image tool. This rule is about file formats, not about the words people use: a request for a presentation, a deck, a report, a one-pager, a document or a table is a request for content — build it, and say nothing at all about file formats. Only state that you cannot produce a file when the user has actually named one of the formats above.
 
           Code and config: Always format any source code or configuration as Markdown fenced code blocks with the correct language tag (for example ```python or ```yaml). Do not present code as bullet points, inline text, or pseudo-formatting. Keep each file in exactly one fenced block and do not split a single file across multiple fences. If several files/snippets are required, order them as: file name or title on its own line (not inside a fence), followed by exactly one fenced block. Keep all non-code explanation outside the fences. Never emit stray language tags (such as "scss") or "Copy code" text.
 
@@ -830,12 +881,15 @@ modelSpecs:
     # That means every per-conversation capability has to be repeated here, or
     # picking a personality silently turns it OFF — the spec is authoritative for
     # a new conversation and an absent key reads as "off", not "inherit":
-    #   web_search  applyModelSpecEphemeralAgent -> `modelSpec.webSearch ?? false`
-    #   artifacts   applyModelSpecEphemeralAgent -> `modelSpec.artifacts || ''`
-    #   skills      applyModelSpecSkills early-returns without the key, so
-    #               `skills_enabled` never becomes true (packages/api/src/agents/added.ts)
+    #   web_search   applyModelSpecEphemeralAgent -> `modelSpec.webSearch ?? false`
+    #   artifacts    applyModelSpecEphemeralAgent -> `modelSpec.artifacts || ''`
+    #   skills       applyModelSpecSkills early-returns without the key, so
+    #                `skills_enabled` never becomes true (packages/api/src/agents/added.ts)
+    #   execute_code applyModelSpecEphemeralAgent -> `modelSpec.executeCode ?? false`,
+    #                and the server ORs the same key (packages/api/src/agents/load.ts)
     # KK20-194 already established this for `webSearch`; KK20-243 extends the
-    # same parity rule to `artifacts` and `skills`. The rule, so nobody has to
+    # same parity rule to `artifacts` and `skills`, KK20-257 to `executeCode`.
+    # The rule, so nobody has to
     # rediscover it: a capability added to the `karl` spec belongs on all three
     # of these too, unless there is a stated reason it should not.
     # Cost is accepted and is not new — the ~2.9k input tokens/turn that
@@ -851,6 +905,8 @@ modelSpecs:
       # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
       artifacts: 'default'
       skills: true
+      # [knauf] KK20-257 — code-execution parity with KARL (same block comment).
+      executeCode: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -873,6 +929,8 @@ modelSpecs:
       # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
       artifacts: 'default'
       skills: true
+      # [knauf] KK20-257 — code-execution parity with KARL (same block comment).
+      executeCode: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'
@@ -895,6 +953,8 @@ modelSpecs:
       # [knauf] KK20-243 — capability parity with KARL (see the block comment above).
       artifacts: 'default'
       skills: true
+      # [knauf] KK20-257 — code-execution parity with KARL (same block comment).
+      executeCode: true
       preset:
         endpoint: 'azureOpenAI'
         model: 'agent-default'

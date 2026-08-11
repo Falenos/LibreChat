@@ -263,11 +263,38 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
   });
 
   it('still forbids the binary formats we genuinely cannot produce', () => {
-    // The original rule existed for a real reason: no code interpreter means no
-    // PDF/XLSX. Relaxing the contradiction must not relax that.
+    // The original rule existed for a real reason, but the reason moved. KK20-257
+    // gave KARL a real sandbox, so .xlsx/.csv/.png/.md written to /mnt/data ARE
+    // delivered as downloads and the old blanket ban made it refuse the very
+    // deliverables the sandbox exists for. What the sandbox still cannot hand back is
+    // PDF/PPTX/DOCX/ZIP/audio/video, so that half must survive verbatim.
     for (const spec of karlChatSpecs()) {
       expect(spec.preset!.promptPrefix!).toMatch(/PDF/);
-      expect(spec.preset!.promptPrefix!).toMatch(/XLS/);
+      expect(spec.preset!.promptPrefix!).toMatch(/PPT\/PPTX, DOC\/DOCX, ZIP/);
+    }
+  });
+
+  it('permits the data files the sandbox really can produce', () => {
+    // The other half of the same boundary: a blanket "you cannot produce XLSX/CSV"
+    // sentence would out-argue the code interpreter, so assert the carve-out is
+    // present and that the old combined ban token is gone.
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).not.toMatch(/XLS\/XLSX\/CSV/);
+      expect(prompt).toMatch(/Data files are the exception/i);
+      expect(prompt).toMatch(/never say you cannot produce a spreadsheet or a CSV/i);
+    }
+  });
+
+  it('tells the model where tabular attachments actually are', () => {
+    // Tabular uploads are routed to the sandbox, not the file_search corpus
+    // (useFileHandling, KK20-257). Without this the model searches for a file that
+    // was never embedded and then confabulates its contents.
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toMatch(/Data files:/);
+      expect(prompt).toMatch(/\/mnt\/data/);
+      expect(prompt).toMatch(/does not go into the file_search corpus/i);
     }
   });
 
@@ -376,21 +403,54 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
   });
 });
 
-describe('[knauf] librechat.yaml — Run Code stays off', () => {
+describe('[knauf] librechat.yaml — code execution is always on, with no chip', () => {
   /**
-   * KK20-252. The self-hosted code sandbox is not deployed on AGK, so every path
-   * that grants Run Code ships a button backed by nothing. Three switches control
-   * it and they have to agree — the pair below plus `RUN_CODE: { USE: false }` in
-   * `knauf/scripts/seed-agent-builder-role.js`, which this file cannot see
-   * (it is a mongosh script, not config) but which is the one a reviewer is most
-   * likely to miss: `updateInterfacePermissions` only re-seeds USER and ADMIN.
+   * KK20-252 established that Run Code was a button backed by nothing, because no
+   * sandbox was deployed. KK20-257 deployed one (the Knauf code-adapter over ACA
+   * dynamic sessions), so the posture changed shape but not intent:
+   *
+   *   capability `execute_code`      -> the tool exists (upload gate, codeEnvAvailable)
+   *   `executeCode: true` per spec   -> it is requested on every KARL turn
+   *   `interface.runCode: true`      -> the RUN_CODE permission is granted, because it is
+   *                                     the only thing that makes the manual execution
+   *                                     path work: `POST /tools/:toolId/call` is the one
+   *                                     server route that checks it
+   *                                     (api/server/controllers/tools.js).
+   *
+   * The permission has never gated agent auto-run — that comes from the capability plus
+   * the per-spec flag (packages/api/src/agents/load.ts) — so granting it changes nothing
+   * about whether code runs. What it does change is the UI: three manual surfaces would
+   * appear (composer chip, tools-menu row, per-code-block Run button). KARL ships none of
+   * them, and they are suppressed in the components by KNAUF_HIDE_CODE_* flags, pinned by
+   * `client/src/knauf/components/Chat/{composerChipHides,codeRunSurfaces}` — which is
+   * where a regression on that half shows up, not here.
+   *
+   * This assertion is `true` deliberately: reverting it to `false` would make those three
+   * client constants dead code and re-disable the manual path by permission, which is the
+   * KK20-252 state that KK20-257 moved away from.
+   *
+   * `RUN_CODE: { USE: false }` in knauf/scripts/seed-agent-builder-role.js is unrelated
+   * and stays: it grants nothing reachable now that no UI calls that endpoint. This file
+   * cannot see it (a mongosh script, not config) and `updateInterfacePermissions`
+   * re-seeds only USER and ADMIN.
    */
-  it('does not grant RUN_CODE through interface.runCode', () => {
-    expect(config.interface?.runCode).toBe(false);
+  it('grants RUN_CODE through interface.runCode, with the UI surfaces hidden client-side', () => {
+    expect(config.interface?.runCode).toBe(true);
   });
 
-  it('does not list execute_code as an agent capability', () => {
-    expect(config.endpoints?.agents?.capabilities ?? []).not.toContain('execute_code');
+  it('lists execute_code as an agent capability', () => {
+    expect(config.endpoints?.agents?.capabilities ?? []).toContain('execute_code');
+  });
+
+  it('requests code execution on every user-facing spec (absent means off, not inherit)', () => {
+    const userFacing = (config.modelSpecs?.list ?? []).filter(
+      (spec) => spec.name !== 'karl-autogenerate-prompt',
+    );
+
+    expect(userFacing.length).toBeGreaterThan(0);
+    expect(userFacing.filter((spec) => spec.executeCode !== true).map((spec) => spec.name)).toEqual(
+      [],
+    );
   });
 });
 
