@@ -201,28 +201,35 @@ diff; no CI change needed). Creates 12 resources across dev + stage.
       grants every container on the account, including the app's own `files`. The adapter now
       supports workload identity for Blob (`e5ae34e23`), so this becomes a config change:
 
-      ```hcl
-      # Pre-create the container: a container-scoped role cannot create one, and the adapter
-      # only tolerates that 403 when the container already exists.
-      resource "azurerm_storage_container" "code_adapter_staging_dev" {
-        name                  = "code-adapter-staging"
-        storage_account_id    = module.storage_blob_dev.storage_account_id
-        container_access_type = "private"
-      }
+      **Written and committed to #73.** The container goes in the storage module's
+      `containers_list` (the house pattern) rather than a standalone `azurerm_storage_container`,
+      and the role assignment mirrors `azurerm_role_assignment.terraform_blob_contributor`
+      already in `blob-dev.tf`:
 
+      ```hcl
+      # blob-dev.tf — alongside the existing "files" container
+      containers_list = [
+        { name = "files", access_type = "private" },
+        { name = "code-adapter-staging", access_type = "private" },
+      ]
+
+      # code-adapter-dev.tf — CONTAINER scope, not account scope
       resource "azurerm_role_assignment" "code_adapter_blob_dev" {
-        scope                = azurerm_storage_container.code_adapter_staging_dev.resource_manager_id
+        scope                = "${module.storage_blob_dev.storage_account_id}/blobServices/default/containers/code-adapter-staging"
         role_definition_name = "Storage Blob Data Contributor"
         principal_id         = azurerm_user_assigned_identity.code_adapter_dev.principal_id
         principal_type       = "ServicePrincipal"
       }
       ```
 
-      Then in D2, swap the ExternalSecret entry for `AZURE_STORAGE_ACCOUNT_NAME`. Order does
-      not matter: the adapter prefers workload identity whenever the account name is set, so
-      there is no window where the key is still the credential in effect. Check the exact
-      attribute names against the storage module's outputs before applying — they are not
-      verified here.
+      Terraform owns the container for a non-obvious reason: creating one needs a broader
+      permission than using one, so a container-scoped role cannot run `createIfNotExists`.
+      The adapter tolerates that 403 only when the container already exists.
+
+      Then in D2, replace the ExternalSecret entry with a configmap `AZURE_STORAGE_ACCOUNT_NAME`
+      (published as the `code_adapter_dev_blob_account_name` output). Order does not matter: the
+      adapter prefers workload identity whenever that is set, so there is no window where the
+      key is still the credential in effect.
 
 - [ ] Record the two values the next phase needs:
       ```bash
