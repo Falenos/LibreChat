@@ -584,3 +584,43 @@ describe('[knauf] ModelEndHandler — Azure content filter', () => {
   });
 });
 // End [knauf]
+
+// [knauf] NO-TICKET — make output-cap truncation visible in production logs.
+describe('[knauf] ModelEndHandler — incomplete output', () => {
+  const { logger } = require('@librechat/data-schemas');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('warns with usage and identifiers when the provider reaches its output cap', async () => {
+    const handler = new ModelEndHandler([]);
+
+    await handler.handle(
+      'on_chat_model_end',
+      {
+        output: {
+          usage_metadata: { input_tokens: 100, output_tokens: 8192, total_tokens: 8292 },
+          response_metadata: {
+            status: 'incomplete',
+            incomplete_details: { reason: 'max_output_tokens' },
+          },
+        },
+      },
+      { ls_model_name: 'model-router', run_id: 'r1', user_id: 'u1', thread_id: 'c1' },
+      buildGraph(),
+    );
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[ModelEndHandler] Completion reached its output limit',
+      expect.objectContaining({
+        userId: 'u1',
+        messageId: 'r1',
+        conversationId: 'c1',
+        outputTokens: 8192,
+        incompleteDetails: { reason: 'max_output_tokens' },
+      }),
+    );
+  });
+});
+// End [knauf]

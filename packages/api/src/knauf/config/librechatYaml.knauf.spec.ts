@@ -104,6 +104,8 @@ describe('[knauf] librechat.yaml — default KARL response latency', () => {
     expect(prompt).toMatch(/exceed 300 words only when the user requests detail/i);
     expect(prompt).toMatch(/does not apply to a complete artifact, code, configuration/i);
     expect(prompt).toMatch(/never truncate valid source/i);
+    expect(prompt).toMatch(/complete all search calls before emitting any user-visible text/i);
+    expect(prompt).toMatch(/stream only the final answer after searching finishes/i);
   });
 });
 

@@ -464,7 +464,7 @@ Terraform declares the following deployments in both environments. Capacity is s
 
 `GlobalStandard` is consumption/pay-per-token capacity, not provisioned throughput. Capacity reserves rate-limit quota but does not create a fixed PTU charge. Router capacity is independent from every direct deployment; direct GPT deployments are not replicas or backends of Model Router.
 
-The intended router mode is `balanced` with the pinned OpenAI-only pool `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. Live GET checks on 2026-07-15 still returned `properties.routing: null`, and probes selected unapproved models. Do not run representative router load tests until the module persists and verifies that exact subset. GPT-5.6 Sol is deliberately outside the router pool and is selected directly for created agents and prompt drafting.
+The router pool is pinned to `gpt-5.4-nano`, `gpt-5.4-mini`, `gpt-5.4`, and `gpt-5.5`. Live ARM GETs on 2026-08-11 confirmed `quality` mode in nonprod and `balanced` mode in prod with that exact pool. Use API version `2026-03-01` for verification: `az cognitiveservices account deployment show` currently uses an older API and can report `properties.routing: null` even when the routing policy is present. GPT-5.6 Sol is deliberately outside the router pool and is selected directly for created agents and prompt drafting.
 
 Infrastructure ownership and release order:
 
@@ -498,6 +498,11 @@ Access and validation rules:
 Safe live checks:
 
 ```bash
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/<subscription-id>/resourceGroups/<hub-resource-group>/providers/Microsoft.CognitiveServices/accounts/<foundry-account>/deployments/model-router?api-version=2026-03-01" \
+  --query "{state:properties.provisioningState,routing:properties.routing}" \
+  -o json
+
 az cognitiveservices account deployment list \
   --subscription <subscription-id> \
   --resource-group <hub-resource-group> \

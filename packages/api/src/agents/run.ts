@@ -918,14 +918,140 @@ export function buildLangfuseConfig(
 }
 // End [knauf]
 
-// [knauf] NO-TICKET — the OpenAI client timeout ends when response headers
-// arrive, so a Model Router stream can otherwise remain open indefinitely.
-// Abort only while a body read is idle; active streams and caller cancellation
-// retain their existing behavior.
-export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unknown>): void {
+// [knauf] NO-TICKET — keep Responses streaming final-answer-only while retaining
+// ordinary token streaming; also abort stalled Model Router response bodies.
+function filterResponsesCommentary(
+  body: ReadableStream<Uint8Array>,
+  bufferNativeSearchDrafts: boolean,
+): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const phaseByOutputIndex = new Map<number, string>();
+  const phaseByItemId = new Map<string, string>();
+  const pendingMessageFrames: string[] = [];
+  let pendingMessageOutputIndex: number | null = null;
+  let hasNativeWebSearchCall = false;
+  let buffer = '';
+
+  const enqueueFrame = (controller: TransformStreamDefaultController<Uint8Array>, frame: string) =>
+    controller.enqueue(encoder.encode(`${frame}\n\n`));
+  const flushPendingMessage = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    for (const frame of pendingMessageFrames.splice(0)) {
+      enqueueFrame(controller, frame);
+    }
+    pendingMessageOutputIndex = null;
+  };
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() ?? '';
+
+      for (const frame of frames) {
+        const data = frame
+          .split(/\r?\n/)
+          .find((line) => line.startsWith('data:'))
+          ?.slice(5)
+          .trim();
+        let drop = false;
+        let bufferFrame = false;
+        if (data && data !== '[DONE]') {
+          try {
+            const event = JSON.parse(data) as {
+              type?: string;
+              output_index?: number;
+              item_id?: string;
+              phase?: string;
+              item?: { id?: string; type?: string; phase?: string };
+              response?: { output?: Array<{ type?: string }> };
+            };
+            const isWebSearchItem = event.item?.type === 'web_search_call';
+            const terminalHasWebSearch = event.response?.output?.some(
+              (item) => item.type === 'web_search_call',
+            );
+            if (pendingMessageOutputIndex != null) {
+              if (isWebSearchItem || terminalHasWebSearch === true) {
+                pendingMessageFrames.length = 0;
+                pendingMessageOutputIndex = null;
+                hasNativeWebSearchCall = true;
+              } else if (
+                event.type === 'response.completed' ||
+                event.type === 'response.failed' ||
+                (event.type === 'response.output_item.added' &&
+                  event.output_index !== pendingMessageOutputIndex)
+              ) {
+                flushPendingMessage(controller);
+              }
+            }
+            if (isWebSearchItem) {
+              hasNativeWebSearchCall = true;
+            }
+            const phase = event.phase ?? event.item?.phase;
+            if (event.item?.type === 'message' && typeof phase === 'string') {
+              if (typeof event.output_index === 'number') {
+                phaseByOutputIndex.set(event.output_index, phase);
+              }
+              if (typeof event.item.id === 'string') {
+                phaseByItemId.set(event.item.id, phase);
+              }
+            }
+            if (
+              bufferNativeSearchDrafts &&
+              !hasNativeWebSearchCall &&
+              event.type === 'response.output_item.added' &&
+              event.item?.type === 'message' &&
+              phase == null &&
+              typeof event.output_index === 'number'
+            ) {
+              pendingMessageOutputIndex = event.output_index;
+            }
+            if (event.type === 'response.output_text.delta') {
+              drop =
+                phase === 'commentary' ||
+                (typeof event.output_index === 'number' &&
+                  phaseByOutputIndex.get(event.output_index) === 'commentary') ||
+                (typeof event.item_id === 'string' &&
+                  phaseByItemId.get(event.item_id) === 'commentary');
+            }
+            bufferFrame =
+              pendingMessageOutputIndex != null && event.output_index === pendingMessageOutputIndex;
+          } catch {
+            // Preserve non-JSON SSE frames unchanged.
+          }
+        }
+        if (drop) {
+          continue;
+        }
+        if (bufferFrame) {
+          pendingMessageFrames.push(frame);
+        } else {
+          enqueueFrame(controller, frame);
+        }
+      }
+    },
+    flush(controller) {
+      flushPendingMessage(controller);
+      buffer += decoder.decode();
+      if (buffer !== '') {
+        controller.enqueue(encoder.encode(buffer));
+      }
+    },
+  });
+
+  return body.pipeThrough(transform);
+}
+
+export function applyKnaufOpenAIStreamControls(
+  cfg: Record<string, unknown>,
+  bufferNativeSearchDrafts = false,
+): void {
   const model = typeof cfg.model === 'string' ? cfg.model.toLowerCase() : '';
   const timeout = cfg.timeout;
-  if (!model.includes('model-router') || typeof timeout !== 'number' || timeout <= 0) {
+  const idleTimeout =
+    model.includes('model-router') && typeof timeout === 'number' && timeout > 0 ? timeout : null;
+  const filterCommentary = cfg.useResponsesApi === true;
+  if (idleTimeout == null && !filterCommentary) {
     return;
   }
 
@@ -950,11 +1076,16 @@ export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unkno
     const reader = response.body.getReader();
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        const timer = setTimeout(
-          () =>
-            idleController.abort(new DOMException('Model Router stream timed out', 'TimeoutError')),
-          timeout,
-        );
+        const timer =
+          idleTimeout == null
+            ? null
+            : setTimeout(
+                () =>
+                  idleController.abort(
+                    new DOMException('Model Router stream timed out', 'TimeoutError'),
+                  ),
+                idleTimeout,
+              );
         try {
           const chunk = await reader.read();
           if (chunk.done) {
@@ -965,7 +1096,9 @@ export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unkno
         } catch (error) {
           controller.error(error);
         } finally {
-          clearTimeout(timer);
+          if (timer != null) {
+            clearTimeout(timer);
+          }
         }
       },
       async cancel(reason) {
@@ -974,11 +1107,14 @@ export function applyKnaufModelRouterStreamIdleTimeout(cfg: Record<string, unkno
       },
     });
 
-    const wrappedResponse = new Response(body, {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    const wrappedResponse = new Response(
+      filterCommentary ? filterResponsesCommentary(body, bufferNativeSearchDrafts) : body,
+      {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText,
+      },
+    );
     Object.defineProperties(wrappedResponse, {
       redirected: { value: response.redirected },
       type: { value: response.type },
@@ -1135,9 +1271,16 @@ export async function createRun({
       body: requestBody,
     });
 
-    // [knauf] NO-TICKET — enforce the configured timeout between streamed
-    // Model Router chunks; the OpenAI client only applies it before headers.
-    applyKnaufModelRouterStreamIdleTimeout(llmConfig as Record<string, unknown>);
+    // [knauf] NO-TICKET — keep only final-answer Responses deltas and enforce
+    // the configured idle timeout between Model Router chunks.
+    const hasNativeWebSearch = agent.tools?.some((tool) => {
+      const type = (tool as { type?: unknown }).type;
+      return typeof type === 'string' && type.startsWith('web_search');
+    });
+    applyKnaufOpenAIStreamControls(
+      llmConfig as Record<string, unknown>,
+      hasNativeWebSearch === true,
+    );
     // End [knauf]
 
     /** Resolves issues with new OpenAI usage field */

@@ -4,9 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   getFinalWebSearchResponseText,
-  hasNativeWebSearchTool,
   replaceLastTextPart,
-  shouldStreamNativeWebSearchDelta,
 } = require('../../api/server/knauf/nativeWebSearchOutput');
 
 test('persists only the authoritative final-answer phase after native web search', () => {
@@ -25,10 +23,8 @@ test('persists only the authoritative final-answer phase after native web search
   ];
   const streamedParts = [
     { type: 'think', think: 'Searching official sources.' },
-    {
-      type: 'text',
-      text: 'First draft with broken citation.The final answer with one citation.',
-    },
+    { type: 'text', text: 'First draft with broken citation.' },
+    { type: 'text', text: 'The final answer with one citation.' },
   ];
 
   const finalText = getFinalWebSearchResponseText(responseOutput);
@@ -53,19 +49,6 @@ test('does not rewrite ordinary Responses output', () => {
   );
 });
 
-test('defers visible deltas only when a native web-search tool is configured', () => {
-  assert.equal(
-    hasNativeWebSearchTool([
-      { tools: [{ type: 'function' }] },
-      { tools: [{ type: 'web_search', user_location: { timezone: 'Europe/Berlin' } }] },
-    ]),
-    true,
-  );
-  assert.equal(hasNativeWebSearchTool([{ tools: [{ type: 'function' }] }]), false);
-  assert.equal(shouldStreamNativeWebSearchDelta({ deferDeltas: true }), false);
-  assert.equal(shouldStreamNativeWebSearchDelta({ deferDeltas: false }), true);
-});
-
 test('Karl instructions require valid Markdown section headings', () => {
   const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
 
@@ -80,9 +63,10 @@ test('Karl bounds routed output without provider-specific verbosity', () => {
   assert.doesNotMatch(config, /^\s*verbosity:/m);
 });
 
-test('Karl keeps basic stable questions concise without web search', () => {
+test('Karl searches only when needed and suppresses pre-search drafts', () => {
   const config = fs.readFileSync(path.resolve(__dirname, '../../librechat.yaml'), 'utf8');
 
   assert.match(config, /Do not use web search for stable facts, definitions, or explanations/i);
   assert.match(config, /Web search does not increase the response-length budget/i);
+  assert.match(config, /complete all search calls before emitting any user-visible text/i);
 });

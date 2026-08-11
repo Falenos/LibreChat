@@ -31,11 +31,8 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { saveBase64Image } = require('~/server/services/Files/process');
-// [knauf] KK20-194 — preserve the final phase and hide phase-less native-search drafts.
-const {
-  getFinalWebSearchResponseText,
-  shouldStreamNativeWebSearchDelta,
-} = require('~/server/knauf/nativeWebSearchOutput');
+// [knauf] KK20-194 — preserve the authoritative final native-search phase.
+const { getFinalWebSearchResponseText } = require('~/server/knauf/nativeWebSearchOutput');
 // End [knauf]
 
 // [knauf] KK20-194 — bounded model refusal and output-limit recovery.
@@ -383,6 +380,23 @@ class ModelEndHandler {
       }
       // End [knauf]
 
+      // [knauf] NO-TICKET — surface responses truncated by the configured output fuse.
+      const responseMetadata = data?.output?.response_metadata;
+      if (
+        responseMetadata?.status === 'incomplete' ||
+        responseMetadata?.finish_reason === 'length'
+      ) {
+        logger.warn('[ModelEndHandler] Completion reached its output limit', {
+          userId: metadata.user_id,
+          messageId: metadata.run_id,
+          conversationId: metadata.thread_id,
+          model: getResponseModel(data) || metadata.ls_model_name,
+          outputTokens: data?.output?.usage_metadata?.output_tokens,
+          incompleteDetails: responseMetadata.incomplete_details,
+        });
+      }
+      // End [knauf]
+
       const usage = data?.output?.usage_metadata;
       if (!usage) {
         return this.finalize(errorMessage);
@@ -720,11 +734,6 @@ function getDefaultHandlers({
        */
       handle: async (event, data, metadata) => {
         aggregateContent({ event, data });
-        // [knauf] KK20-194 — v3.2.65 drops Responses phase metadata before this
-        // callback. Keep the accumulated text for persistence, but publish it
-        // only once the authoritative terminal response is available.
-        if (!shouldStreamNativeWebSearchDelta(nativeWebSearchOutputSink)) return;
-        // End [knauf]
         if (checkIfLastAgent(metadata?.last_agent_id, metadata?.langgraph_node)) {
           await emitEvent(res, streamId, { event, data });
         } else if (!metadata?.hide_sequential_outputs) {

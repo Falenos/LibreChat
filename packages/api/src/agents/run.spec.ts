@@ -2,7 +2,7 @@ import { Providers } from '@librechat/agents';
 import { ReasoningResponseKey } from 'librechat-data-provider';
 import { ToolMessage, AIMessage, HumanMessage } from '@librechat/agents/langchain/messages';
 import {
-  applyKnaufModelRouterStreamIdleTimeout,
+  applyKnaufOpenAIStreamControls,
   extractDiscoveredToolsFromHistory,
   getReasoningKey,
   isDeepSeekReasoningProvider,
@@ -12,7 +12,7 @@ import {
 
 // [knauf] NO-TICKET — Model Router streams must not outlive the configured
 // timeout when Azure stops emitting chunks after returning response headers.
-describe('applyKnaufModelRouterStreamIdleTimeout', () => {
+describe('applyKnaufOpenAIStreamControls', () => {
   it('aborts an idle response body and preserves the configured fetch', async () => {
     const baseFetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = new ReadableStream<Uint8Array>({
@@ -27,7 +27,7 @@ describe('applyKnaufModelRouterStreamIdleTimeout', () => {
     const configuration = { fetch: baseFetch };
     const cfg = { model: 'model-router', timeout: 5, configuration };
 
-    applyKnaufModelRouterStreamIdleTimeout(cfg);
+    applyKnaufOpenAIStreamControls(cfg);
     const response = await cfg.configuration.fetch('https://example.test');
 
     await expect(response.body?.getReader().read()).rejects.toMatchObject({ name: 'TimeoutError' });
@@ -50,19 +50,139 @@ describe('applyKnaufModelRouterStreamIdleTimeout', () => {
     };
     const caller = new AbortController();
 
-    applyKnaufModelRouterStreamIdleTimeout(routerConfig);
+    applyKnaufOpenAIStreamControls(routerConfig);
     await routerConfig.configuration.fetch('https://example.test', { signal: caller.signal });
     caller.abort();
 
     expect(forwardedSignal?.aborted).toBe(true);
 
     const directConfiguration = { fetch: baseFetch };
-    applyKnaufModelRouterStreamIdleTimeout({
+    applyKnaufOpenAIStreamControls({
       model: 'gpt-5.5',
       timeout: 60_000,
       configuration: directConfiguration,
     });
     expect(directConfiguration.fetch).toBe(baseFetch);
+  });
+
+  it('drops commentary-phase deltas but keeps final-answer streaming', async () => {
+    const sse = [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', phase: 'commentary' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        delta: 'Draft before search.',
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 2,
+        item: { type: 'message', phase: 'final_answer' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 2,
+        delta: 'Authoritative final answer.',
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const encoded = new TextEncoder().encode(sse);
+    const baseFetch = jest.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoded.slice(0, 37));
+              controller.enqueue(encoded.slice(37, 113));
+              controller.enqueue(encoded.slice(113));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const cfg = {
+      model: 'gpt-5.5',
+      timeout: 60_000,
+      useResponsesApi: true,
+      configuration: { fetch: baseFetch },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).not.toContain('Draft before search.');
+    expect(filtered).toContain('Authoritative final answer.');
+  });
+
+  it('drops a phase-less message when native web search follows', async () => {
+    const sse = [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        delta: 'Unverified draft.',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message' },
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 1,
+        item: { type: 'web_search_call' },
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 2,
+        item: { type: 'message' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 2,
+        delta: 'Verified final answer.',
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const baseFetch = jest.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(sse));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      configuration: { fetch: baseFetch },
+    };
+
+    (
+      applyKnaufOpenAIStreamControls as unknown as (
+        config: Record<string, unknown>,
+        bufferNativeSearchDrafts: boolean,
+      ) => void
+    )(cfg, true);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).not.toContain('Unverified draft.');
+    expect(filtered).toContain('Verified final answer.');
   });
 });
 // End [knauf]

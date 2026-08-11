@@ -1,5 +1,8 @@
 require('events').EventEmitter.defaultMaxListeners = 100;
 const { logger } = require('@librechat/data-schemas');
+// [knauf] NO-TICKET — title generation needs a fresh trace, not the active agent trace.
+const { context, ROOT_CONTEXT } = require('@opentelemetry/api');
+// End [knauf]
 const { getBufferString, HumanMessage } = require('@librechat/agents/langchain/messages');
 const {
   createRun,
@@ -1848,28 +1851,34 @@ class AgentClient extends BaseClient {
     });
 
     try {
-      const titleResult = await this.run.generateTitle({
-        provider,
-        clientOptions,
-        inputText: text,
-        contentParts: immediate ? [] : this.contentParts,
-        titleMethod: endpointConfig?.titleMethod,
-        titlePrompt: endpointConfig?.titlePrompt,
-        titlePromptTemplate: endpointConfig?.titlePromptTemplate,
-        chainOptions: {
-          runName: 'TitleRun',
-          signal: abortController.signal,
-          callbacks: [
-            {
-              handleLLMEnd,
+      // [knauf] NO-TICKET — `generateTitle` owns a deterministic `title-*` Langfuse
+      // trace, but @librechat/agents 3.2.65 otherwise prefers the concurrently
+      // active agent trace. Detach before the title handler creates its root span.
+      const titleResult = await context.with(ROOT_CONTEXT, () =>
+        this.run.generateTitle({
+          provider,
+          clientOptions,
+          inputText: text,
+          contentParts: immediate ? [] : this.contentParts,
+          titleMethod: endpointConfig?.titleMethod,
+          titlePrompt: endpointConfig?.titlePrompt,
+          titlePromptTemplate: endpointConfig?.titlePromptTemplate,
+          chainOptions: {
+            runName: 'TitleRun',
+            signal: abortController.signal,
+            callbacks: [
+              {
+                handleLLMEnd,
+              },
+            ],
+            configurable: {
+              thread_id: this.conversationId,
+              user_id: this.user ?? this.options.req.user?.id,
             },
-          ],
-          configurable: {
-            thread_id: this.conversationId,
-            user_id: this.user ?? this.options.req.user?.id,
           },
-        },
-      });
+        }),
+      );
+      // End [knauf]
 
       const collectedUsage = collectedMetadata.map((item) => {
         let input_tokens, output_tokens;
