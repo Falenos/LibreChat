@@ -890,9 +890,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/middleware/buildEndpointOption.spec.js` | scheduled agent project-context regression | 168–192 | Proves an agent request retains its raw project association even when the compact endpoint schema omits that field | Self | KK20-255 |
 | `packages/client/src/components/Dropdown.tsx` | `Dropdown`, portalled `SelectPopover` style | 8–10, 62–64, 182–184 | Reuses OGDialog depth-aware stacking for every shared body-portalled dropdown while preserving inline dropdown layering | `packages/client/src/components/Dropdown.knauf.spec.tsx` | KK20-255 |
 | `packages/client/src/components/Dropdown.knauf.spec.tsx` | `Dropdown portal stacking` | 1–67 | Proves shared dropdown portals remain pointer-interactive, stack above their owning dialog, and leave non-portalled behavior unchanged | Self | KK20-255 |
-| `client/src/components/Nav/ExportConversation/ExportModal.tsx` | export type `Dropdown` | 106–112 | Retires the local inline-portal and z-index overrides now that the shared Dropdown safely escapes OGDialog clipping and stacking | `packages/client/src/components/Dropdown.knauf.spec.tsx` (`legacy modal dropdown workarounds`) | KK20-255 |
-| `client/src/components/Input/SetKeyDialog/SetKeyDialog.tsx` | expiry `Dropdown` | 383–391 | Retires the legacy inline portal so the expiry menu uses the shared dialog-aware portal behavior consistently | `packages/client/src/components/Dropdown.knauf.spec.tsx` (`legacy modal dropdown workarounds`) | KK20-255 |
-| `packages/client/src/components/Dropdown.knauf.spec.tsx` | `legacy modal dropdown workarounds` | 2–3, 13–14, 73–83 | Prevents modal Dropdown consumers from restoring call-site `portal={false}` or fixed z-index overrides after the shared fix | Self | KK20-255 |
 <!-- seams:auto:end -->
 
 ## Configuration

@@ -380,15 +380,14 @@ const SetKeyDialog = ({
                   expiryTime ?? 0,
                 ).toLocaleString()}`}
           </small>
-          {/* [knauf] Use shared dialog-aware portal stacking instead of the legacy inline portal. */}
           <Dropdown
             label="Expires "
             value={expiresAtLabel}
             onChange={handleExpirationChange}
             options={expirationOptions.map((option) => option.label)}
             sizeClasses="w-[185px]"
+            portal={false}
           />
-          {/* End [knauf] */}
           <div className="mt-2" />
           <FormProvider {...methods}>
             <EndpointComponent
