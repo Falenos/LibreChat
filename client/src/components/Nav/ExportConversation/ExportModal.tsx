@@ -103,13 +103,9 @@ export default function ExportModal({
                 <Label htmlFor="type" className="text-left text-sm font-medium">
                   {localize('com_nav_export_type')}
                 </Label>
-                <Dropdown
-                  value={type}
-                  onChange={handleTypeChange}
-                  options={TYPE_OPTIONS}
-                  className="z-50"
-                  portal={false}
-                />
+                {/* [knauf] Use shared dialog-aware portal stacking instead of local layering overrides. */}
+                <Dropdown value={type} onChange={handleTypeChange} options={TYPE_OPTIONS} />
+                {/* End [knauf] */}
               </div>
             </div>
             <div className="grid w-full gap-6 sm:grid-cols-2">
