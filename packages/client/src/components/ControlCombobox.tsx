@@ -15,8 +15,8 @@ import { Search, ChevronDown, Plus, X } from 'lucide-react';
 // End [knauf]
 import { SelectRenderer } from '@ariakit/react-core/select/select-renderer';
 import type { OptionWithIcon } from '~/common';
-// [knauf] Stack body-portalled selectors above their owning OGDialog.
-import { usePopoverZIndex } from './OriginalDialog';
+// [knauf] Apply the shared body-portal interaction and OGDialog stacking contract.
+import { usePopoverPortalProps } from './OriginalDialog';
 // End [knauf]
 import './AnimatePopover.css';
 import { JSX } from 'react/jsx-runtime';
@@ -95,8 +95,8 @@ function ControlCombobox({
   const createInputRef = useRef<HTMLInputElement>(null);
   // End [knauf]
   const [buttonWidth, setButtonWidth] = useState<number | null>(null);
-  // [knauf] Resolve the portal layer from the current dialog nesting depth.
-  const popoverZIndex = usePopoverZIndex();
+  // [knauf] Resolve the shared portal contract for this always-portalled selector.
+  const popoverPortalProps = usePopoverPortalProps();
   // End [knauf]
 
   const getItem = (option: OptionWithIcon) => ({
@@ -260,13 +260,13 @@ function ControlCombobox({
         portal
         className={cn(
           'animate-popover z-40 overflow-hidden rounded-xl border border-border-light bg-surface-secondary shadow-lg',
-          // [knauf] Keep portalled comboboxes clickable while a modal locks body pointer events.
-          '[pointer-events:auto]',
+          // [knauf] Reuse the shared modal pointer-event contract.
+          popoverPortalProps.className,
           // End [knauf]
         )}
-        // [knauf] Keep the body portal visible above OGDialog content and overlay.
+        // [knauf] Reuse the shared dialog-depth layer while preserving measured width.
         style={{
-          zIndex: popoverZIndex,
+          ...popoverPortalProps.style,
           width: isCollapsed ? '300px' : (buttonWidth ?? '300px'),
         }}
         // End [knauf]

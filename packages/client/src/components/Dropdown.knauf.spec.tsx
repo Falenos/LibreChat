@@ -61,7 +61,9 @@ describe('Dropdown portal stacking', () => {
       </OGDialog>,
     );
 
-    expect(openDropdown('Inline dropdown')).not.toHaveStyle({ zIndex: '150' });
+    const popover = openDropdown('Inline dropdown');
+    expect(popover).not.toHaveClass('[pointer-events:auto]');
+    expect(popover).not.toHaveStyle({ zIndex: '150' });
   });
 });
 // End [knauf]

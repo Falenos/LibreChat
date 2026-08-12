@@ -5,8 +5,8 @@ import * as Select from '@ariakit/react/select';
 import * as Combobox from '@ariakit/react/combobox';
 import type { Option } from '~/common';
 import { cn } from '~/utils/';
-// [knauf] Stack body-portalled dropdowns above their owning OGDialog.
-import { usePopoverZIndex } from './OriginalDialog';
+// [knauf] Apply the shared body-portal interaction and OGDialog stacking contract.
+import { usePopoverPortalProps } from './OriginalDialog';
 // End [knauf]
 import './Dropdown.css';
 
@@ -59,8 +59,8 @@ const Dropdown: React.FC<DropdownProps> = ({
   searchEmptyText,
 }) => {
   const [searchValue, setSearchValue] = useState('');
-  // [knauf] Resolve the portal layer from the current dialog nesting depth.
-  const popoverZIndex = usePopoverZIndex();
+  // [knauf] Resolve the shared portal behavior only when this dropdown is portalled.
+  const popoverPortalProps = usePopoverPortalProps(portal);
   // End [knauf]
 
   const handleChange = (value: string) => {
@@ -177,10 +177,12 @@ const Dropdown: React.FC<DropdownProps> = ({
           sizeClasses,
           className,
           'max-h-[80vh] overflow-y-auto',
-          '[pointer-events:auto]', // Override body's pointer-events:none when in modal
+          // [knauf] Reuse the shared modal pointer-event contract.
+          popoverPortalProps.className,
+          // End [knauf]
         )}
-        // [knauf] Keep body portals visible above OGDialog without changing inline popovers.
-        style={portal ? { zIndex: popoverZIndex } : undefined}
+        // [knauf] Reuse the shared dialog-depth layer without changing inline popovers.
+        style={popoverPortalProps.style}
         // End [knauf]
       >
         {searchable ? (
