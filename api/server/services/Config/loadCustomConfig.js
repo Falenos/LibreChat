@@ -12,6 +12,9 @@ const {
   agentParamSettings,
   validateSettingDefinitions,
 } = require('librechat-data-provider');
+// [knauf] expose the scheduler UI only in deployments that explicitly enable its API
+const { applySchedulerInterfaceFlag } = require('~/knauf/scheduler/config');
+// End [knauf]
 
 const projectRoot = path.resolve(__dirname, '..', '..', '..', '..');
 const defaultConfigPath = path.resolve(projectRoot, 'librechat.yaml');
@@ -109,6 +112,9 @@ async function loadCustomConfig(printConfig = true) {
     }
   }
 
+  // [knauf] keep one deployment flag authoritative for both scheduler discovery and API access
+  applySchedulerInterfaceFlag(customConfig);
+  // End [knauf]
   const result = configSchema.strict().safeParse(customConfig);
   if (result?.error?.errors?.some((err) => err?.path && err.path?.includes('imageOutputType'))) {
     throw new Error(

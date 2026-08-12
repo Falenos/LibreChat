@@ -7,6 +7,7 @@
     "./server/htmlExtract": "./src/server/htmlExtract.js",
     "./server/pdfAccessProbe": "./src/server/pdfAccessProbe.js",
     "./server/pdfAccessProbe.worker": "./src/server/pdfAccessProbe.worker.js",
+    "./server/scheduler": "./src/server/scheduler/index.js",
     "./server/validateArtifactSource": "./src/server/validateArtifactSource.js"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@datadog/browser-rum": "^6.11.1",
     "@datadog/browser-logs": "^6.11.1",
     "@mozilla/readability": "^0.6.0",
+    "croner": "^10.0.1",
     "html-to-text": "^9.0.5",
     "jsdom": "^26.1.0",
     "pdfjs-dist": "5.4.624",

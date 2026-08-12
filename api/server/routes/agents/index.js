@@ -20,6 +20,14 @@ const responses = require('./responses');
 const openai = require('./openai');
 const { v1 } = require('./v1');
 const chat = require('./chat');
+// [knauf] authenticate scheduler loopback fires and exempt only their intended limiter paths
+const {
+  createSchedulerFireMiddleware,
+  exemptSchedulerIpLimiter,
+  exemptSchedulerUserLimiter,
+} = require('~/knauf/scheduler/internalRequest');
+const { admitSchedulerUserRequest } = require('~/knauf/scheduler/userLifecycle');
+// End [knauf]
 
 const { LIMIT_MESSAGE_IP, LIMIT_MESSAGE_USER } = process.env ?? {};
 
@@ -47,6 +55,9 @@ router.use('/v1', openai);
 router.use(requireJwtAuth);
 router.use(checkBan);
 router.use(uaParser);
+// [knauf] reject forged or deleting-owner scheduler fires before agent admission
+router.use(createSchedulerFireMiddleware({ admitUserRequest: admitSchedulerUserRequest }));
+// End [knauf]
 
 /**
  * Stream endpoints - mounted before chatRouter to bypass rate limiters
@@ -335,13 +346,18 @@ router.use('/', v1);
 const chatRouter = express.Router();
 chatRouter.use(configMiddleware);
 
+// [knauf] keep worker IPs out of the shared client bucket; manual runs still consume user quota
+const unless = (isExempt, limiter) => (req, res, next) =>
+  isExempt(req) ? next() : limiter(req, res, next);
+
 if (isEnabled(LIMIT_MESSAGE_IP)) {
-  chatRouter.use(messageIpLimiter);
+  chatRouter.use(unless(exemptSchedulerIpLimiter, messageIpLimiter));
 }
 
 if (isEnabled(LIMIT_MESSAGE_USER)) {
-  chatRouter.use(messageUserLimiter);
+  chatRouter.use(unless(exemptSchedulerUserLimiter, messageUserLimiter));
 }
+// End [knauf]
 
 chatRouter.use('/', chat);
 router.use('/chat', chatRouter);

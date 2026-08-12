@@ -58,6 +58,17 @@ async function buildEndpointOption(req, res, next) {
     return handleError(res, { text: 'Error parsing conversation' });
   }
 
+  // [knauf] KK20-255 — compact endpoint schemas may omit project context, but
+  // scheduled agent conversations must retain it when endpoint options are built.
+  const rawChatProjectId = req.body.chatProjectId;
+  if (
+    parsedBody.chatProjectId === undefined &&
+    (typeof rawChatProjectId === 'string' || rawChatProjectId === null)
+  ) {
+    parsedBody = { ...parsedBody, chatProjectId: rawChatProjectId };
+  }
+  // End [knauf]
+
   const appConfig = req.config;
   let appliedModelSpecPrivateFields = new Set();
   if (appConfig.modelSpecs?.list?.length && appConfig.modelSpecs?.enforce) {
@@ -65,12 +76,6 @@ async function buildEndpointOption(req, res, next) {
     const { list } = appConfig.modelSpecs;
     const rawSpec = req.body.spec;
     const spec = parsedBody.spec ?? (typeof rawSpec === 'string' ? rawSpec : undefined);
-    const rawChatProjectId = req.body.chatProjectId;
-    const parsedBodyForModelSpec =
-      parsedBody.chatProjectId === undefined &&
-      (typeof rawChatProjectId === 'string' || rawChatProjectId === null)
-        ? { ...parsedBody, chatProjectId: rawChatProjectId }
-        : parsedBody;
 
     if (!spec) {
       return handleError(res, { text: 'No model spec selected' });
@@ -88,7 +93,7 @@ async function buildEndpointOption(req, res, next) {
     try {
       const result = applyModelSpecPreset({
         modelSpec: currentModelSpec,
-        parsedBody: parsedBodyForModelSpec,
+        parsedBody,
         endpoint,
         endpointType,
         defaultParamsEndpoint,

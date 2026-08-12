@@ -208,4 +208,23 @@ describe('loadDefaultInterface', () => {
 
     expect(interfaceConfig).not.toHaveProperty('defaultPinnedTools');
   });
+
+  // [knauf] Pin scheduler discovery through the processed AppService interface. KK20-255.
+  it('passes through configured Knauf interface extensions', async () => {
+    const config: Partial<TCustomConfig> = {
+      interface: {
+        knauf: {
+          scheduler: true,
+        },
+      },
+    };
+
+    const interfaceConfig = await loadDefaultInterface({
+      config,
+      configDefaults: getConfigDefaults(),
+    });
+
+    expect(interfaceConfig?.knauf?.scheduler).toBe(true);
+  });
+  // End [knauf]
 });

@@ -27,6 +27,7 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/async-indexing.md](architecture/files/async-indexing.md)                     | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md)                             | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map                   |
 | [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How **Artifacts** and **Skills** work — the per-capability gate stacks, the deployment-skill layout and authoring traps, and Sandpack/CDN egress. (Code execution now has its own folder — see below.)         |
+| [architecture/scheduled-chats.md](architecture/scheduled-chats.md)                           | How Scheduled Chats work end to end — project-scoped UX, API and worker flow, leases/fencing/replay, failure auto-disable, probes/metrics, operations, and future upstream migration                         |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 

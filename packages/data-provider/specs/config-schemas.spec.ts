@@ -1054,6 +1054,22 @@ describe('interfaceSchema', () => {
       expect(result.success).toBe(false);
     });
   });
+  // End [knauf]
+
+  // [knauf] KK20-255 — scheduler UI remains dark unless explicitly enabled
+  describe('knauf.scheduler', () => {
+    it('accepts an explicit scheduler visibility flag', () => {
+      const result = interfaceSchema.safeParse({ knauf: { scheduler: true } });
+      expect(result.success).toBe(true);
+      expect(result.data?.knauf?.scheduler).toBe(true);
+    });
+
+    it('leaves scheduler disabled when the flag is omitted', () => {
+      const result = interfaceSchema.parse({ knauf: {} });
+      expect(result.knauf?.scheduler).toBeUndefined();
+    });
+  });
+  // End [knauf]
 
   it('accepts retainAgentFiles with all-data retention', () => {
     const result = interfaceSchema.parse({

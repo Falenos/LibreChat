@@ -59,10 +59,13 @@ describe('project file mutations [knauf]', () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
-    queryClient.setQueryData<TFile[]>([QueryKeys.files], [
-      { file_id: 'file-1', filename: 'project.txt' } as TFile,
-      { file_id: 'file-2', filename: 'keep.txt' } as TFile,
-    ]);
+    queryClient.setQueryData<TFile[]>(
+      [QueryKeys.files],
+      [
+        { file_id: 'file-1', filename: 'project.txt' } as TFile,
+        { file_id: 'file-2', filename: 'keep.txt' } as TFile,
+      ],
+    );
     (dataService.deleteProjectFile as jest.Mock).mockResolvedValue({ deleted: true });
 
     const { result } = renderHook(() => useDeleteProjectFileMutation(), {
@@ -98,14 +101,20 @@ describe('project file mutations [knauf]', () => {
     });
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
     const removeSpy = jest.spyOn(queryClient, 'removeQueries');
-    queryClient.setQueryData([QueryKeys.files], [
-      { file_id: 'file-1', filename: 'project.txt' },
-      { file_id: 'file-2', filename: 'keep.txt' },
-    ]);
+    queryClient.setQueryData(
+      [QueryKeys.files],
+      [
+        { file_id: 'file-1', filename: 'project.txt' },
+        { file_id: 'file-2', filename: 'keep.txt' },
+      ],
+    );
     queryClient.setQueryData([QueryKeys.projectFiles, 'project-1'], {
       files: [{ file_id: 'file-1', filename: 'project.txt' }],
     });
-    (dataService.deleteProject as jest.Mock).mockResolvedValue({ deletedCount: 1, modifiedCount: 1 });
+    (dataService.deleteProject as jest.Mock).mockResolvedValue({
+      deletedCount: 1,
+      modifiedCount: 1,
+    });
 
     const { result } = renderHook(() => useDeleteProjectMutation(), {
       wrapper: createWrapper(queryClient),
@@ -121,6 +130,37 @@ describe('project file mutations [knauf]', () => {
     expect(invalidateSpy).toHaveBeenCalledWith([QueryKeys.conversationTags]);
     expect(mockNewConversation).toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith('/c/new', { replace: true });
+  });
+
+  it('does not clear caches or navigate when project deletion is rejected', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockUseRecoilCallback
+      .mockImplementationOnce(() => jest.fn(async () => null))
+      .mockImplementationOnce(() => jest.fn(async () => false));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+    const removeSpy = jest.spyOn(queryClient, 'removeQueries');
+    (dataService.deleteProject as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('Project has an active scheduled run'), {
+        isAxiosError: true,
+        response: { status: 409 },
+      }),
+    );
+
+    const { result } = renderHook(() => useDeleteProjectMutation(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate('project-1');
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(mockNewConversation).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
 // End [knauf]

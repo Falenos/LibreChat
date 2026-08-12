@@ -211,6 +211,9 @@ interface:
     # Flipping to `false` does not remove the tool from `includedTools` or
     # affect custom agents that already have it installed. KK20-168.
     imageGen: true
+    # Scheduled chats remain hidden until the API and worker are enabled and
+    # operationally qualified in the target environment. KK20-255.
+    scheduler: false
     # Starter prompt templates for the agent builder. Shown as selectable
     # cards when the instructions field is empty. KK20-179.
     # Replace [topic/team], [team/purpose], [product/service] etc. with

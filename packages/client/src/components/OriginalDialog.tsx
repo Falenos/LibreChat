@@ -6,6 +6,18 @@ import { cn } from '~/utils';
 
 const DialogDepthContext = React.createContext(0);
 
+// [knauf] Expose dialog-aware stacking for body-portalled controls.
+/** Returns a z-index above the current OGDialog, or a low default outside dialogs. */
+export const usePopoverZIndex = (): number => {
+  const depth = React.useContext(DialogDepthContext);
+  if (depth <= 0) {
+    return 50;
+  }
+  const contentZIndex = 140 + (depth - 1) * 60;
+  return contentZIndex + 10;
+};
+// End [knauf]
+
 interface OGDialogProps extends DialogPrimitive.DialogProps {
   triggerRef?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>;
   triggerRefs?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>[];

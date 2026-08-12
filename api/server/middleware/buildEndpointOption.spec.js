@@ -165,6 +165,32 @@ describe('buildEndpointOption - defaultParamsEndpoint parsing', () => {
     expect(parsedResult.temperature).toBe(0.7);
   });
 
+  // [knauf] KK20-255 — scheduled agent chats retain their project association
+  // even when the compact endpoint schema does not include chatProjectId.
+  it('should preserve raw project context for agent endpoint options', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({});
+    parseCompactConvo.mockReturnValueOnce({
+      endpoint: EModelEndpoint.agents,
+      agent_id: 'agent-1',
+    });
+    const req = createReq(
+      {
+        endpoint: EModelEndpoint.agents,
+        agent_id: 'agent-1',
+        chatProjectId: 'project-1',
+      },
+      { modelSpecs: null },
+    );
+    req.baseUrl = '/api/agents/chat';
+
+    const next = jest.fn();
+    await buildEndpointOption(req, createRes(), next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.body.endpointOption.chatProjectId).toBe('project-1');
+  });
+  // End [knauf]
+
   it('should pass defaultParamsEndpoint when re-parsing enforced model spec', async () => {
     mockGetEndpointsConfig.mockResolvedValue({
       AnthropicClaude: {

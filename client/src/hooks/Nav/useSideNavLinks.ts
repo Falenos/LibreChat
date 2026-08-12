@@ -1,14 +1,17 @@
 import { useMemo } from 'react';
 import { MCPIcon, AttachmentIcon, OpenAIMinimalIcon } from '@librechat/client';
+// [knauf] add the scheduler icon without introducing a second lucide import
 import {
   Bot,
   Brain,
   Bookmark,
+  CalendarClock,
   NotebookPen,
   ScrollText,
   ArrowRightToLine,
   SlidersHorizontal,
 } from 'lucide-react';
+// End [knauf]
 import {
   Permissions,
   EModelEndpoint,
@@ -34,6 +37,9 @@ import { MemoryPanel } from '~/components/SidePanel/Memories';
 import FilesPanel from '~/components/SidePanel/Files/Panel';
 import { PromptsAccordion } from '~/components/Prompts';
 import { SkillsAccordion } from '~/components/Skills';
+// [knauf] expose the isolated scheduler panel through the existing navigation registry
+import { SchedulePanel } from '~/knauf/components/Schedules';
+// End [knauf]
 
 export default function useSideNavLinks({
   hidePanel,
@@ -170,6 +176,22 @@ export default function useSideNavLinks({
       });
     }
 
+    // [knauf] keep scheduled chats dark until interface.knauf.scheduler is explicitly enabled
+    if (
+      interfaceConfig.knauf?.scheduler === true &&
+      endpointsConfig?.[EModelEndpoint.agents] &&
+      hasAccessToAgents
+    ) {
+      links.push({
+        title: 'com_knauf_scheduler_title',
+        label: '',
+        icon: CalendarClock,
+        id: 'schedules',
+        Component: SchedulePanel,
+      });
+    }
+    // End [knauf]
+
     links.push({
       title: 'com_sidepanel_attach_files',
       label: '',
@@ -228,6 +250,7 @@ export default function useSideNavLinks({
     skillsEnabled,
     hasAccessToMemories,
     hasAccessToReadMemories,
+    interfaceConfig.knauf?.scheduler,
     interfaceConfig.parameters,
     endpointType,
     hasAccessToBookmarks,

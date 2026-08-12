@@ -359,6 +359,9 @@ const startServer = async () => {
   // [knauf] mount-point — Knauf-only routes (additive, isolated under /api/knauf).
   app.use('/api/knauf', require('./routes/knauf'));
   // End [knauf]
+  // [knauf] KK20-255 expose the upstream-compatible scheduler contract before upstream release.
+  app.use('/api/schedules', require('./routes/knauf/schedules'));
+  // End [knauf]
   app.use('/metrics', metricsRouter);
 
   /** 404 for unmatched API routes */
