@@ -1322,6 +1322,77 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  it('updates the existing response message in place on sync when the user message id was rehydrated (breaking parentMessageId matching), instead of duplicating it', async () => {
+    const originalUser = {
+      messageId: 'original-user',
+      conversationId: CONV_ID,
+      text: 'Original prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+    };
+    // Note: this response's parentMessageId points at the user message's
+    // *optimistic* id, which no longer equals `userMessage.messageId` once
+    // the 'created' handler rehydrates it to a server-issued id - simulating
+    // a reconnect/sync race where the parentMessageId link is stale.
+    const existingResponse = {
+      messageId: 'server-issued-response-id',
+      conversationId: CONV_ID,
+      text: 'Already streamed answer',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'optimistic-user-id',
+    };
+    const submission = {
+      ...buildSubmission({
+        conversation: { conversationId: CONV_ID },
+        userMessage: originalUser,
+        initialResponse: existingResponse,
+      }),
+      resumeStreamId: CONV_ID,
+    } as TSubmission & { resumeStreamId: string };
+    const chatHelpers = buildChatHelpers();
+    chatHelpers.getMessages.mockReturnValue([originalUser, existingResponse]);
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('message', {
+        data: JSON.stringify({
+          sync: true,
+          resumeState: {
+            runSteps: [],
+            replayEvents: [],
+            aggregatedContent: [{ type: 'text', text: { value: 'Already streamed answer' } }],
+            // No responseMessageId from the server, and the existing message's
+            // id doesn't match the `${userMsgId}_` fallback pattern either.
+            conversationId: CONV_ID,
+          },
+        }),
+      });
+    });
+
+    const lastMessages = chatHelpers.setMessages.mock.calls.at(-1)?.[0];
+    expect(lastMessages.map((message: { messageId: string }) => message.messageId)).toEqual([
+      'original-user',
+      'server-issued-response-id',
+    ]);
+    expect(lastMessages[1]).toEqual(
+      expect.objectContaining({
+        messageId: 'server-issued-response-id',
+        parentMessageId: 'optimistic-user-id',
+        content: expect.any(Array),
+      }),
+    );
+
+    unmount();
+  });
+
   it('uses the resumed submission for final events after sync', async () => {
     const originalUser = {
       messageId: 'original-user',

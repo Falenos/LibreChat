@@ -731,6 +731,33 @@ export default function useResumableSSE(
                     (m.messageId === `${userMsgId}_` || m.parentMessageId === userMsgId),
                 );
               }
+              /**
+               * [knauf] Last-resort fallback for reconnect/sync races: the
+               * user message's id can be rehydrated (optimistic id -> real
+               * server id) by the 'created' handler between the original
+               * render and this sync, so an already-rendered response's
+               * `parentMessageId` may point at the *old* user message id and
+               * no longer equal `userMsgId` above - and the server's
+               * `responseMessageId` can likewise be missing/renamed on
+               * resume. Without this, the checks above silently miss the
+               * existing, already-rendered response message, and the code
+               * below creates a brand-new near-empty duplicate instead of
+               * updating it in place - which is what visually looks like the
+               * finished answer getting replaced by a fresh "still
+               * generating" placeholder. Only apply this when the user
+               * message itself is already in the list (i.e. we're resuming
+               * an existing turn, not starting a brand-new one) - otherwise
+               * this would wrongly reuse an unrelated prior turn's response.
+               */
+              const userAlreadyRendered = messages.some((m) => m.messageId === userMsgId);
+              if (responseIdx < 0 && userAlreadyRendered) {
+                for (let i = messages.length - 1; i >= 0; i -= 1) {
+                  if (!messages[i].isCreatedByUser) {
+                    responseIdx = i;
+                    break;
+                  }
+                }
+              }
 
               console.log('[ResumableSSE] SYNC update', {
                 userMsgId,
