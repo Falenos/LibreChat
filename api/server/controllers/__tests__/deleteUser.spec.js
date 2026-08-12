@@ -109,6 +109,13 @@ jest.mock('~/cache', () => ({
   getLogStores: jest.fn(),
 }));
 
+// [knauf] isolate upstream deletion tests from scheduler persistence and generation jobs
+jest.mock('~/knauf/scheduler/userLifecycle', () => ({
+  prepareSchedulerUserDeletion: jest.fn().mockResolvedValue(undefined),
+  purgeSchedulerDataForUser: jest.fn().mockResolvedValue(undefined),
+}));
+// End [knauf]
+
 const { deleteUserController } = require('~/server/controllers/UserController');
 
 function createRes() {

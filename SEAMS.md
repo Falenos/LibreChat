@@ -885,6 +885,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/projects/handlers.knauf.spec.ts` | `returns a conflict when scheduled work is queued or actively leased` | 307–327 | Proves project deletion leaves the aggregate untouched and maps the scheduler fence to HTTP 409 | Self | KK20-255 |
 | `client/src/components/Conversations/ProjectsSection.tsx` | `ProjectDeleteDialog.confirmDelete`, loading-stable destructive dialog | 148–201 | Shows a localized active-run conflict without navigation/cache side effects and keeps cancel, close, and delete controls locked while destructive deletion is pending | `client/src/data-provider/Projects/mutations.knauf.spec.tsx` | KK20-255 |
 | `client/src/data-provider/Projects/mutations.knauf.spec.tsx` | rejected project deletion cache-safety regression | 134–163 | Proves failed deletion does not clear project/file caches, create a replacement conversation, or navigate away | Self | KK20-255 |
+| `api/server/controllers/__tests__/deleteUser.spec.js` | scheduler lifecycle module mock | 112–117 | Keeps the upstream-focused 2FA account-deletion tests isolated from scheduler persistence while dedicated lifecycle tests cover the Knauf deletion hooks | Self | KK20-255 |
 <!-- seams:auto:end -->
 
 ## Configuration
