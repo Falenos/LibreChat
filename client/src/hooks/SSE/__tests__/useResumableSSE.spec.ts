@@ -1393,6 +1393,117 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  it('does not reuse an unrelated later assistant message when sync cannot match the resumed turn by ids', async () => {
+    const earlierUser = {
+      messageId: 'earlier-user',
+      conversationId: CONV_ID,
+      text: 'Earlier prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+    };
+    const earlierResponse = {
+      messageId: 'earlier-response',
+      conversationId: CONV_ID,
+      text: 'Earlier response',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'earlier-user',
+    };
+    const resumedUser = {
+      messageId: 'server-user-id',
+      conversationId: CONV_ID,
+      text: 'Resumed prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: 'earlier-response',
+    };
+    const laterUser = {
+      messageId: 'later-user',
+      conversationId: CONV_ID,
+      text: 'Later prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: 'server-user-id_',
+    };
+    const unrelatedLaterAssistant = {
+      messageId: 'later-assistant',
+      conversationId: CONV_ID,
+      text: 'Later unrelated answer',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'different-user-id',
+    };
+    const submission = {
+      ...buildSubmission({
+        conversation: { conversationId: CONV_ID },
+        userMessage: resumedUser,
+        initialResponse: {
+          messageId: 'server-issued-response-id',
+          conversationId: CONV_ID,
+          text: '',
+          isCreatedByUser: false,
+          sender: 'Assistant',
+        },
+      }),
+      resumeStreamId: CONV_ID,
+    } as TSubmission & { resumeStreamId: string };
+    const chatHelpers = buildChatHelpers();
+    chatHelpers.getMessages.mockReturnValue([
+      earlierUser,
+      earlierResponse,
+      resumedUser,
+      laterUser,
+      unrelatedLaterAssistant,
+    ]);
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('message', {
+        data: JSON.stringify({
+          sync: true,
+          resumeState: {
+            runSteps: [],
+            replayEvents: [],
+            aggregatedContent: [{ type: 'text', text: { value: 'Recovered answer' } }],
+            conversationId: CONV_ID,
+          },
+        }),
+      });
+    });
+
+    const lastMessages = chatHelpers.setMessages.mock.calls.at(-1)?.[0];
+    expect(lastMessages.map((message: { messageId: string }) => message.messageId)).toEqual([
+      'earlier-user',
+      'earlier-response',
+      'server-user-id',
+      'server-user-id_',
+      'later-user',
+      'later-assistant',
+    ]);
+    expect(lastMessages[3]).toEqual(
+      expect.objectContaining({
+        messageId: 'server-user-id_',
+        parentMessageId: 'server-user-id',
+        content: expect.any(Array),
+      }),
+    );
+    expect(lastMessages[5]).toEqual(
+      expect.objectContaining({
+        messageId: 'later-assistant',
+        text: 'Later unrelated answer',
+      }),
+    );
+
+    unmount();
+  });
+
   it('uses the resumed submission for final events after sync', async () => {
     const originalUser = {
       messageId: 'original-user',

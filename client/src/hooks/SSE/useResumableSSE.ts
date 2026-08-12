@@ -744,18 +744,18 @@ export default function useResumableSSE(
                * below creates a brand-new near-empty duplicate instead of
                * updating it in place - which is what visually looks like the
                * finished answer getting replaced by a fresh "still
-               * generating" placeholder. Only apply this when the user
-               * message itself is already in the list (i.e. we're resuming
-               * an existing turn, not starting a brand-new one) - otherwise
-               * this would wrongly reuse an unrelated prior turn's response.
+               * generating" placeholder. Only consider assistant messages
+               * directly adjacent to the resumed user turn; scanning the whole
+               * conversation can overwrite a later unrelated assistant reply.
                */
-              const userAlreadyRendered = messages.some((m) => m.messageId === userMsgId);
-              if (responseIdx < 0 && userAlreadyRendered) {
-                for (let i = messages.length - 1; i >= 0; i -= 1) {
-                  if (!messages[i].isCreatedByUser) {
-                    responseIdx = i;
+              const userIndex = messages.findIndex((m) => m.messageId === userMsgId);
+              if (responseIdx < 0 && userIndex >= 0) {
+                for (let i = userIndex + 1; i < messages.length; i += 1) {
+                  if (messages[i].isCreatedByUser) {
                     break;
                   }
+                  responseIdx = i;
+                  break;
                 }
               }
               // End [knauf]
