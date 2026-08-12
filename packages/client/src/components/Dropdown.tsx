@@ -5,6 +5,9 @@ import * as Select from '@ariakit/react/select';
 import * as Combobox from '@ariakit/react/combobox';
 import type { Option } from '~/common';
 import { cn } from '~/utils/';
+// [knauf] Stack body-portalled dropdowns above their owning OGDialog.
+import { usePopoverZIndex } from './OriginalDialog';
+// End [knauf]
 import './Dropdown.css';
 
 interface DropdownProps {
@@ -56,6 +59,9 @@ const Dropdown: React.FC<DropdownProps> = ({
   searchEmptyText,
 }) => {
   const [searchValue, setSearchValue] = useState('');
+  // [knauf] Resolve the portal layer from the current dialog nesting depth.
+  const popoverZIndex = usePopoverZIndex();
+  // End [knauf]
 
   const handleChange = (value: string) => {
     onChange(value);
@@ -173,6 +179,9 @@ const Dropdown: React.FC<DropdownProps> = ({
           'max-h-[80vh] overflow-y-auto',
           '[pointer-events:auto]', // Override body's pointer-events:none when in modal
         )}
+        // [knauf] Keep body portals visible above OGDialog without changing inline popovers.
+        style={portal ? { zIndex: popoverZIndex } : undefined}
+        // End [knauf]
       >
         {searchable ? (
           <>

@@ -888,6 +888,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/__tests__/deleteUser.spec.js` | scheduler lifecycle module mock | 112–117 | Keeps the upstream-focused 2FA account-deletion tests isolated from scheduler persistence while dedicated lifecycle tests cover the Knauf deletion hooks | Self | KK20-255 |
 | `api/server/middleware/buildEndpointOption.js` | `buildEndpointOption` raw project-context preservation | 61–70 | Carries `chatProjectId` across compact endpoint parsing so scheduled agent conversations are persisted under their selected project instead of the unassigned chat list | `api/server/middleware/buildEndpointOption.spec.js` (`should preserve raw project context for agent endpoint options`) | KK20-255 |
 | `api/server/middleware/buildEndpointOption.spec.js` | scheduled agent project-context regression | 168–192 | Proves an agent request retains its raw project association even when the compact endpoint schema omits that field | Self | KK20-255 |
+| `packages/client/src/components/Dropdown.tsx` | `Dropdown`, portalled `SelectPopover` style | 8–10, 62–64, 182–184 | Reuses OGDialog depth-aware stacking for every shared body-portalled dropdown while preserving inline dropdown layering | `packages/client/src/components/Dropdown.knauf.spec.tsx` | KK20-255 |
+| `packages/client/src/components/Dropdown.knauf.spec.tsx` | `Dropdown portal stacking` | 1–67 | Proves shared dropdown portals remain pointer-interactive, stack above their owning dialog, and leave non-portalled behavior unchanged | Self | KK20-255 |
 <!-- seams:auto:end -->
 
 ## Configuration
