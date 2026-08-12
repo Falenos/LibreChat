@@ -2,7 +2,7 @@
 title: Scheduled Chats
 spec-id: AGK-ARCH-scheduled-chats
 status: implemented (environment-gated)
-owners: ['@ydrargyros']
+owners: ['@Falenos']
 last-reviewed: 2026-08-10
 code-refs:
   - api/server/routes/knauf/schedules.js
@@ -34,6 +34,14 @@ cadence model, run outcomes, counters, and disabled-reason shape deliberately
 follow the upstream Scheduled Chats direction where practical, while execution
 runs in a dedicated worker rather than inside horizontally scaled API pods.
 
+The exact upstream preview was not backported because its dependency closure
+spanned authentication, generation jobs, streams, schemas, startup, permissions,
+and navigation across more than 100 upstream files, many of which had already
+drifted from this fork. Copying those modules under Knauf paths would not have
+removed those shared-runtime dependencies. The bounded compatibility layer keeps
+the execution invariants and a future migration path without turning the preview
+into a permanent high-risk override.
+
 ---
 
 ## 1. Product flow
@@ -47,6 +55,10 @@ The Schedules sidebar panel opens a dialog that requires:
 - a project owned by the user;
 - an `hourly`, `daily`, `weekdays`, or `weekly` cadence;
 - the browser's IANA timezone.
+
+The project field remains single-select. A user may open the existing project
+creation dialog from the schedule form; the created project is selected
+immediately without losing the other schedule fields.
 
 Create requests include a client-generated `clientRequestId`. Retrying the same
 request returns the existing schedule; reusing the key for different schedule
@@ -88,7 +100,21 @@ Run Now is allowed even when recurrence is disabled. The API:
 Only one active run may exist for a schedule. A second Run Now request, or a
 delete while a run is queued/actively leased, returns HTTP 409.
 
-### 1.4 Automatic run
+### 1.4 Delete a project
+
+Project deletion is permanently destructive. The confirmation names the
+project data that is removed: chats and messages, schedule definitions,
+inactive scheduler history, project knowledge and files, sources, tool-call
+data, and shared links.
+
+Deletion is rejected with HTTP 409 while any project schedule has a queued run
+or a started run with an unexpired lease. Expired leases and terminal runs do
+not block deletion. After the project aggregate is removed, owner-scoped
+scheduler cleanup deletes its schedule definitions and inactive run rows,
+including project-scoped orphan history. No cache or navigation cleanup runs
+when the deletion is rejected.
+
+### 1.5 Automatic run
 
 ```mermaid
 sequenceDiagram
@@ -316,12 +342,13 @@ failure policy rather than introducing immediate permanent-disable reasons.
   interrupted run. Lease recovery resumes the durable Agent stream when it is
   still available, but does not infer success from conversation existence or
   start a replacement generation after the job expires.
-- Recipient notifications and exactly-once delivery are not implemented. Their
-  product semantics and the corresponding KK20-255 acceptance scope require
-  explicit discussion before implementation or formal rescoping.
-- Scheduled Agents currently use the Agent's configured tool/action references.
-  A dedicated external-write allowlist or approval workflow is not implemented;
-  it depends on a broader governance flow that must be agreed separately.
+- Email and Teams delivery are not part of KK20-255. The generated project
+  conversation is the MVP report. Teams direct-user delivery is a separate
+  discovery item whose recipient model, integration method, report content,
+  timing, retry/deduplication, privacy, and failure UX require Product input.
+- No governance, approval, or review stage is required for Scheduled Chats.
+  Scheduled Agents use the Agent's configured tool/action references under the
+  existing Agent authorization model.
 - The immutable run captures the Agent configuration and referenced tool/action
   IDs, not deep copies of external tool implementations or remote action
   definitions.
@@ -538,6 +565,12 @@ The cutover must be quiesced and idempotent:
 Do not dual-write. Do not run both workers against the same logical schedules.
 Historical `knauf_scheduled_agent_runs` rows are not migrated unless a later
 product requirement introduces visible run history or compliance retention.
+
+The compatibility layer is intentionally retireable. Once LibreChat releases a
+stable scheduler with known persistence and execution semantics, compare the
+released contract rather than the old preview, migrate project-scoped fields
+explicitly, and remove the Knauf worker and collections after the rollback
+window.
 
 Rollback before the retention window expires stops the upstream worker,
 restores Knauf reads, and restarts the Knauf worker from the retained source

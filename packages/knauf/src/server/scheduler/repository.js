@@ -49,6 +49,7 @@ function createSchedulerRepository({
     await Promise.all([
       schedules.createIndex({ enabled: 1, nextRunAt: 1 }),
       schedules.createIndex({ id: 1 }, { unique: true }),
+      schedules.createIndex({ user: 1, chatProjectId: 1 }),
       schedules.createIndex(
         { user: 1, clientRequestId: 1 },
         { unique: true, partialFilterExpression: { clientRequestId: { $exists: true } } },
@@ -64,6 +65,7 @@ function createSchedulerRepository({
       ),
       runs.createIndex({ status: 1, leaseExpiresAt: 1 }),
       runs.createIndex({ status: 1, active: 1, scheduledFor: 1 }),
+      runs.createIndex({ ownerId: 1, chatProjectId: 1, active: 1 }),
       runs.createIndex({ status: 1, bookkeepingAppliedAt: 1, completedAt: 1 }),
       runs.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
@@ -219,6 +221,60 @@ function createSchedulerRepository({
       await runs.deleteMany({ scheduleId: id, ownerId: user, active: { $ne: true } });
     }
     return deleted;
+  };
+
+  const assertProjectCanBeDeleted = async ({ projectId, user }) => {
+    const scheduleIds = await schedules
+      .find({ user, chatProjectId: projectId }, { projection: { _id: 0, id: 1 } })
+      .map((schedule) => schedule.id)
+      .toArray();
+    const activeRun = await runs.findOne({
+      ownerId: user,
+      active: true,
+      $and: [
+        {
+          $or: [
+            { chatProjectId: projectId },
+            ...(scheduleIds.length > 0 ? [{ scheduleId: { $in: scheduleIds } }] : []),
+          ],
+        },
+        {
+          $or: [{ status: 'queued' }, { status: 'started', leaseExpiresAt: { $gt: now() } }],
+        },
+      ],
+    });
+    if (activeRun != null) {
+      const error = new Error('Project has an active scheduled run');
+      error.code = SCHEDULE_ACTIVE_RUN_CODE;
+      throw error;
+    }
+    return scheduleIds;
+  };
+
+  const deleteSchedulesForProject = async ({ projectId, user, scheduleIds }) => {
+    const ids = scheduleIds ?? (await assertProjectCanBeDeleted({ projectId, user }));
+    const scheduleResult = await schedules.deleteMany({ user, chatProjectId: projectId });
+    const runResult = await runs.deleteMany({
+      ownerId: user,
+      $and: [
+        {
+          $or: [
+            { chatProjectId: projectId },
+            ...(ids.length > 0 ? [{ scheduleId: { $in: ids } }] : []),
+          ],
+        },
+        {
+          $nor: [
+            { active: true, status: 'queued' },
+            { active: true, status: 'started', leaseExpiresAt: { $gt: now() } },
+          ],
+        },
+      ],
+    });
+    return {
+      deletedSchedules: scheduleResult.deletedCount ?? 0,
+      deletedRuns: runResult.deletedCount ?? 0,
+    };
   };
 
   const claimOccurrence = async ({ schedule, workerId, leaseMs }) => {
@@ -580,6 +636,8 @@ function createSchedulerRepository({
     createSchedule,
     updateScheduleForUser,
     deleteScheduleForUser,
+    assertProjectCanBeDeleted,
+    deleteSchedulesForProject,
     claimOccurrence,
     enqueueOccurrence,
     enqueueManualRun,

@@ -53,7 +53,10 @@ const pendingIndexing = {
 describe('createProjectHandlers project files [knauf]', () => {
   it('lists only file metadata authorized for the current user and tenant', async () => {
     const deps = createDeps({
-      listChatProjectSources: jest.fn(async () => [source('file-ready'), source('file-other-user')]),
+      listChatProjectSources: jest.fn(async () => [
+        source('file-ready'),
+        source('file-other-user'),
+      ]),
       getFiles: jest.fn(async () => [
         {
           file_id: 'file-ready',
@@ -182,7 +185,13 @@ describe('createProjectHandlers project files [knauf]', () => {
   it('attaches only an authorized current-user file', async () => {
     const deps = createDeps({
       getFiles: jest.fn(async () => [
-        { file_id: 'owned-file', filename: 'owned.txt', type: 'text/plain', bytes: 10, embedded: true },
+        {
+          file_id: 'owned-file',
+          filename: 'owned.txt',
+          type: 'text/plain',
+          bytes: 10,
+          embedded: true,
+        },
       ]),
       createChatProjectSource: jest.fn(async () => source('owned-file')),
     });
@@ -248,7 +257,11 @@ describe('createProjectHandlers project files [knauf]', () => {
       res,
     );
 
-    expect(deps.deleteChatProjectSource).toHaveBeenCalledWith(otherUserId, projectId, 'foreign-file');
+    expect(deps.deleteChatProjectSource).toHaveBeenCalledWith(
+      otherUserId,
+      projectId,
+      'foreign-file',
+    );
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'Project file not found' });
   });
@@ -262,10 +275,7 @@ describe('createProjectHandlers project files [knauf]', () => {
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
 
-    await handlers.deleteProject(
-      { params: { projectId }, user: { id: userId } } as any,
-      res,
-    );
+    await handlers.deleteProject({ params: { projectId }, user: { id: userId } } as any, res);
 
     expect(deps.prepareProjectDeleteCleanup).toHaveBeenCalledWith(
       expect.objectContaining({ params: { projectId }, user: { id: userId } }),
@@ -286,13 +296,31 @@ describe('createProjectHandlers project files [knauf]', () => {
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
 
-    await handlers.deleteProject(
-      { params: { projectId }, user: { id: userId } } as any,
-      res,
-    );
+    await handlers.deleteProject({ params: { projectId }, user: { id: userId } } as any, res);
 
     expect(finalizeCleanup).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'Project not found' });
+  });
+
+  it('returns a conflict when scheduled work is queued or actively leased', async () => {
+    const conflict = Object.assign(new Error('Project has an active scheduled run'), {
+      code: 'SCHEDULE_ACTIVE_RUN',
+    });
+    const deps = createDeps({
+      prepareProjectDeleteCleanup: jest.fn(async () => {
+        throw conflict;
+      }),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.deleteProject({ params: { projectId }, user: { id: userId } } as any, res);
+
+    expect(deps.deleteChatProject).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Project has an active scheduled run',
+    });
   });
 });

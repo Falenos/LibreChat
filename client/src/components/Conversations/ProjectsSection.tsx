@@ -40,6 +40,7 @@ import {
 import ProjectCreateDialog from '~/components/Projects/ProjectCreateDialog';
 import { useLocalize, useLocalStorage, useNewConvo } from '~/hooks';
 import { clearMessagesCache, cn } from '~/utils';
+import { getResponseStatus } from '~/utils/errors';
 import { NotificationSeverity } from '~/common';
 import Convo from './Convo';
 import store from '~/store';
@@ -144,6 +145,7 @@ function ProjectDeleteDialog({
   const deleteProject = useDeleteProjectMutation();
   const { showToast } = useToastContext();
 
+  // [knauf] KK20-255 — surface the active scheduled-run deletion fence without clearing UI state.
   const confirmDelete = () => {
     deleteProject.mutate(project._id, {
       onSuccess: () => {
@@ -152,17 +154,26 @@ function ProjectDeleteDialog({
           navigate('/projects');
         }
       },
-      onError: () =>
+      onError: (error) =>
         showToast({
-          message: localize('com_ui_project_delete_error'),
+          message: localize(
+            getResponseStatus(error) === 409
+              ? 'com_knauf_project_delete_active_run'
+              : 'com_ui_project_delete_error',
+          ),
           severity: NotificationSeverity.ERROR,
           showIcon: true,
         }),
     });
   };
+  // End [knauf]
 
+  // [knauf] KK20-255 — keep the destructive confirmation stable while deletion is in flight.
   return (
-    <OGDialog open={open} onOpenChange={onOpenChange}>
+    <OGDialog
+      open={open}
+      onOpenChange={(nextOpen) => !deleteProject.isLoading && onOpenChange(nextOpen)}
+    >
       <OGDialogContent className="w-11/12 max-w-md" showCloseButton={false}>
         <OGDialogHeader>
           <OGDialogTitle>{localize('com_ui_delete_project')}</OGDialogTitle>
@@ -172,7 +183,11 @@ function ProjectDeleteDialog({
         </div>
         <div className="flex justify-end gap-4 pt-4">
           <OGDialogClose asChild>
-            <Button aria-label="cancel" variant="outline">
+            <Button
+              aria-label={localize('com_ui_cancel')}
+              variant="outline"
+              disabled={deleteProject.isLoading}
+            >
               {localize('com_ui_cancel')}
             </Button>
           </OGDialogClose>
@@ -183,6 +198,7 @@ function ProjectDeleteDialog({
       </OGDialogContent>
     </OGDialog>
   );
+  // End [knauf]
 }
 
 const noop = () => {};

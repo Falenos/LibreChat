@@ -163,6 +163,85 @@ describe('Knauf scheduler foundation', () => {
     expect(await runs.countDocuments()).toBe(1);
   });
 
+  test('blocks project deletion while a referenced run is queued or actively leased', async () => {
+    const schedule = await createSchedule();
+    const queued = await repository.enqueueOccurrence({ schedule });
+
+    await expect(
+      repository.assertProjectCanBeDeleted({
+        projectId: schedule.chatProjectId,
+        user: schedule.user,
+      }),
+    ).rejects.toMatchObject({ code: 'SCHEDULE_ACTIVE_RUN' });
+
+    await repository.interruptQueuedRun({ runId: queued._id, reason: 'test_cleanup' });
+    const started = await repository.claimOccurrence({
+      schedule: { ...schedule, id: 'active-project-schedule' },
+      workerId: 'worker-project-delete',
+      leaseMs: 30_000,
+    });
+
+    await expect(
+      repository.assertProjectCanBeDeleted({
+        projectId: schedule.chatProjectId,
+        user: schedule.user,
+      }),
+    ).rejects.toMatchObject({ code: 'SCHEDULE_ACTIVE_RUN' });
+
+    clock = new Date(started.leaseExpiresAt.getTime() + 1);
+    await expect(
+      repository.assertProjectCanBeDeleted({
+        projectId: schedule.chatProjectId,
+        user: schedule.user,
+      }),
+    ).resolves.toEqual(expect.arrayContaining([schedule.id]));
+  });
+
+  test('deletes project schedules and inactive history without crossing ownership boundaries', async () => {
+    const owner = new ObjectId();
+    const otherOwner = new ObjectId();
+    const ownedSchedule = await createSchedule({ id: 'owned-project-schedule', user: owner });
+    const expiredSchedule = await createSchedule({
+      id: 'expired-project-schedule',
+      user: owner,
+      chatProjectId: ownedSchedule.chatProjectId,
+    });
+    const otherSchedule = await createSchedule({
+      id: 'other-project-schedule',
+      user: otherOwner,
+      chatProjectId: ownedSchedule.chatProjectId,
+    });
+    const ownedRun = await repository.enqueueOccurrence({ schedule: ownedSchedule });
+    const expiredRun = await repository.claimOccurrence({
+      schedule: expiredSchedule,
+      workerId: 'expired-project-worker',
+      leaseMs: 30_000,
+    });
+    const otherRun = await repository.enqueueOccurrence({ schedule: otherSchedule });
+    await repository.interruptQueuedRun({ runId: ownedRun._id, reason: 'test_cleanup' });
+    await repository.interruptQueuedRun({ runId: otherRun._id, reason: 'test_cleanup' });
+    clock = new Date(expiredRun.leaseExpiresAt.getTime() + 1);
+
+    const scheduleIds = await repository.assertProjectCanBeDeleted({
+      projectId: ownedSchedule.chatProjectId,
+      user: owner,
+    });
+    await expect(
+      repository.deleteSchedulesForProject({
+        projectId: ownedSchedule.chatProjectId,
+        user: owner,
+        scheduleIds,
+      }),
+    ).resolves.toEqual({ deletedSchedules: 2, deletedRuns: 2 });
+
+    expect(await schedules.findOne({ id: ownedSchedule.id })).toBeNull();
+    expect(await schedules.findOne({ id: expiredSchedule.id })).toBeNull();
+    expect(await runs.findOne({ _id: ownedRun._id })).toBeNull();
+    expect(await runs.findOne({ _id: expiredRun._id })).toBeNull();
+    expect(await schedules.findOne({ id: otherSchedule.id })).not.toBeNull();
+    expect(await runs.findOne({ _id: otherRun._id })).not.toBeNull();
+  });
+
   test('preallocates a durable Agent stream identity before an occurrence is executable', async () => {
     const schedule = await createSchedule();
     const execution = {

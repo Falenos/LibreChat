@@ -1,6 +1,9 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const { createProjectHandlers, deleteConvoSharedLinksWithCleanup } = require('@librechat/api');
+// [knauf] KK20-255 — project deletion fences and removes project-scoped schedules.
+const { createSchedulerRepository } = require('@knauf/knauf/server/scheduler');
+// End [knauf]
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 const {
   collectConvoFilesForCleanup,
@@ -25,36 +28,71 @@ const projectFileOwnerFilter = (req) => {
   };
 };
 
+// [knauf] KK20-255 — scheduler documents persist authenticated users as ObjectIds.
+const normalizeSchedulerUserId = (userId) =>
+  mongoose.isValidObjectId(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+// End [knauf]
+
 const prepareProjectDeleteCleanup = async (req, projectId) => {
-  const collected = await collectConvoFilesForCleanup({ req, filter: { chatProjectId: projectId } });
+  // [knauf] KK20-255 — reject deletion while scheduled work is queued or actively leased.
+  const schedulerRepository = createSchedulerRepository({
+    schedules: mongoose.connection.db.collection('knauf_agent_schedules'),
+    runs: mongoose.connection.db.collection('knauf_scheduled_agent_runs'),
+  });
+  const scheduleIds = await schedulerRepository.assertProjectCanBeDeleted({
+    projectId,
+    user: normalizeSchedulerUserId(req.user.id),
+  });
+  // End [knauf]
+  const collected = await collectConvoFilesForCleanup({
+    req,
+    filter: { chatProjectId: projectId },
+  });
   const sourceRows = await db.listChatProjectSources(req.user.id, projectId);
-  const candidateFileIds = [...new Set([
-    ...(collected.files ?? []).map((file) => file.file_id),
-    ...sourceRows.map((source) => source.file_id),
-  ].filter(Boolean))];
+  const candidateFileIds = [
+    ...new Set(
+      [
+        ...(collected.files ?? []).map((file) => file.file_id),
+        ...sourceRows.map((source) => source.file_id),
+      ].filter(Boolean),
+    ),
+  ];
 
   const sharedProjectFileIds = candidateFileIds.length
     ? new Set(
-        await (mongoose.models.ChatProjectSource || mongoose.model('ChatProjectSource')).distinct('file_id', {
-          user: req.user.id,
-          sourceType: 'file',
-          projectId: { $ne: projectId },
-          file_id: { $in: candidateFileIds },
-        }),
+        await (mongoose.models.ChatProjectSource || mongoose.model('ChatProjectSource')).distinct(
+          'file_id',
+          {
+            user: req.user.id,
+            sourceType: 'file',
+            projectId: { $ne: projectId },
+            file_id: { $in: candidateFileIds },
+          },
+        ),
       )
     : new Set();
 
-  const collectedFiles = (collected.files ?? []).filter((file) => !sharedProjectFileIds.has(file.file_id));
-  const conversationFileIds = new Set(collectedFiles.map((file) => file.file_id).filter(Boolean));
-  const sourceFileIds = [...new Set(sourceRows.map((source) => source.file_id).filter(Boolean))].filter(
-    (fileId) => !conversationFileIds.has(fileId) && !sharedProjectFileIds.has(fileId),
+  const collectedFiles = (collected.files ?? []).filter(
+    (file) => !sharedProjectFileIds.has(file.file_id),
   );
+  const conversationFileIds = new Set(collectedFiles.map((file) => file.file_id).filter(Boolean));
+  const sourceFileIds = [
+    ...new Set(sourceRows.map((source) => source.file_id).filter(Boolean)),
+  ].filter((fileId) => !conversationFileIds.has(fileId) && !sharedProjectFileIds.has(fileId));
   const projectFiles = sourceFileIds.length
-    ? ((await db.getFiles({ file_id: { $in: sourceFileIds }, ...projectFileOwnerFilter(req) })) ?? [])
+    ? ((await db.getFiles({ file_id: { $in: sourceFileIds }, ...projectFileOwnerFilter(req) })) ??
+      [])
     : [];
   const cleanupCollected = { ...collected, files: collectedFiles };
 
   return async () => {
+    // [knauf] KK20-255 — remove schedule definitions and inactive run evidence with the project.
+    await schedulerRepository.deleteSchedulesForProject({
+      projectId,
+      user: normalizeSchedulerUserId(req.user.id),
+      scheduleIds,
+    });
+    // End [knauf]
     await cascadeDeleteCollectedFiles({ req, collected: cleanupCollected });
 
     if (projectFiles.length) {

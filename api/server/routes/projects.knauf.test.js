@@ -30,12 +30,30 @@ const mockHandlers = {
   assignConversationToProject: jest.fn((_req, res) => res.status(200).json({})),
   listProjectFiles: jest.fn((_req, res) => res.status(200).json({ files: [] })),
   addProjectFile: jest.fn((_req, res) => res.status(201).json({})),
-  downloadProjectFile: jest.fn((_req, res) => res.redirect(307, '/api/files/download/user-1/file-1')),
+  downloadProjectFile: jest.fn((_req, res) =>
+    res.redirect(307, '/api/files/download/user-1/file-1'),
+  ),
   deleteProjectFile: jest.fn((_req, res) => res.status(200).json({ deleted: true })),
   getProject: jest.fn((_req, res) => res.status(200).json({})),
   updateProject: jest.fn((_req, res) => res.status(200).json({})),
   deleteProject: jest.fn((_req, res) => res.status(200).json({ deletedCount: 1 })),
 };
+
+const mockSchedulerRepository = {
+  assertProjectCanBeDeleted: jest.fn().mockResolvedValue([]),
+  deleteSchedulesForProject: jest.fn().mockResolvedValue({
+    deletedSchedules: 0,
+    deletedRuns: 0,
+  }),
+};
+
+jest.mock(
+  '@knauf/knauf/server/scheduler',
+  () => ({
+    createSchedulerRepository: jest.fn(() => mockSchedulerRepository),
+  }),
+  { virtual: true },
+);
 
 const mockAttachIndexingToFiles = jest.fn(async ({ files }) => files);
 
@@ -59,10 +77,7 @@ jest.mock(
 );
 
 const db = require('~/models');
-const {
-  createProjectHandlers,
-  deleteConvoSharedLinksWithCleanup,
-} = require('@librechat/api');
+const { createProjectHandlers, deleteConvoSharedLinksWithCleanup } = require('@librechat/api');
 const {
   collectConvoFilesForCleanup,
   cascadeDeleteCollectedFiles,
@@ -75,6 +90,10 @@ beforeEach(() => {
   mongoose.models.ChatProjectSource = {
     distinct: jest.fn().mockResolvedValue([]),
   };
+  Object.defineProperty(mongoose.connection, 'db', {
+    configurable: true,
+    value: { collection: jest.fn() },
+  });
 });
 
 describe('[knauf] KK20-248 project file routes', () => {
@@ -136,6 +155,15 @@ describe('[knauf] KK20-248 project file routes', () => {
     const finalize = await injectedDeps.prepareProjectDeleteCleanup(req, 'project-1');
     await finalize();
 
+    expect(mockSchedulerRepository.assertProjectCanBeDeleted).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      user: 'user-1',
+    });
+    expect(mockSchedulerRepository.deleteSchedulesForProject).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      user: 'user-1',
+      scheduleIds: [],
+    });
     expect(collectConvoFilesForCleanup).toHaveBeenCalledWith({
       req,
       filter: { chatProjectId: 'project-1' },
@@ -165,7 +193,10 @@ describe('[knauf] KK20-248 project file routes', () => {
   });
 
   it('keeps files still attached to another project', async () => {
-    mongoose.models.ChatProjectSource.distinct.mockResolvedValue(['shared-file', 'project-only-file']);
+    mongoose.models.ChatProjectSource.distinct.mockResolvedValue([
+      'shared-file',
+      'project-only-file',
+    ]);
     collectConvoFilesForCleanup.mockResolvedValue({
       conversationIds: ['convo-1'],
       files: [{ file_id: 'shared-file' }],
@@ -188,6 +219,31 @@ describe('[knauf] KK20-248 project file routes', () => {
     expect(db.deleteChatProjectSourcesByFileId).not.toHaveBeenCalled();
     expect(db.deleteToolCalls).toHaveBeenCalledWith('user-1', 'convo-1');
     expect(deleteConvoSharedLinksWithCleanup).toHaveBeenCalledWith('user-1', 'convo-1');
+  });
+
+  it('stops project cleanup preparation when a scheduled run is active', async () => {
+    const conflict = Object.assign(new Error('Project has an active scheduled run'), {
+      code: 'SCHEDULE_ACTIVE_RUN',
+    });
+    mockSchedulerRepository.assertProjectCanBeDeleted.mockRejectedValueOnce(conflict);
+
+    await expect(
+      injectedDeps.prepareProjectDeleteCleanup({ user: { id: 'user-1' } }, 'project-1'),
+    ).rejects.toBe(conflict);
+
+    expect(collectConvoFilesForCleanup).not.toHaveBeenCalled();
+    expect(mockSchedulerRepository.deleteSchedulesForProject).not.toHaveBeenCalled();
+  });
+
+  it('normalizes persisted scheduler ownership to an ObjectId', async () => {
+    const userId = '507f1f77bcf86cd799439011';
+
+    await injectedDeps.prepareProjectDeleteCleanup({ user: { id: userId } }, 'project-1');
+
+    expect(mockSchedulerRepository.assertProjectCanBeDeleted).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      user: new mongoose.Types.ObjectId(userId),
+    });
   });
 });
 // End [knauf]

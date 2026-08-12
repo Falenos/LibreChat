@@ -18,6 +18,9 @@ import type { Request, Response } from 'express';
 
 const PROJECT_NOT_FOUND = 'Project not found';
 const CONVERSATION_NOT_FOUND = 'Conversation not found';
+// [knauf] KK20-255 — preserve the scheduler active-run deletion fence through the project API.
+const SCHEDULE_ACTIVE_RUN_CODE = 'SCHEDULE_ACTIVE_RUN';
+// End [knauf]
 
 const PROJECT_SORT_FIELDS = new Set<ChatProjectSortBy>(['name', 'createdAt', 'lastConversationAt']);
 
@@ -63,7 +66,7 @@ const getUserId = (req: ProjectRequest): string => req.user?.id ?? req.user?._id
 
 const projectFileOwnerFilter = (req: ProjectRequest): FileOwner & Record<string, unknown> => {
   const user = getUserId(req);
-  const tenantId = (req.user as ProjectUser & { tenantId?: string | null } | undefined)?.tenantId;
+  const tenantId = (req.user as (ProjectUser & { tenantId?: string | null }) | undefined)?.tenantId;
   if (!tenantId) {
     return { user };
   }
@@ -315,6 +318,16 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
       }
       return res.status(200).json(result);
     } catch (error) {
+      // [knauf] KK20-255 — a project with queued or actively leased scheduled work is retryable.
+      if (
+        error != null &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === SCHEDULE_ACTIVE_RUN_CODE
+      ) {
+        return res.status(409).json({ error: 'Project has an active scheduled run' });
+      }
+      // End [knauf]
       logger.error('[projects] Error deleting project', error);
       return res.status(500).json({ error: 'Error deleting project' });
     }
