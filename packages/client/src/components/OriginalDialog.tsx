@@ -18,6 +18,15 @@ export const usePopoverZIndex = (): number => {
 };
 // End [knauf]
 
+// [knauf] Centralize body-portal interaction and OGDialog stacking for shared popovers.
+export const usePopoverPortalProps = (
+  portal = true,
+): Readonly<{ className?: string; style?: React.CSSProperties }> => {
+  const zIndex = usePopoverZIndex();
+  return portal ? { className: '[pointer-events:auto]', style: { zIndex } } : {};
+};
+// End [knauf]
+
 interface OGDialogProps extends DialogPrimitive.DialogProps {
   triggerRef?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>;
   triggerRefs?: React.RefObject<HTMLButtonElement | HTMLInputElement | HTMLDivElement | null>[];
