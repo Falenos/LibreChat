@@ -34,14 +34,10 @@ const normalizeSchedulerUserId = (userId) =>
 // End [knauf]
 
 const prepareProjectDeleteCleanup = async (req, projectId) => {
-  // [knauf] KK20-255 — reject deletion while scheduled work is queued or actively leased.
+  // [knauf] KK20-255 — prepare file cleanup before fencing scheduler writes at delete time.
   const schedulerRepository = createSchedulerRepository({
     schedules: mongoose.connection.db.collection('knauf_agent_schedules'),
     runs: mongoose.connection.db.collection('knauf_scheduled_agent_runs'),
-  });
-  const scheduleIds = await schedulerRepository.assertProjectCanBeDeleted({
-    projectId,
-    user: normalizeSchedulerUserId(req.user.id),
   });
   // End [knauf]
   const collected = await collectConvoFilesForCleanup({
@@ -85,29 +81,39 @@ const prepareProjectDeleteCleanup = async (req, projectId) => {
     : [];
   const cleanupCollected = { ...collected, files: collectedFiles };
 
-  return async () => {
-    // [knauf] KK20-255 — remove schedule definitions and inactive run evidence with the project.
-    await schedulerRepository.deleteSchedulesForProject({
-      projectId,
-      user: normalizeSchedulerUserId(req.user.id),
-      scheduleIds,
-    });
-    // End [knauf]
-    await cascadeDeleteCollectedFiles({ req, collected: cleanupCollected });
+  // [knauf] KK20-255 — fence project scheduler writes immediately before aggregate deletion.
+  let schedulerFence;
+  return {
+    beforeDelete: async () => {
+      schedulerFence = await schedulerRepository.beginProjectDeletion({
+        projectId,
+        user: normalizeSchedulerUserId(req.user.id),
+      });
+    },
+    rollback: async () => {
+      await schedulerRepository.cancelProjectDeletion({ fence: schedulerFence });
+    },
+    afterDelete: async () => {
+      await schedulerRepository.deleteSchedulesForProject({ fence: schedulerFence });
+      // End [knauf]
+      await cascadeDeleteCollectedFiles({ req, collected: cleanupCollected });
 
-    if (projectFiles.length) {
-      await deleteFilesWithDedupAwareness({ req, files: projectFiles });
+      if (projectFiles.length) {
+        await deleteFilesWithDedupAwareness({ req, files: projectFiles });
+        await Promise.all(
+          projectFiles.map((file) =>
+            db.deleteChatProjectSourcesByFileId(req.user.id, file.file_id),
+          ),
+        );
+      }
+
       await Promise.all(
-        projectFiles.map((file) => db.deleteChatProjectSourcesByFileId(req.user.id, file.file_id)),
+        (cleanupCollected.conversationIds ?? []).map(async (conversationId) => {
+          await db.deleteToolCalls(req.user.id, conversationId);
+          await deleteConvoSharedLinksWithCleanup(req.user.id, conversationId);
+        }),
       );
-    }
-
-    await Promise.all(
-      (cleanupCollected.conversationIds ?? []).map(async (conversationId) => {
-        await db.deleteToolCalls(req.user.id, conversationId);
-        await deleteConvoSharedLinksWithCleanup(req.user.id, conversationId);
-      }),
-    );
+    },
   };
 };
 

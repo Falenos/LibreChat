@@ -10,6 +10,7 @@ const {
 const {
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
+  SCHEDULE_PROJECT_DELETING_CODE,
   createOccurrenceKey,
   createScheduleDigest,
   createSchedulerRepository,
@@ -24,6 +25,7 @@ module.exports = {
   scheduleJitterMs,
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
+  SCHEDULE_PROJECT_DELETING_CODE,
   createOccurrenceKey,
   createScheduleDigest,
   createSchedulerRepository,

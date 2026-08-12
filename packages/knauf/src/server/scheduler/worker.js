@@ -48,7 +48,11 @@ function createSchedulerWorker({
   };
 
   const ensureScheduleAdvanced = async ({ schedule, run }) => {
-    if (schedule == null || schedule.enabled !== true) {
+    if (
+      schedule == null ||
+      schedule.enabled !== true ||
+      repository.isScheduleDeletionFenced(schedule)
+    ) {
       return null;
     }
 
@@ -96,7 +100,11 @@ function createSchedulerWorker({
     let advanced;
     if (run.trigger === 'manual') {
       advanced =
-        schedule != null && schedule.configRevision === run.configRevision ? schedule : null;
+        schedule != null &&
+        schedule.configRevision === run.configRevision &&
+        !repository.isScheduleDeletionFenced(schedule)
+          ? schedule
+          : null;
     } else {
       advanced = await ensureScheduleAdvanced({ schedule, run });
     }

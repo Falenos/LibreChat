@@ -55,7 +55,7 @@ test('allows owners and editors but rejects view-only users', async () => {
   await expect(
     resolveSchedulableAgent({
       ...dependencies,
-      user: { id: 'owner-1', role: 'USER' },
+      user: { _id: 'owner-1', role: 'USER' },
       checkPermission,
     }),
   ).resolves.toMatchObject({ snapshot: { id: 'agent-1', version: 2 } });

@@ -168,11 +168,12 @@ describe('Knauf scheduler foundation', () => {
     const queued = await repository.enqueueOccurrence({ schedule });
 
     await expect(
-      repository.assertProjectCanBeDeleted({
+      repository.beginProjectDeletion({
         projectId: schedule.chatProjectId,
         user: schedule.user,
       }),
     ).rejects.toMatchObject({ code: 'SCHEDULE_ACTIVE_RUN' });
+    expect(await schedules.findOne({ id: schedule.id })).not.toHaveProperty('deletionToken');
 
     await repository.interruptQueuedRun({ runId: queued._id, reason: 'test_cleanup' });
     const started = await repository.claimOccurrence({
@@ -182,19 +183,25 @@ describe('Knauf scheduler foundation', () => {
     });
 
     await expect(
-      repository.assertProjectCanBeDeleted({
+      repository.beginProjectDeletion({
         projectId: schedule.chatProjectId,
         user: schedule.user,
       }),
     ).rejects.toMatchObject({ code: 'SCHEDULE_ACTIVE_RUN' });
 
     clock = new Date(started.leaseExpiresAt.getTime() + 1);
-    await expect(
-      repository.assertProjectCanBeDeleted({
+    const fence = await repository.beginProjectDeletion({
+      projectId: schedule.chatProjectId,
+      user: schedule.user,
+    });
+    expect(fence.scheduleIds).toEqual(expect.arrayContaining([schedule.id]));
+    await repository.cancelProjectDeletion({ fence });
+    expect(
+      await repository.isProjectDeleting({
         projectId: schedule.chatProjectId,
         user: schedule.user,
       }),
-    ).resolves.toEqual(expect.arrayContaining([schedule.id]));
+    ).toBe(false);
   });
 
   test('deletes project schedules and inactive history without crossing ownership boundaries', async () => {
@@ -222,17 +229,14 @@ describe('Knauf scheduler foundation', () => {
     await repository.interruptQueuedRun({ runId: otherRun._id, reason: 'test_cleanup' });
     clock = new Date(expiredRun.leaseExpiresAt.getTime() + 1);
 
-    const scheduleIds = await repository.assertProjectCanBeDeleted({
+    const fence = await repository.beginProjectDeletion({
       projectId: ownedSchedule.chatProjectId,
       user: owner,
     });
-    await expect(
-      repository.deleteSchedulesForProject({
-        projectId: ownedSchedule.chatProjectId,
-        user: owner,
-        scheduleIds,
-      }),
-    ).resolves.toEqual({ deletedSchedules: 2, deletedRuns: 2 });
+    await expect(repository.deleteSchedulesForProject({ fence })).resolves.toEqual({
+      deletedSchedules: 2,
+      deletedRuns: 2,
+    });
 
     expect(await schedules.findOne({ id: ownedSchedule.id })).toBeNull();
     expect(await schedules.findOne({ id: expiredSchedule.id })).toBeNull();
@@ -240,6 +244,30 @@ describe('Knauf scheduler foundation', () => {
     expect(await runs.findOne({ _id: expiredRun._id })).toBeNull();
     expect(await schedules.findOne({ id: otherSchedule.id })).not.toBeNull();
     expect(await runs.findOne({ _id: otherRun._id })).not.toBeNull();
+  });
+
+  test('rejects schedule creation while project deletion is fenced', async () => {
+    const schedule = await createSchedule();
+    const fence = await repository.beginProjectDeletion({
+      projectId: schedule.chatProjectId,
+      user: schedule.user,
+    });
+
+    await expect(
+      repository.createSchedule({
+        user: schedule.user,
+        payload: {
+          ...schedule,
+          id: undefined,
+          clientRequestId: 'project-delete-create',
+        },
+        nextRunAt: schedule.nextRunAt,
+        maxPerUser: 10,
+      }),
+    ).rejects.toMatchObject({ code: 'SCHEDULE_PROJECT_DELETING' });
+
+    await repository.cancelProjectDeletion({ fence });
+    expect(await schedules.findOne({ id: schedule.id })).not.toHaveProperty('deletionToken');
   });
 
   test('preallocates a durable Agent stream identity before an occurrence is executable', async () => {
@@ -690,6 +718,40 @@ describe('Knauf scheduler foundation', () => {
       },
     });
     expect((await schedules.findOne({ id: schedule.id })).nextRunAt).toBeNull();
+  });
+
+  test('interrupts a claimed manual run when schedule deletion is fenced', async () => {
+    const schedule = await createSchedule({ enabled: false, nextRunAt: undefined });
+    const queued = await repository.enqueueManualRun({
+      schedule,
+      conversationId: 'conversation-deletion-fence',
+      requestedBy: schedule.user,
+    });
+    await schedules.updateOne(
+      { id: schedule.id },
+      {
+        $set: {
+          deletionToken: 'delete-token',
+          deletionFenceExpiresAt: new Date(clock.getTime() + 60_000),
+        },
+      },
+    );
+    const executeSchedule = jest.fn();
+    const worker = createSchedulerWorker({
+      repository,
+      executeSchedule,
+      workerId: 'manual-worker',
+      now: () => new Date(clock),
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      queuedOutcomes: ['schedule_changed'],
+    });
+    expect(executeSchedule).not.toHaveBeenCalled();
+    expect(await runs.findOne({ _id: queued._id })).toMatchObject({
+      status: 'interrupted',
+      skipReason: 'schedule_changed_after_claim',
+    });
   });
 
   test('prevents manual and recurring executions from overlapping', async () => {

@@ -37,7 +37,11 @@ interface ProjectRequest extends Request {
 
 type FileOwner = { user: string; tenantId?: string | null };
 
-type ProjectDeleteCleanupFinalizer = (() => Promise<void>) | void;
+type ProjectDeleteCleanup = {
+  beforeDelete: () => Promise<void>;
+  afterDelete: () => Promise<void>;
+  rollback: () => Promise<void>;
+};
 
 type ProjectHandlerDependencies = Pick<
   ChatProjectMethods,
@@ -58,7 +62,7 @@ type ProjectHandlerDependencies = Pick<
     prepareProjectDeleteCleanup?: (
       req: ProjectRequest,
       projectId: string,
-    ) => Promise<ProjectDeleteCleanupFinalizer>;
+    ) => Promise<ProjectDeleteCleanup>;
   };
 // End [knauf]
 
@@ -305,17 +309,23 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
     }
 
     try {
-      const finalizeCleanup = deps.prepareProjectDeleteCleanup
+      const cleanup = deps.prepareProjectDeleteCleanup
         ? await deps.prepareProjectDeleteCleanup(req, projectId)
         : undefined;
       const userId = getUserId(req);
-      const result = await deps.deleteChatProject(userId, projectId);
+      await cleanup?.beforeDelete();
+      let result;
+      try {
+        result = await deps.deleteChatProject(userId, projectId);
+      } catch (error) {
+        await cleanup?.rollback();
+        throw error;
+      }
       if (!result.deletedCount) {
+        await cleanup?.rollback();
         return res.status(404).json({ error: PROJECT_NOT_FOUND });
       }
-      if (finalizeCleanup) {
-        await finalizeCleanup();
-      }
+      await cleanup?.afterDelete();
       return res.status(200).json(result);
     } catch (error) {
       // [knauf] KK20-255 — a project with queued or actively leased scheduled work is retryable.

@@ -73,11 +73,15 @@ async function resolveSchedulableAgent({
   if (role?.permissions?.[PermissionTypes.AGENTS]?.[Permissions.USE] !== true) {
     return null;
   }
-  const ownsAgent = String(agent.author) === String(user?.id);
+  const userId = user?.id ?? user?._id;
+  if (userId == null) {
+    return null;
+  }
+  const ownsAgent = String(agent.author) === String(userId);
   const mayEdit =
     ownsAgent ||
     (await checkPermission({
-      userId: user.id,
+      userId,
       role: user.role,
       resourceType: ResourceType.AGENT,
       resourceId: agent._id,

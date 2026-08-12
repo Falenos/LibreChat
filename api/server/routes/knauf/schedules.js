@@ -7,6 +7,7 @@ const { z } = require('zod');
 const {
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
+  SCHEDULE_PROJECT_DELETING_CODE,
   computeNextRunAt,
   createSchedulerRepository,
   isValidTimezone,
@@ -223,6 +224,9 @@ function createSchedulesRouter({
         return res.status(409).json({ error: error.message });
       }
       if (error?.code === SCHEDULE_LIMIT_CODE) {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error?.code === SCHEDULE_PROJECT_DELETING_CODE) {
         return res.status(409).json({ error: error.message });
       }
       return next(error);

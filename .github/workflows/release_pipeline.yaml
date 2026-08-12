@@ -54,8 +54,10 @@ jobs:
       AGK_STAGE_IMAGE_REPOSITORY: agentic-karl-stage/agentic-karl
       AGK_STAGE_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl
       AGK_STAGE_WORKER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-worker
+      AGK_STAGE_SCHEDULER_CONFIG_DIRECTORY: agentic-karl/stage/services/agentic-karl-scheduler
       AGK_STAGE_ARGOCD_APP: agentic-karl-stage-agentic-karl
       AGK_STAGE_WORKER_ARGOCD_APP: agentic-karl-stage-agentic-karl-worker
+      AGK_STAGE_SCHEDULER_ARGOCD_APP: agentic-karl-stage-agentic-karl-scheduler
     steps:
       - name: Azure login
         uses: azure/login@v2
@@ -194,8 +196,10 @@ jobs:
           # preview tags can be promoted back onto the normal semver release rail.
           sed -i -E 's#^([[:space:]]+tag:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$AGK_CONFIG_DIRECTORY/values.yaml"
           sed -i -E 's#^([[:space:]]+LANGFUSE_RELEASE:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$AGK_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E 's#^([[:space:]]+KNAUF_SCHEDULER_API_ENABLED:[[:space:]]*).*$#\1"true"#' "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -Eq "^[[:space:]]+tag:[[:space:]]*\"$VERSION\"$" "$AGK_CONFIG_DIRECTORY/values.yaml"
           grep -Eq "^[[:space:]]+LANGFUSE_RELEASE:[[:space:]]*\"$VERSION\"$" "$AGK_CONFIG_DIRECTORY/values.yaml"
+          grep -F 'KNAUF_SCHEDULER_API_ENABLED: "true"' "$AGK_CONFIG_DIRECTORY/values.yaml"
 
           CONFIG_FILES=("$AGK_CONFIG_DIRECTORY/values.yaml")
           WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
@@ -465,16 +469,26 @@ jobs:
 
           sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          sed -i -E 's#^([[:space:]]+KNAUF_SCHEDULER_API_ENABLED:[[:space:]]*).*$#\1"true"#' "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
           grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
+          grep -F 'KNAUF_SCHEDULER_API_ENABLED: "true"' "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
 
           WORKER_VALUES="$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
           test -f "$WORKER_VALUES"
           sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
           grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
 
+          SCHEDULER_VALUES="$AGK_STAGE_SCHEDULER_CONFIG_DIRECTORY/values.yaml"
+          test -f "$SCHEDULER_VALUES"
+          sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$SCHEDULER_VALUES"
+          sed -i -E '0,/^  replicaCount:/{s/^  replicaCount:.*/  replicaCount: 2/}' "$SCHEDULER_VALUES"
+          grep -F "tag: \"$VERSION\"" "$SCHEDULER_VALUES"
+          grep -F "  replicaCount: 2" "$SCHEDULER_VALUES"
+
           CONFIG_FILES=(
             "$AGK_STAGE_CONFIG_DIRECTORY/values.yaml"
             "$WORKER_VALUES"
+            "$SCHEDULER_VALUES"
           )
 
           if git diff --quiet -- "${CONFIG_FILES[@]}"; then
@@ -493,7 +507,7 @@ jobs:
             PR_URL=$(gh pr create \
               --base main --head "$BRANCH" \
               --title "Update agentic-karl stage to $VERSION" \
-              --body "Automated stage GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Bumps the app and async-indexing worker image tags, plus the app Langfuse release, to \`$VERSION\`.")
+              --body "Automated stage GitOps version bump from the agentic-karl release pipeline (run ${{ github.run_id }}). Activates the app, async-indexing worker, and scheduler on \`$VERSION\`.")
           fi
           echo "Stage deployment config PR: $PR_URL"
 
@@ -582,6 +596,50 @@ jobs:
           echo "AGK stage ArgoCD did not report $VERSION as Synced/Healthy in time"
           echo "| Failure | AGK stage ArgoCD did not report \`$EXPECTED_IMAGE\` as Synced/Healthy in time |" >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      - name: Refresh AGK stage worker applications
+        if: success()
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.new-version }}"
+          EXPECTED_IMAGE="$AGK_STAGE_IMAGE_REPOSITORY:$VERSION"
+
+          ARGOCD_PASSWORD=$(az keyvault secret show \
+            --subscription "$AGK_SUBSCRIPTION_ID" \
+            --vault-name "$AGK_ARGOCD_KEY_VAULT_NAME" \
+            --name "$AGK_ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value -o tsv)
+          echo "::add-mask::$ARGOCD_PASSWORD"
+          ARGOCD_TOKEN=$(jq -rn --arg password "$ARGOCD_PASSWORD" '{username: "admin", password: $password}' \
+            | curl -fsS "https://$AGK_ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" -d @- \
+            | jq -r '.token')
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          for APP in "$AGK_STAGE_WORKER_ARGOCD_APP" "$AGK_STAGE_SCHEDULER_ARGOCD_APP"; do
+            for attempt in {1..60}; do
+              curl -fsS \
+                "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$APP?refresh=true" \
+                -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" \
+                > /dev/null 2>&1 || true
+              APP_JSON=$(curl -fsS \
+                "https://$AGK_ARGOCD_DOMAIN/api/v1/applications/$APP" \
+                -H "Authorization: Bearer $ARGOCD_TOKEN" -H "Accept: application/json" \
+                2>/dev/null || true)
+              SYNC_STATUS=$(jq -r '.status.sync.status // "unknown"' <<< "${APP_JSON:-}")
+              HEALTH_STATUS=$(jq -r '.status.health.status // "unknown"' <<< "${APP_JSON:-}")
+              IMAGE_MATCH=$(jq -r '.status.summary.images[]?' <<< "${APP_JSON:-}" | grep -F "$EXPECTED_IMAGE" || true)
+              echo "Attempt $attempt: app=$APP sync=$SYNC_STATUS health=$HEALTH_STATUS image=${IMAGE_MATCH:-missing}"
+              if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ] && [ -n "$IMAGE_MATCH" ]; then
+                break
+              fi
+              if [ "$attempt" = 60 ]; then
+                echo "::error::$APP did not converge on $EXPECTED_IMAGE"
+                exit 1
+              fi
+              sleep 10
+            done
+          done
 
       # [knauf] KK20-195 — informational E2E run on stage, for early-warning
       # visibility only. This does NOT gate anything: promote_pipeline.yaml

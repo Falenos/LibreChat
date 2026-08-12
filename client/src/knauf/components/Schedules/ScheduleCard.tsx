@@ -193,9 +193,9 @@ function ScheduleCard({ schedule }: Readonly<{ schedule: Schedule }>) {
       <p className="mt-1 text-sm text-text-primary">{cadenceText}</p>
       {nextRunText != null && <p className="mt-0.5 text-xs text-text-secondary">{nextRunText}</p>}
       {!schedule.enabled && schedule.disabledReason === 'too_many_failures' && (
-        <p className="mt-1.5 text-xs text-text-secondary" role="status">
+        <output className="mt-1.5 block text-xs text-text-secondary">
           {localize('com_knauf_scheduler_disabled_too_many_failures')}
-        </p>
+        </output>
       )}
       {statusChip != null && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">

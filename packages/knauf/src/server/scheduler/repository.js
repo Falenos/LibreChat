@@ -5,7 +5,9 @@ const { createHash, randomUUID } = require('node:crypto');
 const DUPLICATE_KEY_CODE = 11000;
 const SCHEDULE_ACTIVE_RUN_CODE = 'SCHEDULE_ACTIVE_RUN';
 const SCHEDULE_LIMIT_CODE = 'SCHEDULE_LIMIT_REACHED';
+const SCHEDULE_PROJECT_DELETING_CODE = 'SCHEDULE_PROJECT_DELETING';
 const DEFAULT_RUN_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_DELETION_FENCE_MS = 5 * 60 * 1000;
 
 function createScheduleDigest(payload) {
   return createHash('sha256')
@@ -37,6 +39,7 @@ function createSchedulerRepository({
   runs,
   now = () => new Date(),
   runRetentionMs = DEFAULT_RUN_RETENTION_MS,
+  deletionFenceMs = DEFAULT_DELETION_FENCE_MS,
 }) {
   if (schedules == null || runs == null) {
     throw new TypeError('schedules and runs collections are required');
@@ -44,6 +47,34 @@ function createSchedulerRepository({
   if (!Number.isInteger(runRetentionMs) || runRetentionMs <= 0) {
     throw new TypeError('runRetentionMs must be a positive integer');
   }
+  if (!Number.isInteger(deletionFenceMs) || deletionFenceMs <= 0) {
+    throw new TypeError('deletionFenceMs must be a positive integer');
+  }
+
+  const inactiveDeletionFence = (at = now()) => ({
+    $or: [
+      { deletionToken: { $exists: false } },
+      { deletionFenceExpiresAt: { $exists: false } },
+      { deletionFenceExpiresAt: { $lte: at } },
+    ],
+  });
+
+  const isScheduleDeletionFenced = (schedule, at = now()) =>
+    schedule?.deletionToken != null &&
+    schedule?.deletionFenceExpiresAt != null &&
+    new Date(schedule.deletionFenceExpiresAt).getTime() > at.getTime();
+
+  const projectDeletionGuardId = ({ projectId, user }) =>
+    `project-deletion:${String(user)}:${projectId}`;
+
+  const isProjectDeleting = async ({ projectId, user, at = now() }) =>
+    (await schedules.findOne({
+      id: projectDeletionGuardId({ projectId, user }),
+      user,
+      chatProjectId: projectId,
+      projectDeletionGuard: true,
+      deletionFenceExpiresAt: { $gt: at },
+    })) != null;
 
   const ensureIndexes = async () => {
     await Promise.all([
@@ -73,7 +104,12 @@ function createSchedulerRepository({
 
   const listDueSchedules = ({ at = now(), limit = 50 } = {}) =>
     schedules
-      .find({ enabled: true, nextRunAt: { $lte: at } })
+      .find({
+        enabled: true,
+        nextRunAt: { $lte: at },
+        projectDeletionGuard: { $ne: true },
+        ...inactiveDeletionFence(at),
+      })
       .sort({ nextRunAt: 1, id: 1 })
       .limit(limit)
       .toArray();
@@ -120,15 +156,25 @@ function createSchedulerRepository({
       .limit(limit)
       .toArray();
 
-  const getSchedule = (scheduleId) => schedules.findOne({ id: scheduleId });
+  const getSchedule = (scheduleId) =>
+    schedules.findOne({ id: scheduleId, projectDeletionGuard: { $ne: true } });
 
   const listSchedulesForUser = ({ user }) =>
-    schedules.find({ user }).sort({ createdAt: -1, id: 1 }).toArray();
+    schedules
+      .find({ user, projectDeletionGuard: { $ne: true } })
+      .sort({ createdAt: -1, id: 1 })
+      .toArray();
 
-  const getScheduleForUser = ({ id, user }) => schedules.findOne({ id, user });
+  const getScheduleForUser = ({ id, user }) =>
+    schedules.findOne({ id, user, projectDeletionGuard: { $ne: true } });
 
   const createSchedule = async ({ user, payload, nextRunAt, maxPerUser, id = randomUUID() }) => {
     const createdAt = now();
+    if (await isProjectDeleting({ projectId: payload.chatProjectId, user, at: createdAt })) {
+      const error = new Error('Project is being deleted');
+      error.code = SCHEDULE_PROJECT_DELETING_CODE;
+      throw error;
+    }
     const clientRequestDigest = createScheduleDigest(payload);
 
     for (let slot = 0; slot < maxPerUser; slot++) {
@@ -156,6 +202,12 @@ function createSchedulerRepository({
 
       try {
         await schedules.insertOne(schedule);
+        if (await isProjectDeleting({ projectId: payload.chatProjectId, user })) {
+          await schedules.deleteOne({ id, user });
+          const error = new Error('Project is being deleted');
+          error.code = SCHEDULE_PROJECT_DELETING_CODE;
+          throw error;
+        }
         return { schedule, replayed: false };
       } catch (error) {
         if (error?.code !== DUPLICATE_KEY_CODE) {
@@ -191,7 +243,7 @@ function createSchedulerRepository({
     }
 
     const updated = await schedules.findOneAndUpdate(
-      { id, user, configRevision: current.configRevision },
+      { id, user, configRevision: current.configRevision, ...inactiveDeletionFence() },
       {
         $set: { ...set, updatedAt: now() },
         $unset: unset,
@@ -205,6 +257,34 @@ function createSchedulerRepository({
   };
 
   const deleteScheduleForUser = async ({ id, user }) => {
+    const deletionToken = randomUUID();
+    const deletionStartedAt = now();
+    const fenced = await schedules.findOneAndUpdate(
+      {
+        id,
+        user,
+        projectDeletionGuard: { $ne: true },
+        ...inactiveDeletionFence(deletionStartedAt),
+      },
+      {
+        $set: {
+          deletionToken,
+          deletionStartedAt,
+          deletionFenceExpiresAt: new Date(deletionStartedAt.getTime() + deletionFenceMs),
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (fenced == null) {
+      const existing = await getScheduleForUser({ id, user });
+      if (existing == null) {
+        return null;
+      }
+      const error = new Error('Schedule deletion is already in progress');
+      error.code = SCHEDULE_ACTIVE_RUN_CODE;
+      throw error;
+    }
+
     const activeRun = await runs.findOne({
       scheduleId: id,
       ownerId: user,
@@ -212,22 +292,96 @@ function createSchedulerRepository({
       $or: [{ status: 'queued' }, { status: 'started', leaseExpiresAt: { $gt: now() } }],
     });
     if (activeRun != null) {
+      await schedules.updateOne(
+        { id, user, deletionToken },
+        { $unset: { deletionToken: '', deletionStartedAt: '', deletionFenceExpiresAt: '' } },
+      );
       const error = new Error('Schedule has an active run');
       error.code = SCHEDULE_ACTIVE_RUN_CODE;
       throw error;
     }
-    const deleted = await schedules.findOneAndDelete({ id, user });
+    const deleted = await schedules.findOneAndDelete({ id, user, deletionToken });
     if (deleted != null) {
       await runs.deleteMany({ scheduleId: id, ownerId: user, active: { $ne: true } });
     }
     return deleted;
   };
 
-  const assertProjectCanBeDeleted = async ({ projectId, user }) => {
+  const cancelProjectDeletion = async ({ fence }) => {
+    if (fence == null) {
+      return;
+    }
+    await schedules.updateMany(
+      { user: fence.user, deletionToken: fence.deletionToken },
+      { $unset: { deletionToken: '', deletionStartedAt: '', deletionFenceExpiresAt: '' } },
+    );
+    await schedules.deleteOne({
+      id: fence.guardId,
+      user: fence.user,
+      projectDeletionGuard: true,
+      deletionToken: fence.deletionToken,
+    });
+  };
+
+  const beginProjectDeletion = async ({ projectId, user }) => {
+    const deletionToken = randomUUID();
+    const deletionStartedAt = now();
+    const deletionFenceExpiresAt = new Date(deletionStartedAt.getTime() + deletionFenceMs);
+    const guardId = projectDeletionGuardId({ projectId, user });
+    try {
+      await schedules.findOneAndUpdate(
+        {
+          id: guardId,
+          $or: [
+            { deletionFenceExpiresAt: { $exists: false } },
+            { deletionFenceExpiresAt: { $lte: deletionStartedAt } },
+          ],
+        },
+        {
+          $set: {
+            user,
+            chatProjectId: projectId,
+            projectDeletionGuard: true,
+            deletionToken,
+            deletionStartedAt,
+            deletionFenceExpiresAt,
+          },
+        },
+        { upsert: true, returnDocument: 'after' },
+      );
+    } catch (error) {
+      if (error?.code === DUPLICATE_KEY_CODE) {
+        const conflict = new Error('Project deletion is already in progress');
+        conflict.code = SCHEDULE_ACTIVE_RUN_CODE;
+        throw conflict;
+      }
+      throw error;
+    }
+
     const scheduleIds = await schedules
-      .find({ user, chatProjectId: projectId }, { projection: { _id: 0, id: 1 } })
+      .find(
+        { user, chatProjectId: projectId, projectDeletionGuard: { $ne: true } },
+        { projection: { _id: 0, id: 1 } },
+      )
       .map((schedule) => schedule.id)
       .toArray();
+    const fence = { deletionToken, guardId, projectId, scheduleIds, user };
+    const fenceResult = await schedules.updateMany(
+      {
+        id: { $in: scheduleIds },
+        user,
+        chatProjectId: projectId,
+        ...inactiveDeletionFence(deletionStartedAt),
+      },
+      { $set: { deletionToken, deletionStartedAt, deletionFenceExpiresAt } },
+    );
+    if (fenceResult.modifiedCount !== scheduleIds.length) {
+      await cancelProjectDeletion({ fence });
+      const error = new Error('Project deletion conflicts with another schedule operation');
+      error.code = SCHEDULE_ACTIVE_RUN_CODE;
+      throw error;
+    }
+
     const activeRun = await runs.findOne({
       ownerId: user,
       active: true,
@@ -244,23 +398,28 @@ function createSchedulerRepository({
       ],
     });
     if (activeRun != null) {
+      await cancelProjectDeletion({ fence });
       const error = new Error('Project has an active scheduled run');
       error.code = SCHEDULE_ACTIVE_RUN_CODE;
       throw error;
     }
-    return scheduleIds;
+    return fence;
   };
 
-  const deleteSchedulesForProject = async ({ projectId, user, scheduleIds }) => {
-    const ids = scheduleIds ?? (await assertProjectCanBeDeleted({ projectId, user }));
-    const scheduleResult = await schedules.deleteMany({ user, chatProjectId: projectId });
+  const deleteSchedulesForProject = async ({ fence }) => {
+    const scheduleResult = await schedules.deleteMany({
+      user: fence.user,
+      chatProjectId: fence.projectId,
+      projectDeletionGuard: { $ne: true },
+      deletionToken: fence.deletionToken,
+    });
     const runResult = await runs.deleteMany({
-      ownerId: user,
+      ownerId: fence.user,
       $and: [
         {
           $or: [
-            { chatProjectId: projectId },
-            ...(ids.length > 0 ? [{ scheduleId: { $in: ids } }] : []),
+            { chatProjectId: fence.projectId },
+            ...(fence.scheduleIds.length > 0 ? [{ scheduleId: { $in: fence.scheduleIds } }] : []),
           ],
         },
         {
@@ -270,6 +429,12 @@ function createSchedulerRepository({
           ],
         },
       ],
+    });
+    await schedules.deleteOne({
+      id: fence.guardId,
+      user: fence.user,
+      projectDeletionGuard: true,
+      deletionToken: fence.deletionToken,
     });
     return {
       deletedSchedules: scheduleResult.deletedCount ?? 0,
@@ -362,7 +527,23 @@ function createSchedulerRepository({
 
     try {
       const inserted = await runs.insertOne(run);
-      return { ...run, _id: inserted.insertedId };
+      const queued = { ...run, _id: inserted.insertedId };
+      const current = await schedules.findOne({
+        id: schedule.id,
+        user: schedule.user,
+        enabled: true,
+        nextRunAt: schedule.nextRunAt,
+        configRevision: schedule.configRevision ?? 0,
+        ...inactiveDeletionFence(),
+      });
+      if (current == null) {
+        await interruptQueuedRun({
+          runId: queued._id,
+          reason: 'schedule_changed_after_enqueue',
+        });
+        return null;
+      }
+      return queued;
     } catch (error) {
       if (error?.code === DUPLICATE_KEY_CODE) {
         return null;
@@ -404,7 +585,21 @@ function createSchedulerRepository({
 
     try {
       const inserted = await runs.insertOne(run);
-      return { ...run, _id: inserted.insertedId };
+      const queued = { ...run, _id: inserted.insertedId };
+      const current = await schedules.findOne({
+        id: schedule.id,
+        user: schedule.user,
+        configRevision: schedule.configRevision ?? 0,
+        ...inactiveDeletionFence(),
+      });
+      if (current == null) {
+        await interruptQueuedRun({
+          runId: queued._id,
+          reason: 'schedule_changed_after_enqueue',
+        });
+        return null;
+      }
+      return queued;
     } catch (error) {
       if (error?.code === DUPLICATE_KEY_CODE) {
         return null;
@@ -481,6 +676,7 @@ function createSchedulerRepository({
         id: schedule.id,
         enabled: true,
         nextRunAt: schedule.nextRunAt,
+        ...inactiveDeletionFence(),
       },
       { $set: { nextRunAt, updatedAt: now() } },
       { returnDocument: 'after' },
@@ -633,10 +829,13 @@ function createSchedulerRepository({
     getSchedule,
     listSchedulesForUser,
     getScheduleForUser,
+    isProjectDeleting,
+    isScheduleDeletionFenced,
     createSchedule,
     updateScheduleForUser,
     deleteScheduleForUser,
-    assertProjectCanBeDeleted,
+    beginProjectDeletion,
+    cancelProjectDeletion,
     deleteSchedulesForProject,
     claimOccurrence,
     enqueueOccurrence,
@@ -656,6 +855,7 @@ function createSchedulerRepository({
 module.exports = {
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
+  SCHEDULE_PROJECT_DELETING_CODE,
   createOccurrenceKey,
   createScheduleDigest,
   createSchedulerRepository,

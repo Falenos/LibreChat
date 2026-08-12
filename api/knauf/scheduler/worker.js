@@ -1,11 +1,13 @@
 'use strict';
 
+require('dotenv').config();
+
 if (require.main === module && process.env.KNAUF_SCHEDULER_WORKER_ENABLED !== 'true') {
   console.warn('[scheduler] KNAUF_SCHEDULER_WORKER_ENABLED is not true; exiting');
   process.exit(0);
 }
 
-require('../../server/telemetry');
+const telemetry = require('../../server/telemetry');
 const os = require('node:os');
 const path = require('node:path');
 require('module-alias')({ base: path.resolve(__dirname, '../..') });
@@ -161,13 +163,34 @@ async function main() {
   logger.info(`[scheduler] worker ${workerId} stopped`);
 }
 
+async function runWorkerProcess() {
+  let exitCode = 0;
+  try {
+    await main();
+  } catch (error) {
+    logger.error(`[scheduler] fatal startup error: ${error.message}`);
+    exitCode = 1;
+  }
+
+  try {
+    await mongoose.disconnect();
+  } catch (error) {
+    logger.error(`[scheduler] MongoDB shutdown failed: ${error.message}`);
+    exitCode = 1;
+  }
+
+  try {
+    await telemetry.shutdown();
+  } catch (error) {
+    logger.error(`[scheduler] telemetry shutdown failed: ${error.message}`);
+    exitCode = 1;
+  }
+
+  process.exit(exitCode);
+}
+
 if (require.main === module) {
-  main()
-    .then(() => mongoose.disconnect())
-    .catch((error) => {
-      logger.error(`[scheduler] fatal startup error: ${error.message}`);
-      process.exitCode = 1;
-    });
+  void runWorkerProcess();
 }
 
 module.exports = { main, parsePositiveInteger };

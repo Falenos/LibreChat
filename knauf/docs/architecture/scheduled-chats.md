@@ -226,7 +226,7 @@ default. Environment enablement is explicit.
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `knauf_agent_schedules`       | User configuration, recurrence, revision, counters, next/last run, disabled reason                  |
 | `knauf_scheduled_agent_runs`  | Immutable execution snapshot, occurrence identity, lease, terminal result/error, bookkeeping marker |
-| `knauf_scheduler_user_states` | Account-deletion barrier and distributed in-flight start-admission count                               |
+| `knauf_scheduler_user_states` | Account-deletion barrier and distributed in-flight start-admission count                            |
 
 Every run snapshots the owner, Agent ID and bounded execution configuration,
 project, prompt, cadence, timezone, schedule name, `configRevision`, and
@@ -397,9 +397,11 @@ active-run, and lease constraints make multiple active workers safe. Replica
 count and concurrency remain fixed during a release so scheduler traffic cannot
 silently grow with web HPA activity.
 
-The release workflow updates the application and scheduler GitOps values to the
-same image tag. A deployment is incomplete if the two workloads run different
-versions of the persistence or internal execution contract.
+Release and promotion workflows update the API, indexing worker, and scheduler
+GitOps values to the same image tag and activate the API and scheduler in the
+same transaction. Checked-in scheduler definitions remain dormant with the API
+gate disabled and zero scheduler replicas. A deployment is incomplete if any
+of the three workloads runs a different application image.
 
 ### 6.2 Configuration
 
@@ -441,9 +443,9 @@ The scheduler:
 - accepts Datadog OpenMetrics scrapes on TCP 3082 from the monitoring namespace;
 - has no public ingress.
 
-No dedicated Terraform resource is required. Terraform becomes relevant only
-if a future environment requires infrastructure-managed creation or rotation
-of the signing secret.
+Terraform creates the environment-specific scheduler signing secret in Key
+Vault. ExternalSecret maps it to `KNAUF_SCHEDULER_INTERNAL_SECRET`; operators do
+not manually enter or copy secret values between environments.
 
 ### 6.4 Health, readiness, and metrics
 
@@ -491,15 +493,16 @@ downstream capacity. At one arrival per second, Little's Law implies about 60
 active runs for a one-minute average, 300 for five minutes, and 600 for ten
 minutes. Do not configure those values from arithmetic alone: certify the
 chosen limit with representative Agent/model/tool traffic and interactive load.
-The initial dev GitOps profile uses two workers with 25 slots each (50 total)
-as a safe evidence-gathering baseline, not as the certified production value.
+The release activation profile uses two workers with 25 slots each (50 total)
+as a safe initial bound. Operations can tune that bound from live evidence
+without adding a separate product-governance stage.
 
 The durable deployed test belongs in `agentic-karl-quality`. It must generate
 300 due occurrences over five minutes, validate queued/started/terminal state,
 and correlate scheduler metrics with API, MongoDB, Redis, RAG/tool, Kubernetes,
-and model-quota telemetry. Promotion is blocked until the selected production
-replica/concurrency combination passes this test without violating interactive
-traffic SLOs.
+and model-quota telemetry. This scenario is durable operational evidence for
+capacity tuning; normal release smoke, manual production approval, and live
+ArgoCD/image-lockstep checks remain the delivery controls.
 
 ---
 
@@ -517,9 +520,9 @@ Before enabling the feature in an environment:
 5. confirm the scheduler image exactly matches the API image;
 6. confirm worker-to-API, MongoDB, Datadog OTLP, and metrics-scrape policies;
 7. confirm no scheduler ingress exists.
-8. confirm aggregate scheduler capacity equals the reviewed fixed budget;
-9. run the `agentic-karl-quality` scheduler load scenario and retain the
-   metrics/results with the release evidence.
+8. confirm aggregate scheduler capacity equals the configured fixed budget;
+9. when changing capacity, run the `agentic-karl-quality` scheduler load
+   scenario and retain the metrics/results as operational evidence.
 
 Then enable API/UI and worker together. A healthy pod alone is not feature
 health: create a schedule in a test project, run it manually, open the resulting

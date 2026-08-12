@@ -267,10 +267,16 @@ describe('createProjectHandlers project files [knauf]', () => {
   });
 
   it('deletes a project through the aggregate delete path only', async () => {
-    const finalizeCleanup = jest.fn(async () => undefined);
+    const beforeDelete = jest.fn(async () => undefined);
+    const afterDelete = jest.fn(async () => undefined);
+    const rollback = jest.fn(async () => undefined);
     const deps = createDeps({
       deleteChatProject: jest.fn(async () => ({ deletedCount: 1, modifiedCount: 2 })),
-      prepareProjectDeleteCleanup: jest.fn(async () => finalizeCleanup),
+      prepareProjectDeleteCleanup: jest.fn(async () => ({
+        beforeDelete,
+        afterDelete,
+        rollback,
+      })),
     });
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
@@ -281,26 +287,58 @@ describe('createProjectHandlers project files [knauf]', () => {
       expect.objectContaining({ params: { projectId }, user: { id: userId } }),
       projectId,
     );
+    expect(beforeDelete).toHaveBeenCalled();
     expect(deps.deleteChatProject).toHaveBeenCalledWith(userId, projectId);
-    expect(finalizeCleanup).toHaveBeenCalled();
+    expect(afterDelete).toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ deletedCount: 1, modifiedCount: 2 });
   });
 
   it('does not run project cleanup finalizer when the project is not found', async () => {
-    const finalizeCleanup = jest.fn(async () => undefined);
+    const beforeDelete = jest.fn(async () => undefined);
+    const afterDelete = jest.fn(async () => undefined);
+    const rollback = jest.fn(async () => undefined);
     const deps = createDeps({
       deleteChatProject: jest.fn(async () => ({ deletedCount: 0, modifiedCount: 0 })),
-      prepareProjectDeleteCleanup: jest.fn(async () => finalizeCleanup),
+      prepareProjectDeleteCleanup: jest.fn(async () => ({
+        beforeDelete,
+        afterDelete,
+        rollback,
+      })),
     });
     const handlers = createProjectHandlers(deps);
     const res = createResponse();
 
     await handlers.deleteProject({ params: { projectId }, user: { id: userId } } as any, res);
 
-    expect(finalizeCleanup).not.toHaveBeenCalled();
+    expect(beforeDelete).toHaveBeenCalled();
+    expect(afterDelete).not.toHaveBeenCalled();
+    expect(rollback).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'Project not found' });
+  });
+
+  it('rolls back the scheduler fence when aggregate deletion fails', async () => {
+    const deleteError = new Error('delete failed');
+    const rollback = jest.fn(async () => undefined);
+    const deps = createDeps({
+      deleteChatProject: jest.fn(async () => {
+        throw deleteError;
+      }),
+      prepareProjectDeleteCleanup: jest.fn(async () => ({
+        beforeDelete: jest.fn(async () => undefined),
+        afterDelete: jest.fn(),
+        rollback,
+      })),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.deleteProject({ params: { projectId }, user: { id: userId } } as any, res);
+
+    expect(rollback).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
   });
 
   it('returns a conflict when scheduled work is queued or actively leased', async () => {
@@ -308,9 +346,13 @@ describe('createProjectHandlers project files [knauf]', () => {
       code: 'SCHEDULE_ACTIVE_RUN',
     });
     const deps = createDeps({
-      prepareProjectDeleteCleanup: jest.fn(async () => {
-        throw conflict;
-      }),
+      prepareProjectDeleteCleanup: jest.fn(async () => ({
+        beforeDelete: jest.fn(async () => {
+          throw conflict;
+        }),
+        afterDelete: jest.fn(),
+        rollback: jest.fn(),
+      })),
     });
     const handlers = createProjectHandlers(deps);
     const res = createResponse();

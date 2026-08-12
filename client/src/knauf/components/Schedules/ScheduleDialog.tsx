@@ -101,6 +101,46 @@ const buildCadence = (values: CadenceFormValues, overrideDays?: number[]): Sched
   return { frequency: values.frequency, hour, minute: values.minute };
 };
 
+const getPreservedWeeklyDays = (
+  schedule: Schedule | undefined,
+  frequency: ScheduleFrequency,
+): number[] | undefined =>
+  schedule?.cadence.frequency === 'weekly' && frequency === 'weekly'
+    ? schedule.cadence.daysOfWeek
+    : undefined;
+
+const buildScheduleUpdate = ({
+  dirtyFields,
+  schedule,
+  values,
+}: {
+  dirtyFields: Partial<Record<keyof ScheduleFormValues, boolean>>;
+  schedule: Schedule;
+  values: ScheduleFormValues;
+}) => {
+  const cadenceTouched =
+    dirtyFields.frequency ||
+    dirtyFields.hour12 ||
+    dirtyFields.minute ||
+    dirtyFields.meridiem ||
+    dirtyFields.dayOfWeek;
+  const preservedWeeklyDays =
+    !dirtyFields.dayOfWeek &&
+    !dirtyFields.frequency &&
+    schedule.cadence.frequency === 'weekly' &&
+    values.frequency === 'weekly'
+      ? schedule.cadence.daysOfWeek
+      : undefined;
+
+  return {
+    ...(dirtyFields.name ? { name: values.name.trim() } : {}),
+    ...(dirtyFields.prompt ? { prompt: values.prompt.trim() } : {}),
+    ...(dirtyFields.agent_id ? { agent_id: values.agent_id } : {}),
+    ...(dirtyFields.chatProjectId ? { chatProjectId: values.chatProjectId } : {}),
+    ...(cadenceTouched ? { cadence: buildCadence(values, preservedWeeklyDays) } : {}),
+  };
+};
+
 function FrequencyButton({
   frequency,
   selected,
@@ -246,34 +286,9 @@ export default function ScheduleDialog({
     },
   });
 
-  const resolvePreservedWeeklyDays = (nextFrequency: ScheduleFrequency) =>
-    schedule &&
-    !dirtyFields.dayOfWeek &&
-    !dirtyFields.frequency &&
-    schedule.cadence.frequency === 'weekly' &&
-    nextFrequency === 'weekly'
-      ? schedule.cadence.daysOfWeek
-      : undefined;
-
   const onSubmit = (values: ScheduleFormValues) => {
     if (schedule) {
-      const cadenceTouched =
-        dirtyFields.frequency ||
-        dirtyFields.hour12 ||
-        dirtyFields.minute ||
-        dirtyFields.meridiem ||
-        dirtyFields.dayOfWeek;
-      const payload = {
-        ...(dirtyFields.name ? { name: values.name.trim() } : {}),
-        ...(dirtyFields.prompt ? { prompt: values.prompt.trim() } : {}),
-        ...(dirtyFields.agent_id ? { agent_id: values.agent_id } : {}),
-        ...(dirtyFields.chatProjectId ? { chatProjectId: values.chatProjectId } : {}),
-        ...(cadenceTouched
-          ? {
-              cadence: buildCadence(values, resolvePreservedWeeklyDays(values.frequency)),
-            }
-          : {}),
-      };
+      const payload = buildScheduleUpdate({ dirtyFields, schedule, values });
       if (Object.keys(payload).length === 0) {
         onOpenChange(false);
         return;
@@ -312,7 +327,7 @@ export default function ScheduleDialog({
   const summary = `${describeCadence(
     buildCadence(
       { frequency, hour12, minute, meridiem, dayOfWeek },
-      resolvePreservedWeeklyDays(frequency),
+      getPreservedWeeklyDays(schedule, frequency),
     ),
     localize,
     locale,
@@ -423,9 +438,8 @@ export default function ScheduleDialog({
                   name="frequency"
                   control={control}
                   render={({ field }) => (
-                    <div
+                    <fieldset
                       className="flex gap-1"
-                      role="group"
                       aria-label={localize('com_knauf_scheduler_frequency')}
                     >
                       <FrequencyButton
@@ -452,7 +466,7 @@ export default function ScheduleDialog({
                         label={localize('com_knauf_scheduler_weekly')}
                         onSelect={field.onChange}
                       />
-                    </div>
+                    </fieldset>
                   )}
                 />
               </div>
@@ -538,11 +552,8 @@ export default function ScheduleDialog({
               className="text-white"
               aria-label={localize(schedule ? 'com_ui_save' : 'com_ui_create')}
             >
-              {isLoading ? (
-                <Spinner className="size-4" />
-              ) : (
-                localize(schedule ? 'com_ui_save' : 'com_ui_create')
-              )}
+              {isLoading && <Spinner className="size-4" />}
+              {!isLoading && localize(schedule ? 'com_ui_save' : 'com_ui_create')}
             </Button>
           }
         />

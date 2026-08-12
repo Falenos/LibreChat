@@ -47,7 +47,7 @@ export default function SchedulePanel() {
 
   return (
     <div className="flex h-auto w-full flex-col px-3 pb-3 pt-2">
-      <div role="region" aria-label={localize('com_knauf_scheduler_title')} className="space-y-2">
+      <section aria-label={localize('com_knauf_scheduler_title')} className="space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-text-primary">
             {localize('com_knauf_scheduler_title')}
@@ -86,7 +86,7 @@ export default function SchedulePanel() {
           </p>
         )}
         {createOpen && <ScheduleDialog open={createOpen} onOpenChange={setCreateOpen} />}
-      </div>
+      </section>
     </div>
   );
 }
