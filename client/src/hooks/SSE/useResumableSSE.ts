@@ -731,9 +731,9 @@ export default function useResumableSSE(
                     (m.messageId === `${userMsgId}_` || m.parentMessageId === userMsgId),
                 );
               }
+              // [knauf] last-resort id-mismatch fallback for reconnect/sync races
               /**
-               * [knauf] Last-resort fallback for reconnect/sync races: the
-               * user message's id can be rehydrated (optimistic id -> real
+               * The user message's id can be rehydrated (optimistic id -> real
                * server id) by the 'created' handler between the original
                * render and this sync, so an already-rendered response's
                * `parentMessageId` may point at the *old* user message id and
@@ -758,6 +758,7 @@ export default function useResumableSSE(
                   }
                 }
               }
+              // End [knauf]
 
               console.log('[ResumableSSE] SYNC update', {
                 userMsgId,
