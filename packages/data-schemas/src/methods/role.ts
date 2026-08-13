@@ -3,9 +3,6 @@ import {
   // [knauf] Default public-link sharing for every custom role.
   PermissionTypes,
   // End [knauf]
-  // [knauf] KK20-255 — reconcile the persisted Scheduled Chats role grant.
-  Permissions,
-  // End [knauf]
   SystemRoles,
   roleDefaults,
   permissionsSchema,
@@ -113,17 +110,6 @@ export function createRoleMethods(
             role.permissions[permType] = defaultPerms[permType as keyof typeof defaultPerms];
           }
         }
-        // [knauf] KK20-255 — backfill the scheduler bit without overwriting an explicit false.
-        const agentPermissions = role.permissions[PermissionTypes.AGENTS];
-        const defaultAgentPermissions = defaultPerms[PermissionTypes.AGENTS];
-        if (
-          agentPermissions?.[Permissions.KNAUF_SCHEDULE] === undefined &&
-          defaultAgentPermissions?.[Permissions.KNAUF_SCHEDULE] !== undefined
-        ) {
-          agentPermissions[Permissions.KNAUF_SCHEDULE] =
-            defaultAgentPermissions[Permissions.KNAUF_SCHEDULE];
-        }
-        // End [knauf]
       }
       await role.save();
     }

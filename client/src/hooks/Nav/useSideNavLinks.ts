@@ -82,12 +82,6 @@ export default function useSideNavLinks({
     permissionType: PermissionTypes.AGENTS,
     permission: Permissions.USE,
   });
-  // [knauf] KK20-255 — Scheduled Chats has its own role grant.
-  const hasAccessToScheduleAgents = useHasAccess({
-    permissionType: PermissionTypes.AGENTS,
-    permission: Permissions.KNAUF_SCHEDULE,
-  });
-  // End [knauf]
   const hasAccessToCreateAgents = useHasAccess({
     permissionType: PermissionTypes.AGENTS,
     permission: Permissions.CREATE,
@@ -186,8 +180,7 @@ export default function useSideNavLinks({
     if (
       interfaceConfig.knauf?.scheduler === true &&
       endpointsConfig?.[EModelEndpoint.agents] &&
-      hasAccessToAgents &&
-      hasAccessToScheduleAgents
+      hasAccessToAgents
     ) {
       links.push({
         title: 'com_knauf_scheduler_title',
@@ -251,7 +244,6 @@ export default function useSideNavLinks({
     endpointsConfig,
     keyProvided,
     hasAccessToAgents,
-    hasAccessToScheduleAgents,
     hasAccessToCreateAgents,
     hasAccessToPrompts,
     hasAccessToSkills,

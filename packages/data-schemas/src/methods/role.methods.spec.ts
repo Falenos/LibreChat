@@ -528,10 +528,6 @@ describe('initializeRoles', () => {
     expect(adminRole.permissions[PermissionTypes.PROMPTS]?.SHARE).toBe(true);
     expect(adminRole.permissions[PermissionTypes.BOOKMARKS]?.USE).toBe(true);
     expect(adminRole.permissions[PermissionTypes.AGENTS]?.CREATE).toBe(true);
-    // [knauf] KK20-255 — default roles persist the dedicated Scheduled Chats grant.
-    expect(adminRole.permissions[PermissionTypes.AGENTS]?.KNAUF_SCHEDULE).toBe(true);
-    expect(userRole.permissions[PermissionTypes.AGENTS]?.KNAUF_SCHEDULE).toBe(true);
-    // End [knauf]
   });
 
   it('should not modify existing permissions for existing roles', async () => {
@@ -580,47 +576,6 @@ describe('initializeRoles', () => {
     expect(userRole.permissions[PermissionTypes.AGENTS]?.USE).toBeDefined();
     expect(userRole.permissions[PermissionTypes.AGENTS]?.SHARE).toBeDefined();
   });
-
-  // [knauf] KK20-255 — migrate existing AGENTS blocks while preserving administrator choices.
-  it('should backfill the Scheduled Chats grant when it is missing', async () => {
-    await new Role({
-      name: SystemRoles.USER,
-      permissions: {
-        [PermissionTypes.AGENTS]: {
-          [Permissions.USE]: true,
-          [Permissions.CREATE]: false,
-          [Permissions.SHARE]: false,
-          [Permissions.SHARE_PUBLIC]: false,
-        },
-      },
-    }).save();
-
-    await initializeRoles();
-
-    const userRole = await getRoleByName(SystemRoles.USER);
-    expect(userRole.permissions[PermissionTypes.AGENTS]?.KNAUF_SCHEDULE).toBe(true);
-  });
-
-  it('should preserve an explicit disabled Scheduled Chats grant', async () => {
-    await new Role({
-      name: SystemRoles.USER,
-      permissions: {
-        [PermissionTypes.AGENTS]: {
-          [Permissions.USE]: true,
-          [Permissions.KNAUF_SCHEDULE]: false,
-          [Permissions.CREATE]: false,
-          [Permissions.SHARE]: false,
-          [Permissions.SHARE_PUBLIC]: false,
-        },
-      },
-    }).save();
-
-    await initializeRoles();
-
-    const userRole = await getRoleByName(SystemRoles.USER);
-    expect(userRole.permissions[PermissionTypes.AGENTS]?.KNAUF_SCHEDULE).toBe(false);
-  });
-  // End [knauf]
 
   it('should handle multiple runs without duplicating or modifying data', async () => {
     await initializeRoles();

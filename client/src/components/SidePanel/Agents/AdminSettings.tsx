@@ -7,9 +7,6 @@ import type { PermissionConfig } from '~/components/ui';
 
 const permissions: PermissionConfig[] = [
   { permission: Permissions.USE, labelKey: 'com_ui_agents_allow_use' },
-  // [knauf] KK20-255 — manage recurring execution separately from Agent editing.
-  { permission: Permissions.KNAUF_SCHEDULE, labelKey: 'com_knauf_scheduler_title' },
-  // End [knauf]
   { permission: Permissions.CREATE, labelKey: 'com_ui_agents_allow_create' },
   { permission: Permissions.SHARE, labelKey: 'com_ui_agents_allow_share' },
   { permission: Permissions.SHARE_PUBLIC, labelKey: 'com_ui_agents_allow_share_public' },

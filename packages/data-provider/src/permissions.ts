@@ -128,9 +128,6 @@ export const PERMISSION_SUB_KEYS = new Set([
  */
 export enum Permissions {
   USE = 'USE',
-  // [knauf] KK20-255 — separate recurring Agent execution from Agent authoring rights.
-  KNAUF_SCHEDULE = 'KNAUF_SCHEDULE',
-  // End [knauf]
   CREATE = 'CREATE',
   UPDATE = 'UPDATE',
   READ = 'READ',
@@ -175,9 +172,6 @@ export type TMemoryPermissions = z.infer<typeof memoryPermissionsSchema>;
 
 export const agentPermissionsSchema = z.object({
   [Permissions.USE]: z.boolean().default(true),
-  // [knauf] KK20-255 — role-level opt-in for Scheduled Chats.
-  [Permissions.KNAUF_SCHEDULE]: z.boolean().optional(),
-  // End [knauf]
   [Permissions.CREATE]: z.boolean().default(true),
   [Permissions.SHARE]: z.boolean().default(false),
   [Permissions.SHARE_PUBLIC]: z.boolean().default(false),

@@ -4,8 +4,6 @@ const { randomUUID } = require('node:crypto');
 const express = require('express');
 const mongoose = require('mongoose');
 const { z } = require('zod');
-const { generateCheckAccess } = require('@librechat/api');
-const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const {
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
@@ -128,7 +126,6 @@ function createSchedulesRouter({
     ? messageIpLimiter
     : (_req, _res, next) => next(),
   apiEnabled = isSchedulerApiEnabled,
-  getRoleByName = db.getRoleByName,
   getProject = db.getChatProject,
   maxPerUser = () => parsePositiveInteger(process.env.KNAUF_SCHEDULER_MAX_PER_USER, 10),
   now = () => new Date(),
@@ -142,13 +139,6 @@ function createSchedulesRouter({
     return next();
   });
   router.use(authMiddleware);
-  router.use(
-    generateCheckAccess({
-      permissionType: PermissionTypes.AGENTS,
-      permissions: [Permissions.USE, Permissions.KNAUF_SCHEDULE],
-      getRoleByName,
-    }),
-  );
   router.use(async (req, res, next) => {
     if (req.method === 'GET') {
       return next();

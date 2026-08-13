@@ -42,17 +42,12 @@ test('pins runtime artifact-editing augmentation in the execution snapshot', () 
   ).toMatchObject({ tools: ['tool-1', 'edit_artifact'] });
 });
 
-test('allows owners and viewers with the Scheduled Chats role grant', async () => {
+test('allows owners and viewers with Agent use permission', async () => {
   const dependencies = {
     agentId: 'agent-1',
     getAgent: jest.fn().mockResolvedValue(agent),
     getRoleByName: jest.fn().mockResolvedValue({
-      permissions: {
-        [PermissionTypes.AGENTS]: {
-          [Permissions.USE]: true,
-          [Permissions.KNAUF_SCHEDULE]: true,
-        },
-      },
+      permissions: { [PermissionTypes.AGENTS]: { [Permissions.USE]: true } },
     }),
   };
   const checkPermission = jest.fn().mockResolvedValue(false);
@@ -70,12 +65,15 @@ test('allows owners and viewers with the Scheduled Chats role grant', async () =
   await expect(
     resolveSchedulableAgent({
       ...dependencies,
-      user: { id: 'viewer-1', role: 'USER' },
+      user: { id: 'viewer-1', role: 'AGENT_BUILDER' },
       checkPermission,
     }),
   ).resolves.toMatchObject({ snapshot: { id: 'agent-1', version: 2 } });
   expect(checkPermission).toHaveBeenLastCalledWith(
-    expect.objectContaining({ requiredPermission: PermissionBits.VIEW }),
+    expect.objectContaining({
+      role: 'AGENT_BUILDER',
+      requiredPermission: PermissionBits.VIEW,
+    }),
   );
 
   checkPermission.mockResolvedValueOnce(false);
@@ -84,25 +82,6 @@ test('allows owners and viewers with the Scheduled Chats role grant', async () =
       ...dependencies,
       user: { id: 'denied-1', role: 'USER' },
       checkPermission,
-    }),
-  ).resolves.toBeNull();
-});
-
-test('rejects scheduling when the role grant is absent', async () => {
-  await expect(
-    resolveSchedulableAgent({
-      agentId: 'agent-1',
-      user: { id: 'viewer-1', role: 'USER' },
-      getAgent: jest.fn().mockResolvedValue(agent),
-      getRoleByName: jest.fn().mockResolvedValue({
-        permissions: {
-          [PermissionTypes.AGENTS]: {
-            [Permissions.USE]: true,
-            [Permissions.KNAUF_SCHEDULE]: false,
-          },
-        },
-      }),
-      checkPermission: jest.fn().mockResolvedValue(true),
     }),
   ).resolves.toBeNull();
 });

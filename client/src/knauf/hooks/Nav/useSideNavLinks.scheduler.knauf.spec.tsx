@@ -1,7 +1,5 @@
 import { renderHook } from '@testing-library/react';
 
-const mockAccessByPermission = new Map<string, boolean>();
-
 jest.mock('@librechat/client', () => ({
   AttachmentIcon: () => null,
   MCPIcon: () => null,
@@ -24,7 +22,6 @@ jest.mock('librechat-data-provider', () => ({
   },
   Permissions: {
     CREATE: 'CREATE',
-    KNAUF_SCHEDULE: 'KNAUF_SCHEDULE',
     READ: 'READ',
     USE: 'USE',
   },
@@ -36,8 +33,7 @@ jest.mock('librechat-data-provider', () => ({
 jest.mock('~/hooks', () => ({
   useAgentCapabilities: () => ({ skillsEnabled: false }),
   useGetAgentsConfig: () => ({ agentsConfig: undefined }),
-  useHasAccess: ({ permission }: { permission: string }) =>
-    mockAccessByPermission.get(permission) ?? true,
+  useHasAccess: () => true,
   useMCPServerManager: () => ({ availableMCPServers: [] }),
 }));
 
@@ -61,10 +57,6 @@ const baseProps = {
 };
 
 describe('useSideNavLinks scheduler seam', () => {
-  beforeEach(() => {
-    mockAccessByPermission.clear();
-  });
-
   it('keeps schedules hidden when interface.knauf.scheduler is omitted', () => {
     const { result } = renderHook(() => useSideNavLinks({ ...baseProps, interfaceConfig: {} }));
 
@@ -82,18 +74,5 @@ describe('useSideNavLinks scheduler seam', () => {
     const scheduleLink = result.current.find((link) => link.id === 'schedules');
     expect(scheduleLink?.title).toBe('com_knauf_scheduler_title');
     expect(scheduleLink?.Component).toBeDefined();
-  });
-
-  it('keeps schedules hidden without the Scheduled Chats role grant', () => {
-    mockAccessByPermission.set('KNAUF_SCHEDULE', false);
-
-    const { result } = renderHook(() =>
-      useSideNavLinks({
-        ...baseProps,
-        interfaceConfig: { knauf: { scheduler: true } },
-      }),
-    );
-
-    expect(result.current.some((link) => link.id === 'schedules')).toBe(false);
   });
 });

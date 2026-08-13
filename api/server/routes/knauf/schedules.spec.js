@@ -6,7 +6,6 @@ const express = require('express');
 const request = require('supertest');
 const { MongoClient, ObjectId } = require('mongodb');
 const { MongoMemoryServer } = require('mongodb-memory-server');
-const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const { createSchedulerRepository } = require('@knauf/knauf/server/scheduler');
 const { createSchedulesRouter } = require('./schedules');
 
@@ -19,7 +18,6 @@ describe('Knauf schedules API', () => {
   let userId;
   let resolveAgent;
   let getProject;
-  let getRoleByName;
 
   beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
@@ -41,14 +39,6 @@ describe('Knauf schedules API', () => {
       snapshot: { id: 'agent-project', version: 3 },
     });
     getProject = jest.fn().mockResolvedValue({ id: 'project-1' });
-    getRoleByName = jest.fn().mockResolvedValue({
-      permissions: {
-        [PermissionTypes.AGENTS]: {
-          [Permissions.USE]: true,
-          [Permissions.KNAUF_SCHEDULE]: true,
-        },
-      },
-    });
   });
 
   afterAll(async () => {
@@ -62,7 +52,6 @@ describe('Knauf schedules API', () => {
     limit = 10,
     resolve = resolveAgent,
     findProject = getProject,
-    findRole = getRoleByName,
     isUserDeleting = jest.fn().mockResolvedValue(false),
     runNowIpLimiter = (_req, _res, next) => next(),
   } = {}) => {
@@ -81,7 +70,6 @@ describe('Knauf schedules API', () => {
           next();
         },
         resolveAgent: resolve,
-        getRoleByName: findRole,
         getProject: findProject,
         isUserDeleting,
         runNowIpLimiter,
@@ -121,19 +109,6 @@ describe('Knauf schedules API', () => {
       .get('/api/schedules')
       .expect(404);
     expect(response.body).toEqual({ error: 'Not found' });
-  });
-
-  test('rejects users without the Scheduled Chats role grant', async () => {
-    getRoleByName.mockResolvedValue({
-      permissions: {
-        [PermissionTypes.AGENTS]: {
-          [Permissions.USE]: true,
-          [Permissions.KNAUF_SCHEDULE]: false,
-        },
-      },
-    });
-
-    await request(createApp()).get('/api/schedules').expect(403);
   });
 
   test('creates, lists, and reads an upstream-shaped schedule', async () => {

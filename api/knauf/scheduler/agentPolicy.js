@@ -70,11 +70,7 @@ async function resolveSchedulableAgent({
     return null;
   }
   const role = await getRoleByName(user?.role);
-  const agentPermissions = role?.permissions?.[PermissionTypes.AGENTS];
-  if (
-    agentPermissions?.[Permissions.USE] !== true ||
-    agentPermissions?.[Permissions.KNAUF_SCHEDULE] !== true
-  ) {
+  if (role?.permissions?.[PermissionTypes.AGENTS]?.[Permissions.USE] !== true) {
     return null;
   }
   const userId = user?.id ?? user?._id;

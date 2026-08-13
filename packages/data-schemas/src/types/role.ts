@@ -24,9 +24,6 @@ export interface IRole extends Document {
     };
     [PermissionTypes.AGENTS]?: {
       [Permissions.USE]?: boolean;
-      // [knauf] KK20-255 — role-level Scheduled Chats grant.
-      [Permissions.KNAUF_SCHEDULE]?: boolean;
-      // End [knauf]
       [Permissions.CREATE]?: boolean;
       [Permissions.SHARE]?: boolean;
       [Permissions.SHARE_PUBLIC]?: boolean;
