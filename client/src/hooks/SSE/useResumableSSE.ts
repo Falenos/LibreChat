@@ -719,18 +719,28 @@ export default function useResumableSSE(
               const messages = getMessages() ?? [];
               const userMsgId = userMessage.messageId;
               const serverResponseId = data.resumeState.responseMessageId;
-
-              let responseIdx = -1;
-              if (serverResponseId) {
-                responseIdx = messages.findIndex((m) => m.messageId === serverResponseId);
-              }
-              if (responseIdx < 0) {
-                responseIdx = messages.findIndex(
-                  (m) =>
-                    !m.isCreatedByUser &&
-                    (m.messageId === `${userMsgId}_` || m.parentMessageId === userMsgId),
-                );
-              }
+              // [knauf] deterministic-id-only match for the resumed generation
+              /**
+               * Only ever select a response row by an id we know identifies
+               * *this* generation - never by position or by
+               * `parentMessageId === userMsgId`. Regeneration preserves
+               * sibling response branches under the same parent, so "the
+               * first assistant message after the resumed user message" is
+               * not proof it belongs to the active generation; it can just
+               * as easily be an older sibling reply. `resumeSubmission`
+               * already resolves the effective id this generation owns
+               * (`resumeState.responseMessageId`, falling back to the
+               * previously-tracked `initialResponse.messageId`), so reuse
+               * that single source of truth instead of re-deriving one from
+               * position/parentage. If no row matches by id, fall through
+               * to the merge/append path below rather than guessing.
+               */
+              const effectiveResponseId =
+                serverResponseId ?? resumeSubmission.initialResponse?.messageId;
+              const responseIdx = effectiveResponseId
+                ? messages.findIndex((m) => m.messageId === effectiveResponseId)
+                : -1;
+              // End [knauf]
 
               console.log('[ResumableSSE] SYNC update', {
                 userMsgId,
@@ -763,7 +773,7 @@ export default function useResumableSSE(
                 syncStepMessage(responseMessage);
                 console.log('[ResumableSSE] SYNC complete, handlers synced');
               } else {
-                const responseId = serverResponseId ?? `${userMsgId}_`;
+                const responseId = effectiveResponseId ?? `${userMsgId}_`;
                 const newMessage = {
                   messageId: responseId,
                   parentMessageId: userMsgId,

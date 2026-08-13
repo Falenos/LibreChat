@@ -1322,6 +1322,271 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  it('updates the existing response message in place on sync when the user message id was rehydrated (breaking parentMessageId matching), instead of duplicating it', async () => {
+    const originalUser = {
+      messageId: 'original-user',
+      conversationId: CONV_ID,
+      text: 'Original prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+    };
+    // Note: this response's parentMessageId points at the user message's
+    // *optimistic* id, which no longer equals `userMessage.messageId` once
+    // the 'created' handler rehydrates it to a server-issued id - simulating
+    // a reconnect/sync race where the parentMessageId link is stale.
+    const existingResponse = {
+      messageId: 'server-issued-response-id',
+      conversationId: CONV_ID,
+      text: 'Already streamed answer',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'optimistic-user-id',
+    };
+    const submission = {
+      ...buildSubmission({
+        conversation: { conversationId: CONV_ID },
+        userMessage: originalUser,
+        initialResponse: existingResponse,
+      }),
+      resumeStreamId: CONV_ID,
+    } as TSubmission & { resumeStreamId: string };
+    const chatHelpers = buildChatHelpers();
+    chatHelpers.getMessages.mockReturnValue([originalUser, existingResponse]);
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('message', {
+        data: JSON.stringify({
+          sync: true,
+          resumeState: {
+            runSteps: [],
+            replayEvents: [],
+            aggregatedContent: [{ type: 'text', text: { value: 'Already streamed answer' } }],
+            // No responseMessageId from the server, and the existing message's
+            // id doesn't match the `${userMsgId}_` fallback pattern either.
+            conversationId: CONV_ID,
+          },
+        }),
+      });
+    });
+
+    const lastMessages = chatHelpers.setMessages.mock.calls.at(-1)?.[0];
+    expect(lastMessages.map((message: { messageId: string }) => message.messageId)).toEqual([
+      'original-user',
+      'server-issued-response-id',
+    ]);
+    expect(lastMessages[1]).toEqual(
+      expect.objectContaining({
+        messageId: 'server-issued-response-id',
+        parentMessageId: 'optimistic-user-id',
+        content: expect.any(Array),
+      }),
+    );
+
+    unmount();
+  });
+
+  it('does not reuse an unrelated later assistant message when sync cannot match the resumed turn by ids', async () => {
+    const earlierUser = {
+      messageId: 'earlier-user',
+      conversationId: CONV_ID,
+      text: 'Earlier prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+    };
+    const earlierResponse = {
+      messageId: 'earlier-response',
+      conversationId: CONV_ID,
+      text: 'Earlier response',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'earlier-user',
+    };
+    const resumedUser = {
+      messageId: 'server-user-id',
+      conversationId: CONV_ID,
+      text: 'Resumed prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: 'earlier-response',
+    };
+    const laterUser = {
+      messageId: 'later-user',
+      conversationId: CONV_ID,
+      text: 'Later prompt',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: 'server-user-id_',
+    };
+    const unrelatedLaterAssistant = {
+      messageId: 'later-assistant',
+      conversationId: CONV_ID,
+      text: 'Later unrelated answer',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'different-user-id',
+    };
+    const submission = {
+      ...buildSubmission({
+        conversation: { conversationId: CONV_ID },
+        userMessage: resumedUser,
+        initialResponse: {
+          messageId: 'server-issued-response-id',
+          conversationId: CONV_ID,
+          text: '',
+          isCreatedByUser: false,
+          sender: 'Assistant',
+        },
+      }),
+      resumeStreamId: CONV_ID,
+    } as TSubmission & { resumeStreamId: string };
+    const chatHelpers = buildChatHelpers();
+    chatHelpers.getMessages.mockReturnValue([
+      earlierUser,
+      earlierResponse,
+      resumedUser,
+      laterUser,
+      unrelatedLaterAssistant,
+    ]);
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('message', {
+        data: JSON.stringify({
+          sync: true,
+          resumeState: {
+            runSteps: [],
+            replayEvents: [],
+            aggregatedContent: [{ type: 'text', text: { value: 'Recovered answer' } }],
+            conversationId: CONV_ID,
+          },
+        }),
+      });
+    });
+
+    const lastMessages = chatHelpers.setMessages.mock.calls.at(-1)?.[0];
+    expect(lastMessages.map((message: { messageId: string }) => message.messageId)).toEqual([
+      'earlier-user',
+      'earlier-response',
+      'server-user-id',
+      'server-issued-response-id',
+      'later-user',
+      'later-assistant',
+    ]);
+    expect(lastMessages[3]).toEqual(
+      expect.objectContaining({
+        messageId: 'server-issued-response-id',
+        parentMessageId: 'server-user-id',
+        content: expect.any(Array),
+      }),
+    );
+    expect(lastMessages[5]).toEqual(
+      expect.objectContaining({
+        messageId: 'later-assistant',
+        text: 'Later unrelated answer',
+      }),
+    );
+
+    unmount();
+  });
+
+  it('does not overwrite an older assistant sibling under the same parent during regeneration', async () => {
+    // Regeneration keeps the prior sibling response(s) in the message list -
+    // they share the same parentMessageId as the new, actively-generating
+    // response. Position/parent-based matching would treat the old sibling
+    // as "the assistant message after the user" and silently corrupt it;
+    // only an exact id match against the generation's own response id may
+    // select a row to update.
+    const user = {
+      messageId: 'user-1',
+      conversationId: CONV_ID,
+      text: 'Regenerate please',
+      isCreatedByUser: true,
+      sender: 'User',
+      parentMessageId: '00000000-0000-0000-0000-000000000000',
+    };
+    const olderSibling = {
+      messageId: 'older-assistant-sibling',
+      conversationId: CONV_ID,
+      text: 'Original answer before regenerate',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'user-1',
+    };
+    const activePlaceholder = {
+      messageId: 'active-response-id',
+      conversationId: CONV_ID,
+      text: '',
+      isCreatedByUser: false,
+      sender: 'Assistant',
+      parentMessageId: 'user-1',
+    };
+    const submission = {
+      ...buildSubmission({
+        conversation: { conversationId: CONV_ID },
+        userMessage: user,
+        initialResponse: activePlaceholder,
+      }),
+      resumeStreamId: CONV_ID,
+    } as TSubmission & { resumeStreamId: string };
+    const chatHelpers = buildChatHelpers();
+    chatHelpers.getMessages.mockReturnValue([user, olderSibling, activePlaceholder]);
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('message', {
+        data: JSON.stringify({
+          sync: true,
+          resumeState: {
+            runSteps: [],
+            replayEvents: [],
+            aggregatedContent: [{ type: 'text', text: { value: 'Regenerated answer' } }],
+            // No responseMessageId from the server - the handler must fall
+            // back to the submission's own tracked response id, never to
+            // "whatever assistant row sits next to the user message".
+            conversationId: CONV_ID,
+          },
+        }),
+      });
+    });
+
+    const lastMessages = chatHelpers.setMessages.mock.calls.at(-1)?.[0];
+    expect(
+      lastMessages.find((m: { messageId: string }) => m.messageId === 'older-assistant-sibling'),
+    ).toEqual(olderSibling);
+    expect(
+      lastMessages.find((m: { messageId: string }) => m.messageId === 'active-response-id'),
+    ).toEqual(
+      expect.objectContaining({
+        messageId: 'active-response-id',
+        parentMessageId: 'user-1',
+        content: expect.any(Array),
+      }),
+    );
+
+    unmount();
+  });
+
   it('uses the resumed submission for final events after sync', async () => {
     const originalUser = {
       messageId: 'original-user',
