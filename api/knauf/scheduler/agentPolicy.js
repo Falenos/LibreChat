@@ -78,16 +78,16 @@ async function resolveSchedulableAgent({
     return null;
   }
   const ownsAgent = String(agent.author) === String(userId);
-  const mayEdit =
+  const mayUse =
     ownsAgent ||
     (await checkPermission({
       userId,
       role: user.role,
       resourceType: ResourceType.AGENT,
       resourceId: agent._id,
-      requiredPermission: PermissionBits.EDIT,
+      requiredPermission: PermissionBits.VIEW,
     }));
-  return mayEdit ? { agent, snapshot: createAgentSnapshot(agent) } : null;
+  return mayUse ? { agent, snapshot: createAgentSnapshot(agent) } : null;
 }
 
 module.exports = { createAgentSnapshot, resolveSchedulableAgent };

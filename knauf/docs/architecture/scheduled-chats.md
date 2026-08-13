@@ -51,7 +51,7 @@ into a permanent high-risk override.
 The Schedules sidebar panel opens a dialog that requires:
 
 - a name and prompt;
-- an Agent the user owns or may edit and is allowed to use;
+- an Agent the user's role may use, with effective VIEW access;
 - a project owned by the user;
 - an `hourly`, `daily`, `weekdays`, or `weekly` cadence;
 - the browser's IANA timezone.
@@ -64,6 +64,11 @@ Create requests include a client-generated `clientRequestId`. Retrying the same
 request returns the existing schedule; reusing the key for different schedule
 content returns a conflict. The API also enforces the per-user schedule limit
 (`KNAUF_SCHEDULER_MAX_PER_USER`, default `10`) under concurrent creates.
+
+Scheduling follows LibreChat's Agent execution permission model: the role must
+grant `AGENTS.USE`, and the selected Agent requires effective `VIEW` access.
+`EDIT` remains reserved for changing the Agent definition and is not required
+to schedule a governed shared Agent.
 
 An enabled schedule receives a computed `nextRunAt`. Cadence evaluation uses
 Croner with IANA timezone handling and deterministic per-schedule jitter so
@@ -81,12 +86,12 @@ the disabled reason. A schedule auto-disabled by the worker retains
 `nextRunAt`; `enabled: false` is the execution gate.
 
 Project access is checked when the project is selected and again before a run
-is queued or executed. Agent owner/editor access is checked on create, on every
-edit that leaves the schedule enabled, on Run Now, before automatic dispatch,
-and immediately before the internal Agents request. Disabling remains possible
-after Agent access is lost. A legacy schedule without `chatProjectId` can still
-be disabled. The user must edit it and select an accessible project before it
-can be enabled or run again.
+is queued or executed. Agent `USE` and effective `VIEW` access are checked on
+create, on every edit that leaves the schedule enabled, on Run Now, before
+automatic dispatch, and immediately before the internal Agents request.
+Disabling remains possible after Agent access is lost. A legacy schedule
+without `chatProjectId` can still be disabled. The user must edit it and select
+an accessible project before it can be enabled or run again.
 
 ### 1.3 Run Now
 
@@ -154,9 +159,9 @@ with interactive chat. The worker adds:
 The API removes the snapshot from the ordinary request body only after the
 scheduler HMAC is verified. The Agents build path then uses that snapshot
 instead of reloading the mutable Agent document. Agent edits made after queueing
-therefore affect only future runs. The worker still revalidates current
-owner/editor access immediately before execution; authorization is current
-while execution configuration remains pinned.
+therefore affect only future runs. The worker still revalidates `AGENTS.USE`
+and effective Agent VIEW access immediately before execution; authorization is
+current while execution configuration remains pinned.
 
 The adapter obtains a fresh owner JWT for start, stream/resume, and cancellation
 requests, so a long-running execution cannot outlive the credentials needed to

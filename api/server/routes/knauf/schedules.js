@@ -194,7 +194,7 @@ function createSchedulesRouter({
       }
       const payload = parsed.data;
       if ((await resolveAgent(payload.agent_id, req)) == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       if ((await getProject(req.user.id, payload.chatProjectId)) == null) {
         return res.status(400).json({ error: 'Project not found or not accessible' });
@@ -262,7 +262,7 @@ function createSchedulesRouter({
         enabled: changes.enabled ?? current.enabled,
       });
       if (merged.enabled && (await resolveAgent(merged.agent_id, req)) == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       const recurrenceChanged =
         changes.cadence != null ||
@@ -320,7 +320,7 @@ function createSchedulesRouter({
       }
       const resolvedAgent = await resolveAgent(schedule.agent_id, req);
       if (resolvedAgent == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       if ((await getProject(req.user.id, schedule.chatProjectId)) == null) {
         return res.status(409).json({ error: 'Scheduled chat project no longer exists' });

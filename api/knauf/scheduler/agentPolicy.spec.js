@@ -42,7 +42,7 @@ test('pins runtime artifact-editing augmentation in the execution snapshot', () 
   ).toMatchObject({ tools: ['tool-1', 'edit_artifact'] });
 });
 
-test('allows owners and editors but rejects view-only users', async () => {
+test('allows owners and viewers with Agent use permission', async () => {
   const dependencies = {
     agentId: 'agent-1',
     getAgent: jest.fn().mockResolvedValue(agent),
@@ -65,19 +65,22 @@ test('allows owners and editors but rejects view-only users', async () => {
   await expect(
     resolveSchedulableAgent({
       ...dependencies,
-      user: { id: 'editor-1', role: 'USER' },
+      user: { id: 'viewer-1', role: 'AGENT_BUILDER' },
       checkPermission,
     }),
   ).resolves.toMatchObject({ snapshot: { id: 'agent-1', version: 2 } });
   expect(checkPermission).toHaveBeenLastCalledWith(
-    expect.objectContaining({ requiredPermission: PermissionBits.EDIT }),
+    expect.objectContaining({
+      role: 'AGENT_BUILDER',
+      requiredPermission: PermissionBits.VIEW,
+    }),
   );
 
   checkPermission.mockResolvedValueOnce(false);
   await expect(
     resolveSchedulableAgent({
       ...dependencies,
-      user: { id: 'viewer-1', role: 'USER' },
+      user: { id: 'denied-1', role: 'USER' },
       checkPermission,
     }),
   ).resolves.toBeNull();
