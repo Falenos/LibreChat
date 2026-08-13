@@ -174,7 +174,7 @@ function createAgentExecutionAdapter({
     }
     const resolvedAgent = await resolveAgent(run.agentId, user);
     if (resolvedAgent == null) {
-      throw new Error('Scheduled agent no longer exists or is not editable');
+      throw new Error('Scheduled agent is no longer accessible for scheduling');
     }
     const agentSnapshot = run.execution?.agentSnapshot ?? resolvedAgent.snapshot;
     if (agentSnapshot == null) {

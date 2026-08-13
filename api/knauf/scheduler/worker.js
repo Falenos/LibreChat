@@ -96,7 +96,7 @@ async function main() {
       }
       const resolved = await resolveAgent(schedule.agent_id, user);
       if (resolved == null) {
-        return { preflightError: 'Scheduled agent no longer exists or is not editable' };
+        return { preflightError: 'Scheduled agent is no longer accessible for scheduling' };
       }
       return {
         agentSnapshot: resolved.snapshot,

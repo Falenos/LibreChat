@@ -25,6 +25,9 @@ const rolePermissionsSchema = new Schema(
     },
     [PermissionTypes.AGENTS]: {
       [Permissions.USE]: { type: Boolean },
+      // [knauf] KK20-255 — persist the role-level Scheduled Chats grant.
+      [Permissions.KNAUF_SCHEDULE]: { type: Boolean },
+      // End [knauf]
       [Permissions.CREATE]: { type: Boolean },
       [Permissions.SHARE]: { type: Boolean },
       [Permissions.SHARE_PUBLIC]: { type: Boolean },

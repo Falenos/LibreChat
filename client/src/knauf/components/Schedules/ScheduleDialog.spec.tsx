@@ -1,8 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ButtonHTMLAttributes, LabelHTMLAttributes, ReactNode } from 'react';
+import { PermissionBits } from 'librechat-data-provider';
 
 const mockCreate = jest.fn();
 const mockFetchNextPage = jest.fn();
+const mockUseListAgentsQuery = jest.fn(() => ({
+  data: [{ id: 'agent-1', name: 'Agent One' }],
+}));
 let mockHasNextPage = false;
 let mockProjectCreated: ((project: { _id: string; name: string }) => void) | undefined;
 
@@ -53,7 +57,7 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/data-provider', () => ({
-  useListAgentsQuery: () => ({ data: [{ id: 'agent-1', name: 'Agent One' }] }),
+  useListAgentsQuery: (...args: unknown[]) => mockUseListAgentsQuery(...args),
   useProjectsInfiniteQuery: () => ({
     data: { pages: [{ projects: [{ _id: 'project-1', name: 'Project One' }] }] },
     fetchNextPage: mockFetchNextPage,
@@ -103,6 +107,15 @@ describe('ScheduleDialog project selection', () => {
     render(<ScheduleDialog open={true} onOpenChange={jest.fn()} />);
 
     await waitFor(() => expect(mockFetchNextPage).toHaveBeenCalledTimes(1));
+  });
+
+  test('lists Agents the user may view rather than only Agents they may edit', () => {
+    render(<ScheduleDialog open={true} onOpenChange={jest.fn()} />);
+
+    expect(mockUseListAgentsQuery).toHaveBeenCalledWith(
+      { requiredPermission: PermissionBits.VIEW },
+      expect.any(Object),
+    );
   });
 
   test('requires a project and submits its id with the schedule', async () => {

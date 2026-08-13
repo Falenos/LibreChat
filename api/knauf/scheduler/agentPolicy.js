@@ -70,7 +70,11 @@ async function resolveSchedulableAgent({
     return null;
   }
   const role = await getRoleByName(user?.role);
-  if (role?.permissions?.[PermissionTypes.AGENTS]?.[Permissions.USE] !== true) {
+  const agentPermissions = role?.permissions?.[PermissionTypes.AGENTS];
+  if (
+    agentPermissions?.[Permissions.USE] !== true ||
+    agentPermissions?.[Permissions.KNAUF_SCHEDULE] !== true
+  ) {
     return null;
   }
   const userId = user?.id ?? user?._id;
@@ -78,16 +82,16 @@ async function resolveSchedulableAgent({
     return null;
   }
   const ownsAgent = String(agent.author) === String(userId);
-  const mayEdit =
+  const mayUse =
     ownsAgent ||
     (await checkPermission({
       userId,
       role: user.role,
       resourceType: ResourceType.AGENT,
       resourceId: agent._id,
-      requiredPermission: PermissionBits.EDIT,
+      requiredPermission: PermissionBits.VIEW,
     }));
-  return mayEdit ? { agent, snapshot: createAgentSnapshot(agent) } : null;
+  return mayUse ? { agent, snapshot: createAgentSnapshot(agent) } : null;
 }
 
 module.exports = { createAgentSnapshot, resolveSchedulableAgent };

@@ -4,6 +4,8 @@ const { randomUUID } = require('node:crypto');
 const express = require('express');
 const mongoose = require('mongoose');
 const { z } = require('zod');
+const { generateCheckAccess } = require('@librechat/api');
+const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const {
   SCHEDULE_ACTIVE_RUN_CODE,
   SCHEDULE_LIMIT_CODE,
@@ -126,6 +128,7 @@ function createSchedulesRouter({
     ? messageIpLimiter
     : (_req, _res, next) => next(),
   apiEnabled = isSchedulerApiEnabled,
+  getRoleByName = db.getRoleByName,
   getProject = db.getChatProject,
   maxPerUser = () => parsePositiveInteger(process.env.KNAUF_SCHEDULER_MAX_PER_USER, 10),
   now = () => new Date(),
@@ -139,6 +142,13 @@ function createSchedulesRouter({
     return next();
   });
   router.use(authMiddleware);
+  router.use(
+    generateCheckAccess({
+      permissionType: PermissionTypes.AGENTS,
+      permissions: [Permissions.USE, Permissions.KNAUF_SCHEDULE],
+      getRoleByName,
+    }),
+  );
   router.use(async (req, res, next) => {
     if (req.method === 'GET') {
       return next();
@@ -194,7 +204,7 @@ function createSchedulesRouter({
       }
       const payload = parsed.data;
       if ((await resolveAgent(payload.agent_id, req)) == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       if ((await getProject(req.user.id, payload.chatProjectId)) == null) {
         return res.status(400).json({ error: 'Project not found or not accessible' });
@@ -262,7 +272,7 @@ function createSchedulesRouter({
         enabled: changes.enabled ?? current.enabled,
       });
       if (merged.enabled && (await resolveAgent(merged.agent_id, req)) == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       const recurrenceChanged =
         changes.cadence != null ||
@@ -320,7 +330,7 @@ function createSchedulesRouter({
       }
       const resolvedAgent = await resolveAgent(schedule.agent_id, req);
       if (resolvedAgent == null) {
-        return res.status(400).json({ error: 'Agent not found or not editable' });
+        return res.status(400).json({ error: 'Agent not found or not available for scheduling' });
       }
       if ((await getProject(req.user.id, schedule.chatProjectId)) == null) {
         return res.status(409).json({ error: 'Scheduled chat project no longer exists' });

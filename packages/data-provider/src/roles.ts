@@ -63,6 +63,9 @@ const defaultRolesSchema = z.object({
       }),
       [PermissionTypes.AGENTS]: agentPermissionsSchema.extend({
         [Permissions.USE]: z.boolean().default(true),
+        // [knauf] KK20-255 — admins may schedule Agents independently of editing them.
+        [Permissions.KNAUF_SCHEDULE]: z.boolean().default(true),
+        // End [knauf]
         [Permissions.CREATE]: z.boolean().default(true),
         [Permissions.SHARE]: z.boolean().default(true),
         [Permissions.SHARE_PUBLIC]: z.boolean().default(true),
@@ -157,6 +160,9 @@ export const roleDefaults = defaultRolesSchema.parse({
       },
       [PermissionTypes.AGENTS]: {
         [Permissions.USE]: true,
+        // [knauf] KK20-255 — Scheduled Chats is enabled for built-in roles by default.
+        [Permissions.KNAUF_SCHEDULE]: true,
+        // End [knauf]
         [Permissions.CREATE]: true,
         [Permissions.SHARE]: true,
         [Permissions.SHARE_PUBLIC]: true,
@@ -226,6 +232,9 @@ export const roleDefaults = defaultRolesSchema.parse({
       [PermissionTypes.MEMORIES]: {},
       [PermissionTypes.AGENTS]: {
         [Permissions.USE]: true,
+        // [knauf] KK20-255 — ordinary users may schedule Agents they can use and view.
+        [Permissions.KNAUF_SCHEDULE]: true,
+        // End [knauf]
         [Permissions.CREATE]: true,
         [Permissions.SHARE]: false,
         [Permissions.SHARE_PUBLIC]: false,
