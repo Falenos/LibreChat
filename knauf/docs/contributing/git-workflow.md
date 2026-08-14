@@ -2,13 +2,31 @@
 
 ---
 
-## Merge Protocol
+## Feature and fix branches
+
+Create ordinary PR branches from `origin/main`. Before final review, replay the branch onto the
+current mainline:
+
+```bash
+git fetch origin
+git rebase origin/main
+git push --force-with-lease
+```
+
+Do not merge `origin/main` into feature, fix, or documentation branches. Use
+`--force-with-lease`, never an unguarded force push, after rewriting a published branch.
+
+## Upstream import protocol
 
 See [upstream-sync.md](upstream-sync.md) for the full ritual (branching strategy, per-step checklist, tagging).
 
-Summary: branch from `main`, run `git merge --no-ff upstream/<tag>` (never rebase), resolve conflicts at `[knauf]` markers using SEAMS.md as the index, validate with `seams.js check`, build + test + staging deploy, then PR to `main` with `--no-ff`.
+LibreChat upstream-version imports are the exception to the ordinary branch rule. Branch from
+`main`, run `git merge --no-ff upstream/<tag>`, resolve conflicts at `[knauf]` markers using
+SEAMS.md as the index, validate with `seams.js check`, build + test + staging deploy, then PR to
+`main` with `--no-ff`.
 
-**Why merge, not rebase:** atomic revert via `git revert <merge-commit>`; conflicts resolved once; `git bisect` distinguishes upstream vs Knauf.
+**Why imports merge rather than rebase:** atomic revert via `git revert <merge-commit>`; conflicts
+resolved once; `git bisect` distinguishes upstream vs Knauf.
 
 **Lockfile conflicts:** delete `package-lock.json`, run `npm install` to regenerate.
 
