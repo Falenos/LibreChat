@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { Collection } from 'mongodb';
+import type { Collection, Filter, WithId } from 'mongodb';
 import type { CodeEnvIdentity } from '../types/contract.js';
+
+const MAX_WRITE_ATTEMPTS = 5;
 
 export interface FileDoc {
   sessionId: string;
@@ -16,7 +18,8 @@ export interface FileDoc {
   tenantId: string;
   blobPath: string;
   lastModified: Date;
-  createdAt: Date;
+  /** Missing only on rows written before absolute retention was introduced. */
+  createdAt?: Date;
   expiresAt: Date;
 }
 
@@ -39,6 +42,17 @@ export class FilesRepo {
     private readonly maxLifetimeHours: number,
   ) {}
 
+  private revisionFilter(doc: WithId<FileDoc>): Filter<FileDoc> {
+    return {
+      _id: doc._id,
+      lastModified: doc.lastModified,
+      expiresAt: doc.expiresAt,
+      ...(doc.createdAt instanceof Date
+        ? { createdAt: doc.createdAt }
+        : { createdAt: { $exists: false } }),
+    };
+  }
+
   private createdAt(doc: FileDoc, fallback: Date): Date {
     return doc.createdAt instanceof Date
       ? doc.createdAt
@@ -47,7 +61,7 @@ export class FilesRepo {
         : fallback;
   }
 
-  private expiry(from: Date, createdAt: Date): Date {
+  private expiry(from: Date, createdAt = from): Date {
     const slidingExpiry = from.getTime() + this.ttlHours * 3_600_000;
     const absoluteExpiry = createdAt.getTime() + this.maxLifetimeHours * 3_600_000;
     return new Date(Math.min(slidingExpiry, absoluteExpiry));
@@ -76,7 +90,7 @@ export class FilesRepo {
       blobPath: '',
       lastModified: now,
       createdAt: now,
-      expiresAt: this.expiry(now, now),
+      expiresAt: this.expiry(now),
     };
     doc.blobPath = `${doc.sessionId}/${doc.fileId}`;
     await this.collection.insertOne(doc);
@@ -86,22 +100,24 @@ export class FilesRepo {
   /**
    * Capture upsert keyed on (sessionId, filename) so a re-run of the same
    * code refreshes the row and keeps the fileId (and thus the blobPath /
-   * download link) stable across overwrites. Returns `inserted` so the caller
-   * can roll back a *fresh* row if the subsequent blob write fails — without
-   * deleting a row whose blob from a prior turn is still valid.
+   * download link) stable across active overwrites. An expired generation is
+   * removed with a revision guard and recreated under a new fileId. Returns
+   * `inserted` so the caller can roll back a fresh row if the subsequent blob
+   * write fails without deleting an older valid row.
    */
   async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
-    const now = new Date();
-    const fileId = randomUUID();
-    const existing = await this.collection.findOne({
-      sessionId: input.sessionId,
-      filename: input.filename,
-    });
-    const createdAt = existing == null ? now : this.createdAt(existing, now);
-    const result = await this.collection.findOneAndUpdate(
-      { sessionId: input.sessionId, filename: input.filename },
-      {
-        $set: {
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
+      const now = new Date();
+      const existing = await this.collection.findOne({
+        sessionId: input.sessionId,
+        filename: input.filename,
+      });
+      if (existing == null) {
+        const fileId = randomUUID();
+        const doc: FileDoc = {
+          sessionId: input.sessionId,
+          fileId,
+          filename: input.filename,
           size: input.size,
           contentType: input.contentType,
           state: 'captured',
@@ -110,24 +126,58 @@ export class FilesRepo {
           identity: input.identity,
           userId: input.userId,
           tenantId: input.tenantId,
-          lastModified: now,
-          expiresAt: this.expiry(now, createdAt),
-          ...(existing != null && !(existing.createdAt instanceof Date) ? { createdAt } : {}),
-        },
-        $setOnInsert: {
-          sessionId: input.sessionId,
-          fileId,
-          filename: input.filename,
           blobPath: `${input.sessionId}/${fileId}`,
+          lastModified: now,
           createdAt: now,
+          expiresAt: this.expiry(now),
+        };
+        try {
+          await this.collection.insertOne(doc);
+          return { doc, inserted: true };
+        } catch (error) {
+          if (
+            typeof error === 'object' &&
+            error != null &&
+            'code' in error &&
+            error.code === 11000
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      const revision = this.revisionFilter(existing);
+      if (!this.isActive(existing, now)) {
+        await this.collection.deleteOne(revision);
+        continue;
+      }
+
+      const createdAt = this.createdAt(existing, now);
+      const result = await this.collection.findOneAndUpdate(
+        revision,
+        {
+          $set: {
+            size: input.size,
+            contentType: input.contentType,
+            state: 'captured',
+            origin: input.origin,
+            readOnly: input.readOnly,
+            identity: input.identity,
+            userId: input.userId,
+            tenantId: input.tenantId,
+            lastModified: now,
+            expiresAt: this.expiry(now, createdAt),
+            ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
+          },
         },
-      },
-      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
-    );
-    if (result.value == null) {
-      throw new Error('upsertCaptured returned no document');
+        { returnDocument: 'after', includeResultMetadata: true },
+      );
+      if (result.value != null) {
+        return { doc: result.value, inserted: false };
+      }
     }
-    return { doc: result.value, inserted: result.lastErrorObject?.updatedExisting === false };
+    throw new Error('upsertCaptured could not obtain a stable file revision');
   }
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
@@ -144,21 +194,24 @@ export class FilesRepo {
 
   /** Bump TTL on active use (exec push, download). */
   async touch(sessionId: string, fileId: string): Promise<void> {
-    const now = new Date();
-    const existing = await this.collection.findOne({ sessionId, fileId });
-    if (existing == null) {
-      return;
-    }
-    const createdAt = this.createdAt(existing, now);
-    await this.collection.updateOne(
-      { sessionId, fileId },
-      {
+    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
+      const now = new Date();
+      const existing = await this.collection.findOne({ sessionId, fileId });
+      if (existing == null || !this.isActive(existing, now)) {
+        return;
+      }
+      const createdAt = this.createdAt(existing, now);
+      const result = await this.collection.updateOne(this.revisionFilter(existing), {
         $set: {
           expiresAt: this.expiry(now, createdAt),
           ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
         },
-      },
-    );
+      });
+      if (result.matchedCount === 1) {
+        return;
+      }
+    }
+    throw new Error('touch could not obtain a stable file revision');
   }
 
   async delete(sessionId: string, fileId: string): Promise<boolean> {
