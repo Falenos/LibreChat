@@ -205,6 +205,35 @@ let rumProxyMetrics: RumProxyMetrics = {
   recordRequest: () => undefined,
 };
 
+// [knauf] KK20-270 — bounded Azure Foundry Model Router call telemetry.
+export type FoundryModelCallResult =
+  | 'success'
+  | 'provider_error'
+  | 'timeout'
+  | 'stream_idle_timeout'
+  | 'cancelled'
+  | 'retry';
+export type FoundryModelCallPhase = 'primary' | 'tool' | 'summarization' | 'subagent' | 'other';
+export type FoundryModelCallAttempt = '1' | '2+' | 'unknown';
+
+export type FoundryModelCallMetric = {
+  result: FoundryModelCallResult;
+  returnedModel: string;
+  phase: FoundryModelCallPhase;
+  attempt: FoundryModelCallAttempt;
+  durationSeconds: number;
+  ttftSeconds?: number;
+};
+
+type FoundryModelCallMetrics = {
+  recordCall: (metric: FoundryModelCallMetric) => void;
+};
+
+let foundryModelCallMetrics: FoundryModelCallMetrics = {
+  recordCall: () => undefined,
+};
+// End [knauf]
+
 // [knauf] KK20-195 WP0 — File Search indexing baseline metrics. Measures the RAG
 // embed call (duration/outcome/provider throttles) so async-indexing SLOs and
 // concurrency caps are set from data. Bounded tags only — route, outcome, status
@@ -260,6 +289,11 @@ const resetMetricRecorders = (): void => {
   rumProxyMetrics = {
     recordRequest: () => undefined,
   };
+  // [knauf] KK20-270 — reset Model Router recorders to no-ops.
+  foundryModelCallMetrics = {
+    recordCall: () => undefined,
+  };
+  // End [knauf]
   // [knauf] KK20-195 WP0 — reset file-index recorders to no-ops.
   fileIndexMetrics = {
     recordEmbed: () => undefined,
@@ -297,6 +331,12 @@ export function recordGenerationStreamResumePendingEvents(
 export function recordRumProxyRequest(endpoint: RumProxyEndpoint, result: RumProxyResult): void {
   rumProxyMetrics.recordRequest(endpoint, result);
 }
+
+// [knauf] KK20-270 — public wrapper keeps API callers independent of prom-client.
+export function recordFoundryModelCall(metric: FoundryModelCallMetric): void {
+  foundryModelCallMetrics.recordCall(metric);
+}
+// End [knauf]
 
 // [knauf] KK20-195 WP0 — public wrappers for the file-index recorders (no-ops
 // until createMetrics() wires them; callers never touch prom-client directly).
@@ -625,6 +665,51 @@ export function createMetrics(): PrometheusMetrics {
   rumProxyMetrics = {
     recordRequest: (endpoint, result) => rumProxyRequests.inc({ endpoint, result }),
   };
+
+  // [knauf] KK20-270 — four low-cardinality Model Router instruments.
+  const foundryModelCallDuration = new Histogram({
+    name: 'knauf_foundry_model_call_duration_seconds',
+    help: 'Azure Foundry Model Router call duration',
+    labelNames: ['result', 'returned_model', 'phase', 'attempt'] as const,
+    buckets: [0.5, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120, 180, 300],
+    registers: [registry],
+  });
+
+  const foundryModelCallTtft = new Histogram({
+    name: 'knauf_foundry_model_call_ttft_seconds',
+    help: 'Azure Foundry Model Router time to first streamed chunk',
+    labelNames: ['result', 'returned_model', 'phase', 'attempt'] as const,
+    buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120],
+    registers: [registry],
+  });
+
+  const foundryModelCalls = new Counter({
+    name: 'knauf_foundry_model_calls_total',
+    help: 'Azure Foundry Model Router calls',
+    labelNames: ['result', 'returned_model', 'phase', 'attempt'] as const,
+    registers: [registry],
+  });
+
+  const foundryModelStreamIdleTimeouts = new Counter({
+    name: 'knauf_foundry_model_stream_idle_timeouts_total',
+    help: 'Azure Foundry Model Router stream idle timeouts',
+    registers: [registry],
+  });
+
+  foundryModelCallMetrics = {
+    recordCall: ({ result, returnedModel, phase, attempt, durationSeconds, ttftSeconds }) => {
+      const labels = { result, returned_model: returnedModel, phase, attempt };
+      foundryModelCalls.inc(labels);
+      foundryModelCallDuration.observe(labels, durationSeconds);
+      if (ttftSeconds != null) {
+        foundryModelCallTtft.observe(labels, ttftSeconds);
+      }
+      if (result === 'stream_idle_timeout') {
+        foundryModelStreamIdleTimeouts.inc();
+      }
+    },
+  };
+  // End [knauf]
 
   // [knauf] KK20-195 WP0 — File Search indexing baseline metrics. Buckets span
   // text embeds (seconds) through OCR-heavy PDFs (observed valid job: 21.4 min).

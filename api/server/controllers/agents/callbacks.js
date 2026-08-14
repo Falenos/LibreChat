@@ -133,7 +133,7 @@ function repairModelRouterToolHistory(messages) {
   return complete.length === paired.length ? paired : sanitizeOrphanToolBlocks(complete);
 }
 
-function createModelRetryHandler(metadata) {
+function createModelRetryHandler(metadata, telemetry = null) {
   const state = {
     refusalCount: 0,
     truncationCount: 0,
@@ -160,7 +160,7 @@ function createModelRetryHandler(metadata) {
         }
       }
     },
-    handleLLMEnd(result) {
+    handleLLMEnd(result, runId) {
       // Must stay synchronous: this handler is registered before Langfuse, so
       // Langfuse sees Azure's routed model instead of the `model-router` alias.
       stampLangfuseResponseModel(result);
@@ -185,6 +185,7 @@ function createModelRetryHandler(metadata) {
           ...metadata,
           attempt: state.truncationCount,
         });
+        telemetry?.recordRetry?.({ runId, reason: 'output_limit', output: result });
         throw new Error(
           JSON.stringify({
             type: 'output_truncated',
@@ -200,6 +201,7 @@ function createModelRetryHandler(metadata) {
         ...metadata,
         attempt: state.refusalCount,
       });
+      telemetry?.recordRetry?.({ runId, reason: 'refusal', output: result });
       throw new Error(
         JSON.stringify({
           type: ErrorTypes.REFUSAL,

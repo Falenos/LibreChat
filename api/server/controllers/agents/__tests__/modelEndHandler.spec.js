@@ -292,6 +292,20 @@ describe('zero-usage generic refusal recovery', () => {
     expect(handler.raiseError).toBe(true);
   });
 
+  it('reports the explicit refusal fallback boundary to router telemetry', () => {
+    const telemetry = { recordRetry: jest.fn() };
+    const { handler } = createModelRetryHandler({ messageId: 'm1' }, telemetry);
+
+    expect(() => handler.handleLLMEnd(refusalResult, 'model-run-1')).toThrow(
+      'zero_usage_generic_refusal',
+    );
+    expect(telemetry.recordRetry).toHaveBeenCalledWith({
+      runId: 'model-run-1',
+      reason: 'refusal',
+      output: refusalResult,
+    });
+  });
+
   it('removes the failed streamed refusal while preserving fallback text', () => {
     expect(
       stripRetriedModelOutput(

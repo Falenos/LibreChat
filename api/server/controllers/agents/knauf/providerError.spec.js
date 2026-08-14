@@ -1,4 +1,8 @@
-const { isRetryableProviderError, summarizeProviderError } = require('./providerError');
+const {
+  getProviderRequestId,
+  isRetryableProviderError,
+  summarizeProviderError,
+} = require('./providerError');
 
 describe('[knauf] provider error safety', () => {
   it.each([
@@ -59,5 +63,16 @@ describe('[knauf] provider error safety', () => {
       retryable: true,
       providerStatus: 500,
     });
+  });
+
+  it('extracts a bounded provider request ID from response headers', () => {
+    expect(
+      getProviderRequestId({
+        response: { headers: { 'apim-request-id': 'azure-request-123' } },
+      }),
+    ).toBe('azure-request-123');
+    expect(
+      getProviderRequestId({ headers: { 'x-request-id': 'unsafe request id' } }),
+    ).toBeUndefined();
   });
 });
