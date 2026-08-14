@@ -122,10 +122,16 @@ export async function captureOutputs(params: {
       overflow = true;
       continue;
     }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      timedOut = true;
+      break;
+    }
     const result = await captureNewFile(
       entry,
       name,
       config.exec.captureMaxTotalBytes - capturedBytes,
+      remainingMs,
       {
         sessionId,
         auth,
@@ -134,6 +140,9 @@ export async function captureOutputs(params: {
     );
     if (result === 'overflow') {
       overflow = true;
+    } else if (result === 'timeout') {
+      timedOut = true;
+      break;
     } else if (result == null) {
       // The file is really in the sandbox; we just could not persist it (ACA fetch, Mongo
       // upsert or Blob write failed). Counted so the caller can say so — dropping it
@@ -269,6 +278,13 @@ class CaptureOverflowError extends Error {
   }
 }
 
+class CaptureTimeoutError extends Error {
+  constructor() {
+    super('capture exceeded its wall-clock budget');
+    this.name = 'CaptureTimeoutError';
+  }
+}
+
 class ByteLimitTransform extends Transform {
   bytes = 0;
   overflowed = false;
@@ -304,8 +320,9 @@ async function captureNewFile(
   entry: AcaSessionFile,
   name: string,
   remainingBytes: number,
+  remainingMs: number,
   ctx: CaptureCtx,
-): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | null> {
+): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | 'timeout' | null> {
   const { sessionId, auth, deps } = ctx;
   if ((entry.sizeInBytes ?? remainingBytes) > remainingBytes) {
     return 'overflow';
@@ -319,8 +336,19 @@ async function captureNewFile(
       return 'overflow';
     }
     const limiter = new ByteLimitTransform(remainingBytes);
+    let timedOut = false;
+    source.stream.once('error', (error) => {
+      if (!limiter.destroyed) {
+        limiter.destroy(error);
+      }
+    });
     limiter.on('error', () => source.stream.destroy());
     source.stream.pipe(limiter);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      limiter.destroy(new CaptureTimeoutError());
+    }, remainingMs);
+    timeout.unref();
     try {
       await deps.blob.put(
         candidateBlobPath,
@@ -330,10 +358,17 @@ async function captureNewFile(
       );
       candidateUploaded = true;
     } catch (error) {
+      if (timedOut || error instanceof CaptureTimeoutError) {
+        return 'timeout';
+      }
       if (limiter.overflowed || error instanceof CaptureOverflowError) {
         return 'overflow';
       }
+      source.stream.destroy();
+      limiter.destroy();
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
     const { doc, obsoleteBlobPaths } = await deps.repo.upsertCaptured(
       {

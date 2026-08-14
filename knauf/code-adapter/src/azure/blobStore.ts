@@ -4,6 +4,9 @@ import type { TokenCredential } from '@azure/identity';
 import type { Readable } from 'node:stream';
 import type { Config } from '../config.js';
 
+const STREAM_UPLOAD_BUFFER_BYTES = 4 * 1024 * 1024;
+const STREAM_UPLOAD_CONCURRENCY = 2;
+
 /**
  * Staging blob store. Every key is `<sessionId>/<fileId>` with both segments
  * adapter-minted, in a dedicated container.
@@ -89,8 +92,13 @@ export async function createBlobStore(
       if (Buffer.isBuffer(data)) {
         await client.uploadData(data, options);
       } else {
-        // Bound SDK-side buffering while supporting the 256 MB capture contract.
-        await client.uploadStream(data as Readable, 4 * 1024 * 1024, 2, options);
+        // Keep each streaming upload's SDK buffers bounded to roughly 8 MiB.
+        await client.uploadStream(
+          data as Readable,
+          STREAM_UPLOAD_BUFFER_BYTES,
+          STREAM_UPLOAD_CONCURRENCY,
+          options,
+        );
         void size;
       }
     },
