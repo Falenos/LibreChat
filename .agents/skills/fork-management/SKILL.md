@@ -135,6 +135,7 @@ Then verify manually:
 | "I'll run `seams.js write` to update the manifest" | **Never.** The loop is: scan → agent writes → check. `seams.js write` is a human escape hatch only. |
 | "I'll run `seams.js write --yes` to auto-apply" | **Never.** Same as above. The agent writes SEAMS.md entries directly with the Edit tool. |
 | Leaves `Symbol/Anchor` or `Tests` as `—` | Fill them before the PR. No placeholder rows. |
-| Wants to use `git rebase` for upstream sync | Merge only: `git merge --no-ff upstream/<tag>` |
+| Syncs an ordinary PR branch by merging `origin/main` | Rebase it: `git fetch origin && git rebase origin/main`, then `git push --force-with-lease`. |
+| Rebases a LibreChat upstream-version import | Vendor imports are the exception: merge `upstream/<tag>` to preserve ancestry and atomic rollback. |
 | Pulls `:latest` images | Pin to versioned tags. The existing `:latest` in docker-compose is a known issue. |
 | Splits `librechat.yaml` into base + overlay | It's already 100% Knauf-owned. Don't. |
