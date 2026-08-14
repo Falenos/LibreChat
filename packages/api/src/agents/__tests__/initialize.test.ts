@@ -1492,6 +1492,9 @@ describe('initializeAgent — skill `allowed-tools` union (Phase 6)', () => {
         isInitialAgent: true,
         accessibleSkillIds: [skillId],
         manualSkills: ['tool-skill'],
+        // [knauf] KK20-257 — this fixture explicitly represents an available Code Execution environment.
+        codeEnvAvailable: true,
+        // End [knauf]
       },
       { ...db, listSkillsByAccess: emptyListSkillsByAccess, getSkillByName },
     );

@@ -919,6 +919,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/index.ts` | `codeEnvGuard` package export | 96–98 | Exposes the canonical gate to legacy CommonJS Agent controllers and ToolService without duplicating policy | `api/server/services/__tests__/ToolService.spec.js`, `api/server/controllers/agents/__tests__/client.memory.spec.js` | KK20-257 |
 | `packages/api/src/skills/handlers.ts` | `listHandler` environment dependency filter | 37–40, 358–365 | Removes code-dependent skills from Skills API listings when the effective environment is disabled | `packages/api/src/knauf/code/codeExecutionRuntimeSeams.knauf.spec.ts`, `packages/api/src/knauf/skills/capabilityRequirements.knauf.spec.ts` | KK20-257 |
 | `packages/api/src/skills/handlers.ts` | `listHandler` visible-page pagination | 350–367 | Refills Skills API pages after environment filtering so `has_more` and `after` advance across the visible catalog rather than exposing gaps from hidden code skills | `packages/api/src/knauf/skills/capabilityRequirements.knauf.spec.ts` | KK20-257 |
+| `api/server/controllers/agents/__tests__/openai.spec.js` | `jest.mock('@librechat/api', ...)` Code Execution guard fixture | 82–84 | Keeps the compatibility-controller unit fixture explicitly enabled after the controller began consuming the canonical environment gate, so the suite reaches the behavior it is intended to test | Self | KK20-257 |
+| `api/server/controllers/agents/__tests__/responses.unit.spec.js` | `jest.mock('@librechat/api', ...)` Code Execution guard fixture | 90–92 | Keeps the Responses-controller unit fixture explicitly enabled after the controller began consuming the canonical environment gate, instead of aborting on an absent mock export | Self | KK20-257 |
+| `packages/api/src/agents/__tests__/initialize.test.ts` | `passes the union of agent.tools + allowed-tools` environment fixture | 1495–1497 | Makes the allowed-tools union regression opt into an available Code Execution environment now that code-dependent skills correctly fail closed by default | Self | KK20-257 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1862,6 +1865,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded provider metadata projection | Low — exposes the existing safe request-ID extractor for successful router metadata without broadening accepted identifier characters | `api/server/controllers/agents/knauf/providerError.spec.js` | KK20-270 |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves successful response headers yield only bounded provider request IDs | Self | KK20-270 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.logging.spec.js` | Subject under test; real `@librechat/data-schemas` logger and request context | Medium — captures the final Winston transport envelope and proves router telemetry cannot inherit tenant or user identity while preserving explicit request correlation | Self | KK20-270 |
+| `packages/api/src/knauf/skills/skillPrimeBody.spec.ts` | Subject only (`./skillPrimeBody`) plus Node `fs`/`path` for shipped skills | Low — replaces the obsolete frontmatter byte ceiling with an exact first-frontmatter-boundary assertion, allowing capability metadata to grow without weakening the over-strip regression | Self | KK20-257 |
 <!-- seams:new:end -->
 
 ## Static Assets
