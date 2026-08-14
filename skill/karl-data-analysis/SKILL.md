@@ -9,6 +9,8 @@ description: >-
   with matplotlib, build downloadable output. For spreadsheets use karl-xlsx.
 argument-hint: "[analysis task or file]"
 user-invocable: true
+allowed-tools:
+  - execute_code
 version: "2.0.0"
 ---
 

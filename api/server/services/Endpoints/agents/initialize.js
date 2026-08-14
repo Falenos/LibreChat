@@ -13,6 +13,9 @@ const {
   resolveAgentScopedSkillIds,
   resolveModelSpecSkillIds,
   buildAgentContextAttachmentsByAgentId,
+  // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
+  isKnaufCodeExecutionEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   ResourceType,
@@ -165,7 +168,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   const skillsCapabilityEnabled =
     enabledCapabilities.has(AgentCapabilities.skills) && (await canUseSkills({ req }));
   // End [knauf]
-  const codeEnvAvailable = enabledCapabilities.has(AgentCapabilities.execute_code);
+  // [knauf] KK20-257 — static YAML alone must never activate sandbox runtime paths.
+  const codeEnvAvailable = isKnaufCodeExecutionEnabled(enabledCapabilities);
+  // End [knauf]
   const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
   const skillDbMethods = getSkillDbMethods();
 
@@ -384,6 +389,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
         names: selectedModelSpec.skills,
         accessibleSkillIds,
         getSkillByName: db.getSkillByName,
+        // [knauf] KK20-257 — model specs cannot retain code-dependent skills while disabled.
+        codeEnvAvailable,
+        // End [knauf]
       });
       primaryAgent.skills_enabled = true;
       primaryAgent.skills = resolvedSkillIds.map((id) => id.toString());

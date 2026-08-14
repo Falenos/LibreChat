@@ -14,8 +14,9 @@ import { _resetKnaufCodeEnvWarning } from './codeEnvGuard';
  */
 describe('[knauf] execute_code capability is fail-closed on LIBRECHAT_CODE_BASEURL', () => {
   const ORIGINAL = process.env.LIBRECHAT_CODE_BASEURL;
+  const ORIGINAL_FLAG = process.env.KNAUF_CODE_EXECUTION_ENABLED;
 
-  const deps = (capabilities: AgentCapabilities[]) => ({
+  const deps = (capabilities: AgentCapabilities[] | undefined) => ({
     getAppConfig: jest.fn().mockResolvedValue({
       endpoints: { [EModelEndpoint.agents]: { capabilities } },
     } as unknown as AppConfig),
@@ -35,6 +36,7 @@ describe('[knauf] execute_code capability is fail-closed on LIBRECHAT_CODE_BASEU
   ];
 
   beforeEach(() => {
+    process.env.KNAUF_CODE_EXECUTION_ENABLED = 'true';
     _resetKnaufCodeEnvWarning();
     jest.restoreAllMocks();
     jest.spyOn(logger, 'warn').mockImplementation(() => logger);
@@ -42,6 +44,7 @@ describe('[knauf] execute_code capability is fail-closed on LIBRECHAT_CODE_BASEU
 
   afterAll(() => {
     process.env.LIBRECHAT_CODE_BASEURL = ORIGINAL;
+    process.env.KNAUF_CODE_EXECUTION_ENABLED = ORIGINAL_FLAG;
   });
 
   it('keeps execute_code when the adapter URL is configured', async () => {
@@ -70,6 +73,21 @@ describe('[knauf] execute_code capability is fail-closed on LIBRECHAT_CODE_BASEU
   it('strips execute_code when the URL is the LibreChat-hosted default', async () => {
     process.env.LIBRECHAT_CODE_BASEURL = 'https://api.librechat.ai/v1';
     const { checkCapability } = createEndpointsConfigService(deps(ALL));
+
+    await expect(checkCapability(req(), AgentCapabilities.execute_code)).resolves.toBe(false);
+  });
+
+  it('strips execute_code when the explicit environment flag is false', async () => {
+    process.env.KNAUF_CODE_EXECUTION_ENABLED = 'false';
+    process.env.LIBRECHAT_CODE_BASEURL = 'http://agentic-karl-code-adapter:3112/v1';
+    const { checkCapability } = createEndpointsConfigService(deps(ALL));
+
+    await expect(checkCapability(req(), AgentCapabilities.execute_code)).resolves.toBe(false);
+  });
+
+  it('does not inherit execute_code from upstream defaults when static capabilities are absent', async () => {
+    process.env.LIBRECHAT_CODE_BASEURL = 'http://agentic-karl-code-adapter:3112/v1';
+    const { checkCapability } = createEndpointsConfigService(deps(undefined));
 
     await expect(checkCapability(req(), AgentCapabilities.execute_code)).resolves.toBe(false);
   });

@@ -63,6 +63,7 @@ type PageSkill = {
   author: Types.ObjectId;
   disableModelInvocation?: boolean;
   userInvocable?: boolean;
+  allowedTools?: string[];
 };
 
 describe('extractInvokedSkillsFromPayload', () => {
@@ -597,6 +598,26 @@ describe('resolveModelSpecSkillIds', () => {
 
     expect(result).toEqual([]);
   });
+
+  // [knauf] KK20-257 — model specs cannot retain code-dependent skills while disabled.
+  it('filters code-dependent skills when Code Execution is unavailable', async () => {
+    const skillId = new Types.ObjectId();
+    const result = await resolveModelSpecSkillIds({
+      names: ['code-skill'],
+      accessibleSkillIds: [skillId],
+      codeEnvAvailable: false,
+      getSkillByName: jest.fn().mockResolvedValue({
+        _id: skillId,
+        name: 'code-skill',
+        body: 'body',
+        author: userObjectId,
+        allowedTools: ['execute_code'],
+      }),
+    });
+
+    expect(result).toEqual([]);
+  });
+  // End [knauf]
 });
 
 describe('resolveSkillActive', () => {
@@ -841,6 +862,22 @@ describe('injectSkillCatalog', () => {
     expect(result.skillCount).toBe(1);
     expect(result.activeSkillIds.map((id) => id.toString())).toEqual([shared._id.toString()]);
   });
+
+  // [knauf] KK20-257 — unavailable code skills are absent from catalog and runtime ACLs.
+  it('filters code-dependent skills from the catalog when Code Execution is unavailable', async () => {
+    const codeSkill = { ...makeSkill('code-skill'), allowedTools: ['execute_code'] };
+    const ordinarySkill = makeSkill('ordinary-skill');
+    const result = await injectSkillCatalog(
+      baseParams({
+        listSkillsByAccess: buildPager([[codeSkill, ordinarySkill]]),
+        codeEnvAvailable: false,
+      }),
+    );
+
+    expect(result.skillCount).toBe(1);
+    expect(result.activeSkillNames).toEqual(new Set(['ordinary-skill']));
+  });
+  // End [knauf]
 
   it('honors explicit overrides (deactivated owned skill absent from catalog)', async () => {
     const owned = makeSkill('off', userObjectId);
@@ -1236,6 +1273,7 @@ describe('resolveManualSkills', () => {
       getSkillByName: buildGetSkillByName({ 'with-tools': owned }),
       accessibleSkillIds: [owned._id],
       userId,
+      codeEnvAvailable: true,
     });
     expect(result).toEqual([
       {
@@ -1246,6 +1284,24 @@ describe('resolveManualSkills', () => {
       },
     ]);
   });
+
+  // [knauf] KK20-257 — API-direct manual invocation cannot bypass the environment gate.
+  it('filters code-dependent manual skills when Code Execution is unavailable', async () => {
+    const owned: SkillDoc = {
+      ...mkSkill('code-skill', userOid, 'body'),
+      allowedTools: ['execute_code'],
+    };
+    const result = await resolveManualSkills({
+      names: ['code-skill'],
+      getSkillByName: buildGetSkillByName({ 'code-skill': owned }),
+      accessibleSkillIds: [owned._id],
+      userId,
+      codeEnvAvailable: false,
+    });
+
+    expect(result).toEqual([]);
+  });
+  // End [knauf]
 
   it('omits allowedTools when the skill doc does not declare it', async () => {
     const owned = mkSkill('no-tools', userOid, 'body');
@@ -1899,11 +1955,29 @@ describe('resolveAlwaysApplySkills', () => {
       listAlwaysApplySkills: buildLister([row]),
       accessibleSkillIds: [row._id],
       userId,
+      codeEnvAvailable: true,
     });
     expect(result).toEqual([
       { _id: row._id, name: 'with-tools', body: 'body', allowedTools: ['execute_code'] },
     ]);
   });
+
+  // [knauf] KK20-257 — always-apply cannot bypass the environment gate.
+  it('filters code-dependent always-apply skills when Code Execution is unavailable', async () => {
+    const row: AlwaysApplyRow = {
+      ...mkRow('code-skill', userOid, 'body'),
+      allowedTools: ['execute_code'],
+    };
+    const result = await resolveAlwaysApplySkills({
+      listAlwaysApplySkills: buildLister([row]),
+      accessibleSkillIds: [row._id],
+      userId,
+      codeEnvAvailable: false,
+    });
+
+    expect(result).toEqual([]);
+  });
+  // End [knauf]
 
   it('filters shared always-apply skills when defaultActiveOnShare is false', async () => {
     const shared = mkRow('shared', otherAuthor);

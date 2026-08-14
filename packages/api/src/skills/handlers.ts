@@ -4,6 +4,7 @@ import {
   AccessRoleIds,
   PrincipalType,
   PermissionBits,
+  EModelEndpoint,
 } from 'librechat-data-provider';
 import type {
   TSkill,
@@ -33,6 +34,10 @@ import type { Response } from 'express';
 import type { Types } from 'mongoose';
 import type { ServerRequest, StrategyFunctions } from '~/types';
 import { isBinaryBuffer } from './binary';
+// [knauf] KK20-257 — Skills API visibility follows the effective Code Execution gate.
+import { isKnaufCodeExecutionEnabled } from '~/knauf/code/codeEnvGuard';
+import { isSkillAvailableForCodeEnvironment } from '~/knauf/skills/capabilityRequirements';
+// End [knauf]
 
 /** Thin error shape the skill methods throw on validation failure. */
 type SkillValidationError = Error & { code?: string; issues?: ValidationIssue[] };
@@ -350,7 +355,14 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
       });
 
       const publicSet = new Set(publicIds.map((id) => id.toString()));
-      const skills = result.skills.map((s) => serializeSkillSummary(s, publicSet));
+      // [knauf] KK20-257 — disabled environments do not advertise code-dependent skills.
+      const codeEnvAvailable = isKnaufCodeExecutionEnabled(
+        req.config?.endpoints?.[EModelEndpoint.agents]?.capabilities,
+      );
+      const skills = result.skills
+        .filter((skill) => isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable))
+        .map((skill) => serializeSkillSummary(skill, publicSet));
+      // End [knauf]
 
       return res.status(200).json({
         skills,

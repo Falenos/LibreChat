@@ -9,6 +9,8 @@ description: >-
   main input or output.
 argument-hint: "[spreadsheet task or file]"
 user-invocable: true
+allowed-tools:
+  - execute_code
 version: "1.0.0"
 ---
 

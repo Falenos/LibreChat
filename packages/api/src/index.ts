@@ -80,16 +80,21 @@ export * from './rum/proxy';
 // agents/initialize.ts (agent instructions), so the LLM never has to guess a
 // user's location.
 export * from './knauf/context/locationContext';
+// End [knauf]
 // [knauf] KK20-243 — boot-time assertion that the deployment skills baked into
 // the image actually loaded. Consumed by api/server/index.js immediately after
 // `initializeDeploymentSkills`, because that loader treats an empty skill
 // directory as success and logs the zero case at `debug`.
 export * from './knauf/skills/deploymentSkillsCheck';
+// End [knauf]
 // [knauf] KK20-252 — strips YAML frontmatter from a skill body before it is
 // injected as a user message. Exported for parity with the module above; the
 // in-package call sites (agents/skills.ts, agents/skillFiles.ts) import it via
 // the `~/knauf/...` path directly.
 export * from './knauf/skills/skillPrimeBody';
+// End [knauf]
+// [knauf] KK20-257 — shared environment gate for legacy API runtime consumers.
+export * from './knauf/code/codeEnvGuard';
 // End [knauf]
 // [knauf] Share the USER permission policy with legacy API routes.
 export * from './knauf/permissions/userRestrictions';

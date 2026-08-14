@@ -4,29 +4,13 @@ import {
   isAgentsEndpoint,
   orderEndpointsConfig,
   defaultAgentCapabilities,
-  // [knauf] KK20-257 — needed as a runtime value (not just a type) by the code-env guard below.
-  AgentCapabilities,
-  // End [knauf]
 } from 'librechat-data-provider';
-import type { TEndpointsConfig, TConfig } from 'librechat-data-provider';
+import type { AgentCapabilities, TEndpointsConfig, TConfig } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
 import type { ServerRequest, TCustomEndpointsConfig } from '~/types';
 import { loadCustomEndpointsConfig as defaultLoadCustomEndpoints } from '~/endpoints/custom';
-// [knauf] KK20-257 — fail-closed code-environment guard (see the module docblock for why).
-import { isKnaufCodeEnvConfigured } from '~/knauf/code/codeEnvGuard';
-// End [knauf]
-
-// [knauf] KK20-257 — drop `execute_code` unless LIBRECHAT_CODE_BASEURL points at a host
-// we control. Returns the list untouched otherwise, so non-code capabilities and the
-// `undefined` case (upstream falls back to defaultAgentCapabilities) behave as before.
-function withKnaufCodeEnvGuard(
-  capabilities: AgentCapabilities[] | undefined,
-): AgentCapabilities[] | undefined {
-  if (capabilities == null || isKnaufCodeEnvConfigured()) {
-    return capabilities;
-  }
-  return capabilities.filter((capability) => capability !== AgentCapabilities.execute_code);
-}
+// [knauf] KK20-257 — explicit flag + controlled-URL gate shared by every runtime consumer.
+import { withKnaufCodeExecutionGate } from '~/knauf/code/codeEnvGuard';
 // End [knauf]
 
 type PartialEndpointEntry = Partial<TConfig> & Record<string, unknown>;
@@ -96,20 +80,15 @@ export function createEndpointsConfigService(deps: EndpointsConfigDeps): {
       };
     }
 
-    if (mergedConfig[EModelEndpoint.agents] && appConfig?.endpoints?.[EModelEndpoint.agents]) {
+    if (mergedConfig[EModelEndpoint.agents]) {
       const { disableBuilder, capabilities, allowedProviders } =
-        appConfig.endpoints[EModelEndpoint.agents];
+        appConfig?.endpoints?.[EModelEndpoint.agents] ?? {};
       mergedConfig[EModelEndpoint.agents] = {
         ...mergedConfig[EModelEndpoint.agents],
         allowedProviders,
         disableBuilder,
-        // [knauf] KK20-257 — fail closed on the code environment. Upstream defaults the
-        // Code API to LibreChat's hosted SaaS when LIBRECHAT_CODE_BASEURL is unset, so
-        // an env that enables the capability without it would ship user files to a third
-        // party. Stripping the capability here is upstream of every consumer (served
-        // config → client menu + tabular routing, checkCapability → upload gate,
-        // codeEnvAvailable → tool registration), so they cannot disagree.
-        capabilities: withKnaufCodeEnvGuard(capabilities),
+        // [knauf] KK20-257 — fail closed before this reaches served/config consumers.
+        capabilities: withKnaufCodeExecutionGate(capabilities),
         // End [knauf]
       };
     }

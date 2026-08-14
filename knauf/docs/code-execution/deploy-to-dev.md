@@ -46,7 +46,7 @@ observe it, the step is not done. Detail for each is in the phase named beside i
 | 8 | Merge #347 | ArgoCD syncs; pod `Running` and `/readyz` 200 | Phase D |
 | 9 | Read `spec.serviceAccountName` and the injected `AZURE_*` vars | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once** | Phase E |
 | 10 | Confirm the auth boundary and one real exec | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version | Phase E |
-| 11 | Ship the switch PR (`LIBRECHAT_CODE_BASEURL` + five `CODEAPI_*`) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
+| 11 | Ship the switch PR (`KNAUF_CODE_EXECUTION_ENABLED=true` + URL + JWT values) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
 | 12 | Walk the UI checklist, then run the capacity baseline | ~20 of 25 parallel execs succeed, rest report capacity, recovery after 5 min | Phase E |
 
 Steps 1–2 are the only ones that can be done today; 3 unblocks everything after it.
@@ -63,10 +63,10 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
    it. The first image is produced by the `push: branches: [main], paths: knauf/code-adapter/**`
    trigger when #258 merges. A GitOps PR pointing at a tag that was never built leaves the pod
    in `ImagePullBackOff`.
-3. **The capability flip is inert until the base URL points at the adapter.** `librechat.yaml`
+3. **The capability is inert until both environment gates pass.** `librechat.yaml`
    already lists `execute_code`, but `codeEnvGuard.ts` strips it unless
-   `LIBRECHAT_CODE_BASEURL` names a host we control. So #258 can merge and reach dev without
-   turning anything on — the feature goes live in Phase E, not before.
+   `KNAUF_CODE_EXECUTION_ENABLED=true` and `LIBRECHAT_CODE_BASEURL` names a controlled host.
+   The feature goes live only in Phase E.
 
 ---
 
@@ -414,6 +414,7 @@ verified against `packages/api/src/auth/codeapi.ts`:
 
 ```yaml
   configmap:
+    KNAUF_CODE_EXECUTION_ENABLED: "true"
     LIBRECHAT_CODE_BASEURL: "http://agentic-karl-code-adapter.agentic-karl-dev.svc.cluster.local:80/v1"
     CODEAPI_AUTH_PROVIDER: "librechat-jwt"   # or "both"; anything else mints NO header
     CODEAPI_JWT_ALGORITHM: "EdDSA"
@@ -430,9 +431,9 @@ Two failure modes worth stating plainly, because neither produces an obvious err
 
 - **`kid` / `issuer` / `audience` must match the adapter's values exactly**, or every request
   401s with nothing but `unauthorized`.
-- **The fail-closed guard only checks the base URL.** Set `LIBRECHAT_CODE_BASEURL` but forget
-  `CODEAPI_AUTH_PROVIDER` and the capability switches on, no `Authorization` header is minted,
-  and every execution 401s into "Execution error". Ship D4 as one atomic change.
+- **The fail-closed guard checks operator intent and URL control, not JWT correctness.** Set the
+  flag and URL but forget `CODEAPI_AUTH_PROVIDER`, and every execution 401s into "Execution
+  error". Ship D4 as one atomic change.
 
 **D5 · Network policy** — **there is something to do.** An earlier version of this doc said
 "most likely nothing"; that was wrong, and wrong in the quiet direction.
@@ -569,7 +570,7 @@ recovery. **Write the measured number into scaling.md.** It is the input to prod
 
 | Situation | Action | Blast radius |
 | --- | --- | --- |
-| Feature misbehaves, adapter fine | Remove `LIBRECHAT_CODE_BASEURL` from the app values | Capability strips itself; nothing else changes |
+| Feature misbehaves, adapter fine | Set `KNAUF_CODE_EXECUTION_ENABLED=false` and roll app pods | Capability and code-dependent skills disappear; adapter stays dormant |
 | Adapter unhealthy | Scale the Deployment to 0 | Executions fail closed; the app keeps running |
 | Bad adapter image | Point the values tag at the previous version | Requires a previous tag to exist — see the mutable-tag caveat below |
 | Terraform wrong | Do **not** destroy the pool while sessions are live | Prefer fixing forward |

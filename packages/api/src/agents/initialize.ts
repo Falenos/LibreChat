@@ -801,6 +801,9 @@ export async function initializeAgent(
             userId: req.user?.id,
             skillStates: params.skillStates,
             defaultActiveOnShare: params.defaultActiveOnShare,
+            // [knauf] KK20-257 — manual invocation shares the environment gate.
+            codeEnvAvailable: params.codeEnvAvailable,
+            // End [knauf]
           })
         : Promise.resolve<ResolvedManualSkill[] | undefined>(undefined),
       db.listAlwaysApplySkills
@@ -810,6 +813,9 @@ export async function initializeAgent(
             userId: req.user?.id,
             skillStates: params.skillStates,
             defaultActiveOnShare: params.defaultActiveOnShare,
+            // [knauf] KK20-257 — always-apply shares the environment gate.
+            codeEnvAvailable: params.codeEnvAvailable,
+            // End [knauf]
           })
         : Promise.resolve<ResolvedAlwaysApplySkill[] | undefined>(undefined),
     ]);
