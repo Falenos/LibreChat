@@ -11,12 +11,12 @@ The application exposes these Prometheus instruments through the authenticated
 `/metrics` endpoint. Datadog collects them under the `agentic_karl.foundry`
 namespace.
 
-| Prometheus metric | Datadog metric | Meaning |
-|---|---|---|
-| `knauf_foundry_model_call_duration_seconds` | `agentic_karl.foundry.model_call.duration_seconds` | End-to-end duration of one observable router call |
-| `knauf_foundry_model_call_ttft_seconds` | `agentic_karl.foundry.model_call.ttft_seconds` | Start to first streamed chunk; absent when the callback surface provides no chunk |
-| `knauf_foundry_model_calls_total` | `agentic_karl.foundry.model_calls.count` | Observable calls by result, returned model, phase, and attempt bucket |
-| `knauf_foundry_model_stream_idle_timeouts_total` | `agentic_karl.foundry.model_stream_idle_timeouts.count` | Existing stream watchdog expirations |
+| Prometheus metric                                | Datadog metric                                          | Meaning                                                                           |
+| ------------------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `knauf_foundry_model_call_duration_seconds`      | `agentic_karl.foundry.model_call.duration_seconds`      | End-to-end duration of one observable router call                                 |
+| `knauf_foundry_model_call_ttft_seconds`          | `agentic_karl.foundry.model_call.ttft_seconds`          | Start to first streamed chunk; absent when the callback surface provides no chunk |
+| `knauf_foundry_model_calls_total`                | `agentic_karl.foundry.model_calls.count`                | Observable calls by result, returned model, phase, and attempt bucket             |
+| `knauf_foundry_model_stream_idle_timeouts_total` | `agentic_karl.foundry.model_stream_idle_timeouts.count` | Existing stream watchdog expirations                                              |
 
 Metric labels are bounded:
 
@@ -24,7 +24,7 @@ Metric labels are bounded:
   `stream_idle_timeout`, `cancelled`, or `retry`
 - `returned_model`: approved router candidates, `model-router`, `other`, or
   `unknown`
-- `phase`: `primary`, `tool`, `summarization`, `subagent`, or `other`
+- `phase`: `primary`, `tool`, `summarization`, or `other`
 - `attempt`: `unknown` unless an application-controlled replacement call is
   directly observed, then `2+`
 
@@ -50,14 +50,16 @@ Search production logs for `FoundryRouterTelemetry`.
 - completed model-call count and aggregate model wait
 - terminal user-visible result: `success`, `error`, or `cancelled`
 
-`aggregateModelWaitMs` is the sum of physical call durations. It can exceed wall
-time if model calls overlap; compare it with `durationMs`, not as a strict
-subtraction.
+`aggregateModelWaitMs` is the sum of observed parent-graph physical call
+durations. It can exceed wall time if model calls overlap; compare it with
+`durationMs`, not as a strict subtraction. Subagent child graphs replace the
+parent callback chain in the current Agents SDK, so their model calls are
+excluded rather than reported with misleading timing.
 
 No prompt, response, filename, signed URL, email, or user identity is emitted.
 The first model chunk is the earliest callback token from any observable model
 call. It is a correlation aid, not a guarantee that the chunk was already
-rendered to the user; tool, summarization, and subagent calls can emit first.
+rendered to the user; tool and summarization calls can emit first.
 
 ## Diagnosis workflow
 

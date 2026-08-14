@@ -22,17 +22,10 @@ const normalizeReturnedModel = (value) => {
 const messageType = (message) =>
   typeof message?.getType === 'function' ? message.getType() : message?.role;
 
-const getPhase = (messages, metadata, tags) => {
+const getPhase = (messages, metadata) => {
   const node =
     typeof metadata?.langgraph_node === 'string' ? metadata.langgraph_node.toLowerCase() : '';
   if (node.includes('summar')) return 'summarization';
-  if (
-    metadata?.is_subagent === true ||
-    node.includes('subagent') ||
-    tags?.some((tag) => typeof tag === 'string' && tag.toLowerCase().includes('subagent'))
-  ) {
-    return 'subagent';
-  }
   const lastMessage = messages?.at(-1)?.at(-1);
   if (messageType(lastMessage) === 'tool') return 'tool';
   return node === '' || node.includes('agent') ? 'primary' : 'other';
@@ -98,9 +91,19 @@ function createModelRouterTelemetry({
 }) {
   const calls = new Map();
   const completedCalls = [];
+  const pendingRetriesByParentRunId = new Map();
   let firstModelChunkAtMs;
-  let pendingRetryReason;
   let finalized = false;
+
+  const consumePendingRetry = (parentRunId) => {
+    if (parentRunId == null) return;
+    const reasons = pendingRetriesByParentRunId.get(parentRunId);
+    const reason = reasons?.shift();
+    if (reasons?.length === 0) {
+      pendingRetriesByParentRunId.delete(parentRunId);
+    }
+    return reason;
+  };
 
   const finishCall = (runId, result, output, error) => {
     const call = calls.get(runId);
@@ -145,7 +148,7 @@ function createModelRouterTelemetry({
   };
 
   const handler = BaseCallbackHandler.fromMethods({
-    handleChatModelStart(_llm, messages, runId, _parentRunId, _extraParams, tags, metadata) {
+    handleChatModelStart(_llm, messages, runId, parentRunId, _extraParams, tags, metadata) {
       const runtimeMetadata = metadata ?? (Array.isArray(tags) ? undefined : tags) ?? {};
       const requestedModel = runtimeMetadata?.ls_model_name;
       if (
@@ -154,11 +157,11 @@ function createModelRouterTelemetry({
       ) {
         return;
       }
-      const retryReason = pendingRetryReason;
-      pendingRetryReason = undefined;
+      const retryReason = consumePendingRetry(parentRunId);
       calls.set(runId, {
         startedAtMs: now(),
-        phase: getPhase(messages, runtimeMetadata, Array.isArray(tags) ? tags : []),
+        parentRunId,
+        phase: getPhase(messages, runtimeMetadata),
         attempt: retryReason == null ? 'unknown' : '2+',
         retryReason,
       });
@@ -176,9 +179,15 @@ function createModelRouterTelemetry({
       finishCall(runId, classifyError(error, isCancelled()), undefined, error);
     },
   });
+  handler.awaitHandlers = true;
 
   const recordRetry = ({ runId, reason, output }) => {
-    pendingRetryReason = reason;
+    const parentRunId = calls.get(runId)?.parentRunId;
+    if (parentRunId != null) {
+      const reasons = pendingRetriesByParentRunId.get(parentRunId) ?? [];
+      reasons.push(reason);
+      pendingRetriesByParentRunId.set(parentRunId, reasons);
+    }
     finishCall(runId, 'retry', output);
   };
 

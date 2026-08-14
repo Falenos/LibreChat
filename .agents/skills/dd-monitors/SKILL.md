@@ -1,6 +1,6 @@
 ---
 name: dd-monitors
-description: Monitor management - list, search, file-based create, and alerting best practices.
+description: Monitor management - list, search, file-based create, dashboard-backed metric monitors, Terraform definitions, and alerting best practices.
 metadata:
   version: "1.0.1"
   author: datadog-labs
@@ -17,6 +17,13 @@ Create, manage, and maintain monitors for alerting.
 
 ## Prerequisites
 This requires pup in your path. See [Setup Pup](https://github.com/datadog-labs/agent-skills/tree/main?tab=readme-ov-file#setup-pup).
+
+For Agentic Karl OpenMetrics, dashboard, or Terraform work, also load
+`agk-infra-context` and follow its
+`references/datadog-openmetrics-and-dashboards.md` contract. That repository
+contract overrides generic examples where Datadog latest-mode ingestion,
+organization-wide percentile configuration, or accepted dashboard tag keys
+matter.
 
 ## Command Execution Order (Token-Efficient)
 

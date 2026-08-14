@@ -1,6 +1,6 @@
 ---
 name: agk-infra-context
-description: Use when working on Agentic Karl / AGK infrastructure, architecture maps, Azure CLI, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform, Helm/GitOps values, release and promotion pipelines, adding services, or debugging dev, stage, or prod deployments in this fork.
+description: Use when working on Agentic Karl / AGK infrastructure, architecture maps, Azure CLI, AKS, ArgoCD, Key Vault, ExternalSecret, Terraform, Helm/GitOps values, Datadog/OpenMetrics dashboards and monitors, release and promotion pipelines, adding services, or debugging dev, stage, or prod deployments in this fork.
 ---
 
 # AGK Infra Context
@@ -48,6 +48,7 @@ Read each linked reference when its task applies. Do not rely on the short summa
 | Azure login, subscriptions, human RBAC, control-plane vs data-plane access, GitHub Actions/service-principal permissions    | [Access and identities](references/access-and-identities.md)                                                                                       |
 | AKS or ArgoCD inspection, ExternalSecret refresh, restarts, private endpoints, VPN/DNS diagnosis, private Mongo maintenance | [Runtime operations](references/runtime-operations.md)                                                                                             |
 | Terraform placement/state/workflows, adding a service, deployment workflow changes, pre-PR and promotion checks             | [Infrastructure change workflows](references/infrastructure-change-workflows.md)                                                                   |
+| Datadog OpenMetrics mappings, histogram percentiles, dashboard tags, monitor queries, or observability rollout sequencing   | [Datadog OpenMetrics and dashboards](references/datadog-openmetrics-and-dashboards.md); use `dd-monitors` and `dd-docs` for current product syntax |
 | Langfuse authentication boundaries, trace lookup, LangGraph observations, missing traces, and storage-access failures       | [Langfuse troubleshooting](references/langfuse-troubleshooting.md); use the generic `langfuse` skill for current CLI/API syntax                    |
 | Full dev/stage/prod topology, repositories, service dependencies, data stores, observability, and release flows             | [Architecture reference](../../../knauf/docs/reference/agentic-karl-architecture.md) — inspect its table of contents and load the relevant section |
 | File upload/storage lifecycle and image handling                                                                            | [File architecture overview](../../../knauf/docs/architecture/files/overview.md)                                                                   |

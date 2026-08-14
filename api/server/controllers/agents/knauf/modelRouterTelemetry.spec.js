@@ -8,6 +8,7 @@ jest.mock('@librechat/data-schemas', () => ({
   },
 }));
 
+const { CallbackManager } = require('@langchain/core/callbacks/manager');
 const { recordFoundryModelCall } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const {
@@ -102,13 +103,13 @@ describe('[knauf] Model Router telemetry', () => {
       now: () => currentTime,
     });
 
-    telemetry.handler.handleChatModelStart(null, [[]], 'first', undefined, undefined, [], {
+    telemetry.handler.handleChatModelStart(null, [[]], 'first', 'agent-node', undefined, [], {
       ls_model_name: 'model-router',
     });
     currentTime = 10;
     telemetry.recordRetry({ runId: 'first', reason: 'refusal', output: routedResult });
     currentTime = 20;
-    telemetry.handler.handleChatModelStart(null, [[]], 'replacement', undefined, undefined, [], {
+    telemetry.handler.handleChatModelStart(null, [[]], 'replacement', 'agent-node', undefined, [], {
       ls_model_name: 'model-router',
     });
     currentTime = 40;
@@ -121,6 +122,71 @@ describe('[knauf] Model Router telemetry', () => {
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ result: 'success', attempt: '2+' }),
+    );
+  });
+
+  it('awaits callback-manager dispatch before finalizing the visible turn', async () => {
+    let currentTime = 0;
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'gpt-5.4-mini',
+      startedAtMs: currentTime,
+      now: () => currentTime,
+    });
+    const manager = CallbackManager.configure(
+      [telemetry.handler],
+      undefined,
+      undefined,
+      undefined,
+      { ls_model_name: 'model-router' },
+    );
+
+    currentTime = 10;
+    const [runManager] = await manager.handleChatModelStart({}, [[{ getType: () => 'human' }]]);
+    currentTime = 30;
+    await runManager.handleLLMEnd(routedResult);
+    currentTime = 40;
+    telemetry.finalize();
+
+    expect(telemetry.handler.awaitHandlers).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Visible turn completed',
+      expect.objectContaining({ modelCallCount: 1, aggregateModelWaitMs: 20 }),
+    );
+  });
+
+  it('keeps replacement markers scoped to their parent model lineage', () => {
+    let currentTime = 0;
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'gpt-5.4-mini',
+      startedAtMs: currentTime,
+      now: () => currentTime,
+    });
+    const start = (runId, parentRunId) =>
+      telemetry.handler.handleChatModelStart(null, [[]], runId, parentRunId, undefined, [], {
+        ls_model_name: 'model-router',
+      });
+
+    start('retry-source', 'lineage-a');
+    currentTime = 10;
+    telemetry.recordRetry({
+      runId: 'retry-source',
+      reason: 'output_limit',
+      output: routedResult,
+    });
+    start('unrelated', 'lineage-b');
+    currentTime = 20;
+    telemetry.handler.handleLLMEnd(routedResult, 'unrelated');
+    start('replacement', 'lineage-a');
+    currentTime = 30;
+    telemetry.handler.handleLLMEnd(routedResult, 'replacement');
+
+    expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ attempt: 'unknown' }),
+    );
+    expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ attempt: '2+' }),
     );
   });
 
