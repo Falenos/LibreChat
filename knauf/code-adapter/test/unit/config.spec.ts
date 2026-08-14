@@ -92,7 +92,6 @@ describe('loadConfig', () => {
     expect(config.aca.execTimeoutMs).toBe(230_000);
     expect(config.exec.wrapper).toBe('full');
     expect(config.exec.captureMaxTotalBytes).toBe(268_435_456);
-    expect(config.exec.maxConcurrent).toBe(1);
     expect(config.uploadMaxBytes).toBe(134_217_728);
     expect(config.fileTtlHours).toBe(24);
     expect(config.fileMaxLifetimeHours).toBe(168);

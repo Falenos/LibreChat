@@ -93,37 +93,6 @@ describe('POST /v1/exec contract', () => {
     expect(aca.pushed).toHaveLength(0);
   });
 
-  it('rejects excess per-pod work without queueing or allocating another sandbox', async () => {
-    let startFirst!: () => void;
-    let releaseFirst!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      startFirst = resolve;
-    });
-    const holdFirst = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let executions = 0;
-    aca.executeImpl = async (_sid, code) => {
-      executions += 1;
-      startFirst();
-      await holdFirst;
-      return sentinelOutcome(code, 0, 'done');
-    };
-
-    const first = request(app).post('/v1/exec').send({ lang: 'py', code: 'first' });
-    const firstResponse = first.then((response) => response);
-    await firstStarted;
-    const second = await request(app).post('/v1/exec').send({ lang: 'py', code: 'second' });
-
-    expect(second.status).toBe(200);
-    expect(second.body.code).toBe(1);
-    expect(second.body.stderr).toMatch(/at capacity/i);
-    expect(executions).toBe(1);
-
-    releaseFirst();
-    await expect(firstResponse).resolves.toMatchObject({ status: 200 });
-  });
-
   // [knauf] KK20-257 review F5. `runtime_session_hint` is the only continuity field the
   // locked client puts on the wire (and only when the host sets
   // toolExecution.sandbox.statefulSessions). Same hint ⇒ same sandbox; the hint itself is

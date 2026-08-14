@@ -8,7 +8,6 @@ export interface Metrics {
   wrapperParseFailures: Counter<string>;
   truncationRecoveries: Counter<string>;
   uploadBytes: Counter<string>;
-  localCapacityRejections: Counter<string>;
 }
 
 export function createMetrics(): Metrics {
@@ -50,11 +49,6 @@ export function createMetrics(): Metrics {
     uploadBytes: new Counter({
       name: 'code_adapter_upload_bytes_total',
       help: 'Bytes staged via /upload endpoints',
-      registers: [registry],
-    }),
-    localCapacityRejections: new Counter({
-      name: 'code_adapter_local_capacity_rejections_total',
-      help: 'Executions rejected by the per-pod memory concurrency cap',
       registers: [registry],
     }),
   };
