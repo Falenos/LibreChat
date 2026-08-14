@@ -1866,6 +1866,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves successful response headers yield only bounded provider request IDs | Self | KK20-270 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.logging.spec.js` | Subject under test; real `@librechat/data-schemas` logger and request context | Medium — captures the final Winston transport envelope and proves router telemetry cannot inherit tenant or user identity while preserving explicit request correlation | Self | KK20-270 |
 | `packages/api/src/knauf/skills/skillPrimeBody.spec.ts` | Subject only (`./skillPrimeBody`) plus Node `fs`/`path` for shipped skills | Low — replaces the obsolete frontmatter byte ceiling with an exact first-frontmatter-boundary assertion, allowing capability metadata to grow without weakening the over-strip regression | Self | KK20-257 |
+| `api/server/controllers/agents/knauf/modelRouterTelemetry.js` | LangChain `BaseCallbackHandler`; `@librechat/{api,data-schemas}`; `./providerError` | Medium — extends the bounded returned-model vocabulary so the GPT-5.6 canary remains attributable by Luna, Terra, and Sol without introducing unbounded metric labels | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | KK20-272 |
+| `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | Subject under test; mocked `@librechat/{api,data-schemas}` | Low — pins normalization of versioned Model Router response metadata to the three bounded GPT-5.6 candidate labels | Self | KK20-272 |
 <!-- seams:new:end -->
 
 ## Static Assets

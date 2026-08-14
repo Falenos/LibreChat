@@ -17,6 +17,9 @@ const normalizeReturnedModel = (value) => {
   if (model.includes('gpt-5.4-mini')) return 'gpt-5.4-mini';
   if (model.includes('gpt-5.4')) return 'gpt-5.4';
   if (model.includes('gpt-5.5')) return 'gpt-5.5';
+  if (model.includes('gpt-5.6-luna')) return 'gpt-5.6-luna';
+  if (model.includes('gpt-5.6-terra')) return 'gpt-5.6-terra';
+  if (model.includes('gpt-5.6-sol')) return 'gpt-5.6-sol';
   if (model.includes(MODEL_ROUTER)) return MODEL_ROUTER;
   return 'other';
 };
