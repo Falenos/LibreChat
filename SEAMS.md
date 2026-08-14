@@ -1870,6 +1870,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/knauf/skills/skillPrimeBody.spec.ts` | Subject only (`./skillPrimeBody`) plus Node `fs`/`path` for shipped skills | Low — replaces the obsolete frontmatter byte ceiling with an exact first-frontmatter-boundary assertion, allowing capability metadata to grow without weakening the over-strip regression | Self | KK20-257 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.js` | LangChain `BaseCallbackHandler`; `@librechat/{api,data-schemas}`; `./providerError` | Medium — extends the bounded returned-model vocabulary so the GPT-5.6 canary remains attributable by Luna, Terra, and Sol without introducing unbounded metric labels | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | KK20-272 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | Subject under test; mocked `@librechat/{api,data-schemas}` | Low — pins normalization of versioned Model Router response metadata to the three bounded GPT-5.6 candidate labels | Self | KK20-272 |
+| `knauf/code-adapter/**` | None — standalone service; retention code depends only on MongoDB collection contracts and adapter-owned types | Low — clamps sliding file expiry to an adapter-configured absolute lifetime without changing upstream files or the Code API HTTP contract | `knauf/code-adapter/test/unit/{config,filesRepo}.spec.ts` | KK20-257 |
 <!-- seams:new:end -->
 
 ## Static Assets

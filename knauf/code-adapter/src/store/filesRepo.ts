@@ -36,10 +36,27 @@ export class FilesRepo {
   constructor(
     private readonly collection: Collection<FileDoc>,
     private readonly ttlHours: number,
+    private readonly maxLifetimeHours: number,
   ) {}
 
-  private expiry(from = new Date()): Date {
-    return new Date(from.getTime() + this.ttlHours * 3_600_000);
+  private createdAt(doc: FileDoc, fallback: Date): Date {
+    return doc.createdAt instanceof Date
+      ? doc.createdAt
+      : doc.lastModified instanceof Date
+        ? doc.lastModified
+        : fallback;
+  }
+
+  private expiry(from: Date, createdAt: Date): Date {
+    const slidingExpiry = from.getTime() + this.ttlHours * 3_600_000;
+    const absoluteExpiry = createdAt.getTime() + this.maxLifetimeHours * 3_600_000;
+    return new Date(Math.min(slidingExpiry, absoluteExpiry));
+  }
+
+  private isActive(doc: FileDoc, now: Date): boolean {
+    const absoluteExpiry =
+      this.createdAt(doc, now).getTime() + this.maxLifetimeHours * 3_600_000;
+    return doc.expiresAt.getTime() > now.getTime() && absoluteExpiry > now.getTime();
   }
 
   async insertStaged(input: InsertFileInput): Promise<FileDoc> {
@@ -59,7 +76,7 @@ export class FilesRepo {
       blobPath: '',
       lastModified: now,
       createdAt: now,
-      expiresAt: this.expiry(now),
+      expiresAt: this.expiry(now, now),
     };
     doc.blobPath = `${doc.sessionId}/${doc.fileId}`;
     await this.collection.insertOne(doc);
@@ -76,6 +93,11 @@ export class FilesRepo {
   async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
     const now = new Date();
     const fileId = randomUUID();
+    const existing = await this.collection.findOne({
+      sessionId: input.sessionId,
+      filename: input.filename,
+    });
+    const createdAt = existing == null ? now : this.createdAt(existing, now);
     const result = await this.collection.findOneAndUpdate(
       { sessionId: input.sessionId, filename: input.filename },
       {
@@ -89,7 +111,8 @@ export class FilesRepo {
           userId: input.userId,
           tenantId: input.tenantId,
           lastModified: now,
-          expiresAt: this.expiry(now),
+          expiresAt: this.expiry(now, createdAt),
+          ...(existing != null && !(existing.createdAt instanceof Date) ? { createdAt } : {}),
         },
         $setOnInsert: {
           sessionId: input.sessionId,
@@ -108,16 +131,34 @@ export class FilesRepo {
   }
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
-    return this.collection.findOne({ sessionId, fileId });
+    const doc = await this.collection.findOne({ sessionId, fileId });
+    return doc != null && this.isActive(doc, new Date()) ? doc : null;
   }
 
   async listBySession(sessionId: string): Promise<FileDoc[]> {
-    return this.collection.find({ sessionId }).toArray();
+    const now = new Date();
+    return (await this.collection.find({ sessionId }).toArray()).filter((doc) =>
+      this.isActive(doc, now),
+    );
   }
 
   /** Bump TTL on active use (exec push, download). */
   async touch(sessionId: string, fileId: string): Promise<void> {
-    await this.collection.updateOne({ sessionId, fileId }, { $set: { expiresAt: this.expiry() } });
+    const now = new Date();
+    const existing = await this.collection.findOne({ sessionId, fileId });
+    if (existing == null) {
+      return;
+    }
+    const createdAt = this.createdAt(existing, now);
+    await this.collection.updateOne(
+      { sessionId, fileId },
+      {
+        $set: {
+          expiresAt: this.expiry(now, createdAt),
+          ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
+        },
+      },
+    );
   }
 
   async delete(sessionId: string, fileId: string): Promise<boolean> {
