@@ -124,6 +124,9 @@ See [`.env.example`](.env.example) for the full annotated surface. Required:
 `AZURE_STORAGE_CONNECTION_STRING`), and outside `CODE_ADAPTER_LOCAL_MODE`,
 `CODEAPI_JWT_PUBLIC_KEY`. `FILE_TTL_HOURS` is sliding retention;
 `FILE_MAX_LIFETIME_HOURS` is the absolute ceiling and must be at least as large.
+Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MB) to Blob storage;
+`EXEC_MAX_CONCURRENT` (default 1 per pod) rejects excess work with the existing capacity result
+instead of queueing memory-heavy executions.
 `ACA_API_VERSION` is pinned deliberately — bumping it requires refreshing
 `test/fixtures/aca/` (see below).
 

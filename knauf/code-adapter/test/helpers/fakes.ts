@@ -62,23 +62,34 @@ export class FakeFilesRepo {
     return doc;
   }
 
-  async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
+  async upsertCaptured(
+    input: InsertFileInput,
+    blobPath: string,
+  ): Promise<{ doc: FileDoc; obsoleteBlobPaths: string[] }> {
     for (const doc of this.docs.values()) {
       if (doc.sessionId === input.sessionId && doc.filename === input.filename) {
+        const previousBlobPath = doc.blobPath;
         Object.assign(doc, {
           size: input.size,
           contentType: input.contentType,
           state: 'captured',
+          blobPath,
           lastModified: new Date(),
         });
-        return { doc, inserted: false };
+        return { doc, obsoleteBlobPaths: [previousBlobPath] };
       }
     }
-    return { doc: await this.insertStaged({ ...input, origin: 'exec-output' }), inserted: true };
+    const doc = await this.insertStaged({ ...input, origin: 'exec-output' });
+    doc.blobPath = blobPath;
+    return { doc, obsoleteBlobPaths: [] };
   }
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
     return this.docs.get(this.key(sessionId, fileId)) ?? null;
+  }
+
+  async findByBlobPath(blobPath: string): Promise<FileDoc | null> {
+    return [...this.docs.values()].find((doc) => doc.blobPath === blobPath) ?? null;
   }
 
   async listBySession(sessionId: string): Promise<FileDoc[]> {
@@ -189,6 +200,11 @@ export class FakeAcaClient implements AcaClient {
       throw new Error(`no fixture content for ${name}`);
     }
     return content;
+  }
+
+  async fetchFileStream(identifier: string, name: string) {
+    const content = await this.fetchFileContent(identifier, name);
+    return { stream: Readable.from(content), contentLength: content.length };
   }
 }
 

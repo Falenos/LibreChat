@@ -7,6 +7,7 @@ import { createUploadRouter } from './routes/upload.js';
 import { createDownloadRouter } from './routes/download.js';
 import { createObjectsRouter } from './routes/objects.js';
 import { createHealthRouter } from './routes/health.js';
+import { ExecutionSemaphore } from './exec/semaphore.js';
 import type { Express } from 'express';
 import type { Config } from './config.js';
 import type { Logger } from './logger.js';
@@ -56,13 +57,22 @@ export function createApp(deps: AppDeps): Express {
   }
 
   const v1 = express.Router();
+  const executionSemaphore = new ExecutionSemaphore(config.exec.maxConcurrent);
   v1.use(createJwtMiddleware(config, logger));
   v1.use(express.json({ limit: `${Math.ceil(config.exec.codeMaxBytes / 1024) + 64}kb` }));
   v1.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
   });
   v1.use(
-    createExecRouter({ config, logger, aca: deps.aca, blob: deps.blob, repo: deps.repo, metrics }),
+    createExecRouter({
+      config,
+      logger,
+      aca: deps.aca,
+      blob: deps.blob,
+      repo: deps.repo,
+      metrics,
+      executionSemaphore,
+    }),
   );
   v1.use(createUploadRouter({ config, logger, blob: deps.blob, repo: deps.repo, metrics }));
   v1.use(createDownloadRouter({ blob: deps.blob, repo: deps.repo, logger }));

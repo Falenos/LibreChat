@@ -50,6 +50,8 @@ export interface Config {
     stderrMaxBytes: number;
     captureMaxFiles: number;
     captureMaxTotalBytes: number;
+    /** Per-pod in-flight execution cap; rejects instead of queueing memory-heavy work. */
+    maxConcurrent: number;
     /**
      * Wall-clock ceiling on the whole post-exec capture phase.
      *
@@ -207,6 +209,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       stderrMaxBytes: int('STDERR_MAX_BYTES', 65_536),
       captureMaxFiles: int('CAPTURE_MAX_FILES', 20),
       captureMaxTotalBytes: int('CAPTURE_MAX_TOTAL_BYTES', 268_435_456),
+      maxConcurrent: int('EXEC_MAX_CONCURRENT', 1),
       // Sized against the response budget, not against the file caps: execTimeoutMs
       // (230s) + this must stay comfortably under `server.requestTimeout` (index.ts).
       captureMaxTotalMs: int('CAPTURE_MAX_TOTAL_MS', 60_000),

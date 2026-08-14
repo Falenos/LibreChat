@@ -13,6 +13,7 @@ import type { FilesRepo } from '../store/filesRepo.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { Metrics } from '../middleware/metrics.js';
+import type { ExecutionSemaphore } from './semaphore.js';
 
 const TIMEOUT_STDERR =
   "Execution exceeded the sandbox's 220-second limit and was terminated. " +
@@ -27,6 +28,7 @@ export interface ExecDeps {
   blob: BlobStore;
   repo: FilesRepo;
   metrics: Metrics;
+  executionSemaphore: ExecutionSemaphore;
 }
 
 /** stdout/stderr/exit-code resolved from a pool execution. */
@@ -103,25 +105,35 @@ export async function runExec(
     };
   };
 
-  let inputs;
-  try {
-    inputs = await resolveInputs(body.files ?? [], auth, deps.repo);
-  } catch (err) {
-    if (err instanceof StagedFileMissingError) {
-      return fail(
-        `Input file '${err.filename}' is no longer available in the sandbox (expired). Re-attach the file and retry.`,
-        'expired_input',
-      );
-    }
-    throw err;
+  const release = deps.executionSemaphore.tryAcquire();
+  if (release == null) {
+    metrics.localCapacityRejections.inc();
+    return fail(CAPACITY_STDERR, 'local_capacity');
   }
 
-  const runOnce = () =>
-    executeOnce(body, lang, auth, sessionId, inputs, deps, {
-      derivedFromHint,
-      reused: suppliedIsOwn,
-    });
-  return runWithRecovery(runOnce, { sessionId, logger, fail });
+  try {
+    let inputs;
+    try {
+      inputs = await resolveInputs(body.files ?? [], auth, deps.repo);
+    } catch (err) {
+      if (err instanceof StagedFileMissingError) {
+        return fail(
+          `Input file '${err.filename}' is no longer available in the sandbox (expired). Re-attach the file and retry.`,
+          'expired_input',
+        );
+      }
+      throw err;
+    }
+
+    const runOnce = () =>
+      executeOnce(body, lang, auth, sessionId, inputs, deps, {
+        derivedFromHint,
+        reused: suppliedIsOwn,
+      });
+    return await runWithRecovery(runOnce, { sessionId, logger, fail });
+  } finally {
+    release();
+  }
 }
 
 /**

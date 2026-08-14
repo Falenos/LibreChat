@@ -98,14 +98,15 @@ export class FilesRepo {
   }
 
   /**
-   * Capture upsert keyed on (sessionId, filename) so a re-run of the same
-   * code refreshes the row and keeps the fileId (and thus the blobPath /
-   * download link) stable across active overwrites. An expired generation is
-   * removed with a revision guard and recreated under a new fileId. Returns
-   * `inserted` so the caller can roll back a fresh row if the subsequent blob
-   * write fails without deleting an older valid row.
+   * Commit an already-uploaded capture. The fileId/download link remains stable
+   * across active overwrites, while blobPath changes for every upload so Mongo
+   * always points to one complete Blob generation.
    */
-  async upsertCaptured(input: InsertFileInput): Promise<{ doc: FileDoc; inserted: boolean }> {
+  async upsertCaptured(
+    input: InsertFileInput,
+    blobPath: string,
+  ): Promise<{ doc: FileDoc; obsoleteBlobPaths: string[] }> {
+    const obsoleteBlobPaths = new Set<string>();
     for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
       const now = new Date();
       const existing = await this.collection.findOne({
@@ -126,14 +127,14 @@ export class FilesRepo {
           identity: input.identity,
           userId: input.userId,
           tenantId: input.tenantId,
-          blobPath: `${input.sessionId}/${fileId}`,
+          blobPath,
           lastModified: now,
           createdAt: now,
           expiresAt: this.expiry(now),
         };
         try {
           await this.collection.insertOne(doc);
-          return { doc, inserted: true };
+          return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
         } catch (error) {
           if (
             typeof error === 'object' &&
@@ -149,7 +150,10 @@ export class FilesRepo {
 
       const revision = this.revisionFilter(existing);
       if (!this.isActive(existing, now)) {
-        await this.collection.deleteOne(revision);
+        const result = await this.collection.deleteOne(revision);
+        if (result.deletedCount === 1) {
+          obsoleteBlobPaths.add(existing.blobPath);
+        }
         continue;
       }
 
@@ -166,6 +170,7 @@ export class FilesRepo {
             identity: input.identity,
             userId: input.userId,
             tenantId: input.tenantId,
+            blobPath,
             lastModified: now,
             expiresAt: this.expiry(now, createdAt),
             ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
@@ -174,7 +179,10 @@ export class FilesRepo {
         { returnDocument: 'after', includeResultMetadata: true },
       );
       if (result.value != null) {
-        return { doc: result.value, inserted: false };
+        if (existing.blobPath !== blobPath) {
+          obsoleteBlobPaths.add(existing.blobPath);
+        }
+        return { doc: result.value, obsoleteBlobPaths: [...obsoleteBlobPaths] };
       }
     }
     throw new Error('upsertCaptured could not obtain a stable file revision');
@@ -182,6 +190,11 @@ export class FilesRepo {
 
   async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
     const doc = await this.collection.findOne({ sessionId, fileId });
+    return doc != null && this.isActive(doc, new Date()) ? doc : null;
+  }
+
+  async findByBlobPath(blobPath: string): Promise<FileDoc | null> {
+    const doc = await this.collection.findOne({ blobPath });
     return doc != null && this.isActive(doc, new Date()) ? doc : null;
   }
 

@@ -89,7 +89,8 @@ export async function createBlobStore(
       if (Buffer.isBuffer(data)) {
         await client.uploadData(data, options);
       } else {
-        await client.uploadStream(data as Readable, undefined, undefined, options);
+        // Bound SDK-side buffering while supporting the 256 MB capture contract.
+        await client.uploadStream(data as Readable, 4 * 1024 * 1024, 2, options);
         void size;
       }
     },

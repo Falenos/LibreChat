@@ -76,10 +76,11 @@ describe('FilesRepo absolute retention', () => {
       lastErrorObject: { updatedExisting: true },
     }));
 
-    const { doc, inserted } = await repo.upsertCaptured(input());
+    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(input(), 'karl-session/new-blob');
 
-    expect(inserted).toBe(false);
+    expect(obsoleteBlobPaths).toEqual([existing.blobPath]);
     expect(doc.createdAt).toEqual(createdAt);
+    expect(doc.blobPath).toBe('karl-session/new-blob');
     expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + HOUR_MS));
   });
 
@@ -93,9 +94,12 @@ describe('FilesRepo absolute retention', () => {
         value: { ...current, ...update.$set },
       }));
 
-    const { doc, inserted } = await repo.upsertCaptured(input());
+    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(
+      input(),
+      'karl-session/new-blob',
+    );
 
-    expect(inserted).toBe(false);
+    expect(obsoleteBlobPaths).toEqual([current.blobPath]);
     expect(collection.findOneAndUpdate).toHaveBeenNthCalledWith(
       1,
       {
@@ -115,9 +119,12 @@ describe('FilesRepo absolute retention', () => {
     const expired = fileDoc({ expiresAt: NOW });
     collection.findOne.mockResolvedValueOnce(expired).mockResolvedValueOnce(null);
 
-    const { doc, inserted } = await repo.upsertCaptured(input());
+    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(
+      input(),
+      'karl-session/new-blob',
+    );
 
-    expect(inserted).toBe(true);
+    expect(obsoleteBlobPaths).toEqual([expired.blobPath]);
     expect(collection.deleteOne).toHaveBeenCalledWith({
       _id: expired._id,
       lastModified: expired.lastModified,
@@ -137,9 +144,12 @@ describe('FilesRepo absolute retention', () => {
     });
     collection.findOne.mockResolvedValueOnce(expired).mockResolvedValueOnce(null);
 
-    const { doc, inserted } = await repo.upsertCaptured(input());
+    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(
+      input(),
+      'karl-session/new-blob',
+    );
 
-    expect(inserted).toBe(true);
+    expect(obsoleteBlobPaths).toEqual([expired.blobPath]);
     expect(collection.deleteOne).toHaveBeenCalledWith({
       _id: expired._id,
       lastModified: expired.lastModified,
@@ -157,9 +167,12 @@ describe('FilesRepo absolute retention', () => {
       value: { ...winner, ...update.$set },
     }));
 
-    const { doc, inserted } = await repo.upsertCaptured(input());
+    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(
+      input(),
+      'karl-session/new-blob',
+    );
 
-    expect(inserted).toBe(false);
+    expect(obsoleteBlobPaths).toEqual([winner.blobPath]);
     expect(doc.fileId).toBe(winner.fileId);
   });
 

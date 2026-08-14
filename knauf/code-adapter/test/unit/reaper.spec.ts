@@ -86,8 +86,8 @@ describe('[knauf] orphaned-blob reaper', () => {
   });
 
   it('does NOT delete a freshly written blob, even with no row yet', async () => {
-    // `upsertCaptured` then `blob.put` is two steps. A sweep landing between them must not
-    // take the bytes, so anything younger than the TTL is skipped without a Mongo lookup.
+    // Capture uploads the Blob before committing its path. A sweep landing between those
+    // steps must not take the bytes, so young Blobs are skipped without a Mongo lookup.
     const t = build();
     const doc = await t.stage(0);
     await t.repo.delete(doc.sessionId, doc.fileId);
