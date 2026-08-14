@@ -6,11 +6,14 @@ jest.mock('@librechat/data-schemas', () => ({
   logger: {
     info: jest.fn(),
   },
+  tenantStorage: {
+    run: jest.fn((_context, callback) => callback()),
+  },
 }));
 
 const { CallbackManager } = require('@langchain/core/callbacks/manager');
 const { recordFoundryModelCall } = require('@librechat/api');
-const { logger } = require('@librechat/data-schemas');
+const { logger, tenantStorage } = require('@librechat/data-schemas');
 const {
   classifyError,
   createModelRouterTelemetry,
@@ -93,10 +96,41 @@ describe('[knauf] Model Router telemetry', () => {
       expect.objectContaining({
         streamId: 'stream-1',
         durationMs: 1_200,
-        timeToFirstModelChunkMs: 350,
-        modelCallCount: 1,
-        aggregateModelWaitMs: 1_000,
+        timeToFirstModelContentMs: 350,
+        modelTelemetryScope: 'parent_graph',
+        observedParentModelCallCount: 1,
+        observedParentAggregateModelWaitMs: 1_000,
       }),
+    );
+    expect(tenantStorage.run).toHaveBeenCalledWith({}, expect.any(Function));
+  });
+
+  it('waits for the first non-empty content token before recording TTFT', () => {
+    let currentTime = 1_000;
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'gpt-5.5',
+      startedAtMs: currentTime,
+      now: () => currentTime,
+    });
+
+    currentTime = 1_100;
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    currentTime = 1_150;
+    telemetry.handler.handleLLMNewToken('', { prompt: 0, completion: 0 }, 'model-run-1');
+    currentTime = 1_300;
+    telemetry.handler.handleLLMNewToken('hello', { prompt: 0, completion: 0 }, 'model-run-1');
+    currentTime = 1_500;
+    telemetry.handler.handleLLMEnd(routedResult, 'model-run-1');
+    telemetry.finalize();
+
+    expect(recordFoundryModelCall).toHaveBeenCalledWith(
+      expect.objectContaining({ ttftSeconds: 0.2 }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
+      expect.objectContaining({ timeToFirstModelContentMs: 300 }),
     );
   });
 
@@ -155,7 +189,10 @@ describe('[knauf] Model Router telemetry', () => {
     expect(telemetry.handler.awaitHandlers).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       '[FoundryRouterTelemetry] Generation lifecycle completed',
-      expect.objectContaining({ modelCallCount: 1, aggregateModelWaitMs: 20 }),
+      expect.objectContaining({
+        observedParentModelCallCount: 1,
+        observedParentAggregateModelWaitMs: 20,
+      }),
     );
   });
 

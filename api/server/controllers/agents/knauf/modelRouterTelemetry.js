@@ -1,10 +1,12 @@
 const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
-const { logger } = require('@librechat/data-schemas');
+const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { recordFoundryModelCall } = require('@librechat/api');
 const { getProviderRequestId } = require('./providerError');
 
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
+
+const logTelemetry = (message, event) => tenantStorage.run({}, () => logger.info(message, event));
 
 const normalizeReturnedModel = (value) => {
   if (typeof value !== 'string' || value === '') {
@@ -92,7 +94,7 @@ function createModelRouterTelemetry({
   const calls = new Map();
   const completedCalls = [];
   const pendingRetriesByParentRunId = new Map();
-  let firstModelChunkAtMs;
+  let firstModelContentAtMs;
   let finalized = false;
 
   const consumePendingRetry = (parentRunId) => {
@@ -113,7 +115,9 @@ function createModelRouterTelemetry({
     const completedAtMs = now();
     const durationMs = Math.max(0, completedAtMs - call.startedAtMs);
     const ttftMs =
-      call.firstChunkAtMs == null ? undefined : Math.max(0, call.firstChunkAtMs - call.startedAtMs);
+      call.firstContentTokenAtMs == null
+        ? undefined
+        : Math.max(0, call.firstContentTokenAtMs - call.startedAtMs);
     const returnedModel =
       output == null ? 'unknown' : getReturnedModel(output, responseModelExtractor);
     const usage = output == null ? {} : getUsage(output);
@@ -144,7 +148,7 @@ function createModelRouterTelemetry({
       ...(providerRequestId != null && { providerRequestId }),
     };
     completedCalls.push(event);
-    logger.info('[FoundryRouterTelemetry] Model call completed', event);
+    logTelemetry('[FoundryRouterTelemetry] Model call completed', event);
   };
 
   const handler = BaseCallbackHandler.fromMethods({
@@ -166,11 +170,18 @@ function createModelRouterTelemetry({
         retryReason,
       });
     },
-    handleLLMNewToken(_token, _indices, runId) {
+    handleLLMNewToken(token, _indices, runId) {
       const call = calls.get(runId);
-      if (!call || call.firstChunkAtMs != null) return;
-      call.firstChunkAtMs = now();
-      firstModelChunkAtMs ??= call.firstChunkAtMs;
+      if (
+        !call ||
+        call.firstContentTokenAtMs != null ||
+        typeof token !== 'string' ||
+        token.length === 0
+      ) {
+        return;
+      }
+      call.firstContentTokenAtMs = now();
+      firstModelContentAtMs ??= call.firstContentTokenAtMs;
     },
     handleLLMEnd(output, runId) {
       finishCall(runId, 'success', output);
@@ -197,16 +208,22 @@ function createModelRouterTelemetry({
     if (completedCalls.length === 0 && calls.size === 0) return;
     const completedAtMs = now();
     const modelWaitMs = completedCalls.reduce((total, call) => total + call.durationMs, 0);
-    const terminalResult = cancelled ? 'cancelled' : failed ? 'error' : 'success';
-    logger.info('[FoundryRouterTelemetry] Generation lifecycle completed', {
+    let terminalResult = 'success';
+    if (cancelled) {
+      terminalResult = 'cancelled';
+    } else if (failed) {
+      terminalResult = 'error';
+    }
+    logTelemetry('[FoundryRouterTelemetry] Generation lifecycle completed', {
       ...correlation,
       result: terminalResult,
       durationMs: Math.max(0, completedAtMs - startedAtMs),
-      ...(firstModelChunkAtMs != null && {
-        timeToFirstModelChunkMs: Math.max(0, firstModelChunkAtMs - startedAtMs),
+      ...(firstModelContentAtMs != null && {
+        timeToFirstModelContentMs: Math.max(0, firstModelContentAtMs - startedAtMs),
       }),
-      modelCallCount: completedCalls.length,
-      aggregateModelWaitMs: modelWaitMs,
+      modelTelemetryScope: 'parent_graph',
+      observedParentModelCallCount: completedCalls.length,
+      observedParentAggregateModelWaitMs: modelWaitMs,
     });
   };
 
