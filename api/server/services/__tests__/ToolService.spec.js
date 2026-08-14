@@ -166,6 +166,39 @@ describe('ToolService - Action Capability Gating', () => {
       }
     });
 
+    // [knauf] KK20-257 — raw ephemeral fallback must respect the operator kill switch.
+    it('should remove execute_code from the ephemeral fallback when the environment is disabled', async () => {
+      process.env.KNAUF_CODE_EXECUTION_ENABLED = 'false';
+      try {
+        const req = createMockReq(defaultAgentCapabilities);
+        mockGetEndpointsConfig.mockResolvedValue({});
+
+        const result = await resolveAgentCapabilities(
+          req,
+          req.config,
+          Constants.EPHEMERAL_AGENT_ID,
+        );
+
+        expect(result.has(AgentCapabilities.execute_code)).toBe(false);
+        expect(result.has(AgentCapabilities.tools)).toBe(true);
+      } finally {
+        process.env.KNAUF_CODE_EXECUTION_ENABLED = 'true';
+      }
+    });
+    // End [knauf]
+
+    // [knauf] KK20-257 — static capability omission must not inherit upstream execute_code.
+    it('should keep execute_code disabled when ephemeral static capabilities are absent', async () => {
+      const req = createMockReq(undefined);
+      mockGetEndpointsConfig.mockResolvedValue({});
+
+      const result = await resolveAgentCapabilities(req, req.config, Constants.EPHEMERAL_AGENT_ID);
+
+      expect(result.has(AgentCapabilities.execute_code)).toBe(false);
+      expect(result.has(AgentCapabilities.tools)).toBe(true);
+    });
+    // End [knauf]
+
     it('should return empty set when no capabilities and not ephemeral', async () => {
       const req = createMockReq([]);
       mockGetEndpointsConfig.mockResolvedValue({});

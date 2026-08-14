@@ -19,7 +19,6 @@
  * ```
  */
 import { nanoid } from 'nanoid';
-import { AgentCapabilities } from 'librechat-data-provider';
 import type { Response as ServerResponse, Request } from 'express';
 import type {
   ChatCompletionResponse,
@@ -41,6 +40,9 @@ import {
   writeSSE,
 } from './handlers';
 import { createSafeUser } from '~/utils';
+// [knauf] KK20-257 — standalone OpenAI-compatible service shares the environment gate.
+import { isKnaufCodeExecutionEnabled } from '~/knauf/code/codeEnvGuard';
+// End [knauf]
 
 /**
  * Dependencies for the chat completion service
@@ -422,25 +424,15 @@ export async function createAgentChatCompletion(
     // Build allowed providers set (empty = all allowed)
     const allowedProviders = new Set<string>();
 
-    /**
-     * Derive `codeEnvAvailable` from the caller-supplied `appConfig` so
-     * `agent.tools: ['execute_code']` still produces `bash_tool` +
-     * `read_file` in the initialized agent's `toolDefinitions` (Phase 8
-     * removed the legacy `execute_code` tool definition, so the
-     * capability flag is the sole gate). Uses the
-     * `AgentCapabilities.execute_code` enum value rather than a string
-     * literal so an enum rename propagates here automatically. Falls
-     * back to `undefined` when the caller doesn't provide `appConfig` —
-     * matching the "explicit opt-in" semantics the in-repo controllers
-     * use.
-     */
+    // [knauf] KK20-257 — raw caller config cannot bypass operator intent or URL control.
     const agentsConfig = (deps.appConfig?.endpoints as Record<string, unknown> | undefined)?.agents;
     const codeEnvAvailable =
       agentsConfig != null && typeof agentsConfig === 'object'
-        ? ((agentsConfig as { capabilities?: string[] }).capabilities ?? []).includes(
-            AgentCapabilities.execute_code,
+        ? isKnaufCodeExecutionEnabled(
+            (agentsConfig as { capabilities?: string[] }).capabilities ?? [],
           )
         : undefined;
+    // End [knauf]
 
     // Initialize the agent first to check for disableStreaming
     const initializedAgent = await deps.initializeAgent({

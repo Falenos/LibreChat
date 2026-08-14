@@ -46,6 +46,9 @@ const {
   sendResponsesErrorResponse,
   createResponsesEventHandlers,
   createAggregatorEventHandlers,
+  // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
+  isKnaufCodeExecutionEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   createResponsesToolEndCallback,
@@ -393,6 +396,9 @@ const createResponse = async (req, res) => {
     const enabledCapabilities = new Set(
       appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities,
     );
+    // [knauf] KK20-257 — keep Responses primary and connected Agents fail closed.
+    const codeEnvAvailable = isKnaufCodeExecutionEnabled(enabledCapabilities);
+    // End [knauf]
     const skillsCapabilityEnabled = enabledCapabilities.has(AgentCapabilities.skills);
     const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
     const accessibleSkillIds = skillsCapabilityEnabled
@@ -459,7 +465,9 @@ const createResponse = async (req, res) => {
           skillsCapabilityEnabled,
           ephemeralSkillsToggle,
         }),
-        codeEnvAvailable: enabledCapabilities.has(AgentCapabilities.execute_code),
+        // [knauf] KK20-257 — primary Agent uses the canonical environment decision.
+        codeEnvAvailable,
+        // End [knauf]
         skillStates,
         defaultActiveOnShare,
         manualSkills,
@@ -536,7 +544,9 @@ const createResponse = async (req, res) => {
           skillStates,
           defaultActiveOnShare,
           /** @see DiscoverConnectedAgentsParams.codeEnvAvailable */
-          codeEnvAvailable: enabledCapabilities.has(AgentCapabilities.execute_code),
+          // [knauf] KK20-257 — connected Agents use the same environment decision.
+          codeEnvAvailable,
+          // End [knauf]
         },
         {
           getAgent: db.getAgent,

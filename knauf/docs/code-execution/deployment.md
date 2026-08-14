@@ -283,6 +283,7 @@ point it at the adapter:
 
 - `LIBRECHAT_CODE_BASEURL=http://agentic-karl-code-adapter.agentic-karl-dev.svc.cluster.local:80/v1`
   (the ClusterIP service port; it targets the pod's 3112).
+- `KNAUF_CODE_EXECUTION_ENABLED=true`
 - `CODEAPI_AUTH_PROVIDER=librechat-jwt`
 - `CODEAPI_JWT_PRIVATE_KEY` ← ExternalSecret from `AGK-CODEAPI-JWT-PRIVATE-KEY`
 - `CODEAPI_JWT_ALGORITHM=EdDSA`, `CODEAPI_JWT_KID=lc-codeapi-dev-2026-08`,
@@ -321,14 +322,14 @@ What is already committed:
 **The ordering constraint, restated as a deploy gate.** Because `librechat.yaml` is
 baked into the image and stage/prod are re-tags of the dev image, the capability
 travels with the release. It is safe only because it is inert without a configured
-adapter: `packages/api/src/knauf/code/codeEnvGuard.ts` strips `execute_code` unless
-`LIBRECHAT_CODE_BASEURL` names a host we control. So:
+adapter: `packages/api/src/knauf/code/codeEnvGuard.ts` strips `execute_code` unless the
+explicit flag is true and `LIBRECHAT_CODE_BASEURL` names a host we control. So:
 
-- Deploy §1–4 (pool, workload identity, adapter, `LIBRECHAT_CODE_BASEURL`) **first**.
+- Deploy §1–4 (pool, workload identity, adapter, URL, and true flag) **first**.
   Until then the release is a no-op for code execution — users see no code tool and
   no broken chip, and no file is sent anywhere.
-- After §1–4, code execution turns itself on. There is no second PR to merge, so
-  §6's verification is the real gate.
+- Keep the flag false until the complete environment is ready. Flipping it true is the
+  reviewed environment-specific activation event.
 
 ---
 
@@ -359,8 +360,8 @@ between two execs transparently re-mints the session.
 
 ## 7. Rollback (in escalating order)
 
-1. **Fast off-switch:** unset `LIBRECHAT_CODE_BASEURL` (values change) — code
-   execution stops and nothing else moves.
+1. **Fast off-switch:** set `KNAUF_CODE_EXECUTION_ENABLED=false` and roll the app pods.
+   Code Execution and dependent skills disappear; the adapter can remain dormant.
 
    > **This step used to be wrong, and dangerously so.** Unsetting the variable does
    > *not* stop `@librechat/agents`: it computes
@@ -369,8 +370,8 @@ between two execs transparently re-mints the session.
    > **hosted SaaS**. An operator following the old wording during an incident would
    > have caused the data egress they were trying to prevent.
    >
-   > KK20-257 made the step behave as written:
-   > `packages/api/src/knauf/code/codeEnvGuard.ts` treats "unset, unparseable, or
+   > KK20-257 also makes URL removal fail closed as defense in depth:
+   > `packages/api/src/knauf/code/codeEnvGuard.ts` treats "unset, unparseable, external, or
    > `api.librechat.ai`" as *not configured* and strips the `execute_code` capability,
    > which switches off the upload gate, the attach-menu row, tabular auto-routing and
    > tool registration together. Nothing is sent anywhere. Do not remove that guard as
@@ -391,7 +392,8 @@ there is no separate "enable it in prod" code change to write:
 - `librechat.yaml` carries the capability, `executeCode: true` on all four user-facing
   specs, and the prompt wording. It is baked into the image and byte-identical across
   envs, so prod gets it from the normal release. Only env vars differ.
-- **What keeps that safe in prod is `LIBRECHAT_CODE_BASEURL`.** Until prod sets it to the
+- **What keeps that safe in prod is the explicit default-off flag plus URL control.** Until
+  prod sets `KNAUF_CODE_EXECUTION_ENABLED=true` and points `LIBRECHAT_CODE_BASEURL` at the
   prod adapter, `packages/api/src/knauf/code/codeEnvGuard.ts` strips `execute_code`, so
   prod users see no code tool, no attach-menu row, no tabular routing — and no file is
   sent anywhere. The capability shipping ahead of the infra is therefore inert, not
@@ -412,14 +414,13 @@ there is no separate "enable it in prod" code change to write:
 - GitOps (`agk-deployment-configs`): copy the dev service dir to
   `agentic-karl/prod/services/agentic-karl-code-adapter`, swapping ACR / KV / namespace /
   UAMI clientId / pool endpoint; mirror the ApplicationSet exclude+add for prod. Then set
-  `LIBRECHAT_CODE_BASEURL` in the prod `agentic-karl` values — that is the switch that
-  actually turns prod on.
+  the private JWT wiring and `LIBRECHAT_CODE_BASEURL` in the prod `agentic-karl` values,
+  then flip `KNAUF_CODE_EXECUTION_ENABLED=true` — that is the switch that turns prod on.
 
-> **Ordering, and the current state.** As of this writing the adapter has **no service
-> directory in any environment** — not dev, not stage, not prod — so dev deployment (§1–4)
-> genuinely comes first; prod is two steps out. The order that matters is always the same:
-> pool + identity → adapter running → `LIBRECHAT_CODE_BASEURL` → verify. The capability is
-> already there and waiting, harmlessly.
+> **Ordering, and the current state.** Dev and stage have adapter services and app wiring;
+> production remains unactivated. The order is always pool + identity → adapter running →
+> JWT/URL wiring → `KNAUF_CODE_EXECUTION_ENABLED=true` → verify. Keep the prod flag false
+> until every preceding gate is green.
 
 ---
 

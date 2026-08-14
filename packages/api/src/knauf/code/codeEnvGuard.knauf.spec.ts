@@ -1,9 +1,12 @@
 import { logger } from '@librechat/data-schemas';
 import {
   isKnaufCodeEnvConfigured,
+  isKnaufCodeExecutionEnabled,
+  withKnaufCodeExecutionGate,
   _resetKnaufCodeEnvWarning,
   LIBRECHAT_HOSTED_CODE_API_HOST,
 } from './codeEnvGuard';
+import { AgentCapabilities } from 'librechat-data-provider';
 
 /**
  * [knauf] KK20-257. The guard's whole purpose is that a missing
@@ -109,5 +112,50 @@ describe('[knauf] isKnaufCodeEnvConfigured', () => {
     isKnaufCodeEnvConfigured(env());
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(jest.mocked(logger.warn).mock.calls[0][0]).toContain('execute_code');
+  });
+
+  describe('effective environment gate', () => {
+    const capabilities = [AgentCapabilities.tools, AgentCapabilities.execute_code];
+    const enabledEnv = env('http://agentic-karl-code-adapter:3112/v1');
+
+    it('requires explicit operator intent in addition to capability and URL', () => {
+      expect(isKnaufCodeExecutionEnabled(capabilities, enabledEnv)).toBe(false);
+      expect(
+        isKnaufCodeExecutionEnabled(capabilities, {
+          ...enabledEnv,
+          KNAUF_CODE_EXECUTION_ENABLED: 'true',
+        }),
+      ).toBe(true);
+    });
+
+    it('does not let the flag authorize an external URL', () => {
+      expect(
+        isKnaufCodeExecutionEnabled(capabilities, {
+          KNAUF_CODE_EXECUTION_ENABLED: 'true',
+          LIBRECHAT_CODE_BASEURL: 'https://evil.example.com/v1',
+        }),
+      ).toBe(false);
+    });
+
+    it('requires the static execute_code capability', () => {
+      expect(
+        isKnaufCodeExecutionEnabled([AgentCapabilities.tools], {
+          KNAUF_CODE_EXECUTION_ENABLED: 'true',
+          LIBRECHAT_CODE_BASEURL: 'http://agentic-karl-code-adapter:3112/v1',
+        }),
+      ).toBe(false);
+    });
+
+    it('materializes upstream defaults without execute_code when static capabilities are absent', () => {
+      expect(withKnaufCodeExecutionGate(undefined, enabledEnv)).not.toContain(
+        AgentCapabilities.execute_code,
+      );
+      expect(
+        withKnaufCodeExecutionGate(undefined, {
+          ...enabledEnv,
+          KNAUF_CODE_EXECUTION_ENABLED: 'true',
+        }),
+      ).not.toContain(AgentCapabilities.execute_code);
+    });
   });
 });

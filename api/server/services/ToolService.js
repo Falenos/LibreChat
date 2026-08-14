@@ -29,6 +29,9 @@ const {
   buildMCPAuthRunStepCompletedEvent,
   isFileAuthoringToolDefinition,
   buildOAuthToolCallName,
+  // [knauf] KK20-257 — canonical filtering for the ephemeral raw-config fallback.
+  withKnaufCodeExecutionGate,
+  // End [knauf]
   // [knauf] KK20-201
   resolveUserLocationContext,
   // End [knauf]
@@ -51,7 +54,6 @@ const {
   isEphemeralAgentId,
   validateActionDomain,
   actionDomainSeparator,
-  defaultAgentCapabilities,
   validateAndParseOpenAPISpec,
 } = require('librechat-data-provider');
 const {
@@ -177,9 +179,10 @@ async function resolveAgentCapabilities(req, appConfig, agentId) {
   const endpointsConfig = await getEndpointsConfig(req);
   let capabilities = new Set(endpointsConfig?.[EModelEndpoint.agents]?.capabilities ?? []);
   if (capabilities.size === 0 && isEphemeralAgentId(agentId)) {
-    capabilities = new Set(
-      appConfig.endpoints?.[EModelEndpoint.agents]?.capabilities ?? defaultAgentCapabilities,
-    );
+    // [knauf] KK20-257 — the fallback bypasses getEndpointsConfig, so gate it explicitly.
+    const fallbackCapabilities = appConfig.endpoints?.[EModelEndpoint.agents]?.capabilities;
+    capabilities = new Set(withKnaufCodeExecutionGate(fallbackCapabilities) ?? []);
+    // End [knauf]
   }
   return capabilities;
 }

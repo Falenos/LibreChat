@@ -12,6 +12,9 @@ import { registerCodeExecutionTools } from './tools';
 // user message; see the two call sites below.
 import { prepareSkillBodyForInjection } from '~/knauf/skills/skillPrimeBody';
 // End [knauf]
+// [knauf] KK20-257 — capability-dependent skills disappear when their environment is off.
+import { isSkillAvailableForCodeEnvironment } from '~/knauf/skills/capabilityRequirements';
+// End [knauf]
 import { logAxiosError } from '~/utils';
 
 const SKILL_CATALOG_LIMIT = 100;
@@ -144,6 +147,9 @@ export interface ResolveModelSpecSkillIdsParams {
   accessibleSkillIds: Types.ObjectId[];
   /** DB lookup: name → skill doc constrained to the user's accessible IDs. */
   getSkillByName?: InitializeAgentDbMethods['getSkillByName'];
+  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  codeEnvAvailable?: boolean;
+  // End [knauf]
 }
 
 /**
@@ -156,6 +162,7 @@ export async function resolveModelSpecSkillIds({
   names,
   accessibleSkillIds,
   getSkillByName,
+  codeEnvAvailable,
 }: ResolveModelSpecSkillIdsParams): Promise<Types.ObjectId[]> {
   if (!names.length || accessibleSkillIds.length === 0 || !getSkillByName) {
     return [];
@@ -196,6 +203,15 @@ export async function resolveModelSpecSkillIds({
         resolved.push(null);
         continue;
       }
+      // [knauf] KK20-257 — configured model specs cannot bypass the environment gate.
+      if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
+        logger.warn(
+          `[resolveModelSpecSkillIds] Skill "${name}" requires unavailable Code Execution`,
+        );
+        resolved.push(null);
+        continue;
+      }
+      // End [knauf]
       resolved.push(skill._id);
     } catch (err) {
       logger.warn(
@@ -400,6 +416,10 @@ export async function injectSkillCatalog(
 
   const isActive = (s: SkillSummary): boolean =>
     resolveSkillActive({ skill: s, skillStates, userId, defaultActiveOnShare });
+  // [knauf] KK20-257 — catalog ACL also enforces environment-backed skill dependencies.
+  const isEnvironmentAvailable = (s: SkillSummary): boolean =>
+    isSkillAvailableForCodeEnvironment(s, codeEnvAvailable);
+  // End [knauf]
 
   const activeSkills: SkillSummary[] = [];
   /**
@@ -436,12 +456,14 @@ export async function injectSkillCatalog(
        * deactivation (`isActive` false) is still a hard exclusion: the
        * user explicitly opted out, so we honor it everywhere.
        */
-      if (isActive(skill)) {
+      // [knauf] KK20-257 — unavailable code skills are neither cataloged nor runtime-resolvable.
+      if (isEnvironmentAvailable(skill) && isActive(skill)) {
         activeSkills.push(skill);
         if (skill.disableModelInvocation !== true) {
           visibleCount += 1;
         }
       }
+      // End [knauf]
     }
 
     if (!page.has_more || !page.after) {
@@ -653,6 +675,9 @@ export interface ResolveManualSkillsParams {
   skillStates?: Record<string, boolean>;
   /** Admin-configured default for shared skills. */
   defaultActiveOnShare?: boolean;
+  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  codeEnvAvailable?: boolean;
+  // End [knauf]
 }
 
 /**
@@ -722,8 +747,15 @@ export type ResolvedAlwaysApplySkill = ResolvedSkillPrime;
 export async function resolveManualSkills(
   params: ResolveManualSkillsParams,
 ): Promise<ResolvedManualSkill[]> {
-  const { names, getSkillByName, accessibleSkillIds, userId, skillStates, defaultActiveOnShare } =
-    params;
+  const {
+    names,
+    getSkillByName,
+    accessibleSkillIds,
+    userId,
+    skillStates,
+    defaultActiveOnShare,
+    codeEnvAvailable,
+  } = params;
 
   if (!names.length || accessibleSkillIds.length === 0) {
     return [];
@@ -778,6 +810,14 @@ export async function resolveManualSkills(
           logger.warn(`[resolveManualSkills] Skill "${name}" not found or not accessible`);
           return null;
         }
+        // [knauf] KK20-257 — crafted manualSkills payloads cannot invoke hidden code skills.
+        if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
+          logger.warn(
+            `[resolveManualSkills] Skill "${name}" requires unavailable Code Execution — skipping`,
+          );
+          return null;
+        }
+        // End [knauf]
         /**
          * `user-invocable: false` skills are model-only by author intent;
          * the popover already hides them on the UI side, but an API-direct
@@ -866,6 +906,9 @@ export interface ResolveAlwaysApplySkillsParams {
   defaultActiveOnShare?: boolean;
   /** Override cap on the number of always-apply primes to resolve. Defaults to `MAX_ALWAYS_APPLY_SKILLS`. */
   maxAlwaysApplySkills?: number;
+  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  codeEnvAvailable?: boolean;
+  // End [knauf]
 }
 
 /**
@@ -911,6 +954,7 @@ export async function resolveAlwaysApplySkills(
     skillStates,
     defaultActiveOnShare,
     maxAlwaysApplySkills = MAX_ALWAYS_APPLY_SKILLS,
+    codeEnvAvailable,
   } = params;
 
   if (accessibleSkillIds.length === 0 || maxAlwaysApplySkills <= 0) {
@@ -945,6 +989,11 @@ export async function resolveAlwaysApplySkills(
       if (resolved.length >= maxAlwaysApplySkills) {
         break;
       }
+      // [knauf] KK20-257 — always-apply cannot prime a skill whose sandbox is disabled.
+      if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
+        continue;
+      }
+      // End [knauf]
       if (!skill.body) {
         logger.warn(`[resolveAlwaysApplySkills] Skill "${skill.name}" has empty body — skipping`);
         continue;

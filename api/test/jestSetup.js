@@ -32,6 +32,11 @@ process.env.JWT_REFRESH_SECRET = 'test';
 process.env.CREDS_KEY = 'test';
 process.env.CREDS_IV = 'test';
 process.env.ALLOW_EMAIL_LOGIN = 'true';
+// [knauf] KK20-257 — API tests exercise the explicitly enabled internal code environment.
+process.env.KNAUF_CODE_EXECUTION_ENABLED ??= 'true';
+process.env.LIBRECHAT_CODE_BASEURL ??=
+  'http://agentic-karl-code-adapter.agentic-karl-test.svc.cluster.local/v1';
+// End [knauf]
 
 // Set global test timeout to 30 seconds
 // This can be overridden in individual tests if needed

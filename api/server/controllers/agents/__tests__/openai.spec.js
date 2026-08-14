@@ -79,6 +79,9 @@ jest.mock('@librechat/agents', () => ({
 
 jest.mock('@librechat/api', () => ({
   writeSSE: jest.fn(),
+  // [knauf] KK20-257 — preserve this controller suite's enabled Code Execution fixture.
+  isKnaufCodeExecutionEnabled: jest.fn().mockReturnValue(true),
+  // End [knauf]
   createRun: jest.fn().mockResolvedValue({
     processStream: mockProcessStream,
   }),

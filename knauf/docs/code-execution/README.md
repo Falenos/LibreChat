@@ -18,6 +18,7 @@ Artifacts and Skills are separate features documented in
 **Operational reference** (env vars, the served contract table, how to run/test/build/deploy) lives with the service:
 [`knauf/code-adapter/README.md`](../../code-adapter/README.md).
 
-**Rollout status:** the adapter is built and verified live against a spike subscription; the remaining AGK work —
-`agk-infrastructure` Terraform (one code-interpreter pool + workload identity) and the `agk-deployment-configs` deploy —
-is the step-by-step [deployment runbook](deployment.md).
+**Rollout status:** dev/stage infrastructure and adapter wiring exist; production activation remains
+separate. The app uses the default-off `KNAUF_CODE_EXECUTION_ENABLED` kill switch plus a
+controlled `LIBRECHAT_CODE_BASEURL`, and hides code-dependent skills whenever the effective
+environment is unavailable. See the [deployment runbook](deployment.md).

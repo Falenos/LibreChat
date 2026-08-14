@@ -35,6 +35,9 @@ const {
   resolveAgentScopedSkillIds,
   createOpenAIContentAggregator,
   isChatCompletionValidationFailure,
+  // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
+  isKnaufCodeExecutionEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   buildSummarizationHandlers,
@@ -272,6 +275,9 @@ const OpenAIChatCompletionController = async (req, res) => {
     };
 
     const enabledCapabilities = new Set(agentsEConfig?.capabilities);
+    // [knauf] KK20-257 — keep OpenAI-compatible primary and connected Agents fail closed.
+    const codeEnvAvailable = isKnaufCodeExecutionEnabled(enabledCapabilities);
+    // End [knauf]
     // [knauf] KK20-243 — AND the SKILLS.USE role permission into the capability
     // flag, exactly as in api/server/services/Endpoints/agents/initialize.js.
     // This block is a duplicate of that one upstream, so BOTH need the gate:
@@ -346,7 +352,9 @@ const OpenAIChatCompletionController = async (req, res) => {
           skillsCapabilityEnabled,
           ephemeralSkillsToggle,
         }),
-        codeEnvAvailable: enabledCapabilities.has(AgentCapabilities.execute_code),
+        // [knauf] KK20-257 — primary Agent uses the canonical environment decision.
+        codeEnvAvailable,
+        // End [knauf]
         skillStates,
         defaultActiveOnShare,
         manualSkills,
@@ -423,7 +431,9 @@ const OpenAIChatCompletionController = async (req, res) => {
           skillStates,
           defaultActiveOnShare,
           /** @see DiscoverConnectedAgentsParams.codeEnvAvailable */
-          codeEnvAvailable: enabledCapabilities.has(AgentCapabilities.execute_code),
+          // [knauf] KK20-257 — connected Agents use the same environment decision.
+          codeEnvAvailable,
+          // End [knauf]
         },
         {
           getAgent: db.getAgent,

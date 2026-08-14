@@ -134,6 +134,9 @@ const processAddedConvo = async ({
           names: selectedModelSpec.skills,
           accessibleSkillIds,
           getSkillByName: db.getSkillByName,
+          // [knauf] KK20-257 — connected model specs share the primary environment gate.
+          codeEnvAvailable,
+          // End [knauf]
         });
         addedAgent.skills_enabled = true;
         addedAgent.skills = resolvedSkillIds.map((id) => id.toString());

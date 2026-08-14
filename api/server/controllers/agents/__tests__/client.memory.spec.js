@@ -1,4 +1,7 @@
 const { EModelEndpoint, AgentCapabilities } = require('librechat-data-provider');
+// [knauf] KK20-257 — exercise the same canonical gate used by AgentClient::useMemory.
+const { isKnaufCodeExecutionEnabled } = require('@librechat/api');
+// End [knauf]
 
 /**
  * Pins the capability-flag derivation that `AgentClient::useMemory` uses when
@@ -12,12 +15,13 @@ const { EModelEndpoint, AgentCapabilities } = require('librechat-data-provider')
  * The expression mirrored below is the one in
  * `api/server/controllers/agents/client.js::useMemory`:
  *
- *   new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities)
- *     .has(AgentCapabilities.execute_code)
+ *   isKnaufCodeExecutionEnabled(
+ *     new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities)
+ *   )
  */
 function deriveMemoryCodeEnvAvailable(appConfig) {
-  return new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities).has(
-    AgentCapabilities.execute_code,
+  return isKnaufCodeExecutionEnabled(
+    new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities),
   );
 }
 
@@ -62,6 +66,25 @@ describe('AgentClient::useMemory — codeEnvAvailable derivation', () => {
     expect(deriveMemoryCodeEnvAvailable(null)).toBe(false);
     expect(deriveMemoryCodeEnvAvailable(undefined)).toBe(false);
   });
+
+  // [knauf] KK20-257 — static capability cannot bypass environment operator intent.
+  it('returns false when the explicit Code Execution flag is disabled', () => {
+    process.env.KNAUF_CODE_EXECUTION_ENABLED = 'false';
+    try {
+      expect(
+        deriveMemoryCodeEnvAvailable({
+          endpoints: {
+            [EModelEndpoint.agents]: {
+              capabilities: [AgentCapabilities.execute_code],
+            },
+          },
+        }),
+      ).toBe(false);
+    } finally {
+      process.env.KNAUF_CODE_EXECUTION_ENABLED = 'true';
+    }
+  });
+  // End [knauf]
 
   it('matches the literal string "execute_code" — catches enum rename drift', () => {
     /* Pins the capability enum value so a rename of `AgentCapabilities.execute_code`

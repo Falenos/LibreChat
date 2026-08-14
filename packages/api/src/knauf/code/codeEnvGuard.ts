@@ -18,9 +18,9 @@
  * believe the variable does.
  *
  * WHAT IT GUARDS
- * `getEndpointsConfig` filters `execute_code` out of `endpoints.agents.capabilities`
- * when this returns false. That single choke point is deliberately upstream of every
- * consumer, so all of them agree without their own checks:
+ * The effective helper combines an explicit operator flag, this controlled-host check,
+ * and the static endpoint capability. Served configuration and each independent runtime
+ * consumer use that same decision:
  *   - the served endpoints config → the client's `capabilities.codeEnabled`, which gates
  *     the attach-menu row and Knauf's tabular auto-routing,
  *   - `checkCapability(execute_code)` → the upload gate in Files/process.js, and
@@ -38,11 +38,14 @@
  * form of this check that matches the sentence above it.
  */
 import { logger } from '@librechat/data-schemas';
+import { AgentCapabilities, defaultAgentCapabilities } from 'librechat-data-provider';
+import { isEnabled } from '~/utils/common';
 
 /** The upstream fallback. Treated as "not configured" — see the module docblock. */
 export const LIBRECHAT_HOSTED_CODE_API_HOST = 'api.librechat.ai';
 
-let warned = false;
+let envWarned = false;
+let flagWarned = false;
 
 /** Parsed base URL, or null when it is absent/unparseable. */
 function parse(baseUrl: string | undefined): URL | null {
@@ -106,8 +109,8 @@ export function isKnaufCodeEnvConfigured(env: NodeJS.ProcessEnv = process.env): 
   const schemeOk = url != null && (url.protocol === 'http:' || url.protocol === 'https:');
   const configured = host != null && schemeOk && isControlledHost(host, env);
 
-  if (!configured && !warned) {
-    warned = true;
+  if (!configured && !envWarned) {
+    envWarned = true;
     logger.warn(
       `[knauf][code] \`execute_code\` is disabled: LIBRECHAT_CODE_BASEURL is ${reason(url, host)}` +
         '. Point it at the in-cluster Knauf code-adapter to enable code execution. Files are ' +
@@ -116,6 +119,62 @@ export function isKnaufCodeEnvConfigured(env: NodeJS.ProcessEnv = process.env): 
   }
 
   return configured;
+}
+
+type CapabilityCollection = readonly string[] | ReadonlySet<string>;
+
+function hasExecuteCode(capabilities: CapabilityCollection | undefined): boolean {
+  if (capabilities == null) {
+    return false;
+  }
+  return 'has' in capabilities
+    ? capabilities.has(AgentCapabilities.execute_code)
+    : capabilities.includes(AgentCapabilities.execute_code);
+}
+
+/**
+ * Canonical operator and runtime decision for Knauf Code Execution.
+ *
+ * Static configuration alone is never enough: operators must explicitly enable the
+ * environment and point it at a controlled Code Adapter URL. Callers that additionally
+ * need per-Agent tool selection must still require `agent.tools` to contain
+ * `execute_code`.
+ */
+export function isKnaufCodeExecutionEnabled(
+  capabilities: CapabilityCollection | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!hasExecuteCode(capabilities)) {
+    return false;
+  }
+  if (!isEnabled(env.KNAUF_CODE_EXECUTION_ENABLED)) {
+    if (!flagWarned) {
+      flagWarned = true;
+      logger.warn(
+        '[knauf][code] `execute_code` is disabled: KNAUF_CODE_EXECUTION_ENABLED is not true. ' +
+          'Enable it only in an environment with the Knauf code-adapter configured.',
+      );
+    }
+    return false;
+  }
+  return isKnaufCodeEnvConfigured(env);
+}
+
+/**
+ * Removes `execute_code` from an endpoint capability list when the canonical decision
+ * is false. Undefined lists materialize upstream defaults without `execute_code`;
+ * omission is not an explicit static capability grant.
+ */
+export function withKnaufCodeExecutionGate(
+  capabilities: AgentCapabilities[] | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentCapabilities[] | undefined {
+  if (capabilities != null && isKnaufCodeExecutionEnabled(capabilities, env)) {
+    return capabilities;
+  }
+  return (capabilities ?? defaultAgentCapabilities).filter(
+    (capability) => capability !== AgentCapabilities.execute_code,
+  );
 }
 
 /** The specific misconfiguration, so the log line is actionable rather than generic. */
@@ -138,5 +197,6 @@ function reason(url: URL | null, host: string | null): string {
 
 /** Test-only: clear the once-per-process warning latch. */
 export function _resetKnaufCodeEnvWarning(): void {
-  warned = false;
+  envWarned = false;
+  flagWarned = false;
 }

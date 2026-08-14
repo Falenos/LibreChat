@@ -117,8 +117,9 @@ describe('[knauf] prepareSkillBodyForInjection against the real shipped skills',
     expect(prepared).toMatch(/^#\s/);
     // Nothing but the frontmatter was removed.
     const frontmatterLength = raw.length - prepared.length;
+    const expectedFrontmatter = raw.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n)*/)?.[0];
     expect(frontmatterLength).toBeGreaterThan(0);
-    expect(frontmatterLength).toBeLessThan(600);
+    expect(frontmatterLength).toBe(expectedFrontmatter?.length);
     expect(raw.endsWith(prepared)).toBe(true);
   });
 });

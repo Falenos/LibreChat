@@ -55,6 +55,9 @@ const {
   hasUrlContextTool,
   appendYouTubeVideoParts,
   resolveYouTubeInjectionConfig,
+  // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
+  isKnaufCodeExecutionEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 // [knauf] KK20-194 — retry Model Router refusals and output-limit stops at the
 // current model boundary, then remove the failed partial output before persist.
@@ -774,7 +777,9 @@ class AgentClient extends BaseClient {
      *  `bash_tool` + `read_file` (pre-Phase 8 the legacy `execute_code`
      *  tool registered unconditionally; without this passthrough the
      *  memory path would silently lose code-execution tooling). */
+    // [knauf] KK20-257 — memory Agents must not bypass the environment kill switch.
     const memoryCapabilities = new Set(appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities);
+    const codeEnvAvailable = isKnaufCodeExecutionEnabled(memoryCapabilities);
     const agent = await initializeAgent(
       {
         req: this.options.req,
@@ -786,7 +791,8 @@ class AgentClient extends BaseClient {
             ? EModelEndpoint.agents
             : memoryConfig.agent?.provider,
         },
-        codeEnvAvailable: memoryCapabilities.has(AgentCapabilities.execute_code),
+        codeEnvAvailable,
+        // End [knauf]
       },
       {
         getFiles: db.getFiles,

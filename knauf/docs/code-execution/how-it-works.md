@@ -11,7 +11,9 @@ the adapter's operational reference (env, contract table, run/test) is its own
 ## The one-paragraph version
 
 When an agent runs code, LibreChat calls a fixed HTTP contract (the "Code API")
-at `LIBRECHAT_CODE_BASEURL`. We point that at **`knauf/code-adapter`**, a small
+at `LIBRECHAT_CODE_BASEURL`. KARL exposes that path only when
+`KNAUF_CODE_EXECUTION_ENABLED=true`, the URL is controlled, and the static Agents
+capabilities include `execute_code`. We point the URL at **`knauf/code-adapter`**, a small
 in-cluster service that translates each call into **Azure Container Apps dynamic
 sessions** — Microsoft-managed, Hyper-V-isolated sandboxes — runs the code
 there, and translates the result back. LibreChat is unmodified; the sandbox is
@@ -273,11 +275,11 @@ upstream wording; that is a different surface.
 `LIBRECHAT_CODE_BASEURL ?? 'https://api.librechat.ai/v1'` — LibreChat's hosted SaaS.
 An environment that enabled the capability without setting that variable would have
 uploaded Knauf files to a third party, at attach time, before the user sent anything.
-`packages/api/src/knauf/code/codeEnvGuard.ts` treats unset / unparseable /
-`api.librechat.ai` as _not configured_ and strips the capability, which switches off
-the upload gate, the menu row, tabular routing and tool registration together. It also
-makes the runbook's "unset the variable to turn it off" step true, which it was not
-before.
+`packages/api/src/knauf/code/codeEnvGuard.ts` requires explicit operator intent through
+`KNAUF_CODE_EXECUTION_ENABLED=true` and accepts only controlled URLs. Missing/false flag,
+unset or invalid URL, an external host, or missing static capability all disable the
+served capability and every independent Agent/ToolService runtime path. Code-dependent
+skills declare `allowed-tools: [execute_code]` and disappear under the same decision.
 
 ---
 

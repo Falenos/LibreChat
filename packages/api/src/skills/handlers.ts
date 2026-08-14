@@ -4,6 +4,7 @@ import {
   AccessRoleIds,
   PrincipalType,
   PermissionBits,
+  EModelEndpoint,
 } from 'librechat-data-provider';
 import type {
   TSkill,
@@ -33,6 +34,10 @@ import type { Response } from 'express';
 import type { Types } from 'mongoose';
 import type { ServerRequest, StrategyFunctions } from '~/types';
 import { isBinaryBuffer } from './binary';
+// [knauf] KK20-257 — Skills API visibility follows the effective Code Execution gate.
+import { isKnaufCodeExecutionEnabled } from '~/knauf/code/codeEnvGuard';
+import { listSkillsAvailableForCodeEnvironment } from '~/knauf/skills/capabilityRequirements';
+// End [knauf]
 
 /** Thin error shape the skill methods throw on validation failure. */
 type SkillValidationError = Error & { code?: string; issues?: ValidationIssue[] };
@@ -341,16 +346,26 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
         new Map([...accessibleIds, ...publicIds].map((id) => [id.toString(), id])).values(),
       );
 
-      const result = await listSkillsByAccess({
-        accessibleIds: mergedIds,
-        category: typeof category === 'string' && category.length > 0 ? category : undefined,
-        search: typeof search === 'string' && search.length > 0 ? search : undefined,
+      const publicSet = new Set(publicIds.map((id) => id.toString()));
+      // [knauf] KK20-257 — fill API pages after removing unavailable code-dependent skills.
+      const codeEnvAvailable = isKnaufCodeExecutionEnabled(
+        req.config?.endpoints?.[EModelEndpoint.agents]?.capabilities,
+      );
+      const result = await listSkillsAvailableForCodeEnvironment({
+        codeEnvAvailable,
         limit: parsedLimit,
         cursor: typeof cursor === 'string' && cursor.length > 0 ? cursor : null,
+        listPage: ({ limit: pageLimit, cursor: pageCursor }) =>
+          listSkillsByAccess({
+            accessibleIds: mergedIds,
+            category: typeof category === 'string' && category.length > 0 ? category : undefined,
+            search: typeof search === 'string' && search.length > 0 ? search : undefined,
+            limit: pageLimit,
+            cursor: pageCursor,
+          }),
       });
-
-      const publicSet = new Set(publicIds.map((id) => id.toString()));
-      const skills = result.skills.map((s) => serializeSkillSummary(s, publicSet));
+      // End [knauf]
+      const skills = result.skills.map((skill) => serializeSkillSummary(skill, publicSet));
 
       return res.status(200).json({
         skills,
