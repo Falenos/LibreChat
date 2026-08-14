@@ -1226,13 +1226,16 @@ class AgentClient extends BaseClient {
     const appConfig = this.options.req.config;
     const balanceConfig = getBalanceConfig(appConfig);
     const transactionsConfig = getTransactionsConfig(appConfig);
-    // [knauf] KK20-270 — correlate the visible loader interval with its model calls.
+    // [knauf] KK20-270 — correlate the generation lifecycle with model calls and resumable SSE.
     const modelRouterTelemetry = createModelRouterTelemetry({
       responseModelExtractor: getResponseModel,
       correlation: {
         requestId: this.options.req.id,
         messageId: this.responseMessageId,
         conversationId: this.conversationId,
+        ...(this.options.req?._resumableStreamId && {
+          streamId: this.options.req._resumableStreamId,
+        }),
       },
       isCancelled: () => abortController?.signal?.aborted === true,
     });
@@ -1672,7 +1675,7 @@ class AgentClient extends BaseClient {
         this._resolveRun(this.run ?? null);
         this._resolveRun = null;
       }
-      // [knauf] KK20-270 — one content-free summary bridges model wait to loader duration.
+      // [knauf] KK20-270 — summarize server generation timing without claiming browser loader time.
       modelRouterTelemetry.finalize({
         cancelled: abortController?.signal?.aborted === true,
         failed: modelRouterFailed,

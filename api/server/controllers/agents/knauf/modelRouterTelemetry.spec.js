@@ -39,12 +39,16 @@ describe('[knauf] Model Router telemetry', () => {
     jest.clearAllMocks();
   });
 
-  it('records duration, TTFT, returned model, tokens, and a visible-turn summary', () => {
+  it('records duration, TTFT, returned model, tokens, and a generation summary', () => {
     let currentTime = 1_000;
     const telemetry = createModelRouterTelemetry({
       responseModelExtractor: ({ output }) =>
         output.response_metadata.model.replace('model-router', ''),
-      correlation: { messageId: 'message-1', conversationId: 'conversation-1' },
+      correlation: {
+        messageId: 'message-1',
+        conversationId: 'conversation-1',
+        streamId: 'stream-1',
+      },
       startedAtMs: currentTime,
       now: () => currentTime,
     });
@@ -85,8 +89,9 @@ describe('[knauf] Model Router telemetry', () => {
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(
-      '[FoundryRouterTelemetry] Visible turn completed',
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
       expect.objectContaining({
+        streamId: 'stream-1',
         durationMs: 1_200,
         timeToFirstModelChunkMs: 350,
         modelCallCount: 1,
@@ -125,7 +130,7 @@ describe('[knauf] Model Router telemetry', () => {
     );
   });
 
-  it('awaits callback-manager dispatch before finalizing the visible turn', async () => {
+  it('awaits callback-manager dispatch before finalizing the generation lifecycle', async () => {
     let currentTime = 0;
     const telemetry = createModelRouterTelemetry({
       responseModelExtractor: () => 'gpt-5.4-mini',
@@ -149,7 +154,7 @@ describe('[knauf] Model Router telemetry', () => {
 
     expect(telemetry.handler.awaitHandlers).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
-      '[FoundryRouterTelemetry] Visible turn completed',
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
       expect.objectContaining({ modelCallCount: 1, aggregateModelWaitMs: 20 }),
     );
   });
@@ -190,7 +195,7 @@ describe('[knauf] Model Router telemetry', () => {
     );
   });
 
-  it('uses the visible turn outcome instead of intermediate call failures', () => {
+  it('uses the generation outcome instead of intermediate call failures', () => {
     const telemetry = createModelRouterTelemetry({
       responseModelExtractor: () => 'unknown',
       startedAtMs: 1_000,
@@ -204,7 +209,7 @@ describe('[knauf] Model Router telemetry', () => {
     telemetry.finalize({ failed: false });
 
     expect(logger.info).toHaveBeenCalledWith(
-      '[FoundryRouterTelemetry] Visible turn completed',
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
       expect.objectContaining({ result: 'success' }),
     );
   });

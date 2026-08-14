@@ -198,7 +198,7 @@ function createModelRouterTelemetry({
     const completedAtMs = now();
     const modelWaitMs = completedCalls.reduce((total, call) => total + call.durationMs, 0);
     const terminalResult = cancelled ? 'cancelled' : failed ? 'error' : 'success';
-    logger.info('[FoundryRouterTelemetry] Visible turn completed', {
+    logger.info('[FoundryRouterTelemetry] Generation lifecycle completed', {
       ...correlation,
       result: terminalResult,
       durationMs: Math.max(0, completedAtMs - startedAtMs),

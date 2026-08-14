@@ -43,12 +43,12 @@ Search production logs for `FoundryRouterTelemetry`.
 - optional bounded Azure request ID
 - optional application retry reason (`refusal` or `output_limit`)
 
-`Visible turn completed` contains:
+`Generation lifecycle completed` contains:
 
-- request, conversation, and message correlation IDs
-- visible-turn duration and optional time to first model chunk
+- request, conversation, message, and optional resumable-stream correlation IDs
+- server generation duration and optional time to first model chunk
 - completed model-call count and aggregate model wait
-- terminal user-visible result: `success`, `error`, or `cancelled`
+- terminal generation result: `success`, `error`, or `cancelled`
 
 `aggregateModelWaitMs` is the sum of observed parent-graph physical call
 durations. It can exceed wall time if model calls overlap; compare it with
@@ -61,20 +61,36 @@ The first model chunk is the earliest callback token from any observable model
 call. It is a correlation aid, not a guarantee that the chunk was already
 rendered to the user; tool and summarization calls can emit first.
 
+The generation lifecycle is not the browser loader interval. A resumable client
+can disconnect and subscribe again without starting another model call. Each
+`agentic_karl.sse.stream.duration_seconds` observation measures one SSE
+connection, so reconnects can split one user-visible wait across multiple
+observations. Use `streamId` to correlate the generation logs with
+`librechat.sse.stream` traces, whose attributes include resume status, end
+reason, first-chunk time, and final-event delivery.
+
 ## Diagnosis workflow
 
-1. Start with visible SSE p95 and model-call p95 on the same dashboard interval.
-2. Compare call duration with TTFT:
+1. Start with per-connection SSE p95, model-call p95, and generation stream
+   subscriptions on the same dashboard interval.
+2. If `type:resume` or `type:resume_state` activity rises, inspect
+   `librechat.sse.stream` spans for `librechat.stream.resume:true`,
+   `client_aborted`, `subscribe_failed`, and delayed final-event delivery. A
+   reconnect can re-show or prolong the client loader without another model
+   call.
+3. Compare call duration with TTFT:
    - Both high: delay is primarily before the first token.
    - TTFT normal and duration high: inspect stream-idle timeouts and output
      tokens for a slow or stalled stream.
-3. Group duration and volume by `returned_model` and `phase`.
-4. Inspect `attempt:2+` and `result:retry` for known refusal/output-limit
+4. Group duration and volume by `returned_model` and `phase`.
+5. Inspect `attempt:2+` and `result:retry` for known refusal/output-limit
    replacements. `attempt:unknown` must not be interpreted as a first attempt;
    hidden SDK retries are intentionally not inferred.
-5. Correlate a slow visible-turn log by request/message ID with its model-call
-   logs. Multiple model-run IDs indicate multiple observable calls.
-6. Compare application timing with Azure `TimeToResponse`, 429, and 5xx metrics.
+6. Correlate a slow generation log by stream/request/message ID with its
+   model-call logs and SSE spans. Multiple model-run IDs indicate multiple
+   observable calls; multiple SSE spans alone indicate reconnects, not extra
+   model work.
+7. Compare application timing with Azure `TimeToResponse`, 429, and 5xx metrics.
    If Azure and application tails agree, treat the delay as provider-side.
 
 ## Azure support evidence
