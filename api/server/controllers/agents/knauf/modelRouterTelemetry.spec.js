@@ -263,6 +263,9 @@ describe('[knauf] Model Router telemetry', () => {
 
   it('bounds returned model labels', () => {
     expect(normalizeReturnedModel('gpt-5.4-nano-2026')).toBe('gpt-5.4-nano');
+    expect(normalizeReturnedModel('model-routergpt-5.6-luna-2026-07-09')).toBe('gpt-5.6-luna');
+    expect(normalizeReturnedModel('model-routergpt-5.6-terra-2026-07-09')).toBe('gpt-5.6-terra');
+    expect(normalizeReturnedModel('model-routergpt-5.6-sol-2026-07-09')).toBe('gpt-5.6-sol');
     expect(normalizeReturnedModel('unplanned-model-123')).toBe('other');
     expect(normalizeReturnedModel()).toBe('unknown');
   });
