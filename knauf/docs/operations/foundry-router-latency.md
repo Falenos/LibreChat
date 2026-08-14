@@ -11,12 +11,12 @@ The application exposes these Prometheus instruments through the authenticated
 `/metrics` endpoint. Datadog collects them under the `agentic_karl.foundry`
 namespace.
 
-| Prometheus metric                                | Datadog metric                                          | Meaning                                                                           |
-| ------------------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `knauf_foundry_model_call_duration_seconds`      | `agentic_karl.foundry.model_call.duration_seconds`      | End-to-end duration of one observable router call                                 |
-| `knauf_foundry_model_call_ttft_seconds`          | `agentic_karl.foundry.model_call.ttft_seconds`          | Start to first streamed chunk; absent when the callback surface provides no chunk |
-| `knauf_foundry_model_calls_total`                | `agentic_karl.foundry.model_calls.count`                | Observable calls by result, returned model, phase, and attempt bucket             |
-| `knauf_foundry_model_stream_idle_timeouts_total` | `agentic_karl.foundry.model_stream_idle_timeouts.count` | Existing stream watchdog expirations                                              |
+| Prometheus metric                                | Datadog metric                                          | Meaning                                                                                   |
+| ------------------------------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `knauf_foundry_model_call_duration_seconds`      | `agentic_karl.foundry.model_call.duration_seconds`      | End-to-end duration of one observable router call                                         |
+| `knauf_foundry_model_call_ttft_seconds`          | `agentic_karl.foundry.model_call.ttft_seconds`          | Start to first non-empty streamed content token; absent when no content token is observed |
+| `knauf_foundry_model_calls_total`                | `agentic_karl.foundry.model_calls.count`                | Observable calls by result, returned model, phase, and attempt bucket                     |
+| `knauf_foundry_model_stream_idle_timeouts_total` | `agentic_karl.foundry.model_stream_idle_timeouts.count` | Existing stream watchdog expirations                                                      |
 
 Metric labels are bounded:
 
@@ -46,20 +46,24 @@ Search production logs for `FoundryRouterTelemetry`.
 `Generation lifecycle completed` contains:
 
 - request, conversation, message, and optional resumable-stream correlation IDs
-- server generation duration and optional time to first model chunk
-- completed model-call count and aggregate model wait
+- server generation duration and optional time to first model content
+- observed parent-graph model-call count and aggregate model wait
 - terminal generation result: `success`, `error`, or `cancelled`
 
-`aggregateModelWaitMs` is the sum of observed parent-graph physical call
-durations. It can exceed wall time if model calls overlap; compare it with
-`durationMs`, not as a strict subtraction. Subagent child graphs replace the
-parent callback chain in the current Agents SDK, so their model calls are
-excluded rather than reported with misleading timing.
+`observedParentAggregateModelWaitMs` is the sum of observed parent-graph
+physical call durations. It can exceed wall time if model calls overlap;
+compare it with `durationMs`, not as a strict subtraction. The companion
+`observedParentModelCallCount` and `modelTelemetryScope: parent_graph` make the
+same boundary explicit. Subagent child graphs replace the parent callback chain
+in the current Agents SDK, so their model calls are excluded rather than
+reported with misleading timing.
 
 No prompt, response, filename, signed URL, email, or user identity is emitted.
-The first model chunk is the earliest callback token from any observable model
-call. It is a correlation aid, not a guarantee that the chunk was already
-rendered to the user; tool and summarization calls can emit first.
+Telemetry logs run inside an empty nested request context so the shared Winston
+formatter cannot append tenant or user identity. The first model content time
+is the earliest non-empty callback token from any observable model call. It is
+a correlation aid, not a guarantee that the token was already rendered to the
+user; tool and summarization calls can emit first.
 
 The generation lifecycle is not the browser loader interval. A resumable client
 can disconnect and subscribe again without starting another model call. Each

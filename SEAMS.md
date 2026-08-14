@@ -1835,6 +1835,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | Subject under test; mocked `@librechat/{api,data-schemas}` | Low — pins call timing, TTFT, returned-model bounds, token/request-ID fields, retry buckets, timeout classes, and visible-turn summaries | Self | KK20-270 |
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded provider metadata projection | Low — exposes the existing safe request-ID extractor for successful router metadata without broadening accepted identifier characters | `api/server/controllers/agents/knauf/providerError.spec.js` | KK20-270 |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — proves successful response headers yield only bounded provider request IDs | Self | KK20-270 |
+| `api/server/controllers/agents/knauf/modelRouterTelemetry.logging.spec.js` | Subject under test; real `@librechat/data-schemas` logger and request context | Medium — captures the final Winston transport envelope and proves router telemetry cannot inherit tenant or user identity while preserving explicit request correlation | Self | KK20-270 |
 <!-- seams:new:end -->
 
 ## Static Assets
