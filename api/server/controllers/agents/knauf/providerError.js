@@ -17,11 +17,11 @@ const getStatus = (error) => {
   return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
 };
 
-const getRequestId = (error) => {
-  const headers = error?.headers ?? error?.response?.headers;
+const getProviderRequestId = (value) => {
+  const headers = value?.headers ?? value?.response?.headers;
   return boundedIdentifier(
-    error?.request_id ??
-      error?.requestId ??
+    value?.request_id ??
+      value?.requestId ??
       headers?.get?.('x-request-id') ??
       headers?.['x-request-id'] ??
       headers?.['apim-request-id'],
@@ -41,7 +41,7 @@ const summarizeProviderError = (error, operation) => {
   const code = boundedIdentifier(error?.code ?? error?.error?.code);
   const type = boundedIdentifier(error?.type ?? error?.error?.type);
   const param = boundedParameter(error?.param ?? error?.error?.param);
-  const requestId = getRequestId(error);
+  const requestId = getProviderRequestId(error);
 
   return {
     operation,
@@ -54,4 +54,4 @@ const summarizeProviderError = (error, operation) => {
   };
 };
 
-module.exports = { isRetryableProviderError, summarizeProviderError };
+module.exports = { getProviderRequestId, isRetryableProviderError, summarizeProviderError };

@@ -58,7 +58,14 @@ const {
 } = require('@librechat/api');
 // [knauf] KK20-194 — retry Model Router refusals and output-limit stops at the
 // current model boundary, then remove the failed partial output before persist.
-const { createModelRetryHandler, stripRetriedModelOutput } = require('./callbacks');
+const {
+  createModelRetryHandler,
+  getResponseModel,
+  stripRetriedModelOutput,
+} = require('./callbacks');
+// End [knauf]
+// [knauf] KK20-270 — request-scoped Model Router latency telemetry.
+const { createModelRouterTelemetry } = require('./knauf/modelRouterTelemetry');
 // End [knauf]
 // [knauf] KK20-199 — provider errors may contain request bodies, image data,
 // signed URLs, and identity fields. Keep only bounded diagnostic attributes.
@@ -1215,9 +1222,21 @@ class AgentClient extends BaseClient {
     let run;
     /** @type {Promise<(TAttachment | null)[] | undefined>} */
     let memoryPromise;
+    let modelRouterFailed = false;
     const appConfig = this.options.req.config;
     const balanceConfig = getBalanceConfig(appConfig);
     const transactionsConfig = getTransactionsConfig(appConfig);
+    // [knauf] KK20-270 — correlate the visible loader interval with its model calls.
+    const modelRouterTelemetry = createModelRouterTelemetry({
+      responseModelExtractor: getResponseModel,
+      correlation: {
+        requestId: this.options.req.id,
+        messageId: this.responseMessageId,
+        conversationId: this.conversationId,
+      },
+      isCancelled: () => abortController?.signal?.aborted === true,
+    });
+    // End [knauf]
     try {
       if (!abortController) {
         abortController = new AbortController();
@@ -1497,12 +1516,19 @@ class AgentClient extends BaseClient {
         config.configurable.last_agent_id = agents[agents.length - 1].id;
         // [knauf] KK20-194 — `raiseError` hands bounded refusal/truncation signals
         // to the SDK fallback; completed tools are not executed again.
-        const modelRetry = createModelRetryHandler({
-          userId: this.user ?? this.options.req.user?.id,
-          messageId: this.responseMessageId,
-          conversationId: this.conversationId,
-        });
-        config.callbacks = [...(config.callbacks ?? []), modelRetry.handler];
+        const modelRetry = createModelRetryHandler(
+          {
+            userId: this.user ?? this.options.req.user?.id,
+            messageId: this.responseMessageId,
+            conversationId: this.conversationId,
+          },
+          modelRouterTelemetry,
+        );
+        config.callbacks = [
+          ...(config.callbacks ?? []),
+          modelRetry.handler,
+          modelRouterTelemetry.handler,
+        ];
         try {
           await run.processStream({ messages }, config, {
             callbacks: {
@@ -1574,6 +1600,7 @@ class AgentClient extends BaseClient {
         });
       }
     } catch (err) {
+      modelRouterFailed = true;
       if (abortController.signal.aborted) {
         logger.debug(
           '[api/server/controllers/agents/client.js #sendCompletion] Operation aborted by user',
@@ -1645,6 +1672,12 @@ class AgentClient extends BaseClient {
         this._resolveRun(this.run ?? null);
         this._resolveRun = null;
       }
+      // [knauf] KK20-270 — one content-free summary bridges model wait to loader duration.
+      modelRouterTelemetry.finalize({
+        cancelled: abortController?.signal?.aborted === true,
+        failed: modelRouterFailed,
+      });
+      // End [knauf]
       run = null;
       config = null;
       memoryPromise = null;

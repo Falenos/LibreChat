@@ -7,6 +7,7 @@ import {
   createMetrics,
   instrumentMongooseQueryMetrics,
   normalizePath,
+  recordFoundryModelCall,
   recordGenerationJob,
   recordGenerationStreamResumePendingEvents,
   recordGenerationStreamSubscription,
@@ -301,6 +302,53 @@ describe('createMetrics', () => {
       /rum_proxy_requests_total\{endpoint="logs",result="collector_5xx"\} 1/,
     );
   });
+
+  // [knauf] KK20-270 — Model Router metrics stay bounded and omit TTFT when unavailable.
+  it('tracks Foundry Model Router calls and stream idle timeouts', async () => {
+    const app = express();
+    process.env.METRICS_SECRET = 'test-secret';
+    const { metricsRouter } = createMetrics();
+    app.use('/metrics', metricsRouter);
+
+    recordFoundryModelCall({
+      result: 'success',
+      returnedModel: 'gpt-5.5',
+      phase: 'primary',
+      attempt: 'unknown',
+      durationSeconds: 12.5,
+      ttftSeconds: 3.25,
+    });
+    recordFoundryModelCall({
+      result: 'stream_idle_timeout',
+      returnedModel: 'unknown',
+      phase: 'tool',
+      attempt: '2+',
+      durationSeconds: 60,
+    });
+
+    const response = await request(app)
+      .get('/metrics')
+      .set('Authorization', ['Bearer', 'test-secret'].join(' '))
+      .expect(200);
+
+    expect(response.text).toMatch(
+      /knauf_foundry_model_calls_total\{result="success",returned_model="gpt-5.5",phase="primary",attempt="unknown"\} 1/,
+    );
+    expect(response.text).toMatch(
+      /knauf_foundry_model_call_duration_seconds_sum\{result="success",returned_model="gpt-5.5",phase="primary",attempt="unknown"\} 12.5/,
+    );
+    expect(response.text).toMatch(
+      /knauf_foundry_model_call_ttft_seconds_sum\{result="success",returned_model="gpt-5.5",phase="primary",attempt="unknown"\} 3.25/,
+    );
+    expect(response.text).toMatch(
+      /knauf_foundry_model_calls_total\{result="stream_idle_timeout",returned_model="unknown",phase="tool",attempt="2\+"\} 1/,
+    );
+    expect(response.text).toMatch(/knauf_foundry_model_stream_idle_timeouts_total 1/);
+    expect(response.text).not.toMatch(
+      /knauf_foundry_model_call_ttft_seconds_count\{result="stream_idle_timeout"/,
+    );
+  });
+  // End [knauf]
 
   it('tracks mongoose query counts and latency by model and operation', async () => {
     class FakeQuery {
