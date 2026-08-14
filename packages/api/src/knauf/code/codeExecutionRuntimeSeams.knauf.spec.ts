@@ -32,7 +32,7 @@ describe('[knauf] Code Execution runtime seams', () => {
       'capabilities: withKnaufCodeExecutionGate(capabilities)',
     );
     expect(source('packages/api/src/skills/handlers.ts')).toContain(
-      'isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)',
+      'listSkillsAvailableForCodeEnvironment({',
     );
   });
 

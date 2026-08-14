@@ -918,6 +918,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/endpoints/config/endpoints.ts` | `getEndpointsConfig` capability filtering | 12–14, 90–92 | Applies the explicit flag plus controlled URL decision before served configuration and `checkCapability` consumers see `execute_code` | `packages/api/src/knauf/code/codeEnvCapabilityFilter.knauf.spec.ts`, `packages/api/src/knauf/code/codeExecutionRuntimeSeams.knauf.spec.ts` | KK20-257 |
 | `packages/api/src/index.ts` | `codeEnvGuard` package export | 96–98 | Exposes the canonical gate to legacy CommonJS Agent controllers and ToolService without duplicating policy | `api/server/services/__tests__/ToolService.spec.js`, `api/server/controllers/agents/__tests__/client.memory.spec.js` | KK20-257 |
 | `packages/api/src/skills/handlers.ts` | `listHandler` environment dependency filter | 37–40, 358–365 | Removes code-dependent skills from Skills API listings when the effective environment is disabled | `packages/api/src/knauf/code/codeExecutionRuntimeSeams.knauf.spec.ts`, `packages/api/src/knauf/skills/capabilityRequirements.knauf.spec.ts` | KK20-257 |
+| `packages/api/src/skills/handlers.ts` | `listHandler` visible-page pagination | 350–367 | Refills Skills API pages after environment filtering so `has_more` and `after` advance across the visible catalog rather than exposing gaps from hidden code skills | `packages/api/src/knauf/skills/capabilityRequirements.knauf.spec.ts` | KK20-257 |
 <!-- seams:auto:end -->
 
 ## Configuration
