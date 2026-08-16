@@ -1,3 +1,4 @@
+const { createRequire } = require('node:module');
 const {
   getProviderRequestId,
   isRetryableProviderError,
@@ -74,6 +75,38 @@ describe('[knauf] provider error safety', () => {
       retryable: false,
       errorName: 'BadRequestError',
     });
+  });
+
+  it('matches the OpenAI SDK contract used by @langchain/openai', () => {
+    const openAIRequire = createRequire(require.resolve('@langchain/openai'));
+    const { APIError, BadRequestError } = openAIRequire('openai');
+    const error = APIError.generate(
+      400,
+      {
+        error: {
+          message: 'private provider detail',
+          code: 'unsupported_value',
+          type: 'invalid_request_error',
+          param: 'text.verbosity',
+        },
+      },
+      undefined,
+      new Headers({ 'x-request-id': 'azure-request-contract' }),
+    );
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    const summary = summarizeProviderError(error, 'model_router_call');
+    expect(summary).toEqual({
+      operation: 'model_router_call',
+      retryable: false,
+      providerStatus: 400,
+      code: 'unsupported_value',
+      type: 'invalid_request_error',
+      param: 'text.verbosity',
+      errorName: 'BadRequestError',
+      requestId: 'azure-request-contract',
+    });
+    expect(JSON.stringify(summary)).not.toContain('private provider detail');
   });
 
   it('extracts a bounded provider request ID from response headers', () => {

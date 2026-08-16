@@ -1,3 +1,5 @@
+const { createRequire } = require('node:module');
+
 jest.mock('@librechat/api', () => ({
   recordFoundryModelCall: jest.fn(),
 }));
@@ -12,6 +14,9 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 const { CallbackManager } = require('@langchain/core/callbacks/manager');
+const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
+const modelStackRequire = createRequire(require.resolve('@langchain/openai'));
+const { RunnableLambda } = modelStackRequire('@langchain/core/runnables');
 const { recordFoundryModelCall } = require('@librechat/api');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const {
@@ -191,6 +196,33 @@ describe('[knauf] Model Router telemetry', () => {
         retryReason: 'langchain_retry',
       }),
     );
+  });
+
+  it('matches the installed LangChain retry-tag contract', async () => {
+    let attemptCount = 0;
+    const observedTags = [];
+    const observer = BaseCallbackHandler.fromMethods({
+      handleChainStart(_chain, _inputs, _runId, _runType, tags) {
+        observedTags.push(tags ?? []);
+      },
+    });
+    const retriedRunnable = RunnableLambda.from(() => {
+      attemptCount += 1;
+      if (attemptCount === 1) {
+        throw new Error('expected retry');
+      }
+      return 'ok';
+    }).withRetry({ stopAfterAttempt: 2 });
+
+    await expect(
+      retriedRunnable.invoke('input', {
+        callbacks: [observer],
+      }),
+    ).resolves.toBe('ok');
+
+    const generatedRetryTag = observedTags.flat().find((tag) => tag.startsWith('retry:attempt:'));
+    expect(generatedRetryTag).toBe('retry:attempt:2');
+    expect(getAttempt([generatedRetryTag], undefined)).toBe('2+');
   });
 
   it('awaits callback-manager dispatch before finalizing the generation lifecycle', async () => {
