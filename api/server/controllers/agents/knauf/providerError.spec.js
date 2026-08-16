@@ -39,6 +39,7 @@ describe('[knauf] provider error safety', () => {
       code: 'invalid_payload',
       type: 'invalid_request_error',
       param: 'input[3].content[1].image_url',
+      errorName: 'Error',
       requestId: 'req-safe-123',
     });
     expect(JSON.stringify(summary)).not.toContain(base64.substring(0, 32));
@@ -65,12 +66,23 @@ describe('[knauf] provider error safety', () => {
     });
   });
 
+  it('uses the bounded SDK error class name when available', () => {
+    class BadRequestError extends Error {}
+
+    expect(summarizeProviderError(new BadRequestError('private'), 'model_router_call')).toEqual({
+      operation: 'model_router_call',
+      retryable: false,
+      errorName: 'BadRequestError',
+    });
+  });
+
   it('extracts a bounded provider request ID from response headers', () => {
     expect(
       getProviderRequestId({
         response: { headers: { 'apim-request-id': 'azure-request-123' } },
       }),
     ).toBe('azure-request-123');
+    expect(getProviderRequestId({ requestID: 'sdk-request-456' })).toBe('sdk-request-456');
     expect(
       getProviderRequestId({ headers: { 'x-request-id': 'unsafe request id' } }),
     ).toBeUndefined();
