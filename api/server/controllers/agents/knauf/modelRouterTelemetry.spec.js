@@ -1,3 +1,5 @@
+const { createRequire } = require('node:module');
+
 jest.mock('@librechat/api', () => ({
   recordFoundryModelCall: jest.fn(),
 }));
@@ -12,11 +14,15 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 const { CallbackManager } = require('@langchain/core/callbacks/manager');
+const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
+const modelStackRequire = createRequire(require.resolve('@langchain/openai'));
+const { RunnableLambda } = modelStackRequire('@langchain/core/runnables');
 const { recordFoundryModelCall } = require('@librechat/api');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const {
   classifyError,
   createModelRouterTelemetry,
+  getAttempt,
   normalizeReturnedModel,
 } = require('./modelRouterTelemetry');
 
@@ -77,7 +83,7 @@ describe('[knauf] Model Router telemetry', () => {
       result: 'success',
       returnedModel: 'gpt-5.5',
       phase: 'primary',
-      attempt: 'unknown',
+      attempt: '1',
       durationSeconds: 1,
       ttftSeconds: 0.25,
     });
@@ -156,12 +162,67 @@ describe('[knauf] Model Router telemetry', () => {
 
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ result: 'retry', attempt: 'unknown' }),
+      expect.objectContaining({ result: 'retry', attempt: '1' }),
     );
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ result: 'success', attempt: '2+' }),
     );
+  });
+
+  it('uses LangChain retry tags for provider retry attempts', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'gpt-5.6-luna',
+      startedAtMs: 0,
+      now: () => 10,
+    });
+
+    telemetry.handler.handleChatModelStart(
+      null,
+      [[]],
+      'model-run-2',
+      'parent-run',
+      undefined,
+      ['retry:attempt:2'],
+      { ls_model_name: 'model-router' },
+    );
+    telemetry.handler.handleLLMEnd(routedResult, 'model-run-2');
+
+    expect(recordFoundryModelCall).toHaveBeenCalledWith(expect.objectContaining({ attempt: '2+' }));
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        attempt: '2+',
+        retryReason: 'langchain_retry',
+      }),
+    );
+  });
+
+  it('matches the installed LangChain retry-tag contract', async () => {
+    let attemptCount = 0;
+    const observedTags = [];
+    const observer = BaseCallbackHandler.fromMethods({
+      handleChainStart(_chain, _inputs, _runId, _runType, tags) {
+        observedTags.push(tags ?? []);
+      },
+    });
+    const retriedRunnable = RunnableLambda.from(() => {
+      attemptCount += 1;
+      if (attemptCount === 1) {
+        throw new Error('expected retry');
+      }
+      return 'ok';
+    }).withRetry({ stopAfterAttempt: 2 });
+
+    await expect(
+      retriedRunnable.invoke('input', {
+        callbacks: [observer],
+      }),
+    ).resolves.toBe('ok');
+
+    const generatedRetryTag = observedTags.flat().find((tag) => tag.startsWith('retry:attempt:'));
+    expect(generatedRetryTag).toBe('retry:attempt:2');
+    expect(getAttempt([generatedRetryTag], undefined)).toBe('2+');
   });
 
   it('awaits callback-manager dispatch before finalizing the generation lifecycle', async () => {
@@ -224,7 +285,7 @@ describe('[knauf] Model Router telemetry', () => {
 
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ attempt: 'unknown' }),
+      expect.objectContaining({ attempt: '1' }),
     );
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       3,
@@ -251,6 +312,45 @@ describe('[knauf] Model Router telemetry', () => {
     );
   });
 
+  it('records only bounded OpenAI SDK error diagnostics', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'unknown',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    const error = Object.assign(new Error('sensitive provider response'), {
+      status: 400,
+      code: 'unsupported_value',
+      type: 'invalid_request_error',
+      param: 'text.verbosity',
+      requestID: 'azure-request-400',
+      request: { body: { input: 'private prompt' } },
+    });
+
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    telemetry.handler.handleLLMError(error, 'model-run-1');
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        result: 'provider_error',
+        attempt: '1',
+        providerRetryable: false,
+        providerStatus: 400,
+        providerCode: 'unsupported_value',
+        providerType: 'invalid_request_error',
+        providerParam: 'text.verbosity',
+        errorName: 'Error',
+        providerRequestId: 'azure-request-400',
+      }),
+    );
+    const event = logger.info.mock.calls.at(-1)[1];
+    expect(JSON.stringify(event)).not.toContain('sensitive provider response');
+    expect(JSON.stringify(event)).not.toContain('private prompt');
+  });
+
   it('classifies the existing stream idle timeout distinctly', () => {
     expect(
       classifyError(new DOMException('Model Router stream timed out', 'TimeoutError'), false),
@@ -268,5 +368,13 @@ describe('[knauf] Model Router telemetry', () => {
     expect(normalizeReturnedModel('model-routergpt-5.6-sol-2026-07-09')).toBe('gpt-5.6-sol');
     expect(normalizeReturnedModel('unplanned-model-123')).toBe('other');
     expect(normalizeReturnedModel()).toBe('unknown');
+  });
+
+  it('keeps attempt labels bounded when callback tags are unavailable', () => {
+    expect(getAttempt([], undefined)).toBe('1');
+    expect(getAttempt(['retry:attempt:2'], undefined)).toBe('2+');
+    expect(getAttempt(['retry:attempt:12'], undefined)).toBe('2+');
+    expect(getAttempt({ 'retry:attempt:2': true }, undefined)).toBe('unknown');
+    expect(getAttempt([], 'output_limit')).toBe('2+');
   });
 });

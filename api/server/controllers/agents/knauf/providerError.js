@@ -22,6 +22,7 @@ const getProviderRequestId = (value) => {
   return boundedIdentifier(
     value?.request_id ??
       value?.requestId ??
+      value?.requestID ??
       headers?.get?.('x-request-id') ??
       headers?.['x-request-id'] ??
       headers?.['apim-request-id'],
@@ -41,6 +42,9 @@ const summarizeProviderError = (error, operation) => {
   const code = boundedIdentifier(error?.code ?? error?.error?.code);
   const type = boundedIdentifier(error?.type ?? error?.error?.type);
   const param = boundedParameter(error?.param ?? error?.error?.param);
+  const constructorName = boundedIdentifier(error?.constructor?.name);
+  const errorName =
+    (constructorName === 'Object' ? undefined : constructorName) ?? boundedIdentifier(error?.name);
   const requestId = getProviderRequestId(error);
 
   return {
@@ -50,6 +54,7 @@ const summarizeProviderError = (error, operation) => {
     ...(code != null && { code }),
     ...(type != null && { type }),
     ...(param != null && { param }),
+    ...(errorName != null && { errorName }),
     ...(requestId != null && { requestId }),
   };
 };

@@ -67,6 +67,28 @@ percentile queries.
 - Keep new monitors in draft until live metric names, tags, units, and
   percentile queries are confirmed.
 
+## Structured Diagnostic Log Contract
+
+For Agentic Karl Model Router latency, retry, provider-error, generation, and
+SSE correlation, follow
+[`knauf/docs/operations/foundry-router-latency.md`](../../../../knauf/docs/operations/foundry-router-latency.md).
+Extend the existing Agentic Karl dashboard rather than creating a second
+router-debugging dashboard.
+
+- Metrics contain only bounded aggregate labels. Keep request, conversation,
+  message, model-run, stream, and provider request IDs in structured logs.
+- Never emit prompts, responses, exception messages, request/response bodies,
+  identities, files, signed URLs, arbitrary headers, or secrets.
+- Accept provider status, code, type, parameter, exception class, and request
+  ID only through bounded allow-list validation; drop unsafe values instead of
+  truncating content into a success-shaped diagnostic.
+- Run telemetry logging inside an empty nested request context so shared logger
+  enrichment cannot append tenant or user identity.
+- Add compatibility tests against the packages resolved by the real model
+  stack. A dependency bump that changes SDK error fields, package resolution,
+  callback propagation, or retry tags must fail CI rather than silently reduce
+  diagnostics.
+
 ## Delivery Sequence
 
 1. Application emits bounded metrics and has lifecycle/concurrency tests.

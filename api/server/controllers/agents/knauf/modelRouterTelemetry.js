@@ -1,7 +1,7 @@
 const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { recordFoundryModelCall } = require('@librechat/api');
-const { getProviderRequestId } = require('./providerError');
+const { getProviderRequestId, summarizeProviderError } = require('./providerError');
 
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
@@ -34,6 +34,17 @@ const getPhase = (messages, metadata) => {
   const lastMessage = messages?.at(-1)?.at(-1);
   if (messageType(lastMessage) === 'tool') return 'tool';
   return node === '' || node.includes('agent') ? 'primary' : 'other';
+};
+
+const getAttempt = (tags, retryReason) => {
+  if (retryReason != null) return '2+';
+  if (!Array.isArray(tags)) return 'unknown';
+  const retryTag = tags.find((tag) => {
+    if (typeof tag !== 'string') return false;
+    const match = /^retry:attempt:([0-9]+)$/.exec(tag);
+    return match != null && Number(match[1]) >= 2;
+  });
+  return retryTag == null ? '1' : '2+';
 };
 
 const getGenerationMessage = (result) => result?.generations?.at(-1)?.at(-1)?.message;
@@ -124,8 +135,10 @@ function createModelRouterTelemetry({
     const returnedModel =
       output == null ? 'unknown' : getReturnedModel(output, responseModelExtractor);
     const usage = output == null ? {} : getUsage(output);
+    const providerError =
+      error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
-      error == null ? getSuccessRequestId(output) : getProviderRequestId(error);
+      error == null ? getSuccessRequestId(output) : providerError?.requestId;
 
     recordFoundryModelCall?.({
       result,
@@ -148,6 +161,14 @@ function createModelRouterTelemetry({
       ...(call.retryReason != null && { retryReason: call.retryReason }),
       ...(Number.isFinite(usage.inputTokens) && { inputTokens: usage.inputTokens }),
       ...(Number.isFinite(usage.outputTokens) && { outputTokens: usage.outputTokens }),
+      ...(providerError != null && { providerRetryable: providerError.retryable }),
+      ...(providerError?.providerStatus != null && {
+        providerStatus: providerError.providerStatus,
+      }),
+      ...(providerError?.code != null && { providerCode: providerError.code }),
+      ...(providerError?.type != null && { providerType: providerError.type }),
+      ...(providerError?.param != null && { providerParam: providerError.param }),
+      ...(providerError?.errorName != null && { errorName: providerError.errorName }),
       ...(providerRequestId != null && { providerRequestId }),
     };
     completedCalls.push(event);
@@ -164,12 +185,14 @@ function createModelRouterTelemetry({
       ) {
         return;
       }
-      const retryReason = consumePendingRetry(parentRunId);
+      const explicitRetryReason = consumePendingRetry(parentRunId);
+      const attempt = getAttempt(tags, explicitRetryReason);
+      const retryReason = explicitRetryReason ?? (attempt === '2+' ? 'langchain_retry' : undefined);
       calls.set(runId, {
         startedAtMs: now(),
         parentRunId,
         phase: getPhase(messages, runtimeMetadata),
-        attempt: retryReason == null ? 'unknown' : '2+',
+        attempt,
         retryReason,
       });
     },
@@ -236,6 +259,7 @@ function createModelRouterTelemetry({
 module.exports = {
   classifyError,
   createModelRouterTelemetry,
+  getAttempt,
   getPhase,
   normalizeReturnedModel,
 };
