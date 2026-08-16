@@ -11,9 +11,12 @@ describe('[knauf] provider error safety', () => {
     [{ status: 429 }, true],
     [{ status: 503 }, true],
     [{ code: 'ECONNRESET' }, true],
+    [{ code: 'server_error' }, true],
+    [{ error: { type: 'server_error' } }, true],
     [{ status: 400 }, false],
     [{ status: 422 }, false],
     [{ status: 403 }, false],
+    [{ code: 'unsupported_value' }, false],
   ])('classifies retryability for %p', (error, expected) => {
     expect(isRetryableProviderError(error)).toBe(expected);
   });
@@ -107,6 +110,32 @@ describe('[knauf] provider error safety', () => {
       requestId: 'azure-request-contract',
     });
     expect(JSON.stringify(summary)).not.toContain('private provider detail');
+  });
+
+  it('matches a streamed OpenAI server error without an HTTP status', () => {
+    const openAIRequire = createRequire(require.resolve('@langchain/openai'));
+    const { APIError } = openAIRequire('openai');
+    const error = new APIError(
+      undefined,
+      {
+        message: 'private streamed provider detail',
+        code: 'server_error',
+        type: 'server_error',
+      },
+      undefined,
+      new Headers({ 'x-request-id': 'azure-stream-request' }),
+    );
+
+    const summary = summarizeProviderError(error, 'model_router_call');
+    expect(summary).toEqual({
+      operation: 'model_router_call',
+      retryable: true,
+      code: 'server_error',
+      type: 'server_error',
+      errorName: 'APIError',
+      requestId: 'azure-stream-request',
+    });
+    expect(JSON.stringify(summary)).not.toContain('private streamed provider detail');
   });
 
   it('extracts a bounded provider request ID from response headers', () => {

@@ -5,6 +5,7 @@ const NETWORK_ERROR_CODES = new Set([
   'ENETUNREACH',
   'ETIMEDOUT',
 ]);
+const RETRYABLE_PROVIDER_IDENTIFIERS = new Set(['server_error']);
 
 const boundedIdentifier = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
@@ -34,7 +35,13 @@ const isRetryableProviderError = (error) => {
   if (status != null) {
     return status === 408 || status === 429 || status >= 500;
   }
-  return NETWORK_ERROR_CODES.has(error?.code);
+  const code = error?.code ?? error?.error?.code;
+  const type = error?.type ?? error?.error?.type;
+  return (
+    NETWORK_ERROR_CODES.has(code) ||
+    RETRYABLE_PROVIDER_IDENTIFIERS.has(code) ||
+    RETRYABLE_PROVIDER_IDENTIFIERS.has(type)
+  );
 };
 
 const summarizeProviderError = (error, operation) => {
