@@ -26,8 +26,9 @@ Metric labels are bounded:
   `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `model-router`, `other`, or
   `unknown`
 - `phase`: `primary`, `tool`, `summarization`, or `other`
-- `attempt`: `unknown` unless an application-controlled replacement call is
-  directly observed, then `2+`
+- `attempt`: `1` when callback tags are available and no retry is present,
+  `2+` when LangChain emits `retry:attempt:<n>` or the application directly
+  observes a replacement call, and `unknown` when callback tags are unavailable
 
 The histograms are Datadog distributions. Use percentile and model/phase
 breakdowns to identify tail concentration; use the call counter for volume.
@@ -43,6 +44,8 @@ Search production logs for `FoundryRouterTelemetry`.
 - optional input/output token counts
 - optional bounded Azure request ID
 - optional application retry reason (`refusal` or `output_limit`)
+- for provider errors only: optional bounded HTTP status, provider code, type,
+  parameter, SDK exception class, and retryability
 
 `Generation lifecycle completed` contains:
 
@@ -59,12 +62,21 @@ same boundary explicit. Subagent child graphs replace the parent callback chain
 in the current Agents SDK, so their model calls are excluded rather than
 reported with misleading timing.
 
-No prompt, response, filename, signed URL, email, or user identity is emitted.
-Telemetry logs run inside an empty nested request context so the shared Winston
-formatter cannot append tenant or user identity. The first model content time
-is the earliest non-empty callback token from any observable model call. It is
-a correlation aid, not a guarantee that the token was already rendered to the
-user; tool and summarization calls can emit first.
+No prompt, response, exception message, request or response body, filename,
+signed URL, email, user identity, or arbitrary header is emitted. Provider
+codes, types, parameters, exception classes, and request IDs are retained only
+when they match bounded operational formats; unsafe or unbounded values are
+dropped. Telemetry logs run inside an empty nested request context so the
+shared Winston formatter cannot append tenant or user identity.
+
+Conversation, message, model-run, stream, and provider request IDs are
+pseudonymous operational correlation values. Keep them in structured logs
+under the existing Datadog access and retention controls; never promote them to
+Prometheus labels, dashboard group-by dimensions, or monitor tags.
+
+The first model content time is the earliest non-empty callback token from any
+observable model call. It is a correlation aid, not a guarantee that the token
+was already rendered to the user; tool and summarization calls can emit first.
 
 The generation lifecycle is not the browser loader interval. A resumable client
 can disconnect and subscribe again without starting another model call. Each
@@ -73,6 +85,31 @@ connection, so reconnects can split one user-visible wait across multiple
 observations. Use `streamId` to correlate the generation logs with
 `librechat.sse.stream` traces, whose attributes include resume status, end
 reason, first-chunk time, and final-event delivery.
+
+## Telemetry compatibility contract
+
+Dependency upgrades must not silently remove provider-error or retry
+diagnostics. Tests for this telemetry must exercise the installed runtime
+packages rather than only constructing plain objects with expected property
+names:
+
+- resolve OpenAI through the installed `@langchain/openai` package, construct a
+  real SDK error, and verify status, code, type, parameter, exception class, and
+  request ID survive the bounded summarizer without serializing the message or
+  body
+- resolve `@langchain/core` from the model stack, run a real retry, and verify
+  its generated retry tag crosses the API callback-handler boundary and maps to
+  attempt `2+`
+
+Do not pin an exact dependency version in these contract assertions.
+Compatible upgrades should pass unchanged; a changed SDK error shape, package
+resolution boundary, callback propagation rule, or retry-tag format must fail
+CI and require an explicit telemetry adaptation.
+
+Keep provider-specific diagnostics in structured logs. Prometheus metrics must
+remain bounded to the documented result/model/phase/attempt labels; never add
+provider codes, parameters, exception classes, request IDs, conversation IDs,
+or message IDs as metric labels.
 
 ## Diagnosis workflow
 
@@ -88,14 +125,18 @@ reason, first-chunk time, and final-event delivery.
    - TTFT normal and duration high: inspect stream-idle timeouts and output
      tokens for a slow or stalled stream.
 4. Group duration and volume by `returned_model` and `phase`.
-5. Inspect `attempt:2+` and `result:retry` for known refusal/output-limit
-   replacements. `attempt:unknown` must not be interpreted as a first attempt;
-   hidden SDK retries are intentionally not inferred.
-6. Correlate a slow generation log by stream/request/message ID with its
+5. Inspect `attempt:2+` and `result:retry` for provider or
+   refusal/output-limit retries. `attempt:unknown` must not be interpreted as a
+   first attempt.
+6. For `result:provider_error`, group only by the bounded provider status,
+   code, type, parameter, retryability, and exception class fields. Correlate
+   the provider request ID with Azure diagnostics; do not inspect or export raw
+   exception content.
+7. Correlate a slow generation log by stream/request/message ID with its
    model-call logs and SSE spans. Multiple model-run IDs indicate multiple
    observable calls; multiple SSE spans alone indicate reconnects, not extra
    model work.
-7. Compare application timing with Azure `TimeToResponse`, 429, and 5xx metrics.
+8. Compare application timing with Azure `TimeToResponse`, 429, and 5xx metrics.
    If Azure and application tails agree, treat the delay as provider-side.
 
 ## Azure support evidence
