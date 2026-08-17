@@ -9,6 +9,15 @@ on:
       - synchronize
       - reopened
       - labeled
+    # Skip the full client/api/packages suite for changes that are structurally
+    # isolated from it: the code-adapter is a standalone service consumed only
+    # over HTTP at runtime (no compile-time import from client/api/packages),
+    # and docs/markdown carry no executable code. Any PR touching client/, api/,
+    # packages/*, or shared root config still runs the full suite unchanged.
+    paths-ignore:
+      - 'knauf/code-adapter/**'
+      - 'knauf/docs/**'
+      - '**/*.md'
 
 permissions:
   contents: read
