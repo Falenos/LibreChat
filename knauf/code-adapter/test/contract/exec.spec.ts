@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { Readable } from 'node:stream';
 import { createApp } from '../../src/app.js';
 import { AcaSessionNotFoundError, AcaTimeoutError } from '../../src/types/aca.js';
 import {
@@ -344,6 +345,135 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.stderr).toMatch(/could not be saved/i);
   });
 
+  it('streams unsized output and enforces the byte budget on actual chunks', async () => {
+    const app2 = createApp({
+      config: testConfig({ CAPTURE_MAX_TOTAL_BYTES: '10' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metrics: testMetrics(),
+    });
+    aca.sessionFiles = [{ name: 'unsized.bin', type: 'File' }];
+    aca.fetchFileContent = async () => {
+      throw new Error('buffering path must not be used for output capture');
+    };
+    aca.fetchFileStream = async () => ({
+      stream: Readable.from([Buffer.alloc(6), Buffer.alloc(6)]),
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app2).post('/v1/exec').send({ lang: 'py', code: 'x' });
+
+    expect(response.body.files).toHaveLength(0);
+    expect(response.body.stderr).toContain('not captured');
+    expect(blob.blobs.size).toBe(0);
+    expect(repo.docs.size).toBe(0);
+  });
+
+  it('supports the full 256 MiB capture contract without buffering the file', async () => {
+    const limit = 256 * 1024 * 1024;
+    const chunk = Buffer.alloc(4 * 1024 * 1024);
+    let uploadedBytes = 0;
+    blob.put = async (_path, data) => {
+      if (Buffer.isBuffer(data)) {
+        uploadedBytes += data.length;
+        return;
+      }
+      for await (const part of data) {
+        uploadedBytes += Buffer.isBuffer(part)
+          ? part.length
+          : Buffer.byteLength(part as Uint8Array);
+      }
+    };
+    aca.sessionFiles = [{ name: 'full.bin', type: 'File', sizeInBytes: limit }];
+    aca.fetchFileStream = async () => ({
+      stream: Readable.from(
+        (async function* () {
+          for (let sent = 0; sent < limit; sent += chunk.length) {
+            yield chunk;
+          }
+        })(),
+      ),
+      contentLength: limit,
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'x' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files.map((file: { name: string }) => file.name)).toContain('full.bin');
+    expect(uploadedBytes).toBe(limit);
+    const stored = [...repo.docs.values()].find((doc) => doc.filename === 'full.bin');
+    expect(stored?.size).toBe(limit);
+  });
+
+  it('interrupts a single stalled capture when the total capture deadline expires', async () => {
+    const app2 = createApp({
+      config: testConfig({ CAPTURE_MAX_TOTAL_MS: '10' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metrics: testMetrics(),
+    });
+    aca.sessionFiles = [{ name: 'stalled.bin', type: 'File' }];
+    let sentPartial = false;
+    aca.fetchFileStream = async () => ({
+      stream: new Readable({
+        read() {
+          if (!sentPartial) {
+            sentPartial = true;
+            this.push(Buffer.from('partial'));
+          }
+        },
+      }),
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app2).post('/v1/exec').send({ lang: 'py', code: 'x' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toHaveLength(0);
+    expect(response.body.stderr).toMatch(/took longer than/i);
+    expect(repo.docs.size).toBe(0);
+  });
+
+  it('contains ACA source-stream failures as a failed capture', async () => {
+    aca.sessionFiles = [{ name: 'broken.bin', type: 'File' }];
+    aca.fetchFileStream = async () => ({
+      stream: new Readable({
+        read() {
+          this.destroy(new Error('ACA connection reset'));
+        },
+      }),
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'x' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toHaveLength(0);
+    expect(response.body.stderr).toMatch(/could not be saved/i);
+  });
+
+  it('removes the uploaded candidate Blob when the Mongo commit fails', async () => {
+    aca.sessionFiles = [{ name: 'report.csv', type: 'File', sizeInBytes: 3 }];
+    aca.fileContents.set('report.csv', Buffer.from('abc'));
+    repo.upsertCaptured = async () => {
+      throw new Error('mongo unavailable');
+    };
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'x' });
+
+    expect(response.body.files).toHaveLength(0);
+    expect(response.body.stderr).toContain('could not be saved');
+    expect(blob.blobs.size).toBe(0);
+  });
+
   it('expired staged input → 200 {code:1} explaining re-attach (not 5xx)', async () => {
     const response = await request(app)
       .post('/v1/exec')
@@ -469,6 +599,13 @@ describe('POST /v1/exec contract', () => {
     };
     const r4 = await request(app).post('/v1/exec').send({ lang: 'py', code: 'd', session_id: S });
     expect(names(r4)).toEqual(['out1.txt']);
+    const firstOut1 = r1.body.files.find((f: { name: string }) => f.name === 'out1.txt');
+    const replacedOut1 = r4.body.files.find((f: { name: string }) => f.name === 'out1.txt');
+    expect(replacedOut1.id).toBe(firstOut1.id);
+    const stored = await repo.find(S, replacedOut1.id);
+    expect(stored).not.toBeNull();
+    expect(blob.blobs.get(stored!.blobPath)?.data).toEqual(Buffer.from('x'.repeat(9999)));
+    expect([...blob.blobs.keys()].filter((path) => path.startsWith(`${S}/`))).toHaveLength(2);
   });
 
   it('does not return files that exceed the capture byte budget — sized or unsized', async () => {

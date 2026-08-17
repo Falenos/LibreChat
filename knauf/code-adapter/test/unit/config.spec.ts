@@ -91,7 +91,9 @@ describe('loadConfig', () => {
     expect(config.aca.apiVersion).toBe('2024-02-02-preview');
     expect(config.aca.execTimeoutMs).toBe(230_000);
     expect(config.exec.wrapper).toBe('full');
+    expect(config.exec.captureMaxTotalBytes).toBe(268_435_456);
     expect(config.uploadMaxBytes).toBe(134_217_728);
+    expect(config.fileTtlHours).toBe(24);
     expect(config.blob.container).toBe('code-adapter-staging');
     expect(config.jwt.issuer).toBe('librechat');
     expect(config.jwt.audience).toBe('codeapi');

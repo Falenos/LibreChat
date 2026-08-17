@@ -312,11 +312,12 @@ contract suite in `test/contract/`.
 
 - **Mongo `code_adapter_files`** — one row per staged/captured file:
   `{sessionId, fileId, filename, state, identity, userId, tenantId, blobPath, expiresAt, …}`,
-  indexed unique on `(sessionId,fileId)` and `(sessionId,filename)`, with a 24 h
-  TTL. Rows are the source of truth for what's valid.
-- **Azure Blob `code-adapter-staging`** — the durable bytes, keyed `<sid>/<fileId>`.
-  Cleaned by a container lifecycle rule (>2 days); an orphan blob is harmless
-  because Mongo, not Blob, decides validity.
+  indexed unique on `(sessionId,fileId)`, `(sessionId,filename)`, and `blobPath`, with a
+  sliding 24 h TTL. Rows are the source of truth for what's valid.
+- **Azure Blob `code-adapter-staging`** — the durable bytes. Staged uploads are keyed
+  `<sid>/<fileId>`; captures are keyed `<sid>/<uuid>` — a fresh generation per capture, so
+  Mongo always points at one complete upload and a superseded generation's blob is reaped
+  by reachability (`src/store/reaper.ts`), not by age.
 
 The 24 h Mongo TTL deliberately overshoots LibreChat's 23 h freshness window, so
 LibreChat re-uploads _before_ rows expire; a 404 from the freshness probe routes

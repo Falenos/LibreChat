@@ -23,8 +23,9 @@ import type { Logger } from '../logger.js';
  *
  * Age is still used, but only as a cheap pre-filter: a blob younger than the TTL cannot yet
  * be orphaned, so it is skipped without a Mongo round trip. That also avoids racing an
- * upload — `insertStaged` writes the row before the blob, but `upsertCaptured` + `blob.put`
- * is a two-step, and a blob written seconds ago whose row is mid-flight must not be swept.
+ * upload — staged uploads write the row before the blob, while captures stream to a unique
+ * blob before committing that exact path to Mongo. A blob whose commit is mid-flight must
+ * not be swept.
  *
  * Safe to run on every replica: deletes are keyed on a specific path and go through
  * `deleteIfExists`, so two reapers racing the same orphan is a no-op, not an error.
@@ -46,18 +47,18 @@ export interface ReaperDeps {
   now?: () => number;
 }
 
-/** `<sessionId>/<fileId>` — anything else was not written by this adapter. */
-function parseBlobPath(name: string): { sessionId: string; fileId: string } | null {
+/** `<sessionId>/<uuid>` — anything else was not written by this adapter. */
+function parseBlobPath(name: string): { sessionId: string; blobId: string } | null {
   const slash = name.indexOf('/');
   if (slash <= 0) {
     return null;
   }
   const sessionId = name.slice(0, slash);
-  const fileId = name.slice(slash + 1);
-  if (!isValidSessionId(sessionId) || !isValidFileId(fileId)) {
+  const blobId = name.slice(slash + 1);
+  if (!isValidSessionId(sessionId) || !isValidFileId(blobId)) {
     return null;
   }
-  return { sessionId, fileId };
+  return { sessionId, blobId };
 }
 
 export function createReaper(deps: ReaperDeps): Reaper {
@@ -87,7 +88,7 @@ export function createReaper(deps: ReaperDeps): Reaper {
         skipped += 1;
         continue;
       }
-      const doc = await deps.repo.find(parsed.sessionId, parsed.fileId);
+      const doc = await deps.repo.findByBlobPath(blob.name);
       if (doc != null) {
         skipped += 1;
         continue;

@@ -1,4 +1,5 @@
-import { readFile, unlink } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { Router } from 'express';
 import multer from 'multer';
@@ -32,9 +33,8 @@ export function createUploadRouter(deps: UploadDeps): Router {
   const upload = multer({
     dest: process.env.UPLOAD_TMP_DIR ?? tmpdir(),
     // `files` matters as much as `fileSize` here. /upload/batch takes an unbounded array,
-    // and every item is spooled to the container's writable layer and then read whole into
-    // a Buffer — so without a count cap a single request can exhaust ephemeral storage
-    // (which has no request/limit in the GitOps values) long before the memory limit bites.
+    // and every item is spooled to the container's writable layer. Without a count cap, one
+    // request can exhaust ephemeral storage (which has no request/limit in the GitOps values).
     // The cap matches CAPTURE_MAX_FILES: a batch larger than what one execution can hand
     // back is not a shape we serve.
     limits: { fileSize: deps.config.uploadMaxBytes, files: deps.config.exec.captureMaxFiles },
@@ -48,11 +48,10 @@ export function createUploadRouter(deps: UploadDeps): Router {
     readOnly: boolean,
   ) => {
     const filename = sanitizeFilename(file.originalname);
-    const data = await readFile(file.path);
     const doc = await deps.repo.insertStaged({
       sessionId,
       filename,
-      size: data.length,
+      size: file.size,
       contentType: file.mimetype !== '' ? file.mimetype : 'application/octet-stream',
       origin: 'upload',
       readOnly,
@@ -60,8 +59,24 @@ export function createUploadRouter(deps: UploadDeps): Router {
       userId: auth.userId,
       tenantId: auth.tenantId,
     });
-    await deps.blob.put(doc.blobPath, data, doc.contentType);
-    deps.metrics.uploadBytes.inc(data.length);
+    try {
+      await deps.blob.put(doc.blobPath, createReadStream(file.path), doc.contentType, file.size);
+    } catch (error) {
+      const cleanupResults = await Promise.allSettled([
+        deps.repo.delete(doc.sessionId, doc.fileId),
+        deps.blob.delete(doc.blobPath),
+      ]);
+      cleanupResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          deps.logger.warn(
+            { err: result.reason, fileId: doc.fileId, cleanup: index === 0 ? 'mongo' : 'blob' },
+            'failed to roll back staged upload',
+          );
+        }
+      });
+      throw error;
+    }
+    deps.metrics.uploadBytes.inc(file.size);
     return doc;
   };
 

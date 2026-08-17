@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { Transform } from 'node:stream';
+import type { TransformCallback } from 'node:stream';
 import { OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { AcaClient } from '../azure/acaClient.js';
 import type { AcaSessionFile } from '../types/aca.js';
@@ -119,10 +122,16 @@ export async function captureOutputs(params: {
       overflow = true;
       continue;
     }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      timedOut = true;
+      break;
+    }
     const result = await captureNewFile(
       entry,
       name,
       config.exec.captureMaxTotalBytes - capturedBytes,
+      remainingMs,
       {
         sessionId,
         auth,
@@ -131,6 +140,9 @@ export async function captureOutputs(params: {
     );
     if (result === 'overflow') {
       overflow = true;
+    } else if (result === 'timeout') {
+      timedOut = true;
+      break;
     } else if (result == null) {
       // The file is really in the sandbox; we just could not persist it (ACA fetch, Mongo
       // upsert or Blob write failed). Counted so the caller can say so — dropping it
@@ -259,48 +271,126 @@ interface CaptureCtx {
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
 }
 
+class CaptureOverflowError extends Error {
+  constructor() {
+    super('capture exceeds remaining byte budget');
+    this.name = 'CaptureOverflowError';
+  }
+}
+
+class CaptureTimeoutError extends Error {
+  constructor() {
+    super('capture exceeded its wall-clock budget');
+    this.name = 'CaptureTimeoutError';
+  }
+}
+
+class ByteLimitTransform extends Transform {
+  bytes = 0;
+  overflowed = false;
+
+  constructor(private readonly maxBytes: number) {
+    super();
+  }
+
+  override _transform(
+    chunk: Buffer | Uint8Array,
+    _encoding: BufferEncoding,
+    callback: TransformCallback,
+  ): void {
+    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (this.bytes + data.length > this.maxBytes) {
+      this.overflowed = true;
+      callback(new CaptureOverflowError());
+      return;
+    }
+    this.bytes += data.length;
+    callback(null, data);
+  }
+}
+
 /**
- * Fetch one output file (bounded), persist it to blob + Mongo, and return the
+ * Stream one output file (bounded) to a unique Blob, commit that exact Blob
+ * generation to Mongo, and return the
  * ExecResponseFile. Returns 'overflow' if it doesn't fit the remaining budget,
- * or null if the fetch/persist failed (logged). A missing sizeInBytes is
- * treated as the whole remaining budget so an unsized entry can't slip the cap,
- * and the fetch itself is hard-capped as defense in depth.
+ * or null if the fetch/persist failed (logged). Listing size and Content-Length
+ * are only preflight hints; the transform enforces the limit on actual bytes.
  */
 async function captureNewFile(
   entry: AcaSessionFile,
   name: string,
   remainingBytes: number,
+  remainingMs: number,
   ctx: CaptureCtx,
-): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | null> {
+): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | 'timeout' | null> {
   const { sessionId, auth, deps } = ctx;
   if ((entry.sizeInBytes ?? remainingBytes) > remainingBytes) {
     return 'overflow';
   }
+  const candidateBlobPath = `${sessionId}/${randomUUID()}`;
+  let candidateUploaded = false;
   try {
-    const data = await deps.aca.fetchFileContent(sessionId, name, remainingBytes + 1);
-    if (data.length > remainingBytes) {
+    const source = await deps.aca.fetchFileStream(sessionId, name);
+    if (source.contentLength != null && source.contentLength > remainingBytes) {
+      source.stream.destroy();
       return 'overflow';
     }
-    const { doc, inserted } = await deps.repo.upsertCaptured({
-      sessionId,
-      filename: name,
-      size: data.length,
-      contentType: entry.contentType ?? 'application/octet-stream',
-      origin: 'exec-output',
-      readOnly: false,
-      identity: { kind: 'user', id: auth.userId },
-      userId: auth.userId,
-      tenantId: auth.tenantId,
-    });
-    try {
-      await deps.blob.put(doc.blobPath, data, doc.contentType);
-    } catch (putErr) {
-      // Don't leave a row pointing at a blob that never landed. Only roll back a
-      // freshly inserted row — an updated row still has its prior valid blob.
-      if (inserted) {
-        await deps.repo.delete(sessionId, doc.fileId).catch(() => undefined);
+    const limiter = new ByteLimitTransform(remainingBytes);
+    let timedOut = false;
+    source.stream.once('error', (error) => {
+      if (!limiter.destroyed) {
+        limiter.destroy(error);
       }
-      throw putErr;
+    });
+    limiter.on('error', () => source.stream.destroy());
+    source.stream.pipe(limiter);
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      limiter.destroy(new CaptureTimeoutError());
+    }, remainingMs);
+    timeout.unref();
+    try {
+      await deps.blob.put(
+        candidateBlobPath,
+        limiter,
+        entry.contentType ?? 'application/octet-stream',
+        source.contentLength,
+      );
+      candidateUploaded = true;
+    } catch (error) {
+      if (timedOut || error instanceof CaptureTimeoutError) {
+        return 'timeout';
+      }
+      if (limiter.overflowed || error instanceof CaptureOverflowError) {
+        return 'overflow';
+      }
+      source.stream.destroy();
+      limiter.destroy();
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    const { doc, obsoleteBlobPaths } = await deps.repo.upsertCaptured(
+      {
+        sessionId,
+        filename: name,
+        size: limiter.bytes,
+        contentType: entry.contentType ?? 'application/octet-stream',
+        origin: 'exec-output',
+        readOnly: false,
+        identity: { kind: 'user', id: auth.userId },
+        userId: auth.userId,
+        tenantId: auth.tenantId,
+      },
+      candidateBlobPath,
+    );
+    for (const blobPath of obsoleteBlobPaths) {
+      await deps.blob.delete(blobPath).catch((error) => {
+        deps.logger.warn(
+          { blobPath, err: (error as Error).message },
+          'superseded capture blob cleanup failed',
+        );
+      });
     }
     return {
       file: {
@@ -309,9 +399,12 @@ async function captureNewFile(
         path: `/mnt/data/${doc.filename}`,
         storage_session_id: sessionId,
       },
-      bytes: data.length,
+      bytes: limiter.bytes,
     };
   } catch (err) {
+    if (candidateUploaded) {
+      await deps.blob.delete(candidateBlobPath).catch(() => undefined);
+    }
     deps.logger.warn({ file: name, err: (err as Error).message }, 'output capture failed');
     return null;
   }

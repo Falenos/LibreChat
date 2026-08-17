@@ -54,7 +54,6 @@ export function createApp(deps: AppDeps): Express {
       })().catch(next);
     });
   }
-
   const v1 = express.Router();
   v1.use(createJwtMiddleware(config, logger));
   v1.use(express.json({ limit: `${Math.ceil(config.exec.codeMaxBytes / 1024) + 64}kb` }));

@@ -53,6 +53,34 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     expect(response.body.files[0].filename).toBe('data.csv');
   });
 
+  it('streams spooled uploads to Blob instead of duplicating them in memory', async () => {
+    const put = blob.put.bind(blob);
+    let receivedStream = false;
+    blob.put = async (blobPath, data, contentType, size) => {
+      receivedStream = !Buffer.isBuffer(data);
+      await put(blobPath, data, contentType, size);
+    };
+
+    const response = await uploadOne();
+
+    expect(response.status).toBe(200);
+    expect(receivedStream).toBe(true);
+  });
+
+  it('rolls back staged metadata and partial Blob data when upload fails', async () => {
+    const put = blob.put.bind(blob);
+    blob.put = async (blobPath, data, contentType, size) => {
+      await put(blobPath, data, contentType, size);
+      throw new Error('simulated Blob failure');
+    };
+
+    const response = await uploadOne();
+
+    expect(response.status).toBe(500);
+    expect(repo.docs.size).toBe(0);
+    expect(blob.blobs.size).toBe(0);
+  });
+
   it('POST /upload/batch honors read_only and reports succeeded/failed', async () => {
     const response = await request(app)
       .post('/v1/upload/batch')

@@ -1,5 +1,6 @@
 import { request } from 'undici';
 import type { Dispatcher } from 'undici';
+import type { Readable } from 'node:stream';
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
 import type {
   AcaExecOutcome,
@@ -28,6 +29,10 @@ export interface AcaClient {
   execute(identifier: string, code: string): Promise<AcaExecOutcome>;
   pushFile(identifier: string, name: string, data: Buffer, contentType: string): Promise<void>;
   listFiles(identifier: string): Promise<AcaSessionFile[]>;
+  fetchFileStream(
+    identifier: string,
+    name: string,
+  ): Promise<{ stream: Readable; contentLength?: number }>;
   fetchFileContent(identifier: string, name: string, maxBytes?: number): Promise<Buffer>;
 }
 
@@ -86,6 +91,23 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
       executionMs: raw.properties?.executionTimeInMilliseconds,
       raw,
     };
+  };
+
+  const fetchFileResponse = async (identifier: string, name: string) => {
+    const url = buildUrl(`/files/content/${encodeURIComponent(name)}`, identifier);
+    const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
+    if (response.statusCode === 404) {
+      const bodyText = await response.body.text();
+      if (SESSION_NOT_FOUND_RE.test(bodyText)) {
+        throw new AcaSessionNotFoundError();
+      }
+      throw new AcaError(`pool file not found: ${name}`, 404, 'FileNotFound');
+    }
+    if (response.statusCode >= 400) {
+      await response.body.dump();
+      throw new AcaError(`pool file fetch failed (${response.statusCode})`, 502);
+    }
+    return response;
   };
 
   return {
@@ -234,20 +256,18 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
       }
     },
 
+    async fetchFileStream(identifier, name) {
+      const response = await fetchFileResponse(identifier, name);
+      const rawLength = response.headers['content-length'];
+      const contentLength = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength);
+      return {
+        stream: response.body,
+        ...(Number.isFinite(contentLength) && contentLength >= 0 ? { contentLength } : {}),
+      };
+    },
+
     async fetchFileContent(identifier, name, maxBytes) {
-      const url = buildUrl(`/files/content/${encodeURIComponent(name)}`, identifier);
-      const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
-      if (response.statusCode === 404) {
-        const bodyText = await response.body.text();
-        if (SESSION_NOT_FOUND_RE.test(bodyText)) {
-          throw new AcaSessionNotFoundError();
-        }
-        throw new AcaError(`pool file not found: ${name}`, 404, 'FileNotFound');
-      }
-      if (response.statusCode >= 400) {
-        await response.body.dump();
-        throw new AcaError(`pool file fetch failed (${response.statusCode})`, 502);
-      }
+      const response = await fetchFileResponse(identifier, name);
       const chunks: Buffer[] = [];
       let total = 0;
       for await (const chunk of response.body) {

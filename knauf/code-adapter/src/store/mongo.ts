@@ -14,6 +14,7 @@ export interface MongoHandle {
  * Connect + bootstrap indexes. Index set:
  *  - {sessionId, fileId} unique      — primary lookup key
  *  - {sessionId, filename} unique    — capture upsert key (stable fileIds on re-run)
+ *  - {blobPath} unique               — exact reachability lookup for the Blob reaper
  *  - {expiresAt} TTL(0)              — 24h expiry, bumped on touch
  */
 export async function connectMongo(config: Config): Promise<MongoHandle> {
@@ -25,6 +26,7 @@ export async function connectMongo(config: Config): Promise<MongoHandle> {
   await files.createIndexes([
     { key: { sessionId: 1, fileId: 1 }, unique: true, name: 'session_file_unique' },
     { key: { sessionId: 1, filename: 1 }, unique: true, name: 'session_filename_unique' },
+    { key: { blobPath: 1 }, unique: true, name: 'blob_path_unique' },
     { key: { expiresAt: 1 }, expireAfterSeconds: 0, name: 'ttl_expiresAt' },
   ]);
 
