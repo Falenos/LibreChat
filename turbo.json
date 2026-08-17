@@ -32,6 +32,10 @@
     },
     "@librechat/client#build": {
       "dependsOn": ["^build", "librechat-data-provider#build"]
+    },
+    "test:ci": {
+      "dependsOn": [],
+      "outputs": []
     }
   }
 }
