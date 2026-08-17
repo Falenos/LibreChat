@@ -94,7 +94,6 @@ describe('loadConfig', () => {
     expect(config.exec.captureMaxTotalBytes).toBe(268_435_456);
     expect(config.uploadMaxBytes).toBe(134_217_728);
     expect(config.fileTtlHours).toBe(24);
-    expect(config.fileMaxLifetimeHours).toBe(168);
     expect(config.blob.container).toBe('code-adapter-staging');
     expect(config.jwt.issuer).toBe('librechat');
     expect(config.jwt.audience).toBe('codeapi');
@@ -106,15 +105,5 @@ describe('loadConfig', () => {
       ACA_POOL_ENDPOINT: 'https://code-pool.example.test///',
     });
     expect(config.aca.poolEndpoint).toBe('https://code-pool.example.test');
-  });
-
-  it('rejects an absolute file lifetime shorter than the sliding TTL', () => {
-    expect(() =>
-      loadConfig({
-        ...TEST_ENV_BASE,
-        FILE_TTL_HOURS: '24',
-        FILE_MAX_LIFETIME_HOURS: '12',
-      }),
-    ).toThrow(/FILE_MAX_LIFETIME_HOURS.*FILE_TTL_HOURS/);
   });
 });

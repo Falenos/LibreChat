@@ -169,18 +169,10 @@ the adapter's staging store on every call:
   refs, so they get re-injected/re-pushed the same way on later runs (and remain
   downloadable even though the sandbox that made them is long gone).
 - The staging copy has a **sliding 24 h TTL** — every push/download bumps
-  `expiresAt` — so an active conversation keeps its files available. Only
-  after ~24 h of no use does a file expire; the next exec that references it
-  then returns `code:1` + "re-attach the file and retry" rather than crashing.
-- That sliding window is capped at a **7-day absolute lifetime** from the
-  file's original generation (`FILE_MAX_LIFETIME_HOURS`, default 168) —
-  continued use no longer keeps a file alive past that ceiling. For uploaded
-  inputs this is invisible: LibreChat's own copy re-uploads on the next 404
-  (see the freshness-probe interlock below). For **generated** outputs it is
-  not — a chart from day 1 of a conversation that is still active on day 8 is
-  gone for good, with no regeneration path, only the same generic 404.
-  Deliberate bound against unbounded Mongo/Blob growth for long-lived
-  conversations; not yet reflected in any user-facing messaging.
+  `expiresAt` — so an active conversation keeps its files available
+  indefinitely. Only after ~24 h of no use does a file expire; the next exec
+  that references it then returns `code:1` + "re-attach the file and retry"
+  rather than crashing.
 
 > **Push order matters:** the re-push is **sequential, one file at a time**. ACA
 > dynamic-sessions file upload is _not_ concurrency-safe — pushing several files
@@ -321,8 +313,7 @@ contract suite in `test/contract/`.
 - **Mongo `code_adapter_files`** — one row per staged/captured file:
   `{sessionId, fileId, filename, state, identity, userId, tenantId, blobPath, expiresAt, …}`,
   indexed unique on `(sessionId,fileId)`, `(sessionId,filename)`, and `blobPath`, with a
-  sliding 24 h TTL capped at a 7-day absolute lifetime from the row's original
-  `createdAt` (`FILE_MAX_LIFETIME_HOURS`). Rows are the source of truth for what's valid.
+  sliding 24 h TTL. Rows are the source of truth for what's valid.
 - **Azure Blob `code-adapter-staging`** — the durable bytes. Staged uploads are keyed
   `<sid>/<fileId>`; captures are keyed `<sid>/<uuid>` — a fresh generation per capture, so
   Mongo always points at one complete upload and a superseded generation's blob is reaped

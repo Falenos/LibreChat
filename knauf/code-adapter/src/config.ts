@@ -90,8 +90,6 @@ export interface Config {
   };
 
   fileTtlHours: number;
-  /** Absolute retention ceiling; sliding touches cannot extend a file beyond this age. */
-  fileMaxLifetimeHours: number;
   /** How often the orphaned-blob reaper sweeps. See store/reaper.ts. */
   reaperIntervalMs: number;
   metricsEnabled: boolean;
@@ -223,7 +221,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       container: str('BLOB_CONTAINER') ?? 'code-adapter-staging',
     },
     fileTtlHours: int('FILE_TTL_HOURS', 24),
-    fileMaxLifetimeHours: int('FILE_MAX_LIFETIME_HOURS', 168),
     // Hourly is ample: the reaper only deletes what is already past the TTL, so the sweep
     // interval sets how long an orphan lingers, not whether it is collected.
     reaperIntervalMs: int('REAPER_INTERVAL_MS', 3_600_000),
@@ -234,9 +231,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(
       `code-adapter configuration is incomplete:\n${missing.map((m) => `  - ${m} is required`).join('\n')}`,
     );
-  }
-  if (config.fileMaxLifetimeHours < config.fileTtlHours) {
-    throw new Error('FILE_MAX_LIFETIME_HOURS must be greater than or equal to FILE_TTL_HOURS');
   }
 
   return Object.freeze(config);

@@ -55,7 +55,6 @@ export class FakeFilesRepo {
       state: input.origin === 'upload' ? 'staged' : 'captured',
       blobPath: `${input.sessionId}/${fileId}`,
       lastModified: now,
-      createdAt: now,
       expiresAt: new Date(now.getTime() + 24 * 3_600_000),
     };
     this.docs.set(this.key(doc.sessionId, doc.fileId), doc);

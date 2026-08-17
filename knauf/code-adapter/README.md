@@ -122,8 +122,8 @@ See [`.env.example`](.env.example) for the full annotated surface. Required:
 `ACA_POOL_ENDPOINT`, `MONGO_URI`, one Blob authentication route
 (`AZURE_STORAGE_ACCOUNT_NAME`/`AZURE_STORAGE_ACCOUNT_URL` for workload identity or the legacy
 `AZURE_STORAGE_CONNECTION_STRING`), and outside `CODE_ADAPTER_LOCAL_MODE`,
-`CODEAPI_JWT_PUBLIC_KEY`. `FILE_TTL_HOURS` is sliding retention;
-`FILE_MAX_LIFETIME_HOURS` is the absolute ceiling and must be at least as large.
+`CODEAPI_JWT_PUBLIC_KEY`. `FILE_TTL_HOURS` is the sliding retention window, bumped on every
+push/download so an active conversation keeps its files available.
 Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MB) to Blob storage.
 `ACA_API_VERSION` is pinned deliberately — bumping it requires refreshing
 `test/fixtures/aca/` (see below).

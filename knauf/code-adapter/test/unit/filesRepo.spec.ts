@@ -29,13 +29,15 @@ function fileDoc(overrides: Partial<WithId<FileDoc>> = {}): WithId<FileDoc> {
     state: 'captured',
     blobPath: 'karl-session/file-1',
     lastModified: NOW,
-    createdAt: NOW,
     expiresAt: new Date(NOW.getTime() + 24 * HOUR_MS),
     ...overrides,
   };
 }
 
-describe('FilesRepo absolute retention', () => {
+// Covers the compare-and-swap machinery `upsertCaptured`/`touch` need for the
+// unique-blob-per-generation streaming design: two concurrent captures of the same
+// filename must never lose an update or resurrect an already-expired row.
+describe('FilesRepo', () => {
   const collection = {
     insertOne: vi.fn(),
     findOne: vi.fn(),
@@ -52,7 +54,7 @@ describe('FilesRepo absolute retention', () => {
     vi.setSystemTime(NOW);
     collection.updateOne.mockResolvedValue({ matchedCount: 1 });
     collection.deleteOne.mockResolvedValue({ deletedCount: 1 });
-    repo = new FilesRepo(collection as unknown as Collection<FileDoc>, 24, 168);
+    repo = new FilesRepo(collection as unknown as Collection<FileDoc>, 24);
   });
 
   afterEach(() => {
@@ -62,31 +64,28 @@ describe('FilesRepo absolute retention', () => {
   it('uses the sliding TTL for a newly staged file', async () => {
     const doc = await repo.insertStaged(input());
 
-    expect(doc.createdAt).toEqual(NOW);
     expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + 24 * HOUR_MS));
     expect(collection.insertOne).toHaveBeenCalledWith(doc);
   });
 
-  it('clamps a captured-file overwrite to the original absolute lifetime', async () => {
-    const createdAt = new Date(NOW.getTime() - 167 * HOUR_MS);
-    const existing = fileDoc({ createdAt });
+  it('overwrites an active captured file in place, keeping its fileId and superseding its blobPath', async () => {
+    const existing = fileDoc();
     collection.findOne.mockResolvedValue(existing);
     collection.findOneAndUpdate.mockImplementation(async (_filter, update) => ({
       value: { ...existing, ...update.$set },
-      lastErrorObject: { updatedExisting: true },
     }));
 
     const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(input(), 'karl-session/new-blob');
 
     expect(obsoleteBlobPaths).toEqual([existing.blobPath]);
-    expect(doc.createdAt).toEqual(createdAt);
+    expect(doc.fileId).toBe(existing.fileId);
     expect(doc.blobPath).toBe('karl-session/new-blob');
-    expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + HOUR_MS));
+    expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + 24 * HOUR_MS));
   });
 
-  it('retries against the current record when a captured-file revision is replaced', async () => {
-    const stale = fileDoc({ createdAt: new Date(NOW.getTime() - 167 * HOUR_MS) });
-    const current = fileDoc({ createdAt: new Date(NOW.getTime() - 10 * HOUR_MS) });
+  it('retries against the current record when a captured-file revision is replaced mid-flight', async () => {
+    const stale = fileDoc();
+    const current = fileDoc({ lastModified: new Date(NOW.getTime() - HOUR_MS) });
     collection.findOne.mockResolvedValueOnce(stale).mockResolvedValueOnce(current);
     collection.findOneAndUpdate
       .mockResolvedValueOnce({ value: null })
@@ -102,20 +101,14 @@ describe('FilesRepo absolute retention', () => {
     expect(obsoleteBlobPaths).toEqual([current.blobPath]);
     expect(collection.findOneAndUpdate).toHaveBeenNthCalledWith(
       1,
-      {
-        _id: stale._id,
-        lastModified: stale.lastModified,
-        expiresAt: stale.expiresAt,
-        createdAt: stale.createdAt,
-      },
+      { _id: stale._id, lastModified: stale.lastModified, expiresAt: stale.expiresAt },
       expect.anything(),
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    expect(doc.createdAt).toEqual(current.createdAt);
     expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + 24 * HOUR_MS));
   });
 
-  it('replaces an expired captured-file record with a fresh lifetime', async () => {
+  it('replaces an expired captured-file record with a fresh generation', async () => {
     const expired = fileDoc({ expiresAt: NOW });
     collection.findOne.mockResolvedValueOnce(expired).mockResolvedValueOnce(null);
 
@@ -129,34 +122,10 @@ describe('FilesRepo absolute retention', () => {
       _id: expired._id,
       lastModified: expired.lastModified,
       expiresAt: expired.expiresAt,
-      createdAt: expired.createdAt,
     });
     expect(doc.fileId).not.toBe(expired.fileId);
-    expect(doc.createdAt).toEqual(NOW);
     expect(doc.expiresAt).toEqual(new Date(NOW.getTime() + 24 * HOUR_MS));
     expect(collection.insertOne).toHaveBeenCalledWith(doc);
-  });
-
-  it('replaces an absolutely expired record even when its sliding expiry is still future', async () => {
-    const expired = fileDoc({
-      createdAt: new Date(NOW.getTime() - 168 * HOUR_MS),
-      expiresAt: new Date(NOW.getTime() + HOUR_MS),
-    });
-    collection.findOne.mockResolvedValueOnce(expired).mockResolvedValueOnce(null);
-
-    const { doc, obsoleteBlobPaths } = await repo.upsertCaptured(
-      input(),
-      'karl-session/new-blob',
-    );
-
-    expect(obsoleteBlobPaths).toEqual([expired.blobPath]);
-    expect(collection.deleteOne).toHaveBeenCalledWith({
-      _id: expired._id,
-      lastModified: expired.lastModified,
-      expiresAt: expired.expiresAt,
-      createdAt: expired.createdAt,
-    });
-    expect(doc.createdAt).toEqual(NOW);
   });
 
   it('retries insertion after a concurrent writer wins the unique filename key', async () => {
@@ -176,39 +145,20 @@ describe('FilesRepo absolute retention', () => {
     expect(doc.fileId).toBe(winner.fileId);
   });
 
-  it('clamps touch to the original absolute lifetime', async () => {
-    const createdAt = new Date(NOW.getTime() - 167 * HOUR_MS);
-    const existing = fileDoc({ createdAt });
+  it('bumps the sliding TTL of an active file on touch', async () => {
+    const existing = fileDoc();
     collection.findOne.mockResolvedValue(existing);
 
     await repo.touch('karl-session', 'file-1');
 
     expect(collection.updateOne).toHaveBeenCalledWith(
-      {
-        _id: existing._id,
-        lastModified: existing.lastModified,
-        expiresAt: existing.expiresAt,
-        createdAt,
-      },
-      { $set: { expiresAt: new Date(NOW.getTime() + HOUR_MS) } },
+      { _id: existing._id, lastModified: existing.lastModified, expiresAt: existing.expiresAt },
+      { $set: { expiresAt: new Date(NOW.getTime() + 24 * HOUR_MS) } },
     );
   });
 
   it('does not revive a file after its sliding TTL expires', async () => {
     collection.findOne.mockResolvedValue(fileDoc({ expiresAt: NOW }));
-
-    await repo.touch('karl-session', 'file-1');
-
-    expect(collection.updateOne).not.toHaveBeenCalled();
-  });
-
-  it('does not revive a file at its absolute lifetime boundary', async () => {
-    collection.findOne.mockResolvedValue(
-      fileDoc({
-        createdAt: new Date(NOW.getTime() - 168 * HOUR_MS),
-        expiresAt: new Date(NOW.getTime() + HOUR_MS),
-      }),
-    );
 
     await repo.touch('karl-session', 'file-1');
 
@@ -230,53 +180,20 @@ describe('FilesRepo absolute retention', () => {
       _id: current._id,
       lastModified: current.lastModified,
       expiresAt: current.expiresAt,
-      createdAt: current.createdAt,
     });
   });
 
-  it('does not return a file beyond its absolute lifetime', async () => {
-    collection.findOne.mockResolvedValue(
-      fileDoc({
-        createdAt: new Date(NOW.getTime() - 169 * HOUR_MS),
-        expiresAt: new Date(NOW.getTime() + 24 * HOUR_MS),
-      }),
-    );
+  it('does not return an expired file from find()', async () => {
+    collection.findOne.mockResolvedValue(fileDoc({ expiresAt: NOW }));
 
     await expect(repo.find('karl-session', 'file-1')).resolves.toBeNull();
   });
 
-  it('filters absolutely expired files from session execution', async () => {
+  it('filters expired files out of a session listing', async () => {
     const active = fileDoc({ fileId: 'active' });
-    const expired = fileDoc({
-      fileId: 'expired',
-      createdAt: new Date(NOW.getTime() - 169 * HOUR_MS),
-    });
+    const expired = fileDoc({ fileId: 'expired', expiresAt: NOW });
     collection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue([active, expired]) });
 
     await expect(repo.listBySession('karl-session')).resolves.toEqual([active]);
-  });
-
-  it('anchors legacy rows to lastModified instead of granting an unbounded refresh', async () => {
-    const lastModified = new Date(NOW.getTime() - 167 * HOUR_MS);
-    const legacy = fileDoc({ lastModified });
-    delete legacy.createdAt;
-    collection.findOne.mockResolvedValue(legacy);
-
-    await repo.touch('karl-session', 'file-1');
-
-    expect(collection.updateOne).toHaveBeenCalledWith(
-      {
-        _id: legacy._id,
-        lastModified,
-        expiresAt: legacy.expiresAt,
-        createdAt: { $exists: false },
-      },
-      {
-        $set: {
-          expiresAt: new Date(NOW.getTime() + HOUR_MS),
-          createdAt: lastModified,
-        },
-      },
-    );
   });
 });

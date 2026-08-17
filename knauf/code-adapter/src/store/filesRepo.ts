@@ -18,8 +18,6 @@ export interface FileDoc {
   tenantId: string;
   blobPath: string;
   lastModified: Date;
-  /** Missing only on rows written before absolute retention was introduced. */
-  createdAt?: Date;
   expiresAt: Date;
 }
 
@@ -39,38 +37,22 @@ export class FilesRepo {
   constructor(
     private readonly collection: Collection<FileDoc>,
     private readonly ttlHours: number,
-    private readonly maxLifetimeHours: number,
   ) {}
 
+  /**
+   * CAS guard for touch()/upsertCaptured(): match the exact revision just read, so a
+   * concurrent write in between never gets silently clobbered or lost.
+   */
   private revisionFilter(doc: WithId<FileDoc>): Filter<FileDoc> {
-    return {
-      _id: doc._id,
-      lastModified: doc.lastModified,
-      expiresAt: doc.expiresAt,
-      ...(doc.createdAt instanceof Date
-        ? { createdAt: doc.createdAt }
-        : { createdAt: { $exists: false } }),
-    };
+    return { _id: doc._id, lastModified: doc.lastModified, expiresAt: doc.expiresAt };
   }
 
-  private createdAt(doc: FileDoc, fallback: Date): Date {
-    return doc.createdAt instanceof Date
-      ? doc.createdAt
-      : doc.lastModified instanceof Date
-        ? doc.lastModified
-        : fallback;
-  }
-
-  private expiry(from: Date, createdAt = from): Date {
-    const slidingExpiry = from.getTime() + this.ttlHours * 3_600_000;
-    const absoluteExpiry = createdAt.getTime() + this.maxLifetimeHours * 3_600_000;
-    return new Date(Math.min(slidingExpiry, absoluteExpiry));
+  private expiry(from = new Date()): Date {
+    return new Date(from.getTime() + this.ttlHours * 3_600_000);
   }
 
   private isActive(doc: FileDoc, now: Date): boolean {
-    const absoluteExpiry =
-      this.createdAt(doc, now).getTime() + this.maxLifetimeHours * 3_600_000;
-    return doc.expiresAt.getTime() > now.getTime() && absoluteExpiry > now.getTime();
+    return doc.expiresAt.getTime() > now.getTime();
   }
 
   async insertStaged(input: InsertFileInput): Promise<FileDoc> {
@@ -89,7 +71,6 @@ export class FilesRepo {
       tenantId: input.tenantId,
       blobPath: '',
       lastModified: now,
-      createdAt: now,
       expiresAt: this.expiry(now),
     };
     doc.blobPath = `${doc.sessionId}/${doc.fileId}`;
@@ -129,7 +110,6 @@ export class FilesRepo {
           tenantId: input.tenantId,
           blobPath,
           lastModified: now,
-          createdAt: now,
           expiresAt: this.expiry(now),
         };
         try {
@@ -157,7 +137,6 @@ export class FilesRepo {
         continue;
       }
 
-      const createdAt = this.createdAt(existing, now);
       const result = await this.collection.findOneAndUpdate(
         revision,
         {
@@ -172,8 +151,7 @@ export class FilesRepo {
             tenantId: input.tenantId,
             blobPath,
             lastModified: now,
-            expiresAt: this.expiry(now, createdAt),
-            ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
+            expiresAt: this.expiry(now),
           },
         },
         { returnDocument: 'after', includeResultMetadata: true },
@@ -213,12 +191,8 @@ export class FilesRepo {
       if (existing == null || !this.isActive(existing, now)) {
         return;
       }
-      const createdAt = this.createdAt(existing, now);
       const result = await this.collection.updateOne(this.revisionFilter(existing), {
-        $set: {
-          expiresAt: this.expiry(now, createdAt),
-          ...(!(existing.createdAt instanceof Date) ? { createdAt } : {}),
-        },
+        $set: { expiresAt: this.expiry(now) },
       });
       if (result.matchedCount === 1) {
         return;
