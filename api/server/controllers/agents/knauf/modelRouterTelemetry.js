@@ -5,6 +5,7 @@ const { getProviderRequestId, summarizeProviderError } = require('./providerErro
 
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
+const MAX_RETRY_LINEAGE_LENGTH = 512;
 
 const logTelemetry = (message, event) => tenantStorage.run({}, () => logger.info(message, event));
 
@@ -45,6 +46,13 @@ const getAttempt = (tags, retryReason) => {
     return match != null && Number(match[1]) >= 2;
   });
   return retryTag == null ? '1' : '2+';
+};
+
+const getRetryLineage = (metadata, parentRunId) => {
+  const lineage = metadata?.langgraph_checkpoint_ns ?? metadata?.checkpoint_ns ?? parentRunId;
+  return typeof lineage === 'string' && lineage.length <= MAX_RETRY_LINEAGE_LENGTH
+    ? lineage
+    : undefined;
 };
 
 const getGenerationMessage = (result) => result?.generations?.at(-1)?.at(-1)?.message;
@@ -107,16 +115,23 @@ function createModelRouterTelemetry({
 }) {
   const calls = new Map();
   const completedCalls = [];
-  const pendingRetriesByParentRunId = new Map();
+  const pendingRetriesByLineage = new Map();
   let firstModelContentAtMs;
   let finalized = false;
 
-  const consumePendingRetry = (parentRunId) => {
-    if (parentRunId == null) return;
-    const reasons = pendingRetriesByParentRunId.get(parentRunId);
+  const queuePendingRetry = (lineage, reason) => {
+    if (lineage == null) return;
+    const reasons = pendingRetriesByLineage.get(lineage) ?? [];
+    reasons.push(reason);
+    pendingRetriesByLineage.set(lineage, reasons);
+  };
+
+  const consumePendingRetry = (lineage) => {
+    if (lineage == null) return;
+    const reasons = pendingRetriesByLineage.get(lineage);
     const reason = reasons?.shift();
     if (reasons?.length === 0) {
-      pendingRetriesByParentRunId.delete(parentRunId);
+      pendingRetriesByLineage.delete(lineage);
     }
     return reason;
   };
@@ -139,6 +154,9 @@ function createModelRouterTelemetry({
       error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
       error == null ? getSuccessRequestId(output) : providerError?.requestId;
+    if (result === 'provider_error' && providerError?.retryable === true) {
+      queuePendingRetry(call.retryLineage, 'langgraph_retry');
+    }
 
     recordFoundryModelCall?.({
       result,
@@ -185,12 +203,14 @@ function createModelRouterTelemetry({
       ) {
         return;
       }
-      const explicitRetryReason = consumePendingRetry(parentRunId);
+      const retryLineage = getRetryLineage(runtimeMetadata, parentRunId);
+      const explicitRetryReason = consumePendingRetry(retryLineage);
       const attempt = getAttempt(tags, explicitRetryReason);
       const retryReason = explicitRetryReason ?? (attempt === '2+' ? 'langchain_retry' : undefined);
       calls.set(runId, {
         startedAtMs: now(),
         parentRunId,
+        retryLineage,
         phase: getPhase(messages, runtimeMetadata),
         attempt,
         retryReason,
@@ -219,12 +239,8 @@ function createModelRouterTelemetry({
   handler.awaitHandlers = true;
 
   const recordRetry = ({ runId, reason, output }) => {
-    const parentRunId = calls.get(runId)?.parentRunId;
-    if (parentRunId != null) {
-      const reasons = pendingRetriesByParentRunId.get(parentRunId) ?? [];
-      reasons.push(reason);
-      pendingRetriesByParentRunId.set(parentRunId, reasons);
-    }
+    const retryLineage = calls.get(runId)?.retryLineage;
+    queuePendingRetry(retryLineage, reason);
     finishCall(runId, 'retry', output);
   };
 

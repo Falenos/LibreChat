@@ -16,7 +16,10 @@ jest.mock('@librechat/data-schemas', () => ({
 const { CallbackManager } = require('@langchain/core/callbacks/manager');
 const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
 const modelStackRequire = createRequire(require.resolve('@langchain/openai'));
+const { BaseChatModel } = modelStackRequire('@langchain/core/language_models/chat_models');
+const { AIMessage, HumanMessage } = modelStackRequire('@langchain/core/messages');
 const { RunnableLambda } = modelStackRequire('@langchain/core/runnables');
+const { Annotation, END, START, StateGraph } = require('@langchain/langgraph');
 const { recordFoundryModelCall } = require('@librechat/api');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const {
@@ -223,6 +226,99 @@ describe('[knauf] Model Router telemetry', () => {
     const generatedRetryTag = observedTags.flat().find((tag) => tag.startsWith('retry:attempt:'));
     expect(generatedRetryTag).toBe('retry:attempt:2');
     expect(getAttempt([generatedRetryTag], undefined)).toBe('2+');
+  });
+
+  it('attributes a real LangGraph node retry to attempt 2+', async () => {
+    let modelAttempts = 0;
+    class RetryModel extends BaseChatModel {
+      constructor() {
+        super({});
+      }
+
+      _llmType() {
+        return 'model-router-contract';
+      }
+
+      async _generate() {
+        modelAttempts += 1;
+        if (modelAttempts === 1) {
+          throw Object.assign(new Error('private streamed provider detail'), {
+            code: 'server_error',
+            type: 'server_error',
+            requestID: 'azure-stream-request',
+          });
+        }
+        return {
+          generations: [{ text: 'ok', message: new AIMessage('ok') }],
+        };
+      }
+    }
+
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'gpt-5.6-luna',
+      startedAtMs: 0,
+      now: () => 10,
+    });
+    const State = Annotation.Root({
+      messages: Annotation({
+        reducer: (left, right) => left.concat(right),
+        default: () => [],
+      }),
+    });
+    const model = new RetryModel();
+    const graph = new StateGraph(State)
+      .addNode(
+        'agent',
+        async (state, config) => ({
+          messages: [await model.invoke(state.messages, config)],
+        }),
+        {
+          retryPolicy: {
+            maxAttempts: 2,
+            initialInterval: 1,
+            jitter: false,
+            logWarning: false,
+          },
+        },
+      )
+      .addEdge(START, 'agent')
+      .addEdge('agent', END)
+      .compile();
+
+    await graph.invoke(
+      { messages: [new HumanMessage('hello')] },
+      {
+        callbacks: [telemetry.handler],
+        metadata: { ls_model_name: 'model-router' },
+      },
+    );
+
+    expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ result: 'provider_error', attempt: '1' }),
+    );
+    expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ result: 'success', attempt: '2+' }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        result: 'provider_error',
+        attempt: '1',
+        providerRetryable: true,
+        providerCode: 'server_error',
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        result: 'success',
+        attempt: '2+',
+        retryReason: 'langgraph_retry',
+        returnedModel: 'gpt-5.6-luna',
+      }),
+    );
   });
 
   it('awaits callback-manager dispatch before finalizing the generation lifecycle', async () => {

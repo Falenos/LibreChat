@@ -689,6 +689,7 @@ describe('Azure crud.js - URL refresh tests', () => {
         retryable: false,
         providerStatus: 403,
         code: 'ERR_BAD_REQUEST',
+        errorName: 'Error',
         requestId: 'request-123',
       });
       expect(JSON.stringify(logger.error.mock.calls)).not.toMatch(

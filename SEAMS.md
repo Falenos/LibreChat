@@ -922,6 +922,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/__tests__/openai.spec.js` | `jest.mock('@librechat/api', ...)` Code Execution guard fixture | 82–84 | Keeps the compatibility-controller unit fixture explicitly enabled after the controller began consuming the canonical environment gate, so the suite reaches the behavior it is intended to test | Self | KK20-257 |
 | `api/server/controllers/agents/__tests__/responses.unit.spec.js` | `jest.mock('@librechat/api', ...)` Code Execution guard fixture | 90–92 | Keeps the Responses-controller unit fixture explicitly enabled after the controller began consuming the canonical environment gate, instead of aborting on an absent mock export | Self | KK20-257 |
 | `packages/api/src/agents/__tests__/initialize.test.ts` | `passes the union of agent.tools + allowed-tools` environment fixture | 1495–1497 | Makes the allowed-tools union regression opt into an available Code Execution environment now that code-dependent skills correctly fail closed by default | Self | KK20-257 |
+| `api/server/controllers/agents/client.test.js` | `chatCompletion provider failure logging` `errorName` expectation | 1170–1184 | Keeps the full API privacy regression aligned with the shared bounded provider summary after SDK exception-class capture was added | Self | KK20-270 |
+| `api/test/server/services/Files/Azure/crud.test.js` | `getAzureFileStream` bounded `errorName` expectation | 687–697 | Keeps the Azure download privacy regression aligned with the shared bounded provider summary without permitting raw error content | Self | KK20-270 |
 <!-- seams:auto:end -->
 
 ## Configuration

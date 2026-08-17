@@ -1175,6 +1175,7 @@ describe('AgentClient - titleConvo', () => {
           providerStatus: 403,
           code: 'invalid_value',
           type: 'StorageAccessDenied',
+          errorName: 'Error',
           requestId: 'request-123',
         },
       );

@@ -85,9 +85,10 @@ router-debugging dashboard.
 - Run telemetry logging inside an empty nested request context so shared logger
   enrichment cannot append tenant or user identity.
 - Add compatibility tests against the packages resolved by the real model
-  stack. A dependency bump that changes SDK error fields, package resolution,
-  callback propagation, or retry tags must fail CI rather than silently reduce
-  diagnostics.
+  stack, including both LangChain retry tags and LangGraph checkpoint-namespace
+  retries. A dependency bump that changes SDK error fields, package resolution,
+  callback propagation, retry tags, or graph retry lineage must fail CI rather
+  than silently reduce diagnostics.
 
 ## Delivery Sequence
 
