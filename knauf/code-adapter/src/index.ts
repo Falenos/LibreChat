@@ -10,6 +10,7 @@ import { createAcaClient } from './azure/acaClient.js';
 import { createMetrics } from './middleware/metrics.js';
 import { createReaper } from './store/reaper.js';
 import { createApp } from './app.js';
+import type { Reaper } from './store/reaper.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -52,20 +53,25 @@ async function main(): Promise<void> {
 
   // Blob-led cleanup and bounded metadata reconciliation share a renewable Table lease,
   // so only one replica mutates retention state at a time.
-  const reaper = createReaper({
-    blob,
-    repo,
-    logger,
-    ttlHours: config.fileTtlHours,
-    intervalMs: config.reaperIntervalMs,
-    leaseMs: config.reaperLeaseMs,
-    reconciliationIntervalMs: config.reconciliationIntervalMs,
-    reconciliationPageSize: config.reconciliationPageSize,
-    reconciliationMaxPages: config.reconciliationMaxPages,
-    reconciliationMaxMs: config.reconciliationMaxMs,
-    metrics,
-  });
-  reaper.start();
+  let reaper: Reaper | null = null;
+  if (config.cleanupEnabled) {
+    reaper = createReaper({
+      blob,
+      repo,
+      logger,
+      ttlHours: config.fileTtlHours,
+      intervalMs: config.reaperIntervalMs,
+      leaseMs: config.reaperLeaseMs,
+      reconciliationIntervalMs: config.reconciliationIntervalMs,
+      reconciliationPageSize: config.reconciliationPageSize,
+      reconciliationMaxPages: config.reconciliationMaxPages,
+      reconciliationMaxMs: config.reconciliationMaxMs,
+      metrics,
+    });
+    reaper.start();
+  } else {
+    logger.warn('metadata cleanup is disabled for this deployment');
+  }
 
   const app = createApp({
     config,
@@ -124,7 +130,7 @@ async function main(): Promise<void> {
       return;
     }
     shuttingDown = true;
-    const reaperStopped = reaper.stop();
+    const reaperStopped = reaper?.stop() ?? Promise.resolve();
     logger.info({ signal, drainBudgetMs }, 'shutting down — draining in-flight executions');
     server.close(() => {
       logger.info('drain complete');

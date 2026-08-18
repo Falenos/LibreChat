@@ -99,6 +99,7 @@ export interface Config {
   reconciliationPageSize: number;
   reconciliationMaxPages: number;
   reconciliationMaxMs: number;
+  cleanupEnabled: boolean;
   metricsEnabled: boolean;
 }
 
@@ -272,6 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reconciliationPageSize: int('RECONCILIATION_PAGE_SIZE', 100),
     reconciliationMaxPages: int('RECONCILIATION_MAX_PAGES', 10),
     reconciliationMaxMs: int('RECONCILIATION_MAX_MS', 30_000),
+    cleanupEnabled: bool('CLEANUP_ENABLED', true),
     metricsEnabled: bool('METRICS_ENABLED', true),
   };
 

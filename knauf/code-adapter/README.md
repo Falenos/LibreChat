@@ -160,6 +160,11 @@ is the default; writes require exactly `MIGRATION_APPLY=true`. The command prese
 expiry, verifies Blob length, refuses partial/conflicting target state, emits aggregate counts only,
 and exits nonzero for invalid rows, missing/mismatched Blobs, or write failures.
 
+For a dark branch deployment that shares the pre-cutover Blob container while Mongo remains
+authoritative, set `CLEANUP_ENABLED=false`. This prevents the Table reaper from treating
+Mongo-referenced Blobs as Table orphans. The default is `true`, and the final Table-only deployment
+must restore it.
+
 The **contract suite** (`test/contract/`) replays the exact call shapes of
 `crud.js`, `process.js`, `CodeExecutor` and `BashExecutor` — it is the
 regression gate when LibreChat upstream syncs touch the Code API client side.

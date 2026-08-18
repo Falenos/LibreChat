@@ -151,8 +151,13 @@ describe('loadConfig', () => {
     expect(config.fileTtlHours).toBe(24);
     expect(config.table.tableName).toBe('codeAdapterFiles');
     expect(config.blob.container).toBe('code-adapter-staging');
+    expect(config.cleanupEnabled).toBe(true);
     expect(config.jwt.issuer).toBe('librechat');
     expect(config.jwt.audience).toBe('codeapi');
+  });
+
+  it('allows cleanup to be disabled explicitly for a dark validation deployment', () => {
+    expect(loadConfig({ ...TEST_ENV_BASE, CLEANUP_ENABLED: 'false' }).cleanupEnabled).toBe(false);
   });
 
   it('strips trailing slashes from the pool endpoint', () => {
