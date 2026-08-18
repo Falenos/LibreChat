@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "migrate:table": "node dist/migration/migrateMongoToTable.js",
     "smoke": "node scripts/smoke.mjs",
     "probe:table": "node scripts/probe-table-storage.mjs"
   },

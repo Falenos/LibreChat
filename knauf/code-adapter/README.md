@@ -142,6 +142,24 @@ npm run build && node --env-file=.env dist/index.js
 npm run smoke           # live golden-path against real pools (az login required)
 ```
 
+### Controlled Mongo-to-Table migration
+
+Do not run Mongo- and Table-backed replicas behind the same Service. During the dev/stage quiet
+window, disable Code Execution and stop the old adapter before running the one-off migration from
+the Table-backed image:
+
+```bash
+npm run build
+MIGRATION_APPLY=false npm run migrate:table  # validate source rows and referenced Blobs
+MIGRATION_APPLY=true npm run migrate:table   # idempotently create exact Table entity sets
+```
+
+The Job needs the legacy `MONGO_URI`/optional `MONGO_DB` and
+`MONGO_FILES_COLLECTION`, plus the normal workload-identity Table and Blob configuration. Dry-run
+is the default; writes require exactly `MIGRATION_APPLY=true`. The command preserves source IDs and
+expiry, verifies Blob length, refuses partial/conflicting target state, emits aggregate counts only,
+and exits nonzero for invalid rows, missing/mismatched Blobs, or write failures.
+
 The **contract suite** (`test/contract/`) replays the exact call shapes of
 `crud.js`, `process.js`, `CodeExecutor` and `BashExecutor` — it is the
 regression gate when LibreChat upstream syncs touch the Code API client side.

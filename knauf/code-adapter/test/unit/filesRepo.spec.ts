@@ -108,6 +108,39 @@ describe('Table-backed FilesRepo', () => {
     expect(await repo.find(sessionId, doc.fileId)).toEqual(doc);
   });
 
+  it('imports a legacy file transactionally and treats an exact rerun as idempotent', async () => {
+    const doc: FileDoc = {
+      ...input({ origin: 'upload' }),
+      fileId: randomUUID(),
+      state: 'staged',
+      blobPath: candidate(),
+      lastModified: clock,
+      expiresAt: new Date(clock.getTime() + 24 * HOUR_MS),
+    };
+
+    await expect(repo.importFile(doc)).resolves.toBe('created');
+    await expect(repo.checkImportFile(doc)).resolves.toBe('existing');
+    await expect(repo.importFile(doc)).resolves.toBe('existing');
+    expect(table.allEntities()).toHaveLength(3);
+    expect(await repo.find(doc.sessionId, doc.fileId)).toEqual(doc);
+  });
+
+  it('rejects partial or conflicting migration targets without overwriting them', async () => {
+    const doc: FileDoc = {
+      ...input({ origin: 'upload' }),
+      fileId: randomUUID(),
+      state: 'staged',
+      blobPath: candidate(),
+      lastModified: clock,
+      expiresAt: new Date(clock.getTime() + 24 * HOUR_MS),
+    };
+    table.seed(serializeFileEntity(doc));
+
+    await expect(repo.checkImportFile(doc)).rejects.toThrow(/partial file\/index set/);
+    await expect(repo.importFile(doc)).rejects.toThrow(/partial file\/index set/);
+    expect(table.allEntities()).toHaveLength(1);
+  });
+
   it('keeps the public fileId stable and uses a new Blob generation on active capture overwrite', async () => {
     const first = await repo.insertStaged(input());
     const newBlobPath = candidate();

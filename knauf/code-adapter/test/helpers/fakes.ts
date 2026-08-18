@@ -113,6 +113,11 @@ export class FakeBlobStore implements BlobStore {
     this.blobs.set(blobPath, { data: buf, contentType });
   }
 
+  async head(blobPath: string): Promise<{ contentLength: number } | null> {
+    const entry = this.blobs.get(blobPath);
+    return entry == null ? null : { contentLength: entry.data.length };
+  }
+
   async getStream(blobPath: string) {
     const entry = this.blobs.get(blobPath);
     if (entry == null) {

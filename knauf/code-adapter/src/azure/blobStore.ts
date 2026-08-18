@@ -25,6 +25,7 @@ const STREAM_UPLOAD_CONCURRENCY = 2;
  */
 export interface BlobStore {
   put(blobPath: string, data: Buffer | Readable, contentType: string, size?: number): Promise<void>;
+  head(blobPath: string): Promise<{ contentLength: number } | null>;
   getStream(
     blobPath: string,
   ): Promise<{ stream: NodeJS.ReadableStream; contentLength?: number | undefined }>;
@@ -98,6 +99,27 @@ export async function createBlobStore(
           options,
         );
         void size;
+      }
+    },
+
+    async head(blobPath) {
+      const client = container.getBlockBlobClient(blobPath);
+      try {
+        const properties = await client.getProperties();
+        if (properties.contentLength == null) {
+          throw new Error(`blob ${blobPath} has no content length`);
+        }
+        return { contentLength: properties.contentLength };
+      } catch (error) {
+        if (
+          typeof error === 'object' &&
+          error != null &&
+          'statusCode' in error &&
+          error.statusCode === 404
+        ) {
+          return null;
+        }
+        throw error;
       }
     },
 
