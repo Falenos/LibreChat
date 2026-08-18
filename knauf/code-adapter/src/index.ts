@@ -47,8 +47,8 @@ async function main(): Promise<void> {
   const credential = new DefaultAzureCredential();
   const blob = await createBlobStore(config, credential);
   const tokens = createTokenProvider(config, logger, credential);
-  const aca = createAcaClient(config, logger, tokens);
   const metrics = createMetrics();
+  const aca = createAcaClient(config, logger, tokens, metrics);
 
   // Deletes staged bytes once no Mongo row can reach them. Not optional bookkeeping: the
   // TTL removes the row that holds the blob path and its owner, so without this the bytes

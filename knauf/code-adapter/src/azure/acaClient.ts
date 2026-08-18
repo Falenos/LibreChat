@@ -10,6 +10,7 @@ import type {
 } from '../types/aca.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
+import type { Metrics } from '../middleware/metrics.js';
 import type { TokenProvider } from './credential.js';
 
 /**
@@ -42,7 +43,12 @@ function isSessionNotFound(statusCode: number, bodyText: string): boolean {
   return statusCode === 404 && SESSION_NOT_FOUND_RE.test(bodyText);
 }
 
-export function createAcaClient(config: Config, logger: Logger, tokens: TokenProvider): AcaClient {
+export function createAcaClient(
+  config: Config,
+  logger: Logger,
+  tokens: TokenProvider,
+  metrics: Metrics,
+): AcaClient {
   const buildUrl = (path: string, identifier: string): string => {
     const url = new URL(`${config.aca.poolEndpoint}${path}`);
     url.searchParams.set('api-version', config.aca.apiVersion);
@@ -112,175 +118,248 @@ export function createAcaClient(config: Config, logger: Logger, tokens: TokenPro
 
   return {
     async execute(identifier, code) {
-      const url = buildUrl('/code/execute', identifier);
-      let response;
+      const started = Date.now();
       try {
-        response = await authedRequest(
-          url,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              properties: { codeInputType: 'inline', executionType: 'synchronous', code },
-            }),
-          },
-          config.aca.execTimeoutMs,
-        );
-      } catch (err) {
-        if (err instanceof AcaError) {
-          throw err;
-        }
-        const name = (err as Error).name ?? '';
-        if (/Timeout/i.test(name) || /timeout/i.test((err as Error).message ?? '')) {
-          throw new AcaTimeoutError();
-        }
-        throw new AcaError(`pool request failed: ${(err as Error).message}`, 502);
+        return await doExecute(identifier, code);
+      } finally {
+        metrics.acaRequestDuration.observe({ op: 'execute' }, (Date.now() - started) / 1000);
       }
-
-      const bodyText = await response.body.text();
-      if (response.statusCode === 408 || response.statusCode === 504) {
-        throw new AcaTimeoutError();
-      }
-      if (isSessionNotFound(response.statusCode, bodyText)) {
-        throw new AcaSessionNotFoundError();
-      }
-      if (response.statusCode === 429) {
-        const retryAfter = Number(response.headers['retry-after']);
-        throw new AcaError(
-          'pool at capacity',
-          429,
-          'Capacity',
-          Number.isFinite(retryAfter) ? retryAfter : undefined,
-        );
-      }
-      if (response.statusCode >= 400) {
-        throw new AcaError(
-          `pool execution failed (${response.statusCode})`,
-          502,
-          bodyText.slice(0, 500),
-        );
-      }
-
-      let parsed: AcaExecutionResponse;
-      try {
-        parsed = JSON.parse(bodyText) as AcaExecutionResponse;
-      } catch {
-        throw new AcaError('pool returned non-JSON execution response', 502);
-      }
-      return parseExecution(parsed);
     },
-
     async pushFile(identifier, name, data, contentType) {
-      const url = buildUrl('/files/upload', identifier);
-      const boundary = `karlform${Math.random().toString(16).slice(2)}`;
-      const head = Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${contentType}\r\n\r\n`,
-      );
-      const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-      const body = Buffer.concat([head, data, tail]);
+      const started = Date.now();
+      try {
+        return await doPushFile(identifier, name, data, contentType);
+      } finally {
+        metrics.acaRequestDuration.observe({ op: 'pushFile' }, (Date.now() - started) / 1000);
+      }
+    },
+    async listFiles(identifier) {
+      const started = Date.now();
+      try {
+        return await doListFiles(identifier);
+      } finally {
+        metrics.acaRequestDuration.observe({ op: 'listFiles' }, (Date.now() - started) / 1000);
+      }
+    },
+    async fetchFileStream(identifier, name) {
+      const started = Date.now();
+      const record = () => {
+        metrics.acaRequestDuration.observe(
+          { op: 'fetchFileStream' },
+          (Date.now() - started) / 1000,
+        );
+      };
+      // Unlike the other ops, this one returns before the operation is done: the
+      // promise resolves at response headers, and the caller (capture.ts) then
+      // pipes/reads the body separately. Timing only the header round-trip would
+      // make slow or stalled downloads — and stream-level errors — invisible to
+      // this histogram, so the observation is deferred to the stream's terminal
+      // 'close' event (fired on normal end, consumer-driven destroy, and error
+      // alike) instead of the `finally` used by the other methods below.
+      let result: { stream: Readable; contentLength?: number };
+      try {
+        result = await doFetchFileStream(identifier, name);
+      } catch (err) {
+        record();
+        throw err;
+      }
+      result.stream.once('close', record);
+      return result;
+    },
+    async fetchFileContent(identifier, name, maxBytes) {
+      const started = Date.now();
+      try {
+        return await doFetchFileContent(identifier, name, maxBytes);
+      } finally {
+        metrics.acaRequestDuration.observe(
+          { op: 'fetchFileContent' },
+          (Date.now() - started) / 1000,
+        );
+      }
+    },
+  };
 
-      const response = await authedRequest(
+  async function doExecute(identifier: string, code: string): Promise<AcaExecOutcome> {
+    const url = buildUrl('/code/execute', identifier);
+    let response;
+    try {
+      response = await authedRequest(
         url,
         {
           method: 'POST',
-          headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-          body,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            properties: { codeInputType: 'inline', executionType: 'synchronous', code },
+          }),
         },
-        config.aca.fileOpTimeoutMs,
+        config.aca.execTimeoutMs,
       );
-      const bodyText = await response.body.text();
-      if (isSessionNotFound(response.statusCode, bodyText)) {
-        throw new AcaSessionNotFoundError();
+    } catch (err) {
+      if (err instanceof AcaError) {
+        throw err;
       }
-      if (response.statusCode === 413) {
-        throw new AcaError('file exceeds pool upload limit', 413, 'PayloadTooLarge');
+      const name = (err as Error).name ?? '';
+      if (/Timeout/i.test(name) || /timeout/i.test((err as Error).message ?? '')) {
+        throw new AcaTimeoutError();
       }
-      if (response.statusCode === 429) {
-        // Pushing a file allocates the session — the concurrency cap can bite
-        // here just like on exec. Surface as capacity so execService returns a
-        // friendly result instead of a 502.
-        const retryAfter = Number(response.headers['retry-after']);
-        throw new AcaError(
-          'pool at capacity',
-          429,
-          'Capacity',
-          Number.isFinite(retryAfter) ? retryAfter : undefined,
-        );
-      }
-      if (response.statusCode >= 400) {
-        throw new AcaError(
-          `pool file push failed (${response.statusCode})`,
-          502,
-          bodyText.slice(0, 500),
-        );
-      }
-    },
+      throw new AcaError(`pool request failed: ${(err as Error).message}`, 502);
+    }
 
-    async listFiles(identifier) {
-      const url = buildUrl('/files', identifier);
-      const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
-      const bodyText = await response.body.text();
-      if (isSessionNotFound(response.statusCode, bodyText)) {
-        throw new AcaSessionNotFoundError();
-      }
-      if (response.statusCode >= 400) {
-        throw new AcaError(
-          `pool file list failed (${response.statusCode})`,
-          502,
-          bodyText.slice(0, 500),
-        );
-      }
-      try {
-        const parsed = JSON.parse(bodyText) as AcaFileListResponse;
-        if (!Array.isArray(parsed.value)) {
-          return [];
-        }
-        // Normalize the wrapped { properties: { filename, size, ... } } shape.
-        return parsed.value
-          .map((entry): AcaSessionFile | null => {
-            const p = entry.properties;
-            if (p?.filename == null) {
-              return null;
-            }
-            return {
-              name: p.filename,
-              type: 'File',
-              contentType: p.contentType ?? null,
-              sizeInBytes: p.size,
-              lastModifiedAt: p.lastModifiedTime,
-            };
-          })
-          .filter((f): f is AcaSessionFile => f !== null);
-      } catch {
-        throw new AcaError('pool returned non-JSON file list', 502);
-      }
-    },
+    const bodyText = await response.body.text();
+    if (response.statusCode === 408 || response.statusCode === 504) {
+      throw new AcaTimeoutError();
+    }
+    if (isSessionNotFound(response.statusCode, bodyText)) {
+      throw new AcaSessionNotFoundError();
+    }
+    if (response.statusCode === 429) {
+      const retryAfter = Number(response.headers['retry-after']);
+      throw new AcaError(
+        'pool at capacity',
+        429,
+        'Capacity',
+        Number.isFinite(retryAfter) ? retryAfter : undefined,
+      );
+    }
+    if (response.statusCode >= 400) {
+      throw new AcaError(
+        `pool execution failed (${response.statusCode})`,
+        502,
+        bodyText.slice(0, 500),
+      );
+    }
 
-    async fetchFileStream(identifier, name) {
-      const response = await fetchFileResponse(identifier, name);
-      const rawLength = response.headers['content-length'];
-      const contentLength = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength);
-      return {
-        stream: response.body,
-        ...(Number.isFinite(contentLength) && contentLength >= 0 ? { contentLength } : {}),
-      };
-    },
+    let parsed: AcaExecutionResponse;
+    try {
+      parsed = JSON.parse(bodyText) as AcaExecutionResponse;
+    } catch {
+      throw new AcaError('pool returned non-JSON execution response', 502);
+    }
+    return parseExecution(parsed);
+  }
 
-    async fetchFileContent(identifier, name, maxBytes) {
-      const response = await fetchFileResponse(identifier, name);
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of response.body) {
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
-        total += buf.length;
-        if (maxBytes != null && total > maxBytes) {
-          chunks.push(buf.subarray(0, buf.length - (total - maxBytes)));
-          response.body.destroy();
-          break;
-        }
-        chunks.push(buf);
+  async function doPushFile(
+    identifier: string,
+    name: string,
+    data: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const url = buildUrl('/files/upload', identifier);
+    const boundary = `karlform${Math.random().toString(16).slice(2)}`;
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat([head, data, tail]);
+
+    const response = await authedRequest(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+        body,
+      },
+      config.aca.fileOpTimeoutMs,
+    );
+    const bodyText = await response.body.text();
+    if (isSessionNotFound(response.statusCode, bodyText)) {
+      throw new AcaSessionNotFoundError();
+    }
+    if (response.statusCode === 413) {
+      throw new AcaError('file exceeds pool upload limit', 413, 'PayloadTooLarge');
+    }
+    if (response.statusCode === 429) {
+      // Pushing a file allocates the session — the concurrency cap can bite
+      // here just like on exec. Surface as capacity so execService returns a
+      // friendly result instead of a 502.
+      const retryAfter = Number(response.headers['retry-after']);
+      throw new AcaError(
+        'pool at capacity',
+        429,
+        'Capacity',
+        Number.isFinite(retryAfter) ? retryAfter : undefined,
+      );
+    }
+    if (response.statusCode >= 400) {
+      throw new AcaError(
+        `pool file push failed (${response.statusCode})`,
+        502,
+        bodyText.slice(0, 500),
+      );
+    }
+  }
+
+  async function doListFiles(identifier: string): Promise<AcaSessionFile[]> {
+    const url = buildUrl('/files', identifier);
+    const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
+    const bodyText = await response.body.text();
+    if (isSessionNotFound(response.statusCode, bodyText)) {
+      throw new AcaSessionNotFoundError();
+    }
+    if (response.statusCode >= 400) {
+      throw new AcaError(
+        `pool file list failed (${response.statusCode})`,
+        502,
+        bodyText.slice(0, 500),
+      );
+    }
+    try {
+      const parsed = JSON.parse(bodyText) as AcaFileListResponse;
+      if (!Array.isArray(parsed.value)) {
+        return [];
       }
-      return Buffer.concat(chunks);
-    },
-  };
+      // Normalize the wrapped { properties: { filename, size, ... } } shape.
+      return parsed.value
+        .map((entry): AcaSessionFile | null => {
+          const p = entry.properties;
+          if (p?.filename == null) {
+            return null;
+          }
+          return {
+            name: p.filename,
+            type: 'File',
+            contentType: p.contentType ?? null,
+            sizeInBytes: p.size,
+            lastModifiedAt: p.lastModifiedTime,
+          };
+        })
+        .filter((f): f is AcaSessionFile => f !== null);
+    } catch {
+      throw new AcaError('pool returned non-JSON file list', 502);
+    }
+  }
+
+  async function doFetchFileStream(
+    identifier: string,
+    name: string,
+  ): Promise<{ stream: Readable; contentLength?: number }> {
+    const response = await fetchFileResponse(identifier, name);
+    const rawLength = response.headers['content-length'];
+    const contentLength = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength);
+    return {
+      stream: response.body,
+      ...(Number.isFinite(contentLength) && contentLength >= 0 ? { contentLength } : {}),
+    };
+  }
+
+  async function doFetchFileContent(
+    identifier: string,
+    name: string,
+    maxBytes?: number,
+  ): Promise<Buffer> {
+    const response = await fetchFileResponse(identifier, name);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of response.body) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+      total += buf.length;
+      if (maxBytes != null && total > maxBytes) {
+        chunks.push(buf.subarray(0, buf.length - (total - maxBytes)));
+        response.body.destroy();
+        break;
+      }
+      chunks.push(buf);
+    }
+    return Buffer.concat(chunks);
+  }
 }

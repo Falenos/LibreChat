@@ -254,9 +254,12 @@ The adapter exposes Prometheus metrics on `/metrics` (unauthenticated, ClusterIP
 | Contract drift | `code_adapter_wrapper_parse_failures_total` | The sentinel wrapper stopped parsing; exit codes are being synthesized |
 | Volume | `code_adapter_upload_bytes_total` | Staging growth; pairs with the 24 h sliding TTL |
 
-Gaps to close when monitors are wired: `code_adapter_truncation_recoveries_total` and
-`code_adapter_aca_request_duration_seconds` are registered but never written, so they read as a
-permanent zero — don't build an alert on them until they're incremented.
+`code_adapter_aca_request_duration_seconds{op}` (per-op: execute/pushFile/listFiles/
+fetchFileStream/fetchFileContent) and `code_adapter_truncation_recoveries_total` were previously
+registered but never written (permanent zero). As of KK20-257's metrics fix both are incremented
+— the former on every ACA call (`fetchFileStream`'s timer spans the full stream lifetime, headers
+through close/error, not just the header round-trip), the latter on every recovered-from-`/mnt/data`
+log fetch — and are safe to build alerts on.
 
 Non-Prometheus signals worth a dashboard: pool-level session counts in Azure Monitor (the
 authoritative saturation signal), adapter pod memory against limit (§3), and Mongo

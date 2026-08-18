@@ -377,6 +377,7 @@ async function recoverLog(
 ): Promise<string | null> {
   try {
     const full = await deps.aca.fetchFileContent(sessionId, logName, maxBytes);
+    deps.metrics.truncationRecoveries.inc();
     return full.toString('utf8');
   } catch (err) {
     deps.logger.warn({ err: (err as Error).message, logName }, 'output log recovery failed');

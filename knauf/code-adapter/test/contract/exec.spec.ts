@@ -12,8 +12,10 @@ import {
   testLogger,
   testMetrics,
 } from '../helpers/fakes.js';
+import { OUT_LOG } from '../../src/exec/wrapper.js';
 import type { Express } from 'express';
 import type { AcaExecOutcome } from '../../src/types/aca.js';
+import type { Metrics } from '../../src/middleware/metrics.js';
 
 /**
  * /exec contract tests replaying CodeExecutor / BashExecutor /
@@ -24,6 +26,7 @@ describe('POST /v1/exec contract', () => {
   let aca: FakeAcaClient;
   let repo: FakeFilesRepo;
   let blob: FakeBlobStore;
+  let metrics: Metrics;
 
   /** Simulate the pool running our wrapper: parse the embedded sentinel pieces. */
   const sentinelOutcome = (
@@ -50,6 +53,7 @@ describe('POST /v1/exec contract', () => {
     aca = new FakeAcaClient();
     repo = new FakeFilesRepo();
     blob = new FakeBlobStore();
+    metrics = testMetrics();
     app = createApp({
       config: testConfig(),
       logger: testLogger(),
@@ -57,7 +61,7 @@ describe('POST /v1/exec contract', () => {
       blob,
       repo: repo.asRepo(),
       mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
-      metrics: testMetrics(),
+      metrics,
     });
   });
 
@@ -647,5 +651,36 @@ describe('POST /v1/exec contract', () => {
     expect(response.status).toBe(200);
     expect(response.body.code).toBe(0);
     expect(response.body.stdout).toBe('raw pool output, no sentinel');
+  });
+
+  it('recovers truncated stdout from /mnt/data and increments the truncation-recovery metric', async () => {
+    const fullStdout = `${'x'.repeat(200)}\n`;
+    aca.fileContents.set(OUT_LOG, Buffer.from(fullStdout, 'utf8'));
+    aca.executeImpl = async (_sid, code) => {
+      const delimiter = /KARL_[0-9a-f]{12}/.exec(code)?.[0];
+      if (delimiter == null) {
+        throw new Error('wrapper delimiter not found in submitted code');
+      }
+      // Sentinel claims the full byte count, but the inline chunk is short — exactly
+      // what the pool sends when its own inline truncation kicks in.
+      const inlineStdout = 'x'.repeat(10);
+      return {
+        succeeded: true,
+        stdout: `${delimiter} RC=0 OUT=${Buffer.byteLength(fullStdout, 'utf8')} ERR=0\n${inlineStdout}${delimiter}_ERR\n`,
+        stderr: '',
+        raw: {},
+      };
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print("x" * 200)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(0);
+    expect(response.body.stdout).toBe(fullStdout);
+
+    const recovered = await metrics.truncationRecoveries.get();
+    expect(recovered.values[0].value).toBe(1);
   });
 });
