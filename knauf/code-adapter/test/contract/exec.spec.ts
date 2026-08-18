@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { Readable } from 'node:stream';
 import { createApp } from '../../src/app.js';
-import { AcaSessionNotFoundError, AcaTimeoutError } from '../../src/types/aca.js';
+import {
+  ACA_FILE_MANIFEST_TRUNCATED_NAME,
+  AcaSessionNotFoundError,
+  AcaTimeoutError,
+} from '../../src/types/aca.js';
+import { fileSignature } from '../../src/exec/capture.js';
 import {
   FakeAcaClient,
   FakeBlobStore,
@@ -63,6 +68,44 @@ describe('POST /v1/exec contract', () => {
       metadataReadiness: async () => undefined,
       metrics,
     });
+  });
+
+  it('normalizes ACA timestamps and wrapper nanoseconds to one file signature', () => {
+    const epochSeconds = BigInt(Date.parse('2026-08-18T16:22:14Z')) / 1000n;
+    const nanoseconds = epochSeconds * 1_000_000_000n + 810_699_500n;
+
+    expect(
+      fileSignature({
+        sizeInBytes: 8,
+        lastModifiedAt: '2026-08-18T16:22:14.8106995Z',
+      }),
+    ).toBe(fileSignature({ sizeInBytes: 8, lastModifiedAt: nanoseconds.toString() }));
+  });
+
+  it('captures bounded manifest results and reports when the recursive scan truncated', async () => {
+    aca.sessionFiles = [
+      {
+        name: 'partial.csv',
+        type: 'File',
+        sizeInBytes: 3,
+        lastModifiedAt: '1787070000000000000',
+      },
+      {
+        name: ACA_FILE_MANIFEST_TRUNCATED_NAME,
+        type: 'File',
+        sizeInBytes: 0,
+        lastModifiedAt: '',
+      },
+    ];
+    aca.fileContents.set('partial.csv', Buffer.from('abc'));
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toEqual([expect.objectContaining({ name: 'partial.csv' })]);
+    expect(response.body.files[0]).not.toHaveProperty('inherited');
+    expect(response.body.stderr).toContain('some generated files were not captured');
   });
 
   it('CodeExecutor shape: py exec wraps user code as a python subprocess and returns real rc', async () => {

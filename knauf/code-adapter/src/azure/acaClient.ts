@@ -5,8 +5,13 @@ import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca
 import type {
   AcaExecOutcome,
   AcaExecutionResponse,
+  AcaFileManifest,
   AcaFileListResponse,
   AcaSessionFile,
+} from '../types/aca.js';
+import {
+  ACA_FILE_MANIFEST_NAME,
+  ACA_FILE_MANIFEST_TRUNCATED_NAME,
 } from '../types/aca.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
@@ -38,9 +43,74 @@ export interface AcaClient {
 }
 
 const SESSION_NOT_FOUND_RE = /SessionWithIdentifierNotFound/i;
+const FILE_MANIFEST_MAX_BYTES = 1_048_576;
+const FILE_MANIFEST_MAX_ENTRIES = 100;
 
 function isSessionNotFound(statusCode: number, bodyText: string): boolean {
   return statusCode === 404 && SESSION_NOT_FOUND_RE.test(bodyText);
+}
+
+function parseFileManifest(body: Buffer): AcaSessionFile[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString('utf8'));
+  } catch {
+    throw new AcaError('pool returned invalid file manifest JSON', 502);
+  }
+  if (
+    parsed == null ||
+    typeof parsed !== 'object' ||
+    (parsed as Partial<AcaFileManifest>).version !== 1 ||
+    typeof (parsed as Partial<AcaFileManifest>).truncated !== 'boolean' ||
+    !Array.isArray((parsed as Partial<AcaFileManifest>).files)
+  ) {
+    throw new AcaError('pool returned invalid file manifest shape', 502);
+  }
+  const manifest = parsed as AcaFileManifest;
+  if (manifest.files.length > FILE_MANIFEST_MAX_ENTRIES) {
+    throw new AcaError('pool file manifest exceeded its bounded scan', 502);
+  }
+  const files = (manifest.files as unknown[]).map((raw) => {
+    if (raw == null || typeof raw !== 'object') {
+      throw new AcaError('pool returned invalid file manifest entry', 502);
+    }
+    const entry = raw as Partial<AcaSessionFile>;
+    if (
+      typeof entry.name !== 'string' ||
+      entry.name === '' ||
+      entry.name.startsWith('/') ||
+      entry.type !== 'File' ||
+      (entry.contentType != null && typeof entry.contentType !== 'string') ||
+      typeof entry.sizeInBytes !== 'number' ||
+      !Number.isSafeInteger(entry.sizeInBytes) ||
+      entry.sizeInBytes < 0 ||
+      typeof entry.lastModifiedAt !== 'string' ||
+      entry.lastModifiedAt === ''
+    ) {
+      throw new AcaError('pool returned invalid file manifest entry', 502);
+    }
+    const segments = entry.name.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new AcaError('pool returned invalid file manifest entry', 502);
+    }
+    return {
+      name: entry.name,
+      type: 'File',
+      contentType: entry.contentType ?? null,
+      sizeInBytes: entry.sizeInBytes,
+      lastModifiedAt: entry.lastModifiedAt,
+    };
+  });
+  if (manifest.truncated) {
+    files.push({
+      name: ACA_FILE_MANIFEST_TRUNCATED_NAME,
+      type: 'File',
+      contentType: null,
+      sizeInBytes: 0,
+      lastModifiedAt: '',
+    });
+  }
+  return files;
 }
 
 export function createAcaClient(
@@ -309,7 +379,7 @@ export function createAcaClient(
         return [];
       }
       // Normalize the wrapped { properties: { filename, size, ... } } shape.
-      return parsed.value
+      const rootEntries = parsed.value
         .map((entry): AcaSessionFile | null => {
           const p = entry.properties;
           if (p?.filename == null) {
@@ -324,8 +394,20 @@ export function createAcaClient(
           };
         })
         .filter((f): f is AcaSessionFile => f !== null);
-    } catch {
-      throw new AcaError('pool returned non-JSON file list', 502);
+      if (!rootEntries.some((entry) => entry.name === ACA_FILE_MANIFEST_NAME)) {
+        return rootEntries;
+      }
+      const manifest = await doFetchFileContent(
+        identifier,
+        ACA_FILE_MANIFEST_NAME,
+        FILE_MANIFEST_MAX_BYTES,
+      );
+      return parseFileManifest(manifest);
+    } catch (error) {
+      if (error instanceof AcaError) {
+        throw error;
+      }
+      throw new AcaError('pool returned non-JSON or invalid file list', 502);
     }
   }
 

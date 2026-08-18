@@ -3,6 +3,7 @@ import { Transform } from 'node:stream';
 import type { TransformCallback } from 'node:stream';
 import { OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { AcaClient } from '../azure/acaClient.js';
+import { ACA_FILE_MANIFEST_TRUNCATED_NAME } from '../types/aca.js';
 import type { AcaSessionFile } from '../types/aca.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FilesRepo } from '../store/filesRepo.js';
@@ -19,7 +20,26 @@ import type { Config } from '../config.js';
 export function fileSignature(
   entry: Pick<AcaSessionFile, 'sizeInBytes' | 'lastModifiedAt'>,
 ): string {
-  return `${entry.sizeInBytes ?? ''}|${entry.lastModifiedAt ?? ''}`;
+  return `${entry.sizeInBytes ?? ''}|${normalizeLastModified(entry.lastModifiedAt)}`;
+}
+
+function normalizeLastModified(value: string | undefined): string {
+  if (value == null || value === '') {
+    return '';
+  }
+  if (/^\d+$/.test(value)) {
+    return value;
+  }
+  const utc = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (utc != null) {
+    const epochMs = Date.parse(`${utc[1]}Z`);
+    if (Number.isFinite(epochMs)) {
+      const fractionNs = (utc[2] ?? '').padEnd(9, '0').slice(0, 9);
+      return (BigInt(epochMs) * 1_000_000n + BigInt(fractionNs || '0')).toString();
+    }
+  }
+  const epochMs = Date.parse(value);
+  return Number.isFinite(epochMs) ? (BigInt(epochMs) * 1_000_000n).toString() : value;
 }
 
 /** Build a name→signature map from a pre-exec file listing (see snapshotBaseline). */
@@ -98,6 +118,10 @@ export async function captureOutputs(params: {
 
   for (const entry of listing) {
     const name = entry.name;
+    if (name === ACA_FILE_MANIFEST_TRUNCATED_NAME) {
+      overflow = true;
+      continue;
+    }
     if (!isCapturable(name, entry)) {
       continue;
     }

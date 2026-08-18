@@ -1,6 +1,10 @@
 import { MockAgent, setGlobalDispatcher, getGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcaClient } from '../../src/azure/acaClient.js';
+import {
+  ACA_FILE_MANIFEST_NAME,
+  ACA_FILE_MANIFEST_TRUNCATED_NAME,
+} from '../../src/types/aca.js';
 import { testConfig, testLogger, testMetrics } from '../helpers/fakes.js';
 import type { TokenProvider } from '../../src/azure/credential.js';
 
@@ -113,5 +117,98 @@ describe('acaClient aca_request_duration instrumentation', () => {
 
     expect(observeSpy).toHaveBeenCalledTimes(1);
     expect(observeSpy).toHaveBeenCalledWith({ op: 'fetchFileStream' }, expect.any(Number));
+  });
+
+  it('uses the wrapper manifest to expose nested files instead of top-level directories', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool.intercept({ method: 'GET', path: () => true }).reply(200, {
+      value: [
+        { properties: { filename: ACA_FILE_MANIFEST_NAME, size: 120 } },
+        { properties: { filename: 'reports', size: 4096 } },
+      ],
+    });
+    pool.intercept({ method: 'GET', path: () => true }).reply(
+      200,
+      JSON.stringify({
+        version: 1,
+        truncated: false,
+        files: [
+          {
+            name: 'reports/out.csv',
+            type: 'File',
+            sizeInBytes: 8,
+            lastModifiedAt: '1787070000000000000',
+          },
+        ],
+      }),
+    );
+
+    const client = createAcaClient(config, testLogger(), tokens, testMetrics());
+
+    await expect(client.listFiles('session-1')).resolves.toEqual([
+      {
+        name: 'reports/out.csv',
+        type: 'File',
+        contentType: null,
+        sizeInBytes: 8,
+        lastModifiedAt: '1787070000000000000',
+      },
+    ]);
+  });
+
+  it('returns bounded manifest files plus a truncation marker', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool.intercept({ method: 'GET', path: () => true }).reply(200, {
+      value: [{ properties: { filename: ACA_FILE_MANIFEST_NAME, size: 80 } }],
+    });
+    pool.intercept({ method: 'GET', path: () => true }).reply(
+      200,
+      JSON.stringify({
+        version: 1,
+        truncated: true,
+        files: [
+          {
+            name: 'partial.csv',
+            type: 'File',
+            sizeInBytes: 3,
+            lastModifiedAt: '1787070000000000000',
+          },
+        ],
+      }),
+    );
+
+    const client = createAcaClient(config, testLogger(), tokens, testMetrics());
+
+    await expect(client.listFiles('session-1')).resolves.toEqual([
+      {
+        name: 'partial.csv',
+        type: 'File',
+        contentType: null,
+        sizeInBytes: 3,
+        lastModifiedAt: '1787070000000000000',
+      },
+      {
+        name: ACA_FILE_MANIFEST_TRUNCATED_NAME,
+        type: 'File',
+        contentType: null,
+        sizeInBytes: 0,
+        lastModifiedAt: '',
+      },
+    ]);
+  });
+
+  it('rejects malformed manifest entries from the sandbox', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool.intercept({ method: 'GET', path: () => true }).reply(200, {
+      value: [{ properties: { filename: ACA_FILE_MANIFEST_NAME, size: 80 } }],
+    });
+    pool.intercept({ method: 'GET', path: () => true }).reply(
+      200,
+      JSON.stringify({ version: 1, truncated: false, files: [42] }),
+    );
+
+    const client = createAcaClient(config, testLogger(), tokens, testMetrics());
+
+    await expect(client.listFiles('session-1')).rejects.toThrow(/invalid file manifest entry/);
   });
 });

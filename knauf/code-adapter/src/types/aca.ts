@@ -35,6 +35,15 @@ export interface AcaSessionFile {
   lastModifiedAt?: string | undefined;
 }
 
+export const ACA_FILE_MANIFEST_NAME = '.karl_files.json';
+export const ACA_FILE_MANIFEST_TRUNCATED_NAME = '.karl_manifest_truncated';
+
+export interface AcaFileManifest {
+  version: 1;
+  truncated: boolean;
+  files: AcaSessionFile[];
+}
+
 /** Python pool file entries arrive wrapped: { value: [ { properties: {...} } ] }. */
 export interface AcaFileListResponse {
   value: { properties?: AcaFileProperties }[];
