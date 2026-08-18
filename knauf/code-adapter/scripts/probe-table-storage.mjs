@@ -6,19 +6,23 @@
  * "Phase 0 — dev platform and contract proof".
  *
  * MUST run as the code-adapter's own workload identity (sa-code-adapter in
- * agentic-karl-dev), not from a laptop or a CI runner identity — the entire point is to
- * prove what THAT identity can and cannot reach. DefaultAzureCredential picks up the
- * in-cluster federated token automatically; nothing here accepts an account key or
- * connection string.
+ * agentic-karl-dev), not from a laptop, a CI runner identity, or a developer's `az login`
+ * session — the entire point is to prove what THAT identity, and only that identity, can
+ * and cannot reach. This uses WorkloadIdentityCredential explicitly (not
+ * DefaultAzureCredential's fallback chain, which would silently pick up whatever
+ * environment/CLI/managed-identity credential happens to be available first and prove
+ * nothing about the real identity's scope) and requires the AKS workload-identity webhook's
+ * federated-token env vars (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE) to
+ * be present; nothing here accepts an account key or connection string.
  *
  *   AZURE_STORAGE_ACCOUNT_NAME=<dev account> node scripts/probe-table-storage.mjs
  *
- * Exits non-zero if any check fails. Always deletes every entity it creates, including
- * on failure (best-effort cleanup in a finally block), so re-runs are idempotent and the
- * table is left empty afterwards.
+ * Exits non-zero if any check fails, or if any created entity fails to clean up. Always
+ * attempts to delete every entity it creates (best-effort cleanup in a finally block), so
+ * re-runs are idempotent and the table is left empty afterwards.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { DefaultAzureCredential } from '@azure/identity';
+import { WorkloadIdentityCredential } from '@azure/identity';
 import { TableClient, TableServiceClient, RestError } from '@azure/data-tables';
 
 const ACCOUNT = process.env.AZURE_STORAGE_ACCOUNT_NAME;
@@ -26,11 +30,23 @@ if (!ACCOUNT) {
   console.error('AZURE_STORAGE_ACCOUNT_NAME is required (workload-identity auth only).');
   process.exit(2);
 }
+const REQUIRED_WORKLOAD_IDENTITY_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_FEDERATED_TOKEN_FILE'];
+const missingEnv = REQUIRED_WORKLOAD_IDENTITY_ENV.filter((name) => !process.env[name]);
+if (missingEnv.length > 0) {
+  console.error(
+    `Missing ${missingEnv.join(', ')} — this probe only proves anything when it runs as the ` +
+      'in-cluster workload identity (sa-code-adapter pod, AKS workload-identity webhook). ' +
+      'Run it as a Job in agentic-karl-dev, not from a laptop or CI runner.',
+  );
+  process.exit(2);
+}
 const ENDPOINT = `https://${ACCOUNT}.table.core.windows.net`;
 const TABLE = 'codeAdapterFiles';
 // Negative-scope check below also requires codeAdapterProbeControlDev to exist with NO
-// role assignment for this identity (agk-infrastructure code-adapter-dev.tf).
-const credential = new DefaultAzureCredential();
+// role assignment for this identity (agk-infrastructure code-adapter-dev.tf). Unlike the
+// original Phase 0 run, this table must now be treated as a DURABLE fixture, not a
+// temporary one deleted after a single pass — see the check itself for why.
+const credential = new WorkloadIdentityCredential();
 
 let failures = 0;
 async function check(name, fn) {
@@ -112,9 +128,13 @@ async function main() {
     assert(!stillThere, 'entity still readable after delete');
   });
 
-  // 2a. This identity cannot use control-plane operations, only the data-plane role
-  // granted at the table scope. Creating a *new* table is control-plane.
-  await check('identity cannot create a new table (control-plane, not granted)', async () => {
+  // 2a. NOTE: Storage Table Data Contributor is NOT data-plane-only — its `actions` include
+  // tableServices/tables/{read,write,delete} (control-plane manage/delete), separate from
+  // its `dataActions` (entity CRUD). This check does NOT prove the role lacks control-plane
+  // capability; it proves the role assignment's SCOPE (the codeAdapterFiles table resource
+  // only) blocks a control-plane call against a *different*, not-yet-existing resource. A
+  // rogue table under an existing, in-scope name would not be covered by this check.
+  await check('identity cannot create a table outside its assigned scope (control-plane)', async () => {
     const serviceClient = new TableServiceClient(ENDPOINT, credential);
     const rogueTable = `probeRogue${Date.now()}`;
     try {
@@ -130,17 +150,29 @@ async function main() {
     }
   });
 
-  // 2b. This identity cannot reach a DIFFERENT table that genuinely exists on the same
-  // account but carries no role assignment for it — a real 403, not just "table absent".
-  // codeAdapterProbeControlDev is a temporary, deliberately ungranted control table created
-  // solely for this check (agk-infrastructure code-adapter-dev.tf); delete it once Phase 0
-  // is done.
-  await check('identity gets a real 403 on an ungranted-but-existing table', async () => {
+  // 2b. This identity must NOT be able to reach a DIFFERENT table that genuinely exists on
+  // the same account but carries no role assignment for it — a real 403 tied to a resource
+  // that actually exists, not merely "table absent" (which would prove nothing about scope).
+  // codeAdapterProbeControlDev MUST be a DURABLE fixture (agk-infrastructure
+  // code-adapter-dev.tf) for this check to mean anything: Azure's AAD-authorization path can
+  // return 403 for a resource that doesn't exist at all (RBAC scope is evaluated without
+  // necessarily confirming existence first, so as not to leak which resources exist to an
+  // unauthorized caller) — so a bare 403 alone does not, by itself, prove denial against an
+  // existing sibling table. Treat a 404 here as the fixture being gone, not as a pass.
+  await check('identity gets a real 403 on an ungranted-but-existing control table', async () => {
     const controlClient = new TableClient(ENDPOINT, 'codeAdapterProbeControlDev', credential);
     try {
       await controlClient.getEntity(PARTITION, 'f:anything');
       throw new Error('read against the ungranted control table unexpectedly SUCCEEDED');
     } catch (err) {
+      if (isRestError(err, 404)) {
+        throw new Error(
+          "codeAdapterProbeControlDev does not exist, so this check's premise (an EXISTING, " +
+            'ungranted sibling table) is not met and a pass here would prove nothing. Recreate ' +
+            'the table in agk-infrastructure (code-adapter-dev.tf) as a DURABLE fixture — do not ' +
+            'delete it again after this run — before re-running this probe.',
+        );
+      }
       assert(
         isRestError(err, 403),
         `expected 403 (out of RBAC scope) on the existing-but-ungranted control table, got: ${err.message}`,
@@ -241,13 +273,26 @@ main()
     console.error('FAIL  unhandled error in probe:', err);
   })
   .finally(async () => {
+    // Best-effort cleanup, but "best-effort" must not mean "unreported": a leftover probe
+    // entity is harmless (PARTITION is unique per run), yet the script's own contract above
+    // promises the table is left empty afterwards. Track failures separately from check
+    // failures so a clean check run with failed cleanup is never reported as an unqualified
+    // PASS, and still exits non-zero.
+    let cleanupFailures = 0;
     for (const rowKey of createdRowKeys) {
       try {
         await client.deleteEntity(PARTITION, rowKey);
-      } catch {
-        // best-effort cleanup; a leftover probe entity is harmless and only affects PARTITION
+      } catch (err) {
+        cleanupFailures += 1;
+        console.error(`WARN  cleanup failed for ${PARTITION}/${rowKey}: ${err.message}`);
       }
     }
     console.log(failures === 0 ? '\nAll Phase 0 contract checks PASSED.' : `\n${failures} check(s) FAILED.`);
-    process.exit(failures === 0 ? 0 : 1);
+    if (cleanupFailures > 0) {
+      console.error(
+        `${cleanupFailures} entit${cleanupFailures === 1 ? 'y' : 'ies'} failed to clean up ` +
+          `(partition ${PARTITION}) — table is NOT left empty; delete manually.`,
+      );
+    }
+    process.exit(failures === 0 && cleanupFailures === 0 ? 0 : 1);
   });
