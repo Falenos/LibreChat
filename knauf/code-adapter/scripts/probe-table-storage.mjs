@@ -137,17 +137,31 @@ async function main() {
   await check('identity cannot create a table outside its assigned scope (control-plane)', async () => {
     const serviceClient = new TableServiceClient(ENDPOINT, credential);
     const rogueTable = `probeRogue${Date.now()}`;
+    let createError;
     try {
       await serviceClient.createTable(rogueTable);
-      // If this succeeds, the grant is far broader than intended - clean up and fail loudly.
-      await serviceClient.deleteTable(rogueTable);
-      throw new Error('createTable unexpectedly SUCCEEDED - role scope is too broad');
     } catch (err) {
+      createError = err;
+    }
+
+    if (createError) {
       assert(
-        isRestError(err, 403) || isRestError(err, 401),
-        `expected 401/403 creating a table, got: ${err.message}`,
+        isRestError(createError, 403) || isRestError(createError, 401),
+        `expected 401/403 creating a table, got: ${createError.message}`,
+      );
+      return;
+    }
+
+    // Creation succeeded, so the scope assertion failed. Keep cleanup errors separate:
+    // a denied delete must never be mistaken for the expected create denial.
+    try {
+      await serviceClient.deleteTable(rogueTable);
+    } catch (err) {
+      throw new Error(
+        `createTable unexpectedly SUCCEEDED and cleanup of ${rogueTable} failed: ${err.message}`,
       );
     }
+    throw new Error('createTable unexpectedly SUCCEEDED - role scope is too broad');
   });
 
   // 2b. This identity must NOT be able to reach a DIFFERENT table that genuinely exists on
