@@ -53,7 +53,12 @@ describe('Table-backed FilesRepo', () => {
       expiresAt: new Date(clock.getTime() + 24 * HOUR_MS),
     };
 
-    const entity = { ...serializeFileEntity(doc), etag: '"etag"' };
+    const entity = {
+      ...serializeFileEntity(doc),
+      etag: '"etag"',
+      timestamp: clock,
+      'odata.metadata': 'https://account.table.core.windows.net/$metadata#table/@Element',
+    };
 
     expect(entity).not.toHaveProperty('identity');
     expect(entity).toMatchObject({

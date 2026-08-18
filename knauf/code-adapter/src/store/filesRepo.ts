@@ -151,7 +151,14 @@ function validateKnownKeys(
   expected: TableSchemaError['entity'],
   keys: readonly string[],
 ): void {
-  const allowed = new Set(['partitionKey', 'rowKey', 'etag', 'timestamp', ...keys]);
+  const allowed = new Set([
+    'partitionKey',
+    'rowKey',
+    'etag',
+    'timestamp',
+    'odata.metadata',
+    ...keys,
+  ]);
   if (Object.keys(entity).some((key) => !allowed.has(key))) {
     schemaError(expected, 'shape', `${expected} entity contains unknown properties`);
   }
