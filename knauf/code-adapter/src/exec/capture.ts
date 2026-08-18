@@ -28,7 +28,11 @@ function normalizeLastModified(value: string | undefined): string {
     return '';
   }
   if (/^\d+$/.test(value)) {
-    return value;
+    // ACA exposes file mtimes at 100 ns precision, while os.stat reports nanoseconds.
+    // Truncate the wrapper value to the same resolution so an untouched file does not
+    // look changed solely because of sub-100 ns filesystem digits ACA cannot represent.
+    const nanoseconds = BigInt(value);
+    return ((nanoseconds / 100n) * 100n).toString();
   }
   const utc = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
   if (utc != null) {

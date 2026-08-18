@@ -72,7 +72,7 @@ describe('POST /v1/exec contract', () => {
 
   it('normalizes ACA timestamps and wrapper nanoseconds to one file signature', () => {
     const epochSeconds = BigInt(Date.parse('2026-08-18T16:22:14Z')) / 1000n;
-    const nanoseconds = epochSeconds * 1_000_000_000n + 810_699_500n;
+    const nanoseconds = epochSeconds * 1_000_000_000n + 810_699_504n;
 
     expect(
       fileSignature({
