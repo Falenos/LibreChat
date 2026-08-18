@@ -48,7 +48,7 @@ no communication; it only relocates where the translator listens.
 
 The "just glue" framing undercounts what the ACA contract gap requires (full detail in
 [`how-it-works.md`](how-it-works.md)). Microsoft runs the compute; it does **not** run the bookkeeping LibreChat's Code
-API contract assumes: upload-before-exec staging (Blob + Mongo TTL), downloads that outlive the sandbox, real exit
+API contract assumes: upload-before-exec staging (Blob + Table metadata), downloads that outlive the sandbox, real exit
 codes + output past the ~4000-char cap (the sentinel wrapper), and session resurrection on cooldown expiry.
 
 In the self-hosted design this bookkeeping lived inside the sandbox stack itself — **eight services plus Redis plus
@@ -65,7 +65,7 @@ Code execution is structurally the most abusive workload KARL will host: synchro
 model-generated code). In-process, those buffers and held sockets share heap and event loop with every user's chat
 SSE stream — an exec-driven OOM or crash restarts chat for everyone, and every app deploy kills in-flight executions.
 As a sidecar, the worst case is "code execution is down"; chat never notices. Two `replicaCount: 2` pods restart in
-seconds with no state loss (state is in Blob/Mongo, never in the pod).
+seconds with no state loss (state is in Blob/Table, never in the pod).
 
 ### 3.2 Credential boundary — sidecar
 
@@ -180,6 +180,6 @@ S1/S5 spike), does it still hold? **Yes — and two arguments got materially str
 
 - **Nothing weakened.** The dependency argument was already scored neutral; ops footprint remains in-process's honest
   win, and it remains outweighed. The sidecar's runtime cost is now measured, not assumed: a stateless process whose
-  state lives entirely in Blob/Mongo (restart-safe), reachable only ClusterIP, holding one credential.
+  state lives entirely in Blob/Table (restart-safe), reachable only ClusterIP, holding one credential.
 
 No dimension flipped. The decision stands, with more evidence behind it than when it was made.

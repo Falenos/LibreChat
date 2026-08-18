@@ -177,7 +177,7 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
 >
 > **Why you must check rather than wait for an error:** the adapter acquires its Entra token
 > lazily, on the first ACA call. So a missing workload identity produces *no* boot-time
-> failure and *no* log line — the pod is Ready (`/readyz` only pings Mongo) and looks healthy
+> failure and *no* log line — the pod is Ready (`/readyz` proves Table access, not ACA) and looks healthy
 > right up until the first execution 502s. Nothing tells you until a user tries. If you would
 > rather have that fail loudly, the fix is a boot-time `tokens.getToken()` probe alongside the
 > JWT-key check in `index.ts`, which would turn it into a CrashLoopBackOff.
@@ -363,15 +363,12 @@ agentic-karl-code-adapter:
       kind: SecretStore
       name: kv-agntkarl-nonprod-001
     secrets:
-      # Cosmos vCore ADMIN user. The adapter needs one collection and gets the cluster —
-      # see "Decisions" §1. Still unresolved; the only open security item.
-      MONGO_URI: agentic-karl-MONGODB-CONNECTION-STRING
-      # Storage account PRIMARY KEY. Replace this line with the configmap entry
-      #   AZURE_STORAGE_ACCOUNT_NAME: "<account>"
-      # once the Blob role assignment from Phase A is applied — the adapter prefers workload
-      # identity whenever that is set, so the two can overlap safely during the migration.
-      AZURE_STORAGE_CONNECTION_STRING: agentic-karl-BLOB-STORAGE-CONNECTION-STRING
       ACA_POOL_ENDPOINT: agentic-karl-dev-CODE-POOL-ENDPOINT
+
+  configmap:
+    AZURE_STORAGE_ACCOUNT_NAME: "agkblobdevwesteu"
+    TABLE_NAME: "codeAdapterFiles"
+    CLEANUP_ENABLED: "true"
 
   monitoring:
     enabled: true
@@ -438,10 +435,9 @@ Two failure modes worth stating plainly, because neither produces an obvious err
 **D5 · Network policy** — **there is something to do.** An earlier version of this doc said
 "most likely nothing"; that was wrong, and wrong in the quiet direction.
 
-Right: the adapter's *outbound* needs nothing. Entra, `*.dynamicsessions.io` and Blob are all
-HTTPS/443, which `allowEgressInternet` permits namespace-wide; Mongo goes over
-`allow-egress-private-endpoints` (`podSelector: {}`, 10.160.0.0/16, includes 443 and 10260);
-and app→adapter is covered by `allowSameNamespace`.
+Right: the adapter's *outbound* needs nothing under the current nonproduction policy. Entra,
+`*.dynamicsessions.io`, Blob, and Table are all HTTPS/443, which `allowEgressInternet` permits
+namespace-wide; app→adapter is covered by `allowSameNamespace`.
 
 Wrong: `agentic-karl/dev/network-policy/values.yaml` sets **`defaultDenyAll: true`**, and every
 service in that namespace that wants to be scraped carries its *own* `customPolicies` entry —
@@ -486,7 +482,7 @@ switch) into two PRs if you want a checkpoint between "adapter is healthy" and "
 Each step isolates one layer, so a failure tells you where to look.
 
 ```bash
-# 1. Pod healthy and Mongo reachable
+# 1. Pod healthy and Table reachable
 kubectl -n agentic-karl-dev get pods -l app=agentic-karl-code-adapter
 kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- \
   wget -qO- localhost:3112/readyz
@@ -588,20 +584,10 @@ restart pulls the new one — and rollback-by-tag then has nothing distinct to r
 These are not blockers you can clear by doing work; they need a position taken. Two of the
 three affect whether dev UAT is representative.
 
-**1 · Mongo credentials — the one open security item.** `agentic-karl-MONGODB-CONNECTION-STRING`
-is `mongodb+srv://${var.mongodb_admin_username}:${random_password.mongo_vcore_admin.result}@…`
-— the Cosmos vCore **admin user**. The adapter needs one collection (`code_adapter_files`) and
-gets the whole cluster, so a bug in this new service reaches every chat. Blob was fixed the
-same way ACA already worked (workload identity); Mongo has two routes and both touch the shared
-cluster:
-
-- a scoped Mongo user restricted to the adapter's database — simple, but a second credential to
-  rotate;
-- Entra auth on the vCore cluster — no credential at all, consistent with everything else here,
-  more work and a change to a shared resource.
-
-Acceptable for dev UAT *if* someone says so explicitly and it is tracked. Not acceptable to
-carry into prod silently, which is why it is written down rather than left in a PR thread.
+**1 · Metadata isolation — resolved.** The adapter uses `codeAdapterFiles` through a
+table-scoped workload identity. It holds no Mongo or storage-account credential. Reusing the
+application storage account leaves account-key holders with reverse access; that residual risk is
+accepted and does not widen the adapter identity.
 
 **2 · Spot affinity vs long executions.** The pod has a hard
 `requiredDuringSchedulingIgnoredDuringExecution` affinity to spot nodes, copied verbatim from
@@ -613,7 +599,7 @@ nothing on a cluster that has non-spot capacity. Someone owning the platform pat
 yes or no rather than leaving 360s implying a protection it does not provide.
 
 **3 · Boot-time Entra probe (recommended before UAT).** Today a broken workload identity is
-*silent*: the token is acquired lazily on the first ACA call, `/readyz` only pings Mongo, so the
+*silent*: the token is acquired lazily on the first ACA call, `/readyz` only proves Table access, so the
 pod is Ready and looks healthy until the first execution 502s. A `tokens.getToken()` probe next
 to the existing `importCodeApiKey` check in `index.ts` would turn that into a CrashLoopBackOff
 at boot. It is the same fail-fast argument that justified the JWT-key check, and it removes the
@@ -641,10 +627,10 @@ Not blockers for a dev rollout, but do not lose them:
   but a *predictable* secret makes a hint-derived id guessable from a known conversation id —
   so **set a real `SESSION_HINT_SECRET` before enabling `statefulSessions`**. The adapter warns
   at boot while it is unset.
-- Staged blobs are now reaped by reachability, not age (`ed7dcc043`). The Mongo TTL slides on
-  every use, so an age-based lifecycle rule would delete blobs that are still referenced —
+- Staged Blobs are reaped by reachability, not age (`ed7dcc043`). Table `expiresAt` slides on
+  every use, so an age-based lifecycle rule would delete Blobs that are still referenced —
   hence the sweep in `src/store/reaper.ts` rather than a storage management policy. A lifecycle
-  rule is still worth adding as a backstop for bytes whose Mongo row never landed; it is
+  rule is still worth adding as a backstop for bytes whose Table transaction never landed; it is
   **not** in #73.
 - The pod is pinned to **spot** nodes with a hard `requiredDuringScheduling` affinity. This is
   copied verbatim from the worker, so it is a platform pattern rather than this service's

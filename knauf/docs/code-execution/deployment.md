@@ -8,9 +8,8 @@ service works is in [how-it-works.md](how-it-works.md). It supersedes the
 code-interpreter half of the older
 [artifacts + skills rollout plan](../implementation-plans/code-interpreter-artifacts-rollout.md).
 
-> **Status:** the adapter is built and verified live against a spike pool in
-> CT-SANDBOX. None of the AGK infra below is applied yet. Steps are
-> dependency-ordered; do them top to bottom.
+> **Status:** dev and stage run the Table-backed adapter through GitOps; production remains
+> disabled. The dependency order below remains the production rollout order.
 >
 > **To actually run the dev rollout, use [deploy-to-dev.md](deploy-to-dev.md)** — the
 > checklist version, with the live state of each PR, the ordering traps, the exact keys to
@@ -37,10 +36,9 @@ code-interpreter half of the older
 
 **Consequence for the adapter's egress:** the adapter's outbound is all HTTPS/443
 — Entra (`login.microsoftonline.com`), the dynamic-sessions data-plane
-(`*.dynamicsessions.io`), and Azure Blob — which `allowEgressInternet` **already
-permits namespace-wide**. Mongo is reached over the private-endpoint policy
-(`podSelector: {}` applies to all pods, and its allow-list includes 443 and
-10260). So the adapter needs no new **egress** policy.
+(`*.dynamicsessions.io`), Azure Blob, and Azure Table — which
+`allowEgressInternet` **already permits namespace-wide**. So the adapter needs no new
+**egress** policy for the current public-endpoint design.
 
 **But it does need an ingress one.** An earlier version of this section concluded
 "needs no new NetworkPolicy" full stop; that was wrong for observability.
@@ -67,9 +65,9 @@ to authorise. See `deploy-to-dev.md` Phase D5.
   `agk-infrastructure` tenant root already declares `data "azurerm_kubernetes_cluster" "aks"`,
   so the federated credential references `data.azurerm_kubernetes_cluster.aks.oidc_issuer_url`
   directly, exactly as both ESO credentials do. Never hardcode the issuer.
-- **V3 — Mongo egress**: confirm `MONGO_URI`'s host/port is covered by
-  `allow-egress-private-endpoints` (the app already connects to Mongo from this
-  namespace, so it almost certainly is); if not, add a `customPolicies` entry.
+- **V3 — Table egress**: confirm the environment's
+  `<account>.table.core.windows.net:443` endpoint is reachable while unrelated public egress is
+  denied by the selected production control.
 
 ---
 
@@ -240,13 +238,10 @@ agentic-karl-code-adapter:
         name: agentic-karl-code-adapter-secrets
 ```
 
-**ExternalSecret** for the adapter's two runtime secrets — add to
-`agentic-karl/dev/common-namespace-resources/values.yaml` under
-`externalSecrets.externalSecrets[]` (same pattern as `agentic-karl-metrics-secret`):
-`MONGO_URI` from the existing `agentic-karl-MONGODB-CONNECTION-STRING` KV entry
-and `AZURE_STORAGE_CONNECTION_STRING` from `agentic-karl-BLOB-STORAGE-CONNECTION-STRING`,
-targeting a k8s secret `agentic-karl-code-adapter-secrets`. (Both KV entries
-already exist — the app uses them.)
+**ExternalSecret** for the adapter carries only the ACA pool endpoint. Blob and Table use
+workload identity, with non-secret `AZURE_STORAGE_ACCOUNT_NAME` and
+`TABLE_NAME=codeAdapterFiles` values in the ConfigMap. Do not mount a storage connection string
+or account key.
 
 **Workload-identity SA + AZURE\_ vars:** the SA annotation + pod label above are
 all that's needed; the workload-identity webhook injects `AZURE_CLIENT_ID`,
@@ -429,6 +424,6 @@ there is no separate "enable it in prod" code change to write:
 - **V1** ct-shared-chart renders the SA annotation **and** the WI pod label
   (else vendor the SA template).
 - **V2** exact OIDC issuer URL for the federated credential.
-- **V3** Mongo egress covered by the existing private-endpoint policy.
+- **V3** Table and Blob endpoints reachable through the selected production egress control.
 - Prod SP credentials for ACR import / KV writes verified separately (infra-context
   skill flags nonprod is proven, prod is not).

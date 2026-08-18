@@ -262,8 +262,8 @@ through close/error, not just the header round-trip), the latter on every recove
 log fetch — and are safe to build alerts on.
 
 Non-Prometheus signals worth a dashboard: pool-level session counts in Azure Monitor (the
-authoritative saturation signal), adapter pod memory against limit (§3), and Mongo
-`code_adapter_files` collection size against the 24 h TTL.
+authoritative saturation signal), adapter pod memory against limit (§3), and
+`codeAdapterFiles` Table entity/reconciliation volume against the 24-hour lifetime.
 
 ---
 

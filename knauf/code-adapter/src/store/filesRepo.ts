@@ -52,8 +52,6 @@ export interface InsertFileInput {
   tenantId: string;
 }
 
-export type FileImportResult = 'created' | 'existing';
-
 interface FileRevision {
   doc: FileDoc;
   etag: string;
@@ -301,27 +299,6 @@ function serializeBlobIndex(doc: FileDoc): TableEntityRecord {
     fileId: doc.fileId,
     lookupValue: doc.blobPath,
   };
-}
-
-function fileDocsEqual(left: FileDoc, right: FileDoc): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.fileId === right.fileId &&
-    left.filename === right.filename &&
-    left.size === right.size &&
-    left.contentType === right.contentType &&
-    left.state === right.state &&
-    left.origin === right.origin &&
-    left.readOnly === right.readOnly &&
-    left.identity.kind === right.identity.kind &&
-    left.identity.id === right.identity.id &&
-    left.identity.version === right.identity.version &&
-    left.userId === right.userId &&
-    left.tenantId === right.tenantId &&
-    left.blobPath === right.blobPath &&
-    left.lastModified.getTime() === right.lastModified.getTime() &&
-    left.expiresAt.getTime() === right.expiresAt.getTime()
-  );
 }
 
 function deserializeIndexEntity(
@@ -599,77 +576,6 @@ export class FilesRepo {
       { type: 'create', entity: serializeBlobIndex(doc) },
     ]);
     return doc;
-  }
-
-  private validateImportedFile(doc: FileDoc): FileDoc {
-    return deserializeFileEntity({
-      ...serializeFileEntity(doc),
-      etag: '"migration-validation"',
-    });
-  }
-
-  async checkImportFile(doc: FileDoc): Promise<'absent' | 'existing'> {
-    const validated = this.validateImportedFile(doc);
-    const [file, filenameRaw, blobRaw] = await Promise.all([
-      this.readFile(validated.sessionId, validated.fileId),
-      this.table.get(validated.sessionId, filenameRowKey(validated.filename)),
-      this.readBlobIndex(validated.blobPath),
-    ]);
-    if (file == null && filenameRaw == null && blobRaw == null) {
-      return 'absent';
-    }
-    if (file == null || filenameRaw == null || blobRaw == null) {
-      throw new TableSchemaError(
-        'file',
-        'key_mismatch',
-        'migration target contains a partial file/index set',
-      );
-    }
-    const filename = this.indexRevision(filenameRaw, 'filename-index');
-    if (
-      fileDocsEqual(file.doc, validated) &&
-      filename.fileId === validated.fileId &&
-      filename.lookupValue === validated.filename &&
-      blobRaw.fileId === validated.fileId &&
-      blobRaw.lookupValue === validated.blobPath
-    ) {
-      return 'existing';
-    }
-    throw new TableSchemaError(
-      'file',
-      'key_mismatch',
-      'migration target conflicts with the source document',
-    );
-  }
-
-  async importFile(doc: FileDoc): Promise<FileImportResult> {
-    const validated = deserializeFileEntity({
-      ...serializeFileEntity(doc),
-      etag: '"migration-validation"',
-    });
-    for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
-      const target = await this.checkImportFile(validated);
-      if (target === 'existing') {
-        return 'existing';
-      }
-      if (target === 'absent') {
-        try {
-          await this.table.submitTransaction([
-            { type: 'create', entity: serializeFileEntity(validated) },
-            { type: 'create', entity: serializeFilenameIndex(validated) },
-            { type: 'create', entity: serializeBlobIndex(validated) },
-          ]);
-          return 'created';
-        } catch (error) {
-          if (isTableConflict(error)) {
-            continue;
-          }
-          throw error;
-        }
-      }
-    }
-    this.recordRetryExhaustion('import_file');
-    throw new Error(`importFile exhausted ${MAX_WRITE_ATTEMPTS} conditional attempts`);
   }
 
   async upsertCaptured(
