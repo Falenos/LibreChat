@@ -13,13 +13,11 @@ const STREAM_UPLOAD_CONCURRENCY = 2;
  *
  * RETENTION (review finding A1). This docblock used to assert that cleanup was "a
  * container lifecycle-management rule (>2 days)". No such rule exists — agk-infrastructure
- * #73 explicitly defers it — and the claim made the gap invisible: the Mongo TTL removes
- * the row at 24h, and that row is the *only* thing holding the blob's path and its owner,
- * so the bytes stayed in the account forever with nothing left to attribute them to. User
- * spreadsheets, retained indefinitely and unattributable, is not a cost-tidiness item.
+ * #73 explicitly defers it — and the claim made the gap invisible. Table metadata has no
+ * native TTL, so the adapter owns both Blob-led cleanup and bounded metadata reconciliation.
  *
  * Cleanup is therefore done here rather than left to infrastructure — see `store/reaper.ts`.
- * It deletes by reachability, not by age: the Mongo TTL *slides* on `touch`, so a blob's
+ * It deletes by reachability, not by age: metadata expiry *slides* on `touch`, so a blob's
  * own creation time is not a safe proxy for expiry, and an age-only rule (in Terraform or
  * anywhere else) would delete blobs that are still referenced. A lifecycle rule remains
  * worth adding as a backstop for bytes written by a build that crashed before its row
@@ -27,6 +25,7 @@ const STREAM_UPLOAD_CONCURRENCY = 2;
  */
 export interface BlobStore {
   put(blobPath: string, data: Buffer | Readable, contentType: string, size?: number): Promise<void>;
+  head(blobPath: string): Promise<{ contentLength: number } | null>;
   getStream(
     blobPath: string,
   ): Promise<{ stream: NodeJS.ReadableStream; contentLength?: number | undefined }>;
@@ -100,6 +99,27 @@ export async function createBlobStore(
           options,
         );
         void size;
+      }
+    },
+
+    async head(blobPath) {
+      const client = container.getBlockBlobClient(blobPath);
+      try {
+        const properties = await client.getProperties();
+        if (properties.contentLength == null) {
+          throw new Error(`blob ${blobPath} has no content length`);
+        }
+        return { contentLength: properties.contentLength };
+      } catch (error) {
+        if (
+          typeof error === 'object' &&
+          error != null &&
+          'statusCode' in error &&
+          error.statusCode === 404
+        ) {
+          return null;
+        }
+        throw error;
       }
     },
 

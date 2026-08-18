@@ -41,13 +41,13 @@ observe it, the step is not done. Detail for each is in the phase named beside i
 | 3 | Get #73 approved and merge it | `apply-tenants` green on `main`; 12 resources created | Phase A |
 | 4 | Capture `terraform output code_adapter_dev_client_id` and `code_pool_dev_management_endpoint` | Both non-empty; also in Key Vault | Phase A |
 | 5 | Generate the Ed25519 keypair; private half → Key Vault | `az keyvault secret show --name AGK-CODEAPI-JWT-PRIVATE-KEY` returns | Phase B |
-| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and tag `0.1.0` appears in the ACR | Phase C |
+| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and the tag from `knauf/code-adapter/VERSION` appears in the ACR | Phase C |
 | 7 | Substitute #347's two placeholders (client id from 4, public key from 5) | The **`Reject committed placeholders`** check turns green. It fails today on purpose — that is the gate, not a bug | Phase D |
 | 8 | Merge #347 | ArgoCD syncs; pod `Running` and `/readyz` 200 | Phase D |
 | 9 | Read `spec.serviceAccountName` and the injected `AZURE_*` vars | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once** | Phase E |
 | 10 | Confirm the auth boundary and one real exec | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version | Phase E |
 | 11 | Ship the switch PR (`KNAUF_CODE_EXECUTION_ENABLED=true` + URL + JWT values) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
-| 12 | Walk the UI checklist, then run the capacity baseline | ~20 of 25 parallel execs succeed, rest report capacity, recovery after 5 min | Phase E |
+| 12 | Walk the UI checklist, then run the capacity baseline | Observed success/capacity counts and recovery time are recorded; no production size is inferred from the configured limit alone | Phase E |
 
 Steps 1–2 are the only ones that can be done today; 3 unblocks everything after it.
 **Nothing between 6 and 11 is user-visible** — the feature turns on at 11 and nowhere earlier.
@@ -177,7 +177,7 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
 >
 > **Why you must check rather than wait for an error:** the adapter acquires its Entra token
 > lazily, on the first ACA call. So a missing workload identity produces *no* boot-time
-> failure and *no* log line — the pod is Ready (`/readyz` only pings Mongo) and looks healthy
+> failure and *no* log line — the pod is Ready (`/readyz` proves Table access, not ACA) and looks healthy
 > right up until the first execution 502s. Nothing tells you until a user tries. If you would
 > rather have that fail loudly, the fix is a boot-time `tokens.getToken()` probe alongside the
 > JWT-key check in `index.ts`, which would turn it into a CrashLoopBackOff.
@@ -263,7 +263,8 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
 
 ## Phase C — merge #258 and confirm the image
 
-- [ ] Merge #258. The push trigger builds `VERSION` (`0.1.0`) into the AGK hub ACR.
+- [ ] Merge #258. The push trigger builds the tag declared in `knauf/code-adapter/VERSION`
+      into the AGK hub ACR.
 - [ ] Verify the tag actually landed (the workflow's own last step does this, but check):
       ```bash
       az acr repository show-tags -n acragkhubnonprod001 \
@@ -295,7 +296,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
-    tag: "0.1.0"            # = knauf/code-adapter/VERSION; Phase C must have pushed it
+    tag: "<adapter-version>" # = knauf/code-adapter/VERSION; Phase C must have pushed it
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -363,15 +364,12 @@ agentic-karl-code-adapter:
       kind: SecretStore
       name: kv-agntkarl-nonprod-001
     secrets:
-      # Cosmos vCore ADMIN user. The adapter needs one collection and gets the cluster —
-      # see "Decisions" §1. Still unresolved; the only open security item.
-      MONGO_URI: agentic-karl-MONGODB-CONNECTION-STRING
-      # Storage account PRIMARY KEY. Replace this line with the configmap entry
-      #   AZURE_STORAGE_ACCOUNT_NAME: "<account>"
-      # once the Blob role assignment from Phase A is applied — the adapter prefers workload
-      # identity whenever that is set, so the two can overlap safely during the migration.
-      AZURE_STORAGE_CONNECTION_STRING: agentic-karl-BLOB-STORAGE-CONNECTION-STRING
       ACA_POOL_ENDPOINT: agentic-karl-dev-CODE-POOL-ENDPOINT
+
+  configmap:
+    AZURE_STORAGE_ACCOUNT_NAME: "agkblobdevwesteu"
+    TABLE_NAME: "codeAdapterFiles"
+    CLEANUP_ENABLED: "true"
 
   monitoring:
     enabled: true
@@ -438,10 +436,9 @@ Two failure modes worth stating plainly, because neither produces an obvious err
 **D5 · Network policy** — **there is something to do.** An earlier version of this doc said
 "most likely nothing"; that was wrong, and wrong in the quiet direction.
 
-Right: the adapter's *outbound* needs nothing. Entra, `*.dynamicsessions.io` and Blob are all
-HTTPS/443, which `allowEgressInternet` permits namespace-wide; Mongo goes over
-`allow-egress-private-endpoints` (`podSelector: {}`, 10.160.0.0/16, includes 443 and 10260);
-and app→adapter is covered by `allowSameNamespace`.
+Right: the adapter's *outbound* needs nothing under the current nonproduction policy. Entra,
+`*.dynamicsessions.io`, Blob, and Table are all HTTPS/443, which `allowEgressInternet` permits
+namespace-wide; app→adapter is covered by `allowSameNamespace`.
 
 Wrong: `agentic-karl/dev/network-policy/values.yaml` sets **`defaultDenyAll: true`**, and every
 service in that namespace that wants to be scraped carries its *own* `customPolicies` entry —
@@ -486,7 +483,7 @@ switch) into two PRs if you want a checkpoint between "adapter is healthy" and "
 Each step isolates one layer, so a failure tells you where to look.
 
 ```bash
-# 1. Pod healthy and Mongo reachable
+# 1. Pod healthy and Table reachable
 kubectl -n agentic-karl-dev get pods -l app=agentic-karl-code-adapter
 kubectl -n agentic-karl-dev exec deploy/agentic-karl-code-adapter -- \
   wget -qO- localhost:3112/readyz
@@ -561,8 +558,9 @@ Then in the UI, in this order — each one exercises a different half of the fea
       has drifted from `packages/api/src/agents/load.ts`.
 
 Finally, the capacity baseline from [scaling.md](scaling.md) §2 — run the 25-parallel-exec
-test, confirm roughly 20 succeed and the rest report "at capacity", wait 5 minutes, confirm
-recovery. **Write the measured number into scaling.md.** It is the input to prod sizing.
+test, record how many start and how many report "at capacity", wait for recovery, and record
+the measured recovery time. **Write the result into scaling.md.** It is evidence for production
+sizing; the configured limit of 20 is not itself a measured throughput result.
 
 ---
 
@@ -588,20 +586,10 @@ restart pulls the new one — and rollback-by-tag then has nothing distinct to r
 These are not blockers you can clear by doing work; they need a position taken. Two of the
 three affect whether dev UAT is representative.
 
-**1 · Mongo credentials — the one open security item.** `agentic-karl-MONGODB-CONNECTION-STRING`
-is `mongodb+srv://${var.mongodb_admin_username}:${random_password.mongo_vcore_admin.result}@…`
-— the Cosmos vCore **admin user**. The adapter needs one collection (`code_adapter_files`) and
-gets the whole cluster, so a bug in this new service reaches every chat. Blob was fixed the
-same way ACA already worked (workload identity); Mongo has two routes and both touch the shared
-cluster:
-
-- a scoped Mongo user restricted to the adapter's database — simple, but a second credential to
-  rotate;
-- Entra auth on the vCore cluster — no credential at all, consistent with everything else here,
-  more work and a change to a shared resource.
-
-Acceptable for dev UAT *if* someone says so explicitly and it is tracked. Not acceptable to
-carry into prod silently, which is why it is written down rather than left in a PR thread.
+**1 · Metadata isolation — resolved.** The adapter uses `codeAdapterFiles` through a
+table-scoped workload identity. It holds no Mongo or storage-account credential. Reusing the
+application storage account leaves account-key holders with reverse access; that residual risk is
+accepted and does not widen the adapter identity.
 
 **2 · Spot affinity vs long executions.** The pod has a hard
 `requiredDuringSchedulingIgnoredDuringExecution` affinity to spot nodes, copied verbatim from
@@ -613,7 +601,7 @@ nothing on a cluster that has non-spot capacity. Someone owning the platform pat
 yes or no rather than leaving 360s implying a protection it does not provide.
 
 **3 · Boot-time Entra probe (recommended before UAT).** Today a broken workload identity is
-*silent*: the token is acquired lazily on the first ACA call, `/readyz` only pings Mongo, so the
+*silent*: the token is acquired lazily on the first ACA call, `/readyz` only proves Table access, so the
 pod is Ready and looks healthy until the first execution 502s. A `tokens.getToken()` probe next
 to the existing `importCodeApiKey` check in `index.ts` would turn that into a CrashLoopBackOff
 at boot. It is the same fail-fast argument that justified the JWT-key check, and it removes the
@@ -625,14 +613,14 @@ single most likely first-deployment failure from the "mysterious" category. Roug
 
 Not blockers for a dev rollout, but do not lose them:
 
-- Adapter memory: input push and output capture both buffer whole files, with no queue. Hence
-  the 2 Gi limit and the lowered `CAPTURE_MAX_TOTAL_BYTES` above. The durable fix is to stream
-  capture into Blob — worth doing before prod ([scaling.md](scaling.md) §3).
-- Pool throughput is ~4 executions/minute sustained across all users at
-  `maxConcurrentSessions: 20` — which works out to roughly **4 people doing data analysis in the
-  same five-minute window**, because a user five steps into an analysis holds five slots at once
-  ([scaling.md](scaling.md) §2). Comfortable for a handful of UAT testers; the number to
-  re-measure and re-size before any wider audience.
+- Adapter input push still buffers one whole staged file per active execution, with no queue.
+  Generated-output capture now streams through a byte-bounded transform into Blob. The 2 Gi limit
+  and input limits still need representative concurrency evidence before production
+  ([scaling.md](scaling.md) §3).
+- The current 20-session pools have an unmeasured sustained-throughput ceiling because stateless
+  sessions remain allocated through the 300-second cooldown. The four-executions-per-minute
+  figure in [scaling.md](scaling.md) is an illustrative model, not observed capacity and not a
+  production sizing requirement.
 - ~~Session identity is not bound to the caller.~~ **Fixed** (`d6fad8068`). Every session id
   now carries an 8-hex owner tag derived from the caller's subject, so `/exec` only honours a
   supplied `session_id` bearing the caller's own tag, and `runtime_session_hint` derivation
@@ -641,10 +629,10 @@ Not blockers for a dev rollout, but do not lose them:
   but a *predictable* secret makes a hint-derived id guessable from a known conversation id —
   so **set a real `SESSION_HINT_SECRET` before enabling `statefulSessions`**. The adapter warns
   at boot while it is unset.
-- Staged blobs are now reaped by reachability, not age (`ed7dcc043`). The Mongo TTL slides on
-  every use, so an age-based lifecycle rule would delete blobs that are still referenced —
+- Staged Blobs are reaped by reachability, not age (`ed7dcc043`). Table `expiresAt` slides on
+  every use, so an age-based lifecycle rule would delete Blobs that are still referenced —
   hence the sweep in `src/store/reaper.ts` rather than a storage management policy. A lifecycle
-  rule is still worth adding as a backstop for bytes whose Mongo row never landed; it is
+  rule is still worth adding as a backstop for bytes whose Table transaction never landed; it is
   **not** in #73.
 - The pod is pinned to **spot** nodes with a hard `requiredDuringScheduling` affinity. This is
   copied verbatim from the worker, so it is a platform pattern rather than this service's
@@ -652,8 +640,8 @@ Not blockers for a dev rollout, but do not lose them:
   no `terminationGracePeriodSeconds` saves an evicted execution. `preferred` would cost nothing
   here and is worth arguing for before prod.
 - Nonprod image tags are mutable (`az acr build` overwrites) while `promote-code-adapter.yaml`
-  deliberately refuses `--force`. So a rebuilt `0.1.0` in nonprod can differ from `0.1.0` in
-  prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
+  deliberately refuses `--force`. So a rebuilt version tag in nonprod can differ from the same
+  tag in prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
   digest before prod.
 - `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` is published to Key Vault but cannot be consumed
   by ESO — the ServiceAccount annotation is rendered by Helm, not injected from a Secret. It
@@ -664,8 +652,8 @@ Not blockers for a dev rollout, but do not lose them:
 
 ## Prod
 
-Not a copy of dev. `terraform/subscription/prod/tenant/agentic-karl/` needs its own pool
-(`maxConcurrentSessions` sized from the dev measurement, not inherited), its own identity in
-the `agentic-karl-prod` namespace, its own keypair in `kv-agntkarl-prod-001`, and the image
-promoted with `promote-code-adapter.yaml`. That workflow only makes the tag available — the
-prod rollout is a values bump in `agk-deployment-configs`, reviewed like any other service.
+Not a copy of dev. Production infrastructure already contains its own 20-session pool and adapter
+identity. Keep that limit unchanged until representative stage evidence supports a reviewed size;
+there is no established 50-session requirement. Verify the production key material, promote the
+image with `promote-code-adapter.yaml`, and deploy through a reviewed values change in
+`agk-deployment-configs`.

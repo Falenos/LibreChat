@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { ACA_FILE_MANIFEST_NAME } from '../types/aca.js';
 import type { SupportedLang } from '../validate.js';
 
 /**
@@ -20,6 +21,7 @@ export const OUT_LOG = '.karl_out.log';
 export const ERR_LOG = '.karl_err.log';
 const INLINE_OUT_BYTES = 3000;
 const INLINE_ERR_BYTES = 700;
+const FILE_MANIFEST_MAX_ENTRIES = 100;
 
 export interface WrapperPlan {
   delimiter: string;
@@ -68,7 +70,7 @@ export function buildWrapper(
   const movesJson = JSON.stringify(JSON.stringify(moves.map((m) => [m.from, m.to])));
 
   const wrappedCode = [
-    'import base64, json, os, pathlib, subprocess, sys',
+    'import base64, json, os, pathlib, stat, subprocess, sys, time',
     `os.chdir('/mnt/data')`,
     `for _src, _dst in json.loads(${movesJson}):`,
     `    _p = pathlib.Path('/mnt/data') / _dst`,
@@ -78,6 +80,46 @@ export function buildWrapper(
     `_r = subprocess.run(${argvPrefix} + json.loads(${argsJson}), capture_output=True, cwd='/mnt/data')`,
     `pathlib.Path('/mnt/data/${OUT_LOG}').write_bytes(_r.stdout)`,
     `pathlib.Path('/mnt/data/${ERR_LOG}').write_bytes(_r.stderr)`,
+    'try:',
+    `    _manifest_path = pathlib.Path('/mnt/data/${ACA_FILE_MANIFEST_NAME}')`,
+    '    if _manifest_path.exists() or _manifest_path.is_symlink():',
+    '        _manifest_path.unlink()',
+    '    _manifest_files = []',
+    '    _manifest_truncated = False',
+    '    _manifest_deadline = time.monotonic() + 2.0',
+    `    for _root, _dirs, _files in os.walk('/mnt/data', followlinks=False):`,
+    '        if time.monotonic() > _manifest_deadline:',
+    '            _manifest_truncated = True',
+    '            break',
+    '        _dirs[:] = [d for d in _dirs if not pathlib.Path(_root, d).is_symlink()]',
+    '        for _name in _files:',
+    `            if len(_manifest_files) >= ${FILE_MANIFEST_MAX_ENTRIES} or time.monotonic() > _manifest_deadline:`,
+    '                _manifest_truncated = True',
+    '                break',
+    '            _path = pathlib.Path(_root, _name)',
+    '            try:',
+    '                _stat = os.lstat(_path)',
+    '            except OSError:',
+    '                continue',
+    '            if not stat.S_ISREG(_stat.st_mode):',
+    '                continue',
+    `            _relative = _path.relative_to('/mnt/data').as_posix()`,
+    `            if _relative.startswith('.karl_'):`,
+    '                continue',
+    '            _manifest_files.append({',
+    `                'name': _relative,`,
+    `                'type': 'File',`,
+    `                'sizeInBytes': _stat.st_size,`,
+    `                'lastModifiedAt': str(_stat.st_mtime_ns),`,
+    '            })',
+    '        if _manifest_truncated:',
+    '            break',
+    `    _manifest_path.write_text(`,
+    `        json.dumps({'version': 1, 'truncated': _manifest_truncated, 'files': _manifest_files}),`,
+    `        encoding='utf-8',`,
+    '    )',
+    'except Exception:',
+    '    pass',
     `print(f"${delimiter} RC={_r.returncode} OUT={len(_r.stdout)} ERR={len(_r.stderr)}")`,
     `sys.stdout.write(_r.stdout[:${INLINE_OUT_BYTES}].decode('utf-8', 'replace'))`,
     `print("${delimiter}_ERR")`,

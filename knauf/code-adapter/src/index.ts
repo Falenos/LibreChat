@@ -2,14 +2,15 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { importCodeApiKey } from './auth/verifyJwt.js';
-import { connectMongo } from './store/mongo.js';
 import { FilesRepo } from './store/filesRepo.js';
+import { checkTableReadiness, createTableStore } from './store/tableStore.js';
 import { createBlobStore } from './azure/blobStore.js';
 import { createTokenProvider } from './azure/credential.js';
 import { createAcaClient } from './azure/acaClient.js';
 import { createMetrics } from './middleware/metrics.js';
 import { createReaper } from './store/reaper.js';
 import { createApp } from './app.js';
+import type { Reaper } from './store/reaper.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -39,29 +40,48 @@ async function main(): Promise<void> {
     );
   }
 
-  const mongo = await connectMongo(config);
-  const repo = new FilesRepo(mongo.files, config.fileTtlHours);
-  // One credential for both Azure clients: the pod federates once and both the ACA data plane
-  // and (when configured for it) Blob ride on the same workload identity. Blob falls back to
-  // the account key only if AZURE_STORAGE_ACCOUNT_NAME is unset — see blobStore.ts.
+  // One process-wide credential serves Table, Blob, and ACA through workload identity.
   const credential = new DefaultAzureCredential();
+  const metrics = createMetrics();
+  metrics.metadataBackendInfo.set({ backend: 'table', table: config.table.tableName }, 1);
+  const table = createTableStore(config, credential, metrics);
+  await checkTableReadiness(table, metrics);
+  const repo = new FilesRepo(table, config.fileTtlHours, metrics);
   const blob = await createBlobStore(config, credential);
   const tokens = createTokenProvider(config, logger, credential);
-  const metrics = createMetrics();
   const aca = createAcaClient(config, logger, tokens, metrics);
 
-  // Deletes staged bytes once no Mongo row can reach them. Not optional bookkeeping: the
-  // TTL removes the row that holds the blob path and its owner, so without this the bytes
-  // are retained indefinitely and unattributably. See store/reaper.ts (finding A1).
-  const reaper = createReaper({
+  // Blob-led cleanup and bounded metadata reconciliation share a renewable Table lease,
+  // so only one replica mutates retention state at a time.
+  let reaper: Reaper | null = null;
+  if (config.cleanupEnabled) {
+    reaper = createReaper({
+      blob,
+      repo,
+      logger,
+      ttlHours: config.fileTtlHours,
+      intervalMs: config.reaperIntervalMs,
+      leaseMs: config.reaperLeaseMs,
+      reconciliationIntervalMs: config.reconciliationIntervalMs,
+      reconciliationPageSize: config.reconciliationPageSize,
+      reconciliationMaxPages: config.reconciliationMaxPages,
+      reconciliationMaxMs: config.reconciliationMaxMs,
+      metrics,
+    });
+    reaper.start();
+  } else {
+    logger.warn('metadata cleanup is disabled for this deployment');
+  }
+
+  const app = createApp({
+    config,
+    logger,
+    aca,
     blob,
     repo,
-    logger,
-    ttlHours: config.fileTtlHours,
-    intervalMs: config.reaperIntervalMs,
+    metadataReadiness: () => checkTableReadiness(table, metrics),
+    metrics,
   });
-
-  const app = createApp({ config, logger, aca, blob, repo, mongo, metrics });
 
   // An /exec response legitimately takes execTimeoutMs (230s) plus the baseline listing
   // and the capture phase. Node's default requestTimeout is 300s, which lands inside that
@@ -77,6 +97,8 @@ async function main(): Promise<void> {
         port: config.port,
         localMode: config.localMode,
         apiVersion: config.aca.apiVersion,
+        metadataBackend: 'table',
+        tableName: config.table.tableName,
       },
       'code-adapter listening',
     );
@@ -108,11 +130,11 @@ async function main(): Promise<void> {
       return;
     }
     shuttingDown = true;
-    reaper.stop();
+    const reaperStopped = reaper?.stop() ?? Promise.resolve();
     logger.info({ signal, drainBudgetMs }, 'shutting down — draining in-flight executions');
     server.close(() => {
       logger.info('drain complete');
-      void mongo.close().finally(() => process.exit(0));
+      void reaperStopped.finally(() => process.exit(0));
     });
     server.closeIdleConnections();
     setTimeout(() => {

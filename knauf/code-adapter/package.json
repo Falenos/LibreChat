@@ -1,6 +1,6 @@
 {
   "name": "@knauf/code-adapter",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "description": "Tier-3 adapter: LibreChat Code API -> Azure Container Apps dynamic session pools (KARL code execution backend)",
   "type": "module",
@@ -19,12 +19,11 @@
     "probe:table": "node scripts/probe-table-storage.mjs"
   },
   "dependencies": {
-    "@azure/data-tables": "^13.3.2",
+    "@azure/data-tables": "13.3.2",
     "@azure/identity": "^4.5.0",
     "@azure/storage-blob": "^12.26.0",
     "express": "^4.21.2",
     "jose": "^5.9.6",
-    "mongodb": "^6.12.0",
     "multer": "^2.2.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",

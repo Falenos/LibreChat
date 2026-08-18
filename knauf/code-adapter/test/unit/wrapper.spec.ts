@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildWrapper, parseSentinel, OUT_LOG } from '../../src/exec/wrapper.js';
+import { ACA_FILE_MANIFEST_NAME } from '../../src/types/aca.js';
 
 describe('buildWrapper', () => {
   it('embeds user code base64-only (no raw code in the wrapper)', () => {
@@ -19,7 +20,9 @@ describe('buildWrapper', () => {
   it('is always a Python wrapper; bash runs via a bash subprocess on the same pool', () => {
     const bash = buildWrapper('bash', 'grep x /etc/hosts', [], []);
     // Python wrapper (goes to /code/execute), not a raw bash script.
-    expect(bash.wrappedCode).toContain('import base64, json, os, pathlib, subprocess, sys');
+    expect(bash.wrappedCode).toContain(
+      'import base64, json, os, pathlib, stat, subprocess, sys, time',
+    );
     expect(bash.wrappedCode).toContain('[\'bash\', "/tmp/karl_user.sh"]');
     const py = buildWrapper('py', 'print(1)', [], []);
     expect(py.wrappedCode).toContain('[sys.executable, "/tmp/karl_user.py"]');
@@ -86,5 +89,8 @@ describe('log names', () => {
   it('wrapper writes logs the capture layer excludes', () => {
     const plan = buildWrapper('bash', 'true', [], []);
     expect(plan.wrappedCode).toContain(OUT_LOG);
+    expect(plan.wrappedCode).toContain(ACA_FILE_MANIFEST_NAME);
+    expect(plan.wrappedCode).toContain("os.walk('/mnt/data', followlinks=False)");
+    expect(plan.wrappedCode).toContain('stat.S_ISREG');
   });
 });

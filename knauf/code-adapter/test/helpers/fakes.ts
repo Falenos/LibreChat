@@ -6,21 +6,28 @@ import { createLogger } from '../../src/logger.js';
 import { createMetrics } from '../../src/middleware/metrics.js';
 import { loadConfig } from '../../src/config.js';
 import { mintSessionId } from '../../src/validate.js';
+import { deserializeFileEntity, FilesRepo } from '../../src/store/filesRepo.js';
+import { InMemoryTableClient } from './tableFake.js';
 import type { Config } from '../../src/config.js';
 import type { AcaClient } from '../../src/azure/acaClient.js';
 import type { BlobStore } from '../../src/azure/blobStore.js';
-import type { FileDoc, FilesRepo, InsertFileInput } from '../../src/store/filesRepo.js';
+import type { FileDoc, InsertFileInput } from '../../src/store/filesRepo.js';
 import type { AcaExecOutcome, AcaSessionFile } from '../../src/types/aca.js';
 
 export const TEST_ENV_BASE = {
   CODE_ADAPTER_LOCAL_MODE: 'true',
   ACA_POOL_ENDPOINT: 'https://code-pool.example.test',
-  MONGO_URI: 'mongodb://unused.example.test/karl',
+  AZURE_TABLE_CONNECTION_STRING: 'UseDevelopmentStorage=true',
   AZURE_STORAGE_CONNECTION_STRING: 'UseDevelopmentStorage=true',
 };
 
 export function testConfig(overrides: Record<string, string> = {}): Config {
-  return loadConfig({ ...process.env, ...TEST_ENV_BASE, ...overrides });
+  const env = { ...process.env, ...TEST_ENV_BASE, ...overrides };
+  if (env.CODE_ADAPTER_LOCAL_MODE === 'false') {
+    delete env.AZURE_TABLE_CONNECTION_STRING;
+    env.AZURE_TABLE_ACCOUNT_NAME ??= 'table-test-account';
+  }
+  return loadConfig(env);
 }
 
 export const testLogger = () => createLogger('silent');
@@ -38,69 +45,48 @@ export function ownedSessionId(config: Config, userId = 'local'): string {
   return mintSessionId(userId, config.sessionHintSecret);
 }
 
-/** In-memory FilesRepo — same public surface as the Mongo-backed class. */
+/** Real FilesRepo over the purpose-built in-memory Table implementation. */
 export class FakeFilesRepo {
-  docs = new Map<string, FileDoc>();
+  readonly table = new InMemoryTableClient();
+  private readonly repo = new FilesRepo(this.table, 24);
 
-  private key(sessionId: string, fileId: string): string {
-    return `${sessionId}:${fileId}`;
+  get docs(): Map<string, FileDoc> {
+    return new Map(
+      this.table
+        .allEntities()
+        .filter((entity) => entity.entityType === 'file')
+        .map((entity) => {
+          const doc = deserializeFileEntity(entity);
+          return [`${doc.sessionId}:${doc.fileId}`, doc];
+        }),
+    );
   }
 
-  async insertStaged(input: InsertFileInput): Promise<FileDoc> {
-    const now = new Date();
-    const fileId = randomUUID();
-    const doc: FileDoc = {
-      ...input,
-      fileId,
-      state: input.origin === 'upload' ? 'staged' : 'captured',
-      blobPath: `${input.sessionId}/${fileId}`,
-      lastModified: now,
-      expiresAt: new Date(now.getTime() + 24 * 3_600_000),
-    };
-    this.docs.set(this.key(doc.sessionId, doc.fileId), doc);
-    return doc;
+  insertStaged(input: InsertFileInput): Promise<FileDoc> {
+    return this.repo.insertStaged(input);
   }
 
   async upsertCaptured(
     input: InsertFileInput,
     blobPath: string,
   ): Promise<{ doc: FileDoc; obsoleteBlobPaths: string[] }> {
-    for (const doc of this.docs.values()) {
-      if (doc.sessionId === input.sessionId && doc.filename === input.filename) {
-        const previousBlobPath = doc.blobPath;
-        Object.assign(doc, {
-          size: input.size,
-          contentType: input.contentType,
-          state: 'captured',
-          blobPath,
-          lastModified: new Date(),
-        });
-        return { doc, obsoleteBlobPaths: [previousBlobPath] };
-      }
-    }
-    const doc = await this.insertStaged({ ...input, origin: 'exec-output' });
-    doc.blobPath = blobPath;
-    return { doc, obsoleteBlobPaths: [] };
+    return this.repo.upsertCaptured(input, blobPath);
   }
 
-  async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
-    return this.docs.get(this.key(sessionId, fileId)) ?? null;
+  find(sessionId: string, fileId: string): Promise<FileDoc | null> {
+    return this.repo.find(sessionId, fileId);
   }
 
-  async findByBlobPath(blobPath: string): Promise<FileDoc | null> {
-    return [...this.docs.values()].find((doc) => doc.blobPath === blobPath) ?? null;
+  listBySession(sessionId: string): Promise<FileDoc[]> {
+    return this.repo.listBySession(sessionId);
   }
 
-  async listBySession(sessionId: string): Promise<FileDoc[]> {
-    return [...this.docs.values()].filter((d) => d.sessionId === sessionId);
+  touch(sessionId: string, fileId: string): Promise<void> {
+    return this.repo.touch(sessionId, fileId);
   }
 
-  async touch(): Promise<void> {
-    /* no-op */
-  }
-
-  async delete(sessionId: string, fileId: string): Promise<boolean> {
-    return this.docs.delete(this.key(sessionId, fileId));
+  delete(sessionId: string, fileId: string): Promise<string | null> {
+    return this.repo.delete(sessionId, fileId);
   }
 
   asRepo(): FilesRepo {
@@ -125,6 +111,11 @@ export class FakeBlobStore implements BlobStore {
           })(),
         );
     this.blobs.set(blobPath, { data: buf, contentType });
+  }
+
+  async head(blobPath: string): Promise<{ contentLength: number } | null> {
+    const entry = this.blobs.get(blobPath);
+    return entry == null ? null : { contentLength: entry.data.length };
   }
 
   async getStream(blobPath: string) {

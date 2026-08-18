@@ -30,7 +30,7 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
       aca: new FakeAcaClient(),
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
   });

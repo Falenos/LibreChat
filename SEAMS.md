@@ -1022,6 +1022,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | KK20-255 — localizes the scheduler panel, cadence editor, Run Now controls, execution statuses, limits, and destructive-action confirmations under the `com_knauf_scheduler_*` namespace. |
 | `client/src/locales/{en,de}/translation.json` | KK20-255 — replaces the legacy non-cascading project-delete confirmation with explicit permanent-cascade copy and adds the localized queued/active scheduled-run conflict message. JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 | `.env.example` | KK20-257 — documents the default-off `KNAUF_CODE_EXECUTION_ENABLED` operator switch, controlled-host allowlist, and the three-part effective availability contract. |
+| `.github/workflows/build-code-adapter.yaml` | KK20-281 — tests adapter pull requests before any image build, builds `VERSION` by default for both main pushes and blank manual dispatches, validates optional tag overrides before Azure login, and keeps ACR writes unavailable to pull-request jobs. |
 
 ## Net-New Files
 

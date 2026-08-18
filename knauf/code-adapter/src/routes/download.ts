@@ -24,7 +24,7 @@ interface DownloadDeps {
  * with no listener, which is an uncaught exception, and the adapter installs no
  * `uncaughtException` handler — so one storage blip would restart the pod. Same
  * reason the TTL bump is caught rather than left floating: an unhandled rejection
- * terminates the process on Node >= 15, and a Mongo hiccup during a download must
+ * terminates the process on Node >= 15, and a metadata hiccup during a download must
  * not be able to do that.
  */
 export function createDownloadRouter(deps: DownloadDeps): Router {

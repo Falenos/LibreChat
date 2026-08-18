@@ -26,7 +26,7 @@ flowchart LR
   karl -->|"bash_tool / execute_code\nPOST /v1/exec (+JWT)"| ad["code-adapter\n(ClusterIP pod)"]
   ad -->|"Entra token\n(workload identity)"| pool["ACA code-interpreter\nsession pool"]
   pool --> sbx["Hyper-V session\n/mnt/data"]
-  ad --- mongo[("Mongo\ncode_adapter_files")]
+  ad --- table[("Azure Table\ncodeAdapterFiles")]
   ad --- blob[("Azure Blob\ncode-adapter-staging")]
 ```
 
@@ -63,7 +63,7 @@ credential anywhere.**
 1. **Protocol translation** — Code API ⇄ the ACA data-plane call, both directions.
 2. **Language handling** — `py` and `bash` (else `501`) both run on the one code-interpreter pool; the wrapper picks the interpreter.
 3. **Auth bridge** — verify LibreChat's JWT inbound; acquire an Entra token outbound. Neither side sees the other's auth.
-4. **File staging** — uploads land in Blob + a Mongo TTL row _before_ any session exists, get (re-)pushed into the fresh sandbox **sequentially** on every exec that references them, and generated files get captured back to Blob so downloads outlive the sandbox.
+4. **File staging** — uploads land in Blob + transactional Table metadata _before_ any session exists, get (re-)pushed into the fresh sandbox **sequentially** on every exec that references them, and generated files get captured back to Blob so downloads outlive the sandbox.
 5. **Filling ACA's gaps** — real exit codes and output past the ~4000-char cap, via the wrapper (below).
 6. **Resilience** — vanished-session retry, friendly timeouts, capacity handling — never a 5xx into the tool loop. Also: a non-zero exit with no output gets an explanatory stderr line, because the caller formats stdout/stderr and never reads the exit code.
 
@@ -165,7 +165,7 @@ the adapter's staging store on every call:
   **re-pushes them into the fresh sandbox's `/mnt/data`** before running the
   code. So `data.csv` "is there" every run — mechanically it is re-uploaded each
   time.
-- Files the code **generates** are captured to Blob + Mongo and handed back as
+- Files the code **generates** are captured to Blob + Table metadata and handed back as
   refs, so they get re-injected/re-pushed the same way on later runs (and remain
   downloadable even though the sandbox that made them is long gone).
 - The staging copy has a **sliding 24 h TTL** — every push/download bumps
@@ -185,7 +185,7 @@ the adapter's staging store on every call:
 > **Security / isolation:** every exec is its own sandbox, so users and
 > conversations never share one — isolation is inherent, not dependent on
 > identifier reuse. Access to a staged/generated file is additionally gated by a
-> Mongo ownership check on download/objects/delete (user-kind → same `sub`;
+> Table-backed ownership check on download/objects/delete (user-kind → same `sub`;
 > agent/skill-kind → same tenant), so a guessed identifier still can't reach
 > another user's bytes.
 
@@ -287,13 +287,13 @@ skills declare `allowed-tools: [execute_code]` and disappear under the same deci
 
 1. You attach `data.csv` in chat. LibreChat stores it, then (at exec time) calls
    `POST /upload` → the adapter stages it to Blob (`code-adapter-staging/<sid>/<fileId>`)
-   plus a Mongo row (`state: staged`, TTL 24 h). No session exists yet.
+   plus a file entity and filename/Blob indexes in `codeAdapterFiles`. No session exists yet.
 2. The agent runs `pd.read_csv('data.csv')`. LibreChat calls `POST /exec` with
    the file _referenced_ (it re-sends the ref on every exec). The adapter mints a
    fresh sandbox, pulls the bytes from Blob, pushes them into that sandbox's
    `/mnt/data` (sequentially), then runs the wrapped code.
 3. The code writes `chart.png`. After a `code:0` exec the adapter lists the
-   session files, sees the new PNG, captures it to Blob + Mongo under the exec
+   session files, sees the new PNG, captures it to Blob + Table metadata under the exec
    session, and returns it in `files[]`.
 4. LibreChat downloads it via `GET /download/...` and renders it inline. It
    still works after the sandbox is gone, because it lives in Blob.
@@ -308,19 +308,19 @@ contract suite in `test/contract/`.
 
 ---
 
-## Bookkeeping (Mongo + Blob)
+## Bookkeeping (Table + Blob)
 
-- **Mongo `code_adapter_files`** — one row per staged/captured file:
-  `{sessionId, fileId, filename, state, identity, userId, tenantId, blobPath, expiresAt, …}`,
-  indexed unique on `(sessionId,fileId)`, `(sessionId,filename)`, and `blobPath`, with a
-  sliding 24 h TTL. Rows are the source of truth for what's valid.
+- **Azure Table `codeAdapterFiles`** — one file entity plus filename and Blob indexes per
+  staged/captured file. Each session is one partition; same-partition transactions preserve
+  file/index consistency, and ETags protect concurrent updates. `expiresAt` is a sliding 24-hour
+  lifetime refreshed on active use; the bounded cleanup pass removes expired metadata and Blobs.
 - **Azure Blob `code-adapter-staging`** — the durable bytes. Staged uploads are keyed
   `<sid>/<fileId>`; captures are keyed `<sid>/<uuid>` — a fresh generation per capture, so
-  Mongo always points at one complete upload and a superseded generation's blob is reaped
+  Table metadata always points at one complete upload and a superseded generation's Blob is reaped
   by reachability (`src/store/reaper.ts`), not by age.
 
-The 24 h Mongo TTL deliberately overshoots LibreChat's 23 h freshness window, so
-LibreChat re-uploads _before_ rows expire; a 404 from the freshness probe routes
+The 24-hour metadata lifetime deliberately overshoots LibreChat's 23-hour freshness window, so
+LibreChat re-uploads _before_ entities expire; a 404 from the freshness probe routes
 into LibreChat's own re-upload path.
 
 ---

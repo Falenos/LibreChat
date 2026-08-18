@@ -3,6 +3,7 @@ import { Transform } from 'node:stream';
 import type { TransformCallback } from 'node:stream';
 import { OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { AcaClient } from '../azure/acaClient.js';
+import { ACA_FILE_MANIFEST_TRUNCATED_NAME } from '../types/aca.js';
 import type { AcaSessionFile } from '../types/aca.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FilesRepo } from '../store/filesRepo.js';
@@ -19,7 +20,30 @@ import type { Config } from '../config.js';
 export function fileSignature(
   entry: Pick<AcaSessionFile, 'sizeInBytes' | 'lastModifiedAt'>,
 ): string {
-  return `${entry.sizeInBytes ?? ''}|${entry.lastModifiedAt ?? ''}`;
+  return `${entry.sizeInBytes ?? ''}|${normalizeLastModified(entry.lastModifiedAt)}`;
+}
+
+function normalizeLastModified(value: string | undefined): string {
+  if (value == null || value === '') {
+    return '';
+  }
+  if (/^\d+$/.test(value)) {
+    // ACA exposes file mtimes at 100 ns precision, while os.stat reports nanoseconds.
+    // Truncate the wrapper value to the same resolution so an untouched file does not
+    // look changed solely because of sub-100 ns filesystem digits ACA cannot represent.
+    const nanoseconds = BigInt(value);
+    return ((nanoseconds / 100n) * 100n).toString();
+  }
+  const utc = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (utc != null) {
+    const epochMs = Date.parse(`${utc[1]}Z`);
+    if (Number.isFinite(epochMs)) {
+      const fractionNs = (utc[2] ?? '').padEnd(9, '0').slice(0, 9);
+      return (BigInt(epochMs) * 1_000_000n + BigInt(fractionNs || '0')).toString();
+    }
+  }
+  const epochMs = Date.parse(value);
+  return Number.isFinite(epochMs) ? (BigInt(epochMs) * 1_000_000n).toString() : value;
 }
 
 /** Build a name→signature map from a pre-exec file listing (see snapshotBaseline). */
@@ -36,7 +60,7 @@ export function baselineFrom(listing: AcaSessionFile[]): Map<string, string> {
 /**
  * Post-exec capture: list the session's /mnt/data and return only the files
  * this exec produced — NEW files, or files whose signature changed vs the
- * pre-exec `baseline`. Persists them to blob + Mongo so /download outlives the
+ * pre-exec `baseline`. Persists them to Blob + Table metadata so /download outlives the
  * session cooldown. Files left over from earlier execs in the same (reused)
  * sandbox are in the baseline unchanged, so they are NOT re-returned — that
  * accumulation is the bug this guards against.
@@ -98,6 +122,10 @@ export async function captureOutputs(params: {
 
   for (const entry of listing) {
     const name = entry.name;
+    if (name === ACA_FILE_MANIFEST_TRUNCATED_NAME) {
+      overflow = true;
+      continue;
+    }
     if (!isCapturable(name, entry)) {
       continue;
     }
@@ -144,7 +172,7 @@ export async function captureOutputs(params: {
       timedOut = true;
       break;
     } else if (result == null) {
-      // The file is really in the sandbox; we just could not persist it (ACA fetch, Mongo
+      // The file is really in the sandbox; we just could not persist it (ACA fetch, Table
       // upsert or Blob write failed). Counted so the caller can say so — dropping it
       // silently would report success with the deliverable missing.
       failed += 1;
@@ -311,7 +339,7 @@ class ByteLimitTransform extends Transform {
 
 /**
  * Stream one output file (bounded) to a unique Blob, commit that exact Blob
- * generation to Mongo, and return the
+ * generation to Table metadata, and return the
  * ExecResponseFile. Returns 'overflow' if it doesn't fit the remaining budget,
  * or null if the fetch/persist failed (logged). Listing size and Content-Length
  * are only preflight hints; the transform enforces the limit on actual bytes.
@@ -403,7 +431,10 @@ async function captureNewFile(
     };
   } catch (err) {
     if (candidateUploaded) {
-      await deps.blob.delete(candidateBlobPath).catch(() => undefined);
+      deps.logger.warn(
+        { file: name, blobPath: candidateBlobPath },
+        'retaining captured Blob after uncertain metadata commit for reaper reconciliation',
+      );
     }
     deps.logger.warn({ file: name, err: (err as Error).message }, 'output capture failed');
     return null;

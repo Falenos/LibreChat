@@ -13,7 +13,6 @@ import type { Logger } from './logger.js';
 import type { AcaClient } from './azure/acaClient.js';
 import type { BlobStore } from './azure/blobStore.js';
 import type { FilesRepo } from './store/filesRepo.js';
-import type { MongoHandle } from './store/mongo.js';
 import type { Metrics } from './middleware/metrics.js';
 
 export interface AppDeps {
@@ -22,7 +21,7 @@ export interface AppDeps {
   aca: AcaClient;
   blob: BlobStore;
   repo: FilesRepo;
-  mongo: Pick<MongoHandle, 'db'>;
+  metadataReadiness: () => Promise<void>;
   metrics: Metrics;
 }
 
@@ -45,7 +44,7 @@ export function createApp(deps: AppDeps): Express {
     }),
   );
 
-  app.use(createHealthRouter(deps.mongo));
+  app.use(createHealthRouter(deps.metadataReadiness));
   if (config.metricsEnabled) {
     app.get('/metrics', (req, res, next) => {
       void (async () => {

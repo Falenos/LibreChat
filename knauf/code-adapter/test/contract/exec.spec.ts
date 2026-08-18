@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { Readable } from 'node:stream';
 import { createApp } from '../../src/app.js';
-import { AcaSessionNotFoundError, AcaTimeoutError } from '../../src/types/aca.js';
+import {
+  ACA_FILE_MANIFEST_TRUNCATED_NAME,
+  AcaSessionNotFoundError,
+  AcaTimeoutError,
+} from '../../src/types/aca.js';
+import { fileSignature } from '../../src/exec/capture.js';
 import {
   FakeAcaClient,
   FakeBlobStore,
@@ -60,9 +65,47 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics,
     });
+  });
+
+  it('normalizes ACA timestamps and wrapper nanoseconds to one file signature', () => {
+    const epochSeconds = BigInt(Date.parse('2026-08-18T16:22:14Z')) / 1000n;
+    const nanoseconds = epochSeconds * 1_000_000_000n + 810_699_504n;
+
+    expect(
+      fileSignature({
+        sizeInBytes: 8,
+        lastModifiedAt: '2026-08-18T16:22:14.8106995Z',
+      }),
+    ).toBe(fileSignature({ sizeInBytes: 8, lastModifiedAt: nanoseconds.toString() }));
+  });
+
+  it('captures bounded manifest results and reports when the recursive scan truncated', async () => {
+    aca.sessionFiles = [
+      {
+        name: 'partial.csv',
+        type: 'File',
+        sizeInBytes: 3,
+        lastModifiedAt: '1787070000000000000',
+      },
+      {
+        name: ACA_FILE_MANIFEST_TRUNCATED_NAME,
+        type: 'File',
+        sizeInBytes: 0,
+        lastModifiedAt: '',
+      },
+    ];
+    aca.fileContents.set('partial.csv', Buffer.from('abc'));
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toEqual([expect.objectContaining({ name: 'partial.csv' })]);
+    expect(response.body.files[0]).not.toHaveProperty('inherited');
+    expect(response.body.stderr).toContain('some generated files were not captured');
   });
 
   it('CodeExecutor shape: py exec wraps user code as a python subprocess and returns real rc', async () => {
@@ -333,7 +376,7 @@ describe('POST /v1/exec contract', () => {
   // code:0, so a generated deliverable could disappear while the tool reported success.
   it('reports generated files it could not persist instead of silently dropping them', async () => {
     aca.sessionFiles = [{ name: 'chart.png', type: 'File', sizeInBytes: 10 }];
-    // Present in the sandbox, but unfetchable — stands in for an ACA/Blob/Mongo failure.
+    // Present in the sandbox, but unfetchable — stands in for an ACA/Blob/Table failure.
     aca.fetchFileContent = async () => {
       throw new Error('blob write failed');
     };
@@ -356,7 +399,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.sessionFiles = [{ name: 'unsized.bin', type: 'File' }];
@@ -420,7 +463,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.sessionFiles = [{ name: 'stalled.bin', type: 'File' }];
@@ -463,11 +506,11 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.stderr).toMatch(/could not be saved/i);
   });
 
-  it('removes the uploaded candidate Blob when the Mongo commit fails', async () => {
+  it('retains the uploaded candidate Blob when the Table commit outcome is uncertain', async () => {
     aca.sessionFiles = [{ name: 'report.csv', type: 'File', sizeInBytes: 3 }];
     aca.fileContents.set('report.csv', Buffer.from('abc'));
     repo.upsertCaptured = async () => {
-      throw new Error('mongo unavailable');
+      throw new Error('table unavailable');
     };
     aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
 
@@ -475,7 +518,7 @@ describe('POST /v1/exec contract', () => {
 
     expect(response.body.files).toHaveLength(0);
     expect(response.body.stderr).toContain('could not be saved');
-    expect(blob.blobs.size).toBe(0);
+    expect(blob.blobs.size).toBe(1);
   });
 
   it('expired staged input → 200 {code:1} explaining re-attach (not 5xx)', async () => {
@@ -621,7 +664,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');

@@ -21,7 +21,7 @@ export function isValidSessionId(value: unknown): value is string {
  * WHY. An ACA session identifier *is* the isolation boundary between conversations —
  * posting to one gives you that sandbox and everything in its /mnt/data. `/exec` honours
  * a caller-supplied `session_id`, and nothing else in the request ties that id to the
- * caller: file *refs* are ownership-checked against Mongo, the sandbox never was. So an
+ * caller: file *refs* are ownership-checked against metadata, the sandbox never was. So an
  * authenticated user could name another user's session and read their data by running
  * code in it. That it is unreachable today rests entirely on `@librechat/agents` choosing
  * not to put the field on the wire — a property of a third-party package, not of our auth.

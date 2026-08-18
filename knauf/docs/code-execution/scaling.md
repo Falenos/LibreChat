@@ -84,31 +84,14 @@ slots held by one user mid-analysis  ≈  executions in the turn        (3–6)
 concurrent analyses the pool supports ≈  maxConcurrentSessions / that (20 / ~5)
 ```
 
-| Pool | Concurrent users mid-analysis | Analysis turns / hour | Executions / hour |
+| Pool | Illustrative concurrent analyses | Illustrative analysis turns / hour | Illustrative executions / hour |
 | --- | --- | --- | --- |
 | **20** (dev, stage — today) | **~4** | ~47 | ~236 |
-| 50 (prod, planned) | ~10 | ~118 | ~590 |
-| 100 | ~20 | ~236 | ~1 180 |
 
-"Concurrent" means *inside the same ~5-minute window*, which is the right unit here: a user who
-finishes an analysis keeps their slots for five more minutes regardless.
-
-To go from concurrent to population, divide by how often a person actually runs one:
-
-| Profile | Analyses / hour each | Users supported on the dev pool (20) |
-| --- | --- | --- |
-| Power analyst (one every 10 min) | 6 | ~8 |
-| Regular (one every 30 min) | 2 | ~23 |
-| Occasional (one every 2 hours) | 0.5 | ~94 |
-
-Read those as *simultaneously-online users of that type during the peak hour*, not licence
-count. Most KARL turns run no code at all — chat, web search and artifacts never touch the pool
-— so the population that maps onto these numbers is only the slice doing data work at that
-moment.
-
-**What this means in practice.** For dev UAT with a handful of testers, 20 is comfortable. For a
-department-wide rollout it is not: ~8 concurrent power users is a plausible Monday morning, and
-the 21st execution gets "The sandbox is at capacity."
+"Concurrent" means *inside the same ~5-minute window*: a completed analysis can retain its slots
+through the cooldown. The row is an arithmetic illustration using the assumptions below, not an
+observed service level. Do not convert it into a supported-user count without measured peak
+arrival rates, executions per analysis, execution duration, and observed release behavior.
 
 **Two assumptions carry all of this, and both are cheap to replace with measurements:**
 
@@ -119,11 +102,10 @@ the 21st execution gets "The sandbox is at capacity."
   what the validation below actually tests. If ACA releases slots earlier than the cooldown,
   every number in these tables improves, in some cases by a lot.
 
-**The lever that changes the shape, not just the size:** session reuse (§2, option 2) makes a
-whole *conversation* cost one slot instead of one per execution. On the dev pool that moves
-"~4 concurrent analysts" to roughly "~20 concurrent conversations" — a bigger win than any
-plausible increase to `maxConcurrentSessions`, and cheaper, since idle sessions bill by the
-hour. It needs the identity fix in §5 first.
+**The lever that changes the shape, not just the size:** session reuse (§2, option 2) can make a
+whole *conversation* cost one slot instead of one per execution. It remains disabled because it
+changes privacy/lifecycle behavior and hint-derived sessions are not yet treated as reused during
+output capture; see §5.
 
 > **Validate this before UAT.** The slot-accounting above follows from the documented ACA
 > semantics (`maxConcurrentSessions` counts *allocated* sessions; `cooldownPeriodInSeconds` is
@@ -139,19 +121,19 @@ hour. It needs the identity fix in §5 first.
 > done; wait
 > ```
 >
-> If ~20 succeed and the rest come back "at capacity", the model holds. Then wait 5 minutes and
-> confirm the pool has recovered. Record the result here.
+> Record the success/capacity counts and recovery time. The configured limit suggests a possible
+> result; it does not prove the service behavior in advance.
 
 ### The three ways to buy more throughput
 
 1. **Raise `maxConcurrentSessions`** (Terraform, `code-adapter-{dev,stage}.tf`). Linear, immediate,
    and the pool bills per session-hour — idle capacity is close to free. This is the cheap lever.
-2. **Reuse sessions per conversation** — turn on `toolExecution.sandbox.statefulSessions`, which
+2. **Reuse sessions per conversation** — after its separate privacy and capture gates, turn on
+   `toolExecution.sandbox.statefulSessions`, which
    makes `@librechat/agents` send `runtime_session_hint` and the adapter derive a stable
    identifier from it. One conversation then costs **one** slot instead of one per execution,
-   which is a 3–6× throughput improvement on realistic traffic. It is a real product decision,
-   not a tuning change (see the trade-offs in how-it-works.md), and it currently has a
-   [security prerequisite](#5-security-note-that-is-also-a-scaling-decision).
+   which may materially improve throughput. It is a product/privacy decision, not a tuning
+   change (see the trade-offs in how-it-works.md).
 3. **Release the slot early.** If the dynamic-sessions data plane exposes a session-terminate
    call at our pinned api-version, calling it after capture would return the slot in seconds
    instead of 300, which is worth up to ~75× on sustained throughput. **Unverified** — nobody has
@@ -162,34 +144,28 @@ hour. It needs the identity fix in §5 first.
 ## 3. Memory is the adapter's real limit, not CPU
 
 The adapter is I/O-bound — it spends nearly all of an execution awaiting ACA — so CPU is
-irrelevant. **Bytes in flight are not.** Two paths buffer whole files in memory:
+rarely the first limit. **Bytes in flight are not.** Input push still buffers whole files:
 
 | Path | Peak buffer | Source |
 | --- | --- | --- |
 | Input push | the whole file, one at a time (pushes are deliberately sequential) | `blob.getBuffer()` → `aca.pushFile()` |
-| Output capture | the whole file, one at a time | `aca.fetchFileContent()` → `Buffer.concat` → `blob.put()` |
+| Output capture | bounded streaming buffers (roughly 8 MiB per upload plus SDK overhead) | ACA stream → byte-limit transform → `blob.put()` |
 
 Defaults: `UPLOAD_MAX_BYTES` 128 MB, `CAPTURE_MAX_TOTAL_BYTES` 256 MB per execution,
 `CAPTURE_MAX_FILES` 20.
 
-So a *single* execution can legitimately peak at a couple of hundred megabytes resident, and
-the adapter runs **N of those concurrently with no queue**. Sizing rule:
+So a *single* execution can still hold a large staged input in memory, and the adapter runs
+**N of those concurrently with no queue**. Conservative sizing rule:
 
 ```
-pod memory limit  ≥  (largest single file you allow)  ×  (concurrent execs you expect)  +  ~256 Mi baseline
+pod memory limit  ≥  (largest staged input)  ×  (concurrent input pushes)  +  runtime/SDK headroom
 ```
-
-With a 1 Gi limit — the value the worker service uses and the obvious thing to copy — **three
-concurrent executions each capturing a 256 MB output OOM-kill the pod.** So the dev service
-deliberately does not copy it:
 
 - **1 Gi request / 2 Gi limit**, 2 replicas — as deployed.
-- **`CAPTURE_MAX_TOTAL_BYTES: 67108864`** (64 MB) in the values rather than the adapter's 256 MB
-  default, which is generous for charts and spreadsheets and fits the limit with room for
-  concurrency. These two move together: raising one without the other is how the pod OOMs.
-- The durable fix is to stream capture straight from ACA into Blob instead of buffering
-  (`BlobStore.put` already accepts a `Readable`); that removes the coupling entirely and is
-  worth doing before prod.
+- **`CAPTURE_MAX_TOTAL_BYTES: 67108864`** (64 MB) bounds generated bytes and Blob spend but no
+  longer implies a same-sized process buffer.
+- The remaining durable memory improvement is streaming staged inputs from Blob to ACA. Until
+  then, load evidence must cover concurrent large-input pushes before production activation.
 
 An OOM kill is not graceful: in-flight executions die with a socket error, and the user sees
 "Execution error". Watch `container_memory_working_set_bytes` against the limit before raising
@@ -224,19 +200,19 @@ Two consequences worth knowing:
 
 ---
 
-## 5. Security note that is also a scaling decision
+## 5. Stateful reuse remains a separate launch decision
 
-The most attractive throughput lever (§2.2 — session reuse via `statefulSessions`) currently has
-a prerequisite. The derived identifier is `HMAC(sessionHintSecret, thread_id)`, and
-`sessionHintSecret` **defaults to the JWT public key**, which deployment publishes as a
-ConfigMap value. `/exec` also honours a caller-supplied `session_id` without checking that the
-session belongs to the caller. Today that is inert — identifiers are 128-bit random mints — but
-with reuse switched on, the identifier becomes a deterministic function of two non-secret
-values, and reaching another user's live sandbox becomes a question of knowing a conversation id.
+Session IDs are now bound to the authenticated caller: minted IDs carry an owner tag, hint
+derivation includes the user ID, and foreign supplied IDs are ignored. A dedicated
+`SESSION_HINT_SECRET` is still required before enabling stateful sessions so known conversation
+IDs do not yield predictable session IDs.
 
-**Bind the session to the principal before enabling reuse**: fold `auth.userId` into
-`deriveSessionId`, and reject a supplied `session_id` that was not minted for the caller. Small
-change; it just has to land first.
+That closes the direct ownership defect, but it does not make stateful reuse launch-ready.
+Hint-derived sessions are not currently marked as reused when the pre-execution baseline is
+selected, so a later execution without new inputs can re-report files left by an earlier turn.
+Continuity also changes retention and shared-conversation privacy semantics. Keep
+`toolExecution.sandbox.statefulSessions` disabled until those behaviors have dedicated tests and
+an explicit product/security decision.
 
 ---
 
@@ -262,8 +238,8 @@ through close/error, not just the header round-trip), the latter on every recove
 log fetch — and are safe to build alerts on.
 
 Non-Prometheus signals worth a dashboard: pool-level session counts in Azure Monitor (the
-authoritative saturation signal), adapter pod memory against limit (§3), and Mongo
-`code_adapter_files` collection size against the 24 h TTL.
+authoritative saturation signal), adapter pod memory against limit (§3), and
+`codeAdapterFiles` Table entity/reconciliation volume against the 24-hour lifetime.
 
 ---
 
@@ -271,7 +247,7 @@ authoritative saturation signal), adapter pod memory against limit (§3), and Mo
 
 | Symptom | Turn this | Where |
 | --- | --- | --- |
-| "The sandbox is at capacity" | `maxConcurrentSessions` (20 → 50) | `agk-infrastructure`, `code-adapter-<env>.tf` |
+| "The sandbox is at capacity" | Review `maxConcurrentSessions` using measured demand; do not assume a target | `agk-infrastructure`, `code-adapter-<env>.tf` |
 | Capacity pressure at the same user load | enable `statefulSessions` (after §5) | `librechat.yaml` |
 | Adapter OOM-kills | `resources.limits.memory` ↑ **and** `CAPTURE_MAX_TOTAL_BYTES` ↓ | `agk-deployment-configs` values |
 | Adapter CPU-bound (unexpected) | `replicaCount` | `agk-deployment-configs` values |
@@ -285,17 +261,17 @@ it's for availability and rollout safety, not throughput.
 
 ---
 
-## 8. Prod sizing, when it comes
+## 8. Production sizing
 
-Not a copy of dev. Before the prod pool is created:
+Production already has a separately owned pool configured at 20 sessions. Before activation:
 
 1. Measure real executions-per-conversation in dev UAT (the `exec completed` log line has
    everything needed).
 2. Decide on session reuse — it changes the required pool size by 3–6×.
 3. Size `maxConcurrentSessions` for peak-hour concurrency **plus the 300 s cooldown tail**, not
-   for average load. The planned 50 assumes fresh-per-exec and roughly 10 executions/minute
-   sustained; verify against the dev numbers rather than inheriting the assumption.
-4. Fix the capture buffering (§3) or set memory limits that account for it.
+   for average load. Keep 20 unless measured evidence justifies a reviewed change; there is no
+   established 50-session requirement.
+4. Measure concurrent large-input pushes against the adapter memory limit (§3).
 
 Sizing shortcut, once step 1 has a real number for executions-per-turn (`E`):
 
@@ -304,8 +280,6 @@ maxConcurrentSessions  ≈  peak concurrent analysts  ×  E          (fresh-per-
 maxConcurrentSessions  ≈  peak concurrent conversations           (with session reuse)
 ```
 
-At the planned 50 and `E ≈ 5`, prod supports roughly **10 people doing data analysis in the same
-five-minute window** — which is the number to sanity-check against the actual audience before
-the pool is created, not after. If that is too few, decide between a larger pool (linear, cheap
-— idle sessions bill by the hour) and session reuse (§2, which divides the requirement by `E`),
-and remember the second one needs the §5 identity fix first.
+Use the formula only after `E` and peak demand are measured. If 20 is insufficient, decide
+between a larger pool and stateful reuse; the latter remains gated by §5 and must not be enabled
+as an operational shortcut.

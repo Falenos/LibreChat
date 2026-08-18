@@ -64,10 +64,12 @@ export interface Config {
 
   uploadMaxBytes: number;
 
-  mongo: {
-    uri: string;
-    db: string | null;
-    filesCollection: string;
+  table: {
+    /** `https://<account>.table.core.windows.net`; null only for local connection-string mode. */
+    accountUrl: string | null;
+    tableName: string;
+    /** Accepted only in explicit local mode for Azurite or a developer-owned Table endpoint. */
+    localConnectionString: string | null;
   };
 
   blob: {
@@ -90,8 +92,14 @@ export interface Config {
   };
 
   fileTtlHours: number;
-  /** How often the orphaned-blob reaper sweeps. See store/reaper.ts. */
+  /** How often the Blob-led retention pass sweeps. See store/reaper.ts. */
   reaperIntervalMs: number;
+  reaperLeaseMs: number;
+  reconciliationIntervalMs: number;
+  reconciliationPageSize: number;
+  reconciliationMaxPages: number;
+  reconciliationMaxMs: number;
+  cleanupEnabled: boolean;
   metricsEnabled: boolean;
 }
 
@@ -116,6 +124,23 @@ function resolveBlobAccountUrl(str: (name: string) => string | null): string | n
   }
   const account = str('AZURE_STORAGE_ACCOUNT_NAME');
   return account != null ? `https://${account}.blob.core.windows.net` : null;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let result = value;
+  while (result.endsWith('/')) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+
+function resolveTableAccountUrl(str: (name: string) => string | null): string | null {
+  const explicit = str('AZURE_TABLE_ACCOUNT_URL');
+  if (explicit != null) {
+    return trimTrailingSlashes(explicit);
+  }
+  const account = str('AZURE_TABLE_ACCOUNT_NAME') ?? str('AZURE_STORAGE_ACCOUNT_NAME');
+  return account != null ? `https://${account}.table.core.windows.net` : null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -150,6 +175,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (localMode && env.NODE_ENV === 'production') {
     throw new Error('CODE_ADAPTER_LOCAL_MODE=true is not allowed with NODE_ENV=production');
   }
+  const tableConnectionString = str('AZURE_TABLE_CONNECTION_STRING');
+  if (!localMode && tableConnectionString != null) {
+    throw new Error(
+      'AZURE_TABLE_CONNECTION_STRING is accepted only when CODE_ADAPTER_LOCAL_MODE=true',
+    );
+  }
 
   const missing: string[] = [];
   const required = (name: string): string => {
@@ -173,6 +204,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     missing.push(
       'AZURE_STORAGE_ACCOUNT_NAME (or AZURE_STORAGE_ACCOUNT_URL) for workload-identity Blob ' +
         'auth, or AZURE_STORAGE_CONNECTION_STRING for key auth',
+    );
+  }
+  const tableAccountUrl = resolveTableAccountUrl(str);
+  if (localMode) {
+    if (tableConnectionString == null && tableAccountUrl == null) {
+      missing.push(
+        'AZURE_TABLE_CONNECTION_STRING for local Table/Azurite, or ' +
+          'AZURE_TABLE_ACCOUNT_URL/AZURE_TABLE_ACCOUNT_NAME/AZURE_STORAGE_ACCOUNT_NAME',
+      );
+    }
+  } else if (tableAccountUrl == null) {
+    missing.push(
+      'AZURE_TABLE_ACCOUNT_URL (or AZURE_TABLE_ACCOUNT_NAME/AZURE_STORAGE_ACCOUNT_NAME) ' +
+        'for workload-identity Table auth',
     );
   }
 
@@ -210,10 +255,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       captureMaxTotalMs: int('CAPTURE_MAX_TOTAL_MS', 60_000),
     },
     uploadMaxBytes: int('UPLOAD_MAX_BYTES', 134_217_728),
-    mongo: {
-      uri: required('MONGO_URI'),
-      db: str('MONGO_DB'),
-      filesCollection: str('MONGO_FILES_COLLECTION') ?? 'code_adapter_files',
+    table: {
+      accountUrl: tableAccountUrl,
+      tableName: str('TABLE_NAME') ?? 'codeAdapterFiles',
+      localConnectionString: localMode ? tableConnectionString : null,
     },
     blob: {
       connectionString: str('AZURE_STORAGE_CONNECTION_STRING'),
@@ -221,11 +266,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       container: str('BLOB_CONTAINER') ?? 'code-adapter-staging',
     },
     fileTtlHours: int('FILE_TTL_HOURS', 24),
-    // Hourly is ample: the reaper only deletes what is already past the TTL, so the sweep
-    // interval sets how long an orphan lingers, not whether it is collected.
+    // The Blob-led pass remains hourly; the metadata pass is separately bounded and daily.
     reaperIntervalMs: int('REAPER_INTERVAL_MS', 3_600_000),
+    reaperLeaseMs: int('REAPER_LEASE_MS', 120_000),
+    reconciliationIntervalMs: int('RECONCILIATION_INTERVAL_MS', 86_400_000),
+    reconciliationPageSize: int('RECONCILIATION_PAGE_SIZE', 100),
+    reconciliationMaxPages: int('RECONCILIATION_MAX_PAGES', 10),
+    reconciliationMaxMs: int('RECONCILIATION_MAX_MS', 30_000),
+    cleanupEnabled: bool('CLEANUP_ENABLED', true),
     metricsEnabled: bool('METRICS_ENABLED', true),
   };
+
+  if (!/^[A-Za-z][A-Za-z0-9]{2,62}$/.test(config.table.tableName)) {
+    throw new Error('TABLE_NAME must be 3-63 alphanumeric characters and begin with a letter');
+  }
 
   if (missing.length > 0) {
     throw new Error(

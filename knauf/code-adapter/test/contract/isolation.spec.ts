@@ -52,7 +52,7 @@ describe('[knauf] a caller cannot reach another user’s sandbox', () => {
       aca,
       blob: new FakeBlobStore(),
       repo: new FakeFilesRepo().asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
 
@@ -119,7 +119,7 @@ describe('[knauf] a caller cannot reach another user’s sandbox', () => {
       aca,
       blob: new FakeBlobStore(),
       repo: new FakeFilesRepo().asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.executeImpl = async (_sid, code) => sentinel(code, 0, 'ok');
