@@ -203,7 +203,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
-    tag: '0.1.0' # = knauf/code-adapter/VERSION; CI must have pushed it first
+    tag: '<adapter-version>' # = knauf/code-adapter/VERSION; CI must have pushed it first
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -402,10 +402,11 @@ there is no separate "enable it in prod" code change to write:
 
 **What is still outside this repo** (nothing here can do it):
 
-- Terraform (`agk-infrastructure`): `sp-agk-code-prod` + `id-agk-code-adapter-prod`
-  (federated subject `system:serviceaccount:agentic-karl-prod:sa-code-adapter`), Session
-  Executor role on the pool, `maxConcurrentSessions: 50`;
-  `AGK-CODEAPI-JWT-PRIVATE-KEY` in `kv-agntkarl-prod-001`.
+- Terraform (`agk-infrastructure`) already owns the production pool, adapter identity, federation,
+  Session Executor role, storage roles, and the current `maxConcurrentSessions: 20`. Keep 20 until
+  representative stage load evidence supports a reviewed change; 50 is not an established
+  requirement. Verify the required `AGK-CODEAPI-JWT-PRIVATE-KEY` material in
+  `kv-agntkarl-prod-001` before a dark deployment.
 - GitOps (`agk-deployment-configs`): copy the dev service dir to
   `agentic-karl/prod/services/agentic-karl-code-adapter`, swapping ACR / KV / namespace /
   UAMI clientId / pool endpoint; mirror the ApplicationSet exclude+add for prod. Then set

@@ -8,17 +8,16 @@ name: Build code-adapter image
 # cross-registry import), authenticating as the shared service principal (secrets.AZURE_CREDENTIALS).
 # The dev code-adapter Helm service (Knauf-Group/agk-deployment-configs) points at this image.
 #
-# Tag: workflow_dispatch input (default = VERSION); a push to main touching the adapter rebuilds
-# the tag in VERSION. Bump knauf/code-adapter/VERSION when you change the adapter, then point
+# Tag: a non-empty workflow_dispatch input overrides VERSION; otherwise dispatches and pushes
+# to main use VERSION. Bump knauf/code-adapter/VERSION when you change the adapter, then point
 # the deployment-configs values.yaml tag at it. Tests run first — a red suite never ships.
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Image tag to build & push (e.g. 0.1.0)'
-        required: true
-        default: '0.1.0'
+        description: 'Optional image tag override (blank uses knauf/code-adapter/VERSION)'
+        required: false
   push:
     branches: [main]
     paths:
@@ -121,7 +120,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
           else
             TAG="$(tr -d '[:space:]' < "$ADAPTER_DIR/VERSION")"

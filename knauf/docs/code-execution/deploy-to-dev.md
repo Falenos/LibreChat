@@ -41,13 +41,13 @@ observe it, the step is not done. Detail for each is in the phase named beside i
 | 3 | Get #73 approved and merge it | `apply-tenants` green on `main`; 12 resources created | Phase A |
 | 4 | Capture `terraform output code_adapter_dev_client_id` and `code_pool_dev_management_endpoint` | Both non-empty; also in Key Vault | Phase A |
 | 5 | Generate the Ed25519 keypair; private half → Key Vault | `az keyvault secret show --name AGK-CODEAPI-JWT-PRIVATE-KEY` returns | Phase B |
-| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and tag `0.1.0` appears in the ACR | Phase C |
+| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and the tag from `knauf/code-adapter/VERSION` appears in the ACR | Phase C |
 | 7 | Substitute #347's two placeholders (client id from 4, public key from 5) | The **`Reject committed placeholders`** check turns green. It fails today on purpose — that is the gate, not a bug | Phase D |
 | 8 | Merge #347 | ArgoCD syncs; pod `Running` and `/readyz` 200 | Phase D |
 | 9 | Read `spec.serviceAccountName` and the injected `AZURE_*` vars | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once** | Phase E |
 | 10 | Confirm the auth boundary and one real exec | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version | Phase E |
 | 11 | Ship the switch PR (`KNAUF_CODE_EXECUTION_ENABLED=true` + URL + JWT values) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
-| 12 | Walk the UI checklist, then run the capacity baseline | ~20 of 25 parallel execs succeed, rest report capacity, recovery after 5 min | Phase E |
+| 12 | Walk the UI checklist, then run the capacity baseline | Observed success/capacity counts and recovery time are recorded; no production size is inferred from the configured limit alone | Phase E |
 
 Steps 1–2 are the only ones that can be done today; 3 unblocks everything after it.
 **Nothing between 6 and 11 is user-visible** — the feature turns on at 11 and nowhere earlier.
@@ -263,7 +263,8 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
 
 ## Phase C — merge #258 and confirm the image
 
-- [ ] Merge #258. The push trigger builds `VERSION` (`0.1.0`) into the AGK hub ACR.
+- [ ] Merge #258. The push trigger builds the tag declared in `knauf/code-adapter/VERSION`
+      into the AGK hub ACR.
 - [ ] Verify the tag actually landed (the workflow's own last step does this, but check):
       ```bash
       az acr repository show-tags -n acragkhubnonprod001 \
@@ -295,7 +296,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
-    tag: "0.1.0"            # = knauf/code-adapter/VERSION; Phase C must have pushed it
+    tag: "<adapter-version>" # = knauf/code-adapter/VERSION; Phase C must have pushed it
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -557,8 +558,9 @@ Then in the UI, in this order — each one exercises a different half of the fea
       has drifted from `packages/api/src/agents/load.ts`.
 
 Finally, the capacity baseline from [scaling.md](scaling.md) §2 — run the 25-parallel-exec
-test, confirm roughly 20 succeed and the rest report "at capacity", wait 5 minutes, confirm
-recovery. **Write the measured number into scaling.md.** It is the input to prod sizing.
+test, record how many start and how many report "at capacity", wait for recovery, and record
+the measured recovery time. **Write the result into scaling.md.** It is evidence for production
+sizing; the configured limit of 20 is not itself a measured throughput result.
 
 ---
 
@@ -611,14 +613,14 @@ single most likely first-deployment failure from the "mysterious" category. Roug
 
 Not blockers for a dev rollout, but do not lose them:
 
-- Adapter memory: input push and output capture both buffer whole files, with no queue. Hence
-  the 2 Gi limit and the lowered `CAPTURE_MAX_TOTAL_BYTES` above. The durable fix is to stream
-  capture into Blob — worth doing before prod ([scaling.md](scaling.md) §3).
-- Pool throughput is ~4 executions/minute sustained across all users at
-  `maxConcurrentSessions: 20` — which works out to roughly **4 people doing data analysis in the
-  same five-minute window**, because a user five steps into an analysis holds five slots at once
-  ([scaling.md](scaling.md) §2). Comfortable for a handful of UAT testers; the number to
-  re-measure and re-size before any wider audience.
+- Adapter input push still buffers one whole staged file per active execution, with no queue.
+  Generated-output capture now streams through a byte-bounded transform into Blob. The 2 Gi limit
+  and input limits still need representative concurrency evidence before production
+  ([scaling.md](scaling.md) §3).
+- The current 20-session pools have an unmeasured sustained-throughput ceiling because stateless
+  sessions remain allocated through the 300-second cooldown. The four-executions-per-minute
+  figure in [scaling.md](scaling.md) is an illustrative model, not observed capacity and not a
+  production sizing requirement.
 - ~~Session identity is not bound to the caller.~~ **Fixed** (`d6fad8068`). Every session id
   now carries an 8-hex owner tag derived from the caller's subject, so `/exec` only honours a
   supplied `session_id` bearing the caller's own tag, and `runtime_session_hint` derivation
@@ -638,8 +640,8 @@ Not blockers for a dev rollout, but do not lose them:
   no `terminationGracePeriodSeconds` saves an evicted execution. `preferred` would cost nothing
   here and is worth arguing for before prod.
 - Nonprod image tags are mutable (`az acr build` overwrites) while `promote-code-adapter.yaml`
-  deliberately refuses `--force`. So a rebuilt `0.1.0` in nonprod can differ from `0.1.0` in
-  prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
+  deliberately refuses `--force`. So a rebuilt version tag in nonprod can differ from the same
+  tag in prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
   digest before prod.
 - `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` is published to Key Vault but cannot be consumed
   by ESO — the ServiceAccount annotation is rendered by Helm, not injected from a Secret. It
@@ -650,8 +652,8 @@ Not blockers for a dev rollout, but do not lose them:
 
 ## Prod
 
-Not a copy of dev. `terraform/subscription/prod/tenant/agentic-karl/` needs its own pool
-(`maxConcurrentSessions` sized from the dev measurement, not inherited), its own identity in
-the `agentic-karl-prod` namespace, its own keypair in `kv-agntkarl-prod-001`, and the image
-promoted with `promote-code-adapter.yaml`. That workflow only makes the tag available — the
-prod rollout is a values bump in `agk-deployment-configs`, reviewed like any other service.
+Not a copy of dev. Production infrastructure already contains its own 20-session pool and adapter
+identity. Keep that limit unchanged until representative stage evidence supports a reviewed size;
+there is no established 50-session requirement. Verify the production key material, promote the
+image with `promote-code-adapter.yaml`, and deploy through a reviewed values change in
+`agk-deployment-configs`.

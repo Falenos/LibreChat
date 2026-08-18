@@ -1022,6 +1022,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | KK20-255 — localizes the scheduler panel, cadence editor, Run Now controls, execution statuses, limits, and destructive-action confirmations under the `com_knauf_scheduler_*` namespace. |
 | `client/src/locales/{en,de}/translation.json` | KK20-255 — replaces the legacy non-cascading project-delete confirmation with explicit permanent-cascade copy and adds the localized queued/active scheduled-run conflict message. JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 | `.env.example` | KK20-257 — documents the default-off `KNAUF_CODE_EXECUTION_ENABLED` operator switch, controlled-host allowlist, and the three-part effective availability contract. |
+| `.github/workflows/build-code-adapter.yaml` | KK20-281 — tests adapter pull requests before any image build, builds `VERSION` by default for both main pushes and blank manual dispatches, validates optional tag overrides before Azure login, and keeps ACR writes unavailable to pull-request jobs. |
 
 ## Net-New Files
 
@@ -1870,7 +1871,6 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/knauf/skills/skillPrimeBody.spec.ts` | Subject only (`./skillPrimeBody`) plus Node `fs`/`path` for shipped skills | Low — replaces the obsolete frontmatter byte ceiling with an exact first-frontmatter-boundary assertion, allowing capability metadata to grow without weakening the over-strip regression | Self | KK20-257 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.js` | LangChain `BaseCallbackHandler`; `@librechat/{api,data-schemas}`; `./providerError` | Medium — extends the bounded returned-model vocabulary so the GPT-5.6 canary remains attributable by Luna, Terra, and Sol without introducing unbounded metric labels | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | KK20-272 |
 | `api/server/controllers/agents/knauf/modelRouterTelemetry.spec.js` | Subject under test; mocked `@librechat/{api,data-schemas}` | Low — pins normalization of versioned Model Router response metadata to the three bounded GPT-5.6 candidate labels | Self | KK20-272 |
-| `knauf/code-adapter/**` | None — standalone Node/TS package; Azure Tables, Blob, identity, and Mongo SDKs are direct package dependencies rather than upstream imports | Medium — Table transactions depend on the pinned Azure SDK 13.3.2 runtime shape, while the one-off migration validates the legacy Mongo file contract before writing atomic Table entity sets | `knauf/code-adapter/test/{unit,contract}/*.spec.ts`; live dev workload-identity conditional-transaction probe | KK20-281 |
 <!-- seams:new:end -->
 
 ## Static Assets

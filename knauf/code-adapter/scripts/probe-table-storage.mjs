@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Phase 0 contract probe for the Mongo -> Table Storage migration (KK20-281,
- * follow-up to KK20-257 finding B2). See
+ * Azure Table Storage workload-identity and transaction contract probe (KK20-281). See
  * `local/KK20-257-code-execution-ownership/security/table-storage-implementation-plan.md`,
  * "Phase 0 — dev platform and contract proof".
  *
