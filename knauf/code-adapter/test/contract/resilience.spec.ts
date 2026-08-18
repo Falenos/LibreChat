@@ -18,7 +18,7 @@ import type { BlobStore } from '../../src/azure/blobStore.js';
  * [knauf] KK20-257 review — the three ways this process could be killed, or lie about
  * being healthy, by something outside its control.
  *
- * All three were live before this suite: a Blob read that fails mid-transfer, a Mongo
+ * All three were live before this suite: a Blob read that fails mid-transfer, a metadata
  * hiccup during the TTL bump, and a verification key that only gets parsed on the first
  * request. None of them is a caller error, and none of them may take the pod down or
  * turn it into a healthy-looking 401 machine.
@@ -87,7 +87,7 @@ describe('[knauf] a failing dependency must not kill the process', () => {
       aca: new FakeAcaClient(),
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     return { app, repo, blob };
@@ -101,7 +101,7 @@ describe('[knauf] a failing dependency must not kill the process', () => {
       .attach('file', Buffer.from('a,b\n1,2\n'), 'data.csv');
 
   it('survives a blob stream that fails mid-download', async () => {
-    // Stage through the real store so the Mongo row and blob exist, then swap in a store
+    // Stage through the real store so the Table metadata and Blob exist, then swap in a store
     // whose stream dies partway — `stream.pipe(res)` forwards no source error, so the
     // unhandled `error` event used to be an uncaught exception and a pod restart.
     const backing = new FakeBlobStore();
@@ -135,7 +135,7 @@ describe('[knauf] a failing dependency must not kill the process', () => {
     // Left floating (`void repo.touch(...)`) its rejection is an unhandled rejection,
     // which terminates the process on Node >= 15.
     repo.touch = async () => {
-      throw new Error('Mongo topology closed');
+      throw new Error('Table endpoint unavailable');
     };
 
     const response = await request(app)

@@ -20,7 +20,7 @@ interface UploadDeps {
 }
 
 /**
- * POST /upload and /upload/batch. Files are staged to blob + Mongo only
+ * POST /upload and /upload/batch. Files are staged to Blob + Table metadata only
  * — no ACA session exists yet (upload-before-exec); the push happens
  * lazily at first /exec referencing them.
  *
@@ -62,17 +62,20 @@ export function createUploadRouter(deps: UploadDeps): Router {
     try {
       await deps.blob.put(doc.blobPath, createReadStream(file.path), doc.contentType, file.size);
     } catch (error) {
-      const cleanupResults = await Promise.allSettled([
-        deps.repo.delete(doc.sessionId, doc.fileId),
-        deps.blob.delete(doc.blobPath),
-      ]);
-      cleanupResults.forEach((result, index) => {
-        if (result.status === 'rejected') {
-          deps.logger.warn(
-            { err: result.reason, fileId: doc.fileId, cleanup: index === 0 ? 'mongo' : 'blob' },
-            'failed to roll back staged upload',
-          );
-        }
+      let committedBlobPath: string | null = null;
+      try {
+        committedBlobPath = await deps.repo.delete(doc.sessionId, doc.fileId);
+      } catch (cleanupError) {
+        deps.logger.warn(
+          { err: cleanupError, fileId: doc.fileId, cleanup: 'metadata' },
+          'failed to roll back staged upload',
+        );
+      }
+      await deps.blob.delete(committedBlobPath ?? doc.blobPath).catch((cleanupError) => {
+        deps.logger.warn(
+          { err: cleanupError, fileId: doc.fileId, cleanup: 'blob' },
+          'failed to roll back staged upload',
+        );
       });
       throw error;
     }

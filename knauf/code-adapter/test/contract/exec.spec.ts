@@ -60,7 +60,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics,
     });
   });
@@ -333,7 +333,7 @@ describe('POST /v1/exec contract', () => {
   // code:0, so a generated deliverable could disappear while the tool reported success.
   it('reports generated files it could not persist instead of silently dropping them', async () => {
     aca.sessionFiles = [{ name: 'chart.png', type: 'File', sizeInBytes: 10 }];
-    // Present in the sandbox, but unfetchable — stands in for an ACA/Blob/Mongo failure.
+    // Present in the sandbox, but unfetchable — stands in for an ACA/Blob/Table failure.
     aca.fetchFileContent = async () => {
       throw new Error('blob write failed');
     };
@@ -356,7 +356,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.sessionFiles = [{ name: 'unsized.bin', type: 'File' }];
@@ -420,7 +420,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.sessionFiles = [{ name: 'stalled.bin', type: 'File' }];
@@ -463,11 +463,11 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.stderr).toMatch(/could not be saved/i);
   });
 
-  it('removes the uploaded candidate Blob when the Mongo commit fails', async () => {
+  it('retains the uploaded candidate Blob when the Table commit outcome is uncertain', async () => {
     aca.sessionFiles = [{ name: 'report.csv', type: 'File', sizeInBytes: 3 }];
     aca.fileContents.set('report.csv', Buffer.from('abc'));
     repo.upsertCaptured = async () => {
-      throw new Error('mongo unavailable');
+      throw new Error('table unavailable');
     };
     aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');
 
@@ -475,7 +475,7 @@ describe('POST /v1/exec contract', () => {
 
     expect(response.body.files).toHaveLength(0);
     expect(response.body.stderr).toContain('could not be saved');
-    expect(blob.blobs.size).toBe(0);
+    expect(blob.blobs.size).toBe(1);
   });
 
   it('expired staged input → 200 {code:1} explaining re-attach (not 5xx)', async () => {
@@ -621,7 +621,7 @@ describe('POST /v1/exec contract', () => {
       aca,
       blob,
       repo: repo.asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
     aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'done');

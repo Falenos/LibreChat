@@ -10,12 +10,62 @@ describe('loadConfig', () => {
     } catch (err) {
       const message = (err as Error).message;
       expect(message).toContain('ACA_POOL_ENDPOINT is required');
-      expect(message).toContain('MONGO_URI is required');
+      expect(message).toContain('AZURE_TABLE_CONNECTION_STRING');
       // Blob auth is one-of (workload identity or the account key), so the line names both
       // routes rather than a single variable. Review finding B2.
       expect(message).toContain('AZURE_STORAGE_ACCOUNT_NAME');
       expect(message).toContain('AZURE_STORAGE_CONNECTION_STRING');
     }
+  });
+
+  describe('Table auth selection', () => {
+    it('accepts a Table connection string only in explicit local mode', () => {
+      const config = loadConfig(TEST_ENV_BASE);
+      expect(config.table.localConnectionString).toBe('UseDevelopmentStorage=true');
+      expect(config.table.accountUrl).toBeNull();
+    });
+
+    it('rejects a Table connection string outside local mode', () => {
+      expect(() =>
+        loadConfig({
+          ...TEST_ENV_BASE,
+          CODE_ADAPTER_LOCAL_MODE: 'false',
+          CODEAPI_JWT_PUBLIC_KEY: 'public-key-placeholder',
+          AZURE_STORAGE_ACCOUNT_NAME: 'sharedaccount',
+        }),
+      ).toThrow(/AZURE_TABLE_CONNECTION_STRING.*only/);
+    });
+
+    it('prefers the explicit Table URL, then Table account name, then storage account name', () => {
+      const common = {
+        ...TEST_ENV_BASE,
+        AZURE_TABLE_CONNECTION_STRING: undefined,
+        AZURE_STORAGE_ACCOUNT_NAME: 'sharedaccount',
+      } as Record<string, string | undefined>;
+      expect(
+        loadConfig({
+          ...common,
+          AZURE_TABLE_ACCOUNT_NAME: 'tableaccount',
+          AZURE_TABLE_ACCOUNT_URL: 'https://explicit.table.core.windows.net///',
+        }).table.accountUrl,
+      ).toBe('https://explicit.table.core.windows.net');
+      expect(
+        loadConfig({ ...common, AZURE_TABLE_ACCOUNT_NAME: 'tableaccount' }).table.accountUrl,
+      ).toBe('https://tableaccount.table.core.windows.net');
+      expect(loadConfig(common).table.accountUrl).toBe(
+        'https://sharedaccount.table.core.windows.net',
+      );
+    });
+
+    it('requires a workload-identity Table endpoint outside local mode', () => {
+      expect(() =>
+        loadConfig({
+          ACA_POOL_ENDPOINT: 'https://pool.example.test',
+          CODEAPI_JWT_PUBLIC_KEY: 'public-key-placeholder',
+          AZURE_STORAGE_CONNECTION_STRING: 'UseDevelopmentStorage=true',
+        }),
+      ).toThrow(/workload-identity Table auth/);
+    });
   });
 
   /**
@@ -74,9 +124,14 @@ describe('loadConfig', () => {
   });
 
   it('requires the JWT public key outside LOCAL_MODE', () => {
-    expect(() => loadConfig({ ...TEST_ENV_BASE, CODE_ADAPTER_LOCAL_MODE: 'false' })).toThrow(
-      /CODEAPI_JWT_PUBLIC_KEY/,
-    );
+    expect(() =>
+      loadConfig({
+        ...TEST_ENV_BASE,
+        CODE_ADAPTER_LOCAL_MODE: 'false',
+        AZURE_TABLE_CONNECTION_STRING: undefined,
+        AZURE_TABLE_ACCOUNT_NAME: 'table-test-account',
+      }),
+    ).toThrow(/CODEAPI_JWT_PUBLIC_KEY/);
   });
 
   it('refuses LOCAL_MODE in production', () => {
@@ -94,6 +149,7 @@ describe('loadConfig', () => {
     expect(config.exec.captureMaxTotalBytes).toBe(268_435_456);
     expect(config.uploadMaxBytes).toBe(134_217_728);
     expect(config.fileTtlHours).toBe(24);
+    expect(config.table.tableName).toBe('codeAdapterFiles');
     expect(config.blob.container).toBe('code-adapter-staging');
     expect(config.jwt.issuer).toBe('librechat');
     expect(config.jwt.audience).toBe('codeapi');

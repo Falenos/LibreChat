@@ -71,9 +71,9 @@ Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
    never forwarded — no identifier injection. Note the current client sends **neither**
    field unless the host enables `toolExecution.sandbox.statefulSessions`, so the default
    is one fresh sandbox per execution.
-2. **Staged inputs** — uploads land in blob (`code-adapter-staging/<sid>/<fileId>`)
-   plus a Mongo row (`code_adapter_files`, TTL 24 h) because LibreChat uploads
-   before any session exists. At exec time they are pushed into the session
+2. **Staged inputs** — uploads land in Blob (`code-adapter-staging/<sid>/<fileId>`)
+   plus three same-partition Table entities (file, hashed-filename index, Blob index)
+   because LibreChat uploads before any session exists. At exec time they are pushed into the session
    (nested paths pushed flat as `.karl_in_<n>`, moved into place by the wrapper).
 3. **The wrapper** (the key design piece) — user code is never sent raw. A
    base64-embedded subprocess wrapper tees full stdout/stderr to
@@ -85,7 +85,7 @@ Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
    raw stdout + 0/1 synthesis + `wrapper_parse_failures_total` metric.
 4. **Capture** — on rc==0 the session's files are listed and diffed: unchanged
    or read-only inputs are echoed `inherited:true`; new/changed writable files
-   are persisted to blob + Mongo under the exec session so `/download` works
+   are persisted to Blob + Table metadata under the exec session so `/download` works
    after the session cooldown destroys the sandbox.
 5. **Retries** — `SessionWithIdentifierNotFound` (cooldown expiry) → transparent
    one re-run with the same identifier + re-push (ACA allocates a fresh sandbox for a
@@ -119,11 +119,14 @@ each pool.
 ## Environment
 
 See [`.env.example`](.env.example) for the full annotated surface. Required:
-`ACA_POOL_ENDPOINT`, `MONGO_URI`, one Blob authentication route
+`ACA_POOL_ENDPOINT`, a Table workload-identity endpoint
+(`AZURE_TABLE_ACCOUNT_URL`, `AZURE_TABLE_ACCOUNT_NAME`, or the shared
+`AZURE_STORAGE_ACCOUNT_NAME`), one Blob authentication route
 (`AZURE_STORAGE_ACCOUNT_NAME`/`AZURE_STORAGE_ACCOUNT_URL` for workload identity or the legacy
 `AZURE_STORAGE_CONNECTION_STRING`), and outside `CODE_ADAPTER_LOCAL_MODE`,
 `CODEAPI_JWT_PUBLIC_KEY`. `FILE_TTL_HOURS` is the sliding retention window, bumped on every
 push/download so an active conversation keeps its files available.
+`AZURE_TABLE_CONNECTION_STRING` is local-mode-only; deployed workloads never use a Table key.
 Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MB) to Blob storage.
 `ACA_API_VERSION` is pinned deliberately — bumping it requires refreshing
 `test/fixtures/aca/` (see below).
@@ -155,12 +158,12 @@ single-source service `agentic-karl-code-adapter` in
 `Knauf-Group/agk-deployment-configs` (ClusterIP 3112, replicaCount 2, first
 workload-identity app pod on AGK). Azure resources (session pools, UAMI,
 federated credential, role assignments) come from `Knauf-Group/agk-infrastructure`
-Terraform. Blob cleanup is a container lifecycle rule (>2 days); Mongo rows are
-the source of truth and expire via TTL.
+Terraform. Table metadata is the source of truth. One lease-holding replica performs an hourly
+Blob-led pass plus bounded daily metadata reconciliation; metadata/indexes are committed deleted
+before the referenced Blob is removed.
 
 ## Follow-ups (tracked in the rollout plan)
 
-- Move blob access to workload identity and drop
-  `AZURE_STORAGE_CONNECTION_STRING` (the last secret this service holds).
+- Keep Blob access on workload identity and do not add Table keys or connection strings to pods.
 - Datadog scrape of `/metrics` (`code_adapter_exec_total`,
   `…_wrapper_parse_failures_total`, `…_entra_token_*`).

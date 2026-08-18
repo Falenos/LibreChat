@@ -36,7 +36,7 @@ export function baselineFrom(listing: AcaSessionFile[]): Map<string, string> {
 /**
  * Post-exec capture: list the session's /mnt/data and return only the files
  * this exec produced — NEW files, or files whose signature changed vs the
- * pre-exec `baseline`. Persists them to blob + Mongo so /download outlives the
+ * pre-exec `baseline`. Persists them to Blob + Table metadata so /download outlives the
  * session cooldown. Files left over from earlier execs in the same (reused)
  * sandbox are in the baseline unchanged, so they are NOT re-returned — that
  * accumulation is the bug this guards against.
@@ -144,7 +144,7 @@ export async function captureOutputs(params: {
       timedOut = true;
       break;
     } else if (result == null) {
-      // The file is really in the sandbox; we just could not persist it (ACA fetch, Mongo
+      // The file is really in the sandbox; we just could not persist it (ACA fetch, Table
       // upsert or Blob write failed). Counted so the caller can say so — dropping it
       // silently would report success with the deliverable missing.
       failed += 1;
@@ -311,7 +311,7 @@ class ByteLimitTransform extends Transform {
 
 /**
  * Stream one output file (bounded) to a unique Blob, commit that exact Blob
- * generation to Mongo, and return the
+ * generation to Table metadata, and return the
  * ExecResponseFile. Returns 'overflow' if it doesn't fit the remaining budget,
  * or null if the fetch/persist failed (logged). Listing size and Content-Length
  * are only preflight hints; the transform enforces the limit on actual bytes.
@@ -403,7 +403,10 @@ async function captureNewFile(
     };
   } catch (err) {
     if (candidateUploaded) {
-      await deps.blob.delete(candidateBlobPath).catch(() => undefined);
+      deps.logger.warn(
+        { file: name, blobPath: candidateBlobPath },
+        'retaining captured Blob after uncertain metadata commit for reaper reconciliation',
+      );
     }
     deps.logger.warn({ file: name, err: (err as Error).message }, 'output capture failed');
     return null;

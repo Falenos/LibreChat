@@ -26,7 +26,7 @@ export function checkOwnership(doc: FileDoc, auth: AuthContext): boolean {
  *      (that is the designed TTL-recovery path, so a 404 here is normal).
  * DELETE /sessions/:sid/objects/:fid — primary delete.
  * DELETE /files/:sid/:fid            — crud.js fallback alias (same handler).
- * Pure Mongo/blob operations — no ACA calls (5s/15s client timeouts).
+ * Pure Table/Blob operations — no ACA calls (5s/15s client timeouts).
  */
 export function createObjectsRouter(deps: ObjectsDeps): Router {
   const router = Router();
@@ -85,8 +85,10 @@ export function createObjectsRouter(deps: ObjectsDeps): Router {
         res.status(403).json({ error: 'forbidden' });
         return;
       }
-      await deps.blob.delete(doc.blobPath);
-      await deps.repo.delete(sessionId, fileId);
+      const committedBlobPath = await deps.repo.delete(sessionId, fileId);
+      if (committedBlobPath != null) {
+        await deps.blob.delete(committedBlobPath);
+      }
       res.status(200).json({ message: 'success' });
     })().catch(next);
   };

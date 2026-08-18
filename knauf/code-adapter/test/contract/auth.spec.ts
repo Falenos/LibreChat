@@ -36,7 +36,7 @@ describe('JWT auth (codeapi.ts mirror)', () => {
       aca: new FakeAcaClient(),
       blob: new FakeBlobStore(),
       repo: new FakeFilesRepo().asRepo(),
-      mongo: { db: { command: async () => ({ ok: 1 }) } } as never,
+      metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
   });
