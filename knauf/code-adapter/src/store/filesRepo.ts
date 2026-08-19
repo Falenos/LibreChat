@@ -455,16 +455,21 @@ export class FilesRepo {
     }
   }
 
-  private async readFile(sessionId: string, fileId: string): Promise<FileRevision | null> {
-    const entity = await this.table.get(sessionId, fileRowKey(fileId));
+  private async readFile(
+    sessionId: string,
+    fileId: string,
+    signal?: AbortSignal,
+  ): Promise<FileRevision | null> {
+    const entity = await this.table.get(sessionId, fileRowKey(fileId), signal);
     return entity == null ? null : this.fileRevision(entity);
   }
 
   private async readFilenameIndex(
     sessionId: string,
     filename: string,
+    signal?: AbortSignal,
   ): Promise<IndexRevision | null> {
-    const entity = await this.table.get(sessionId, filenameRowKey(filename));
+    const entity = await this.table.get(sessionId, filenameRowKey(filename), signal);
     if (entity == null) {
       return null;
     }
@@ -475,12 +480,15 @@ export class FilesRepo {
     return index;
   }
 
-  private async readBlobIndex(blobPath: string): Promise<IndexRevision | null> {
+  private async readBlobIndex(
+    blobPath: string,
+    signal?: AbortSignal,
+  ): Promise<IndexRevision | null> {
     const parsed = parseBlobPath(blobPath);
     if (parsed == null) {
       return null;
     }
-    const entity = await this.table.get(parsed.sessionId, blobRowKey(parsed.blobId));
+    const entity = await this.table.get(parsed.sessionId, blobRowKey(parsed.blobId), signal);
     return entity == null ? null : this.indexRevision(entity, 'blob-index');
   }
 
@@ -581,6 +589,7 @@ export class FilesRepo {
   async upsertCaptured(
     input: InsertFileInput,
     blobPath: string,
+    signal?: AbortSignal,
   ): Promise<{ doc: FileDoc; obsoleteBlobPaths: string[] }> {
     const parsedCandidate = parseBlobPath(blobPath);
     if (parsedCandidate == null || parsedCandidate.sessionId !== input.sessionId) {
@@ -589,10 +598,13 @@ export class FilesRepo {
     const obsoleteBlobPaths = new Set<string>();
 
     for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
+      signal?.throwIfAborted();
       const now = this.now();
-      const filenameIndex = await this.readFilenameIndex(input.sessionId, input.filename);
+      const filenameIndex = await this.readFilenameIndex(input.sessionId, input.filename, signal);
       const existing =
-        filenameIndex == null ? null : await this.readFile(input.sessionId, filenameIndex.fileId);
+        filenameIndex == null
+          ? null
+          : await this.readFile(input.sessionId, filenameIndex.fileId, signal);
 
       if (filenameIndex == null) {
         const fileId = randomUUID();
@@ -602,7 +614,7 @@ export class FilesRepo {
             { type: 'create', entity: serializeFileEntity(doc) },
             { type: 'create', entity: serializeFilenameIndex(doc) },
             { type: 'create', entity: serializeBlobIndex(doc) },
-          ]);
+          ], signal);
           return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
         } catch (error) {
           if (isTableConflict(error)) {
@@ -625,7 +637,7 @@ export class FilesRepo {
             },
             { type: 'create', entity: serializeFileEntity(doc) },
             { type: 'create', entity: serializeBlobIndex(doc) },
-          ]);
+          ], signal);
           return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
         } catch (error) {
           if (isTableConflict(error)) {
@@ -636,7 +648,7 @@ export class FilesRepo {
       }
 
       obsoleteBlobPaths.add(existing.doc.blobPath);
-      const oldBlobIndex = await this.readBlobIndex(existing.doc.blobPath);
+      const oldBlobIndex = await this.readBlobIndex(existing.doc.blobPath, signal);
       const fileId = this.isActive(existing.doc) ? existing.doc.fileId : randomUUID();
       const doc = this.newDoc(input, fileId, blobPath, now);
       const actions: TableMutation[] = [];
@@ -685,7 +697,7 @@ export class FilesRepo {
       }
 
       try {
-        await this.table.submitTransaction(actions);
+        await this.table.submitTransaction(actions, signal);
         return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
       } catch (error) {
         if (isTableConflict(error)) {
@@ -699,8 +711,12 @@ export class FilesRepo {
     throw new Error(`upsertCaptured exhausted ${MAX_WRITE_ATTEMPTS} conditional attempts`);
   }
 
-  async find(sessionId: string, fileId: string): Promise<FileDoc | null> {
-    const revision = await this.readFile(sessionId, fileId);
+  async find(
+    sessionId: string,
+    fileId: string,
+    signal?: AbortSignal,
+  ): Promise<FileDoc | null> {
+    const revision = await this.readFile(sessionId, fileId, signal);
     return revision != null && this.isActive(revision.doc) ? revision.doc : null;
   }
 
@@ -768,9 +784,10 @@ export class FilesRepo {
     return docs;
   }
 
-  async touch(sessionId: string, fileId: string): Promise<void> {
+  async touch(sessionId: string, fileId: string, signal?: AbortSignal): Promise<void> {
     for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
-      const existing = await this.readFile(sessionId, fileId);
+      signal?.throwIfAborted();
+      const existing = await this.readFile(sessionId, fileId, signal);
       const now = this.now();
       if (existing == null || !this.isActive(existing.doc, now)) {
         return;
@@ -787,7 +804,7 @@ export class FilesRepo {
             etag: existing.etag,
             mode: 'Merge',
           },
-        ]);
+        ], signal);
         return;
       } catch (error) {
         if (isEntityNotFound(error)) {

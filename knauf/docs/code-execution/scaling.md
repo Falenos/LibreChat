@@ -17,25 +17,24 @@ interchangeable — adding adapter pods does nothing for a saturated session poo
 
 ```mermaid
 flowchart LR
-  u["users / agent turns"] --> lc["LibreChat pods<br/>(unbounded concurrency,<br/>no exec-side timeout)"]
-  lc --> ad["code-adapter pods<br/>2 replicas, no queue,<br/>memory-bound"]
+  u["users / agent turns"] --> lc["LibreChat pods<br/>(adapter responds within<br/>one 300 s deadline)"]
+  lc --> ad["code-adapter pods<br/>4 active requests each,<br/>no queue"]
   ad --> pool["ACA session pool<br/>maxConcurrentSessions = 20<br/>cooldown = 300 s"]
   pool --> sbx["one Hyper-V sandbox<br/>per execution"]
 ```
 
-| Domain | Limit today | Bounded by | Where it lives |
-| --- | --- | --- | --- |
-| LibreChat → adapter | none | nothing — `CodeExecutor` uses `node-fetch` with no timeout | `@librechat/agents` |
-| Adapter process | none (no queue, no semaphore) | pod memory, then Node's socket pool | `knauf/code-adapter` |
-| Adapter fleet | 2 replicas × 2 Gi limit | `replicaCount` / `resources` | `agk-deployment-configs` values |
-| **ACA session pool** | **20 concurrent sessions** | `maxConcurrentSessions` | `agk-infrastructure` Terraform |
-| One sandbox | 1 exec, ~220 s, no network | ACA platform | Microsoft |
+| Domain               | Limit today                                                    | Bounded by                                                  | Where it lives                 |
+| -------------------- | -------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------ |
+| LibreChat → adapter  | adapter total deadline 300 s; sandbox read/write helper 350 s  | `EXEC_TOTAL_TIMEOUT_MS`, `CODE_EXEC_HELPER_TIMEOUT_MS`      | adapter + `process.js`         |
+| Adapter process      | 4 active requests and 512 MiB aggregate staged input; no queue | `EXEC_MAX_ACTIVE_REQUESTS`, `EXEC_MAX_INFLIGHT_INPUT_BYTES` | `knauf/code-adapter`           |
+| Adapter fleet        | 2 replicas × 4 admitted requests × 2 Gi limit                  | `replicaCount` / admission / `resources`                    | adapter + GitOps values        |
+| **ACA session pool** | **20 concurrent sessions**                                     | `maxConcurrentSessions`                                     | `agk-infrastructure` Terraform |
+| One sandbox          | 1 exec, ~220 s, no network                                     | ACA platform                                                | Microsoft                      |
 
-**The pool is the binding constraint**, and it is the only one that is not elastic. Everything
-above it will happily accept more work than the pool can take; the adapter turns the resulting
-429 into a friendly "The sandbox is at capacity. Try again shortly." (`code: 1`, HTTP 200), so
-saturation degrades into a retry prompt rather than an error — but it is still a stall the user
-sees.
+The first binding constraint depends on traffic shape. Per-process admission intentionally rejects
+before Node memory or sockets are exhausted; the ACA pool remains the environment-wide ceiling.
+Adapter admission returns HTTP 429 with no queue. ACA saturation remains a friendly HTTP 200
+`code:1` response so the model can retry later.
 
 ---
 
@@ -45,75 +44,58 @@ This is the part that surprises people, and it follows directly from the
 **fresh-sandbox-per-exec** model described in [how-it-works.md](how-it-works.md) (§ "Sessions and
 sandboxes").
 
-Every `/exec` mints a brand-new identifier (`karl-<32 hex>`), so every `/exec` **allocates a new
-session**. A session is released when it has been idle for `cooldownPeriodInSeconds` — 300 s,
-which is the platform minimum and cannot be lowered.
+Every stateless `/exec` mints a brand-new identifier (`karl-<32 hex>`), so it allocates a new
+session. After output recovery and generated-file capture, the adapter calls the ACA session
+DELETE endpoint. A successful delete returns the slot promptly; only a failed or unauthorized
+delete leaves the session allocated through the 300-second cooldown.
 
 So one execution occupies a pool slot for:
 
 ```
-slot time  =  execution time  +  cooldown (300 s)
+normal slot time   = input push + execution + capture + explicit delete
+failed-delete time = the same work + cooldown tail (up to 300 s)
 ```
 
-An execution that finishes in 4 seconds still holds its slot for roughly 5 minutes.
-
-### Sustained throughput
-
-```
-sustained executions/min  ≈  maxConcurrentSessions × 60 / (exec_time + 300)
-                          ≈  20 × 60 / 304
-                          ≈  4 executions per minute, pool-wide
-```
-
-Four per minute is **across every user of the environment**, not per user. A single analysis
-turn commonly costs 3–6 executions (`ls`, inspect, compute, plot, write), so in dev roughly
-**one data-analysis conversation per minute** saturates the pool.
-
-Burst behaviour is better than sustained: 20 executions can start simultaneously. It is the
-recovery that is slow — the pool is empty again only ~5 minutes after the burst.
+The former four-executions-per-minute model assumed every session waited through cooldown and is
+no longer the normal-path model. Throughput must now be measured with deletion success/failure
+split out. The stage proof must show DELETE permission, `code_adapter_session_deletion_total`,
+and Azure pool recovery after both successful and deliberately failed cleanup.
 
 ### How many users is that?
 
 The number people actually want. It follows from one step that is easy to miss: **executions
-within a turn are sequential, but their slots are not.** Each `/exec` mints a *new* identifier,
+within a turn are sequential, but their slots are not.** Each `/exec` mints a _new_ identifier,
 so step 2 allocates a second session while step 1's is still cooling. A user five steps into an
 analysis is holding **five slots at once** — one running, four idle-but-not-yet-released.
 
 ```
-slots held by one user mid-analysis  ≈  executions in the turn        (3–6)
-concurrent analyses the pool supports ≈  maxConcurrentSessions / that (20 / ~5)
+slots held by one user mid-analysis ≈ concurrently running executions
+cooling slots after completion      ≈ executions whose explicit deletion failed
 ```
 
-| Pool | Illustrative concurrent analyses | Illustrative analysis turns / hour | Illustrative executions / hour |
-| --- | --- | --- | --- |
-| **20** (dev, stage — today) | **~4** | ~47 | ~236 |
+Do not convert the configured pool size into a supported-user count without measured peak arrival
+rates, executions per analysis, execution/capture duration, and deletion success.
 
-"Concurrent" means *inside the same ~5-minute window*: a completed analysis can retain its slots
-through the cooldown. The row is an arithmetic illustration using the assumptions below, not an
-observed service level. Do not convert it into a supported-user count without measured peak
-arrival rates, executions per analysis, execution duration, and observed release behavior.
+**The remaining assumptions must be replaced with measurements:**
 
-**Two assumptions carry all of this, and both are cheap to replace with measurements:**
-
-- *executions per analysis turn = 3–6* — estimated from the workflow the skills prescribe
+- _executions per analysis turn = 3–6_ — estimated from the workflow the skills prescribe
   (`ls` → inspect → compute → plot → write), not measured. The adapter's `exec completed` log
   line has everything needed to count it for real.
-- *a cooling session still occupies a slot* — follows from the documented ACA semantics, and is
-  what the validation below actually tests. If ACA releases slots earlier than the cooldown,
-  every number in these tables improves, in some cases by a lot.
+- _successful DELETE promptly returns pool capacity_ — the API contract is implemented, but the
+  exact stage identity permission and observed recovery time still require a live proof.
 
 **The lever that changes the shape, not just the size:** session reuse (§2, option 2) can make a
-whole *conversation* cost one slot instead of one per execution. It remains disabled because it
+whole _conversation_ cost one slot instead of one per execution. It remains disabled because it
 changes privacy/lifecycle behavior and hint-derived sessions are not yet treated as reused during
 output capture; see §5.
 
 > **Validate this before UAT.** The slot-accounting above follows from the documented ACA
-> semantics (`maxConcurrentSessions` counts *allocated* sessions; `cooldownPeriodInSeconds` is
+> semantics (`maxConcurrentSessions` counts _allocated_ sessions; `cooldownPeriodInSeconds` is
 > the idle timeout before termination), but we have not measured it on the AGK pools. The test
 > is cheap:
 >
 > ```bash
-> # 25 trivial execs as fast as the adapter will take them
+> # 25 trivial execs as fast as the adapter will admit them
 > for i in $(seq 1 25); do
 >   curl -s -XPOST "$ADAPTER/v1/exec" -H 'Content-Type: application/json' \
 >     -H "Authorization: Bearer $JWT" \
@@ -121,8 +103,8 @@ output capture; see §5.
 > done; wait
 > ```
 >
-> Record the success/capacity counts and recovery time. The configured limit suggests a possible
-> result; it does not prove the service behavior in advance.
+> Record adapter 429s, ACA capacity responses, deletion outcomes, and pool recovery time. The
+> configured limits do not prove service behavior in advance.
 
 ### The three ways to buy more throughput
 
@@ -134,38 +116,38 @@ output capture; see §5.
    identifier from it. One conversation then costs **one** slot instead of one per execution,
    which may materially improve throughput. It is a product/privacy decision, not a tuning
    change (see the trade-offs in how-it-works.md).
-3. **Release the slot early.** If the dynamic-sessions data plane exposes a session-terminate
-   call at our pinned api-version, calling it after capture would return the slot in seconds
-   instead of 300, which is worth up to ~75× on sustained throughput. **Unverified** — nobody has
-   checked. Worth 30 minutes with the API reference before anyone raises the session cap.
+3. **Keep explicit deletion healthy.** It is implemented for adapter-minted stateless sessions
+   after capture. Verify the stage identity can call it and alert on deletion failures; raising
+   pool size while cleanup is unauthorized only hides the lifecycle defect.
 
 ---
 
 ## 3. Memory is the adapter's real limit, not CPU
 
 The adapter is I/O-bound — it spends nearly all of an execution awaiting ACA — so CPU is
-rarely the first limit. **Bytes in flight are not.** Input push still buffers whole files:
+rarely the first limit. **Bytes in flight are not.** Input push and output capture are streamed, and admission bounds the
+aggregate metadata-backed input bytes accepted by each process:
 
-| Path | Peak buffer | Source |
-| --- | --- | --- |
-| Input push | the whole file, one at a time (pushes are deliberately sequential) | `blob.getBuffer()` → `aca.pushFile()` |
-| Output capture | bounded streaming buffers (roughly 8 MiB per upload plus SDK overhead) | ACA stream → byte-limit transform → `blob.put()` |
+| Path           | Peak buffer                                                                    | Source                                           |
+| -------------- | ------------------------------------------------------------------------------ | ------------------------------------------------ |
+| Input push     | streaming SDK buffers; one file at a time (pushes are deliberately sequential) | `blob.getStream()` → `aca.pushFile()`            |
+| Output capture | bounded streaming buffers (roughly 8 MiB per upload plus SDK overhead)         | ACA stream → byte-limit transform → `blob.put()` |
 
 Defaults: `UPLOAD_MAX_BYTES` 128 MB, `CAPTURE_MAX_TOTAL_BYTES` 256 MB per execution,
 `CAPTURE_MAX_FILES` 20.
 
-So a *single* execution can still hold a large staged input in memory, and the adapter runs
-**N of those concurrently with no queue**. Conservative sizing rule:
+The adapter admits at most four active executions and 512 MiB of aggregate staged input metadata
+per process by default. There is no waiting queue. Conservative sizing rule:
 
 ```
-pod memory limit  ≥  (largest staged input)  ×  (concurrent input pushes)  +  runtime/SDK headroom
+pod memory limit ≥ concurrent SDK stream buffers + runtime/SDK headroom
 ```
 
 - **1 Gi request / 2 Gi limit**, 2 replicas — as deployed.
 - **`CAPTURE_MAX_TOTAL_BYTES: 67108864`** (64 MB) bounds generated bytes and Blob spend but no
   longer implies a same-sized process buffer.
-- The remaining durable memory improvement is streaming staged inputs from Blob to ACA. Until
-  then, load evidence must cover concurrent large-input pushes before production activation.
+- Stage load evidence still has to cover concurrent maximum-size streams before production
+  activation; metadata admission bounds logical bytes, while SDK buffering determines heap use.
 
 An OOM kill is not graceful: in-flight executions die with a socket error, and the user sees
 "Execution error". Watch `container_memory_working_set_bytes` against the limit before raising
@@ -175,28 +157,25 @@ An OOM kill is not graceful: in-flight executions die with a socket error, and t
 
 ## 4. Latency budgets — the four timeouts that must stay ordered
 
-| Hop | Budget | Set in |
-| --- | --- | --- |
-| Sandbox execution (platform) | ~220 s | ACA |
-| Adapter → ACA (`ACA_EXEC_TIMEOUT_MS`) | 230 s | adapter env |
-| Adapter → ACA file ops (`ACA_FILE_OP_TIMEOUT_MS`) | 30 s | adapter env |
-| LibreChat → adapter, `/exec` from the model | unbounded | `@librechat/agents` |
-| LibreChat → adapter, `readSandboxFile` / `writeSandboxFile` | **15 s** | `process.js` |
-| LibreChat → adapter, `/upload`, `/upload/batch` | 120 s | `crud.js` |
-| LibreChat → adapter, `/download` | 15 s | `crud.js`, `process.js` |
-| LibreChat → adapter, object freshness probe | 5 s | `process.js` |
+| Hop                                                         | Budget                           | Set in                                        |
+| ----------------------------------------------------------- | -------------------------------- | --------------------------------------------- |
+| Sandbox execution (platform)                                | ~220 s                           | ACA                                           |
+| Adapter → ACA (`ACA_EXEC_TIMEOUT_MS`)                       | 230 s                            | adapter env                                   |
+| Adapter → ACA file ops (`ACA_FILE_OP_TIMEOUT_MS`)           | 30 s                             | adapter env                                   |
+| Whole adapter request (`EXEC_TOTAL_TIMEOUT_MS`)             | 300 s                            | adapter env                                   |
+| Stateless session deletion                                  | 10 s, independent cleanup budget | adapter env                                   |
+| LibreChat → adapter, `readSandboxFile` / `writeSandboxFile` | 350 s                            | `CODE_EXEC_HELPER_TIMEOUT_MS` in `process.js` |
+| LibreChat → adapter, `/upload`, `/upload/batch`             | 120 s                            | `crud.js`                                     |
+| LibreChat → adapter, `/download`                            | 15 s                             | `crud.js`, `process.js`                       |
+| LibreChat → adapter, object freshness probe                 | 5 s                              | `process.js`                                  |
 
 Two consequences worth knowing:
 
-- **`read_file` has a 15-second budget but runs a full `/exec`.** Because every exec is a fresh
-  sandbox, the adapter must re-push the referenced inputs first — sequentially. A `read_file`
-  against a conversation carrying 100 MB of attachments will blow the 15 s client budget while
-  the adapter is still pushing; LibreChat gives up and the model is told the read failed, even
-  though the sandbox is fine. Keep an eye on `push_count` and `total_ms` in the adapter's
-  `exec completed` log line.
-- **A slow execution ties up a LibreChat request too**, for up to 230 s, because nothing on that
-  side times out. Node handles that fine (it's an idle socket), but it does count against
-  `CONCURRENT_MESSAGE_MAX` and against any ingress read timeout in front of LibreChat.
+- **The adapter owns the terminal deadline.** A timeout aborts ACA, Blob, Table, stream, retry,
+  and capture work and returns a model-actionable failure where the contract permits.
+- **The helper timeout is intentionally outside the adapter deadline.** Its 350-second budget
+  allows the 300-second request plus bounded cleanup and transport slack without becoming
+  unbounded.
 
 ---
 
@@ -220,15 +199,20 @@ an explicit product/security decision.
 
 The adapter exposes Prometheus metrics on `/metrics` (unauthenticated, ClusterIP-only).
 
-| Signal | Metric | What it tells you |
-| --- | --- | --- |
-| Saturation | `code_adapter_exec_total{outcome="capacity"}` | Pool is full — raise `maxConcurrentSessions` or enable reuse |
-| **Executions per turn** | `code_adapter_exec_total` ÷ distinct conversations | The assumption the §2 user math rests on. Measure it in UAT and replace the 3–6 estimate |
-| Timeouts | `code_adapter_exec_total{outcome="timeout"}` | Work exceeding ~220 s — a prompt/skill problem more often than a capacity one |
-| Lost sandboxes | `code_adapter_exec_total{outcome="session_lost"}` | Retry-once exhausted; correlate with pool restarts |
-| Latency | `code_adapter_exec_duration_seconds` | Success path only — failures are counted but not observed |
-| Contract drift | `code_adapter_wrapper_parse_failures_total` | The sentinel wrapper stopped parsing; exit codes are being synthesized |
-| Volume | `code_adapter_upload_bytes_total` | Staging growth; pairs with the 24 h sliding TTL |
+| Signal                  | Metric                                                                         | What it tells you                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Saturation              | `code_adapter_exec_total{outcome="capacity"}`                                  | Pool is full — raise `maxConcurrentSessions` or enable reuse                             |
+| Adapter admission       | `code_adapter_admission_rejected_total{reason}`                                | Per-process active-request or aggregate-input guard rejected before execution            |
+| Active load             | `code_adapter_admission_active_requests`, `code_adapter_admission_input_bytes` | Current process admission occupancy                                                      |
+| Session cleanup         | `code_adapter_session_deletion_total{outcome}`                                 | Whether stateless sessions are returning pool capacity explicitly                        |
+| Dependency health       | `code_adapter_dependency_ready{dependency}`                                    | Cached Table/Blob/identity/ACA readiness                                                 |
+| Canary freshness        | `code_adapter_canary_last_success_timestamp_seconds`                           | Last complete fixed-code/output/file lifecycle proof                                     |
+| **Executions per turn** | `code_adapter_exec_total` ÷ distinct conversations                             | The assumption the §2 user math rests on. Measure it in UAT and replace the 3–6 estimate |
+| Timeouts                | `code_adapter_exec_total{outcome="timeout"}`                                   | Work exceeding ~220 s — a prompt/skill problem more often than a capacity one            |
+| Lost sandboxes          | `code_adapter_exec_total{outcome="session_lost"}`                              | Retry-once exhausted; correlate with pool restarts                                       |
+| Latency                 | `code_adapter_exec_duration_seconds`                                           | Success path only — failures are counted but not observed                                |
+| Contract drift          | `code_adapter_wrapper_parse_failures_total`                                    | The sentinel wrapper stopped parsing; exit codes are being synthesized                   |
+| Volume                  | `code_adapter_upload_bytes_total`                                              | Staging growth; pairs with the 24 h sliding TTL                                          |
 
 `code_adapter_aca_request_duration_seconds{op}` (per-op: execute/pushFile/listFiles/
 fetchFileStream/fetchFileContent) and `code_adapter_truncation_recoveries_total` were previously
@@ -245,15 +229,16 @@ authoritative saturation signal), adapter pod memory against limit (§3), and
 
 ## 7. Knob reference
 
-| Symptom | Turn this | Where |
-| --- | --- | --- |
-| "The sandbox is at capacity" | Review `maxConcurrentSessions` using measured demand; do not assume a target | `agk-infrastructure`, `code-adapter-<env>.tf` |
-| Capacity pressure at the same user load | enable `statefulSessions` (after §5) | `librechat.yaml` |
-| Adapter OOM-kills | `resources.limits.memory` ↑ **and** `CAPTURE_MAX_TOTAL_BYTES` ↓ | `agk-deployment-configs` values |
-| Adapter CPU-bound (unexpected) | `replicaCount` | `agk-deployment-configs` values |
-| Long analyses truncated at ~220 s | nothing to turn — it is a platform cap; the skills already tell the model to split work and persist to `/mnt/data` | — |
-| Files expiring mid-conversation | `FILE_TTL_HOURS` (24, sliding — bumped on every push/download) | adapter env |
-| Too many generated files dropped | `CAPTURE_MAX_FILES` (20) | adapter env |
+| Symptom                                 | Turn this                                                                                                          | Where                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| "The sandbox is at capacity"            | Review `maxConcurrentSessions` using measured demand; do not assume a target                                       | `agk-infrastructure`, `code-adapter-<env>.tf` |
+| Capacity pressure at the same user load | enable `statefulSessions` (after §5)                                                                               | `librechat.yaml`                              |
+| Adapter 429s                            | Review `EXEC_MAX_ACTIVE_REQUESTS` and `EXEC_MAX_INFLIGHT_INPUT_BYTES` against measured memory/latency              | adapter env + GitOps                          |
+| Adapter OOM-kills                       | Keep admission conservative; review `resources.limits.memory` and stream evidence                                  | adapter env + GitOps                          |
+| Adapter CPU-bound (unexpected)          | `replicaCount`                                                                                                     | `agk-deployment-configs` values               |
+| Long analyses truncated at ~220 s       | nothing to turn — it is a platform cap; the skills already tell the model to split work and persist to `/mnt/data` | —                                             |
+| Files expiring mid-conversation         | `FILE_TTL_HOURS` (24, sliding — bumped on every push/download)                                                     | adapter env                                   |
+| Too many generated files dropped        | `CAPTURE_MAX_FILES` (20)                                                                                           | adapter env                                   |
 
 Two knobs that look like scaling knobs and are not: `cooldownPeriodInSeconds` is already at the
 platform minimum, and adapter `replicaCount` buys nothing while the pool is the constraint —
@@ -268,9 +253,9 @@ Production already has a separately owned pool configured at 20 sessions. Before
 1. Measure real executions-per-conversation in dev UAT (the `exec completed` log line has
    everything needed).
 2. Decide on session reuse — it changes the required pool size by 3–6×.
-3. Size `maxConcurrentSessions` for peak-hour concurrency **plus the 300 s cooldown tail**, not
-   for average load. Keep 20 unless measured evidence justifies a reviewed change; there is no
-   established 50-session requirement.
+3. Size `maxConcurrentSessions` for peak-hour concurrency plus the measured failed-delete
+   cooldown tail, not for average load. Keep 20 unless measured evidence justifies a reviewed
+   change; there is no established 50-session requirement.
 4. Measure concurrent large-input pushes against the adapter memory limit (§3).
 
 Sizing shortcut, once step 1 has a real number for executions-per-turn (`E`):

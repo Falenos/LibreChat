@@ -13,7 +13,7 @@ import type { Logger } from '../logger.js';
  * path: invalidate() on a pool 401/403, then the caller retries once.
  */
 export interface TokenProvider {
-  getToken(): Promise<string>;
+  getToken(signal?: AbortSignal): Promise<string>;
   invalidate(): void;
 }
 
@@ -22,16 +22,39 @@ interface CachedToken {
   expiresOnMs: number;
 }
 
+interface InflightToken {
+  controller: AbortController;
+  promise: Promise<CachedToken>;
+  waiters: number;
+  settled: boolean;
+}
+
+function waitForToken(promise: Promise<CachedToken>, signal?: AbortSignal): Promise<CachedToken> {
+  signal?.throwIfAborted();
+  if (signal == null) {
+    return promise;
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
+  });
+}
+
 export function createTokenProvider(
   config: Config,
   logger: Logger,
   credential: TokenCredential = new DefaultAzureCredential(),
 ): TokenProvider {
   let cached: CachedToken | null = null;
-  let inflight: Promise<CachedToken> | null = null;
+  let inflight: InflightToken | null = null;
 
-  const refresh = async (): Promise<CachedToken> => {
-    const result = await credential.getToken(config.aca.tokenScope);
+  const refresh = async (signal: AbortSignal): Promise<CachedToken> => {
+    const result = await credential.getToken(config.aca.tokenScope, { abortSignal: signal });
     if (result == null) {
       throw new Error('Failed to acquire Entra token for dynamic sessions');
     }
@@ -43,19 +66,43 @@ export function createTokenProvider(
   };
 
   return {
-    async getToken() {
+    async getToken(signal) {
+      signal?.throwIfAborted();
       const now = Date.now();
       const skewMs = config.aca.tokenRefreshSkewS * 1000;
       if (cached != null && now < cached.expiresOnMs - skewMs) {
         return cached.token;
       }
       if (inflight == null) {
-        inflight = refresh().finally(() => {
-          inflight = null;
-        });
+        const entry: InflightToken = {
+          controller: new AbortController(),
+          promise: Promise.resolve({ token: '', expiresOnMs: 0 }),
+          waiters: 0,
+          settled: false,
+        };
+        entry.promise = refresh(entry.controller.signal)
+          .then((token) => {
+            cached = token;
+            return token;
+          })
+          .finally(() => {
+            entry.settled = true;
+            if (inflight === entry) {
+              inflight = null;
+            }
+          });
+        inflight = entry;
       }
-      cached = await inflight;
-      return cached.token;
+      const entry = inflight;
+      entry.waiters += 1;
+      try {
+        return (await waitForToken(entry.promise, signal)).token;
+      } finally {
+        entry.waiters -= 1;
+        if (!entry.settled && entry.waiters === 0) {
+          entry.controller.abort();
+        }
+      }
     },
 
     invalidate() {

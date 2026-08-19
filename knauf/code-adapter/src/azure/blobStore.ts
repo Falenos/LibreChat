@@ -24,13 +24,21 @@ const STREAM_UPLOAD_CONCURRENCY = 2;
  * landed, but it cannot be the primary mechanism.
  */
 export interface BlobStore {
-  put(blobPath: string, data: Buffer | Readable, contentType: string, size?: number): Promise<void>;
-  head(blobPath: string): Promise<{ contentLength: number } | null>;
+  put(
+    blobPath: string,
+    data: Buffer | Readable,
+    contentType: string,
+    size?: number,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  head(blobPath: string, signal?: AbortSignal): Promise<{ contentLength: number } | null>;
   getStream(
     blobPath: string,
-  ): Promise<{ stream: NodeJS.ReadableStream; contentLength?: number | undefined }>;
+    signal?: AbortSignal,
+  ): Promise<{ stream: Readable; contentLength?: number | undefined }>;
   getBuffer(blobPath: string): Promise<Buffer>;
-  delete(blobPath: string): Promise<void>;
+  delete(blobPath: string, signal?: AbortSignal): Promise<void>;
+  checkReadiness(signal?: AbortSignal): Promise<void>;
   /** Every staged blob with its creation time, for the reaper. */
   list(): AsyncIterable<{ name: string; createdOn?: Date | undefined }>;
 }
@@ -85,9 +93,12 @@ export async function createBlobStore(
   }
 
   return {
-    async put(blobPath, data, contentType, size) {
+    async put(blobPath, data, contentType, size, signal) {
       const client = container.getBlockBlobClient(blobPath);
-      const options = { blobHTTPHeaders: { blobContentType: contentType } };
+      const options = {
+        blobHTTPHeaders: { blobContentType: contentType },
+        ...(signal != null ? { abortSignal: signal } : {}),
+      };
       if (Buffer.isBuffer(data)) {
         await client.uploadData(data, options);
       } else {
@@ -102,10 +113,12 @@ export async function createBlobStore(
       }
     },
 
-    async head(blobPath) {
+    async head(blobPath, signal) {
       const client = container.getBlockBlobClient(blobPath);
       try {
-        const properties = await client.getProperties();
+        const properties = await client.getProperties(
+          signal != null ? { abortSignal: signal } : {},
+        );
         if (properties.contentLength == null) {
           throw new Error(`blob ${blobPath} has no content length`);
         }
@@ -123,14 +136,18 @@ export async function createBlobStore(
       }
     },
 
-    async getStream(blobPath) {
+    async getStream(blobPath, signal) {
       const client = container.getBlockBlobClient(blobPath);
-      const response = await client.download();
+      const response = await client.download(
+        0,
+        undefined,
+        signal != null ? { abortSignal: signal } : {},
+      );
       if (response.readableStreamBody == null) {
         throw new Error(`blob ${blobPath} has no readable body`);
       }
       return {
-        stream: response.readableStreamBody,
+        stream: response.readableStreamBody as Readable,
         contentLength: response.contentLength,
       };
     },
@@ -140,9 +157,13 @@ export async function createBlobStore(
       return client.downloadToBuffer();
     },
 
-    async delete(blobPath) {
+    async delete(blobPath, signal) {
       const client = container.getBlockBlobClient(blobPath);
-      await client.deleteIfExists();
+      await client.deleteIfExists(signal != null ? { abortSignal: signal } : {});
+    },
+
+    async checkReadiness(signal) {
+      await container.getProperties(signal != null ? { abortSignal: signal } : {});
     },
 
     list() {

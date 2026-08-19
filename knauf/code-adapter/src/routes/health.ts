@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 /**
- * /healthz (liveness) and /readyz (readiness: exact filtered Table query). Unprefixed
+ * /healthz (liveness) and /readyz (cached Table/Blob/identity/ACA checks). Unprefixed
  * and unauthenticated — k8s probes only; LibreChat's verifyToolAuth
  * never probes the backend, so these buy nothing on the LibreChat side.
  */

@@ -138,6 +138,8 @@ export class FakeBlobStore implements BlobStore {
     this.blobs.delete(blobPath);
   }
 
+  async checkReadiness(): Promise<void> {}
+
   /** Creation times, for the reaper. Absent unless a test sets one. */
   createdOn = new Map<string, Date>();
 
@@ -154,7 +156,11 @@ export class FakeBlobStore implements BlobStore {
 
 /** Programmable ACA client (single code-interpreter pool). */
 export class FakeAcaClient implements AcaClient {
-  executeImpl: (identifier: string, code: string) => Promise<AcaExecOutcome> = async () => ({
+  executeImpl: (
+    identifier: string,
+    code: string,
+    signal?: AbortSignal,
+  ) => Promise<AcaExecOutcome> = async () => ({
     succeeded: true,
     stdout: '',
     stderr: '',
@@ -162,26 +168,44 @@ export class FakeAcaClient implements AcaClient {
   });
   pushed: { identifier: string; name: string; data: Buffer }[] = [];
   sessionFiles: AcaSessionFile[] = [];
+  listFilesImpl: () => Promise<AcaSessionFile[]> = async () => this.sessionFiles;
   fileContents = new Map<string, Buffer>();
   /** Peak number of pushFile calls in flight at once (ACA uploads must not overlap). */
   maxConcurrentPushes = 0;
+  deletedSessions: string[] = [];
+  deleteSessionImpl: (identifier: string) => Promise<void> = async (identifier) => {
+    this.deletedSessions.push(identifier);
+  };
   private activePushes = 0;
 
-  async execute(identifier: string, code: string): Promise<AcaExecOutcome> {
-    return this.executeImpl(identifier, code);
+  async execute(
+    identifier: string,
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<AcaExecOutcome> {
+    return this.executeImpl(identifier, code, signal);
   }
 
-  async pushFile(identifier: string, name: string, data: Buffer): Promise<void> {
+  async pushFile(
+    identifier: string,
+    name: string,
+    data: Readable,
+    _size: number,
+  ): Promise<void> {
     this.activePushes += 1;
     this.maxConcurrentPushes = Math.max(this.maxConcurrentPushes, this.activePushes);
     // Yield so any overlapping caller is observed before this one resolves.
     await new Promise((r) => setImmediate(r));
-    this.pushed.push({ identifier, name, data });
+    const chunks: Buffer[] = [];
+    for await (const chunk of data) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    }
+    this.pushed.push({ identifier, name, data: Buffer.concat(chunks) });
     this.activePushes -= 1;
   }
 
   async listFiles(): Promise<AcaSessionFile[]> {
-    return this.sessionFiles;
+    return this.listFilesImpl();
   }
 
   async fetchFileContent(_identifier: string, name: string): Promise<Buffer> {
@@ -196,6 +220,12 @@ export class FakeAcaClient implements AcaClient {
     const content = await this.fetchFileContent(identifier, name);
     return { stream: Readable.from(content), contentLength: content.length };
   }
+
+  async deleteSession(identifier: string): Promise<void> {
+    await this.deleteSessionImpl(identifier);
+  }
+
+  async checkReadiness(): Promise<void> {}
 }
 
 /** Mint a JWT shaped exactly like packages/api/src/auth/codeapi.ts. */

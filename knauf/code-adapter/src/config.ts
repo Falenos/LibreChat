@@ -37,10 +37,12 @@ export interface Config {
     // lang=bash route here (see exec/wrapper.ts). KK20-108, verified Aug 2026.
     poolEndpoint: string;
     apiVersion: string;
+    sessionApiVersion: string;
     tokenScope: string;
     tokenRefreshSkewS: number;
     execTimeoutMs: number;
     fileOpTimeoutMs: number;
+    sessionDeleteTimeoutMs: number;
   };
 
   exec: {
@@ -60,6 +62,12 @@ export interface Config {
      * Stopping early and saying so beats delivering nothing.
      */
     captureMaxTotalMs: number;
+    inputMaxFiles: number;
+    inputMaxFileBytes: number;
+    inputMaxTotalBytes: number;
+    maxActiveRequests: number;
+    maxInflightInputBytes: number;
+    totalTimeoutMs: number;
   };
 
   uploadMaxBytes: number;
@@ -101,6 +109,8 @@ export interface Config {
   reconciliationMaxMs: number;
   cleanupEnabled: boolean;
   metricsEnabled: boolean;
+  readinessCacheMs: number;
+  readinessTimeoutMs: number;
 }
 
 function normalizePem(value: string): string {
@@ -238,10 +248,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     aca: {
       poolEndpoint: required('ACA_POOL_ENDPOINT').replace(/\/+$/, ''),
       apiVersion: str('ACA_API_VERSION') ?? '2024-02-02-preview',
+      sessionApiVersion: str('ACA_SESSION_API_VERSION') ?? '2025-02-02-preview',
       tokenScope: str('ACA_TOKEN_SCOPE') ?? 'https://dynamicsessions.io/.default',
       tokenRefreshSkewS: int('ACA_TOKEN_REFRESH_SKEW_S', 300),
       execTimeoutMs: int('ACA_EXEC_TIMEOUT_MS', 230_000),
       fileOpTimeoutMs: int('ACA_FILE_OP_TIMEOUT_MS', 30_000),
+      sessionDeleteTimeoutMs: int('ACA_SESSION_DELETE_TIMEOUT_MS', 10_000),
     },
     exec: {
       wrapper: str('EXEC_WRAPPER') === 'off' ? 'off' : 'full',
@@ -253,6 +265,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       // Sized against the response budget, not against the file caps: execTimeoutMs
       // (230s) + this must stay comfortably under `server.requestTimeout` (index.ts).
       captureMaxTotalMs: int('CAPTURE_MAX_TOTAL_MS', 60_000),
+      inputMaxFiles: int('EXEC_INPUT_MAX_FILES', 20),
+      inputMaxFileBytes: int('EXEC_INPUT_MAX_FILE_BYTES', 134_217_728),
+      inputMaxTotalBytes: int('EXEC_INPUT_MAX_TOTAL_BYTES', 268_435_456),
+      maxActiveRequests: int('EXEC_MAX_ACTIVE_REQUESTS', 4),
+      maxInflightInputBytes: int('EXEC_MAX_INFLIGHT_INPUT_BYTES', 536_870_912),
+      totalTimeoutMs: int('EXEC_TOTAL_TIMEOUT_MS', 300_000),
     },
     uploadMaxBytes: int('UPLOAD_MAX_BYTES', 134_217_728),
     table: {
@@ -275,6 +293,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reconciliationMaxMs: int('RECONCILIATION_MAX_MS', 30_000),
     cleanupEnabled: bool('CLEANUP_ENABLED', true),
     metricsEnabled: bool('METRICS_ENABLED', true),
+    readinessCacheMs: int('READINESS_CACHE_MS', 30_000),
+    readinessTimeoutMs: int('READINESS_TIMEOUT_MS', 10_000),
   };
 
   if (!/^[A-Za-z][A-Za-z0-9]{2,62}$/.test(config.table.tableName)) {

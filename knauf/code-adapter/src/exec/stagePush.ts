@@ -5,6 +5,7 @@ import type { FileDoc, FilesRepo } from '../store/filesRepo.js';
 import type { AcaClient } from '../azure/acaClient.js';
 import type { MoveInstruction } from './wrapper.js';
 import type { Logger } from '../logger.js';
+import type { Config } from '../config.js';
 
 /**
  * Resolve /exec file refs against the staging store and push them into
@@ -42,6 +43,7 @@ export async function resolveInputs(
   refs: ExecFileRef[],
   auth: AuthContext,
   repo: FilesRepo,
+  signal?: AbortSignal,
 ): Promise<ResolvedInput[]> {
   const resolved: ResolvedInput[] = [];
   let flatIndex = 0;
@@ -50,7 +52,8 @@ export async function resolveInputs(
     if (storageSid == null || ref.id == null) {
       throw new StagedFileMissingError(ref.name ?? 'unknown');
     }
-    const doc = await repo.find(storageSid, ref.id);
+    signal?.throwIfAborted();
+    const doc = await repo.find(storageSid, ref.id, signal);
     if (doc == null) {
       throw new StagedFileMissingError(ref.name ?? ref.id);
     }
@@ -89,14 +92,52 @@ export async function pushInputs(
   inputs: ResolvedInput[],
   sessionId: string,
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger },
+  signal?: AbortSignal,
 ): Promise<void> {
   for (const input of inputs) {
-    const data = await deps.blob.getBuffer(input.doc.blobPath);
-    await deps.aca.pushFile(sessionId, input.pushedAs, data, input.doc.contentType);
-    await deps.repo.touch(input.doc.sessionId, input.doc.fileId);
+    signal?.throwIfAborted();
+    const source = await deps.blob.getStream(input.doc.blobPath, signal);
+    if (source.contentLength != null && source.contentLength !== input.doc.size) {
+      source.stream.destroy();
+      throw new Error(`staged file size changed after metadata commit: ${input.finalName}`);
+    }
+    try {
+      await deps.aca.pushFile(
+        sessionId,
+        input.pushedAs,
+        source.stream,
+        input.doc.size,
+        input.doc.contentType,
+        signal,
+      );
+    } catch (error) {
+      source.stream.destroy();
+      throw error;
+    }
+    await deps.repo.touch(input.doc.sessionId, input.doc.fileId, signal);
     deps.logger.debug(
-      { sessionId, file: input.finalName, bytes: data.length },
+      { sessionId, file: input.finalName, bytes: input.doc.size },
       'staged file pushed to session',
     );
   }
+}
+
+export function validateInputBudgets(
+  inputs: ResolvedInput[],
+  config: Config['exec'],
+): number {
+  if (inputs.length > config.inputMaxFiles) {
+    throw new ValidationError(`too many input files (maximum ${config.inputMaxFiles})`, 413);
+  }
+  let total = 0;
+  for (const input of inputs) {
+    if (input.doc.size > config.inputMaxFileBytes) {
+      throw new ValidationError(`input file '${input.finalName}' exceeds the maximum size`, 413);
+    }
+    total += input.doc.size;
+    if (total > config.inputMaxTotalBytes) {
+      throw new ValidationError('aggregate input size exceeds the maximum', 413);
+    }
+  }
+  return total;
 }

@@ -2,27 +2,22 @@ name: Build code-adapter image
 
 # Builds the Knauf code-adapter (knauf/code-adapter/, LibreChat Code API ->
 # Azure Container Apps dynamic sessions) straight into the AGK hub ACR:
-#   acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<tag>
+#   acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<VERSION>
 #
 # `az acr build` runs the build server-side in ACR (no docker, no registry password, no
 # cross-registry import), authenticating as the shared service principal (secrets.AZURE_CREDENTIALS).
 # The dev code-adapter Helm service (Knauf-Group/agk-deployment-configs) points at this image.
 #
-# Tag: a non-empty workflow_dispatch input overrides VERSION; otherwise dispatches and pushes
-# to main use VERSION. Bump knauf/code-adapter/VERSION when you change the adapter, then point
-# the deployment-configs values.yaml tag at it. Tests run first — a red suite never ships.
+# VERSION is the only tag source. Every adapter PR must change it, and publishing refuses to
+# replace an existing tag. The workflow records the source commit, VERSION, and resulting digest;
+# deployments must consume repository@digest rather than trusting a mutable tag.
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Optional image tag override (blank uses knauf/code-adapter/VERSION)'
-        required: false
   push:
     branches: [main]
     paths:
       - knauf/code-adapter/**
-      - .github/workflows/build-code-adapter.yaml
   # Review finding A6 — the adapter had NO test gate on a PR. This workflow ran only on
   # dispatch or post-merge, and test_pipeline.yaml covers the root workspaces only (the
   # adapter is a separate package with its own dependency tree, excluded from the monorepo
@@ -38,9 +33,8 @@ permissions:
   contents: read
 
 concurrency:
-  # PRs cancel superseded runs; main/dispatch builds must not cancel each other, because a
-  # cancelled `az acr build` can leave a half-pushed tag.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Every registry publisher shares one lane. PR tests remain independently cancellable.
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || 'code-adapter-publish' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -48,12 +42,48 @@ jobs:
     name: Unit + contract tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     defaults:
       run:
         working-directory: knauf/code-adapter
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate unique adapter version
+        id: version
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          [ -n "$VERSION" ] || { echo "::error::VERSION is empty"; exit 1; }
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'; then
+            echo "::error::invalid VERSION '$VERSION' — expected semver like 0.3.0 or 0.3.0-rc.1"
+            exit 1
+          fi
+          if [ "${#VERSION}" -gt 64 ]; then
+            echo "::error::VERSION is longer than 64 characters"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] &&
+             [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::manual publishing is allowed only from main"
+            exit 1
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ] &&
+             ! git diff --quiet "$BASE_SHA" "${{ github.event.pull_request.head.sha }}" -- .; then
+            BASE_VERSION="$(git show "${BASE_SHA}:knauf/code-adapter/VERSION" | tr -d '[:space:]')"
+            if [ "$VERSION" = "$BASE_VERSION" ]; then
+              echo "::error::adapter changes require a new VERSION (base is $BASE_VERSION)"
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -105,63 +135,139 @@ jobs:
       ACR_NAME: acragkhubnonprod001
       IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-code-adapter
       ADAPTER_DIR: knauf/code-adapter
+      ADAPTER_VERSION: ${{ needs.test.outputs.version }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Resolve image tag
-        id: tag
-        # `inputs.tag` arrives through `env`, never interpolated into the script body:
-        # `${{ }}` is substituted before bash parses the line, so a crafted tag could
-        # otherwise close the quoting and run arbitrary commands — with a later step
-        # holding an Azure login and write access to the ACR. Validating after the fact
-        # would be too late, because the injection happens at substitution time.
-        env:
-          INPUT_TAG: ${{ inputs.tag }}
+      - name: Create unique build tag
+        id: build-tag
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"
-          else
-            TAG="$(tr -d '[:space:]' < "$ADAPTER_DIR/VERSION")"
-          fi
-          [ -n "$TAG" ] || { echo "::error::empty tag"; exit 1; }
-          # Docker tag grammar, deliberately narrower than the spec allows: the adapter is
-          # tagged from VERSION, so semver plus an optional short pre-release suffix is
-          # everything a legitimate build needs.
-          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'; then
-            echo "::error::invalid tag '$TAG' — expected semver like 0.1.0 or 0.1.0-rc.1"
-            exit 1
-          fi
-          if [ "${#TAG}" -gt 64 ]; then
-            echo "::error::tag longer than 64 characters"
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Building $ACR_NAME / $IMAGE_REPOSITORY:$TAG"
+          echo "tag=build-${GITHUB_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (shared service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Build adapter into AGK ACR (server-side)
+      - name: Build adapter under a unique temporary tag
+        env:
+          BUILD_TAG: ${{ steps.build-tag.outputs.tag }}
         run: |
           set -euo pipefail
           az acr build \
             --subscription "$SUBSCRIPTION_ID" \
             --registry "$ACR_NAME" \
-            --image "$IMAGE_REPOSITORY:${{ steps.tag.outputs.tag }}" \
+            --image "$IMAGE_REPOSITORY:$BUILD_TAG" \
+            --build-arg "ADAPTER_VERSION=$ADAPTER_VERSION" \
+            --build-arg "SOURCE_REVISION=$GITHUB_SHA" \
             --file "$ADAPTER_DIR/Dockerfile" \
             "$ADAPTER_DIR"
 
-      - name: Verify tag is in AGK ACR
+      - name: Resolve temporary build digest
+        id: build
+        env:
+          BUILD_TAG: ${{ steps.build-tag.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="${{ steps.tag.outputs.tag }}"
-          az acr repository show-tags \
+          DIGEST=""
+          for attempt in 1 2 3 4 5 6; do
+            DIGEST="$(az acr repository show \
+              --subscription "$SUBSCRIPTION_ID" \
+              --name "$ACR_NAME" \
+              --image "$IMAGE_REPOSITORY:$BUILD_TAG" \
+              --query digest \
+              --output tsv 2>/dev/null || true)"
+            if printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              break
+            fi
+            sleep 5
+          done
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::could not resolve the temporary build digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable version tag
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          REGISTRY_ID="$(az acr show \
             --subscription "$SUBSCRIPTION_ID" \
             --name "$ACR_NAME" \
-            --repository "$IMAGE_REPOSITORY" \
-            --output tsv \
-            --query "[?@=='$TAG'] | [0]" | grep -qx "$TAG"
+            --query id \
+            --output tsv)"
+          # No --force: ACR atomically rejects an existing VERSION tag. The build itself
+          # used a unique temporary tag, so registry lookup failures cannot cause overwrite.
+          az acr import \
+            --subscription "$SUBSCRIPTION_ID" \
+            --name "$ACR_NAME" \
+            --registry "$REGISTRY_ID" \
+            --source "$IMAGE_REPOSITORY@$BUILD_DIGEST" \
+            --image "$IMAGE_REPOSITORY:$ADAPTER_VERSION"
+
+      - name: Verify published version digest
+        id: provenance
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          PUBLISHED_DIGEST="$(az acr repository show \
+            --subscription "$SUBSCRIPTION_ID" \
+            --name "$ACR_NAME" \
+            --image "$IMAGE_REPOSITORY:$ADAPTER_VERSION" \
+            --query digest \
+            --output tsv)"
+          if [ "$PUBLISHED_DIGEST" != "$BUILD_DIGEST" ]; then
+            echo "::error::published digest mismatch: build=$BUILD_DIGEST version=$PUBLISHED_DIGEST"
+            exit 1
+          fi
+          echo "digest=$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=$ACR_NAME.azurecr.io/$IMAGE_REPOSITORY@$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Remove temporary build tag
+        if: always()
+        env:
+          BUILD_TAG: ${{ steps.build-tag.outputs.tag }}
+        run: |
+          az acr repository untag \
+            --subscription "$SUBSCRIPTION_ID" \
+            --name "$ACR_NAME" \
+            --image "$IMAGE_REPOSITORY:$BUILD_TAG" \
+            || echo "::warning::failed to remove temporary build tag $BUILD_TAG"
+
+      - name: Record build provenance
+        env:
+          DIGEST: ${{ steps.provenance.outputs.digest }}
+          IMAGE: ${{ steps.provenance.outputs.image }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit "$GITHUB_SHA" \
+            --arg version "$ADAPTER_VERSION" \
+            --arg digest "$DIGEST" \
+            --arg image "$IMAGE" \
+            '{repository:$repository,commit:$commit,version:$version,digest:$digest,image:$image}' \
+            > "$RUNNER_TEMP/code-adapter-provenance.json"
+          {
+            echo "### code-adapter published"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Source commit | \`$GITHUB_SHA\` |"
+            echo "| VERSION | \`$ADAPTER_VERSION\` |"
+            echo "| Digest | \`$DIGEST\` |"
+            echo "| Deploy image | \`$IMAGE\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-adapter-${{ needs.test.outputs.version }}-provenance
+          path: ${{ runner.temp }}/code-adapter-provenance.json
+          if-no-files-found: error
+          retention-days: 90

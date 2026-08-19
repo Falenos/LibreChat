@@ -10,11 +10,16 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
+ARG ADAPTER_VERSION
+ARG SOURCE_REVISION
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+LABEL org.opencontainers.image.source="https://github.com/Knauf-Group/agentic-karl" \
+      org.opencontainers.image.version="${ADAPTER_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
 USER node
 EXPOSE 3112
 ENV PORT=3112

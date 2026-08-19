@@ -40,6 +40,16 @@ describe('buildWrapper', () => {
     expect(plan.wrappedCode).not.toContain('> /mnt/data/');
   });
 
+  it('streams subprocess output to files and reads only bounded inline heads', () => {
+    const plan = buildWrapper('py', 'print("x")', [], []);
+
+    expect(plan.wrappedCode).not.toContain('capture_output=True');
+    expect(plan.wrappedCode).toContain('stdout=_out_file, stderr=_err_file');
+    expect(plan.wrappedCode).toContain('_out_file.read(3000)');
+    expect(plan.wrappedCode).toContain('_err_file.read(700)');
+    expect(plan.wrappedCode).not.toContain('.read_bytes()');
+  });
+
   it('renders staged-file moves as python pathlib.rename (works for nested/space paths)', () => {
     const plan = buildWrapper(
       'bash',

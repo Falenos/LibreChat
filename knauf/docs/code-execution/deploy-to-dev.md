@@ -12,17 +12,17 @@ keys to paste. Capacity expectations for what you are switching on are in
 > **State as of 2026-08-11.** Nothing is deployed. Three repos have to move, in order, and
 > all three PRs are open but unmerged.
 
-| Repo | What it contributes | State |
-| --- | --- | --- |
-| `Knauf-Group/agentic-karl` | The adapter source, the CI that builds its image, the capability flip | **PR #258 open, `MERGEABLE / CLEAN`** — all checks green, review round 2 addressed. Ready to merge |
-| `Knauf-Group/agk-infrastructure` | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open, `MERGEABLE / BLOCKED`** — plan green (12 add / 0 change / 0 destroy), all four checks pass. `BLOCKED` is the required-review gate only; **approval is the sole remaining action** |
-| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR. Repo is busy (five app version bumps merged on 08-11 alone), so re-check `ct-shared-chart` and the ApplicationSet line numbers at merge time |
+| Repo                                 | What it contributes                                                                   | State                                                                                                                                                                                                                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Knauf-Group/agentic-karl`           | The adapter source, the CI that builds its image, the capability flip                 | **PR #258 open, `MERGEABLE / CLEAN`** — all checks green, review round 2 addressed. Ready to merge                                                                                                                                    |
+| `Knauf-Group/agk-infrastructure`     | ACA session pool, managed identity, federated credential, role assignment, KV secrets | **PR #73 open, `MERGEABLE / BLOCKED`** — plan green (12 add / 0 change / 0 destroy), all four checks pass. `BLOCKED` is the required-review gate only; **approval is the sole remaining action**                                      |
+| `Knauf-Group/agk-deployment-configs` | The adapter Deployment/Service/SA, ArgoCD registration, and the app-side env wiring   | **PR #347 open** — adapter only, deliberately inert; the app-side wiring is a second PR. Repo is busy (five app version bumps merged on 08-11 alone), so re-check `ct-shared-chart` and the ApplicationSet line numbers at merge time |
 
 **Exactly one hard unknown remains** (everything else below is sequencing you control): whether
 `ct-shared-chart` 2.15.0 renders `podLabels`. It cannot be answered from the repos — the chart
 is an OCI artifact in a private ACR — and if the answer is no, every execution fails 502.
 
-It is a blocker for the **switch** (D4), *not* for #347: merging #347 with a broken workload
+It is a blocker for the **switch** (D4), _not_ for #347: merging #347 with a broken workload
 identity deploys a pod that nothing calls. So the cheapest order is merge #347, run one
 `kubectl exec` to read the injected `AZURE_*` variables, and fix the label if they are absent —
 all before D4. Both routes are spelled out in Phase 0.
@@ -34,20 +34,20 @@ all before D4. Both routes are spelled out in Phase 0.
 Twelve steps. The **Gate** column is what tells you the step actually worked — if you cannot
 observe it, the step is not done. Detail for each is in the phase named beside it.
 
-| # | Do | Gate — how you know | Where |
-| --- | --- | --- | --- |
-| 1 | Answer #73's three open questions in the PR conversation | Reviewer has nothing left to ask | Phase 0 |
-| 2 | `az provider show --namespace Microsoft.App --query registrationState -o tsv` | `Registered`. **Not** a plan-time failure — an unregistered RP fails at *apply* | Phase 0 |
-| 3 | Get #73 approved and merge it | `apply-tenants` green on `main`; 12 resources created | Phase A |
-| 4 | Capture `terraform output code_adapter_dev_client_id` and `code_pool_dev_management_endpoint` | Both non-empty; also in Key Vault | Phase A |
-| 5 | Generate the Ed25519 keypair; private half → Key Vault | `az keyvault secret show --name AGK-CODEAPI-JWT-PRIVATE-KEY` returns | Phase B |
-| 6 | Merge #258 | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and the tag from `knauf/code-adapter/VERSION` appears in the ACR | Phase C |
-| 7 | Substitute #347's two placeholders (client id from 4, public key from 5) | The **`Reject committed placeholders`** check turns green. It fails today on purpose — that is the gate, not a bug | Phase D |
-| 8 | Merge #347 | ArgoCD syncs; pod `Running` and `/readyz` 200 | Phase D |
-| 9 | Read `spec.serviceAccountName` and the injected `AZURE_*` vars | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once** | Phase E |
-| 10 | Confirm the auth boundary and one real exec | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version | Phase E |
-| 11 | Ship the switch PR (`KNAUF_CODE_EXECUTION_ENABLED=true` + URL + JWT values) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops | Phase D4 |
-| 12 | Walk the UI checklist, then run the capacity baseline | Observed success/capacity counts and recovery time are recorded; no production size is inferred from the configured limit alone | Phase E |
+| #   | Do                                                                                            | Gate — how you know                                                                                                                              | Where    |
+| --- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| 1   | Answer #73's three open questions in the PR conversation                                      | Reviewer has nothing left to ask                                                                                                                 | Phase 0  |
+| 2   | `az provider show --namespace Microsoft.App --query registrationState -o tsv`                 | `Registered`. **Not** a plan-time failure — an unregistered RP fails at _apply_                                                                  | Phase 0  |
+| 3   | Get #73 approved and merge it                                                                 | `apply-tenants` green on `main`; 12 resources created                                                                                            | Phase A  |
+| 4   | Capture `terraform output code_adapter_dev_client_id` and `code_pool_dev_management_endpoint` | Both non-empty; also in Key Vault                                                                                                                | Phase A  |
+| 5   | Generate the Ed25519 keypair; private half → Key Vault                                        | `az keyvault secret show --name AGK-CODEAPI-JWT-PRIVATE-KEY` returns                                                                             | Phase B  |
+| 6   | Merge #258                                                                                    | `Build adapter into AGK ACR` runs on `main` (it is `skipping` on PRs by design) and the tag from `knauf/code-adapter/VERSION` appears in the ACR | Phase C  |
+| 7   | Substitute #347's two placeholders (client id from 4, public key from 5)                      | The **`Reject committed placeholders`** check turns green. It fails today on purpose — that is the gate, not a bug                               | Phase D  |
+| 8   | Merge #347                                                                                    | ArgoCD syncs; pod `Running` and `/readyz` 200                                                                                                    | Phase D  |
+| 9   | Read `spec.serviceAccountName` and the injected `AZURE_*` vars                                | `sa-code-adapter` (not `default`) and all three vars present. **Answers both chart unknowns at once**                                            | Phase E  |
+| 10  | Confirm the auth boundary and one real exec                                                   | Unauthenticated → 401; a JWT'd `/v1/exec` returns pandas' version                                                                                | Phase E  |
+| 11  | Ship the switch PR (`KNAUF_CODE_EXECUTION_ENABLED=true` + URL + JWT values) as **one** commit | `execute_code` in the served `/api/endpoints`; the boot warning stops                                                                            | Phase D4 |
+| 12  | Walk the UI checklist, then run the capacity baseline                                         | Observed success/capacity counts and recovery time are recorded; no production size is inferred from the configured limit alone                  | Phase E  |
 
 Steps 1–2 are the only ones that can be done today; 3 unblocks everything after it.
 **Nothing between 6 and 11 is user-visible** — the feature turns on at 11 and nowhere earlier.
@@ -91,6 +91,7 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
       Also don't "simplify" `tags = { for k, v in local.tags : k => tostring(v) }` to
       `local.tags`: ARM tag values must be strings and `local.tags` carries `Shared = false`
       as a bool.
+
 - [x] **#258:** the `/download` stream-error handler — **done** (`1666f852b`). `pipeline()`
       instead of `.pipe()`, plus the floating `repo.touch()` caught. Either one exited the
       process, on the path every generated chart and spreadsheet is served over.
@@ -113,6 +114,7 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
         `runtime_session_hint` present — still hold against **3.4.5**, far newer than the
         3.2.65 the lockfile pins. That job now installs the *locked* version rather than the
         range, so it tests what the app actually ships.
+
 - [ ] **Get #73 approved.** Blocked on review, not on anything technical — the plan is green
       and the checks pass. Three things the reviewer will reasonably want answered, so put them
       in the PR conversation rather than making them ask:
@@ -135,7 +137,8 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
       against that schema before the flag went on, which is how the preview-shaped
       `dynamicPoolConfiguration` got caught. Anyone changing `body` should flip it back on
       temporarily.
-- [ ] **Answer the `podLabels` question before the *switch* PR** (D4). Not before #347 — see
+
+- [ ] **Answer the `podLabels` question before the _switch_ PR** (D4). Not before #347 — see
       the note below on why #347 is safe to merge either way.
 
       What has to be true: the pod carries the label `azure.workload.identity/use: "true"` on
@@ -176,8 +179,8 @@ Steps 1–2 are the only ones that can be done today; 3 unblocks everything afte
 > get the same answer.
 >
 > **Why you must check rather than wait for an error:** the adapter acquires its Entra token
-> lazily, on the first ACA call. So a missing workload identity produces *no* boot-time
-> failure and *no* log line — the pod is Ready (`/readyz` proves Table access, not ACA) and looks healthy
+> lazily, on the first ACA call. So a missing workload identity produces _no_ boot-time
+> failure and _no_ log line — the pod is Ready (`/readyz` proves Table access, not ACA) and looks healthy
 > right up until the first execution 502s. Nothing tells you until a user tries. If you would
 > rather have that fail loudly, the fix is a boot-time `tokens.getToken()` probe alongside the
 > JWT-key check in `index.ts`, which would turn it into a CrashLoopBackOff.
@@ -196,7 +199,7 @@ diff; no CI change needed). Creates 12 resources across dev + stage.
       user-assigned identity can lose a race with Entra replication; `principal_type` is set,
       which usually avoids it.
 - [ ] **Optional but recommended in the same PR — the Blob role assignment.** Review finding
-      B2: `agentic-karl-BLOB-STORAGE-CONNECTION-STRING` is the storage account's *primary key*
+      B2: `agentic-karl-BLOB-STORAGE-CONNECTION-STRING` is the storage account's _primary key_
       (`module.storage_blob_dev.storage_primary_connection_string`), so giving it to this pod
       grants every container on the account, including the app's own `files`. The adapter now
       supports workload identity for Blob (`e5ae34e23`), so this becomes a config change:
@@ -232,10 +235,12 @@ diff; no CI change needed). Creates 12 resources across dev + stage.
       key is still the credential in effect.
 
 - [ ] Record the two values the next phase needs:
-      ```bash
-      terraform output code_adapter_dev_client_id            # → SA annotation
-      terraform output code_pool_dev_management_endpoint     # → ACA_POOL_ENDPOINT
-      ```
+
+  ```bash
+  terraform output code_adapter_dev_client_id         # -> SA annotation
+  terraform output code_pool_dev_management_endpoint  # -> ACA_POOL_ENDPOINT
+  ```
+
       Both are also published to `kv-agntkarl-nonprod-001` as
       `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` and `agentic-karl-dev-CODE-POOL-ENDPOINT`.
 
@@ -261,15 +266,19 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
 
 ---
 
-## Phase C — merge #258 and confirm the image
+## Phase C — merge the adapter release and confirm the image
 
-- [ ] Merge #258. The push trigger builds the tag declared in `knauf/code-adapter/VERSION`
-      into the AGK hub ACR.
-- [ ] Verify the tag actually landed (the workflow's own last step does this, but check):
-      ```bash
-      az acr repository show-tags -n acragkhubnonprod001 \
-        --repository agentic-karl-dev/agentic-karl-code-adapter -o tsv
-      ```
+- [ ] Merge the reviewed adapter release. The push trigger builds the new value declared in
+      `knauf/code-adapter/VERSION` into the AGK hub ACR and refuses to replace an existing tag.
+- [ ] Record the workflow's source commit, version, and digest provenance artifact.
+- [ ] Verify the tag resolves to that exact digest:
+
+  ```bash
+  az acr repository show -n acragkhubnonprod001 \
+    --image agentic-karl-dev/agentic-karl-code-adapter:<version> \
+    --query digest -o tsv
+  ```
+
 - [ ] **Nothing is live yet.** The app is now running with `execute_code` in
       `librechat.yaml` and no `LIBRECHAT_CODE_BASEURL`, so the guard strips the capability and
       logs `[knauf][code] execute_code is disabled: ...`. That log line at boot is the
@@ -296,7 +305,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
-    tag: "<adapter-version>" # = knauf/code-adapter/VERSION; Phase C must have pushed it
+    digest: "sha256:<workflow-output>"
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -313,6 +322,7 @@ agentic-karl-code-adapter:
     create: false
     annotations: {}
     name: "sa-code-adapter"
+    automountServiceAccountToken: false
   podLabels:
     azure.workload.identity/use: "true"     # ← see the blocker below
 
@@ -339,6 +349,16 @@ agentic-karl-code-adapter:
       ...lc-codeapi-dev.pub...
       -----END PUBLIC KEY-----
     ACA_API_VERSION: "2024-02-02-preview"   # bump only with the adapter's aca fixtures
+    ACA_SESSION_API_VERSION: "2025-02-02-preview"
+    ACA_SESSION_DELETE_TIMEOUT_MS: "10000"
+    EXEC_INPUT_MAX_FILES: "20"
+    EXEC_INPUT_MAX_FILE_BYTES: "134217728"
+    EXEC_INPUT_MAX_TOTAL_BYTES: "268435456"
+    EXEC_MAX_ACTIVE_REQUESTS: "4"
+    EXEC_MAX_INFLIGHT_INPUT_BYTES: "536870912"
+    EXEC_TOTAL_TIMEOUT_MS: "300000"
+    READINESS_CACHE_MS: "30000"
+    READINESS_TIMEOUT_MS: "10000"
     # Capacity guardrails — see scaling.md §3. The 256 MB default does not fit this pod.
     CAPTURE_MAX_TOTAL_BYTES: "67108864"
     CAPTURE_MAX_FILES: "20"                 # also caps files per /upload/batch request
@@ -378,7 +398,7 @@ agentic-karl-code-adapter:
 
   resources:
     requests: { memory: "1Gi",  cpu: "250m" }
-    limits:   { memory: "2Gi",  cpu: "1000m" }   # NOT 1Gi — capture buffers whole files
+    limits:   { memory: "2Gi",  cpu: "1000m" }   # retain until stream/admission load proof
 
   ingress:
     enabled: false            # in-cluster only; /metrics and /healthz are unauthenticated
@@ -411,18 +431,18 @@ one** (the worker does exactly this at lines 46 and 156):
 verified against `packages/api/src/auth/codeapi.ts`:
 
 ```yaml
-  configmap:
-    KNAUF_CODE_EXECUTION_ENABLED: "true"
-    LIBRECHAT_CODE_BASEURL: "http://agentic-karl-code-adapter.agentic-karl-dev.svc.cluster.local:80/v1"
-    CODEAPI_AUTH_PROVIDER: "librechat-jwt"   # or "both"; anything else mints NO header
-    CODEAPI_JWT_ALGORITHM: "EdDSA"
-    CODEAPI_JWT_KID: "lc-codeapi-dev-2026-08"
-    CODEAPI_JWT_ISSUER: "agentic-karl"
-    CODEAPI_JWT_AUDIENCE: "codeapi"
-    CODEAPI_JWT_SINGLE_TENANT_ID: "knauf"
-  externalSecret:
-    secrets:
-      CODEAPI_JWT_PRIVATE_KEY: AGK-CODEAPI-JWT-PRIVATE-KEY
+configmap:
+  KNAUF_CODE_EXECUTION_ENABLED: 'true'
+  LIBRECHAT_CODE_BASEURL: 'http://agentic-karl-code-adapter.agentic-karl-dev.svc.cluster.local:80/v1'
+  CODEAPI_AUTH_PROVIDER: 'librechat-jwt' # or "both"; anything else mints NO header
+  CODEAPI_JWT_ALGORITHM: 'EdDSA'
+  CODEAPI_JWT_KID: 'lc-codeapi-dev-2026-08'
+  CODEAPI_JWT_ISSUER: 'agentic-karl'
+  CODEAPI_JWT_AUDIENCE: 'codeapi'
+  CODEAPI_JWT_SINGLE_TENANT_ID: 'knauf'
+externalSecret:
+  secrets:
+    CODEAPI_JWT_PRIVATE_KEY: AGK-CODEAPI-JWT-PRIVATE-KEY
 ```
 
 Two failure modes worth stating plainly, because neither produces an obvious error:
@@ -436,32 +456,32 @@ Two failure modes worth stating plainly, because neither produces an obvious err
 **D5 · Network policy** — **there is something to do.** An earlier version of this doc said
 "most likely nothing"; that was wrong, and wrong in the quiet direction.
 
-Right: the adapter's *outbound* needs nothing under the current nonproduction policy. Entra,
+Right: the adapter's _outbound_ needs nothing under the current nonproduction policy. Entra,
 `*.dynamicsessions.io`, Blob, and Table are all HTTPS/443, which `allowEgressInternet` permits
 namespace-wide; app→adapter is covered by `allowSameNamespace`.
 
 Wrong: `agentic-karl/dev/network-policy/values.yaml` sets **`defaultDenyAll: true`**, and every
-service in that namespace that wants to be scraped carries its *own* `customPolicies` entry —
+service in that namespace that wants to be scraped carries its _own_ `customPolicies` entry —
 `allow-datadog-metrics-scrape` (app, 3000), `allow-datadog-worker-metrics-scrape` (worker,
 3081), `allow-egress-rag-datadog` (rag-api). The adapter had none, so all six
 `code_adapter_*` metrics were unreachable and a brand-new execution backend would have gone
 into UAT blind. Added in #347:
 
 ```yaml
-    - name: allow-datadog-code-adapter-metrics-scrape
-      spec:
-        podSelector:
-          matchLabels:
-            app: agentic-karl-code-adapter
-        policyTypes: [Ingress]
-        ingress:
-          - from:
-              - namespaceSelector:
-                  matchLabels:
-                    kubernetes.io/metadata.name: monitoring
-            ports:
-              - protocol: TCP
-                port: 3112
+- name: allow-datadog-code-adapter-metrics-scrape
+  spec:
+    podSelector:
+      matchLabels:
+        app: agentic-karl-code-adapter
+    policyTypes: [Ingress]
+    ingress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: monitoring
+        ports:
+          - protocol: TCP
+            port: 3112
 ```
 
 **Ingress only, deliberately.** The adapter has no tracer: its dependencies are
@@ -566,18 +586,15 @@ sizing; the configured limit of 20 is not itself a measured throughput result.
 
 ## Rollback, in escalating order
 
-| Situation | Action | Blast radius |
-| --- | --- | --- |
+| Situation                        | Action                                                     | Blast radius                                                          |
+| -------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
 | Feature misbehaves, adapter fine | Set `KNAUF_CODE_EXECUTION_ENABLED=false` and roll app pods | Capability and code-dependent skills disappear; adapter stays dormant |
-| Adapter unhealthy | Scale the Deployment to 0 | Executions fail closed; the app keeps running |
-| Bad adapter image | Point the values tag at the previous version | Requires a previous tag to exist — see the mutable-tag caveat below |
-| Terraform wrong | Do **not** destroy the pool while sessions are live | Prefer fixing forward |
+| Adapter unhealthy                | Scale the Deployment to 0                                  | Executions fail closed; the app keeps running                         |
+| Bad adapter image                | Point the values digest at the previous proven manifest    | Exact rollback; tags are not deployment identity                      |
+| Terraform wrong                  | Do **not** destroy the pool while sessions are live        | Prefer fixing forward                                                 |
 
-**Mutable-tag caveat:** a merge to `main` that touches `knauf/code-adapter/**` without bumping
-`VERSION` silently rebuilds and replaces the existing tag in ACR. Because the values pin that
-same string, ArgoCD sees no change and the cluster keeps the old image until some unrelated
-restart pulls the new one — and rollback-by-tag then has nothing distinct to roll back to.
-**Bump `VERSION` in every PR that touches the adapter.**
+**Immutable release rule:** every adapter PR must bump `VERSION`, publishing refuses an existing
+tag, and GitOps pins the workflow-reported digest. A tag is only a human lookup key.
 
 ---
 
@@ -600,12 +617,9 @@ Softening to `preferred` is the only thing that changes the eviction story, and 
 nothing on a cluster that has non-spot capacity. Someone owning the platform pattern should say
 yes or no rather than leaving 360s implying a protection it does not provide.
 
-**3 · Boot-time Entra probe (recommended before UAT).** Today a broken workload identity is
-*silent*: the token is acquired lazily on the first ACA call, `/readyz` only proves Table access, so the
-pod is Ready and looks healthy until the first execution 502s. A `tokens.getToken()` probe next
-to the existing `importCodeApiKey` check in `index.ts` would turn that into a CrashLoopBackOff
-at boot. It is the same fail-fast argument that justified the JWT-key check, and it removes the
-single most likely first-deployment failure from the "mysterious" category. Roughly ten lines.
+**3 · Dependency readiness — implemented.** `/readyz` now caches bounded Table, Blob,
+workload-identity token, and non-allocating ACA checks. Verify all four metric labels and failure
+paths in the rollout; do not replace this with a code-executing readiness probe.
 
 ---
 
@@ -613,20 +627,19 @@ single most likely first-deployment failure from the "mysterious" category. Roug
 
 Not blockers for a dev rollout, but do not lose them:
 
-- Adapter input push still buffers one whole staged file per active execution, with no queue.
-  Generated-output capture now streams through a byte-bounded transform into Blob. The 2 Gi limit
-  and input limits still need representative concurrency evidence before production
+- Input push and generated-output capture stream. Process-wide admission has no queue and bounds
+  active requests plus aggregate metadata-backed input bytes. The 2 Gi limit and defaults still
+  need representative maximum-stream concurrency evidence before production
   ([scaling.md](scaling.md) §3).
-- The current 20-session pools have an unmeasured sustained-throughput ceiling because stateless
-  sessions remain allocated through the 300-second cooldown. The four-executions-per-minute
-  figure in [scaling.md](scaling.md) is an illustrative model, not observed capacity and not a
-  production sizing requirement.
+- Adapter-minted stateless sessions are explicitly deleted after capture with an independent
+  timeout. The exact stage identity permission and observed pool recovery remain live rollout
+  gates; failed cleanup still leaves the 300-second cooldown tail.
 - ~~Session identity is not bound to the caller.~~ **Fixed** (`d6fad8068`). Every session id
   now carries an 8-hex owner tag derived from the caller's subject, so `/exec` only honours a
   supplied `session_id` bearing the caller's own tag, and `runtime_session_hint` derivation
   mixes in the user id. What remains: `SESSION_HINT_SECRET` is unset, so it falls back to the
   JWT public key. Ownership holds regardless (the check is against the caller's own identity),
-  but a *predictable* secret makes a hint-derived id guessable from a known conversation id —
+  but a _predictable_ secret makes a hint-derived id guessable from a known conversation id —
   so **set a real `SESSION_HINT_SECRET` before enabling `statefulSessions`**. The adapter warns
   at boot while it is unset.
 - Staged Blobs are reaped by reachability, not age (`ed7dcc043`). Table `expiresAt` slides on
@@ -639,10 +652,8 @@ Not blockers for a dev rollout, but do not lose them:
   choice — but Azure gives ~30s of eviction notice against executions that run for minutes, so
   no `terminationGracePeriodSeconds` saves an evicted execution. `preferred` would cost nothing
   here and is worth arguing for before prod.
-- Nonprod image tags are mutable (`az acr build` overwrites) while `promote-code-adapter.yaml`
-  deliberately refuses `--force`. So a rebuilt version tag in nonprod can differ from the same
-  tag in prod with nothing surfacing the divergence. Bump `VERSION` every time; consider promoting by
-  digest before prod.
+- Build publishing rejects an existing nonprod version tag. Production promotion resolves and
+  imports the source digest, refuses an existing prod tag, and verifies exact digest equality.
 - `agentic-karl-dev-MI-CODE-ADAPTER-CLIENT-ID` is published to Key Vault but cannot be consumed
   by ESO — the ServiceAccount annotation is rendered by Helm, not injected from a Secret. It
   stays a lookup convenience. `agentic-karl-dev-CODE-POOL-ENDPOINT` **is** consumable, and D2

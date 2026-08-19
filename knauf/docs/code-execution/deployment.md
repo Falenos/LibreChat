@@ -13,39 +13,42 @@ code-interpreter half of the older
 >
 > **To actually run the dev rollout, use [deploy-to-dev.md](deploy-to-dev.md)** — the
 > checklist version, with the live state of each PR, the ordering traps, the exact keys to
-> paste, and the verification sequence. This document stays the reference for *what each
-> repo contributes and why*; capacity expectations are in [scaling.md](scaling.md).
+> paste, and the verification sequence. This document stays the reference for _what each
+> repo contributes and why_; capacity expectations are in [scaling.md](scaling.md).
 
 ---
 
 ## 0. Verified environment (double-checked Aug 2026)
 
-| Fact                                    | Value                                                                                                                                              | How verified                                                     |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Nonprod subscription                    | `ad3f0a71-cc5b-4d00-8289-23623cf2064c` (CT-SHARED-RESOURCES)                                                                                       | `az account list`                                                |
-| Prod subscription                       | `e0515a24-7205-481b-b657-944901020e32`                                                                                                             | infra-context skill                                              |
-| Tenant                                  | `ad200093-0cba-48cb-9853-16fb53354a4d`                                                                                                             | ESO values                                                       |
+| Fact                                    | Value                                                                                                                                                             | How verified                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Nonprod subscription                    | `ad3f0a71-cc5b-4d00-8289-23623cf2064c` (CT-SHARED-RESOURCES)                                                                                                      | `az account list`                                                |
+| Prod subscription                       | `e0515a24-7205-481b-b657-944901020e32`                                                                                                                            | infra-context skill                                              |
+| Tenant                                  | `ad200093-0cba-48cb-9853-16fb53354a4d`                                                                                                                            | ESO values                                                       |
 | AKS (nonprod / prod)                    | `aks-agk-nonprod-001` (`rg-agk-nonprod-westeurope`) / `aks-agk-prod-001` (`rg-agk-prod-westeurope`) — corrected; the `sxsx` names once written here exist nowhere | `agk-infrastructure` `locals.tf` (authoritative)                 |
-| **AKS OIDC issuer + workload identity** | **both `enabled: true`** on nonprod and prod                                                                                                       | `az aks list` — the workload-identity prerequisite is met (S3 ✓) |
-| ACR (nonprod / prod)                    | `acragkhubnonprod001` / `acragkhubprod001`                                                                                                         | infra-context skill, release pipeline                            |
-| Key Vault (nonprod / prod)              | `kv-agntkarl-nonprod-001` / `kv-agntkarl-prod-001`                                                                                                 | ESO SecretStore values                                           |
-| ESO                                     | SA `sa-external-secrets` (client `b573fdae-1009-46d4-8c58-16694e48f65f`), `SecretStore kv-agntkarl-nonprod-001`, `authType: WorkloadIdentity`      | `agentic-karl/dev/common-namespace-resources/values.yaml`        |
-| Namespace                               | `agentic-karl-dev`                                                                                                                                 | GitOps repo                                                      |
-| ct-shared-chart                         | worker pins `2.15.0` (verified 2026-08-11; use the newest a live service pins at PR time — this number moves)                                       | worker `Chart.yaml`                                              |
-| Egress policy                           | `defaultDenyAll` + `allowEgressInternet` (TCP 443/80, namespace-wide) + `allow-egress-private-endpoints` (`podSelector: {}`, CIDR `10.160.0.0/16`) | `agentic-karl/dev/network-policy/values.yaml`                    |
+| **AKS OIDC issuer + workload identity** | **both `enabled: true`** on nonprod and prod                                                                                                                      | `az aks list` — the workload-identity prerequisite is met (S3 ✓) |
+| ACR (nonprod / prod)                    | `acragkhubnonprod001` / `acragkhubprod001`                                                                                                                        | infra-context skill, release pipeline                            |
+| Key Vault (nonprod / prod)              | `kv-agntkarl-nonprod-001` / `kv-agntkarl-prod-001`                                                                                                                | ESO SecretStore values                                           |
+| ESO                                     | SA `sa-external-secrets` (client `b573fdae-1009-46d4-8c58-16694e48f65f`), `SecretStore kv-agntkarl-nonprod-001`, `authType: WorkloadIdentity`                     | `agentic-karl/dev/common-namespace-resources/values.yaml`        |
+| Namespace                               | `agentic-karl-dev`                                                                                                                                                | GitOps repo                                                      |
+| ct-shared-chart                         | worker pins `2.15.0` (verified 2026-08-11; use the newest a live service pins at PR time — this number moves)                                                     | worker `Chart.yaml`                                              |
+| Egress policy                           | `defaultDenyAll` + `allowEgressInternet` (TCP 443/80, namespace-wide) + `allow-egress-private-endpoints` (`podSelector: {}`, CIDR `10.160.0.0/16`)                | `agentic-karl/dev/network-policy/values.yaml`                    |
 
-**Consequence for the adapter's egress:** the adapter's outbound is all HTTPS/443
+**Current consequence for the adapter's egress:** the adapter's outbound is all HTTPS/443
 — Entra (`login.microsoftonline.com`), the dynamic-sessions data-plane
 (`*.dynamicsessions.io`), Azure Blob, and Azure Table — which
-`allowEgressInternet` **already permits namespace-wide**. So the adapter needs no new
-**egress** policy for the current public-endpoint design.
+`allowEgressInternet` currently permits namespace-wide. That explains why the existing dev/stage
+service can connect; it is **not production-ready isolation**. Kubernetes policies are additive,
+so an adapter-only deny/allow policy cannot override the broad same-namespace and internet allows.
+Before representative stage proof, the adapter must have a distinct egress source and be excluded
+from those broad policies, with dependency-only enforcement at the selected network boundary.
 
 **But it does need an ingress one.** An earlier version of this section concluded
 "needs no new NetworkPolicy" full stop; that was wrong for observability.
 `defaultDenyAll` means Datadog cannot reach `/metrics` on 3112 unless a policy
 says so, and in this namespace that is always a per-service entry — the app, the
 worker and the RAG API each have their own. Without it the adapter's six
-`code_adapter_*` metrics are exposed but uncollectable, which for a new execution
+original `code_adapter_*` metrics were exposed but uncollectable, which for a new execution
 backend is the worst possible time to be blind. `allow-datadog-code-adapter-metrics-scrape`
 is in agk-deployment-configs#347, and it needs the matching `podAnnotations`
 openmetrics check on the service to be any use — the two halves fail
@@ -93,7 +96,7 @@ draft of it was wrong in four ways, all of which are worth knowing before writin
 twin:
 
 - **`dynamicPoolConfiguration` shape.** The flat `{ executionType, cooldownPeriodInSeconds }`
-  is the *preview* schema. `2025-07-01` GA nests it under `lifecycleConfiguration` and
+  is the _preview_ schema. `2025-07-01` GA nests it under `lifecycleConfiguration` and
   renames `executionType` → `lifecycleType`. Caught by `terraform validate` with azapi
   schema validation on; most ACA blog posts still show the preview form.
 - **Identity name.** `id-agk-code-adapter-nonprod` matches nothing in that repo. The
@@ -203,7 +206,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
-    tag: '<adapter-version>' # = knauf/code-adapter/VERSION; CI must have pushed it first
+    digest: 'sha256:<workflow-output>' # exact digest from build-code-adapter.yaml
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -212,6 +215,7 @@ agentic-karl-code-adapter:
   serviceAccount:
     create: true
     name: sa-code-adapter
+    automountServiceAccountToken: false
     annotations:
       azure.workload.identity/client-id: '<id-agk-code-adapter-nonprod clientId>'
   podLabels:
@@ -222,6 +226,14 @@ agentic-karl-code-adapter:
       value: '<code_pool poolManagementEndpoint>'
     - name: ACA_API_VERSION
       value: '2024-02-02-preview'
+    - name: ACA_SESSION_API_VERSION
+      value: '2025-02-02-preview'
+    - name: EXEC_TOTAL_TIMEOUT_MS
+      value: '300000'
+    - name: EXEC_MAX_ACTIVE_REQUESTS
+      value: '4'
+    - name: EXEC_MAX_INFLIGHT_INPUT_BYTES
+      value: '536870912'
     - name: CODEAPI_JWT_ISSUER
       value: 'agentic-karl'
     - name: CODEAPI_JWT_AUDIENCE
@@ -248,11 +260,10 @@ all that's needed; the workload-identity webhook injects `AZURE_CLIENT_ID`,
 `AZURE_TENANT_ID`, and `AZURE_FEDERATED_TOKEN_FILE` into the pod, which
 `DefaultAzureCredential` consumes. We set none of those by hand.
 
-**Network:** per §0, `allowEgressInternet` (443) + the private-endpoint policy
-already cover the adapter's **egress**, so nothing is needed there. An **ingress**
-`customPolicies` entry IS needed so Datadog can scrape `/metrics` on 3112 —
-`defaultDenyAll` blocks it otherwise, and every other scraped service in this
-namespace carries its own entry. See §0 and `deploy-to-dev.md` D5.
+**Network:** the broad namespace policies explain current connectivity but do not satisfy the
+production isolation gate. The final GitOps values must exclude adapter pods from broad
+same-namespace/internet/private policies, add selected app/canary/Datadog ingress, and pair
+adapter-specific Kubernetes egress with the separately proven network enforcement boundary.
 
 **ApplicationSet registration** (`infra/nonprod/argocd/projects/services.yaml`,
 same PR — langfuse precedent):
@@ -359,7 +370,7 @@ between two execs transparently re-mints the session.
    Code Execution and dependent skills disappear; the adapter can remain dormant.
 
    > **This step used to be wrong, and dangerously so.** Unsetting the variable does
-   > *not* stop `@librechat/agents`: it computes
+   > _not_ stop `@librechat/agents`: it computes
    > `LIBRECHAT_CODE_BASEURL ?? 'https://api.librechat.ai/v1'`, so an unset value
    > silently redirects code execution — and every attached file — to LibreChat's
    > **hosted SaaS**. An operator following the old wording during an incident would
@@ -367,7 +378,7 @@ between two execs transparently re-mints the session.
    >
    > KK20-257 also makes URL removal fail closed as defense in depth:
    > `packages/api/src/knauf/code/codeEnvGuard.ts` treats "unset, unparseable, external, or
-   > `api.librechat.ai`" as *not configured* and strips the `execute_code` capability,
+   > `api.librechat.ai`" as _not configured_ and strips the `execute_code` capability,
    > which switches off the upload gate, the attach-menu row, tabular auto-routing and
    > tool registration together. Nothing is sent anywhere. Do not remove that guard as
    > "redundant" — it is what makes this line true.
@@ -394,11 +405,12 @@ there is no separate "enable it in prod" code change to write:
   sent anywhere. The capability shipping ahead of the infra is therefore inert, not
   broken. Do not "pre-set" that variable to anything else to silence a log line.
 - Image promotion: **`.github/workflows/promote-code-adapter.yaml`** (`workflow_dispatch`,
-  tag + confirm) imports `acragkhubnonprod001 → acragkhubprod001`. It is a separate
+  tag + confirm) resolves the source tag to a digest, imports that digest
+  `acragkhubnonprod001 → acragkhubprod001`, and verifies exact target equality. It is a separate
   workflow rather than a step in `promote_pipeline.yaml` because the adapter versions from
   `knauf/code-adapter/VERSION` independently of KARL's `vX.Y.Z` tag; coupling them would
-  force a full app promotion for a code-adapter hotfix. It only publishes the tag — the
-  rollout is the values bump below.
+  force a full app promotion for a code-adapter hotfix. It only publishes an immutable manifest —
+  the rollout is the digest values bump below.
 
 **What is still outside this repo** (nothing here can do it):
 
@@ -410,13 +422,12 @@ there is no separate "enable it in prod" code change to write:
 - GitOps (`agk-deployment-configs`): copy the dev service dir to
   `agentic-karl/prod/services/agentic-karl-code-adapter`, swapping ACR / KV / namespace /
   UAMI clientId / pool endpoint; mirror the ApplicationSet exclude+add for prod. Then set
-  the private JWT wiring and `LIBRECHAT_CODE_BASEURL` in the prod `agentic-karl` values,
-  then flip `KNAUF_CODE_EXECUTION_ENABLED=true` — that is the switch that turns prod on.
+  the private JWT wiring for the dormant adapter. Keep `KNAUF_CODE_EXECUTION_ENABLED=false`
+  and omit production `LIBRECHAT_CODE_BASEURL`; activation is a separate reviewed change.
 
 > **Ordering, and the current state.** Dev and stage have adapter services and app wiring;
 > production remains unactivated. The order is always pool + identity → adapter running →
-> JWT/URL wiring → `KNAUF_CODE_EXECUTION_ENABLED=true` → verify. Keep the prod flag false
-> until every preceding gate is green.
+> dormant adapter verification. Production activation is explicitly outside this rollout.
 
 ---
 
@@ -426,5 +437,7 @@ there is no separate "enable it in prod" code change to write:
   (else vendor the SA template).
 - **V2** exact OIDC issuer URL for the federated credential.
 - **V3** Table and Blob endpoints reachable through the selected production egress control.
+- **V4** the exact stage workload identity can DELETE adapter-minted stateless ACA sessions;
+  204 and already-gone 404 are successful, while unauthorized cleanup is a rollout blocker.
 - Prod SP credentials for ACR import / KV writes verified separately (infra-context
   skill flags nonprod is proven, prod is not).

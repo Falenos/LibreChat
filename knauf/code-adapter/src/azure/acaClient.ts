@@ -1,6 +1,6 @@
 import { request } from 'undici';
 import type { Dispatcher } from 'undici';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
 import type {
   AcaExecOutcome,
@@ -9,10 +9,7 @@ import type {
   AcaFileListResponse,
   AcaSessionFile,
 } from '../types/aca.js';
-import {
-  ACA_FILE_MANIFEST_NAME,
-  ACA_FILE_MANIFEST_TRUNCATED_NAME,
-} from '../types/aca.js';
+import { ACA_FILE_MANIFEST_NAME, ACA_FILE_MANIFEST_TRUNCATED_NAME } from '../types/aca.js';
 import type { Config } from '../config.js';
 import type { Logger } from '../logger.js';
 import type { Metrics } from '../middleware/metrics.js';
@@ -32,19 +29,40 @@ import type { TokenProvider } from './credential.js';
  * token and retry once. Executions are NOT retried on other failures.
  */
 export interface AcaClient {
-  execute(identifier: string, code: string): Promise<AcaExecOutcome>;
-  pushFile(identifier: string, name: string, data: Buffer, contentType: string): Promise<void>;
-  listFiles(identifier: string): Promise<AcaSessionFile[]>;
+  execute(identifier: string, code: string, signal?: AbortSignal): Promise<AcaExecOutcome>;
+  pushFile(
+    identifier: string,
+    name: string,
+    data: Readable,
+    size: number,
+    contentType: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  listFiles(identifier: string, signal?: AbortSignal): Promise<AcaSessionFile[]>;
   fetchFileStream(
     identifier: string,
     name: string,
+    signal?: AbortSignal,
   ): Promise<{ stream: Readable; contentLength?: number }>;
-  fetchFileContent(identifier: string, name: string, maxBytes?: number): Promise<Buffer>;
+  fetchFileContent(
+    identifier: string,
+    name: string,
+    maxBytes?: number,
+    signal?: AbortSignal,
+  ): Promise<Buffer>;
+  deleteSession(identifier: string, signal?: AbortSignal): Promise<void>;
+  checkReadiness(signal?: AbortSignal): Promise<void>;
 }
 
 const SESSION_NOT_FOUND_RE = /SessionWithIdentifierNotFound/i;
 const FILE_MANIFEST_MAX_BYTES = 1_048_576;
 const FILE_MANIFEST_MAX_ENTRIES = 100;
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error != null && 'name' in error && error.name === 'AbortError'
+  );
+}
 
 function isSessionNotFound(statusCode: number, bodyText: string): boolean {
   return statusCode === 404 && SESSION_NOT_FOUND_RE.test(bodyText);
@@ -125,6 +143,18 @@ export function createAcaClient(
     url.searchParams.set('identifier', identifier);
     return url.toString();
   };
+  const buildSessionUrl = (identifier: string): string => {
+    const url = new URL(`${config.aca.poolEndpoint}/session`);
+    url.searchParams.set('api-version', config.aca.sessionApiVersion);
+    url.searchParams.set('identifier', identifier);
+    return url.toString();
+  };
+  const buildListSessionsUrl = (): string => {
+    const url = new URL(`${config.aca.poolEndpoint}/listSessions`);
+    url.searchParams.set('api-version', config.aca.sessionApiVersion);
+    url.searchParams.set('skip', '0');
+    return url.toString();
+  };
 
   const authedRequest = async (
     url: string,
@@ -132,7 +162,7 @@ export function createAcaClient(
     timeoutMs: number,
   ) => {
     const doRequest = async () => {
-      const token = await tokens.getToken();
+      const token = await tokens.getToken(options.signal as AbortSignal | undefined);
       return request(url, {
         ...options,
         headers: {
@@ -169,9 +199,13 @@ export function createAcaClient(
     };
   };
 
-  const fetchFileResponse = async (identifier: string, name: string) => {
+  const fetchFileResponse = async (identifier: string, name: string, signal?: AbortSignal) => {
     const url = buildUrl(`/files/content/${encodeURIComponent(name)}`, identifier);
-    const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
+    const response = await authedRequest(
+      url,
+      { method: 'GET', signal },
+      config.aca.fileOpTimeoutMs,
+    );
     if (response.statusCode === 404) {
       const bodyText = await response.body.text();
       if (SESSION_NOT_FOUND_RE.test(bodyText)) {
@@ -187,31 +221,31 @@ export function createAcaClient(
   };
 
   return {
-    async execute(identifier, code) {
+    async execute(identifier, code, signal) {
       const started = Date.now();
       try {
-        return await doExecute(identifier, code);
+        return await doExecute(identifier, code, signal);
       } finally {
         metrics.acaRequestDuration.observe({ op: 'execute' }, (Date.now() - started) / 1000);
       }
     },
-    async pushFile(identifier, name, data, contentType) {
+    async pushFile(identifier, name, data, size, contentType, signal) {
       const started = Date.now();
       try {
-        return await doPushFile(identifier, name, data, contentType);
+        return await doPushFile(identifier, name, data, size, contentType, signal);
       } finally {
         metrics.acaRequestDuration.observe({ op: 'pushFile' }, (Date.now() - started) / 1000);
       }
     },
-    async listFiles(identifier) {
+    async listFiles(identifier, signal) {
       const started = Date.now();
       try {
-        return await doListFiles(identifier);
+        return await doListFiles(identifier, signal);
       } finally {
         metrics.acaRequestDuration.observe({ op: 'listFiles' }, (Date.now() - started) / 1000);
       }
     },
-    async fetchFileStream(identifier, name) {
+    async fetchFileStream(identifier, name, signal) {
       const started = Date.now();
       const record = () => {
         metrics.acaRequestDuration.observe(
@@ -228,7 +262,7 @@ export function createAcaClient(
       // alike) instead of the `finally` used by the other methods below.
       let result: { stream: Readable; contentLength?: number };
       try {
-        result = await doFetchFileStream(identifier, name);
+        result = await doFetchFileStream(identifier, name, signal);
       } catch (err) {
         record();
         throw err;
@@ -236,10 +270,10 @@ export function createAcaClient(
       result.stream.once('close', record);
       return result;
     },
-    async fetchFileContent(identifier, name, maxBytes) {
+    async fetchFileContent(identifier, name, maxBytes, signal) {
       const started = Date.now();
       try {
-        return await doFetchFileContent(identifier, name, maxBytes);
+        return await doFetchFileContent(identifier, name, maxBytes, signal);
       } finally {
         metrics.acaRequestDuration.observe(
           { op: 'fetchFileContent' },
@@ -247,9 +281,29 @@ export function createAcaClient(
         );
       }
     },
+    async deleteSession(identifier, signal) {
+      const started = Date.now();
+      try {
+        await doDeleteSession(identifier, signal);
+      } finally {
+        metrics.acaRequestDuration.observe({ op: 'deleteSession' }, (Date.now() - started) / 1000);
+      }
+    },
+    async checkReadiness(signal) {
+      const started = Date.now();
+      try {
+        await doCheckReadiness(signal);
+      } finally {
+        metrics.acaRequestDuration.observe({ op: 'readiness' }, (Date.now() - started) / 1000);
+      }
+    },
   };
 
-  async function doExecute(identifier: string, code: string): Promise<AcaExecOutcome> {
+  async function doExecute(
+    identifier: string,
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<AcaExecOutcome> {
     const url = buildUrl('/code/execute', identifier);
     let response;
     try {
@@ -257,6 +311,7 @@ export function createAcaClient(
         url,
         {
           method: 'POST',
+          signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             properties: { codeInputType: 'inline', executionType: 'synchronous', code },
@@ -265,6 +320,12 @@ export function createAcaClient(
         config.aca.execTimeoutMs,
       );
     } catch (err) {
+      if (signal?.aborted) {
+        throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      }
+      if (isAbortError(err)) {
+        throw err;
+      }
       if (err instanceof AcaError) {
         throw err;
       }
@@ -311,8 +372,10 @@ export function createAcaClient(
   async function doPushFile(
     identifier: string,
     name: string,
-    data: Buffer,
+    data: Readable,
+    size: number,
     contentType: string,
+    signal?: AbortSignal,
   ): Promise<void> {
     const url = buildUrl('/files/upload', identifier);
     const boundary = `karlform${Math.random().toString(16).slice(2)}`;
@@ -320,13 +383,25 @@ export function createAcaClient(
       `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${contentType}\r\n\r\n`,
     );
     const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-    const body = Buffer.concat([head, data, tail]);
+    const body = Readable.from(
+      (async function* () {
+        yield head;
+        for await (const chunk of data) {
+          yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+        }
+        yield tail;
+      })(),
+    );
 
     const response = await authedRequest(
       url,
       {
         method: 'POST',
-        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+        signal,
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(head.length + size + tail.length),
+        },
         body,
       },
       config.aca.fileOpTimeoutMs,
@@ -359,9 +434,13 @@ export function createAcaClient(
     }
   }
 
-  async function doListFiles(identifier: string): Promise<AcaSessionFile[]> {
+  async function doListFiles(identifier: string, signal?: AbortSignal): Promise<AcaSessionFile[]> {
     const url = buildUrl('/files', identifier);
-    const response = await authedRequest(url, { method: 'GET' }, config.aca.fileOpTimeoutMs);
+    const response = await authedRequest(
+      url,
+      { method: 'GET', signal },
+      config.aca.fileOpTimeoutMs,
+    );
     const bodyText = await response.body.text();
     if (isSessionNotFound(response.statusCode, bodyText)) {
       throw new AcaSessionNotFoundError();
@@ -401,6 +480,7 @@ export function createAcaClient(
         identifier,
         ACA_FILE_MANIFEST_NAME,
         FILE_MANIFEST_MAX_BYTES,
+        signal,
       );
       return parseFileManifest(manifest);
     } catch (error) {
@@ -414,8 +494,9 @@ export function createAcaClient(
   async function doFetchFileStream(
     identifier: string,
     name: string,
+    signal?: AbortSignal,
   ): Promise<{ stream: Readable; contentLength?: number }> {
-    const response = await fetchFileResponse(identifier, name);
+    const response = await fetchFileResponse(identifier, name, signal);
     const rawLength = response.headers['content-length'];
     const contentLength = Number(Array.isArray(rawLength) ? rawLength[0] : rawLength);
     return {
@@ -428,8 +509,9 @@ export function createAcaClient(
     identifier: string,
     name: string,
     maxBytes?: number,
+    signal?: AbortSignal,
   ): Promise<Buffer> {
-    const response = await fetchFileResponse(identifier, name);
+    const response = await fetchFileResponse(identifier, name, signal);
     const chunks: Buffer[] = [];
     let total = 0;
     for await (const chunk of response.body) {
@@ -443,5 +525,49 @@ export function createAcaClient(
       chunks.push(buf);
     }
     return Buffer.concat(chunks);
+  }
+
+  async function doDeleteSession(identifier: string, signal?: AbortSignal): Promise<void> {
+    const response = await authedRequest(
+      buildSessionUrl(identifier),
+      { method: 'DELETE', signal },
+      config.aca.sessionDeleteTimeoutMs,
+    );
+    if (response.statusCode === 204 || response.statusCode === 404) {
+      await response.body.dump();
+      return;
+    }
+    const bodyText = await response.body.text();
+    if (response.statusCode >= 400) {
+      throw new AcaError(
+        `pool session deletion failed (${response.statusCode})`,
+        502,
+        bodyText.slice(0, 500),
+      );
+    }
+  }
+
+  async function doCheckReadiness(signal?: AbortSignal): Promise<void> {
+    const response = await authedRequest(
+      buildListSessionsUrl(),
+      { method: 'GET', signal },
+      config.readinessTimeoutMs,
+    );
+    const bodyText = await response.body.text();
+    if (response.statusCode >= 400) {
+      throw new AcaError(
+        `pool readiness failed (${response.statusCode})`,
+        502,
+        bodyText.slice(0, 500),
+      );
+    }
+    try {
+      const parsed = JSON.parse(bodyText) as { value?: unknown };
+      if (!Array.isArray(parsed.value)) {
+        throw new Error('missing value array');
+      }
+    } catch {
+      throw new AcaError('pool readiness returned an invalid session list', 502);
+    }
   }
 }
