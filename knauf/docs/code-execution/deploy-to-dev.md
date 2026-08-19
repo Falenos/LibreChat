@@ -266,12 +266,15 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
 
 ---
 
-## Phase C — merge the adapter release and confirm the image
+## Phase C — merge the adapter release and follow automatic nonprod delivery
 
 - [ ] Merge the reviewed adapter release. The push trigger builds the new value declared in
       `knauf/code-adapter/VERSION` into the AGK hub ACR and refuses to replace an existing tag.
 - [ ] Record the workflow's source commit, version, and digest provenance artifact.
-- [ ] Verify the tag resolves to that exact digest:
+- [ ] Follow `.github/workflows/deploy-code-adapter.yaml`. It runs asynchronously after the
+      publisher, auto-merges an exact-digest dev GitOps PR, waits for dev readiness, then repeats
+      for stage. A dev failure stops stage.
+- [ ] Verify the tag and both ArgoCD Applications resolve to that exact digest:
 
   ```bash
   az acr repository show -n acragkhubnonprod001 \
@@ -279,10 +282,9 @@ az keyvault secret set --vault-name kv-agntkarl-nonprod-001 \
     --query digest -o tsv
   ```
 
-- [ ] **Nothing is live yet.** The app is now running with `execute_code` in
-      `librechat.yaml` and no `LIBRECHAT_CODE_BASEURL`, so the guard strips the capability and
-      logs `[knauf][code] execute_code is disabled: ...`. That log line at boot is the
-      expected state between Phase C and Phase E — check for it.
+- [ ] The adapter release is live in dev/stage after the workflow succeeds. The application
+      capability remains controlled independently by `KNAUF_CODE_EXECUTION_ENABLED` and the
+      controlled base URL.
 
 ---
 
@@ -305,6 +307,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
+    tag: "<version>" # human lookup and rollback pairing; digest remains deployment identity
     digest: "sha256:<workflow-output>"
     pullPolicy: Always
   service:
@@ -586,15 +589,17 @@ sizing; the configured limit of 20 is not itself a measured throughput result.
 
 ## Rollback, in escalating order
 
-| Situation                        | Action                                                     | Blast radius                                                          |
-| -------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
-| Feature misbehaves, adapter fine | Set `KNAUF_CODE_EXECUTION_ENABLED=false` and roll app pods | Capability and code-dependent skills disappear; adapter stays dormant |
-| Adapter unhealthy                | Scale the Deployment to 0                                  | Executions fail closed; the app keeps running                         |
-| Bad adapter image                | Point the values digest at the previous proven manifest    | Exact rollback; tags are not deployment identity                      |
-| Terraform wrong                  | Do **not** destroy the pool while sessions are live        | Prefer fixing forward                                                 |
+| Situation                        | Action                                                                | Blast radius                                                          |
+| -------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Feature misbehaves, adapter fine | Set `KNAUF_CODE_EXECUTION_ENABLED=false` and roll app pods            | Capability and code-dependent skills disappear; adapter stays dormant |
+| Adapter unhealthy                | Scale the Deployment to 0                                             | Executions fail closed; the app keeps running                         |
+| Bad adapter image                | Revert the automated GitOps PR or review a prior tag+digest values PR | Exact rollback; retained tags are lookup keys and digest is identity  |
+| Terraform wrong                  | Do **not** destroy the pool while sessions are live                   | Prefer fixing forward                                                 |
 
 **Immutable release rule:** every adapter PR must bump `VERSION`, publishing refuses an existing
-tag, and GitOps pins the workflow-reported digest. A tag is only a human lookup key.
+tag, and GitOps pins the workflow-reported digest. Previous version tags are retained. Forward
+dev/stage PRs auto-merge only after their checks; rollback remains an explicit reviewed GitOps
+action and is never triggered by the delivery workflow.
 
 ---
 

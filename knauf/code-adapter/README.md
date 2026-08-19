@@ -166,16 +166,31 @@ and refreshing those fixtures is the documented step for an api-version bump.
 Image: `.github/workflows/build-code-adapter.yaml` (`az acr build` →
 `acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<VERSION>`).
 Every adapter change requires a new `VERSION`; publishing rejects existing tags and records the
-source commit, version, and immutable digest as a workflow artifact and summary. GitOps must deploy
-`repository@sha256`, not the tag. Production promotion resolves the nonprod tag once, imports that
-digest, and verifies exact digest equality. Deploy: GitOps
-single-source service `agentic-karl-code-adapter` in
-`Knauf-Group/agk-deployment-configs` (ClusterIP 3112, replicaCount 2, first
-workload-identity app pod on AGK). Azure resources (session pools, UAMI,
-federated credential, role assignments) come from `Knauf-Group/agk-infrastructure`
-Terraform. Table metadata is the source of truth. One lease-holding replica performs an hourly
-Blob-led pass plus bounded daily metadata reconciliation; metadata/indexes are committed deleted
-before the referenced Blob is removed.
+source commit, version, and immutable digest as a workflow artifact and summary.
+
+Nonproduction delivery is asynchronous:
+
+1. `.github/workflows/deploy-code-adapter.yaml` consumes the successful main-build provenance;
+2. it upgrades an older wrapper to the digest-capable `ct-shared-chart` baseline;
+3. it auto-merges a protected dev GitOps PR pinning `image.digest`;
+4. it waits for the dev ArgoCD application to be `Synced/Healthy` on the exact digest;
+5. only then does it repeat the same immutable GitOps bump and wait for stage.
+
+The publisher does not wait for ArgoCD, unrelated app releases do not redeploy the independently
+versioned adapter, and production is never changed by this rail. Production promotion resolves
+the nonprod tag once, imports that digest, and verifies exact digest equality.
+
+**Manual rollback:** previous ACR version tags are never deleted or retargeted. Revert the
+environment's automated GitOps PR, or open a reviewed values PR setting both `image.tag` and
+`image.digest` to a previously recorded pair, then verify ArgoCD and the running image. Rollback
+is deliberately not auto-merged.
+
+Deploy: GitOps single-source service `agentic-karl-code-adapter` in
+`Knauf-Group/agk-deployment-configs` (ClusterIP 3112, replicaCount 2, first workload-identity app
+pod on AGK). Azure resources (session pools, UAMI, federated credential, role assignments) come
+from `Knauf-Group/agk-infrastructure` Terraform. Table metadata is the source of truth. One
+lease-holding replica performs an hourly Blob-led pass plus bounded daily metadata reconciliation;
+metadata/indexes are committed deleted before the referenced Blob is removed.
 
 ## Follow-ups (tracked in the rollout plan)
 

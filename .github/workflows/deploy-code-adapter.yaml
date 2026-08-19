@@ -1,0 +1,391 @@
+name: Deploy code-adapter to nonprod
+
+# A successful main-branch adapter build publishes an immutable version/digest and records
+# provenance. Deployment is deliberately a separate workflow so the publisher finishes quickly
+# while this rail waits for protected GitOps PRs and ArgoCD convergence.
+#
+# Forward path:
+#   build provenance -> dev GitOps auto-merge -> dev Ready -> stage GitOps auto-merge -> stage Ready
+#
+# Production is never changed here. Rollback remains a reviewed GitOps revert or values bump to a
+# previously recorded version/digest; immutable ACR version tags are retained for that purpose.
+
+on:
+  workflow_run:
+    workflows: [Build code-adapter image]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: code-adapter-nonprod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy exact adapter digest through dev and stage
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
+      ACR_NAME: acragkhubnonprod001
+      IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-code-adapter
+      CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
+      ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
+      ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
+      ARGOCD_PASSWORD_SECRET_NAME: argocd-admin-agk-nonprod
+      MIN_CT_SHARED_CHART_VERSION: 2.17.0
+    steps:
+      - name: Resolve source build run
+        id: build-run
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          printf '%s' "$RUN_ID" | grep -Eq '^[0-9]+$'
+          echo "id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download build provenance
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.build-run.outputs.id }}
+          pattern: code-adapter-*-provenance
+          path: provenance
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate build provenance
+        id: provenance
+        env:
+          BUILD_RUN_ID: ${{ steps.build-run.outputs.id }}
+        run: |
+          set -euo pipefail
+          FILE="provenance/code-adapter-provenance.json"
+          test -f "$FILE"
+
+          REPOSITORY="$(jq -er '.repository' "$FILE")"
+          COMMIT="$(jq -er '.commit' "$FILE")"
+          VERSION="$(jq -er '.version' "$FILE")"
+          DIGEST="$(jq -er '.digest' "$FILE")"
+          IMAGE="$(jq -er '.image' "$FILE")"
+
+          [ "$REPOSITORY" = "$GITHUB_REPOSITORY" ]
+          printf '%s' "$COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,20})?$'
+          printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          [ "$IMAGE" = "$ACR_NAME.azurecr.io/$IMAGE_REPOSITORY@$DIGEST" ]
+
+          {
+            echo "commit=$COMMIT"
+            echo "version=$VERSION"
+            echo "digest=$DIGEST"
+            echo "image=$IMAGE"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### code-adapter nonprod deployment"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Build run | \`$BUILD_RUN_ID\` |"
+            echo "| Source commit | \`$COMMIT\` |"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Digest | \`$DIGEST\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify the published ACR version
+        env:
+          VERSION: ${{ steps.provenance.outputs.version }}
+          EXPECTED_DIGEST: ${{ steps.provenance.outputs.digest }}
+        run: |
+          set -euo pipefail
+          PUBLISHED_DIGEST="$(az acr repository show \
+            --subscription "$SUBSCRIPTION_ID" \
+            --name "$ACR_NAME" \
+            --image "$IMAGE_REPOSITORY:$VERSION" \
+            --query digest \
+            --output tsv)"
+          if [ "$PUBLISHED_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::ACR version digest mismatch: expected=$EXPECTED_DIGEST actual=$PUBLISHED_DIGEST"
+            exit 1
+          fi
+
+      - name: Load deployment credentials
+        run: |
+          set -euo pipefail
+          GITHUB_PAT="$(az keyvault secret show \
+            --vault-name kv-ct-shared-devops-001 \
+            --name GITHUB-PAT \
+            --query value \
+            --output tsv)"
+          ARGOCD_PASSWORD="$(az keyvault secret show \
+            --subscription "$SUBSCRIPTION_ID" \
+            --vault-name "$ARGOCD_KEY_VAULT_NAME" \
+            --name "$ARGOCD_PASSWORD_SECRET_NAME" \
+            --query value \
+            --output tsv)"
+          echo "::add-mask::$GITHUB_PAT"
+          echo "::add-mask::$ARGOCD_PASSWORD"
+          echo "GITHUB_PAT=$GITHUB_PAT" >> "$GITHUB_ENV"
+          echo "ARGOCD_PASSWORD=$ARGOCD_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Check out deployment configuration
+        run: git clone "https://$GITHUB_PAT@github.com/$CONFIG_REPOSITORY.git" agk-deployment-configs
+
+      - name: Deploy exact digest to dev then stage
+        working-directory: agk-deployment-configs
+        env:
+          GH_TOKEN: ${{ env.GITHUB_PAT }}
+          SOURCE_COMMIT: ${{ steps.provenance.outputs.commit }}
+          VERSION: ${{ steps.provenance.outputs.version }}
+          DIGEST: ${{ steps.provenance.outputs.digest }}
+          EXPECTED_IMAGE: ${{ steps.provenance.outputs.image }}
+          BUILD_RUN_ID: ${{ steps.build-run.outputs.id }}
+        run: |
+          set -euo pipefail
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          ARGOCD_TOKEN="$(jq -rn \
+            --arg password "$ARGOCD_PASSWORD" \
+            '{username: "admin", password: $password}' \
+            | curl -fsS "https://$ARGOCD_DOMAIN/api/v1/session" \
+                -H "Content-Type: application/json" \
+                -d @- \
+            | jq -er '.token')"
+          echo "::add-mask::$ARGOCD_TOKEN"
+
+          wait_for_pr() {
+            local pr_url="$1"
+            local state=""
+            for attempt in {1..90}; do
+              # If repository auto-merge is unavailable, retry a normal protected merge until
+              # required checks permit it. No --admin/bypass path is used.
+              gh pr merge "$pr_url" --squash --delete-branch >/dev/null 2>&1 || true
+              state="$(gh pr view "$pr_url" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
+              echo "Attempt $attempt: GitOps PR state=$state"
+              if [ "$state" = "MERGED" ]; then
+                return 0
+              fi
+              if [ "$state" = "CLOSED" ]; then
+                echo "::error::GitOps PR closed without merging: $pr_url"
+                return 1
+              fi
+              sleep 10
+            done
+            echo "::error::GitOps PR did not merge in time: $pr_url"
+            return 1
+          }
+
+          wait_for_argocd() {
+            local application="$1"
+            local sync_status=""
+            local health_status=""
+            local current_images=""
+            local image_match=""
+
+            curl -fsS \
+              "https://$ARGOCD_DOMAIN/api/v1/applications/$application?refresh=true" \
+              -H "Authorization: Bearer $ARGOCD_TOKEN" \
+              -H "Accept: application/json" \
+              >/dev/null 2>&1 || true
+
+            for attempt in {1..60}; do
+              app_json="$(curl -fsS \
+                "https://$ARGOCD_DOMAIN/api/v1/applications/$application" \
+                -H "Authorization: Bearer $ARGOCD_TOKEN" \
+                -H "Accept: application/json" 2>/dev/null || true)"
+              if [ -z "$app_json" ]; then
+                echo "Attempt $attempt: ArgoCD API unavailable"
+                sleep 10
+                continue
+              fi
+
+              sync_status="$(jq -r '.status.sync.status // "unknown"' <<< "$app_json")"
+              health_status="$(jq -r '.status.health.status // "unknown"' <<< "$app_json")"
+              current_images="$(jq -r '.status.summary.images[]?' <<< "$app_json" | tr '\n' ',' | sed 's/,$//')"
+              image_match="$(jq -r '.status.summary.images[]?' <<< "$app_json" | grep -Fx "$EXPECTED_IMAGE" || true)"
+              echo "Attempt $attempt: app=$application sync=$sync_status health=$health_status exact_image=${image_match:-missing}"
+
+              if [ "$sync_status" = "Synced" ] &&
+                 [ "$health_status" = "Healthy" ] &&
+                 [ -n "$image_match" ]; then
+                {
+                  echo "| $application | Synced/Healthy |"
+                  echo "| $application image | \`$EXPECTED_IMAGE\` |"
+                } >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+
+              curl -fsS \
+                "https://$ARGOCD_DOMAIN/api/v1/applications/$application?refresh=true" \
+                -H "Authorization: Bearer $ARGOCD_TOKEN" \
+                -H "Accept: application/json" \
+                >/dev/null 2>&1 || true
+              sleep 10
+            done
+
+            echo "::error::$application did not converge on $EXPECTED_IMAGE; images=${current_images:-none}"
+            return 1
+          }
+
+          deploy_environment() {
+            local environment="$1"
+            local values="agentic-karl/$environment/services/agentic-karl-code-adapter/values.yaml"
+            local chart="agentic-karl/$environment/services/agentic-karl-code-adapter/Chart.yaml"
+            local application="agentic-karl-$environment-agentic-karl-code-adapter"
+            local branch="release/code-adapter-$environment-$VERSION"
+
+            git checkout main
+            git pull --ff-only origin main
+
+            current_chart_version="$(awk '
+              /^dependencies:/ { in_dependencies=1; next }
+              in_dependencies && /^    version:/ {
+                gsub(/[[:space:]"]/, "", $2)
+                gsub(/\047/, "", $2)
+                print $2
+                exit
+              }
+            ' "$chart")"
+            test -n "$current_chart_version"
+            lowest_version="$(printf '%s\n' "$current_chart_version" "$MIN_CT_SHARED_CHART_VERSION" | sort -V | head -1)"
+            if [ "$current_chart_version" != "$MIN_CT_SHARED_CHART_VERSION" ] &&
+               [ "$lowest_version" = "$current_chart_version" ]; then
+              awk -v version="$MIN_CT_SHARED_CHART_VERSION" '
+                {
+                  if (!updated && /^dependencies:/) {
+                    in_dependencies=1
+                  } else if (in_dependencies && !updated && /^    version:/) {
+                    print "    version: \047" version "\047"
+                    updated=1
+                    next
+                  }
+                  print
+                }
+                END { if (!updated) exit 1 }
+              ' "$chart" > "$chart.tmp"
+              mv "$chart.tmp" "$chart"
+            fi
+
+            if grep -Eq '^[[:space:]]+tag:' "$values" &&
+               grep -Eq '^[[:space:]]+digest:' "$values"; then
+              awk -v version="$VERSION" -v digest="$DIGEST" '
+                {
+                  if (!tag_updated && match($0, /^[[:space:]]+tag:/)) {
+                    match($0, /^[[:space:]]*/)
+                    indent=substr($0, RSTART, RLENGTH)
+                    print indent "tag: \"" version "\""
+                    tag_updated=1
+                    next
+                  }
+                  if (!digest_updated && match($0, /^[[:space:]]+digest:/)) {
+                    match($0, /^[[:space:]]*/)
+                    indent=substr($0, RSTART, RLENGTH)
+                    print indent "digest: \"" digest "\""
+                    digest_updated=1
+                    next
+                  }
+                  print
+                }
+                END { if (!tag_updated || !digest_updated) exit 1 }
+              ' "$values" > "$values.tmp"
+              mv "$values.tmp" "$values"
+            elif grep -Eq '^[[:space:]]+tag:' "$values"; then
+              awk -v version="$VERSION" -v digest="$DIGEST" '
+                {
+                  if (!inserted && match($0, /^[[:space:]]+tag:/)) {
+                    match($0, /^[[:space:]]*/)
+                    indent=substr($0, RSTART, RLENGTH)
+                    print indent "tag: \"" version "\""
+                    print indent "digest: \"" digest "\""
+                    inserted=1
+                    next
+                  }
+                  print
+                }
+                END { if (!inserted) exit 1 }
+              ' "$values" > "$values.tmp"
+              mv "$values.tmp" "$values"
+            elif grep -Eq '^[[:space:]]+digest:' "$values"; then
+              awk -v version="$VERSION" -v digest="$DIGEST" '
+                {
+                  if (!inserted && match($0, /^[[:space:]]+digest:/)) {
+                    match($0, /^[[:space:]]*/)
+                    indent=substr($0, RSTART, RLENGTH)
+                    print indent "tag: \"" version "\""
+                    print indent "digest: \"" digest "\""
+                    inserted=1
+                    next
+                  }
+                  print
+                }
+                END { if (!inserted) exit 1 }
+              ' "$values" > "$values.tmp"
+              mv "$values.tmp" "$values"
+            else
+              echo "::error::$values has neither image.tag nor image.digest"
+              return 1
+            fi
+            if grep -Fq 'agentic-karl.knauf.digital/image-digest:' "$values"; then
+              sed -i -E \
+                "s#^([[:space:]]+agentic-karl\\.knauf\\.digital/image-digest:).*#\\1 \"$DIGEST\"#" \
+                "$values"
+            fi
+
+            grep -F "version: '$MIN_CT_SHARED_CHART_VERSION'" "$chart" >/dev/null ||
+              awk '
+                /^dependencies:/ { in_dependencies=1; next }
+                in_dependencies && /^    version:/ { print; exit }
+              ' "$chart" | grep -F "$current_chart_version" >/dev/null
+            grep -F "tag: \"$VERSION\"" "$values" >/dev/null
+            grep -F "digest: \"$DIGEST\"" "$values" >/dev/null
+
+            if git diff --quiet -- "$chart" "$values"; then
+              echo "$environment GitOps already points at $VERSION@$DIGEST"
+            else
+              git checkout -B "$branch"
+              git add "$chart" "$values"
+              git commit -m "Deploy code-adapter $VERSION to $environment"
+              git push --force-with-lease origin "$branch"
+
+              pr_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // empty')"
+              if [ -z "$pr_url" ]; then
+                # shellcheck disable=SC2016 # markdown backticks are literal in the PR body
+                printf -v pr_body '%s\n\n- Source commit: `%s`\n- Version: `%s`\n- Digest: `%s`\n- Environment: `%s`\n\n%s' \
+                  "Automated immutable code-adapter deployment from Knauf-Group/agentic-karl build run $BUILD_RUN_ID." \
+                  "$SOURCE_COMMIT" \
+                  "$VERSION" \
+                  "$DIGEST" \
+                  "$environment" \
+                  "The previous version/digest remains in ACR and Git history for a reviewed manual rollback."
+                pr_url="$(gh pr create \
+                  --base main \
+                  --head "$branch" \
+                  --title "Deploy code-adapter $VERSION to $environment" \
+                  --body "$pr_body")"
+              fi
+              echo "$environment GitOps PR: $pr_url"
+              gh pr merge "$pr_url" --auto --squash --delete-branch \
+                || gh pr merge "$pr_url" --squash --delete-branch \
+                || true
+              wait_for_pr "$pr_url"
+              echo "| $environment GitOps PR | $pr_url |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            wait_for_argocd "$application"
+          }
+
+          deploy_environment dev
+          deploy_environment stage

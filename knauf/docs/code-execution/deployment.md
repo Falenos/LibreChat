@@ -85,6 +85,21 @@ Terraform (pool +    ─┼─→  GitOps deploy (merge = deploy)  →  wire Lib
 identity + KV key)   ─┘
 ```
 
+For adapter releases after the service exists, the build and GitOps handoff is automated but
+asynchronous:
+
+```text
+build + provenance
+  → dev exact-digest GitOps PR (auto-merge)
+  → dev ArgoCD Synced/Healthy on that digest
+  → stage exact-digest GitOps PR (auto-merge)
+  → stage ArgoCD Synced/Healthy on the same digest
+```
+
+This lives in `.github/workflows/deploy-code-adapter.yaml`, not the app release pipeline: the
+adapter has its own `VERSION` and must not be redeployed by unrelated app releases. Production is
+never part of this automatic rail.
+
 ---
 
 ## 2. agk-infrastructure — Terraform (Phase B) — SHIPPED for dev + stage
@@ -206,6 +221,7 @@ agentic-karl-code-adapter:
   replicaCount: 2
   image:
     repository: acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter
+    tag: '<version>' # human lookup and rollback pairing; digest remains deployment identity
     digest: 'sha256:<workflow-output>' # exact digest from build-code-adapter.yaml
     pullPolicy: Always
   service:
@@ -384,8 +400,13 @@ between two execs transparently re-mints the session.
    > "redundant" — it is what makes this line true.
 
 2. Revert the capability flip PR (a release).
-3. Revert the GitOps PR (removes the service). The pool costs ~nothing idle.
-4. Compromise: rotate `AGK-CODEAPI-JWT-PRIVATE-KEY` in KV + the adapter's public
+3. For a bad adapter release, revert the environment's automated GitOps PR or open a reviewed PR
+   restoring both the previous `image.tag` and its recorded `image.digest`. Prior immutable ACR
+   versions are retained; verify ArgoCD reports the old `repository@digest` before closing the
+   incident. Rollback PRs are not auto-merged.
+4. Revert the service GitOps PR only when removing the dormant backend is intended. The pool costs
+   almost nothing idle.
+5. Compromise: rotate `AGK-CODEAPI-JWT-PRIVATE-KEY` in KV + the adapter's public
    key ConfigMap.
 
 ---
@@ -411,6 +432,9 @@ there is no separate "enable it in prod" code change to write:
   `knauf/code-adapter/VERSION` independently of KARL's `vX.Y.Z` tag; coupling them would
   force a full app promotion for a code-adapter hotfix. It only publishes an immutable manifest —
   the rollout is the digest values bump below.
+- Nonprod delivery: **`.github/workflows/deploy-code-adapter.yaml`** consumes build provenance,
+  auto-merges exact-digest dev/stage GitOps PRs in order, and gates stage on dev ArgoCD readiness.
+  It is separate from the publisher so waiting for ArgoCD does not hold the ACR build job open.
 
 **What is still outside this repo** (nothing here can do it):
 

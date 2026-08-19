@@ -10,7 +10,10 @@ name: Build code-adapter image
 #
 # VERSION is the only tag source. Every adapter PR must change it, and publishing refuses to
 # replace an existing tag. The workflow records the source commit, VERSION, and resulting digest;
-# deployments must consume repository@digest rather than trusting a mutable tag.
+# deployments must consume repository@digest rather than trusting tag text. A successful
+# main-branch build asynchronously triggers deploy-code-adapter.yaml, which auto-merges the exact
+# digest through dev and stage and waits for each ArgoCD application independently of this
+# publisher.
 
 on:
   workflow_dispatch:
@@ -28,6 +31,7 @@ on:
     paths:
       - knauf/code-adapter/**
       - .github/workflows/build-code-adapter.yaml
+      - .github/workflows/deploy-code-adapter.yaml
 
 permissions:
   contents: read
@@ -172,7 +176,7 @@ jobs:
         run: |
           set -euo pipefail
           DIGEST=""
-          for attempt in 1 2 3 4 5 6; do
+          for _ in 1 2 3 4 5 6; do
             DIGEST="$(az acr repository show \
               --subscription "$SUBSCRIPTION_ID" \
               --name "$ACR_NAME" \

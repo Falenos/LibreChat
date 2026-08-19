@@ -1027,6 +1027,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.github/workflows/build-code-adapter.yaml` | KK20-281 — tests adapter pull requests before any image build, builds `VERSION` by default for both main pushes and blank manual dispatches, validates optional tag overrides before Azure login, and keeps ACR writes unavailable to pull-request jobs. |
 | `.github/workflows/build-code-adapter.yaml` | KK20-257 — enforces a new adapter `VERSION`, serializes registry publishing, rejects tag replacement, embeds source/version labels, resolves the published digest, and records commit/version/digest provenance. |
 | `.github/workflows/promote-code-adapter.yaml` | KK20-257 — resolves the nonprod tag once, imports by immutable digest, rejects existing production tags, verifies exact source/target digest equality, and records promotion provenance. |
+| `.github/workflows/deploy-code-adapter.yaml` | KK20-285 — asynchronously consumes main-build provenance, adopts digest-capable chart values, auto-merges exact-digest dev then stage GitOps PRs, gates each environment on ArgoCD readiness, excludes production, and preserves reviewed rollback to retained prior versions. |
 
 ## Net-New Files
 
