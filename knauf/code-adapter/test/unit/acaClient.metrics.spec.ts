@@ -228,18 +228,17 @@ describe('acaClient aca_request_duration instrumentation', () => {
     expect(observeSpy).toHaveBeenCalledWith({ op: 'deleteSession' }, expect.any(Number));
   });
 
-  it('checks readiness through the pool-wide non-allocating session list', async () => {
+  it('checks readiness through a non-allocating reserved-session lookup', async () => {
     const pool = mockAgent.get(config.aca.poolEndpoint);
     pool
       .intercept({
         method: 'GET',
         path: (path) =>
-          path.includes('/listSessions?') &&
+          path.includes('/session?') &&
           path.includes(`api-version=${config.aca.sessionApiVersion}`) &&
-          path.includes('skip=0') &&
-          !path.includes('identifier='),
+          path.includes('identifier=karl-readiness-probe'),
       })
-      .reply(200, { value: [] });
+      .reply(404, '');
     const client = createAcaClient(config, testLogger(), tokens, testMetrics());
 
     await expect(client.checkReadiness()).resolves.toBeUndefined();

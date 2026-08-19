@@ -116,26 +116,25 @@ export function createExecRouter(deps: ExecRouterDeps): Router {
         res.status(401).json({ error: 'unauthorized' });
         return;
       }
-      const response = await runExec(
-        { lang: 'py', code: CANARY_CODE },
-        'py',
-        auth,
-        {
+      try {
+        const response = await runExec({ lang: 'py', code: CANARY_CODE }, 'py', auth, {
           ...runtimeDeps,
           logger: deps.logger.child({ request_id: req.id, canary: true }),
-        },
-      );
-      const passed =
-        response.code === 0 &&
-        response.stdout.trim() === CANARY_STDOUT &&
-        response.files.some((file) => file.name === CANARY_FILENAME && file.inherited !== true);
-      if (!passed) {
+        });
+        const passed =
+          response.code === 0 &&
+          response.stdout.trim() === CANARY_STDOUT &&
+          response.files.some((file) => file.name === CANARY_FILENAME && file.inherited !== true);
+        if (!passed) {
+          throw new Error('fixed code-execution canary returned an unexpected result');
+        }
+        deps.metrics.canaryTotal.inc({ outcome: 'success' });
+        deps.metrics.canaryLastSuccess.set(Date.now() / 1000);
+        res.status(200).json(response);
+      } catch (error) {
         deps.metrics.canaryTotal.inc({ outcome: 'error' });
-        throw new Error('fixed code-execution canary returned an unexpected result');
+        throw error;
       }
-      deps.metrics.canaryTotal.inc({ outcome: 'success' });
-      deps.metrics.canaryLastSuccess.set(Date.now() / 1000);
-      res.status(200).json(response);
     })().catch(next);
   });
 

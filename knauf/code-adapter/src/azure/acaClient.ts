@@ -149,12 +149,6 @@ export function createAcaClient(
     url.searchParams.set('identifier', identifier);
     return url.toString();
   };
-  const buildListSessionsUrl = (): string => {
-    const url = new URL(`${config.aca.poolEndpoint}/listSessions`);
-    url.searchParams.set('api-version', config.aca.sessionApiVersion);
-    url.searchParams.set('skip', '0');
-    return url.toString();
-  };
 
   const authedRequest = async (
     url: string,
@@ -548,26 +542,24 @@ export function createAcaClient(
   }
 
   async function doCheckReadiness(signal?: AbortSignal): Promise<void> {
+    // GET /session is a management lookup, not a file/code interaction: an unknown
+    // identifier returns 404 without allocating a sandbox. A single reserved identifier
+    // keeps the response bounded and avoids exposing/listing active tenant session ids.
     const response = await authedRequest(
-      buildListSessionsUrl(),
+      buildSessionUrl('karl-readiness-probe'),
       { method: 'GET', signal },
       config.readinessTimeoutMs,
     );
     const bodyText = await response.body.text();
+    if (response.statusCode === 404) {
+      return;
+    }
     if (response.statusCode >= 400) {
       throw new AcaError(
         `pool readiness failed (${response.statusCode})`,
         502,
         bodyText.slice(0, 500),
       );
-    }
-    try {
-      const parsed = JSON.parse(bodyText) as { value?: unknown };
-      if (!Array.isArray(parsed.value)) {
-        throw new Error('missing value array');
-      }
-    } catch {
-      throw new AcaError('pool readiness returned an invalid session list', 502);
     }
   }
 }

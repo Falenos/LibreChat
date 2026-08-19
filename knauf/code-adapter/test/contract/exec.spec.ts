@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { Readable } from 'node:stream';
 import { createApp } from '../../src/app.js';
@@ -398,6 +398,18 @@ describe('POST /v1/exec contract', () => {
       expect.objectContaining({ name: 'karl-code-canary.txt' }),
     ]);
     expect(aca.deletedSessions).toEqual([response.body.session_id]);
+  });
+
+  it('records backend failures as canary errors', async () => {
+    const canarySpy = vi.spyOn(metrics.canaryTotal, 'inc');
+    aca.executeImpl = async () => {
+      throw new AcaError('pool unavailable', 502, 'BackendUnavailable');
+    };
+
+    const response = await request(app).post('/v1/internal/canary').send({});
+
+    expect(response.status).toBe(502);
+    expect(canarySpy).toHaveBeenCalledWith({ outcome: 'error' });
   });
 
   it('timeout → HTTP 200 {code:1} with a model-actionable stderr, never 5xx', async () => {
