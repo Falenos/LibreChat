@@ -341,8 +341,8 @@ describe('initializeClient — processAgent ACL gate', () => {
    * authorization axis — and `withDeploymentSkillIds` appended every deployment
    * skill unconditionally. So a role with `SKILLS.USE: false` still received the
    * catalog and could invoke `karl-brand` / `karl-artifacts` in a default KARL
-   * chat. AGENT_BUILDER is exactly that role until a human runs
-   * `knauf/scripts/seed-agent-builder-role.js`.
+   * chat. KK20-286 fixed the missing AGENT_BUILDER role fields at startup, but
+   * this test still proves an explicit Admin denial is enforced during a run.
    *
    * Two role names rather than one document toggled twice, because
    * `getRoleByName` memoises per name and a flipped document can be served stale.

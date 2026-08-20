@@ -364,6 +364,22 @@ describe('createAdminRolesHandlers', () => {
       });
     });
 
+    // [knauf] KK20-286 — startup exclusively owns the governed role's existence.
+    it('returns 403 when creating an Agent Builder case variant', async () => {
+      const deps = createDeps();
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        body: { name: 'agent_builder' },
+      });
+
+      await handlers.createRole(req, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(json).toHaveBeenCalledWith({ error: 'Cannot create managed Agent Builder role' });
+      expect(deps.createRoleByName).not.toHaveBeenCalled();
+    });
+    // End [knauf]
+
     it('returns 500 on unexpected error', async () => {
       const deps = createDeps({
         createRoleByName: jest.fn().mockRejectedValue(new Error('db crash')),
@@ -574,6 +590,38 @@ describe('createAdminRolesHandlers', () => {
       expect(status).toHaveBeenCalledWith(403);
       expect(json).toHaveBeenCalledWith({ error: 'Cannot use a reserved system role name' });
     });
+
+    // [knauf] KK20-286 — the governed custom role keeps a stable identity.
+    it('returns 403 when renaming the Agent Builder role', async () => {
+      const deps = createDeps();
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        params: { name: 'AGENT_BUILDER' },
+        body: { name: 'CHAMPION' },
+      });
+
+      await handlers.updateRole(req, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(json).toHaveBeenCalledWith({ error: 'Cannot rename managed Agent Builder role' });
+      expect(deps.getRoleByName).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when renaming another role to Agent Builder', async () => {
+      const deps = createDeps();
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        params: { name: 'editor' },
+        body: { name: 'agent_builder' },
+      });
+
+      await handlers.updateRole(req, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(json).toHaveBeenCalledWith({ error: 'Cannot rename managed Agent Builder role' });
+      expect(deps.getRoleByName).not.toHaveBeenCalled();
+    });
+    // End [knauf]
 
     it('returns 409 when target name already exists', async () => {
       const deps = createDeps({
@@ -856,6 +904,32 @@ describe('createAdminRolesHandlers', () => {
       expect(status).toHaveBeenCalledWith(200);
       expect(json).toHaveBeenCalledWith({ role: updatedRole });
     });
+
+    // [knauf] KK20-286 — identity protection must not reduce Admin permission control.
+    it('allows Agent Builder permission updates', async () => {
+      const role = mockRole({ name: 'AGENT_BUILDER' });
+      const updatedRole = mockRole({
+        name: 'AGENT_BUILDER',
+        permissions: {
+          [PermissionTypes.SKILLS]: { [Permissions.USE]: false },
+        } as IRole['permissions'],
+      });
+      const deps = createDeps({
+        getRoleByName: jest.fn().mockResolvedValueOnce(role).mockResolvedValueOnce(updatedRole),
+      });
+      const handlers = createAdminRolesHandlers(deps);
+      const permissions = { [PermissionTypes.SKILLS]: { [Permissions.USE]: false } };
+      const { req, res, status } = createReqRes({
+        params: { name: 'AGENT_BUILDER' },
+        body: { permissions },
+      });
+
+      await handlers.updateRolePermissions(req, res);
+
+      expect(status).toHaveBeenCalledWith(200);
+      expect(deps.updateAccessPermissions).toHaveBeenCalledWith('AGENT_BUILDER', permissions, role);
+    });
+    // End [knauf]
 
     // [knauf] Pin Admin UI ownership of USER prompt-sharing permissions.
     it('preserves the complete USER prompt-sharing choice from Admin', async () => {
@@ -1140,6 +1214,22 @@ describe('createAdminRolesHandlers', () => {
       expect(deps.deleteRoleByName).not.toHaveBeenCalled();
     });
 
+    // [knauf] KK20-286 — startup owns Agent Builder existence.
+    it('returns 403 for the Agent Builder role', async () => {
+      const deps = createDeps();
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status, json } = createReqRes({
+        params: { name: 'agent_builder' },
+      });
+
+      await handlers.deleteRole(req, res);
+
+      expect(status).toHaveBeenCalledWith(403);
+      expect(json).toHaveBeenCalledWith({ error: 'Cannot delete managed Agent Builder role' });
+      expect(deps.deleteRoleByName).not.toHaveBeenCalled();
+    });
+    // End [knauf]
+
     it('returns 404 when role not found', async () => {
       const deps = createDeps({ deleteRoleByName: jest.fn().mockResolvedValue(null) });
       const handlers = createAdminRolesHandlers(deps);
@@ -1300,6 +1390,27 @@ describe('createAdminRolesHandlers', () => {
       expect(status).toHaveBeenCalledWith(200);
       expect(json).toHaveBeenCalledWith({ success: true });
     });
+
+    // [knauf] KK20-286 — the managed identity remains assignable like any custom role.
+    it('allows adding an Agent Builder member', async () => {
+      const deps = createDeps({
+        getRoleByName: jest.fn().mockResolvedValue(mockRole({ name: 'AGENT_BUILDER' })),
+        findUser: jest.fn().mockResolvedValue(mockUser({ role: 'viewer' })),
+      });
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status } = createReqRes({
+        params: { name: 'AGENT_BUILDER' },
+        body: { userId: validUserId },
+      });
+
+      await handlers.addRoleMember(req, res);
+
+      expect(status).toHaveBeenCalledWith(200);
+      expect(deps.updateUser).toHaveBeenCalledWith(validUserId, {
+        role: 'AGENT_BUILDER',
+      });
+    });
+    // End [knauf]
 
     it('skips DB write when user already has the target role', async () => {
       const deps = createDeps({
@@ -1509,6 +1620,26 @@ describe('createAdminRolesHandlers', () => {
       expect(status).toHaveBeenCalledWith(200);
       expect(json).toHaveBeenCalledWith({ success: true });
     });
+
+    // [knauf] KK20-286 — identity protection does not trap members in the role.
+    it('allows removing an Agent Builder member', async () => {
+      const deps = createDeps({
+        getRoleByName: jest.fn().mockResolvedValue(mockRole({ name: 'AGENT_BUILDER' })),
+        findUser: jest.fn().mockResolvedValue(mockUser({ role: 'AGENT_BUILDER' })),
+      });
+      const handlers = createAdminRolesHandlers(deps);
+      const { req, res, status } = createReqRes({
+        params: { name: 'AGENT_BUILDER', userId: validUserId },
+      });
+
+      await handlers.removeRoleMember(req, res);
+
+      expect(status).toHaveBeenCalledWith(200);
+      expect(deps.updateUser).toHaveBeenCalledWith(validUserId, {
+        role: SystemRoles.USER,
+      });
+    });
+    // End [knauf]
 
     it('returns 403 when removing from a non-ADMIN system role', async () => {
       const deps = createDeps();

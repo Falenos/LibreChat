@@ -163,12 +163,10 @@ function canCreateSkill({ req }) {
  * received the deployment catalog and could invoke `karl-brand` /
  * `karl-artifacts` in a default KARL chat.
  *
- * That mattered concretely rather than theoretically: AGENT_BUILDER has
- * `SKILLS.USE: false` until a human runs `knauf/scripts/seed-agent-builder-role.js`,
- * so the window between deploying the image and running mongosh granted exactly
- * what the seed script exists to grant. It also made the "three gates" claim in
- * `librechat.yaml` and the rollout plan untrue, and left us no way to deny skills
- * to a role later.
+ * That mattered concretely rather than theoretically: a missing
+ * `AGENT_BUILDER.SKILLS` block caused this exact failure before KK20-286 added
+ * startup reconciliation. This runtime check remains necessary because Admins
+ * can explicitly deny Skills later and missing permissions must fail closed.
  *
  * Fails closed: `checkAccessWithRequestCache` returns `false` for a missing user,
  * a missing role document, or an absent permission block — it never throws.

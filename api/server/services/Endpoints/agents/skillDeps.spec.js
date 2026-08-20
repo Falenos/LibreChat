@@ -7,6 +7,7 @@ const mockResolveRequestTenantId = jest.fn();
 const mockCreateDeploymentSkillMethods = jest.fn((methods) => methods);
 // [knauf] KK20-243 — see the '@librechat/api' mock below.
 const mockCheckAccessWithRequestCache = jest.fn();
+// End [knauf]
 
 jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: (...args) => mockGetStrategyFunctions(...args),
@@ -75,9 +76,9 @@ const { getSkillToolDeps, canUseSkills } = require('./skillDeps');
  * Upstream checked this permission only on the skills REST routes and inside
  * `canCreateSkill` (authoring). Nothing checked it while building a run, so a
  * role with `SKILLS.USE: false` still received the deployment-skill catalog and
- * could invoke `karl-brand` / `karl-artifacts` in a default KARL chat. That
- * window was real, not hypothetical: AGENT_BUILDER carries `SKILLS.USE: false`
- * until a human runs `knauf/scripts/seed-agent-builder-role.js`.
+ * could invoke `karl-brand` / `karl-artifacts` in a default KARL chat. The
+ * missing AGENT_BUILDER Skills block that triggered KK20-286 proved this path
+ * needs an independent runtime authorization check.
  */
 describe('[knauf] canUseSkills', () => {
   beforeEach(() => {

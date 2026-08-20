@@ -429,10 +429,10 @@ describe('[knauf] librechat.yaml — code execution is always on, with no chip',
    * client constants dead code and re-disable the manual path by permission, which is the
    * KK20-252 state that KK20-257 moved away from.
    *
-   * `RUN_CODE: { USE: false }` in knauf/scripts/seed-agent-builder-role.js is unrelated
-   * and stays: it grants nothing reachable now that no UI calls that endpoint. This file
-   * cannot see it (a mongosh script, not config) and `updateInterfacePermissions`
-   * re-seeds only USER and ADMIN.
+   * `RUN_CODE: { USE: false }` in the AGENT_BUILDER startup policy is unrelated and
+   * stays: it grants nothing reachable now that no UI calls that endpoint. This file
+   * cannot see that custom-role policy, and `updateInterfacePermissions` re-seeds only
+   * USER and ADMIN.
    */
   it('grants RUN_CODE through interface.runCode, with the UI surfaces hidden client-side', () => {
     expect(config.interface?.runCode).toBe(true);
