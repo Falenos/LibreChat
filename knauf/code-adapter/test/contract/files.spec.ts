@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
 import {
@@ -100,6 +100,37 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     const docs = await repo.listBySession(sid);
     expect(docs.every((d) => d.readOnly)).toBe(true);
     expect(docs.every((d) => d.identity.kind === 'skill' && d.identity.version === 3)).toBe(true);
+  });
+
+  it('does not log original filenames when a batch item fails', async () => {
+    const logger = testLogger();
+    const warn = vi.spyOn(logger, 'warn');
+    app = createApp({
+      config: testConfig(),
+      logger,
+      aca: new FakeAcaClient(),
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics: testMetrics(),
+    });
+    blob.put = async () => {
+      throw new Error('simulated Blob failure');
+    };
+
+    const response = await request(app)
+      .post('/v1/upload/batch')
+      .field('kind', 'user')
+      .field('id', 'user-1')
+      .attach('file', Buffer.from('sensitive'), 'confidential-project-name.txt');
+
+    expect(response.status).toBe(200);
+    expect(response.body.files[0].filename).toBe('confidential-project-name.txt');
+    expect(warn).toHaveBeenCalledWith(
+      { itemIndex: 0, err: 'simulated Blob failure' },
+      'batch upload item failed',
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('confidential-project-name.txt');
   });
 
   it('rejects a bad identity with the codeapi 400 wording', async () => {

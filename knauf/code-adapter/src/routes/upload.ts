@@ -141,13 +141,13 @@ export function createUploadRouter(deps: UploadDeps): Router {
         const sessionId = mintSessionId(auth.userId, deps.config.sessionHintSecret);
 
         const results: BatchUploadFileResult[] = [];
-        for (const file of files) {
+        for (const [itemIndex, file] of files.entries()) {
           try {
             const doc = await stageOne(file, identity, auth, sessionId, readOnly);
             results.push({ status: 'success', fileId: doc.fileId, filename: doc.filename });
           } catch (err) {
             deps.logger.warn(
-              { file: file.originalname, err: (err as Error).message },
+              { itemIndex, err: (err as Error).message },
               'batch upload item failed',
             );
             results.push({
