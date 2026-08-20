@@ -36,6 +36,8 @@ jobs:
       SUBSCRIPTION_ID: ad3f0a71-cc5b-4d00-8289-23623cf2064c
       ACR_NAME: acragkhubnonprod001
       IMAGE_REPOSITORY: agentic-karl-dev/agentic-karl-code-adapter
+      CHART_ACR_NAME: acrctshared001
+      CT_SHARED_CHART_REPOSITORY: helm/ct-shared-chart
       CONFIG_REPOSITORY: Knauf-Group/agk-deployment-configs
       ARGOCD_DOMAIN: argocd.agk.nonprod.knauf.digital
       ARGOCD_KEY_VAULT_NAME: kv-agk-hub-nonprod-001
@@ -102,6 +104,20 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify required shared chart is published
+        run: |
+          set -euo pipefail
+          PUBLISHED_VERSION="$(az acr repository show-tags \
+            --subscription "$SUBSCRIPTION_ID" \
+            --name "$CHART_ACR_NAME" \
+            --repository "$CT_SHARED_CHART_REPOSITORY" \
+            --query "[?@=='$MIN_CT_SHARED_CHART_VERSION'] | [0]" \
+            --output tsv)"
+          if [ "$PUBLISHED_VERSION" != "$MIN_CT_SHARED_CHART_VERSION" ]; then
+            echo "::error::Required chart $CT_SHARED_CHART_REPOSITORY:$MIN_CT_SHARED_CHART_VERSION is not published in $CHART_ACR_NAME"
+            exit 1
+          fi
 
       - name: Verify the published ACR version
         env:
