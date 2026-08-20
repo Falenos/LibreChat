@@ -1,9 +1,4 @@
-const {
-  CacheKeys,
-  Permissions,
-  PermissionTypes,
-  permissionsSchema,
-} = require('librechat-data-provider');
+const { CacheKeys, Permissions, PermissionTypes } = require('librechat-data-provider');
 const { logger, runAsSystem, scopedCacheKey } = require('@librechat/data-schemas');
 
 const AGENT_BUILDER_ROLE = 'AGENT_BUILDER';
@@ -85,10 +80,6 @@ const AGENT_BUILDER_PERMISSIONS = {
   },
 };
 
-function isAgentBuilderRole(name) {
-  return typeof name === 'string' && name.toUpperCase() === AGENT_BUILDER_ROLE;
-}
-
 function permissionEntries() {
   return Object.entries(AGENT_BUILDER_PERMISSIONS).flatMap(([permissionType, values]) =>
     Object.entries(values).map(([permission, value]) => ({
@@ -134,10 +125,6 @@ async function ensureAgentBuilderRole({ Role, getCache, roleLogger = logger }) {
 
     const created = createResult.upsertedCount > 0;
     if (created || addedPaths.length > 0) {
-      const cache = getCache?.(CacheKeys.ROLES);
-      if (cache) {
-        await cache.set(scopedCacheKey(AGENT_BUILDER_ROLE), null);
-      }
       roleLogger.info(
         `[agentBuilderRole] ${created ? 'created role' : `added ${addedPaths.join(', ')}`}`,
       );
@@ -157,14 +144,13 @@ async function ensureAgentBuilderRole({ Role, getCache, roleLogger = logger }) {
       );
     }
 
+    const cache = getCache?.(CacheKeys.ROLES);
+    if (cache) {
+      await cache.set(scopedCacheKey(AGENT_BUILDER_ROLE), null);
+    }
+
     return { role, created, addedPaths };
   });
-}
-
-function getPermissionSchemaPaths() {
-  return Object.entries(permissionsSchema.shape).flatMap(([permissionType, schema]) =>
-    Object.keys(schema.shape).map((permission) => `permissions.${permissionType}.${permission}`),
-  );
 }
 
 module.exports = {
@@ -172,7 +158,4 @@ module.exports = {
   AGENT_BUILDER_DESCRIPTION,
   AGENT_BUILDER_PERMISSIONS,
   ensureAgentBuilderRole,
-  getPermissionSchemaPaths,
-  isAgentBuilderRole,
-  permissionEntries,
 };

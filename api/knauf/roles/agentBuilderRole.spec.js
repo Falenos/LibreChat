@@ -1,16 +1,30 @@
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { createModels } = require('@librechat/data-schemas');
-const { Permissions, PermissionTypes, SystemRoles } = require('librechat-data-provider');
+const {
+  Permissions,
+  PermissionTypes,
+  SystemRoles,
+  permissionsSchema,
+} = require('librechat-data-provider');
 const {
   AGENT_BUILDER_ROLE,
   AGENT_BUILDER_DESCRIPTION,
   AGENT_BUILDER_PERMISSIONS,
   ensureAgentBuilderRole,
-  getPermissionSchemaPaths,
-  isAgentBuilderRole,
-  permissionEntries,
 } = require('./agentBuilderRole');
+
+function policyPaths() {
+  return Object.entries(AGENT_BUILDER_PERMISSIONS).flatMap(([permissionType, values]) =>
+    Object.keys(values).map((permission) => `permissions.${permissionType}.${permission}`),
+  );
+}
+
+function schemaPaths() {
+  return Object.entries(permissionsSchema.shape).flatMap(([permissionType, schema]) =>
+    Object.keys(schema.shape).map((permission) => `permissions.${permissionType}.${permission}`),
+  );
+}
 
 describe('ensureAgentBuilderRole', () => {
   let mongoServer;
@@ -138,13 +152,13 @@ describe('ensureAgentBuilderRole', () => {
 
     const roles = await Role.find({ name: AGENT_BUILDER_ROLE }).lean();
     expect(roles).toHaveLength(1);
-    for (const { path } of permissionEntries()) {
+    for (const path of policyPaths()) {
       const value = path.split('.').reduce((current, segment) => current?.[segment], roles[0]);
       expect(value).not.toBeUndefined();
     }
   });
 
-  it('does not invalidate cache or touch tenant-scoped copies on a no-op run', async () => {
+  it('invalidates stale base cache without touching tenant-scoped copies on a DB no-op', async () => {
     await Role.create([
       {
         name: AGENT_BUILDER_ROLE,
@@ -167,22 +181,16 @@ describe('ensureAgentBuilderRole', () => {
 
     expect(result.created).toBe(false);
     expect(result.addedPaths).toEqual([]);
-    expect(cache.set).not.toHaveBeenCalled();
+    expect(cache.set).toHaveBeenCalledWith(AGENT_BUILDER_ROLE, null);
     expect(tenantRole.description).toBe('Tenant-owned role');
     expect(tenantRole.permissions[PermissionTypes.SKILLS]).toEqual({ [Permissions.USE]: false });
   });
 
   it('covers every permission bit in the current LibreChat schema', () => {
-    expect(
-      permissionEntries()
-        .map(({ path }) => path)
-        .sort(),
-    ).toEqual(getPermissionSchemaPaths().sort());
+    expect(policyPaths().sort()).toEqual(schemaPaths().sort());
   });
 
   it('remains a normal custom role name', () => {
-    expect(isAgentBuilderRole('agent_builder')).toBe(true);
-    expect(isAgentBuilderRole('USER')).toBe(false);
     expect(Object.values(SystemRoles)).not.toContain(AGENT_BUILDER_ROLE);
   });
 });

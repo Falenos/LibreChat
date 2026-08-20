@@ -40,8 +40,6 @@ The shipped `librechat.yaml` sets `SKILLS.USE=true` and skill authoring/sharing 
 
 Assign users through Admin Panel → Users → select user → **Change Role → AGENT_BUILDER**.
 
-The legacy `knauf/scripts/seed-agent-builder-role.js` path is now read-only diagnostic tooling. It prints current role documents and never changes the database.
-
 ## Troubleshooting
 
 If MongoDB shows the correct values but the Admin UI does not, check in this order:

@@ -105,7 +105,7 @@ Artifacts and Skills are **on**. `execute_code` is untouched. The whole activati
 
 ### Role lifecycle update (KK20-286)
 
-The former post-deployment mongosh step is retired. Application startup now creates the base `AGENT_BUILDER` role if absent and adds only missing permission fields. Existing values and membership remain Admin-owned. The legacy script is read-only diagnostic tooling and does not converge tenant-scoped copies.
+The former post-deployment mongosh step and script are removed. Application startup now creates the base `AGENT_BUILDER` role if absent and adds only missing permission fields. Existing values and membership remain Admin-owned; tenant-scoped role lifecycle remains tenant-owned.
 
 ### Known behaviour that will generate questions
 
