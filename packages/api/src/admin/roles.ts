@@ -25,6 +25,13 @@ function isSystemRoleName(name: string): boolean {
   return systemRoleValues.has(name.toUpperCase());
 }
 
+// [knauf] KK20-286 — protect the app-owned Agent Builder identity without making it a system role.
+const AGENT_BUILDER_ROLE = 'AGENT_BUILDER';
+function isAgentBuilderRoleName(name: string): boolean {
+  return name.toUpperCase() === AGENT_BUILDER_ROLE;
+}
+// End [knauf]
+
 const MAX_NAME_LENGTH = 500;
 const MAX_DESCRIPTION_LENGTH = 2000;
 const CONTROL_CHAR_RE = /\p{Cc}/u;
@@ -250,6 +257,11 @@ export function createAdminRolesHandlers(deps: AdminRolesDeps): {
       if (nameError) {
         return res.status(400).json({ error: nameError });
       }
+      // [knauf] KK20-286 — startup exclusively owns creation of the governed base role.
+      if (isAgentBuilderRoleName((name as string).trim())) {
+        return res.status(403).json({ error: 'Cannot create managed Agent Builder role' });
+      }
+      // End [knauf]
       const descError = validateDescription(description);
       if (descError) {
         return res.status(400).json({ error: descError });
@@ -350,6 +362,11 @@ export function createAdminRolesHandlers(deps: AdminRolesDeps): {
       if (isRename && isSystemRoleName(trimmedName)) {
         return res.status(403).json({ error: 'Cannot use a reserved system role name' });
       }
+      // [knauf] KK20-286 — permissions and membership stay editable; only role identity is fixed.
+      if (isRename && (isAgentBuilderRoleName(name) || isAgentBuilderRoleName(trimmedName))) {
+        return res.status(403).json({ error: 'Cannot rename managed Agent Builder role' });
+      }
+      // End [knauf]
 
       const existing = await getRoleByName(name);
       if (!existing) {
@@ -449,6 +466,11 @@ export function createAdminRolesHandlers(deps: AdminRolesDeps): {
       if (isSystemRoleName(name)) {
         return res.status(403).json({ error: 'Cannot delete system role' });
       }
+      // [knauf] KK20-286 — startup owns this role's existence, so Admin must not delete it.
+      if (isAgentBuilderRoleName(name)) {
+        return res.status(403).json({ error: 'Cannot delete managed Agent Builder role' });
+      }
+      // End [knauf]
 
       const deleted = await deleteRoleByName(name);
       if (!deleted) {

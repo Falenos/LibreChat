@@ -17,7 +17,7 @@ Use audience groups for normal agent distribution. Do not describe a platform ro
 | Use shipped read-only skills | Yes | Yes | Yes |
 | Browse the public web | Conditional; restricted USER deployments disable it | Yes | Yes |
 | Use assigned Agent Marketplace agents | Yes | Yes | Yes |
-| Use a centrally managed MCP integration | Conditional; only when configured and authorised | No in the seeded profile | Conditional; only when configured |
+| Use a centrally managed MCP integration | Conditional; only when configured and authorised | No in the startup default profile | Conditional; only when configured |
 | Create and maintain own agents | No | Yes | Yes |
 | Add Data Knowledge to own agents | No | Yes | Yes |
 | Configure Browse, visual artifacts, skills, and curated tools on own agents | No | Yes | Yes |
@@ -33,7 +33,9 @@ Can use standard chat, shipped read-only skills, and agents shared to an audienc
 
 ### AGENT_BUILDER
 
-An approved AI Champion. Can create and maintain private agents, configure the three **What it can do** capabilities, add approved Data Knowledge, and attach the curated image-generation or calculator tools when needed. Can use shipped skills but cannot author or share skills. Cannot publish agents, grant audience access, browse user/group directories, use or create MCP servers, use remote agents or memory, run code, or administer the platform under the seeded profile.
+An approved AI Champion. Can create and maintain private agents, configure the three **What it can do** capabilities, add approved Data Knowledge, and attach the curated image-generation or calculator tools when needed. Can use shipped skills but cannot author or share skills. Cannot publish agents, grant audience access, browse user/group directories, use or create MCP servers, use remote agents or memory, run code, or administer the platform under the startup default profile.
+
+The role is a normal LibreChat custom role. Startup creates it if absent and adds only missing permission fields; Admin-selected values and membership remain authoritative. Its stable name cannot be renamed or deleted through the Admin API.
 
 ### ADMIN
 

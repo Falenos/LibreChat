@@ -4,71 +4,42 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-test('the Agent Builder role can create public artifact links', () => {
-  let role = { name: 'AGENT_BUILDER', permissions: {} };
+test('the deprecated Agent Builder script is read-only', () => {
+  const output = [];
+  const role = { _id: 'role-1', name: 'AGENT_BUILDER', permissions: {} };
   const roles = {
     find: () => ({ toArray: () => [role] }),
-    insertOne: () => {
-      throw new Error('Expected the existing role to be updated');
-    },
-    updateOne: (_filter, update) => {
-      role = { ...role, ...update.$set };
-      return { matchedCount: 1, modifiedCount: 1 };
-    },
+    insertOne: () => assert.fail('Diagnostic must not insert roles'),
+    updateOne: () => assert.fail('Diagnostic must not update roles'),
   };
   vm.runInNewContext(
     fs.readFileSync(path.resolve(__dirname, '../scripts/seed-agent-builder-role.js'), 'utf8'),
     {
       db: { getCollection: () => roles },
-      print: () => undefined,
+      print: (message) => output.push(message),
       printjson: () => undefined,
     },
   );
 
-  assert.equal(role.permissions.SHARED_LINKS.CREATE, true);
-  assert.equal(role.permissions.SHARED_LINKS.SHARE, true);
-  assert.equal(role.permissions.SHARED_LINKS.SHARE_PUBLIC, true);
-  assert.equal(role.permissions.PROMPTS, undefined);
-  assert.equal(role.permissions.PEOPLE_PICKER, undefined);
+  assert.match(output.join('\n'), /Read-only diagnostic/);
+  assert.match(output.join('\n'), /missing SKILLS\.USE/);
+  assert.match(output.join('\n'), /restart the application/);
 });
 
-test('the Agent Builder seeder preserves Admin-managed prompt sharing permissions', () => {
-  let role = {
-    _id: 'agent-builder-role',
-    name: 'AGENT_BUILDER',
-    permissions: {
-      PROMPTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: true },
-      PEOPLE_PICKER: { VIEW_USERS: false, VIEW_GROUPS: true, VIEW_ROLES: true },
-    },
-  };
+test('the diagnostic directs operators to startup when the role is absent', () => {
+  const output = [];
   const roles = {
-    find: () => ({ toArray: () => [role] }),
-    insertOne: () => {
-      throw new Error('Expected the existing role to be updated');
-    },
-    updateOne: (_filter, update) => {
-      role = { ...role, ...update.$set };
-      return { matchedCount: 1, modifiedCount: 1 };
-    },
+    find: () => ({ toArray: () => [] }),
   };
   vm.runInNewContext(
     fs.readFileSync(path.resolve(__dirname, '../scripts/seed-agent-builder-role.js'), 'utf8'),
     {
       db: { getCollection: () => roles },
-      print: () => undefined,
+      print: (message) => output.push(message),
       printjson: () => undefined,
     },
   );
 
-  assert.deepEqual(role.permissions.PROMPTS, {
-    USE: false,
-    CREATE: false,
-    SHARE: false,
-    SHARE_PUBLIC: true,
-  });
-  assert.deepEqual(role.permissions.PEOPLE_PICKER, {
-    VIEW_USERS: false,
-    VIEW_GROUPS: true,
-    VIEW_ROLES: true,
-  });
+  assert.match(output.join('\n'), /Role not found/);
+  assert.match(output.join('\n'), /startup initialization can create it/);
 });

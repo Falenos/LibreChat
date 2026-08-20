@@ -423,11 +423,10 @@ interface:
   # is not working, this is not the flag to look at (see
   # packages/api/src/knauf/code/codeEnvGuard.ts and knauf/docs/code-execution/).
   #
-  # Two knock-ons kept in sync: `knauf/scripts/seed-agent-builder-role.js` (permissions.ts
-  # re-seeds only USER and ADMIN from this file, so the AGENT_BUILDER custom role is set
-  # there), and KNAUF_RESTRICT_USER_PERMISSIONS, which forces RUN_CODE.USE false for the
-  # built-in USER role wherever it is enabled — so in those environments this flag
-  # effectively applies to ADMIN only.
+  # Two knock-ons kept in sync: the AGENT_BUILDER startup policy (permissions.ts
+  # re-seeds only USER and ADMIN from this file), and KNAUF_RESTRICT_USER_PERMISSIONS,
+  # which forces RUN_CODE.USE false for the built-in USER role wherever it is enabled —
+  # so in those environments this flag effectively applies to ADMIN only.
   # Agent authors are unaffected either way: the builder's Execute code capability reads
   # the capability, not this permission.
   runCode: true
@@ -473,14 +472,13 @@ interface:
   #                    That is deliberate: the deployment skills in `skill/` are
   #                    code-reviewed and version-controlled, and a Mongo-backed
   #                    skill authored in the UI would be neither. To grant
-  #                    authoring to a specific role later, do it the way
-  #                    AGENT_BUILDER is done — a targeted seed script, not this
-  #                    block.
+  #                    authoring to a specific role later, use a targeted role
+  #                    policy like AGENT_BUILDER rather than this shared block.
   #   share/public  -> nothing to share while skills are deployment-only.
   # SKILLS is deliberately NOT in KNAUF_RESTRICTED_USER_PERMISSION_TYPES
   # (packages/api/src/knauf/permissions/userRestrictions.ts), so this block is
-  # the only thing governing the built-in USER role. AGENT_BUILDER is separate
-  # and manual — see knauf/scripts/seed-agent-builder-role.js.
+  # the only thing governing the built-in USER role. AGENT_BUILDER is reconciled
+  # separately at application startup without overwriting Admin-selected values.
   skills:
     use: true
     create: false
@@ -574,8 +572,8 @@ endpoints:
   #                per-agent opt-in sits on top of this flag: persisted agents
   #                need `skills_enabled`, default-spec chats use the modelSpec
   #                `skills` field. Also gated by the SKILLS.USE RBAC permission —
-  #                see `interface.skills` above, and
-  #                knauf/scripts/seed-agent-builder-role.js for AGENT_BUILDER.
+  #                see `interface.skills` above and the AGENT_BUILDER startup
+  #                policy in api/knauf/roles/agentBuilderRole.js.
   #                NOTE that RBAC gate is a [knauf] addition (KK20-243, PR review):
   #                upstream enforced SKILLS.USE only on the skills REST routes,
   #                so this capability alone used to hand the deployment catalog
