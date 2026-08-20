@@ -1621,15 +1621,17 @@ describe('Code Process', () => {
       });
     });
 
+    // [knauf] pin the extended sandbox helper timeout to the adapter's total deadline
     describe('timeout', () => {
-      it('uses the same 15s timeout as processCodeOutput (consistent code-server SLA)', async () => {
+      it('allows the bounded adapter execution and cleanup budget to complete', async () => {
         mockAxios.mockResolvedValueOnce({ data: { stdout: '', stderr: '' } });
 
         await readSandboxFile({ file_path: '/mnt/data/x.txt' });
 
-        expect(mockAxios.mock.calls[0][0].timeout).toBe(15000);
+        expect(mockAxios.mock.calls[0][0].timeout).toBe(350000);
       });
     });
+    // End [knauf]
   });
 
   describe('writeSandboxFile', () => {
@@ -1670,7 +1672,9 @@ describe('Code Process', () => {
       expect(call.data.lang).toBe('bash');
       expect(call.data.session_id).toBe('sess-prev');
       expect(call.data.files).toEqual(files);
-      expect(call.timeout).toBe(15000);
+      // [knauf] pin write helper timeout to the same bounded adapter deadline
+      expect(call.timeout).toBe(350000);
+      // End [knauf]
       expect(call.httpAgent).toBe(codeServerHttpAgent);
       expect(call.httpsAgent).toBe(codeServerHttpsAgent);
       expect(result).toMatchObject({

@@ -76,21 +76,26 @@ export async function captureOutputs(params: {
   sessionId: string;
   inputs: ResolvedInput[];
   baseline: Map<string, string>;
+  baselineReliable: boolean;
   auth: AuthContext;
   config: Config;
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
+  signal?: AbortSignal;
 }): Promise<{
   files: ExecResponseFile[];
   overflowNote: string | null;
   /** Set when a file existed in the sandbox but could not be persisted (see below). */
   failedNote: string | null;
 }> {
-  const { sessionId, inputs, baseline, auth, config, deps } = params;
+  const { sessionId, inputs, baseline, baselineReliable, auth, config, deps, signal } = params;
 
   let listing: AcaSessionFile[];
   try {
-    listing = await deps.aca.listFiles(sessionId);
+    listing = await deps.aca.listFiles(sessionId, signal);
   } catch (err) {
+    if (signal?.aborted) {
+      throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
     deps.logger.warn({ err: (err as Error).message }, 'post-exec file listing failed');
     return {
       files: echoInputs(inputs),
@@ -121,6 +126,7 @@ export async function captureOutputs(params: {
   let timedOut = false;
 
   for (const entry of listing) {
+    signal?.throwIfAborted();
     const name = entry.name;
     if (name === ACA_FILE_MANIFEST_TRUNCATED_NAME) {
       overflow = true;
@@ -134,7 +140,12 @@ export async function captureOutputs(params: {
       break;
     }
 
-    const plan = planEntry(entry, name, { byFinalName, byPushedName, baseline });
+    const plan = planEntry(entry, name, {
+      byFinalName,
+      byPushedName,
+      baseline,
+      baselineReliable,
+    });
     if (plan.input != null) {
       seenInputs.add(plan.input);
     }
@@ -164,6 +175,7 @@ export async function captureOutputs(params: {
         sessionId,
         auth,
         deps,
+        ...(signal != null ? { signal } : {}),
       },
     );
     if (result === 'overflow') {
@@ -258,6 +270,7 @@ function planEntry(
     byFinalName: Map<string, ResolvedInput>;
     byPushedName: Map<string, ResolvedInput>;
     baseline: Map<string, string>;
+    baselineReliable: boolean;
   },
 ): EntryPlan {
   const input = ctx.byFinalName.get(name) ?? ctx.byPushedName.get(name) ?? null;
@@ -265,11 +278,18 @@ function planEntry(
   const baselineSignature = ctx.baseline.get(wasMoved ? input.pushedAs : name);
 
   if (input != null) {
+    if (!ctx.baselineReliable) {
+      return { action: input.doc.readOnly ? 'echo' : 'capture', input };
+    }
     const unchanged =
       baselineSignature != null
         ? baselineSignature === fileSignature(entry)
         : (entry.sizeInBytes ?? 0) === input.doc.size;
     return { action: unchanged || input.doc.readOnly ? 'echo' : 'capture', input };
+  }
+
+  if (!ctx.baselineReliable) {
+    return { action: 'capture', input: null };
   }
 
   // Not an input, and unchanged since before this exec → already delivered.
@@ -297,6 +317,7 @@ interface CaptureCtx {
   sessionId: string;
   auth: AuthContext;
   deps: { aca: AcaClient; blob: BlobStore; repo: FilesRepo; logger: Logger };
+  signal?: AbortSignal;
 }
 
 class CaptureOverflowError extends Error {
@@ -351,14 +372,15 @@ async function captureNewFile(
   remainingMs: number,
   ctx: CaptureCtx,
 ): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | 'timeout' | null> {
-  const { sessionId, auth, deps } = ctx;
+  const { sessionId, auth, deps, signal } = ctx;
+  signal?.throwIfAborted();
   if ((entry.sizeInBytes ?? remainingBytes) > remainingBytes) {
     return 'overflow';
   }
   const candidateBlobPath = `${sessionId}/${randomUUID()}`;
   let candidateUploaded = false;
   try {
-    const source = await deps.aca.fetchFileStream(sessionId, name);
+    const source = await deps.aca.fetchFileStream(sessionId, name, signal);
     if (source.contentLength != null && source.contentLength > remainingBytes) {
       source.stream.destroy();
       return 'overflow';
@@ -372,6 +394,11 @@ async function captureNewFile(
     });
     limiter.on('error', () => source.stream.destroy());
     source.stream.pipe(limiter);
+    const abort = () => {
+      source.stream.destroy(new CaptureTimeoutError());
+      limiter.destroy(new CaptureTimeoutError());
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => {
       timedOut = true;
       limiter.destroy(new CaptureTimeoutError());
@@ -383,6 +410,7 @@ async function captureNewFile(
         limiter,
         entry.contentType ?? 'application/octet-stream',
         source.contentLength,
+        signal,
       );
       candidateUploaded = true;
     } catch (error) {
@@ -397,6 +425,7 @@ async function captureNewFile(
       throw error;
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
     }
     const { doc, obsoleteBlobPaths } = await deps.repo.upsertCaptured(
       {
@@ -411,9 +440,10 @@ async function captureNewFile(
         tenantId: auth.tenantId,
       },
       candidateBlobPath,
+      signal,
     );
     for (const blobPath of obsoleteBlobPaths) {
-      await deps.blob.delete(blobPath).catch((error) => {
+      await deps.blob.delete(blobPath, signal).catch((error) => {
         deps.logger.warn(
           { blobPath, err: (error as Error).message },
           'superseded capture blob cleanup failed',
@@ -430,6 +460,9 @@ async function captureNewFile(
       bytes: limiter.bytes,
     };
   } catch (err) {
+    if (signal?.aborted) {
+      throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
     if (candidateUploaded) {
       deps.logger.warn(
         { file: name, blobPath: candidateBlobPath },

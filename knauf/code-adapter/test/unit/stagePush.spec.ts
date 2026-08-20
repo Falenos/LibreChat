@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { pushInputs } from '../../src/exec/stagePush.js';
 import type { ResolvedInput } from '../../src/exec/stagePush.js';
 import { FakeAcaClient, FakeBlobStore, FakeFilesRepo, testLogger } from '../helpers/fakes.js';
@@ -36,6 +36,7 @@ describe('pushInputs', () => {
     const blob = new FakeBlobStore();
     const repo = new FakeFilesRepo();
     const aca = new FakeAcaClient();
+    const bufferedRead = vi.spyOn(blob, 'getBuffer');
     const inputs = await stageInputs(blob, repo, [
       'SKILL.md',
       'reading.md',
@@ -51,6 +52,7 @@ describe('pushInputs', () => {
     });
 
     expect(aca.maxConcurrentPushes).toBe(1);
+    expect(bufferedRead).not.toHaveBeenCalled();
     expect(aca.pushed.map((p) => p.name)).toEqual([
       'SKILL.md',
       'reading.md',

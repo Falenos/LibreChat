@@ -10,6 +10,7 @@ import { createAcaClient } from './azure/acaClient.js';
 import { createMetrics } from './middleware/metrics.js';
 import { createReaper } from './store/reaper.js';
 import { createApp } from './app.js';
+import { createDependencyReadiness } from './readiness.js';
 import type { Reaper } from './store/reaper.js';
 
 async function main(): Promise<void> {
@@ -50,6 +51,28 @@ async function main(): Promise<void> {
   const blob = await createBlobStore(config, credential);
   const tokens = createTokenProvider(config, logger, credential);
   const aca = createAcaClient(config, logger, tokens, metrics);
+  const dependencyReadiness = createDependencyReadiness(config, metrics, [
+    {
+      name: 'table',
+      run: (signal) => checkTableReadiness(table, metrics, signal),
+    },
+    {
+      name: 'blob',
+      run: (signal) => blob.checkReadiness(signal),
+    },
+    {
+      name: 'identity',
+      run: async (signal) => {
+        signal.throwIfAborted();
+        await tokens.getToken(signal);
+        signal.throwIfAborted();
+      },
+    },
+    {
+      name: 'aca',
+      run: (signal) => aca.checkReadiness(signal),
+    },
+  ]);
 
   // Blob-led cleanup and bounded metadata reconciliation share a renewable Table lease,
   // so only one replica mutates retention state at a time.
@@ -79,7 +102,7 @@ async function main(): Promise<void> {
     aca,
     blob,
     repo,
-    metadataReadiness: () => checkTableReadiness(table, metrics),
+    metadataReadiness: dependencyReadiness,
     metrics,
   });
 
@@ -88,8 +111,7 @@ async function main(): Promise<void> {
   // window: it would abort the response after the files were already persisted, so the
   // caller sees a socket error and the model never hears about work that did happen.
   // Sized from the same numbers rather than a round guess, so the three move together.
-  const requestBudgetMs =
-    config.aca.execTimeoutMs + config.aca.fileOpTimeoutMs + config.exec.captureMaxTotalMs + 30_000;
+  const requestBudgetMs = config.exec.totalTimeoutMs + config.aca.sessionDeleteTimeoutMs + 30_000;
 
   const server = app.listen(config.port, () => {
     logger.info(

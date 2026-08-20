@@ -54,4 +54,48 @@ describe('token provider', () => {
     expect(await provider.getToken()).toBe('token-2');
     expect(calls()).toBe(2);
   });
+
+  it('aborts the SDK token request when its only waiter is cancelled', async () => {
+    let sdkSignal: AbortSignal | undefined;
+    const credential: TokenCredential = {
+      getToken: async (_scopes, options) => {
+        sdkSignal = options?.abortSignal;
+        return new Promise<AccessToken>((_resolve, reject) => {
+          sdkSignal?.addEventListener(
+            'abort',
+            () => reject(sdkSignal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+      },
+    };
+    const provider = createTokenProvider(testConfig(), testLogger(), credential);
+    const controller = new AbortController();
+    const pending = provider.getToken(controller.signal);
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sdkSignal?.aborted).toBe(true);
+  });
+
+  it('keeps a shared refresh alive while another waiter still needs it', async () => {
+    let resolveToken!: (token: AccessToken) => void;
+    const credential: TokenCredential = {
+      getToken: async () =>
+        new Promise<AccessToken>((resolve) => {
+          resolveToken = resolve;
+        }),
+    };
+    const provider = createTokenProvider(testConfig(), testLogger(), credential);
+    const cancelled = new AbortController();
+    const first = provider.getToken(cancelled.signal);
+    const second = provider.getToken();
+
+    cancelled.abort();
+    resolveToken({ token: 'shared-token', expiresOnTimestamp: Date.now() + 3_600_000 });
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).resolves.toBe('shared-token');
+  });
 });

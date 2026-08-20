@@ -50,17 +50,19 @@ is the tripwire that fires when the response shape drifts.
 
 ## Contract served (under `/v1`, JWT-authenticated)
 
-| Endpoint                                                         | Caller in the fork                                                                                | Notes                                                                                                                                                                          |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /exec`                                                     | `execute_code`/`bash_tool` (@librechat/agents), `readSandboxFile`/`writeSandboxFile` (process.js) | `{lang, code, args?, files?, session_id?}` → `{session_id, stdout, stderr, code, files[]}`. `lang` ∈ {`py`, `bash`} (else **501**); both run on the one code-interpreter pool. |
-| `POST /exec/programmatic`                                        | PTC (not enabled in KARL)                                                                         | **501 PTC_NOT_SUPPORTED**                                                                                                                                                      |
-| `POST /upload`                                                   | crud.js `uploadCodeEnvFile`                                                                       | multipart `file` + `kind/id/version` → `{message:'success', storage_session_id, files:[{fileId, filename}]}`                                                                   |
-| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`                                                                                        |
-| `GET /download/:sid/:fid?kind=&id=[&version=]`                   | crud.js (stream) + process.js (arraybuffer)                                                       | served from staging blob — outlives the ACA session                                                                                                                            |
-| `GET /sessions/:sid/objects/:fid?…`                              | process.js `getSessionInfo` freshness probe                                                       | `{lastModified, size, …}`; a 404 routes LibreChat into its re-upload path (designed TTL recovery)                                                                              |
-| `DELETE /sessions/:sid/objects/:fid` / `DELETE /files/:sid/:fid` | crud.js primary + fallback                                                                        | same handler; terminal 404 = success for the caller                                                                                                                            |
+| Endpoint                                                         | Caller in the fork                                                                                | Notes                                                                                                                                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /exec`                                                     | `execute_code`/`bash_tool` (@librechat/agents), `readSandboxFile`/`writeSandboxFile` (process.js) | `{lang, code, args?, files?, session_id?}` → `{session_id, stdout, stderr, code, files[]}`. `lang` ∈ {`py`, `bash`} (else **501**); requests are schema-, byte-, admission-, and deadline-bounded. |
+| `POST /internal/canary`                                          | Scheduled authenticated production canary                                                         | Ignores caller code, runs reviewed fixed Python, and verifies exact stdout plus generated-file capture.                                                                                            |
+| `POST /exec/programmatic`                                        | PTC (not enabled in KARL)                                                                         | **501 PTC_NOT_SUPPORTED**                                                                                                                                                                          |
+| `POST /upload`                                                   | crud.js `uploadCodeEnvFile`                                                                       | multipart `file` + `kind/id/version` → `{message:'success', storage_session_id, files:[{fileId, filename}]}`                                                                                       |
+| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`                                                                                                            |
+| `GET /download/:sid/:fid?kind=&id=[&version=]`                   | crud.js (stream) + process.js (arraybuffer)                                                       | served from staging blob — outlives the ACA session                                                                                                                                                |
+| `GET /sessions/:sid/objects/:fid?…`                              | process.js `getSessionInfo` freshness probe                                                       | `{lastModified, size, …}`; a 404 routes LibreChat into its re-upload path (designed TTL recovery)                                                                                                  |
+| `DELETE /sessions/:sid/objects/:fid` / `DELETE /files/:sid/:fid` | crud.js primary + fallback                                                                        | same handler; terminal 404 = success for the caller                                                                                                                                                |
 
-Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
+Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`. Readiness caches
+bounded Table, Blob, workload-identity, and non-allocating ACA checks.
 
 ## How /exec works
 
@@ -70,24 +72,30 @@ Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`.
    forwarded to Azure or used raw); else freshly minted. Anything else inbound is ignored,
    never forwarded — no identifier injection. Note the current client sends **neither**
    field unless the host enables `toolExecution.sandbox.statefulSessions`, so the default
-   is one fresh sandbox per execution.
+   is one fresh sandbox per execution. Fresh stateless sessions are explicitly deleted after
+   output recovery/capture; caller-owned and hint-derived sessions are retained.
 2. **Staged inputs** — uploads land in Blob (`code-adapter-staging/<sid>/<fileId>`)
    plus three same-partition Table entities (file, hashed-filename index, Blob index)
    because LibreChat uploads before any session exists. At exec time they are pushed into the session
-   (nested paths pushed flat as `.karl_in_<n>`, moved into place by the wrapper).
-3. **The wrapper** (the key design piece) — user code is never sent raw. A
-   base64-embedded subprocess wrapper tees full stdout/stderr to
+   (nested paths pushed flat as `.karl_in_<n>`, moved into place by the wrapper). Metadata-backed
+   file/count/aggregate limits are checked before admission; Blob bodies stream sequentially into
+   ACA rather than being buffered in the Node heap.
+3. **Admission and deadline** — a process-wide controller rejects excess active requests or
+   aggregate in-flight input bytes with HTTP 429; there is no queue. One request-scoped deadline
+   and cancellation signal covers Table, Blob, ACA, retries, streams, and capture.
+4. **The wrapper** (the key design piece) — user code is never sent raw. A
+   base64-embedded subprocess wrapper redirects full stdout/stderr to
    `/mnt/data/.karl_out.log` / `.karl_err.log` and prints a per-request random
    sentinel `KARL_<hex> RC=<n> OUT=<bytes> ERR=<bytes>` + inline heads. This
    yields **real exit codes** (ACA's response has none) and detects/recovers
    output beyond ACA's ~4000-char stdout cap (full logs fetched via the pool
    files API, capped at `STDOUT_MAX_BYTES`). Sentinel missing → degraded mode:
    raw stdout + 0/1 synthesis + `wrapper_parse_failures_total` metric.
-4. **Capture** — on rc==0 the session's files are listed and diffed: unchanged
+5. **Capture** — on rc==0 the session's files are listed and diffed: unchanged
    or read-only inputs are echoed `inherited:true`; new/changed writable files
    are persisted to Blob + Table metadata under the exec session so `/download` works
    after the session cooldown destroys the sandbox.
-5. **Retries** — `SessionWithIdentifierNotFound` (cooldown expiry) → transparent
+6. **Retries** — `SessionWithIdentifierNotFound` (cooldown expiry) → transparent
    one re-run with the same identifier + re-push (ACA allocates a fresh sandbox for a
    key with no live session). Pool 401/403 → single-flight token refresh +
    one retry. Exec 5xx is **not** retried (not idempotent).
@@ -128,6 +136,10 @@ See [`.env.example`](.env.example) for the full annotated surface. Required:
 push/download so an active conversation keeps its files available.
 `AZURE_TABLE_CONNECTION_STRING` is local-mode-only; deployed workloads never use a Table key.
 Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MB) to Blob storage.
+Input requests default to 20 files, 128 MB per file, and 256 MB aggregate. A process admits at
+most four active executions and 512 MB of aggregate staged input, with a 300-second total request
+deadline. Stateless ACA cleanup has its own 10-second budget. `/readyz` caches dependency checks
+for 30 seconds with a 10-second refresh timeout.
 `ACA_API_VERSION` is pinned deliberately — bumping it requires refreshing
 `test/fixtures/aca/` (see below).
 
@@ -152,15 +164,33 @@ and refreshing those fixtures is the documented step for an api-version bump.
 ## Build & deploy
 
 Image: `.github/workflows/build-code-adapter.yaml` (`az acr build` →
-`acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<VERSION>`),
-same self-contained pattern as `build-rag-api-overlay.yaml`. Deploy: GitOps
-single-source service `agentic-karl-code-adapter` in
-`Knauf-Group/agk-deployment-configs` (ClusterIP 3112, replicaCount 2, first
-workload-identity app pod on AGK). Azure resources (session pools, UAMI,
-federated credential, role assignments) come from `Knauf-Group/agk-infrastructure`
-Terraform. Table metadata is the source of truth. One lease-holding replica performs an hourly
-Blob-led pass plus bounded daily metadata reconciliation; metadata/indexes are committed deleted
-before the referenced Blob is removed.
+`acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<VERSION>`).
+Every adapter change requires a new `VERSION`; publishing rejects existing tags and records the
+source commit, version, and immutable digest as a workflow artifact and summary.
+
+Nonproduction delivery is asynchronous:
+
+1. `.github/workflows/deploy-code-adapter.yaml` consumes the successful main-build provenance;
+2. it upgrades an older wrapper to the digest-capable `ct-shared-chart` baseline;
+3. it auto-merges a protected dev GitOps PR pinning `image.digest`;
+4. it waits for the dev ArgoCD application to be `Synced/Healthy` on the exact digest;
+5. only then does it repeat the same immutable GitOps bump and wait for stage.
+
+The publisher does not wait for ArgoCD, unrelated app releases do not redeploy the independently
+versioned adapter, and production is never changed by this rail. Production promotion resolves
+the nonprod tag once, imports that digest, and verifies exact digest equality.
+
+**Manual rollback:** previous ACR version tags are never deleted or retargeted. Revert the
+environment's automated GitOps PR, or open a reviewed values PR setting both `image.tag` and
+`image.digest` to a previously recorded pair, then verify ArgoCD and the running image. Rollback
+is deliberately not auto-merged.
+
+Deploy: GitOps single-source service `agentic-karl-code-adapter` in
+`Knauf-Group/agk-deployment-configs` (ClusterIP 3112, replicaCount 2, first workload-identity app
+pod on AGK). Azure resources (session pools, UAMI, federated credential, role assignments) come
+from `Knauf-Group/agk-infrastructure` Terraform. Table metadata is the source of truth. One
+lease-holding replica performs an hourly Blob-led pass plus bounded daily metadata reconciliation;
+metadata/indexes are committed deleted before the referenced Blob is removed.
 
 ## Follow-ups (tracked in the rollout plan)
 

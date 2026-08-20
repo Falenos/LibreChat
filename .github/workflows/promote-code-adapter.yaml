@@ -1,9 +1,9 @@
 name: Promote code-adapter image to prod
 
-# Promotes an existing Knauf code-adapter tag from the AGK nonprod hub ACR to the prod
-# hub ACR:
-#   acragkhubnonprod001.azurecr.io/agentic-karl-dev/agentic-karl-code-adapter:<tag>
-#     -> acragkhubprod001.azurecr.io/agentic-karl-prod/agentic-karl-code-adapter:<tag>
+# Resolves an existing nonprod tag to its immutable digest, imports that digest into the prod
+# hub ACR, and proves the source and target manifests are byte-identical:
+#   nonprod/.../agentic-karl-code-adapter:<tag> -> @sha256:<digest>
+#     -> prod/.../agentic-karl-code-adapter:<tag> == @sha256:<digest>
 #
 # WHY A SEPARATE WORKFLOW, not a step inside promote_pipeline.yaml.
 # The adapter versions independently of KARL: its tag comes from
@@ -13,7 +13,7 @@ name: Promote code-adapter image to prod
 # promotion. Deliberate deviation from the "slot it into promote_pipeline.yaml" bullet in
 # knauf/docs/code-execution/deployment.md §8, which assumed lock-step versioning.
 #
-# This workflow does NOT deploy. It only makes the tag available in the prod registry —
+# This workflow does NOT deploy. It only makes the immutable manifest available in prod —
 # the prod rollout is a values bump in Knauf-Group/agk-deployment-configs
 # (agentic-karl/prod/services/agentic-karl-code-adapter), which ArgoCD then syncs. That
 # split is intentional: image availability is reversible and safe, the values bump is the
@@ -56,6 +56,7 @@ jobs:
       PROD_IMAGE_REPOSITORY: agentic-karl-prod/agentic-karl-code-adapter
     steps:
       - name: Validate inputs
+        id: inputs
         # Both inputs arrive through `env`, never interpolated into the script body.
         # `${{ }}` is substituted before bash parses the line, so a crafted tag could
         # otherwise break quoting and run commands — and this job holds an Azure login
@@ -82,25 +83,53 @@ jobs:
             echo "::error::tag longer than 64 characters"
             exit 1
           fi
-          echo "tag=$TAG" >> "$GITHUB_ENV"
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::production promotion is allowed only from main"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Azure login (shared service principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Verify the tag exists in nonprod
+      - name: Resolve source digest
+        id: source
+        env:
+          TAG: ${{ steps.inputs.outputs.tag }}
         run: |
           set -euo pipefail
-          # Fail before touching prod if the source tag was never built.
-          az acr repository show-tags \
+          DIGEST="$(az acr repository show \
             --subscription "$NONPROD_SUBSCRIPTION_ID" \
             --name "$NONPROD_ACR_NAME" \
-            --repository "$NONPROD_IMAGE_REPOSITORY" \
-            --output tsv \
-            --query "[?@=='$tag'] | [0]" | grep -qx "$tag"
+            --image "$NONPROD_IMAGE_REPOSITORY:$TAG" \
+            --query digest \
+            --output tsv)"
+          if ! printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::nonprod tag $TAG did not resolve to a valid digest"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an existing prod tag
+        env:
+          TAG: ${{ steps.inputs.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if az acr repository show \
+            --subscription "$PROD_SUBSCRIPTION_ID" \
+            --name "$PROD_ACR_NAME" \
+            --image "$PROD_IMAGE_REPOSITORY:$TAG" \
+            >/dev/null 2>&1; then
+            echo "::error::$PROD_IMAGE_REPOSITORY:$TAG already exists in prod"
+            exit 1
+          fi
 
       - name: Import into AGK prod ACR
+        env:
+          TAG: ${{ steps.inputs.outputs.tag }}
+          SOURCE_DIGEST: ${{ steps.source.outputs.digest }}
         run: |
           set -euo pipefail
           SOURCE_REGISTRY_ID=$(az acr show \
@@ -109,40 +138,77 @@ jobs:
             --query id \
             -o tsv)
 
-          # No --force: a tag already present in prod must not be silently replaced.
-          # Re-promoting the same version is a signal that something is wrong upstream
-          # (an unversioned rebuild), so make it fail loudly and bump VERSION instead.
+          # Import the resolved manifest, never the mutable source tag. No --force: a
+          # production version is immutable and must never be silently replaced.
           az acr import \
             --subscription "$PROD_SUBSCRIPTION_ID" \
             --name "$PROD_ACR_NAME" \
             --registry "$SOURCE_REGISTRY_ID" \
-            --source "$NONPROD_IMAGE_REPOSITORY:$tag" \
-            --image "$PROD_IMAGE_REPOSITORY:$tag"
+            --source "$NONPROD_IMAGE_REPOSITORY@$SOURCE_DIGEST" \
+            --image "$PROD_IMAGE_REPOSITORY:$TAG"
 
-      - name: Verify the tag landed in prod
+      - name: Verify exact target digest
+        id: target
+        env:
+          TAG: ${{ steps.inputs.outputs.tag }}
+          SOURCE_DIGEST: ${{ steps.source.outputs.digest }}
         run: |
           set -euo pipefail
-          az acr repository show-tags \
-            --subscription "$PROD_SUBSCRIPTION_ID" \
-            --name "$PROD_ACR_NAME" \
-            --repository "$PROD_IMAGE_REPOSITORY" \
-            --output tsv \
-            --query "[?@=='$tag'] | [0]" | grep -qx "$tag"
+          TARGET_DIGEST=""
+          for attempt in 1 2 3 4 5 6; do
+            TARGET_DIGEST="$(az acr repository show \
+              --subscription "$PROD_SUBSCRIPTION_ID" \
+              --name "$PROD_ACR_NAME" \
+              --image "$PROD_IMAGE_REPOSITORY:$TAG" \
+              --query digest \
+              --output tsv 2>/dev/null || true)"
+            if [ "$TARGET_DIGEST" = "$SOURCE_DIGEST" ]; then
+              break
+            fi
+            sleep 5
+          done
+          if [ "$TARGET_DIGEST" != "$SOURCE_DIGEST" ]; then
+            echo "::error::digest mismatch: source=$SOURCE_DIGEST target=$TARGET_DIGEST"
+            exit 1
+          fi
+          echo "digest=$TARGET_DIGEST" >> "$GITHUB_OUTPUT"
 
-      - name: Summary
+      - name: Record promotion provenance
+        env:
+          TAG: ${{ steps.inputs.outputs.tag }}
+          SOURCE_DIGEST: ${{ steps.source.outputs.digest }}
+          TARGET_DIGEST: ${{ steps.target.outputs.digest }}
         run: |
+          set -euo pipefail
+          jq -n \
+            --arg tag "$TAG" \
+            --arg source "$NONPROD_ACR_NAME.azurecr.io/$NONPROD_IMAGE_REPOSITORY@$SOURCE_DIGEST" \
+            --arg target "$PROD_ACR_NAME.azurecr.io/$PROD_IMAGE_REPOSITORY@$TARGET_DIGEST" \
+            --arg digest "$TARGET_DIGEST" \
+            '{tag:$tag,source:$source,target:$target,digest:$digest}' \
+            > "$RUNNER_TEMP/code-adapter-promotion.json"
           {
             echo "### code-adapter promoted to prod ACR"
             echo ""
-            echo "| | |"
+            echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`$tag\` |"
-            echo "| Image | \`$PROD_ACR_NAME.azurecr.io/$PROD_IMAGE_REPOSITORY:$tag\` |"
+            echo "| Tag | \`$TAG\` |"
+            echo "| Source digest | \`$SOURCE_DIGEST\` |"
+            echo "| Target digest | \`$TARGET_DIGEST\` |"
+            echo "| Deploy image | \`$PROD_ACR_NAME.azurecr.io/$PROD_IMAGE_REPOSITORY@$TARGET_DIGEST\` |"
             echo ""
-            echo "**Not deployed yet.** Point the prod values at this tag to roll it out:"
+            echo "**Not deployed yet.** Point the prod values at the digest above to roll it out:"
             echo "\`agentic-karl/prod/services/agentic-karl-code-adapter/values.yaml\` in"
             echo "Knauf-Group/agk-deployment-configs. Prod also needs its own ACA session pool,"
             echo "managed identity and \`LIBRECHAT_CODE_BASEURL\` — until that env var points at"
             echo "the prod adapter, code execution stays off by design"
             echo "(packages/api/src/knauf/code/codeEnvGuard.ts)."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload promotion provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-adapter-${{ steps.inputs.outputs.tag }}-promotion
+          path: ${{ runner.temp }}/code-adapter-promotion.json
+          if-no-files-found: error
+          retention-days: 90

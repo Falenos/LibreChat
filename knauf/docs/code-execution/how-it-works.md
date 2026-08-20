@@ -140,15 +140,16 @@ counter-intuitive part, so it's worth being exact about what actually persists.
 Each ACA sandbox is keyed by an **`identifier`** string, and the adapter mints
 `karl-<32 hex>` ids to use as that identifier. The adapter _would_ reuse a
 sandbox if a caller sent back a prior `session_id` — but the current client
-doesn't. The compiled code tool in **`@librechat/agents` (v3.2.46)** reads a
+doesn't. The locked code tool in **`@librechat/agents` (v3.2.65)** reads a
 `session_id` from its context but **never puts it in the `POST /exec` body**
 (verified in `CodeExecutor.cjs`, and in the adapter's own logs: every exec in a
 conversation arrives with no `session_id` and gets a fresh `karl-…` id). So in
 practice:
 
-- **Each exec = a fresh, empty, fully isolated Hyper-V sandbox.** It is never
-  "still there" from a previous run; ACA sessions also self-destruct after the
-  cooldown (≥300 s idle) regardless.
+- **Each stateless exec = a fresh, empty, fully isolated Hyper-V sandbox.** It is never
+  "still there" from a previous run. After output recovery and file capture, the adapter
+  explicitly deletes adapter-minted sessions; failed cleanup falls back to ACA's
+  cooldown-based destruction (≥300 s idle).
 - **In-memory state never carries over.** A Python variable, `/tmp`, an
   installed package — all gone next exec. (The subprocess wrapper means state
   doesn't even survive _within_ a conversation, and the fresh sandbox means it
@@ -161,8 +162,8 @@ the adapter's staging store on every call:
 
 - LibreChat re-sends the relevant **file references on every `/exec`** (its
   `_injected_files` mechanism — it carries files forward instead of relying on a
-  live session). The adapter pulls each referenced file's bytes from Blob and
-  **re-pushes them into the fresh sandbox's `/mnt/data`** before running the
+  live session). The adapter streams each referenced file from Blob and
+  **re-pushes it into the fresh sandbox's `/mnt/data`** before running the
   code. So `data.csv` "is there" every run — mechanically it is re-uploaded each
   time.
 - Files the code **generates** are captured to Blob + Table metadata and handed back as

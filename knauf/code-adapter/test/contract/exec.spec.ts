@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { Readable } from 'node:stream';
 import { createApp } from '../../src/app.js';
 import {
   ACA_FILE_MANIFEST_TRUNCATED_NAME,
+  AcaError,
   AcaSessionNotFoundError,
   AcaTimeoutError,
 } from '../../src/types/aca.js';
@@ -175,6 +176,87 @@ describe('POST /v1/exec contract', () => {
 
     expect(a.body.session_id).not.toBe(b.body.session_id);
     expect(a.body.runtime_session_id).toBeUndefined();
+    expect(aca.deletedSessions).toEqual([a.body.session_id, b.body.session_id]);
+  });
+
+  it('does not delete caller-owned or hint-derived stateful sessions', async () => {
+    const config = testConfig();
+    app = createApp({
+      config,
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+    const owned = ownedSessionId(config);
+
+    await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)', session_id: owned });
+    await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(1)', runtime_session_hint: 'thread-1' });
+
+    expect(aca.deletedSessions).toEqual([]);
+  });
+
+  it('does not fail a completed exec when best-effort stateless session deletion fails', async () => {
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+    aca.deleteSessionImpl = async () => {
+      throw new Error('delete denied');
+    };
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ code: 0, stdout: 'ok' });
+  });
+
+  it('enforces one total request deadline and still attempts independent cleanup', async () => {
+    app = createApp({
+      config: testConfig({ EXEC_TOTAL_TIMEOUT_MS: '25' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    aca.executeImpl = async (_sid, _code, signal) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {
+          once: true,
+        });
+      });
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'while True: pass' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.stderr).toContain('220-second limit');
+    expect(aca.deletedSessions).toEqual([response.body.session_id]);
+  });
+
+  it('maps a deadline during capacity backoff to the bounded timeout response', async () => {
+    app = createApp({
+      config: testConfig({ EXEC_TOTAL_TIMEOUT_MS: '25' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    aca.executeImpl = async () => {
+      throw new AcaError('pool at capacity', 429, 'Capacity', 5);
+    };
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.stderr).toContain('220-second limit');
   });
 
   it('unsupported lang → 501 (adapter contract)', async () => {
@@ -185,10 +267,149 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.error).toContain("Language 'node'");
   });
 
+  it('rejects malformed and excessive file-reference shapes before metadata access', async () => {
+    const malformed = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(1)', files: [{ id: 42, name: 'bad.txt' }] });
+    const excessive = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: 'print(1)',
+        files: Array.from({ length: 21 }, (_, index) => ({
+          id: `file-${index}`,
+          name: `file-${index}.txt`,
+        })),
+      });
+
+    expect(malformed.status).toBe(400);
+    expect(excessive.status).toBe(413);
+    expect(aca.pushed).toHaveLength(0);
+  });
+
+  it('enforces metadata-backed per-file input limits before Blob download', async () => {
+    const config = testConfig({ EXEC_INPUT_MAX_FILE_BYTES: '2' });
+    app = createApp({
+      config,
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    const doc = await repo.insertStaged({
+      sessionId: ownedSessionId(config),
+      filename: 'three.txt',
+      size: 3,
+      contentType: 'text/plain',
+      origin: 'upload',
+      readOnly: false,
+      identity: { kind: 'user', id: 'local' },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(doc.blobPath, Buffer.from('abc'), doc.contentType);
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: 'print(1)',
+        files: [{ id: doc.fileId, name: doc.filename, storage_session_id: doc.sessionId }],
+      });
+
+    expect(response.status).toBe(413);
+    expect(aca.pushed).toHaveLength(0);
+  });
+
+  it('rejects immediately when active execution admission is full', async () => {
+    app = createApp({
+      config: testConfig({ EXEC_MAX_ACTIVE_REQUESTS: '1' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    aca.executeImpl = async (_sid, code) => {
+      markStarted();
+      await finished;
+      return sentinelOutcome(code, 0, 'ok');
+    };
+
+    const first = request(app)
+      .post('/v1/exec')
+      .send({ lang: 'py', code: 'print(1)' })
+      .then((response) => response);
+    await started;
+    const rejected = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(2)' });
+    finish();
+    const accepted = await first;
+
+    expect(rejected.status).toBe(429);
+    expect(rejected.body.error).toContain('capacity');
+    expect(accepted.status).toBe(200);
+  });
+
   it('/exec/programmatic → 501 PTC_NOT_SUPPORTED', async () => {
     const response = await request(app).post('/v1/exec/programmatic').send({});
     expect(response.status).toBe(501);
     expect(response.body.error.code).toBe('PTC_NOT_SUPPORTED');
+  });
+
+  it('runs only the reviewed fixed payload through the authenticated canary endpoint', async () => {
+    aca.executeImpl = async (_sid, code) => {
+      const fixedPayload = [
+        'from pathlib import Path',
+        'Path("karl-code-canary.txt").write_text("ok", encoding="utf-8")',
+        'print("KARL_CODE_CANARY_OK")',
+      ].join('\n');
+      expect(code).toContain(Buffer.from(fixedPayload, 'utf8').toString('base64'));
+      expect(code).not.toContain('caller input must be ignored');
+      aca.sessionFiles = [
+        {
+          name: 'karl-code-canary.txt',
+          type: 'File',
+          sizeInBytes: 2,
+          lastModifiedAt: '2026-08-19T12:00:00Z',
+        },
+      ];
+      aca.fileContents.set('karl-code-canary.txt', Buffer.from('ok'));
+      return sentinelOutcome(code, 0, 'KARL_CODE_CANARY_OK\n');
+    };
+
+    const response = await request(app).post('/v1/internal/canary').send({
+      code: 'raise RuntimeError("caller input must be ignored")',
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.stdout).toBe('KARL_CODE_CANARY_OK\n');
+    expect(response.body.files).toEqual([
+      expect.objectContaining({ name: 'karl-code-canary.txt' }),
+    ]);
+    expect(aca.deletedSessions).toEqual([response.body.session_id]);
+  });
+
+  it('records backend failures as canary errors', async () => {
+    const canarySpy = vi.spyOn(metrics.canaryTotal, 'inc');
+    aca.executeImpl = async () => {
+      throw new AcaError('pool unavailable', 502, 'BackendUnavailable');
+    };
+
+    const response = await request(app).post('/v1/internal/canary').send({});
+
+    expect(response.status).toBe(502);
+    expect(canarySpy).toHaveBeenCalledWith({ outcome: 'error' });
   });
 
   it('timeout → HTTP 200 {code:1} with a model-actionable stderr, never 5xx', async () => {
@@ -286,6 +507,58 @@ describe('POST /v1/exec contract', () => {
     // Captured as this exec's output, NOT echoed as the untouched original.
     expect(returned.inherited).toBeUndefined();
     expect(returned.storage_session_id).toBe(response.body.session_id);
+  });
+
+  it('captures writable inputs conservatively when the pre-exec baseline cannot be read', async () => {
+    const doc = await repo.insertStaged({
+      sessionId: 'karl-' + 'e'.repeat(32),
+      filename: 'data.csv',
+      size: 3,
+      contentType: 'text/csv',
+      origin: 'upload',
+      readOnly: false,
+      identity: { kind: 'user', id: 'local' },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(doc.blobPath, Buffer.from('abc'), 'text/csv');
+
+    let listCalls = 0;
+    aca.listFilesImpl = async () => {
+      listCalls += 1;
+      if (listCalls === 1) {
+        throw new Error('baseline unavailable');
+      }
+      return [
+        {
+          name: 'data.csv',
+          type: 'File',
+          sizeInBytes: 3,
+          lastModifiedAt: '2026-08-10T10:00:00Z',
+        },
+      ];
+    };
+    aca.fileContents.set('data.csv', Buffer.from('xyz'));
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, '');
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: "open('data.csv','w').write('xyz')",
+        files: [
+          { id: doc.fileId, name: 'data.csv', storage_session_id: doc.sessionId, kind: 'user' },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toEqual([
+      expect.objectContaining({
+        name: 'data.csv',
+        storage_session_id: response.body.session_id,
+      }),
+    ]);
+    expect(response.body.files[0]).not.toHaveProperty('inherited');
   });
 
   // The same bug, on the nested path — review finding A3. A nested input is pushed flat as

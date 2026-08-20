@@ -4,6 +4,15 @@ export interface Metrics {
   registry: Registry;
   execTotal: Counter<'lang' | 'outcome'>;
   execDuration: Histogram<'lang' | 'outcome'>;
+  execInputBytes: Histogram<string>;
+  admissionActive: Gauge<string>;
+  admissionInputBytes: Gauge<string>;
+  admissionRejected: Counter<'reason'>;
+  sessionDeletion: Counter<'outcome'>;
+  dependencyReadiness: Gauge<'dependency'>;
+  dependencyReadinessChecks: Counter<'dependency' | 'outcome'>;
+  canaryTotal: Counter<'outcome'>;
+  canaryLastSuccess: Gauge<string>;
   acaRequestDuration: Histogram<'op'>;
   wrapperParseFailures: Counter<string>;
   truncationRecoveries: Counter<string>;
@@ -36,6 +45,57 @@ export function createMetrics(): Metrics {
       help: 'End-to-end /exec latency',
       labelNames: ['lang', 'outcome'],
       buckets: [0.5, 1, 2, 5, 10, 30, 60, 120, 220],
+      registers: [registry],
+    }),
+    execInputBytes: new Histogram({
+      name: 'code_adapter_exec_input_bytes',
+      help: 'Aggregate staged input bytes accepted by /exec',
+      buckets: [0, 1024, 65_536, 1_048_576, 16_777_216, 67_108_864, 134_217_728, 268_435_456],
+      registers: [registry],
+    }),
+    admissionActive: new Gauge({
+      name: 'code_adapter_admission_active_requests',
+      help: 'Current number of admitted execution requests',
+      registers: [registry],
+    }),
+    admissionInputBytes: new Gauge({
+      name: 'code_adapter_admission_input_bytes',
+      help: 'Current aggregate staged input bytes held by admitted requests',
+      registers: [registry],
+    }),
+    admissionRejected: new Counter({
+      name: 'code_adapter_admission_rejected_total',
+      help: 'Execution requests rejected before work starts',
+      labelNames: ['reason'],
+      registers: [registry],
+    }),
+    sessionDeletion: new Counter({
+      name: 'code_adapter_session_deletion_total',
+      help: 'Explicit stateless ACA session deletion outcomes',
+      labelNames: ['outcome'],
+      registers: [registry],
+    }),
+    dependencyReadiness: new Gauge({
+      name: 'code_adapter_dependency_ready',
+      help: 'Cached dependency readiness state (1 ready, 0 failing)',
+      labelNames: ['dependency'],
+      registers: [registry],
+    }),
+    dependencyReadinessChecks: new Counter({
+      name: 'code_adapter_dependency_readiness_checks_total',
+      help: 'Dependency readiness checks by outcome',
+      labelNames: ['dependency', 'outcome'],
+      registers: [registry],
+    }),
+    canaryTotal: new Counter({
+      name: 'code_adapter_canary_total',
+      help: 'Fixed authenticated canary executions by outcome',
+      labelNames: ['outcome'],
+      registers: [registry],
+    }),
+    canaryLastSuccess: new Gauge({
+      name: 'code_adapter_canary_last_success_timestamp_seconds',
+      help: 'Unix timestamp of the last successful fixed canary execution',
       registers: [registry],
     }),
     acaRequestDuration: new Histogram({

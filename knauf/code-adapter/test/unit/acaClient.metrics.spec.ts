@@ -1,10 +1,7 @@
 import { MockAgent, setGlobalDispatcher, getGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcaClient } from '../../src/azure/acaClient.js';
-import {
-  ACA_FILE_MANIFEST_NAME,
-  ACA_FILE_MANIFEST_TRUNCATED_NAME,
-} from '../../src/types/aca.js';
+import { ACA_FILE_MANIFEST_NAME, ACA_FILE_MANIFEST_TRUNCATED_NAME } from '../../src/types/aca.js';
 import { testConfig, testLogger, testMetrics } from '../helpers/fakes.js';
 import type { TokenProvider } from '../../src/azure/credential.js';
 
@@ -202,13 +199,63 @@ describe('acaClient aca_request_duration instrumentation', () => {
     pool.intercept({ method: 'GET', path: () => true }).reply(200, {
       value: [{ properties: { filename: ACA_FILE_MANIFEST_NAME, size: 80 } }],
     });
-    pool.intercept({ method: 'GET', path: () => true }).reply(
-      200,
-      JSON.stringify({ version: 1, truncated: false, files: [42] }),
-    );
+    pool
+      .intercept({ method: 'GET', path: () => true })
+      .reply(200, JSON.stringify({ version: 1, truncated: false, files: [42] }));
 
     const client = createAcaClient(config, testLogger(), tokens, testMetrics());
 
     await expect(client.listFiles('session-1')).rejects.toThrow(/invalid file manifest entry/);
+  });
+
+  it('deletes stateless sessions with the lifecycle API and treats 404 as idempotent success', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool
+      .intercept({
+        method: 'DELETE',
+        path: (path) =>
+          path.includes('/session?') &&
+          path.includes(`api-version=${config.aca.sessionApiVersion}`) &&
+          path.includes('identifier=session-1'),
+      })
+      .reply(404, '');
+
+    const metrics = testMetrics();
+    const observeSpy = vi.spyOn(metrics.acaRequestDuration, 'observe');
+    const client = createAcaClient(config, testLogger(), tokens, metrics);
+
+    await expect(client.deleteSession('session-1')).resolves.toBeUndefined();
+    expect(observeSpy).toHaveBeenCalledWith({ op: 'deleteSession' }, expect.any(Number));
+  });
+
+  it('checks readiness through a non-allocating reserved-session lookup', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool
+      .intercept({
+        method: 'GET',
+        path: (path) =>
+          path.includes('/session?') &&
+          path.includes(`api-version=${config.aca.sessionApiVersion}`) &&
+          path.includes('identifier=karl-readiness-probe'),
+      })
+      .reply(404, '');
+    const client = createAcaClient(config, testLogger(), tokens, testMetrics());
+
+    await expect(client.checkReadiness()).resolves.toBeUndefined();
+  });
+
+  it('preserves a real undici abort as a request deadline instead of wrapping it as 502', async () => {
+    const pool = mockAgent.get(config.aca.poolEndpoint);
+    pool
+      .intercept({ method: 'POST', path: (path) => path.includes('/code/execute?') })
+      .reply(200, { properties: { status: 'Success', stdout: '', stderr: '' } })
+      .delay(100);
+    const client = createAcaClient(config, testLogger(), tokens, testMetrics());
+    const controller = new AbortController();
+    const pending = client.execute('session-1', 'print(1)', controller.signal);
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

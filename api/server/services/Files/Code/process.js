@@ -86,6 +86,14 @@ const createDownloadFallback = ({
  */
 const PREVIEW_FINALIZE_TIMEOUT_MS = 60_000;
 
+// [knauf] align sandbox read/write helpers with the bounded adapter request and drain budgets
+const parsedCodeExecHelperTimeoutMs = Number(process.env.CODE_EXEC_HELPER_TIMEOUT_MS);
+const CODE_EXEC_HELPER_TIMEOUT_MS =
+  Number.isFinite(parsedCodeExecHelperTimeoutMs) && parsedCodeExecHelperTimeoutMs > 0
+    ? Math.floor(parsedCodeExecHelperTimeoutMs)
+    : 350_000;
+// End [knauf]
+
 /**
  * Render the inline HTML preview for a code-execution file (or plain
  * text for non-office buckets that still benefit from caching), then
@@ -1023,7 +1031,9 @@ async function readSandboxFile({ file_path, session_id, files, req }) {
       },
       httpAgent: codeServerHttpAgent,
       httpsAgent: codeServerHttpsAgent,
-      timeout: 15000,
+      // [knauf] sandbox helper may legitimately span the adapter's total execution budget
+      timeout: CODE_EXEC_HELPER_TIMEOUT_MS,
+      // End [knauf]
     });
     const result = response?.data ?? {};
     if (result.stderr && (result.stdout == null || result.stdout === '')) {
@@ -1107,7 +1117,9 @@ async function writeSandboxFile({ file_path, content, session_id, files, req }) 
       },
       httpAgent: codeServerHttpAgent,
       httpsAgent: codeServerHttpsAgent,
-      timeout: 15000,
+      // [knauf] sandbox helper may legitimately span the adapter's total execution budget
+      timeout: CODE_EXEC_HELPER_TIMEOUT_MS,
+      // End [knauf]
     });
     const result = response?.data ?? {};
     if (result.stderr && (result.stdout == null || result.stdout === '')) {

@@ -37,9 +37,13 @@ export interface TablePage {
 }
 
 export interface RepositoryTableClient {
-  get(partitionKey: string, rowKey: string): Promise<StoredTableEntity | null>;
-  submitTransaction(actions: TableMutation[]): Promise<void>;
-  listPage(request: TableListRequest): Promise<TablePage>;
+  get(
+    partitionKey: string,
+    rowKey: string,
+    signal?: AbortSignal,
+  ): Promise<StoredTableEntity | null>;
+  submitTransaction(actions: TableMutation[], signal?: AbortSignal): Promise<void>;
+  listPage(request: TableListRequest, signal?: AbortSignal): Promise<TablePage>;
   checkTransactionSupport?(): Promise<void>;
 }
 
@@ -79,10 +83,7 @@ function storageCode(error: unknown): string | null {
 
 export function isEntityNotFound(error: unknown): boolean {
   const code = storageCode(error);
-  return (
-    storageStatus(error) === 404 &&
-    (code === 'EntityNotFound' || code === 'ResourceNotFound')
-  );
+  return storageStatus(error) === 404 && (code === 'EntityNotFound' || code === 'ResourceNotFound');
 }
 
 export function isTableConflict(error: unknown): boolean {
@@ -120,7 +121,7 @@ interface ConditionalTransaction {
     options: { etag: string },
   ): void;
   deleteEntity(partitionKey: string, rowKey: string, options: { etag: string }): void;
-  submitTransaction(): Promise<unknown>;
+  submitTransaction(options?: { abortSignal?: AbortSignal }): Promise<unknown>;
 }
 
 type ConditionalTransactionConstructor = new (
@@ -176,13 +177,14 @@ class AzureRepositoryTableClient implements RepositoryTableClient {
     this.runtimeClient();
     const Transaction = await loadConditionalTransactionConstructor();
     if (typeof Transaction !== 'function') {
-      throw new Error(
-        '@azure/data-tables conditional transaction implementation is unavailable',
-      );
+      throw new Error('@azure/data-tables conditional transaction implementation is unavailable');
     }
   }
 
-  private async measured<T>(op: 'get' | 'transaction' | 'list', work: () => Promise<T>): Promise<T> {
+  private async measured<T>(
+    op: 'get' | 'transaction' | 'list',
+    work: () => Promise<T>,
+  ): Promise<T> {
     const stop = this.metrics?.tableOperationDuration.startTimer({ op });
     try {
       const result = await work();
@@ -199,10 +201,18 @@ class AzureRepositoryTableClient implements RepositoryTableClient {
     }
   }
 
-  async get(partitionKey: string, rowKey: string): Promise<StoredTableEntity | null> {
+  async get(
+    partitionKey: string,
+    rowKey: string,
+    signal?: AbortSignal,
+  ): Promise<StoredTableEntity | null> {
     try {
       return await this.measured('get', async () => {
-        const entity = await this.client.getEntity<Record<string, unknown>>(partitionKey, rowKey);
+        const entity = await this.client.getEntity<Record<string, unknown>>(
+          partitionKey,
+          rowKey,
+          signal != null ? { abortSignal: signal } : {},
+        );
         return entity as StoredTableEntity;
       });
     } catch (error) {
@@ -213,10 +223,11 @@ class AzureRepositoryTableClient implements RepositoryTableClient {
     }
   }
 
-  async submitTransaction(actions: TableMutation[]): Promise<void> {
+  async submitTransaction(actions: TableMutation[], signal?: AbortSignal): Promise<void> {
     if (actions.length === 0) {
       return;
     }
+    signal?.throwIfAborted();
     await this.measured('transaction', async () => {
       const partitionKey =
         actions[0]?.type === 'delete'
@@ -246,11 +257,12 @@ class AzureRepositoryTableClient implements RepositoryTableClient {
           transaction.deleteEntity(action.partitionKey, action.rowKey, { etag: action.etag });
         }
       }
-      await transaction.submitTransaction();
+      await transaction.submitTransaction(signal != null ? { abortSignal: signal } : {});
+      signal?.throwIfAborted();
     });
   }
 
-  async listPage(request: TableListRequest): Promise<TablePage> {
+  async listPage(request: TableListRequest, signal?: AbortSignal): Promise<TablePage> {
     return this.measured('list', async () => {
       const filters: string[] = [];
       if (request.partitionKey != null) {
@@ -267,7 +279,10 @@ class AzureRepositoryTableClient implements RepositoryTableClient {
       }
       const queryOptions = filters.length > 0 ? { filter: filters.join(' and ') } : undefined;
       const pages = this.client
-        .listEntities<Record<string, unknown>>(queryOptions != null ? { queryOptions } : {})
+        .listEntities<Record<string, unknown>>({
+          ...(queryOptions != null ? { queryOptions } : {}),
+          ...(signal != null ? { abortSignal: signal } : {}),
+        })
         .byPage({
           ...(request.continuationToken != null
             ? { continuationToken: request.continuationToken }
@@ -312,15 +327,17 @@ export function createTableStore(
 export async function checkTableReadiness(
   table: RepositoryTableClient,
   metrics?: Metrics,
+  signal?: AbortSignal,
 ): Promise<void> {
   let page;
   try {
     await table.checkTransactionSupport?.();
-    page = await table.listPage({
+    const request = {
       partitionKey: '__system__',
       rowKey: '__readiness__',
       maxPageSize: 1,
-    });
+    };
+    page = signal == null ? await table.listPage(request) : await table.listPage(request, signal);
   } catch (error) {
     metrics?.metadataReadiness.inc({ outcome: 'error' });
     throw error;

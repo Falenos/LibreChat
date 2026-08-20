@@ -1,8 +1,21 @@
 import { AcaError, AcaSessionNotFoundError, AcaTimeoutError } from '../types/aca.js';
-import { deriveSessionId, isValidSessionId, mintSessionId, sessionBelongsTo } from '../validate.js';
+import {
+  deriveSessionId,
+  isValidSessionId,
+  mintSessionId,
+  sessionBelongsTo,
+  ValidationError,
+} from '../validate.js';
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { WrapperPlan } from './wrapper.js';
-import { resolveInputs, movePlan, pushInputs, StagedFileMissingError } from './stagePush.js';
+import {
+  resolveInputs,
+  movePlan,
+  pushInputs,
+  StagedFileMissingError,
+  validateInputBudgets,
+} from './stagePush.js';
+import type { AdmissionController } from './admission.js';
 import { captureOutputs, echoInputs, baselineFrom } from './capture.js';
 import type { SupportedLang } from '../validate.js';
 import type { AuthContext, ExecRequest, ExecResponse } from '../types/contract.js';
@@ -27,6 +40,7 @@ export interface ExecDeps {
   blob: BlobStore;
   repo: FilesRepo;
   metrics: Metrics;
+  admission: AdmissionController;
 }
 
 /** stdout/stderr/exit-code resolved from a pool execution. */
@@ -51,77 +65,134 @@ export async function runExec(
   deps: ExecDeps,
 ): Promise<ExecResponse> {
   const { logger, metrics } = deps;
+  const requestController = new AbortController();
+  const requestTimeout = setTimeout(
+    () => requestController.abort(),
+    deps.config.exec.totalTimeoutMs,
+  );
+  requestTimeout.unref();
+  const signal = requestController.signal;
 
-  // Session resolution, most specific first:
-  //   1. an explicit valid `session_id` — honoured, but note the current client never
-  //      sends one (it reads ToolNode's session id and drops it before the POST), so this
-  //      is really for direct API callers and our own smoke script;
-  //   2. `runtime_session_hint` — the one continuity field `@librechat/agents` 3.2.65 does
-  //      put on the wire, and only when the host enables
-  //      `toolExecution.sandbox.statefulSessions`. Same hint ⇒ same sandbox, so a
-  //      conversation keeps its /mnt/data across turns instead of starting cold;
-  //   3. otherwise a fresh id, i.e. a fresh sandbox for this execution.
-  const hint = typeof body.runtime_session_hint === 'string' ? body.runtime_session_hint : '';
-  const secret = deps.config.sessionHintSecret;
-  // A supplied id must be well-formed AND bear the caller's own owner tag. Without the
-  // second half, `session_id` is an unauthenticated pointer at any sandbox in the pool —
-  // the sandbox is the isolation boundary, and nothing else in the request binds it to a
-  // user. Foreign ids are ignored rather than rejected: the contract is to run the code,
-  // and running it in a fresh sandbox of the caller's own is both safe and useful.
-  const suppliedIsOwn =
-    isValidSessionId(body.session_id) && sessionBelongsTo(body.session_id, auth.userId, secret);
-  let sessionId: string;
-  let derivedFromHint = false;
-  if (suppliedIsOwn && isValidSessionId(body.session_id)) {
-    sessionId = body.session_id;
-  } else if (hint !== '') {
-    sessionId = deriveSessionId(hint, secret, auth.userId);
-    derivedFromHint = true;
-  } else {
-    sessionId = mintSessionId(auth.userId, secret);
-  }
-  if (body.session_id != null && !isValidSessionId(body.session_id)) {
-    logger.warn({ supplied: String(body.session_id).slice(0, 64) }, 'invalid session_id ignored');
-  } else if (isValidSessionId(body.session_id) && !suppliedIsOwn) {
-    // Worth a louder line than a malformed id: well-formed but not the caller's means
-    // either a client bug or someone probing another user's sandbox.
-    logger.warn(
-      { supplied: body.session_id.slice(0, 16), userId: auth.userId },
-      'session_id does not belong to the caller — ignored, fresh session allocated',
-    );
-  }
-
-  const fail = (stderr: string, outcome: string): ExecResponse => {
-    metrics.execTotal.inc({ lang, outcome });
-    return {
-      session_id: sessionId,
-      stdout: '',
-      stderr,
-      code: 1,
-      files: [],
-      ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
-    };
-  };
-
-  let inputs;
   try {
-    inputs = await resolveInputs(body.files ?? [], auth, deps.repo);
-  } catch (err) {
-    if (err instanceof StagedFileMissingError) {
-      return fail(
-        `Input file '${err.filename}' is no longer available in the sandbox (expired). Re-attach the file and retry.`,
-        'expired_input',
+    // Session resolution, most specific first:
+    //   1. an explicit valid `session_id` — honoured, but note the current client never
+    //      sends one (it reads ToolNode's session id and drops it before the POST), so this
+    //      is really for direct API callers and our own smoke script;
+    //   2. `runtime_session_hint` — the one continuity field `@librechat/agents` 3.2.65 does
+    //      put on the wire, and only when the host enables
+    //      `toolExecution.sandbox.statefulSessions`. Same hint ⇒ same sandbox, so a
+    //      conversation keeps its /mnt/data across turns instead of starting cold;
+    //   3. otherwise a fresh id, i.e. a fresh sandbox for this execution.
+    const hint = typeof body.runtime_session_hint === 'string' ? body.runtime_session_hint : '';
+    const secret = deps.config.sessionHintSecret;
+    // A supplied id must be well-formed AND bear the caller's own owner tag. Without the
+    // second half, `session_id` is an unauthenticated pointer at any sandbox in the pool —
+    // the sandbox is the isolation boundary, and nothing else in the request binds it to a
+    // user. Foreign ids are ignored rather than rejected: the contract is to run the code,
+    // and running it in a fresh sandbox of the caller's own is both safe and useful.
+    const suppliedIsOwn =
+      isValidSessionId(body.session_id) && sessionBelongsTo(body.session_id, auth.userId, secret);
+    let sessionId: string;
+    let derivedFromHint = false;
+    if (suppliedIsOwn && isValidSessionId(body.session_id)) {
+      sessionId = body.session_id;
+    } else if (hint !== '') {
+      sessionId = deriveSessionId(hint, secret, auth.userId);
+      derivedFromHint = true;
+    } else {
+      sessionId = mintSessionId(auth.userId, secret);
+    }
+    if (body.session_id != null && !isValidSessionId(body.session_id)) {
+      logger.warn({ supplied: String(body.session_id).slice(0, 64) }, 'invalid session_id ignored');
+    } else if (isValidSessionId(body.session_id) && !suppliedIsOwn) {
+      // Worth a louder line than a malformed id: well-formed but not the caller's means
+      // either a client bug or someone probing another user's sandbox.
+      logger.warn(
+        { supplied: body.session_id.slice(0, 16), userId: auth.userId },
+        'session_id does not belong to the caller — ignored, fresh session allocated',
       );
     }
-    throw err;
-  }
 
-  const runOnce = () =>
-    executeOnce(body, lang, auth, sessionId, inputs, deps, {
-      derivedFromHint,
-      reused: suppliedIsOwn,
-    });
-  return runWithRecovery(runOnce, { sessionId, logger, fail });
+    const fail = (stderr: string, outcome: string): ExecResponse => {
+      metrics.execTotal.inc({ lang, outcome });
+      return {
+        session_id: sessionId,
+        stdout: '',
+        stderr,
+        code: 1,
+        files: [],
+        ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
+      };
+    };
+
+    const admission = deps.admission.tryAcquireRequest();
+    if ('rejected' in admission) {
+      throw new ValidationError('adapter execution capacity is exhausted; retry later', 429);
+    }
+    try {
+      let inputs;
+      try {
+        inputs = await resolveInputs(body.files ?? [], auth, deps.repo, signal);
+      } catch (err) {
+        if (err instanceof StagedFileMissingError) {
+          return fail(
+            `Input file '${err.filename}' is no longer available in the sandbox (expired). Re-attach the file and retry.`,
+            'expired_input',
+          );
+        }
+        throw err;
+      }
+      const inputBytes = validateInputBudgets(inputs, deps.config.exec);
+      metrics.execInputBytes.observe(inputBytes);
+      metrics.execInputBytes.observe(inputBytes);
+      if (admission.reserveInputBytes(inputBytes) != null) {
+        throw new ValidationError('adapter execution capacity is exhausted; retry later', 429);
+      }
+      try {
+        const runOnce = () =>
+          executeOnce(
+            body,
+            lang,
+            auth,
+            sessionId,
+            inputs,
+            deps,
+            {
+              derivedFromHint,
+              reused: suppliedIsOwn,
+            },
+            signal,
+          );
+        return await runWithRecovery(runOnce, { sessionId, logger, fail, signal });
+      } finally {
+        if (!suppliedIsOwn && !derivedFromHint) {
+          await deleteStatelessSession(sessionId, deps);
+        }
+      }
+    } finally {
+      admission.release();
+    }
+  } finally {
+    clearTimeout(requestTimeout);
+  }
+}
+
+async function deleteStatelessSession(sessionId: string, deps: ExecDeps): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), deps.config.aca.sessionDeleteTimeoutMs);
+  timeout.unref();
+  try {
+    await deps.aca.deleteSession(sessionId, controller.signal);
+    deps.metrics.sessionDeletion.inc({ outcome: 'success' });
+  } catch (error) {
+    deps.metrics.sessionDeletion.inc({ outcome: 'error' });
+    deps.logger.warn(
+      { sessionId, err: (error as Error).message },
+      'stateless session deletion failed',
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**
@@ -145,9 +216,10 @@ async function runWithRecovery(
     sessionId: string;
     logger: Logger;
     fail: (stderr: string, outcome: string) => ExecResponse;
+    signal: AbortSignal;
   },
 ): Promise<ExecResponse> {
-  const { sessionId, logger, fail } = ctx;
+  const { sessionId, logger, fail, signal } = ctx;
   try {
     return await runOnce();
   } catch (err) {
@@ -163,7 +235,11 @@ async function runWithRecovery(
       );
     }
     if (isRetryableCapacity(err)) {
-      await sleep((err.retryAfterSeconds ?? 0) * 1000);
+      try {
+        await sleep((err.retryAfterSeconds ?? 0) * 1000, signal);
+      } catch (sleepError) {
+        return mapTerminalError(sleepError, fail);
+      }
       return retryOnce(runOnce, () => fail(CAPACITY_STDERR, 'capacity'));
     }
     return mapTerminalError(err, fail);
@@ -207,16 +283,23 @@ async function executeOnce(
   inputs: Awaited<ReturnType<typeof resolveInputs>>,
   deps: ExecDeps,
   origin: SessionOrigin,
+  signal: AbortSignal,
 ): Promise<ExecResponse> {
   const { derivedFromHint, reused: reusedSession } = origin;
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
 
   if (inputs.length > 0) {
-    await pushInputs(inputs, sessionId, deps);
+    await pushInputs(inputs, sessionId, deps, signal);
   }
 
-  const baseline = await snapshotBaseline(sessionId, reusedSession, inputs.length > 0, deps);
+  const baseline = await snapshotBaseline(
+    sessionId,
+    reusedSession,
+    inputs.length > 0,
+    deps,
+    signal,
+  );
 
   // Everything runs on the code-interpreter (Python) pool, so the wrapper is
   // always a Python program (it runs bash via subprocess). It is mandatory for
@@ -225,14 +308,23 @@ async function executeOnce(
   const useWrapper = config.exec.wrapper === 'full' || lang === 'bash';
   const plan = useWrapper ? buildWrapper(lang, body.code, body.args ?? [], movePlan(inputs)) : null;
 
-  const outcome = await deps.aca.execute(sessionId, plan?.wrappedCode ?? body.code);
-  const out = await resolveOutput(outcome, plan, sessionId, deps);
+  const outcome = await deps.aca.execute(sessionId, plan?.wrappedCode ?? body.code, signal);
+  const out = await resolveOutput(outcome, plan, sessionId, deps, signal);
 
   let files = echoInputs(inputs);
   let stderr = out.stderr;
   const notes: string[] = [];
   if (out.code === 0) {
-    const capture = await captureOutputs({ sessionId, inputs, baseline, auth, config, deps });
+    const capture = await captureOutputs({
+      sessionId,
+      inputs,
+      baseline: baseline.signatures,
+      baselineReliable: baseline.reliable,
+      auth,
+      config,
+      deps,
+      signal,
+    });
     files = capture.files;
     if (capture.overflowNote != null) {
       notes.push(capture.overflowNote);
@@ -311,15 +403,25 @@ async function snapshotBaseline(
   reusedSession: boolean,
   hasInputs: boolean,
   deps: ExecDeps,
-): Promise<Map<string, string>> {
+  signal: AbortSignal,
+): Promise<{ signatures: Map<string, string>; reliable: boolean }> {
   if (!reusedSession && !hasInputs) {
-    return new Map();
+    return { signatures: new Map(), reliable: true };
   }
   try {
-    return baselineFrom(await deps.aca.listFiles(sessionId));
+    return {
+      signatures: baselineFrom(await deps.aca.listFiles(sessionId, signal)),
+      reliable: true,
+    };
   } catch (err) {
-    deps.logger.debug({ err: (err as Error).message }, 'baseline snapshot skipped');
-    return new Map();
+    if (signal.aborted) {
+      throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
+    deps.logger.warn(
+      { err: (err as Error).message },
+      'baseline snapshot failed — writable files will be captured conservatively',
+    );
+    return { signatures: new Map(), reliable: false };
   }
 }
 
@@ -333,6 +435,7 @@ async function resolveOutput(
   plan: WrapperPlan | null,
   sessionId: string,
   deps: ExecDeps,
+  signal: AbortSignal,
 ): Promise<ResolvedOutput> {
   const sentinel = plan != null ? parseSentinel(plan.delimiter, outcome.stdout) : null;
   if (sentinel == null) {
@@ -352,14 +455,26 @@ async function resolveOutput(
   let stdout = sentinel.inlineStdout;
   let stderr = sentinel.inlineStderr;
   if (sentinel.outBytes > Buffer.byteLength(stdout, 'utf8')) {
-    const full = await recoverLog(sessionId, OUT_LOG, deps.config.exec.stdoutMaxBytes, deps);
+    const full = await recoverLog(
+      sessionId,
+      OUT_LOG,
+      deps.config.exec.stdoutMaxBytes,
+      deps,
+      signal,
+    );
     if (full != null) {
       stdout = full;
       truncationRecovered = true;
     }
   }
   if (sentinel.errBytes > Buffer.byteLength(stderr, 'utf8')) {
-    const full = await recoverLog(sessionId, ERR_LOG, deps.config.exec.stderrMaxBytes, deps);
+    const full = await recoverLog(
+      sessionId,
+      ERR_LOG,
+      deps.config.exec.stderrMaxBytes,
+      deps,
+      signal,
+    );
     if (full != null) {
       stderr = full;
       truncationRecovered = true;
@@ -374,12 +489,16 @@ async function recoverLog(
   logName: string,
   maxBytes: number,
   deps: ExecDeps,
+  signal: AbortSignal,
 ): Promise<string | null> {
   try {
-    const full = await deps.aca.fetchFileContent(sessionId, logName, maxBytes);
+    const full = await deps.aca.fetchFileContent(sessionId, logName, maxBytes, signal);
     deps.metrics.truncationRecoveries.inc();
     return full.toString('utf8');
   } catch (err) {
+    if (signal.aborted) {
+      throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
     deps.logger.warn({ err: (err as Error).message, logName }, 'output log recovery failed');
     return null;
   }
@@ -393,6 +512,9 @@ function mapTerminalError(
   if (err instanceof AcaTimeoutError) {
     return fail(TIMEOUT_STDERR, 'timeout');
   }
+  if (isAbortError(err)) {
+    return fail(TIMEOUT_STDERR, 'timeout');
+  }
   if (err instanceof AcaError && err.statusCode === 429) {
     return fail(CAPACITY_STDERR, 'capacity');
   }
@@ -402,6 +524,31 @@ function mapTerminalError(
   throw err;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error != null && 'name' in error && error.name === 'AbortError'
+  );
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    timer.unref();
+    void Promise.resolve().then(() => {
+      if (signal.aborted) {
+        abort();
+      }
+    });
+  });
 }

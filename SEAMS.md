@@ -924,6 +924,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/agents/__tests__/initialize.test.ts` | `passes the union of agent.tools + allowed-tools` environment fixture | 1495–1497 | Makes the allowed-tools union regression opt into an available Code Execution environment now that code-dependent skills correctly fail closed by default | Self | KK20-257 |
 | `api/server/controllers/agents/client.test.js` | `chatCompletion provider failure logging` `errorName` expectation | 1170–1184 | Keeps the full API privacy regression aligned with the shared bounded provider summary after SDK exception-class capture was added | Self | KK20-270 |
 | `api/test/server/services/Files/Azure/crud.test.js` | `getAzureFileStream` bounded `errorName` expectation | 687–697 | Keeps the Azure download privacy regression aligned with the shared bounded provider summary without permitting raw error content | Self | KK20-270 |
+| `api/server/services/Files/Code/process.js` | `CODE_EXEC_HELPER_TIMEOUT_MS`, `readSandboxFile`, `writeSandboxFile` | 89–95, 1034–1036, 1120–1122 | Aligns host-side sandbox read/write HTTP timeouts with the adapter's bounded total request and cleanup budget instead of aborting valid work after 15 seconds | `api/server/services/Files/Code/process.spec.js` | KK20-257 |
+| `api/server/services/Files/Code/process.spec.js` | `readSandboxFile timeout`, `writeSandboxFile payload shape` | 1624–1634, 1675–1677 | Pins both upstream helper call sites to the extended bounded timeout so later merges cannot silently restore the 15-second cutoff | Self | KK20-257 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1023,6 +1025,9 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | KK20-255 — replaces the legacy non-cascading project-delete confirmation with explicit permanent-cascade copy and adds the localized queued/active scheduled-run conflict message. JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 | `.env.example` | KK20-257 — documents the default-off `KNAUF_CODE_EXECUTION_ENABLED` operator switch, controlled-host allowlist, and the three-part effective availability contract. |
 | `.github/workflows/build-code-adapter.yaml` | KK20-281 — tests adapter pull requests before any image build, builds `VERSION` by default for both main pushes and blank manual dispatches, validates optional tag overrides before Azure login, and keeps ACR writes unavailable to pull-request jobs. |
+| `.github/workflows/build-code-adapter.yaml` | KK20-257 — enforces a new adapter `VERSION`, serializes registry publishing, rejects tag replacement, embeds source/version labels, resolves the published digest, and records commit/version/digest provenance. |
+| `.github/workflows/promote-code-adapter.yaml` | KK20-257 — resolves the nonprod tag once, imports by immutable digest, rejects existing production tags, verifies exact source/target digest equality, and records promotion provenance. |
+| `.github/workflows/deploy-code-adapter.yaml` | KK20-285 — asynchronously consumes main-build provenance, adopts digest-capable chart values, auto-merges exact-digest dev then stage GitOps PRs, gates each environment on ArgoCD readiness, excludes production, and preserves reviewed rollback to retained prior versions. |
 
 ## Net-New Files
 
