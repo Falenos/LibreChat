@@ -30,6 +30,10 @@ export interface Metrics {
 
 export function createMetrics(): Metrics {
   const registry = new Registry();
+  registry.setDefaultLabels({
+    service: 'agentic-karl-code-adapter',
+    version: process.env.ADAPTER_VERSION ?? 'unknown',
+  });
   collectDefaultMetrics({ register: registry });
 
   return {

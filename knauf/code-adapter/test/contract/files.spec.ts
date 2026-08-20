@@ -114,7 +114,9 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
       metadataReadiness: async () => undefined,
       metrics: testMetrics(),
     });
-    blob.put = async () => {
+    const put = blob.put.bind(blob);
+    blob.put = async (blobPath, data, contentType, size) => {
+      await put(blobPath, data, contentType, size);
       throw new Error('simulated Blob failure');
     };
 

@@ -17,7 +17,10 @@ export function createLogger(level: string) {
       ],
       censor: '[redacted]',
     },
-    base: { service: 'code-adapter' },
+    base: {
+      service: 'agentic-karl-code-adapter',
+      version: process.env.ADAPTER_VERSION ?? 'unknown',
+    },
   });
 }
 
