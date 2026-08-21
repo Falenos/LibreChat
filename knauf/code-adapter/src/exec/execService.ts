@@ -144,7 +144,6 @@ export async function runExec(
       }
       const inputBytes = validateInputBudgets(inputs, deps.config.exec);
       metrics.execInputBytes.observe(inputBytes);
-      metrics.execInputBytes.observe(inputBytes);
       if (admission.reserveInputBytes(inputBytes) != null) {
         throw new ValidationError('adapter execution capacity is exhausted; retry later', 429);
       }

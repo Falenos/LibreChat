@@ -1,6 +1,6 @@
 {
   "name": "@knauf/code-adapter",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Tier-3 adapter: LibreChat Code API -> Azure Container Apps dynamic session pools (KARL code execution backend)",
   "type": "module",

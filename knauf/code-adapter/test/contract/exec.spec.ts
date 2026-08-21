@@ -124,6 +124,17 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.session_id).toMatch(/^karl-[0-9a-f]{32}$/);
   });
 
+  it('records input bytes once per execution', async () => {
+    const observe = vi.spyOn(metrics.execInputBytes, 'observe');
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledWith(0);
+  });
+
   it('BashExecutor shape: lang=bash runs via a python-hosted bash subprocess with a real exit code', async () => {
     aca.executeImpl = async (_sid, code) => {
       // bash runs on the same code-interpreter pool, launched as subprocess(['bash', …])
