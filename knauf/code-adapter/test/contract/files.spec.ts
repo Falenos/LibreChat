@@ -67,6 +67,33 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     expect(receivedStream).toBe(true);
   });
 
+  it('accepts the exact configured upload byte limit and rejects one byte more', async () => {
+    app = createApp({
+      config: testConfig({ UPLOAD_MAX_BYTES: '4' }),
+      logger: testLogger(),
+      aca: new FakeAcaClient(),
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics: testMetrics(),
+    });
+
+    const atLimit = await request(app)
+      .post('/v1/upload')
+      .field('kind', 'user')
+      .field('id', 'user-1')
+      .attach('file', Buffer.from('four'), 'at-limit.txt');
+    expect(atLimit.status).toBe(200);
+
+    const overLimit = await request(app)
+      .post('/v1/upload')
+      .field('kind', 'user')
+      .field('id', 'user-1')
+      .attach('file', Buffer.from('fives'), 'over-limit.txt');
+    expect(overLimit.status).toBe(413);
+    expect(overLimit.body.error).toBe('file exceeds the 128MB upload limit');
+  });
+
   it('rolls back staged metadata and partial Blob data when upload fails', async () => {
     const put = blob.put.bind(blob);
     blob.put = async (blobPath, data, contentType, size) => {

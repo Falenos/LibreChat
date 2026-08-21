@@ -37,7 +37,10 @@ export function createUploadRouter(deps: UploadDeps): Router {
     // request can exhaust ephemeral storage (which has no request/limit in the GitOps values).
     // The cap matches CAPTURE_MAX_FILES: a batch larger than what one execution can hand
     // back is not a shape we serve.
-    limits: { fileSize: deps.config.uploadMaxBytes, files: deps.config.exec.captureMaxFiles },
+    // Busboy raises LIMIT_FILE_SIZE when the configured byte count is reached, so the
+    // parser limit must be one byte beyond the documented inclusive application limit.
+    // Files larger than uploadMaxBytes still reach the sentinel and are rejected.
+    limits: { fileSize: deps.config.uploadMaxBytes + 1, files: deps.config.exec.captureMaxFiles },
   });
 
   const stageOne = async (
