@@ -4,6 +4,7 @@ import { createMetrics } from '../../src/middleware/metrics.js';
 
 describe('unified telemetry tags', () => {
   const originalVersion = process.env.ADAPTER_VERSION;
+  const originalEnv = process.env.DD_ENV;
 
   afterEach(() => {
     if (originalVersion == null) {
@@ -11,14 +12,21 @@ describe('unified telemetry tags', () => {
     } else {
       process.env.ADAPTER_VERSION = originalVersion;
     }
+    if (originalEnv == null) {
+      delete process.env.DD_ENV;
+    } else {
+      process.env.DD_ENV = originalEnv;
+    }
   });
 
-  it('adds the immutable adapter version and canonical service to logs and metrics', async () => {
+  it('adds service, environment, and immutable adapter version to logs and metrics', async () => {
     process.env.ADAPTER_VERSION = '0.3.2';
+    process.env.DD_ENV = 'production';
 
     const logger = createLogger('silent');
     expect(logger.bindings()).toMatchObject({
       service: 'agentic-karl-code-adapter',
+      env: 'production',
       version: '0.3.2',
     });
 
@@ -27,7 +35,7 @@ describe('unified telemetry tags', () => {
     const exposition = await metrics.registry.metrics();
 
     expect(exposition).toContain(
-      'code_adapter_admission_active_requests{service="agentic-karl-code-adapter",version="0.3.2"} 1',
+      'code_adapter_admission_active_requests{service="agentic-karl-code-adapter",env="production",version="0.3.2"} 1',
     );
   });
 });

@@ -278,10 +278,16 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.error).toContain("Language 'node'");
   });
 
-  it('rejects malformed and excessive file-reference shapes before metadata access', async () => {
+  it('rejects malformed file-reference shapes before metadata access', async () => {
     const malformed = await request(app)
       .post('/v1/exec')
       .send({ lang: 'py', code: 'print(1)', files: [{ id: 42, name: 'bad.txt' }] });
+
+    expect(malformed.status).toBe(400);
+    expect(aca.pushed).toHaveLength(0);
+  });
+
+  it('returns one non-retryable tool error when accumulated inputs exceed the limit', async () => {
     const excessive = await request(app)
       .post('/v1/exec')
       .send({
@@ -293,8 +299,10 @@ describe('POST /v1/exec contract', () => {
         })),
       });
 
-    expect(malformed.status).toBe(400);
-    expect(excessive.status).toBe(413);
+    expect(excessive.status).toBe(200);
+    expect(excessive.body).toMatchObject({ code: 1, files: [] });
+    expect(excessive.body.stderr).toContain('maximum 20');
+    expect(excessive.body.stderr).toContain('Do not retry this request unchanged');
     expect(aca.pushed).toHaveLength(0);
   });
 
@@ -806,6 +814,11 @@ describe('POST /v1/exec contract', () => {
   });
 
   it('expired staged input → 200 {code:1} explaining re-attach (not 5xx)', async () => {
+    let attempts = 0;
+    aca.executeImpl = async () => {
+      attempts += 1;
+      throw new Error('must not execute with an expired input');
+    };
     const response = await request(app)
       .post('/v1/exec')
       .send({
@@ -824,6 +837,45 @@ describe('POST /v1/exec contract', () => {
     expect(response.body.code).toBe(1);
     expect(response.body.stderr).toContain("Input file 'gone.csv'");
     expect(response.body.stderr).toContain('Re-attach');
+    expect(response.body.stderr).toContain('Do not retry this request unchanged');
+    expect(attempts).toBe(0);
+  });
+
+  it('classifies sandbox ENOENT once and tells the model not to retry unchanged', async () => {
+    let attempts = 0;
+    aca.executeImpl = async (_sid, code) => {
+      attempts += 1;
+      return sentinelOutcome(code, 1, '', "cat: /mnt/data/missing.csv: No such file or directory\n");
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'bash', code: 'cat /mnt/data/missing.csv' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(1);
+    expect(response.body.stderr).toContain('not available in this sandbox');
+    expect(response.body.stderr).toContain('Do not retry this request unchanged');
+    expect(attempts).toBe(1);
+  });
+
+  it('classifies a normal ACA failure at the platform cap as a timeout', async () => {
+    aca.executeImpl = async () => ({
+      succeeded: false,
+      stdout: '',
+      stderr: '',
+      executionMs: 221_003,
+      raw: { properties: { status: 'Failure' } },
+    });
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({ lang: 'bash', code: 'long-running-command' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.code).toBe(1);
+    expect(response.body.stderr).toContain('220-second limit');
+    expect(response.body.stderr).not.toContain('produced no error output');
   });
 
   it('SessionWithIdentifierNotFound mid-run → transparent retry with re-push', async () => {

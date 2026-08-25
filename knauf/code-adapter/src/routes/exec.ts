@@ -54,12 +54,6 @@ export function createExecRouter(deps: ExecRouterDeps): Router {
       if (body.files != null && !Array.isArray(body.files)) {
         throw new ValidationError('files must be an array');
       }
-      if (body.files != null && body.files.length > deps.config.exec.inputMaxFiles) {
-        throw new ValidationError(
-          `too many input files (maximum ${deps.config.exec.inputMaxFiles})`,
-          413,
-        );
-      }
       for (const file of body.files ?? []) {
         if (
           file == null ||

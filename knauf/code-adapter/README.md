@@ -64,6 +64,15 @@ is the tripwire that fires when the response shape drifts.
 Unprefixed and unauthenticated (k8s only): `/healthz`, `/readyz`, `/metrics`. Readiness caches
 bounded Table, Blob, workload-identity, and non-allocating ACA checks.
 
+HTTP logs retain only method, normalized route template, status, and duration; identity headers,
+query values, session/object IDs, filenames, code, and provider payloads are redacted. The image
+stamps `agentic-karl-code-adapter` as both the Datadog and OpenTelemetry service name plus its
+immutable adapter version. The bundled Datadog tracer is registered as the OpenTelemetry provider
+before application imports; automatic plugins stay disabled so only the bounded incoming HTTP span
+is emitted. It continues trace context without high-cardinality attributes. `agk-deployment-configs`
+must expose the Agent trace intake (`DD_AGENT_HOST` or `DD_TRACE_AGENT_URL`) and set `DD_ENV`; do not
+target this ESM service with SSI because it carries explicit instrumentation.
+
 ## How /exec works
 
 1. **Session** — a `karl-<32hex>` id doubles as the ACA `identifier`. Resolution order:

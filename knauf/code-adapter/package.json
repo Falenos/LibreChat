@@ -1,6 +1,6 @@
 {
   "name": "@knauf/code-adapter",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "description": "Tier-3 adapter: LibreChat Code API -> Azure Container Apps dynamic session pools (KARL code execution backend)",
   "type": "module",
@@ -10,8 +10,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "dev": "tsc -p tsconfig.json --watch & node --watch dist/index.js",
+    "start": "node --import ./dist/tracing.js dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch & node --watch --import ./dist/tracing.js dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +22,8 @@
     "@azure/data-tables": "13.3.2",
     "@azure/identity": "^4.5.0",
     "@azure/storage-blob": "^12.26.0",
+    "@opentelemetry/api": "1.9.1",
+    "dd-trace": "6.12.0",
     "express": "^4.21.2",
     "jose": "^5.9.6",
     "multer": "^2.2.0",

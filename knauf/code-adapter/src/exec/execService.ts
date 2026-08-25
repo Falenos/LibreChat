@@ -32,6 +32,8 @@ const TIMEOUT_STDERR =
   'Split the work into smaller steps and persist intermediate results to /mnt/data.';
 
 const CAPACITY_STDERR = 'The sandbox is at capacity. Try again shortly.';
+const ACA_PLATFORM_TIMEOUT_FLOOR_MS = 220_000;
+const NO_UNCHANGED_RETRY = 'Do not retry this request unchanged.';
 
 export interface ExecDeps {
   config: Config;
@@ -65,6 +67,7 @@ export async function runExec(
   deps: ExecDeps,
 ): Promise<ExecResponse> {
   const { logger, metrics } = deps;
+  const requestStartedAt = Date.now();
   const requestController = new AbortController();
   const requestTimeout = setTimeout(
     () => requestController.abort(),
@@ -115,6 +118,17 @@ export async function runExec(
 
     const fail = (stderr: string, outcome: string): ExecResponse => {
       metrics.execTotal.inc({ lang, outcome });
+      logger.info(
+        {
+          session_id: sessionId,
+          lang,
+          rc: 1,
+          total_ms: Date.now() - requestStartedAt,
+          file_count: body.files?.length ?? 0,
+          failure_reason: outcome,
+        },
+        'exec failed',
+      );
       return {
         session_id: sessionId,
         stdout: '',
@@ -124,6 +138,14 @@ export async function runExec(
         ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
       };
     };
+
+    if ((body.files?.length ?? 0) > deps.config.exec.inputMaxFiles) {
+      return fail(
+        `Too many input files (maximum ${deps.config.exec.inputMaxFiles}). ` +
+          `Start a new turn with only the files needed for this command. ${NO_UNCHANGED_RETRY}`,
+        'too_many_inputs',
+      );
+    }
 
     const admission = deps.admission.tryAcquireRequest();
     if ('rejected' in admission) {
@@ -136,7 +158,8 @@ export async function runExec(
       } catch (err) {
         if (err instanceof StagedFileMissingError) {
           return fail(
-            `Input file '${err.filename}' is no longer available in the sandbox (expired). Re-attach the file and retry.`,
+            `Input file '${err.filename}' is no longer available in the sandbox (expired). ` +
+              `Re-attach the file before retrying. ${NO_UNCHANGED_RETRY}`,
             'expired_input',
           );
         }
@@ -308,7 +331,18 @@ async function executeOnce(
   const plan = useWrapper ? buildWrapper(lang, body.code, body.args ?? [], movePlan(inputs)) : null;
 
   const outcome = await deps.aca.execute(sessionId, plan?.wrappedCode ?? body.code, signal);
-  const out = await resolveOutput(outcome, plan, sessionId, deps, signal);
+  const platformTimedOut =
+    outcome.succeeded === false &&
+    outcome.executionMs != null &&
+    outcome.executionMs >= ACA_PLATFORM_TIMEOUT_FLOOR_MS;
+  const out = platformTimedOut
+    ? {
+        stdout: '',
+        stderr: TIMEOUT_STDERR,
+        code: 1,
+        truncationRecovered: false,
+      }
+    : await resolveOutput(outcome, plan, sessionId, deps, signal);
 
   let files = echoInputs(inputs);
   let stderr = out.stderr;
@@ -334,6 +368,10 @@ async function executeOnce(
     if (capture.failedNote != null) {
       notes.push(capture.failedNote);
     }
+  } else if (isMissingSandboxFile(stderr)) {
+    notes.push(
+      `The requested file is not available in this sandbox. Use a path from the current Available files list, or re-attach the source file. ${NO_UNCHANGED_RETRY}`,
+    );
   } else if (stderr === '') {
     // The exit code is real, but the caller drops it: `@librechat/agents` (3.2.65,
     // and 3.2.46 before it) formats only `stdout`/`stderr` and never reads `result.code`.
@@ -349,7 +387,15 @@ async function executeOnce(
     stderr = [stderr, ...notes].filter((part) => part !== '').join('\n');
   }
 
-  const outcomeLabel = out.code === 0 ? 'ok' : 'user_error';
+  const outcomeLabel = platformTimedOut ? 'timeout' : out.code === 0 ? 'ok' : 'user_error';
+  const failureReason =
+    outcomeLabel === 'ok'
+      ? undefined
+      : outcomeLabel === 'timeout'
+        ? 'timeout'
+        : isMissingSandboxFile(stderr)
+          ? 'missing_file'
+          : 'user_error';
   metrics.execTotal.inc({ lang, outcome: outcomeLabel });
   metrics.execDuration.observe({ lang, outcome: outcomeLabel }, (Date.now() - startedAt) / 1000);
   logger.info(
@@ -360,6 +406,7 @@ async function executeOnce(
       exec_ms: outcome.executionMs,
       total_ms: Date.now() - startedAt,
       push_count: inputs.length,
+      failure_reason: failureReason,
       stdout_bytes: Buffer.byteLength(out.stdout, 'utf8'),
       stderr_bytes: Buffer.byteLength(stderr, 'utf8'),
       truncation_recovered: out.truncationRecovered,
@@ -378,6 +425,14 @@ async function executeOnce(
     // continuity is visible in traces instead of having to be inferred.
     ...(derivedFromHint ? { runtime_session_id: sessionId } : {}),
   };
+}
+
+function isMissingSandboxFile(stderr: string): boolean {
+  return (
+    /No such file or directory/i.test(stderr) ||
+    /FileNotFoundError:\s*\[Errno 2\]/i.test(stderr) ||
+    /cannot (?:access|open).*not found/i.test(stderr)
+  );
 }
 
 /**
