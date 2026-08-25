@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { Download, FileCode2, FileText, Image } from 'lucide-react';
 import {
   Button,
@@ -14,7 +14,7 @@ import { NotificationSeverity } from '~/common';
 import { useFileDownload } from '~/data-provider';
 import useArtifactProps from '~/hooks/Artifacts/useArtifactProps';
 import { useCodeState } from '~/Providers/EditorContext';
-import { useAuthContext, useLocalize } from '~/hooks';
+import { AuthContext, useLocalize } from '~/hooks';
 import { postArtifactExport } from '~/knauf/data-provider/data-service';
 import { triggerDownload } from '~/utils/downloadFile';
 
@@ -33,7 +33,7 @@ export default function ArtifactDownloadMenu({
   shareId,
 }: Readonly<{ artifact: Artifact; shareId?: string }>) {
   const localize = useLocalize();
-  const { user } = useAuthContext();
+  const user = useContext(AuthContext)?.user;
   const { showToast } = useToastContext();
   const { currentCode } = useCodeState();
   const { fileKey } = useArtifactProps({ artifact });

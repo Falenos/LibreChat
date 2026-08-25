@@ -31,7 +31,7 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
-  useAuthContext: () => ({ user: { id: 'user-1' } }),
+  AuthContext: jest.requireActual('react').createContext(undefined),
   useLocalize: () => (key: string) => key,
 }));
 
@@ -115,6 +115,12 @@ describe('ArtifactDownloadMenu', () => {
     expect(
       screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_source' }),
     ).toBeDisabled();
+  });
+
+  it('renders public shared artifacts without an AuthProvider', () => {
+    render(<ArtifactDownloadMenu artifact={artifact} shareId="share-1" />);
+
+    expect(screen.getByRole('button', { name: 'com_ui_download_artifact' })).toBeEnabled();
   });
 
   it.each([
