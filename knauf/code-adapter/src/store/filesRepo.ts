@@ -91,7 +91,13 @@ export type ReconciliationOutcome =
 
 export class TableSchemaError extends Error {
   constructor(
-    public readonly entity: 'file' | 'filename-index' | 'blob-index' | 'lease' | 'cursor' | 'unknown',
+    public readonly entity:
+      | 'file'
+      | 'filename-index'
+      | 'blob-index'
+      | 'lease'
+      | 'cursor'
+      | 'unknown',
     public readonly reason: 'schema_version' | 'shape' | 'key_mismatch' | 'unknown_type',
     message: string,
   ) {
@@ -138,7 +144,10 @@ function isDate(value: unknown): value is Date {
   return value instanceof Date && !Number.isNaN(value.getTime());
 }
 
-function validateSchemaVersion(entity: TableEntityRecord, expected: TableSchemaError['entity']): void {
+function validateSchemaVersion(
+  entity: TableEntityRecord,
+  expected: TableSchemaError['entity'],
+): void {
   if (entity.schemaVersion !== FILE_SCHEMA_VERSION) {
     schemaError(expected, 'schema_version', `unsupported ${expected} schema version`);
   }
@@ -162,11 +171,7 @@ function validateKnownKeys(
   }
 }
 
-function validateIdentity(
-  kind: unknown,
-  id: unknown,
-  version: unknown,
-): CodeEnvIdentity {
+function validateIdentity(kind: unknown, id: unknown, version: unknown): CodeEnvIdentity {
   if (
     typeof kind !== 'string' ||
     !CODE_ENV_KINDS.includes(kind as (typeof CODE_ENV_KINDS)[number]) ||
@@ -306,12 +311,7 @@ function deserializeIndexEntity(
   expected: 'filename-index' | 'blob-index',
 ): IndexRevision {
   validateSchemaVersion(entity, expected);
-  validateKnownKeys(entity, expected, [
-    'entityType',
-    'schemaVersion',
-    'fileId',
-    'lookupValue',
-  ]);
+  validateKnownKeys(entity, expected, ['entityType', 'schemaVersion', 'fileId', 'lookupValue']);
   if (
     entity.entityType !== expected ||
     !isValidSessionId(entity.partitionKey) ||
@@ -610,11 +610,14 @@ export class FilesRepo {
         const fileId = randomUUID();
         const doc = this.newDoc(input, fileId, blobPath, now);
         try {
-          await this.table.submitTransaction([
-            { type: 'create', entity: serializeFileEntity(doc) },
-            { type: 'create', entity: serializeFilenameIndex(doc) },
-            { type: 'create', entity: serializeBlobIndex(doc) },
-          ], signal);
+          await this.table.submitTransaction(
+            [
+              { type: 'create', entity: serializeFileEntity(doc) },
+              { type: 'create', entity: serializeFilenameIndex(doc) },
+              { type: 'create', entity: serializeBlobIndex(doc) },
+            ],
+            signal,
+          );
           return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
         } catch (error) {
           if (isTableConflict(error)) {
@@ -628,16 +631,19 @@ export class FilesRepo {
         const fileId = randomUUID();
         const doc = this.newDoc(input, fileId, blobPath, now);
         try {
-          await this.table.submitTransaction([
-            {
-              type: 'update',
-              entity: serializeFilenameIndex(doc),
-              etag: filenameIndex.etag,
-              mode: 'Replace',
-            },
-            { type: 'create', entity: serializeFileEntity(doc) },
-            { type: 'create', entity: serializeBlobIndex(doc) },
-          ], signal);
+          await this.table.submitTransaction(
+            [
+              {
+                type: 'update',
+                entity: serializeFilenameIndex(doc),
+                etag: filenameIndex.etag,
+                mode: 'Replace',
+              },
+              { type: 'create', entity: serializeFileEntity(doc) },
+              { type: 'create', entity: serializeBlobIndex(doc) },
+            ],
+            signal,
+          );
           return { doc, obsoleteBlobPaths: [...obsoleteBlobPaths] };
         } catch (error) {
           if (isTableConflict(error)) {
@@ -677,7 +683,12 @@ export class FilesRepo {
             etag: filenameIndex.etag,
             mode: 'Replace',
           },
-          { type: 'delete', partitionKey: input.sessionId, rowKey: fileRowKey(existing.doc.fileId), etag: existing.etag },
+          {
+            type: 'delete',
+            partitionKey: input.sessionId,
+            rowKey: fileRowKey(existing.doc.fileId),
+            etag: existing.etag,
+          },
           { type: 'create', entity: serializeFileEntity(doc) },
           { type: 'create', entity: serializeBlobIndex(doc) },
         );
@@ -711,13 +722,17 @@ export class FilesRepo {
     throw new Error(`upsertCaptured exhausted ${MAX_WRITE_ATTEMPTS} conditional attempts`);
   }
 
-  async find(
+  async find(sessionId: string, fileId: string, signal?: AbortSignal): Promise<FileDoc | null> {
+    const revision = await this.readFile(sessionId, fileId, signal);
+    return revision != null && this.isActive(revision.doc) ? revision.doc : null;
+  }
+
+  async findForDeletion(
     sessionId: string,
     fileId: string,
     signal?: AbortSignal,
   ): Promise<FileDoc | null> {
-    const revision = await this.readFile(sessionId, fileId, signal);
-    return revision != null && this.isActive(revision.doc) ? revision.doc : null;
+    return (await this.readFile(sessionId, fileId, signal))?.doc ?? null;
   }
 
   async lookupBlob(blobPath: string): Promise<BlobLookup> {
@@ -793,18 +808,21 @@ export class FilesRepo {
         return;
       }
       try {
-        await this.table.submitTransaction([
-          {
-            type: 'update',
-            entity: {
-              partitionKey: sessionId,
-              rowKey: fileRowKey(fileId),
-              expiresAt: this.expiry(now),
+        await this.table.submitTransaction(
+          [
+            {
+              type: 'update',
+              entity: {
+                partitionKey: sessionId,
+                rowKey: fileRowKey(fileId),
+                expiresAt: this.expiry(now),
+              },
+              etag: existing.etag,
+              mode: 'Merge',
             },
-            etag: existing.etag,
-            mode: 'Merge',
-          },
-        ], signal);
+          ],
+          signal,
+        );
         return;
       } catch (error) {
         if (isEntityNotFound(error)) {
@@ -878,11 +896,7 @@ export class FilesRepo {
         });
       }
     }
-    if (
-      blobRaw != null &&
-      blobRaw.fileId === doc.fileId &&
-      blobRaw.lookupValue === doc.blobPath
-    ) {
+    if (blobRaw != null && blobRaw.fileId === doc.fileId && blobRaw.lookupValue === doc.blobPath) {
       actions.push({
         type: 'delete',
         partitionKey: blobRaw.partitionKey,
@@ -956,9 +970,7 @@ export class FilesRepo {
     if (valid) {
       return { outcome: 'skipped' };
     }
-    return (await this.deleteIndexOnce(index))
-      ? { outcome: 'repaired' }
-      : { outcome: 'conflict' };
+    return (await this.deleteIndexOnce(index)) ? { outcome: 'repaired' } : { outcome: 'conflict' };
   }
 
   async acquireCleanupLease(ownerId: string, leaseMs: number): Promise<boolean> {
@@ -1073,9 +1085,7 @@ export class FilesRepo {
   async saveReconciliationCursor(token: string | null, etag: string | null): Promise<void> {
     const entity = serializeCursor(token, this.now());
     await this.table.submitTransaction([
-      etag == null
-        ? { type: 'create', entity }
-        : { type: 'update', entity, etag, mode: 'Replace' },
+      etag == null ? { type: 'create', entity } : { type: 'update', entity, etag, mode: 'Replace' },
     ]);
   }
 }

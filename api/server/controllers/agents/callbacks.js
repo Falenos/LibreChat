@@ -1472,6 +1472,10 @@ function buildResponsesAttachment(fileMetadata, toolCallId) {
     textFormat: fileMetadata.textFormat ?? null,
     status: fileMetadata.status,
     previewError: fileMetadata.previewError,
+    // [knauf] KK20-316 — preserve adapter-owned fallback retention metadata in Responses API.
+    source: fileMetadata.source,
+    expiresAt: fileMetadata.expiresAt,
+    // End [knauf]
   };
 }
 

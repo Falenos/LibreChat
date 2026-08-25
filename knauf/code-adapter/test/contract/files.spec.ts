@@ -193,13 +193,14 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     expect(response.status).toBe(400);
   });
 
-  it('GET /sessions/:sid/objects/:fid returns lastModified (process.js getSessionInfo)', async () => {
+  it('GET /sessions/:sid/objects/:fid returns active metadata and authoritative expiry', async () => {
     const upload = await uploadOne();
     const response = await request(app)
       .get(`/v1/sessions/${upload.body.storage_session_id}/objects/${upload.body.files[0].fileId}`)
       .query({ kind: 'user', id: 'user-1' });
     expect(response.status).toBe(200);
     expect(new Date(response.body.lastModified as string).getTime()).not.toBeNaN();
+    expect(new Date(response.body.expiresAt as string).getTime()).not.toBeNaN();
     expect(response.body.size).toBe(8);
   });
 
@@ -235,5 +236,47 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     expect(gone.status).toBe(404);
 
     expect(blob.blobs.size).toBe(0);
+  });
+
+  it('DELETE removes expired metadata and Blob bytes immediately', async () => {
+    const upload = await uploadOne();
+    const sid = upload.body.storage_session_id as string;
+    const fileId = upload.body.files[0].fileId as string;
+    const entity = repo.table.allEntities().find((candidate) => candidate.rowKey === `f:${fileId}`);
+    expect(entity).toBeDefined();
+    repo.table.replaceDirect({ ...entity!, expiresAt: new Date('2000-01-01T00:00:00.000Z') });
+
+    const probe = await request(app)
+      .get(`/v1/sessions/${sid}/objects/${fileId}`)
+      .query({ kind: 'user', id: 'user-1' });
+    expect(probe.status).toBe(404);
+
+    const deleted = await request(app)
+      .delete(`/v1/sessions/${sid}/objects/${fileId}`)
+      .query({ kind: 'user', id: 'user-1' });
+    expect(deleted.status).toBe(200);
+    expect(repo.docs.size).toBe(0);
+    expect(blob.blobs.size).toBe(0);
+  });
+
+  it('DELETE does not expose or remove an expired object owned by another user', async () => {
+    const upload = await uploadOne();
+    const sid = upload.body.storage_session_id as string;
+    const fileId = upload.body.files[0].fileId as string;
+    const entity = repo.table.allEntities().find((candidate) => candidate.rowKey === `f:${fileId}`);
+    expect(entity).toBeDefined();
+    repo.table.replaceDirect({
+      ...entity!,
+      userId: 'different-owner',
+      expiresAt: new Date('2000-01-01T00:00:00.000Z'),
+    });
+
+    const response = await request(app)
+      .delete(`/v1/sessions/${sid}/objects/${fileId}`)
+      .query({ kind: 'user', id: 'user-1' });
+
+    expect(response.status).toBe(404);
+    expect(repo.docs.size).toBe(1);
+    expect(blob.blobs.size).toBe(1);
   });
 });

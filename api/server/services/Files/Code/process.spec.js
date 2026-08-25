@@ -29,7 +29,7 @@ jest.mock('librechat-data-provider', () => {
   };
 });
 
-const { FileContext } = require('librechat-data-provider');
+const { FileContext, FileSources } = require('librechat-data-provider');
 
 // Mock uuid
 jest.mock('uuid', () => ({
@@ -170,6 +170,7 @@ const {
 } = require('./process');
 
 describe('Code Process', () => {
+  const stagingExpiresAt = '2026-08-19T12:00:00.000Z';
   const mockReq = {
     user: { id: 'user-123' },
     config: {
@@ -670,13 +671,18 @@ describe('Code Process', () => {
         fileSizeLimitConfig.value = 1000; // 1KB limit
 
         const largeBuffer = Buffer.alloc(5000); // 5KB - exceeds 1KB limit
-        mockAxios.mockResolvedValue({ data: largeBuffer });
+        // [knauf] KK20-316 — fallback expiry comes from the active-object probe.
+        mockAxios
+          .mockResolvedValueOnce({ data: largeBuffer })
+          .mockResolvedValueOnce({ data: { expiresAt: stagingExpiresAt } });
+        // End [knauf]
 
         const { file: result } = await processCodeOutput(baseParams);
 
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds size limit'));
         expect(result.filepath).toContain('/api/files/code/download/session-123/file-id-123');
-        expect(result.expiresAt).toBeDefined();
+        expect(result.expiresAt).toBe(Date.parse(stagingExpiresAt));
+        expect(result.source).toBe(FileSources.execute_code);
         // Should not call createFile for oversized files (fallback path)
         expect(createFile).not.toHaveBeenCalled();
 
@@ -688,7 +694,11 @@ describe('Code Process', () => {
     describe('fallback behavior', () => {
       it('should fallback to download URL when saveBuffer is not available', async () => {
         const smallBuffer = Buffer.alloc(100);
-        mockAxios.mockResolvedValue({ data: smallBuffer });
+        // [knauf] KK20-316 — fallback expiry comes from the active-object probe.
+        mockAxios
+          .mockResolvedValueOnce({ data: smallBuffer })
+          .mockResolvedValueOnce({ data: { expiresAt: stagingExpiresAt } });
+        // End [knauf]
         getStrategyFunctions.mockReturnValue({ saveBuffer: null });
 
         const { file: result } = await processCodeOutput(baseParams);
@@ -700,19 +710,15 @@ describe('Code Process', () => {
         expect(result.filename).toBe('test-file.txt');
       });
 
-      it('should fallback to download URL on axios error', async () => {
+      // [knauf] KK20-316 — a failed adapter download must not produce an active-looking dead link.
+      it('should fail when the Code Adapter download fails', async () => {
         mockAxios.mockRejectedValue(new Error('Network error'));
 
-        const { file: result } = await processCodeOutput(baseParams);
-
-        expect(logger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('Falling back to Code API download URL for strategy local'),
+        await expect(processCodeOutput(baseParams)).rejects.toThrow(
+          'The Code Execution output could not be saved or made available for download.',
         );
-        expect(result.filepath).toContain('/api/files/code/download/session-123/file-id-123');
-        expect(result.conversationId).toBe('conv-123');
-        expect(result.messageId).toBe('msg-123');
-        expect(result.toolCallId).toBe('tool-call-123');
       });
+      // End [knauf]
     });
 
     describe('usage counter increment', () => {
@@ -1233,7 +1239,11 @@ describe('Code Process', () => {
       });
 
       it('returns no finalize key for the size-limit fallback', async () => {
-        mockAxios.mockResolvedValue({ data: Buffer.alloc(100 * 1024 * 1024) });
+        // [knauf] KK20-316 — fallback expiry comes from the active-object probe.
+        mockAxios
+          .mockResolvedValueOnce({ data: Buffer.alloc(100 * 1024 * 1024) })
+          .mockResolvedValueOnce({ data: { expiresAt: stagingExpiresAt } });
+        // End [knauf]
         const result = await processCodeOutput(baseParams);
         expect(result.finalize).toBeUndefined();
         expect(result.file.filepath).toContain('/api/files/code/download/');
@@ -1241,18 +1251,24 @@ describe('Code Process', () => {
 
       it('returns no finalize key for the saveBuffer-unavailable fallback', async () => {
         getStrategyFunctions.mockReturnValueOnce({});
-        mockAxios.mockResolvedValue({ data: Buffer.alloc(100) });
+        // [knauf] KK20-316 — fallback expiry comes from the active-object probe.
+        mockAxios
+          .mockResolvedValueOnce({ data: Buffer.alloc(100) })
+          .mockResolvedValueOnce({ data: { expiresAt: stagingExpiresAt } });
+        // End [knauf]
         const result = await processCodeOutput(baseParams);
         expect(result.finalize).toBeUndefined();
         expect(result.file.filepath).toContain('/api/files/code/download/');
       });
 
-      it('returns no finalize key for the axios-error fallback', async () => {
+      // [knauf] KK20-316 — a failed adapter download has no fallback attachment.
+      it('rejects when the adapter download fails', async () => {
         mockAxios.mockRejectedValue(new Error('network'));
-        const result = await processCodeOutput(baseParams);
-        expect(result.finalize).toBeUndefined();
-        expect(result.file.filepath).toContain('/api/files/code/download/');
+        await expect(processCodeOutput(baseParams)).rejects.toThrow(
+          'The Code Execution output could not be saved or made available for download.',
+        );
       });
+      // End [knauf]
     });
   });
 
@@ -1761,9 +1777,9 @@ describe('Code Process', () => {
       });
       updateFile.mockResolvedValue({});
       filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
-      // getSessionInfo is mocked at module level via mockAxios; return null
-      // to force the reupload path. Each `getSessionInfo` call hits axios.
-      mockAxios.mockResolvedValue({ data: null });
+      // [knauf] KK20-316 — only the adapter's terminal 404 triggers rehydration.
+      mockAxios.mockRejectedValue({ response: { status: 404 } });
+      // End [knauf]
       return { handleFileUpload, getDownloadStream };
     }
 
@@ -1917,8 +1933,14 @@ describe('Code Process', () => {
       };
       getFiles.mockResolvedValue([dbFile]);
       filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
-      // getSessionInfo returns a fresh timestamp so reupload is skipped.
-      mockAxios.mockResolvedValue({ data: { lastModified: new Date().toISOString() } });
+      // [knauf] KK20-316 — a 200 is authoritative even when lastModified is older than 23h.
+      mockAxios.mockResolvedValue({
+        data: {
+          lastModified: '2020-01-01T00:00:00.000Z',
+          expiresAt: '2030-01-01T00:00:00.000Z',
+        },
+      });
+      // End [knauf]
 
       const result = await primeFiles({
         req: { user: { id: 'user-123', role: 'USER' } },
@@ -1943,6 +1965,128 @@ describe('Code Process', () => {
         },
       ]);
     });
+
+    // [knauf] KK20-316 — object-level lifecycle probes and fail-closed restoration.
+    it('probes each file independently when two files share a storage session', async () => {
+      const makeDbFile = (file_id, filename, codeFileId) => ({
+        file_id,
+        filename,
+        filepath: `/uploads/${filename}`,
+        source: 'local',
+        context: 'execute_code',
+        metadata: {
+          codeEnvRef: {
+            kind: 'user',
+            id: 'user-123',
+            storage_session_id: 'SHARED_SESSION',
+            file_id: codeFileId,
+          },
+        },
+      });
+      getFiles.mockResolvedValue([
+        makeDbFile('first', 'first.txt', 'FIRST_ID'),
+        makeDbFile('second', 'second.txt', 'SECOND_ID'),
+      ]);
+      filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
+      const handleFileUpload = jest
+        .fn()
+        .mockResolvedValue({ storage_session_id: 'NEW_SESSION', file_id: 'NEW_SECOND_ID' });
+      getStrategyFunctions.mockImplementation((source) =>
+        source === 'execute_code'
+          ? { handleFileUpload }
+          : { getDownloadStream: jest.fn().mockResolvedValue('mock-stream') },
+      );
+      mockAxios
+        .mockResolvedValueOnce({ data: { expiresAt: '2030-01-01T00:00:00.000Z' } })
+        .mockRejectedValueOnce({ response: { status: 404 } });
+
+      const result = await primeFiles({
+        req: { user: { id: 'user-123', role: 'USER' } },
+        tool_resources: { execute_code: { file_ids: ['first', 'second'], files: [] } },
+        agentId: 'agent-id',
+      });
+
+      expect(mockAxios).toHaveBeenCalledTimes(2);
+      expect(handleFileUpload).toHaveBeenCalledTimes(1);
+      expect(result.files.map((file) => file.id)).toEqual(['FIRST_ID', 'NEW_SECOND_ID']);
+    });
+
+    it.each([
+      ['unauthorized', { response: { status: 401 } }],
+      ['server error', { response: { status: 500 } }],
+      ['timeout', Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })],
+    ])('propagates a %s object-probe failure', async (_label, error) => {
+      getFiles.mockResolvedValue([
+        {
+          file_id: 'librechat-file-id',
+          filename: 'sentinel.txt',
+          filepath: '/uploads/sentinel.txt',
+          source: 'local',
+          context: 'execute_code',
+          metadata: {
+            codeEnvRef: {
+              kind: 'user',
+              id: 'user-123',
+              storage_session_id: 'SESSION',
+              file_id: 'FILE_ID',
+            },
+          },
+        },
+      ]);
+      filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
+      mockAxios.mockRejectedValue(error);
+
+      await expect(
+        primeFiles({
+          req: { user: { id: 'user-123', role: 'USER' } },
+          tool_resources: {
+            execute_code: { file_ids: ['librechat-file-id'], files: [] },
+          },
+          agentId: 'agent-id',
+        }),
+      ).rejects.toThrow(
+        'Code Execution attachment availability could not be verified. Retry the request.',
+      );
+    });
+
+    it('propagates a bounded error when rehydration fails', async () => {
+      const dbFile = {
+        file_id: 'librechat-file-id',
+        filename: 'sentinel.txt',
+        filepath: '/uploads/sentinel.txt',
+        source: 'local',
+        context: 'execute_code',
+        metadata: {
+          codeEnvRef: {
+            kind: 'user',
+            id: 'user-123',
+            storage_session_id: 'OLD_SESSION',
+            file_id: 'OLD_ID',
+          },
+        },
+      };
+      getFiles.mockResolvedValue([dbFile]);
+      filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
+      getStrategyFunctions.mockImplementation((source) =>
+        source === 'execute_code'
+          ? { handleFileUpload: jest.fn().mockRejectedValue(new Error('adapter unavailable')) }
+          : { getDownloadStream: jest.fn().mockResolvedValue('mock-stream') },
+      );
+      mockAxios.mockRejectedValue({ response: { status: 404 } });
+
+      await expect(
+        primeFiles({
+          req: { user: { id: 'user-123', role: 'USER' } },
+          tool_resources: {
+            execute_code: { file_ids: ['librechat-file-id'], files: [] },
+          },
+          agentId: 'agent-id',
+        }),
+      ).rejects.toThrow(
+        'A Code Execution attachment could not be restored. Retry the request or reattach the file.',
+      );
+    });
+    // End [knauf]
   });
 
   describe('primeFiles toolContext for model-visible code files', () => {
@@ -1975,11 +2119,12 @@ describe('Code Process', () => {
     }
 
     function setupSessionInfoOk() {
-      /* `getSessionInfo` returns `lastModified`; `checkIfActive` parses
-       * that as a Date and decides whether the sandbox copy is still
-       * fresh (under 23 hours). Use `now` so we always go straight to
-       * `pushFile` and exercise the toolContext annotation logic. */
-      mockAxios.mockResolvedValue({ data: { lastModified: new Date().toISOString() } });
+      mockAxios.mockResolvedValue({
+        data: {
+          lastModified: new Date().toISOString(),
+          expiresAt: '2030-01-01T00:00:00.000Z',
+        },
+      });
       getStrategyFunctions.mockReturnValue({});
       filterFilesByAgentAccess.mockImplementation(({ files }) => Promise.resolve(files));
     }

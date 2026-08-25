@@ -21,9 +21,8 @@ export function checkOwnership(doc: FileDoc, auth: AuthContext): boolean {
 }
 
 /**
- * GET  /sessions/:sid/objects/:fid — freshness probe; process.js reads
- *      lastModified; any error is treated as cache-miss → re-upload
- *      (that is the designed TTL-recovery path, so a 404 here is normal).
+ * GET  /sessions/:sid/objects/:fid — authoritative active-object probe; a
+ *      404 means missing/expired and other errors remain operational failures.
  * DELETE /sessions/:sid/objects/:fid — primary delete.
  * DELETE /files/:sid/:fid            — crud.js fallback alias (same handler).
  * Pure Table/Blob operations — no ACA calls (5s/15s client timeouts).
@@ -58,6 +57,7 @@ export function createObjectsRouter(deps: ObjectsDeps): Router {
         size: doc.size,
         contentType: doc.contentType,
         lastModified: doc.lastModified.toISOString(),
+        expiresAt: doc.expiresAt.toISOString(),
       });
     })().catch(next);
   });
@@ -75,14 +75,15 @@ export function createObjectsRouter(deps: ObjectsDeps): Router {
         res.status(401).json({ error: 'unauthorized' });
         return;
       }
-      const doc = await deps.repo.find(sessionId, fileId);
+      const doc = await deps.repo.findForDeletion(sessionId, fileId);
       if (doc == null) {
         // crud.js treats a terminal 404 as success — deletion is idempotent.
         res.status(404).json({ error: 'not found' });
         return;
       }
       if (!checkOwnership(doc, auth)) {
-        res.status(403).json({ error: 'forbidden' });
+        const expired = doc.expiresAt.getTime() <= Date.now();
+        res.status(expired ? 404 : 403).json({ error: expired ? 'not found' : 'forbidden' });
         return;
       }
       const committedBlobPath = await deps.repo.delete(sessionId, fileId);

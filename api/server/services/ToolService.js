@@ -1062,6 +1062,9 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
       }
     } catch (error) {
       logger.error('[loadToolDefinitionsWrapper] Error priming code files:', error);
+      // [knauf] KK20-316 — attachments are part of the execution contract; fail instead of omitting.
+      throw error;
+      // End [knauf]
     }
   }
 

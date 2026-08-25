@@ -102,6 +102,7 @@ const {
   resolveAgentCapabilities,
 } = require('../ToolService');
 const { reinitMCPServer } = require('~/server/services/Tools/mcp');
+const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { PENDING_STALE_MS } = require('@librechat/api');
 
 function createMockReq(capabilities) {
@@ -340,6 +341,25 @@ describe('ToolService - Action Capability Gating', () => {
 
       expect(result.actionsEnabled).toBe(false);
     });
+
+    // [knauf] KK20-316 — an expected Code Execution attachment must not disappear silently.
+    it('propagates code-file priming failures', async () => {
+      const capabilities = [AgentCapabilities.tools, AgentCapabilities.execute_code];
+      const req = createMockReq(capabilities);
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      primeCodeFiles.mockRejectedValueOnce(new Error('attachment unavailable'));
+
+      await expect(
+        loadAgentTools({
+          req,
+          res: {},
+          agent: { id: 'agent_123', tools: [Tools.execute_code] },
+          tool_resources: { execute_code: { file_ids: ['file-1'], files: [] } },
+          definitionsOnly: true,
+        }),
+      ).rejects.toThrow('attachment unavailable');
+    });
+    // End [knauf]
 
     it('emits separate MCP OAuth login steps and completion events for multiple pending servers', async () => {
       const req = createMockReq([AgentCapabilities.tools]);

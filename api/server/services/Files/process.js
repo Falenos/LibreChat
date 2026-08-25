@@ -180,16 +180,28 @@ const getDeleteMethod = ({ source, deletionMethods }) => {
 const createDeleteFileWithSecondaryStorage = ({ source, deleteFile, deletionMethods }) => {
   return async (req, file, openai) => {
     const secondaryDeleteMethods = [];
+    // [knauf] KK20-316 — clear disposable code staging before deleting the durable source.
+    let codeDeleteMethod;
+    // End [knauf]
     if (file.embedded === true && source !== FileSources.vectordb) {
       secondaryDeleteMethods.push(
         getDeleteMethod({ source: FileSources.vectordb, deletionMethods }),
       );
     }
     if (hasCodeEnvRef(file) && source !== FileSources.execute_code) {
-      secondaryDeleteMethods.push(
-        getDeleteMethod({ source: FileSources.execute_code, deletionMethods }),
-      );
+      // [knauf] KK20-316 — a staging failure must leave the application copy intact.
+      codeDeleteMethod = getDeleteMethod({
+        source: FileSources.execute_code,
+        deletionMethods,
+      });
+      // End [knauf]
     }
+
+    // [knauf] KK20-316 — retry remains safe because Code Adapter deletion is idempotent on 404.
+    if (codeDeleteMethod) {
+      await codeDeleteMethod(req, file);
+    }
+    // End [knauf]
 
     try {
       await deleteFile(req, file, openai);

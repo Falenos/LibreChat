@@ -103,7 +103,7 @@ export interface BatchUploadResponse {
   failed: number;
 }
 
-/** GET /sessions/:sid/objects/:fid — process.js reads lastModified for freshness. */
+/** GET /sessions/:sid/objects/:fid — active metadata and authoritative staging expiry. */
 export interface SessionObjectInfo {
   id: string;
   name: string;
@@ -111,6 +111,7 @@ export interface SessionObjectInfo {
   size: number;
   contentType: string;
   lastModified: string;
+  expiresAt: string;
 }
 
 export interface AuthContext {

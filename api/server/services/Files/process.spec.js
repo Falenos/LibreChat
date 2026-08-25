@@ -1674,9 +1674,51 @@ describe('processDeleteRequest', () => {
 
     expect(primaryDelete).toHaveBeenCalledWith(req, file, undefined);
     expect(codeDelete).toHaveBeenCalledWith(req, file);
+    // [knauf] KK20-316 — staging is removed before the durable application copy.
+    expect(codeDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      primaryDelete.mock.invocationCallOrder[0],
+    );
+    // End [knauf]
     expect(db.deleteFiles).toHaveBeenCalledWith(['code-resource-file']);
     expect(result).toEqual({ deletedFileIds: ['code-resource-file'], failedFileIds: [] });
   });
+
+  // [knauf] KK20-316 — a staging delete outage must leave durable bytes and metadata retryable.
+  it('does not delete the application copy when code environment deletion fails', async () => {
+    const primaryDelete = jest.fn().mockResolvedValue(undefined);
+    const codeDelete = jest.fn().mockRejectedValue(new Error('adapter unavailable'));
+    getStrategyFunctions.mockImplementation((source) =>
+      source === FileSources.execute_code
+        ? { deleteFile: codeDelete }
+        : { deleteFile: primaryDelete },
+    );
+    const req = {
+      body: {},
+      config: {},
+      user: { id: 'user-123', tenantId: 'tenant-a' },
+    };
+    const file = {
+      file_id: 'code-resource-file',
+      filepath: '/uploads/code-resource.txt',
+      source: FileSources.local,
+      metadata: {
+        codeEnvRef: {
+          kind: 'agent',
+          id: 'agent-abc',
+          storage_session_id: 'sess-1',
+          file_id: 'fid-1',
+        },
+      },
+    };
+
+    const result = await processDeleteRequest({ req, files: [file] });
+
+    expect(codeDelete).toHaveBeenCalledWith(req, file);
+    expect(primaryDelete).not.toHaveBeenCalled();
+    expect(db.deleteFiles).not.toHaveBeenCalled();
+    expect(result).toEqual({ deletedFileIds: [], failedFileIds: ['code-resource-file'] });
+  });
+  // End [knauf]
 });
 
 describe('sweepExpiredFiles', () => {
@@ -1787,12 +1829,14 @@ describe('filterFile per-category size caps', () => {
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_image');
   });
 
+  // End [knauf]
   // [knauf] NO-TICKET — SVG source uses the artifact-size boundary, not raster limits.
   test('throws the SVG key above 8 MB on azureOpenAI', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: 'image/svg+xml', size: 9 * MB });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_svg');
   });
   // End [knauf]
+  // [knauf] filterFile per-category size caps (KK20-190). Continue after the SVG-specific seam.
 
   test('allows a PDF exactly at the 25 MB cap (strict > boundary)', () => {
     const req = makeFilterReq({ endpoint: 'azureOpenAI', mimetype: PDF_MIME, size: 25 * MB });
