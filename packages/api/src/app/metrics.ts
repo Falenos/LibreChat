@@ -137,6 +137,15 @@ export interface PrometheusMetrics {
 export type OpenIDUserLookupResult = 'found' | 'not_found' | 'migration' | 'auth_failed' | 'error';
 export type GenerationJobStore = 'memory' | 'redis';
 export type GenerationJobResult = 'created' | 'completed' | 'error' | 'aborted' | 'abort_failed';
+// [knauf] NO-TICKET — bounded generation failure classes; never provider text or identifiers.
+export type GenerationJobReason =
+  | 'none'
+  | 'provider_bad_request'
+  | 'provider_request_failed'
+  | 'attachment_unavailable'
+  | 'generation_timeout'
+  | 'unknown';
+// End [knauf]
 export type GenerationStreamSubscriptionType = 'initial' | 'resume' | 'resume_state';
 export type GenerationStreamSubscriptionResult =
   | 'success'
@@ -180,7 +189,13 @@ let mongooseQueryMetrics: MongooseQueryMetrics = {
 };
 
 type GenerationJobMetrics = {
-  recordJob: (store: GenerationJobStore, result: GenerationJobResult) => void;
+  // [knauf] NO-TICKET — attach a bounded reason to terminal generation metrics.
+  recordJob: (
+    store: GenerationJobStore,
+    result: GenerationJobResult,
+    reason: GenerationJobReason,
+  ) => void;
+  // End [knauf]
   setJobsInFlight: (store: GenerationJobStore, count: number) => void;
   recordSubscription: (
     store: GenerationJobStore,
@@ -305,9 +320,15 @@ const resetMetricRecorders = (): void => {
   // End [knauf]
 };
 
-export function recordGenerationJob(store: GenerationJobStore, result: GenerationJobResult): void {
-  generationJobMetrics.recordJob(store, result);
+// [knauf] NO-TICKET — lifecycle-only events use the stable none bucket.
+export function recordGenerationJob(
+  store: GenerationJobStore,
+  result: GenerationJobResult,
+  reason: GenerationJobReason = 'none',
+): void {
+  generationJobMetrics.recordJob(store, result, reason);
 }
+// End [knauf]
 
 export function setGenerationJobsInFlight(store: GenerationJobStore, count: number): void {
   generationJobMetrics.setJobsInFlight(store, count);
@@ -620,8 +641,10 @@ export function createMetrics(): PrometheusMetrics {
 
   const generationJobs = new Counter({
     name: 'generation_jobs_total',
-    help: 'Generation jobs by backing store and result',
-    labelNames: ['store', 'result'] as const,
+    help: 'Generation jobs by backing store, result, and bounded failure reason',
+    // [knauf] NO-TICKET — reason is an allow-listed class, not an error message.
+    labelNames: ['store', 'result', 'reason'] as const,
+    // End [knauf]
     registers: [registry],
   });
 
@@ -654,7 +677,9 @@ export function createMetrics(): PrometheusMetrics {
   });
 
   generationJobMetrics = {
-    recordJob: (store, result) => generationJobs.inc({ store, result }),
+    // [knauf] NO-TICKET — emit the allow-listed class as an OpenMetrics label.
+    recordJob: (store, result, reason) => generationJobs.inc({ store, result, reason }),
+    // End [knauf]
     setJobsInFlight: (store, count) => generationJobsInFlight.set({ store }, count),
     recordSubscription: (store, type, result) =>
       generationStreamSubscriptions.inc({ store, type, result }),

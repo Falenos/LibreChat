@@ -29,7 +29,7 @@ const { releaseSchedulerAdmission } = require('~/knauf/scheduler/internalRequest
 // End [knauf]
 // [knauf] NO-TICKET — provider failures are logged and persisted only as safe,
 // bounded operational classifications.
-const { summarizeProviderError } = require('./knauf/providerError');
+const { getPublicGenerationError, summarizeProviderError } = require('./knauf/providerError');
 // End [knauf]
 
 function createCloseHandler(abortController) {
@@ -852,10 +852,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           const errorSummary = summarizeProviderError(error, 'agent_generation');
           // [knauf] Do not leak Axios/provider library codes like ERR_BAD_REQUEST
           // to the UI; expose a stable public class while logs keep diagnostics.
-          const publicError =
-            errorSummary.providerStatus === 400
-              ? 'provider_bad_request'
-              : 'provider_request_failed';
+          const publicError = getPublicGenerationError(errorSummary);
           // End [knauf]
           logger.error('[ResumableAgentController] Generation failed', errorSummary);
           await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);

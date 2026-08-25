@@ -63,6 +63,32 @@ const blobStorageSources = new Set([
 const knaufImageEndpoints = new Set([EModelEndpoint.agents, EModelEndpoint.azureOpenAI]);
 // End [knauf]
 
+// [knauf] NO-TICKET — reconcile a definitive missing Azure attachment once.
+const isMissingAzureBlob = (source, error) =>
+  source === FileSources.azure_blob &&
+  (error?.statusCode === 404 || error?.response?.status === 404);
+
+async function reconcileMissingAttachment(req, file, source) {
+  let cleanup = 'completed';
+  try {
+    const {
+      deleteFilesWithDedupAwareness,
+    } = require('~/server/services/Files/knauf/cascadeDeleteConvoFiles');
+    await deleteFilesWithDedupAwareness({ req, files: [file] });
+  } catch (_error) {
+    cleanup = 'failed';
+  }
+  logger.warn('Attachment unavailable', {
+    operation: 'attachment_reconciliation',
+    storageSource: source,
+    cleanup,
+  });
+  throw Object.assign(new Error('attachment_unavailable'), {
+    code: 'attachment_unavailable',
+  });
+}
+// End [knauf]
+
 /**
  * Encodes and formats the given files.
  * @param {ServerRequest} req - The request object.
@@ -150,7 +176,13 @@ async function encodeAndFormat(req, files, params, mode) {
         promises.push([file, base64Data]);
         base64Data = null;
         continue;
-      } catch (_error) {
+      } catch (error) {
+        // Remove stale metadata through the existing dedup-aware lifecycle,
+        // then surface only a stable public code. This stays inside the existing
+        // private-Blob provider-payload seam above.
+        if (isMissingAzureBlob(source, error)) {
+          await reconcileMissingAttachment(req, file, source);
+        }
         logger.error('Image normalization failed', {
           operation: 'image_normalization',
           storageSource: source,

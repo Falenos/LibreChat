@@ -461,15 +461,17 @@ async function deleteFileFromAzure(req, file) {
     await blockBlobClient.delete();
     logger.debug('[deleteFileFromAzure] Blob deleted successfully from Azure Blob Storage');
   } catch (error) {
+    // [knauf] NO-TICKET — an already-gone blob is successful idempotent cleanup.
+    if (error.statusCode === 404 || error.response?.status === 404) {
+      return;
+    }
+    // End [knauf]
     // [knauf] KK20-199 — omit Blob paths and raw Azure errors from delete logs.
     logger.error(
       '[deleteFileFromAzure] Blob delete failed',
       summarizeProviderError(error, 'azure_blob_delete'),
     );
     // End [knauf]
-    if (error.statusCode === 404) {
-      return;
-    }
     throw error;
   }
 }
@@ -618,6 +620,12 @@ async function getAzureFileStream(_req, fileURL) {
     });
     return response.data;
   } catch (error) {
+    // [knauf] NO-TICKET — the attachment lifecycle reconciles missing blobs and
+    // owns the single actionable warning, so do not amplify the same 404 here.
+    if (error.statusCode === 404 || error.response?.status === 404) {
+      throw error;
+    }
+    // End [knauf]
     // [knauf] KK20-199 — Axios errors carry config.url, including SAS and user paths.
     logger.error(
       '[getAzureFileStream] Blob download failed',

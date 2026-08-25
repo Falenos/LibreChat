@@ -1810,6 +1810,32 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  // [knauf] NO-TICKET — missing historical attachments remain actionable and sanitized.
+  it('maps missing historical attachments to actionable copy', async () => {
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('error', { data: JSON.stringify({ error: 'attachment_unavailable' }) });
+    });
+
+    expect(mockErrorHandler).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        text: 'A previous attachment is no longer available. Please upload it again and retry.',
+      }),
+      submission: expect.objectContaining({ userMessage: expect.any(Object) }),
+    });
+    expect(sse.close).toHaveBeenCalled();
+    unmount();
+  });
+  // End [knauf]
+
   it('surfaces file indexing start errors without reconnecting', async () => {
     const submission = buildSubmission();
     const chatHelpers = buildChatHelpers();

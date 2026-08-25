@@ -435,7 +435,9 @@ describe('createMetrics', () => {
     const { metricsRouter } = createMetrics();
     app.use('/metrics', metricsRouter);
 
+    // [knauf] NO-TICKET — generation reasons survive Prometheus exposition.
     recordGenerationJob('memory', 'created');
+    recordGenerationJob('redis', 'error', 'attachment_unavailable');
     setGenerationJobsInFlight('memory', 2);
     recordGenerationStreamSubscription('redis', 'resume', 'not_found');
     recordGenerationStreamSubscription('redis', 'resume_state', 'missing');
@@ -446,7 +448,13 @@ describe('createMetrics', () => {
       .set('Authorization', 'Bearer test-secret')
       .expect(200);
 
-    expect(response.text).toMatch(/generation_jobs_total\{store="memory",result="created"\} 1/);
+    expect(response.text).toMatch(
+      /generation_jobs_total\{store="memory",result="created",reason="none"\} 1/,
+    );
+    expect(response.text).toMatch(
+      /generation_jobs_total\{store="redis",result="error",reason="attachment_unavailable"\} 1/,
+    );
+    // End [knauf]
     expect(response.text).toMatch(/generation_jobs_in_flight\{store="memory"\} 2/);
     expect(response.text).toMatch(
       /generation_stream_subscriptions_total\{store="redis",type="resume",result="not_found"\} 1/,

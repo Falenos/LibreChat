@@ -25,7 +25,9 @@ import type {
   IJobStore,
   GenerationRef,
 } from './interfaces/IJobStore';
-import type { GenerationJobStore } from '~/app/metrics';
+// [knauf] NO-TICKET — bounded generation metric failure classes.
+import type { GenerationJobReason, GenerationJobStore } from '~/app/metrics';
+// End [knauf]
 import type * as t from '~/types';
 import {
   recordGenerationStreamResumePendingEvents,
@@ -40,6 +42,19 @@ import { filterPersistableAbortContent } from './abortContent';
 /** Error surfaced to any client still attached when a stale/hung job is reaped. */
 const REAPED_JOB_ERROR = 'Generation timed out';
 const OAUTH_TOOL_CALL_PREFIX = `oauth${Constants.mcp_delimiter}`;
+
+// [knauf] NO-TICKET — keep generation metric tags bounded and actionable.
+function getGenerationJobFailureReason(error: string): GenerationJobReason {
+  if (
+    error === 'provider_bad_request' ||
+    error === 'provider_request_failed' ||
+    error === 'attachment_unavailable'
+  ) {
+    return error;
+  }
+  return error === REAPED_JOB_ERROR ? 'generation_timeout' : 'unknown';
+}
+// End [knauf]
 
 function getToolCallName(toolCall: unknown): unknown {
   return toolCall != null && typeof toolCall === 'object' && 'name' in toolCall
@@ -758,6 +773,13 @@ class GenerationJobManagerClass {
    */
   // End [knauf]
   async completeJob(streamId: string, error?: string, generationId?: string): Promise<void> {
+    // [knauf] NO-TICKET — abortJob owns abort persistence and accounting. Its
+    // request callback may arrive later and must not relabel the abort as error.
+    if (error === 'Request aborted' || error === 'Request aborted during initialization') {
+      return;
+    }
+    // End [knauf]
+
     // [knauf] Capture ownership before awaiting; a later turn may claim the conversation.
     const ownerGenerationId = this.resolveGenerationId(streamId, generationId);
     const runtime = this.getRuntimeState(streamId, ownerGenerationId);
@@ -819,7 +841,9 @@ class GenerationJobManagerClass {
       }
       // End [knauf]
       this.syncRunningJobMetrics();
-      recordGenerationJob(this.storeLabel, 'error');
+      // [knauf] NO-TICKET — emit only the allow-listed failure class.
+      recordGenerationJob(this.storeLabel, 'error', getGenerationJobFailureReason(error));
+      // End [knauf]
       logger.debug(
         `[GenerationJobManager] Job completed with error (persisted for late subscribers): ${streamId}`,
       );
@@ -889,12 +913,13 @@ class GenerationJobManagerClass {
       };
     }
 
-    // [knauf] Abort only the generation resolved by the authenticated route lookup.
+    // [knauf] Abort only the authenticated generation and synchronously claim its terminal metric.
     const generationId = jobData.generationId;
     const runtime = this.getRuntimeState(streamId, generationId);
     const ownerKey = this.generationKey(streamId, generationId);
     if (runtime) {
       runtime.terminal = true;
+      runtime.completionRecorded = true;
     }
     // End [knauf]
 
