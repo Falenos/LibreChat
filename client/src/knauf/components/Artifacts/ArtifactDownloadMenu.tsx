@@ -11,9 +11,10 @@ import {
 } from '@librechat/client';
 import type { Artifact } from '~/common';
 import { NotificationSeverity } from '~/common';
+import { useFileDownload } from '~/data-provider';
 import useArtifactProps from '~/hooks/Artifacts/useArtifactProps';
 import { useCodeState } from '~/Providers/EditorContext';
-import { useLocalize } from '~/hooks';
+import { useAuthContext, useLocalize } from '~/hooks';
 import { postArtifactExport } from '~/knauf/data-provider/data-service';
 import { triggerDownload } from '~/utils/downloadFile';
 
@@ -32,20 +33,38 @@ export default function ArtifactDownloadMenu({
   shareId,
 }: Readonly<{ artifact: Artifact; shareId?: string }>) {
   const localize = useLocalize();
+  const { user } = useAuthContext();
   const { showToast } = useToastContext();
   const { currentCode } = useCodeState();
   const { fileKey } = useArtifactProps({ artifact });
   const [isExporting, setIsExporting] = useState(false);
   const content = currentCode || artifact.content || '';
   const isNativeSvg = artifact.type === 'image/svg+xml';
+  const isOriginalUnavailable = !!shareId && artifact.type === 'spreadsheet-preview';
+  const originalFileId = shareId ? undefined : artifact.sourceFileId;
+  const { refetch: downloadOriginal } = useFileDownload(user?.id, originalFileId, {
+    direct: false,
+  });
 
   const download = async (format: ExportFormat) => {
-    if (!content || isExporting) {
+    if (
+      (!content && !(format === 'source' && originalFileId)) ||
+      (format === 'source' && isOriginalUnavailable) ||
+      isExporting
+    ) {
       return;
     }
     setIsExporting(true);
     try {
       if (format === 'source') {
+        if (originalFileId) {
+          const result = await downloadOriginal();
+          if (!result.data) {
+            throw new Error('Original artifact file download returned no URL');
+          }
+          triggerDownload(result.data, safeTitle(artifact.title || 'artifact'));
+          return;
+        }
         const sourceTitle = safeTitle((artifact.title || 'artifact').replace(/\.svg$/iu, ''));
         triggerDownload(
           URL.createObjectURL(
@@ -102,7 +121,11 @@ export default function ArtifactDownloadMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="z-[1001] min-w-44">
-        <DropdownMenuItem className="cursor-pointer gap-2" onSelect={() => void download('source')}>
+        <DropdownMenuItem
+          className="cursor-pointer gap-2"
+          disabled={isOriginalUnavailable}
+          onSelect={() => void download('source')}
+        >
           <FileCode2 className="size-4" aria-hidden="true" />
           {localize(
             isNativeSvg ? 'com_knauf_artifact_download_svg' : 'com_knauf_artifact_download_source',

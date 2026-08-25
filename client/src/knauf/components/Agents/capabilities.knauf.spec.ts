@@ -236,5 +236,9 @@ describe('[knauf] KNAUF_CAPABILITIES registry', () => {
         expect(locales.de[entry.labelKey!]).not.toBe(locales.en[entry.labelKey!]);
       }
     });
+
+    it('uses Einkauf for the German procurement category', () => {
+      expect(locales.de.com_agents_category_procurement).toBe('Einkauf');
+    });
   });
 });

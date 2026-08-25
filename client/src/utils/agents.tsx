@@ -32,10 +32,25 @@ const LazyAgentAvatar = ({
   imgClass: string;
 }) => {
   const [isLoaded, setIsLoaded] = useState(false);
+  // [knauf] Resolve broken or expired agent avatar URLs to a visible fallback. (KK20-282)
+  const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     setIsLoaded(false);
+    setHasError(false);
   }, [url]);
+
+  if (hasError) {
+    return (
+      <img
+        src="/assets/knauf-logo.png"
+        alt={alt}
+        className={`${imgClass.replace('object-cover', 'object-contain')} bg-white p-2`}
+        loading="lazy"
+        decoding="async"
+      />
+    );
+  }
 
   return (
     <>
@@ -45,7 +60,7 @@ const LazyAgentAvatar = ({
         className={imgClass}
         loading="lazy"
         onLoad={() => setIsLoaded(true)}
-        onError={() => setIsLoaded(false)}
+        onError={() => setHasError(true)}
         style={{
           opacity: isLoaded ? 1 : 0,
           transition: 'opacity 0.2s ease-in-out',
@@ -54,6 +69,7 @@ const LazyAgentAvatar = ({
       {!isLoaded && <Skeleton className="absolute inset-0 rounded-full" aria-hidden="true" />}
     </>
   );
+  // End [knauf]
 };
 
 /**

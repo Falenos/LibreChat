@@ -1622,10 +1622,33 @@ class AgentClient extends BaseClient {
           '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',
           summarizeProviderError(err, 'agent_generation'),
         );
-        this.contentParts.push({
-          type: ContentTypes.ERROR,
-          [ContentTypes.ERROR]: 'An error occurred while processing the request',
-        });
+        // KK20-260 — the image tool can finish and persist its output before
+        // the router's redundant follow-up call fails. Keep that successful result.
+        const completedImageToolIds = new Set(
+          this.contentParts
+            .filter(
+              (part) =>
+                part.type === ContentTypes.TOOL_CALL &&
+                part.tool_call?.progress === 1 &&
+                ['image_gen_oai', 'image_edit_oai'].includes(part.tool_call.name),
+            )
+            .map((part) => part.tool_call.id),
+        );
+        const artifactResults = await Promise.allSettled(this.artifactPromises ?? []);
+        const recoveredRedundantImageFailure =
+          err?.code === 'server_error' &&
+          artifactResults.some(
+            (result) =>
+              result.status === 'fulfilled' &&
+              completedImageToolIds.has(result.value?.toolCallId) &&
+              result.value?.type?.startsWith('image/'),
+          );
+        if (!recoveredRedundantImageFailure) {
+          this.contentParts.push({
+            type: ContentTypes.ERROR,
+            [ContentTypes.ERROR]: 'An error occurred while processing the request',
+          });
+        }
         // End [knauf]
       }
     } finally {

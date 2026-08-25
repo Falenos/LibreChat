@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import ArtifactDownloadMenu from './ArtifactDownloadMenu';
 
 const mockPostArtifactExport = jest.fn();
+const mockDownloadOriginal = jest.fn();
 const mockTriggerDownload = jest.fn();
 const mockShowToast = jest.fn();
 let mockCurrentCode: string | undefined;
@@ -20,8 +21,9 @@ jest.mock('@librechat/client', () => ({
   DropdownMenuItem: ({
     children,
     onSelect,
-  }: Readonly<{ children: ReactNode; onSelect: () => void }>) => (
-    <button role="menuitem" onClick={onSelect}>
+    ...props
+  }: Readonly<{ children: ReactNode; onSelect: () => void; disabled?: boolean }>) => (
+    <button role="menuitem" onClick={onSelect} {...props}>
       {children}
     </button>
   ),
@@ -29,7 +31,12 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
+  useAuthContext: () => ({ user: { id: 'user-1' } }),
   useLocalize: () => (key: string) => key,
+}));
+
+jest.mock('~/data-provider', () => ({
+  useFileDownload: () => ({ refetch: mockDownloadOriginal }),
 }));
 
 jest.mock('~/hooks/Artifacts/useArtifactProps', () => ({
@@ -61,6 +68,7 @@ describe('ArtifactDownloadMenu', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCurrentCode = 'export default () => <main>Edited</main>;';
+    mockDownloadOriginal.mockResolvedValue({ data: 'blob:original-file' });
     mockPostArtifactExport.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -75,6 +83,38 @@ describe('ArtifactDownloadMenu', () => {
 
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:artifact-export', 'App.tsx');
     expect(mockPostArtifactExport).not.toHaveBeenCalled();
+  });
+
+  it('downloads the original generated file when a source file is available', async () => {
+    render(
+      <ArtifactDownloadMenu
+        artifact={{
+          ...artifact,
+          title: 'data.csv',
+          type: 'spreadsheet-preview',
+          sourceFileId: 'file-1',
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_source' }));
+
+    await waitFor(() => expect(mockDownloadOriginal).toHaveBeenCalled());
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:original-file', 'data.csv');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('disables unavailable original spreadsheet downloads in shared artifacts', () => {
+    render(
+      <ArtifactDownloadMenu
+        artifact={{ ...artifact, type: 'spreadsheet-preview' }}
+        shareId="share-1"
+      />,
+    );
+
+    expect(
+      screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_source' }),
+    ).toBeDisabled();
   });
 
   it.each([

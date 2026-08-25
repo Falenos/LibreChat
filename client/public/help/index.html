@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KARL help and release notes</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f5f7fa;
+        color: #172033;
+      }
+      main {
+        width: min(900px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 64px;
+      }
+      .language-picker {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      select {
+        min-height: 40px;
+        border: 1px solid #9aa5b1;
+        border-radius: 8px;
+        background: white;
+        color: #172033;
+        padding: 8px 32px 8px 12px;
+        font: inherit;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      header,
+      section {
+        background: white;
+        border: 1px solid #dfe4eb;
+        border-radius: 12px;
+        padding: 24px;
+        margin-bottom: 20px;
+      }
+      h1,
+      h2,
+      h3 {
+        margin-top: 0;
+      }
+      h1 {
+        color: #0057b8;
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      a {
+        color: #0057b8;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        border-top: 1px solid #dfe4eb;
+        padding: 12px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        width: 22%;
+      }
+      .note {
+        border-left: 4px solid #0057b8;
+        padding-left: 12px;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #111827;
+          color: #e5e7eb;
+        }
+        header,
+        section {
+          background: #1f2937;
+          border-color: #374151;
+        }
+        h1,
+        a {
+          color: #69a9ff;
+        }
+        th,
+        td {
+          border-color: #374151;
+        }
+        select {
+          border-color: #6b7280;
+          background: #1f2937;
+          color: #e5e7eb;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="language-picker">
+        <label id="language-label" for="language-select">Language</label>
+        <select id="language-select" aria-labelledby="language-label">
+          <option value="en" lang="en" selected>English</option>
+          <option value="de" lang="de">Deutsch</option>
+        </select>
+      </div>
+
+      <header id="en" lang="en" data-language-page="en">
+        <h1>KARL help and release notes</h1>
+        <p>Plain-language guidance for everyday KARL use. No technical setup required.</p>
+        <nav aria-label="Page sections">
+          <a href="#en-prompts">Prompts and instructions</a>
+          <a href="#en-release-notes">What's new</a>
+        </nav>
+      </header>
+
+      <section id="en-prompts" lang="en" data-language-page="en">
+        <h2>Prompts, chat prompts, and agent instructions</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>What it is</th>
+              <th>When to use it</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Prompt</th>
+              <td>
+                A reusable request saved in the Prompt library. You can insert it into a chat and
+                edit it before sending.
+              </td>
+              <td>
+                Use it when you or your team repeat the same starting request, format, or checklist.
+              </td>
+            </tr>
+            <tr>
+              <th>Chat prompt</th>
+              <td>
+                The message you send in the current conversation, including its goal, context,
+                files, and desired output.
+              </td>
+              <td>
+                Use it for the task in front of you. It guides this conversation; it does not
+                permanently change an agent.
+              </td>
+            </tr>
+            <tr>
+              <th>Agent instructions</th>
+              <td>
+                Persistent guidance configured by an Agent Builder: role, boundaries, workflow,
+                tone, and output rules.
+              </td>
+              <td>
+                Use it when the same behavior should apply every time that agent is used. Keep
+                task-specific details in the chat prompt.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          <strong>Rule of thumb:</strong> repeatable request → Prompt library; current task → chat
+          prompt; repeatable agent behavior → agent instructions.
+        </p>
+        <h3>Write a useful chat prompt</h3>
+        <ol>
+          <li>State the outcome you need.</li>
+          <li>Add the relevant context or files.</li>
+          <li>Name constraints such as audience, language, length, or deadline.</li>
+          <li>Describe the desired output format.</li>
+        </ol>
+        <p>
+          Never place passwords, API keys, or other secrets in prompts, chats, files, or agent
+          instructions.
+        </p>
+      </section>
+
+      <section id="en-release-notes" lang="en" data-language-page="en">
+        <h2>What's new in KARL</h2>
+        <p>Available user-facing release notes appear here, with the newest entry first.</p>
+        <h3>August 4–14, 2026</h3>
+        <ul>
+          <li>
+            <strong>Scheduled Agents:</strong> create recurring project tasks, run them immediately,
+            and manage schedules in one place.
+          </li>
+          <li>
+            <strong>Better Artifacts:</strong> edit SVG graphics, recover earlier versions, and
+            export or continue shared artifacts more reliably.
+          </li>
+          <li>
+            <strong>Project Knowledge:</strong> see upload and processing status, retry failures,
+            and keep project files synchronized.
+          </li>
+          <li>
+            <strong>Prompt Sharing:</strong> share prompts with permitted colleagues through the
+            existing access controls.
+          </li>
+          <li>
+            <strong>Clearer Answers:</strong> shorter direct answers for simple questions and safer
+            retries for interrupted model output.
+          </li>
+          <li>
+            <strong>More reliable chats and files:</strong> fewer duplicate responses, automatic
+            image-link recovery, and clearer upload errors.
+          </li>
+        </ul>
+      </section>
+
+      <header id="de" lang="de" data-language-page="de" hidden>
+        <h1>KARL-Hilfe und Versionshinweise</h1>
+        <p>Verständliche Hilfe für die tägliche Arbeit mit KARL. Keine technische Einrichtung.</p>
+        <nav aria-label="Seitenbereiche">
+          <a href="#de-prompts">Prompts und Anweisungen</a>
+          <a href="#de-release-notes">Neuigkeiten</a>
+        </nav>
+      </header>
+
+      <section id="de-prompts" lang="de" data-language-page="de" hidden>
+        <h2>Prompts, Chat-Prompts und Agentenanweisungen</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Typ</th>
+              <th>Was ist das?</th>
+              <th>Wann wird es verwendet?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Prompt</th>
+              <td>
+                Eine wiederverwendbare Anfrage aus der Prompt-Bibliothek. Sie kann in einen Chat
+                eingefügt und vor dem Senden bearbeitet werden.
+              </td>
+              <td>
+                Verwenden Sie sie, wenn Sie oder Ihr Team dieselbe Anfrage, dasselbe Format oder
+                dieselbe Checkliste wiederholen.
+              </td>
+            </tr>
+            <tr>
+              <th>Chat-Prompt</th>
+              <td>
+                Die Nachricht im aktuellen Gespräch mit Ziel, Kontext, Dateien und gewünschtem
+                Ergebnis.
+              </td>
+              <td>
+                Verwenden Sie ihn für die aktuelle Aufgabe. Er steuert dieses Gespräch, ändert einen
+                Agenten aber nicht dauerhaft.
+              </td>
+            </tr>
+            <tr>
+              <th>Agentenanweisungen</th>
+              <td>
+                Dauerhafte Vorgaben eines Agent Builders zu Rolle, Grenzen, Ablauf, Ton und Ausgabe.
+              </td>
+              <td>
+                Verwenden Sie sie, wenn dasselbe Verhalten bei jeder Nutzung des Agenten gelten
+                soll. Aufgabenspezifische Details gehören in den Chat-Prompt.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="note">
+          <strong>Faustregel:</strong> wiederholbare Anfrage → Prompt-Bibliothek; aktuelle Aufgabe →
+          Chat-Prompt; wiederholbares Agentenverhalten → Agentenanweisungen.
+        </p>
+        <h3>Einen hilfreichen Chat-Prompt schreiben</h3>
+        <ol>
+          <li>Nennen Sie das gewünschte Ergebnis.</li>
+          <li>Fügen Sie den relevanten Kontext oder Dateien hinzu.</li>
+          <li>Nennen Sie Vorgaben wie Zielgruppe, Sprache, Länge oder Termin.</li>
+          <li>Beschreiben Sie das gewünschte Ausgabeformat.</li>
+        </ol>
+        <p>
+          Geben Sie niemals Passwörter, API-Schlüssel oder andere Geheimnisse in Prompts, Chats,
+          Dateien oder Agentenanweisungen ein.
+        </p>
+      </section>
+
+      <section id="de-release-notes" lang="de" data-language-page="de" hidden>
+        <h2>Neuigkeiten in KARL</h2>
+        <p>Verfügbare nutzerbezogene Versionshinweise stehen hier, neueste zuerst.</p>
+        <h3>4.–14. August 2026</h3>
+        <ul>
+          <li>
+            <strong>Geplante Agenten:</strong> wiederkehrende Projektaufgaben erstellen, sofort
+            ausführen und Zeitpläne zentral verwalten.
+          </li>
+          <li>
+            <strong>Bessere Artefakte:</strong> SVG-Grafiken bearbeiten, frühere Versionen
+            wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen.
+          </li>
+          <li>
+            <strong>Projektwissen:</strong> Upload- und Verarbeitungsstatus sehen, Fehler erneut
+            versuchen und Projektdateien synchron halten.
+          </li>
+          <li>
+            <strong>Prompts teilen:</strong> Prompts über die vorhandenen Zugriffsrechte mit
+            berechtigten Kolleginnen und Kollegen teilen.
+          </li>
+          <li>
+            <strong>Klarere Antworten:</strong> kürzere direkte Antworten auf einfache Fragen und
+            sicherere Wiederholungen bei unterbrochenen Modellausgaben.
+          </li>
+          <li>
+            <strong>Zuverlässigere Chats und Dateien:</strong> weniger doppelte Antworten,
+            automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler.
+          </li>
+        </ul>
+      </section>
+    </main>
+    <script>
+      const languageSelect = document.querySelector('#language-select');
+      const languageLabel = document.querySelector('#language-label');
+      const languagePages = document.querySelectorAll('[data-language-page]');
+      const pageTitles = {
+        en: 'KARL help and release notes',
+        de: 'KARL-Hilfe und Versionshinweise',
+      };
+
+      function showLanguage(language) {
+        const selectedLanguage = language === 'de' ? 'de' : 'en';
+        document.documentElement.lang = selectedLanguage;
+        document.title = pageTitles[selectedLanguage];
+        languageLabel.textContent = selectedLanguage === 'de' ? 'Sprache' : 'Language';
+        languageSelect.value = selectedLanguage;
+        languagePages.forEach((page) => {
+          page.hidden = page.dataset.languagePage !== selectedLanguage;
+        });
+      }
+
+      languageSelect.addEventListener('change', () => showLanguage(languageSelect.value));
+      showLanguage('en');
+    </script>
+  </body>
+</html>

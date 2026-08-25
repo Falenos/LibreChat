@@ -827,7 +827,7 @@ modelSpecs:
 
           General: If you do not know the answer, say you do not know. If you are unsure how to answer, ask for clarification. Answer appropriately in the user's language.
 
-          Sources: If you retrieved a user-facing document for context — a file_search result, an uploaded file, or a web page — include only the sources you used for answer generation at the end of your response (maximum of 3). Skill files and anything you read from them are never sources: never list them, and omit the Sources section entirely if they are all you read. If no sources were used (for example when RAG is disabled), omit the Sources section entirely. Page numbers are optional: include one only when file metadata provides it, and never call file_search solely to obtain citation metadata. Use this format:
+          Sources: If you retrieved a user-facing document for context — a file_search result, an uploaded file, or a web page — include every source you used for answer generation at the end of your response. Skill files and anything you read from them are never sources: never list them, and omit the Sources section entirely if they are all you read. If no sources were used (for example when RAG is disabled), omit the Sources section entirely. Page numbers are optional: include one only when file metadata provides it, and never call file_search solely to obtain citation metadata. Use this format:
           Sources:
           [1] source[, page]
 

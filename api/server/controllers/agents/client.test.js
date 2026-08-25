@@ -1187,6 +1187,65 @@ describe('AgentClient - titleConvo', () => {
         error: 'An error occurred while processing the request',
       });
     });
+
+    // KK20-260 — a persisted image is a successful tool outcome even when
+    // the router's redundant follow-up call fails.
+    it.each(['image_gen_oai', 'image_edit_oai'])(
+      'keeps a completed %s image instead of appending a false error',
+      async (toolName) => {
+        const toolCallId = `${toolName}-call`;
+        const followUpError = Object.assign(new Error('router follow-up failed'), {
+          code: 'server_error',
+        });
+        mockCreateRun.mockResolvedValueOnce({
+          processStream: jest.fn().mockRejectedValue(followUpError),
+          getCalibrationRatio: jest.fn(() => 0),
+        });
+        client.run = null;
+        client.contentParts = [
+          {
+            type: ContentTypes.TOOL_CALL,
+            tool_call: { id: toolCallId, name: toolName, progress: 1 },
+          },
+        ];
+        client.artifactPromises = [
+          Promise.resolve({ type: 'image/png', toolCallId, file_id: 'persisted-image' }),
+        ];
+
+        await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+        expect(client.contentParts).not.toContainEqual({
+          type: ContentTypes.ERROR,
+          error: 'An error occurred while processing the request',
+        });
+      },
+    );
+
+    it('keeps a genuine post-image provider failure visible', async () => {
+      const toolCallId = 'image-call';
+      const providerError = Object.assign(new Error('content rejected'), {
+        code: 'content_filter',
+      });
+      mockCreateRun.mockResolvedValueOnce({
+        processStream: jest.fn().mockRejectedValue(providerError),
+        getCalibrationRatio: jest.fn(() => 0),
+      });
+      client.run = null;
+      client.contentParts = [
+        {
+          type: ContentTypes.TOOL_CALL,
+          tool_call: { id: toolCallId, name: 'image_gen_oai', progress: 1 },
+        },
+      ];
+      client.artifactPromises = [Promise.resolve({ type: 'image/png', toolCallId })];
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(client.contentParts).toContainEqual({
+        type: ContentTypes.ERROR,
+        error: 'An error occurred while processing the request',
+      });
+    });
   });
   // End [knauf]
 
