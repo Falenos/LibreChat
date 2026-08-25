@@ -16,6 +16,9 @@ const {
 } = require('@librechat/api');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { spendTokens, spendStructuredTokens, getFiles } = require('~/models');
+// [knauf] Enforce GPT Image 2 output constraints server-side. KK20-168.
+const { assertImageOptions } = require('../knauf/imageOptions');
+// End [knauf]
 
 const displayMessage =
   "The tool displayed an image. All generated images are already plainly visible, so don't repeat the descriptions in detail. Do not list download links as they are available in the UI already. The user may download the images by clicking on them, but do not mention anything about downloading to the user.";
@@ -50,7 +53,7 @@ function createAbortHandler() {
   };
 }
 
-// [knauf] Track gpt-image-1 token usage in the existing transaction ledger.
+// [knauf] Track GPT Image token usage in the existing transaction ledger.
 async function recordOpenAIImageUsage({ usage, req, model, conversationId, messageId }) {
   if (!usage || !req?.user?.id || !conversationId) {
     return;
@@ -128,7 +131,9 @@ function createOpenAIImageTools(fields = {}) {
   let apiKey = fields.IMAGE_GEN_OAI_API_KEY ?? getApiKey();
   const closureConfig = { apiKey };
 
-  const imageModel = process.env.IMAGE_GEN_OAI_MODEL || 'gpt-image-1';
+  // [knauf] Default local/unconfigured runs to the latest deployed image model. KK20-168.
+  const imageModel = process.env.IMAGE_GEN_OAI_MODEL || 'gpt-image-2';
+  // End [knauf]
 
   let baseURL = 'https://api.openai.com/v1/';
   if (!override && process.env.IMAGE_GEN_OAI_BASEURL) {
@@ -162,8 +167,8 @@ function createOpenAIImageTools(fields = {}) {
       {
         prompt,
         background = 'auto',
-        n = 1,
-        output_compression = 100,
+        output_format = imageOutputType,
+        output_compression = 85,
         quality = 'auto',
         size = 'auto',
       },
@@ -182,7 +187,13 @@ function createOpenAIImageTools(fields = {}) {
 
       /** @type {OpenAI} */
       const openai = new OpenAI(clientConfig);
-      let output_format = imageOutputType;
+      assertImageOptions({
+        model: imageModel,
+        size,
+        background,
+        outputFormat: output_format,
+        outputCompression: output_compression,
+      });
       if (
         background === 'transparent' &&
         output_format !== EImageOutputType.PNG &&
@@ -211,7 +222,7 @@ function createOpenAIImageTools(fields = {}) {
           {
             model: imageModel,
             prompt: replaceUnwantedChars(prompt),
-            n: Math.min(Math.max(1, n), 10),
+            n: 1,
             background,
             output_format,
             output_compression:
@@ -242,7 +253,7 @@ Error Message: ${error.message}`);
         );
       }
 
-      // For gpt-image-1, the response contains base64-encoded images
+      // GPT Image responses contain base64-encoded images.
       // [knauf] Persist image model usage so FinOps can show generation token cost next to chats.
       const conversationId = runnableConfig?.configurable?.thread_id;
       const messageId =
@@ -291,10 +302,28 @@ Error Message: ${error.message}`);
    * Image Editing Tool
    */
   const imageEditTool = tool(
-    async ({ prompt, image_ids, quality = 'auto', size = 'auto' }, runnableConfig) => {
+    async (
+      {
+        prompt,
+        image_ids,
+        background = 'auto',
+        output_format = imageOutputType,
+        output_compression = 85,
+        quality = 'auto',
+        size = 'auto',
+      },
+      runnableConfig,
+    ) => {
       if (!prompt) {
         throw new Error('Missing required field: prompt');
       }
+      assertImageOptions({
+        model: imageModel,
+        size,
+        background,
+        outputFormat: output_format,
+        outputCompression: output_compression,
+      });
 
       const clientConfig = { ...closureConfig };
       const proxyDispatcher = getProxyDispatcher();
@@ -308,8 +337,11 @@ Error Message: ${error.message}`);
       formData.append('model', imageModel);
       formData.append('prompt', replaceUnwantedChars(prompt));
       // TODO: `mask` support
-      // TODO: more than 1 image support
-      // formData.append('n', n.toString());
+      formData.append('background', background);
+      formData.append('output_format', output_format);
+      if (output_format === EImageOutputType.WEBP || output_format === EImageOutputType.JPEG) {
+        formData.append('output_compression', output_compression.toString());
+      }
       formData.append('quality', quality);
       formData.append('size', size);
 
@@ -456,7 +488,7 @@ Error Message: ${error.message}`);
           {
             type: ContentTypes.IMAGE_URL,
             image_url: {
-              url: `data:image/${imageOutputType};base64,${base64Image}`,
+              url: `data:image/${output_format};base64,${base64Image}`,
             },
           },
         ];

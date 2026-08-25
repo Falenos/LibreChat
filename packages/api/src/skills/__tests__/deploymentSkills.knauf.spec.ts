@@ -63,6 +63,7 @@ const EXPECTED_SKILL_NAMES = KNAUF_EXPECTED_DEPLOYMENT_SKILLS;
 /** The token source of truth. Every other skill mirrors, never authors. */
 const TOKEN_SOURCE_SKILL = 'karl-brand';
 const MERMAID_SKILL = 'karl-mermaid';
+const IMAGE_GENERATION_SKILL = 'karl-image-generation';
 
 const HEX_PATTERN = /#[0-9a-fA-F]{6}\b/g;
 /** `read_file` reference paths: `skills/<skill-name>/<relative/path>`. */
@@ -210,6 +211,21 @@ describe('[knauf] shipped deployment skills', () => {
     expect(mermaid?.description).toContain('render error');
     expect(mermaid?.body).toContain('Mermaid **11.15.0**');
   });
+
+  // [knauf] KK20-168 — ship concise, model-invocable GPT Image 2 production guidance.
+  it('ships model-invocable image generation and editing guidance', () => {
+    const image = byName.get(IMAGE_GENERATION_SKILL);
+    expect(image).toBeDefined();
+    expect(image?.disableModelInvocation).not.toBe(true);
+    expect(image?.alwaysApply).not.toBe(true);
+    expect(image?.description).toMatch(/generation|edit/i);
+    expect(image?.body).toContain('image_gen_oai');
+    expect(image?.body).toContain('image_edit_oai');
+    expect(image?.body).toContain('output_compression: 85');
+    expect(image?.body).toContain('not WebP or transparent output');
+    expect(image?.body).toContain('skills/karl-brand/SKILL.md');
+  });
+  // End [knauf]
 
   it('never authors a hex outside the token source', () => {
     // Every hex the token source declares, from its SKILL.md body AND its own

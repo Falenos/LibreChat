@@ -40,6 +40,7 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
       // [knauf] KK20-257 — the code-execution skills ship now that the adapter does.
       'karl-data-analysis',
       'karl-guide',
+      'karl-image-generation',
       'karl-mermaid',
       'karl-xlsx',
       // End [knauf]

@@ -110,7 +110,7 @@ The former post-deployment mongosh step and script are removed. Application star
 ### Known behaviour that will generate questions
 
 - **The composer Skills chip cannot turn skills off on a spec-driven chat.** `skills: true` on the modelSpec makes `skills_enabled` unconditional, which short-circuits `isAgentSkillsEnabledForRun` before it consults the chip. Accepted because the alternative is skills off by default everywhere. A working off-switch is a follow-up.
-- **A new Skills section appears in the left sidebar** for every user (`useSideNavLinks` adds it whenever the capability and permission are on). With `create: false` it is read-only — currently a catalogue of six deployment skills. Harmless but visible; worth product sign-off on the copy.
+- **A new Skills section appears in the left sidebar** for every user (`useSideNavLinks` adds it whenever the capability and permission are on). With `create: false` it is read-only — currently a catalogue of nine deployment skills. Harmless but visible; worth product sign-off on the copy.
 - **Artifacts adds ~2.9k input tokens per turn** on every KARL conversation (the artifacts prompt is ~11.4 KB). Capture a Langfuse baseline before and after promotion.
 - **Artifacts previews depend on CDN egress from the user's browser.** See the pre-flight in [Verification recipes](#verification-recipes).
 
