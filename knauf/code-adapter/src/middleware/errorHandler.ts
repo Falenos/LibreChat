@@ -7,12 +7,24 @@ interface MulterLikeError extends Error {
   code?: string;
 }
 
+function formatByteLimit(bytes: number): string {
+  const mebibyte = 1024 * 1024;
+  const kibibyte = 1024;
+  if (bytes % mebibyte === 0) {
+    return `${bytes / mebibyte} MiB`;
+  }
+  if (bytes % kibibyte === 0) {
+    return `${bytes / kibibyte} KiB`;
+  }
+  return `${bytes} bytes`;
+}
+
 /**
  * Terminal error mapper. Everything the routes did not convert into a
  * contract-shaped 200 lands here: validation → 4xx, pool/infra → 502,
  * multer size cap → 413, unknown → 500.
  */
-export function createErrorHandler(logger: Logger) {
+export function createErrorHandler(logger: Logger, uploadMaxBytes: number) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   return function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction) {
     if (res.headersSent) {
@@ -24,7 +36,11 @@ export function createErrorHandler(logger: Logger) {
       return;
     }
     if ((err as MulterLikeError).code === 'LIMIT_FILE_SIZE') {
-      res.status(413).json({ error: 'file exceeds the 128MB upload limit' });
+      res
+        .status(413)
+        .json({
+          error: `file exceeds the configured upload limit of ${formatByteLimit(uploadMaxBytes)}`,
+        });
       return;
     }
     if ((err as MulterLikeError).code === 'LIMIT_FILE_COUNT') {

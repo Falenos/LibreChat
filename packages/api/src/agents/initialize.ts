@@ -6,7 +6,6 @@ import {
   ErrorTypes,
   EModelEndpoint,
   EToolResources,
-  paramEndpoints,
   isAgentsEndpoint,
   replaceSpecialVars,
   providerEndpointMap,
@@ -734,16 +733,14 @@ export async function initializeAgent(
   }
 
   if (currentFiles && currentFiles.length) {
-    let endpointType: EModelEndpoint | undefined;
-    if (!paramEndpoints.has(agent.endpoint ?? '')) {
-      endpointType = EModelEndpoint.custom;
-    }
-
+    // [knauf] KK20-315 — initializeAgent always handles a logical agent run,
+    // including OpenAI-compatible routes that pass the model provider here.
     currentFiles = filterFilesByEndpointConfig(req, {
       files: currentFiles,
-      endpoint: agent.endpoint ?? '',
-      endpointType,
+      endpoint: EModelEndpoint.agents,
+      endpointType: undefined,
     });
+    // End [knauf]
   }
 
   const {

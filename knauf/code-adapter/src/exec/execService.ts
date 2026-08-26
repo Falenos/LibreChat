@@ -573,7 +573,7 @@ function mapTerminalError(
     return fail(CAPACITY_STDERR, 'capacity');
   }
   if (err instanceof AcaError && err.statusCode === 413) {
-    return fail('An input file exceeds the sandbox 128MB limit.', 'payload_too_large');
+    return fail('An input file exceeds the sandbox 128 MiB limit.', 'payload_too_large');
   }
   throw err;
 }

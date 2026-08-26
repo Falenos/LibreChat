@@ -5,6 +5,7 @@ Documentation for the Knauf "Agentic Karl" fork of LibreChat. Docs are organized
 | Folder                                         | Purpose                                                                                                                                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [architecture/](architecture/)                 | **How the product works** — feature & subsystem reference (the running system, not the rollout)                                                                                                                                      |
+| [reference/](reference/)                       | **Cross-cutting operational reference** — system ownership and the repository-wide runtime-limit inventory                                                                                                                          |
 | [code-execution/](code-execution/)             | **Code execution (KK20-108)** — the whole story of how KARL runs Python/Bash via Azure Container Apps dynamic sessions + the `code-adapter` sidecar: how it works, the backend decision, and the sidecar-vs-in-process justification |
 | [contributing/](contributing/)                 | **How we work on this fork** — change protocol, git/merge workflow, seam testing, upstream sync, fork history                                                                                                                        |
 | [implementation-plans/](implementation-plans/) | **Work in flight** — time-bound, multi-PR workstreams (see the folder's own [README](implementation-plans/README.md) for the lifecycle)                                                                                              |
@@ -30,6 +31,13 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/scheduled-chats.md](architecture/scheduled-chats.md)                           | How Scheduled Chats work end to end — project-scoped UX, API and worker flow, leases/fencing/replay, failure auto-disable, probes/metrics, operations, and future upstream migration                         |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
+
+## Reference — cross-cutting system facts
+
+| Doc                                                                            | When to read it                                                                                                                                        |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [reference/agentic-karl-architecture.md](reference/agentic-karl-architecture.md) | Full environment topology, repository ownership, service dependencies, data stores, observability, and release flows                                  |
+| [reference/runtime-limits.md](reference/runtime-limits.md)                     | Repository-wide operational limits, their rationale and interactions, authority level, source keys, zero semantics, and maintenance procedure          |
 
 ## Code execution — how KARL runs Python/Bash (KK20-108)
 

@@ -103,6 +103,21 @@ Do NOT add rows for:
 
 ---
 
+## Runtime limit documentation
+
+If a change introduces or modifies an operational size/count/token limit,
+timeout, retry, lease, retention interval, concurrency or queue bound, rate
+limit, resource limit, provider quota, or platform ceiling, update
+`knauf/docs/reference/runtime-limits.md` in the same change.
+
+Keep source defaults separate from `.env.example`, deployment overrides, and
+external platform ceilings. Document cross-layer interactions and non-obvious
+zero/disabled semantics. Do not copy mutable live state into the repository;
+verify current deployed values in their owning GitOps, Terraform, Azure,
+Kubernetes, or ArgoCD source.
+
+---
+
 ## Phase 4 — Pre-PR checklist
 
 Run these before opening any PR that touches seams or config:

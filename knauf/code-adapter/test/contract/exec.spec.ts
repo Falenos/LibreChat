@@ -342,6 +342,49 @@ describe('POST /v1/exec contract', () => {
     expect(aca.pushed).toHaveLength(0);
   });
 
+  it('maps the ACA per-file ceiling to the 128 MiB sandbox contract', async () => {
+    const config = testConfig();
+    app = createApp({
+      config,
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    const doc = await repo.insertStaged({
+      sessionId: ownedSessionId(config),
+      filename: 'input.txt',
+      size: 3,
+      contentType: 'text/plain',
+      origin: 'upload',
+      readOnly: false,
+      identity: { kind: 'user', id: 'local' },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(doc.blobPath, Buffer.from('abc'), doc.contentType);
+    aca.pushFile = async () => {
+      throw new AcaError('file exceeds pool upload limit', 413, 'PayloadTooLarge');
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: 'print(1)',
+        files: [{ id: doc.fileId, name: doc.filename, storage_session_id: doc.sessionId }],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      code: 1,
+      stderr: 'An input file exceeds the sandbox 128 MiB limit.',
+      files: [],
+    });
+  });
+
   it('rejects immediately when active execution admission is full', async () => {
     app = createApp({
       config: testConfig({ EXEC_MAX_ACTIVE_REQUESTS: '1' }),

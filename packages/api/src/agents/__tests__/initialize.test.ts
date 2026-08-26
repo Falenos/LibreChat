@@ -92,8 +92,9 @@ jest.mock('~/endpoints', () => ({
   getProviderConfig: (...args: unknown[]) => mockGetProviderConfig(...args),
 }));
 
+const mockFilterFilesByEndpointConfig = jest.fn(() => []);
 jest.mock('~/files', () => ({
-  filterFilesByEndpointConfig: jest.fn(() => []),
+  filterFilesByEndpointConfig: (...args: unknown[]) => mockFilterFilesByEndpointConfig(...args),
 }));
 
 jest.mock('~/prompts', () => ({
@@ -1027,6 +1028,61 @@ describe('initializeAgent — attachment scoping', () => {
       tenantId: undefined,
     });
   });
+
+  // [knauf] KK20-315 — conversation carry-forward must use the agents file
+  // policy so the provider's per-send totalSizeLimit does not drop prior files.
+  it.each([EModelEndpoint.agents, EModelEndpoint.azureOpenAI])(
+    'uses the agents file policy when the route endpoint is %s',
+    async (routeEndpoint) => {
+      const requestFile = {
+        file_id: 'request-file',
+        filename: 'request.json',
+        bytes: 20 * 1024 * 1024,
+      } as IMongoFile;
+      const priorFile = {
+        file_id: 'prior-file',
+        filename: 'prior.json',
+        bytes: 90 * 1024 * 1024,
+      } as IMongoFile;
+      const { agent, req, res, loadTools, db } = createMocks({
+        provider: EModelEndpoint.azureOpenAI,
+      });
+
+      agent.tools = [EToolResources.execute_code];
+      mockExtractLibreChatParams.mockReturnValueOnce({
+        resendFiles: true,
+        maxContextTokens: undefined,
+        modelOptions: { model: agent.model },
+      });
+      (db.getConvoFiles as jest.Mock).mockResolvedValueOnce([priorFile.file_id]);
+      (db.getToolFilesByIds as jest.Mock).mockResolvedValueOnce([priorFile]);
+      (db.updateFilesUsage as jest.Mock)
+        .mockResolvedValueOnce([requestFile])
+        .mockResolvedValueOnce([priorFile]);
+
+      await initializeAgent(
+        {
+          req,
+          res,
+          agent,
+          loadTools,
+          requestFiles: [requestFile],
+          conversationId: 'conversation-1',
+          endpointOption: { endpoint: routeEndpoint },
+          allowedProviders: new Set([EModelEndpoint.azureOpenAI]),
+          isInitialAgent: true,
+        },
+        db,
+      );
+
+      expect(mockFilterFilesByEndpointConfig).toHaveBeenCalledWith(req, {
+        files: [requestFile, priorFile],
+        endpoint: EModelEndpoint.agents,
+        endpointType: undefined,
+      });
+    },
+  );
+  // End [knauf]
 });
 
 describe('initializeAgent — maxContextTokens', () => {

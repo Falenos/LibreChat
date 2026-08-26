@@ -116,7 +116,7 @@ target this ESM service with SSI because it carries explicit instrumentation.
   persist intermediates to `/mnt/data` — never a 5xx.
 - **Languages**: `py` and `bash` only (`node`/`bun` → 501). The dominant KARL
   traffic is `bash` + `python3` heredocs, both covered.
-- **128 MB upload cap** (pool file API) vs codeapi's 150 MB.
+- **128 MiB upload cap** (pool file API) vs codeapi's 150 MB.
 - Exit codes are real when the wrapper runs (`EXEC_WRAPPER=full`, default);
   with `EXEC_WRAPPER=off` they degrade to 0/1 synthesis.
 
@@ -144,9 +144,9 @@ See [`.env.example`](.env.example) for the full annotated surface. Required:
 `CODEAPI_JWT_PUBLIC_KEY`. `FILE_TTL_HOURS` is the sliding retention window, bumped on every
 push/download so an active conversation keeps its files available.
 `AZURE_TABLE_CONNECTION_STRING` is local-mode-only; deployed workloads never use a Table key.
-Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MB) to Blob storage.
-Input requests default to 20 files, 128 MB per file, and 256 MB aggregate. A process admits at
-most four active executions and 512 MB of aggregate staged input, with a 300-second total request
+Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MiB) to Blob storage.
+Input requests default to 20 files, 128 MiB per file, and 256 MiB aggregate. A process admits at
+most four active executions and 512 MiB of aggregate staged input, with a 300-second total request
 deadline. Stateless ACA cleanup has its own 10-second budget. `/readyz` caches dependency checks
 for 30 seconds with a 10-second refresh timeout.
 `ACA_API_VERSION` is pinned deliberately — bumping it requires refreshing

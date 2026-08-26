@@ -51,11 +51,28 @@ Read each linked reference when its task applies. Do not rely on the short summa
 | Datadog OpenMetrics mappings, histogram percentiles, dashboard tags, monitor queries, or observability rollout sequencing   | [Datadog OpenMetrics and dashboards](references/datadog-openmetrics-and-dashboards.md); use `dd-monitors` and `dd-docs` for current product syntax |
 | Langfuse authentication boundaries, trace lookup, LangGraph observations, missing traces, and storage-access failures       | [Langfuse troubleshooting](references/langfuse-troubleshooting.md); use the generic `langfuse` skill for current CLI/API syntax                    |
 | Full dev/stage/prod topology, repositories, service dependencies, data stores, observability, and release flows             | [Architecture reference](../../../knauf/docs/reference/agentic-karl-architecture.md) — inspect its table of contents and load the relevant section |
+| Runtime limits, upload ceilings, timeouts, retries, retention, concurrency, rate limits, or cross-layer capacity            | [Runtime limits](../../../knauf/docs/reference/runtime-limits.md) — verify mutable deployment values in their owning GitOps, Terraform, Azure, Kubernetes, or ArgoCD source |
 | File upload/storage lifecycle and image handling                                                                            | [File architecture overview](../../../knauf/docs/architecture/files/overview.md)                                                                   |
 | Conversation, Project, and Agent Knowledge retrieval                                                                        | [RAG search](../../../knauf/docs/architecture/files/rag-search.md)                                                                                 |
 | Queueing, workers, retry policy, generations, and deletion                                                                  | [Async indexing](../../../knauf/docs/architecture/files/async-indexing.md)                                                                         |
 
 The bundled references preserve durable operational guidance. The architecture documents preserve detailed system behavior. Owning repositories and live systems remain authoritative for mutable state.
+
+## Keeping Runtime Limits Current
+
+When a task adds or changes an operational byte/count/token bound, timeout,
+lease, retry, backoff, retention interval, concurrency setting, rate limit,
+resource limit, provider quota, or platform ceiling:
+
+1. Update `knauf/docs/reference/runtime-limits.md` in the same change.
+2. Label the value as committed policy, code default, environment example,
+   deployment override, platform ceiling, or CI-only.
+3. Re-evaluate adjacent layers and document the effective minimum or timeout
+   ladder rather than presenting one layer as the universal limit.
+4. Record zero, missing, invalid, and disabled semantics when applicable.
+5. Verify deployment-specific values in the owning repository or live rendered
+   state before calling them current; do not turn this skill or the reference
+   into a deployment-state cache.
 
 ## Operating Rules
 

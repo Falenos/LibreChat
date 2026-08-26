@@ -91,7 +91,7 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
       .field('id', 'user-1')
       .attach('file', Buffer.from('fives'), 'over-limit.txt');
     expect(overLimit.status).toBe(413);
-    expect(overLimit.body.error).toBe('file exceeds the 128MB upload limit');
+    expect(overLimit.body.error).toBe('file exceeds the configured upload limit of 4 bytes');
   });
 
   it('rolls back staged metadata and partial Blob data when upload fails', async () => {

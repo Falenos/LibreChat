@@ -961,6 +961,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/__tests__/ToolService.spec.js` | Code Execution priming failure regression | 345–362 | Proves tool-definition loading fails when an expected Code Execution attachment cannot be primed | Self | KK20-316 |
 | `api/server/controllers/agents/callbacks.js` | `buildResponsesAttachment` temporary-retention projection | 1475–1478 | Preserves Code Adapter ownership and authoritative expiry when staging-only output attachments are emitted through the Open Responses API | `api/server/controllers/agents/__tests__/callbacks.spec.js` | KK20-316 |
 | `api/server/controllers/agents/__tests__/callbacks.spec.js` | Responses API temporary Code Execution attachment regression | 10–12, 654–706 | Proves staging-only output events retain their source and adapter-owned expiry instead of appearing durable | Self | KK20-316 |
+| `packages/api/src/agents/initialize.ts` | agent file-policy selection in `initializeAgent` | 735–744 | Applies the dedicated agents file policy during conversation carry-forward, including OpenAI-compatible routes that pass a model provider as their endpoint | `packages/api/src/agents/__tests__/initialize.test.ts` (`uses the agents file policy when the route endpoint is ...`) | KK20-315 |
+| `packages/api/src/agents/__tests__/initialize.test.ts` | agents file-policy regression | 1032–1085 | Proves native and OpenAI-compatible Azure-backed agent runs filter the combined current and prior attachment set against `agents`, not `azureOpenAI` | Self | KK20-315 |
 <!-- seams:auto:end -->
 
 ## Configuration

@@ -36,7 +36,7 @@ also has no precedent for.
 
 ACA removes the question entirely: **Microsoft operates the isolation** (Hyper-V per session), so there is no
 privileged pod, no node-pool spike, and no kernel to patch. The costs we accept in exchange — building and owning a
-small adapter, the ~220 s exec cap, the 128 MB upload cap, and living on a preview data-plane API — are all bounded
+small adapter, the ~220 s exec cap, the 128 MiB upload cap, and living on a preview data-plane API — are all bounded
 and are documented in [`how-it-works.md`](how-it-works.md).
 
 Secondary factors that pointed the same way: **~zero idle cost** (consumption billing, sessions self-destruct after a
@@ -49,7 +49,7 @@ eight services + storage + a fork of the sandbox repo to maintain).
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Adapter is net-new code we own                                                                                                                                                                     | ~2,000 lines, one contract, contract-replay test suite; Tier-3, zero upstream edits                         |
 | No native exit code (Python pool) / ~4000-char stdout cap                                                                                                                                          | The adapter's sentinel wrapper restores both                                                                |
-| 220 s exec cap, 128 MB upload cap                                                                                                                                                                  | Friendly `code:1` messages; RAG remains the large-file path                                                 |
+| 220 s exec cap, 128 MiB upload cap                                                                                                                                                                 | Friendly `code:1` messages; RAG remains the large-file path                                                 |
 | Preview data-plane API churn                                                                                                                                                                       | api-versions pinned per pool + fixture tripwire test; the adapter is the single choke point                 |
 | First workload-identity app pod on AGK                                                                                                                                                             | Proven on a small pod, not the main app (see placement doc §3.4)                                            |
 | **Built-in Shell pool lacks the data-science stack** (verified: no pandas/numpy; egress disabled ⇒ no `pip install`) — and agent code execution runs entirely through `bash_tool` → the Shell pool | **RESOLVED (below):** consolidated onto the code-interpreter pool, which has bash + the data-science stack. |

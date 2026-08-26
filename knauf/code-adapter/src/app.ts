@@ -76,6 +76,6 @@ export function createApp(deps: AppDeps): Express {
   v1.use(createObjectsRouter({ blob: deps.blob, repo: deps.repo, logger }));
   app.use('/v1', v1);
 
-  app.use(createErrorHandler(logger));
+  app.use(createErrorHandler(logger, config.uploadMaxBytes));
   return app;
 }
