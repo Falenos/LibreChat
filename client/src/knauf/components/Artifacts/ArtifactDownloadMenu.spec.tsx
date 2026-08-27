@@ -212,4 +212,33 @@ describe('ArtifactDownloadMenu', () => {
       expect(mockPostArtifactExport).toHaveBeenCalledWith(expect.any(Object), 'pdf', 'share-1'),
     );
   });
+
+  it.each([
+    [
+      'artifact_page_limit',
+      { actualPages: 26, maxPages: 25 },
+      'com_knauf_artifact_download_page_limit',
+    ],
+    [
+      'artifact_png_height_limit',
+      { actualPages: 21, maxPages: 13 },
+      'com_knauf_artifact_download_png_limit',
+    ],
+    ['artifact_output_too_large', undefined, 'com_knauf_artifact_download_output_too_large'],
+    ['artifact_renderer_busy', undefined, 'com_knauf_artifact_download_busy'],
+    ['artifact_rate_limit', undefined, 'com_knauf_artifact_download_busy'],
+  ])('shows the %s export guidance', async (code, details, message) => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockPostArtifactExport.mockRejectedValue({ code, details });
+    render(<ArtifactDownloadMenu artifact={artifact} />);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_png' }));
+
+    await waitFor(() =>
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message, severity: 'error' }),
+      ),
+    );
+    consoleError.mockRestore();
+  });
 });

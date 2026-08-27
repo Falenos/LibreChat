@@ -119,17 +119,48 @@ export interface ArtifactExportSnapshot {
   language?: string;
 }
 
+class ArtifactExportRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'ArtifactExportRequestError';
+  }
+}
+
 export async function postArtifactExport(
   artifact: ArtifactExportSnapshot,
   format: 'png' | 'pdf',
   shareId?: string,
 ): Promise<Blob> {
-  const response = await axios.post(
-    endpoints.artifactExport(shareId),
-    shareId ? { format } : { artifact, format },
-    { responseType: 'blob' },
-  );
-  return response.data;
+  try {
+    const response = await axios.post(
+      endpoints.artifactExport(shareId),
+      shareId ? { format } : { artifact, format },
+      { responseType: 'blob' },
+    );
+    return response.data;
+  } catch (error) {
+    const data = axios.isAxiosError(error) ? error.response?.data : undefined;
+    if (data instanceof Blob && data.type.includes('json')) {
+      let payload: { message?: unknown; code?: unknown; details?: unknown };
+      try {
+        payload = JSON.parse(await data.text()) as typeof payload;
+      } catch {
+        throw error;
+      }
+      throw new ArtifactExportRequestError(
+        typeof payload.message === 'string' ? payload.message : 'Artifact export failed',
+        typeof payload.code === 'string' ? payload.code : undefined,
+        payload.details != null && typeof payload.details === 'object'
+          ? (payload.details as Record<string, unknown>)
+          : undefined,
+      );
+    }
+    throw error;
+  }
 }
 
 export interface SharedArtifactContinuationResponse {

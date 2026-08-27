@@ -1069,6 +1069,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `librechat.yaml` | KK20-286 — replaces obsolete manual Agent Builder seed references with the startup policy that adds missing fields while preserving Admin-selected values. |
 | `client/src/locales/de/translation.json` | KK20-280 — uses the product-approved German procurement category label “Einkauf”; JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 | `client/src/locales/{en,de}/translation.json` | KK20-250 / KK20-283 — localizes the KARL help and release-note menu entry; JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
+| `client/src/locales/{en,de}/translation.json` | NO-TICKET — localizes actionable artifact-export outcomes for page, PNG-height, output-size, renderer-capacity, and rate limits; JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 
 ## Net-New Files
 
@@ -1939,6 +1940,10 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/knauf/data-provider/Agents/queries.knauf.spec.ts` | Mocked React Query option capture and Agent query hooks | Low — proves both list and detail queries refresh stale signed avatar URLs at client lifecycle boundaries after a two-minute stale window | Self | KK20-282 |
 | `client/src/knauf/components/Header/KnaufTopBar*.tsx` | Existing top-bar user menu, localization, and browser `window.open` | Low — adds one discoverable link to the bundled KARL guide and release notes | `KnaufTopBar.knauf.spec.tsx` | KK20-250, KK20-283 |
 | `packages/api/src/knauf/config/librechatYaml.knauf.spec.ts` | `js-yaml`, Node `fs`/`path`, real `librechat.yaml` | Low — pins the KARL source-footer instruction to include every source actually used instead of silently capping multi-file answers at three | Self | KK20-222 |
+| `api/server/services/Artifacts/knauf/export*.js` | `playwright-core`, Node crypto/fs, and the artifact-share validator | Medium — raises bounded PDF/deck export support to 25 slides and classifies page, PNG-height, output-size, and renderer-capacity failures without exposing renderer internals | `api/server/services/Artifacts/knauf/export.spec.js` | NO-TICKET |
+| `api/server/routes/knauf/artifactExport*.js` | Express, the existing artifact renderer, authentication/share middleware, and rate limiter | Medium — returns stable safe error codes/details for known export limits and rate limiting while preserving generic 500 responses | `api/server/routes/knauf/artifactExport.spec.js` | NO-TICKET |
+| `client/src/knauf/components/Artifacts/ArtifactDownloadMenu*.tsx` | Upstream artifact/editor hooks, localized controls, toast/download helpers, and Knauf export data service | Medium — maps known export error codes to actionable localized guidance while retaining the generic fallback | `ArtifactDownloadMenu.spec.tsx` | NO-TICKET |
+| `client/src/knauf/data-provider/data-service*.ts` | Axios and `librechat-data-provider` request/types | Low — decodes JSON error blobs from the binary artifact-export endpoint into a bounded typed client error | `client/src/knauf/data-provider/data-service.spec.ts` | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

@@ -27,6 +27,22 @@ const artifact = {
   content: '<main>Ready</main>',
 };
 
+const setSlideCount = (pageCount, height = 900) => {
+  mockPreviewEvaluate.mockImplementation(async (callback) => {
+    const source = callback.toString();
+    if (source.includes('scrollHeight')) {
+      return height;
+    }
+    if (source.includes('button.click')) {
+      return true;
+    }
+    if (source.includes("querySelectorAll('button')")) {
+      return pageCount;
+    }
+    return undefined;
+  });
+};
+
 describe('artifact renderer', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -235,6 +251,39 @@ describe('artifact renderer', () => {
     });
     expect(mockSetContent.mock.calls[0][0].match(/data:image\/png;base64/g)).toHaveLength(3);
     expect(mockScreenshot).toHaveBeenCalledTimes(4);
+  });
+
+  it('exports a 25-slide PDF', async () => {
+    setSlideCount(25);
+
+    await expect(renderArtifact(artifact, 'pdf')).resolves.toEqual({
+      buffer: Buffer.from('pdf'),
+      mime: 'application/pdf',
+      extension: 'pdf',
+    });
+    expect(mockScreenshot).toHaveBeenCalledTimes(25);
+  });
+
+  it('returns page counts when an export exceeds 25 slides', async () => {
+    setSlideCount(26);
+
+    await expect(renderArtifact(artifact, 'pdf')).rejects.toMatchObject({
+      status: 413,
+      code: 'artifact_page_limit',
+      details: { format: 'pdf', actualPages: 26, maxPages: 25 },
+    });
+    expect(mockScreenshot).not.toHaveBeenCalled();
+  });
+
+  it('directs tall multi-slide PNG exports to PDF', async () => {
+    setSlideCount(14);
+
+    await expect(renderArtifact(artifact, 'png')).rejects.toMatchObject({
+      status: 413,
+      code: 'artifact_png_height_limit',
+      details: { format: 'png', actualPages: 14, maxPages: 13 },
+    });
+    expect(mockScreenshot).not.toHaveBeenCalled();
   });
 
   it('rejects a slide export when the rendered preview has no slide contract', async () => {

@@ -20,6 +20,32 @@ import { triggerDownload } from '~/utils/downloadFile';
 
 type ExportFormat = 'source' | 'png' | 'pdf';
 
+type ExportError = {
+  code?: unknown;
+  details?: { actualPages?: unknown; maxPages?: unknown };
+};
+
+const exportErrorMessage = (error: unknown, localize: ReturnType<typeof useLocalize>): string => {
+  const { code, details } = (error ?? {}) as ExportError;
+  const pages = {
+    actualPages: String(details?.actualPages ?? ''),
+    maxPages: String(details?.maxPages ?? ''),
+  };
+  if (code === 'artifact_page_limit') {
+    return localize('com_knauf_artifact_download_page_limit', pages);
+  }
+  if (code === 'artifact_png_height_limit') {
+    return localize('com_knauf_artifact_download_png_limit', pages);
+  }
+  if (code === 'artifact_output_too_large') {
+    return localize('com_knauf_artifact_download_output_too_large');
+  }
+  if (code === 'artifact_renderer_busy' || code === 'artifact_rate_limit') {
+    return localize('com_knauf_artifact_download_busy');
+  }
+  return localize('com_knauf_artifact_download_error');
+};
+
 const safeTitle = (title: string): string => {
   const sanitized = title
     .replace(/[<>:"/\\|?*\p{Cc}]/gu, '_')
@@ -89,7 +115,7 @@ export default function ArtifactDownloadMenu({
     } catch (error) {
       console.error('Artifact export failed:', error);
       showToast({
-        message: localize('com_knauf_artifact_download_error'),
+        message: exportErrorMessage(error, localize),
         severity: NotificationSeverity.ERROR,
         showIcon: true,
       });
