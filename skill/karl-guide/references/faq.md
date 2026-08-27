@@ -45,6 +45,10 @@ The shipped read-only catalogue currently contains:
 - `web-research` for web-search routing and source discipline.
 - `karl-guide` for Karl product help and limitations.
 - `agent-builder-coach` for designing and testing custom agents.
+- `business-idea-stress-test` for testing an uncommitted idea before proposal work.
+- `business-plan-grilling` for checking execution readiness after a direction is chosen.
+- `business-case-writeup` for turning agreed decisions into a decision paper or delivery specification.
+- `business-jira-breakdown` for explicit Jira work-breakdown and import-content requests.
 
 Use the live Skills catalogue as the authority because the platform team can add reviewed public skills later.
 

@@ -53,6 +53,10 @@ import { logger } from '@librechat/data-schemas';
  */
 export const KNAUF_EXPECTED_DEPLOYMENT_SKILLS: readonly string[] = Object.freeze([
   'agent-builder-coach',
+  'business-case-writeup',
+  'business-idea-stress-test',
+  'business-jira-breakdown',
+  'business-plan-grilling',
   'karl-artifacts',
   'karl-brand',
   'karl-guide',

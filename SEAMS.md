@@ -963,6 +963,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/__tests__/callbacks.spec.js` | Responses API temporary Code Execution attachment regression | 10–12, 654–706 | Proves staging-only output events retain their source and adapter-owned expiry instead of appearing durable | Self | KK20-316 |
 | `packages/api/src/agents/initialize.ts` | agent file-policy selection in `initializeAgent` | 735–744 | Applies the dedicated agents file policy during conversation carry-forward, including OpenAI-compatible routes that pass a model provider as their endpoint | `packages/api/src/agents/__tests__/initialize.test.ts` (`uses the agents file policy when the route endpoint is ...`) | KK20-315 |
 | `packages/api/src/agents/__tests__/initialize.test.ts` | agents file-policy regression | 1032–1085 | Proves native and OpenAI-compatible Azure-backed agent runs filter the combined current and prior attachment set against `agents`, not `azureOpenAI` | Self | KK20-315 |
+| `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | business workflow invocation contract | 101–124 | Pins the four business skills as user-invocable and narrowly model-invocable while forbidding global application and unsupported download/Jira promises | Self | NO-TICKET |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -1944,6 +1945,11 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/knauf/artifactExport*.js` | Express, the existing artifact renderer, authentication/share middleware, and rate limiter | Medium — returns stable safe error codes/details for known export limits and rate limiting while preserving generic 500 responses | `api/server/routes/knauf/artifactExport.spec.js` | NO-TICKET |
 | `client/src/knauf/components/Artifacts/ArtifactDownloadMenu*.tsx` | Upstream artifact/editor hooks, localized controls, toast/download helpers, and Knauf export data service | Medium — maps known export error codes to actionable localized guidance while retaining the generic fallback | `ArtifactDownloadMenu.spec.tsx` | NO-TICKET |
 | `client/src/knauf/data-provider/data-service*.ts` | Axios and `librechat-data-provider` request/types | Low — decodes JSON error blobs from the binary artifact-export endpoint into a bounded typed client error | `client/src/knauf/data-provider/data-service.spec.ts` | NO-TICKET |
+| `skill/business-*/**` | Deployment-skill loader and on-demand reference reads | Medium — adds four narrowly routed, explicit-invocation business workflows without always applying them or claiming unavailable Jira/download capabilities | `packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts` | NO-TICKET |
+| `skill/THIRD_PARTY_NOTICES.md` | MIT notice for adapted workflow material | Low — preserves attribution for the portions adapted from `mattpocock/skills` | Review | NO-TICKET |
+| `skill/README.md` | Deployment skill inventory and invocation contract | Low — documents the four on-demand workflows, capability gates, and non-global routing policy | Deployment skill suite | NO-TICKET |
+| `skill/karl-guide/references/faq.md` | Shipped skill catalogue | Low — exposes the four business workflows and their boundaries in Karl product guidance | Deployment skill suite | NO-TICKET |
+| `packages/api/src/knauf/skills/deploymentSkillsCheck{,.spec}.ts` | Expected deployment skill inventory | Low — makes missing business skills visible at boot and pins the image inventory in CI | Focused unit and deployment skill suites | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets

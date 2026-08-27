@@ -99,6 +99,31 @@ describe('[knauf] shipped deployment skills', () => {
     expect(overLong).toEqual([]);
   });
 
+  // [knauf] NO-TICKET — business workflows stay selectable, narrow, and never global.
+  it('routes business workflows only for their matching job or explicit invocation', () => {
+    const stressTest = byName.get('business-idea-stress-test');
+    const grilling = byName.get('business-plan-grilling');
+    const writeup = byName.get('business-case-writeup');
+    const jira = byName.get('business-jira-breakdown');
+    const businessSkills = [stressTest, grilling, writeup, jira];
+
+    for (const skill of businessSkills) {
+      expect(skill).toBeDefined();
+      expect(skill?.userInvocable).not.toBe(false);
+      expect(skill?.disableModelInvocation).not.toBe(true);
+      expect(skill?.alwaysApply).not.toBe(true);
+    }
+
+    expect(stressTest?.description).toContain('uncommitted business idea');
+    expect(grilling?.description).toContain('chosen business plan');
+    expect(writeup?.description).toContain('agreed business discussion');
+    expect(jira?.description).toContain('only when the user explicitly asks for Jira');
+    expect(writeup?.body).toContain('Do not promise a downloadable document file');
+    expect(jira?.body).toContain('does not connect to Jira');
+    expect(jira?.body).toContain('not creating a downloadable file');
+  });
+  // End [knauf]
+
   it('keeps the token-source skill readable across skills', () => {
     const source = byName.get(TOKEN_SOURCE_SKILL);
     const readme = fs.readFileSync(path.join(SKILLS_DIR, 'README.md'), 'utf8');
