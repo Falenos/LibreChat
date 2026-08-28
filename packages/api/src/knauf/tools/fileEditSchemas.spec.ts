@@ -1,4 +1,5 @@
 /// <reference types="jest" />
+import { getToolDefinition } from '../../tools/registry/definitions';
 import { editIdmlSchema, editXmlSchema } from './fileEditSchemas';
 
 describe('[knauf] IDML edit schema', () => {
@@ -19,5 +20,13 @@ describe('[knauf] XML edit schema', () => {
 
     expect(segmentEdits.description).toContain('user explicitly supplies');
     expect(segmentEdits.description).toContain('never infer');
+  });
+
+  it('tells the model to refuse attribute edits without calling the tool', () => {
+    const description = getToolDefinition('edit_xml')?.description;
+
+    expect(description).toContain('Attribute editing is unsupported');
+    expect(description).toContain('do not call this tool for an attribute edit');
+    expect(description).toContain('no output file was created');
   });
 });

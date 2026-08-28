@@ -644,7 +644,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   edit_xml: {
     name: 'edit_xml',
     description:
-      'Inspect element paths, read-only attributes, and text nodes in XML files attached to the current message, or export changed XML using exact text replacements. Use inspect before uncertain edits. For text-only requests use replacements; use segment_edits only when the user explicitly supplies a segment_id. Never infer a segment_id to bypass ambiguity. Ambiguous matches fail unless replace_all is explicit. Preserves element names, namespaces, attributes, comments, processing instructions, and order. Rejects DTD/entities and malformed XML.',
+      'Inspect element paths, read-only attributes, and text nodes in XML files attached to the current message, or export changed XML using exact text replacements. Attribute editing is unsupported: do not call this tool for an attribute edit; explain that attributes are read-only and no output file was created. Use inspect before uncertain edits. For text-only requests use replacements; use segment_edits only when the user explicitly supplies a segment_id. Never infer a segment_id to bypass ambiguity. Ambiguous matches fail unless replace_all is explicit. Preserves element names, namespaces, attributes, comments, processing instructions, and order. Rejects DTD/entities and malformed XML.',
     schema: editXmlSchema,
     toolType: 'builtin',
     responseFormat: 'content_and_artifact',

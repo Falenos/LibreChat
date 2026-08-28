@@ -1052,6 +1052,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/hooks/Files/useFileHandling.ts` | XML `effectiveToolResource` routing | 867–888 | Keeps XML editor inputs out of File Search so malformed or unsafe XML reaches the request-scoped inspector, which returns its format-specific validation error | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` (`drops file_search routing for an XML editor input`) | KK20-297 |
 | `client/src/hooks/Files/__tests__/useFileHandling.test.ts` | XML upload-routing regression | 808–822 | Proves regular drag/drop routing clears `file_search` from XML while retaining the exact uploaded attachment for editing | Self | KK20-297 |
 | `packages/api/src/tools/registry/definitions.ts` | `edit_xml` ambiguity contract | 643–652 | Tells the model that text-only edits must use deterministic replacements and inferred segment IDs cannot bypass ambiguity handling | `api/server/services/Files/knauf/xml/edit.spec.js`; `packages/api/src/knauf/tools/fileEditSchemas.spec.ts` | KK20-297 |
+| `packages/api/src/tools/registry/definitions.ts` | `toolDefinitions.edit_xml` attribute-edit refusal | 643–652 | Prevents unsupported XML attribute-edit requests from producing invalid tool calls; the model must explain the read-only boundary and create no output | `api/server/services/Files/knauf/xml/edit.spec.js` (`tells the model not to bypass text ambiguity with an inferred segment id`) | KK20-297 |
 <!-- seams:auto:end -->
 
 ## Configuration

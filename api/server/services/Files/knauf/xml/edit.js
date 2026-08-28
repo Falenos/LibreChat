@@ -189,6 +189,7 @@ function buildXmlToolContext(req) {
     `XML structure/attribute inspection and text-node editing are available for: ${names.join(', ')}.`,
     'Use edit_xml action inspect before an uncertain edit, then replace exact text or a returned segment_id.',
     'For text-only requests, use replacements. Use segment_edits only when the user explicitly supplies a segment_id; never infer one or bypass ambiguity.',
+    'Attribute editing is unsupported. If the user requests it, do not call edit_xml; explain that attributes are read-only and no output file was created.',
     'Inspection reports comments and processing instructions as read-only metadata.',
     'Element names, namespaces, attributes, comments, processing instructions, and order are preserved.',
     'DTD/entities and malformed XML are rejected. Validate the export against its schema or consuming system.',

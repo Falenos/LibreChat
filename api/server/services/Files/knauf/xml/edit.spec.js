@@ -19,6 +19,9 @@ describe('[knauf] edit_xml', () => {
 
     expect(context).toContain('user explicitly supplies a segment_id');
     expect(context).toContain('never infer');
+    expect(context).toContain(
+      'Attribute editing is unsupported. If the user requests it, do not call edit_xml',
+    );
   });
 
   it('rejects model-inferred segment ids absent from the user request', () => {
