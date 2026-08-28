@@ -1893,6 +1893,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/README.md` | None (Markdown) | Low — removes the obsolete Agent Builder seed path from the active tooling inventory now that startup owns the lifecycle | Docs only | KK20-286 |
 | `skill/karl-guide/references/roles-and-access.md` | None (Markdown) | Low — teaches the user-facing guide that Agent Builder defaults reconcile at startup while Admin-selected values and membership remain authoritative | Docs plus Agent Builder lifecycle suites | KK20-286 |
 | `packages/api/src/knauf/config/librechatYaml.knauf.spec.ts` | `js-yaml`, Node `fs`/`path`, real `librechat.yaml` | Low — updates the configuration guard's Agent Builder RUN_CODE rationale from mongosh ownership to startup policy ownership | Self | KK20-286 |
+| `knauf/docs/implementation-plans/pii-privacy-workstream.md` | None (Markdown) | Low — plan doc only; no runtime coupling. Relative links to `librechat.yaml`, the Langfuse / openid / parsers / memory seams and sibling docs are advisory and break loudly on file moves, surfacing in PR review rather than at runtime | Docs only (manual link spot-check) | — |
 <!-- seams:new:end -->
 
 ## Static Assets
