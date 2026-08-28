@@ -150,6 +150,32 @@ describe('[knauf] Azure translation provider', () => {
     });
   });
 
+  it('drops non-linguistic identity rows before native Office translation', async () => {
+    const csv = Buffer.from(
+      'id,a,b,c,eng_GLO,deu_GLO\n1,,,,0,0\n2,,,,Knauf,Knauf\n3,,,,Board,Platte\n',
+    );
+    process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
+    process.env.AZURE_STORAGE_CONNECTION_STRING =
+      'DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test-key';
+    mockTargetBlob.getProperties.mockResolvedValue({ contentLength: csv.length, etag: 'v3b' });
+    mockTargetBlob.downloadToBuffer.mockResolvedValue(csv);
+
+    await expect(
+      glossaryForRequest({
+        sourceLocale: 'en',
+        targetLocale: 'de',
+        segments: [],
+        filterToDocument: false,
+      }),
+    ).resolves.toMatchObject({
+      entries: [
+        { source: 'Knauf', target: 'Knauf' },
+        { source: 'Board', target: 'Platte' },
+      ],
+      stats: { nonLinguisticIdentity: 1 },
+    });
+  });
+
   it('fails instead of silently truncating applicable glossary terms', async () => {
     const csv = Buffer.from('id,a,b,c,eng_GLO,deu_GLO\n1,,,,Hello,Hallo\n');
     process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';

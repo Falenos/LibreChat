@@ -348,6 +348,7 @@ async function resolveGlossary({
   const terms = new Map();
   let malformedRows = 0;
   let emptyTargets = 0;
+  let nonLinguisticIdentity = 0;
   for (const row of table.rows) {
     if (!Array.isArray(row)) {
       malformedRows += 1;
@@ -365,6 +366,10 @@ async function resolveGlossary({
     }
     if (!target) {
       emptyTargets += 1;
+      continue;
+    }
+    if (source === target && !/\p{L}/u.test(source)) {
+      nonLinguisticIdentity += 1;
       continue;
     }
     const current = terms.get(key) ?? { source, targets: new Set(), categories: new Set() };
@@ -412,6 +417,7 @@ async function resolveGlossary({
       applied: entries.length,
       ambiguous,
       emptyTargets,
+      nonLinguisticIdentity,
       malformedRows,
       truncated,
       bytes,
