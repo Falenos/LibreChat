@@ -981,6 +981,57 @@ describe('initializeAgent — attachment scoping', () => {
     expect(agent.tools).toEqual([]);
   });
 
+  it('preserves initial request tool files during secondary agent initialization', async () => {
+    const { primeResources } = jest.requireMock('../resources') as {
+      primeResources: jest.Mock;
+    };
+    const requestFile = {
+      file_id: 'idml-file',
+      filename: 'datasheet.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+    } as IMongoFile;
+    primeResources
+      .mockResolvedValueOnce({
+        attachments: [requestFile],
+        requestAttachments: [requestFile],
+        agentContextAttachments: undefined,
+        tool_resources: undefined,
+      })
+      .mockResolvedValueOnce({ attachments: [], tool_resources: undefined });
+
+    const { agent, req, res, loadTools, db } = createMocks();
+    (db.updateFilesUsage as jest.Mock).mockResolvedValueOnce([requestFile]);
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        requestFiles: [{ file_id: requestFile.file_id } as IMongoFile],
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+      },
+      db,
+    );
+
+    expect((req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles).toEqual([
+      requestFile,
+    ]);
+  });
+
   it('does not expose dynamic or persisted request-scoped file tools on the compatibility API', async () => {
     const { primeResources } = jest.requireMock('../resources') as {
       primeResources: jest.Mock;

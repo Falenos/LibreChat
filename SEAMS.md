@@ -1043,6 +1043,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/file.knauf.spec.ts` | `translation output retention` describe | 78–108 | Proves application-managed `expiredAt` survives creation and conversation binding while temporary upload `expiresAt` remains absent | Self | KK20-297 |
 | `api/server/services/Files/Local/crud.js` | `unlinkFile` | 199–205 | Preserves idempotent missing-file deletion while surfacing real local filesystem failures so translation cleanup debt cannot be cleared falsely | `api/server/services/Files/knauf/cascadeDeleteConvoFiles.spec.js` (`local cleanup propagates`) | KK20-297 |
 | `api/server/routes/__tests__/convos.spec.js` | conversation cleanup route mock | 20–26 | Keeps upstream route assertions isolated from the separately tested translation cancellation and file-cleanup transaction boundary | Self | KK20-297 |
+| `packages/api/src/agents/initialize.ts` | initial-agent `knaufToolFiles` publication | 746–751 | Prevents memory and handoff agent initialization from erasing the owner-validated current-message attachment scope before IDML/XML/translation tools execute | `packages/api/src/agents/__tests__/initialize.test.ts` (`preserves initial request tool files during secondary agent initialization`) | KK20-297 |
+| `packages/api/src/agents/__tests__/initialize.test.ts` | secondary-agent attachment-scope regression | 984–1033 | Reproduces the primary-then-secondary initialization sequence from browser chat and proves the authenticated IDML file remains available to request-scoped tools | Self | KK20-297 |
 <!-- seams:auto:end -->
 
 ## Configuration

@@ -745,7 +745,10 @@ export async function initializeAgent(
 
   // [knauf] KK20-297 — execution must consume the same owner-validated
   // records used for request-scoped tool selection, not client file-id stubs.
-  (req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles = resolvedRequestFiles;
+  if (isInitialAgent) {
+    (req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles =
+      resolvedRequestFiles;
+  }
   // End [knauf]
 
   if (currentFiles && currentFiles.length) {
