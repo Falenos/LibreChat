@@ -400,6 +400,15 @@ export function createProjectHandlers(deps: ProjectHandlerDependencies): {
         return res.status(404).json({ error: 'File not found' });
       }
 
+      // End [knauf]
+
+      // [knauf] KK20-297 — Code Interpreter-only uploads cannot become Project Knowledge.
+      if (authorizedFile.embedded !== true && !authorizedFile.knauf_asset_id) {
+        return res.status(400).json({ error: 'File is not indexable as project knowledge' });
+      }
+      // End [knauf]
+
+      // [knauf] KK20-248 — explicit project file endpoints for project knowledge.
       const source = await deps.createChatProjectSource(getUserId(req), {
         projectId,
         file_id: fileId,

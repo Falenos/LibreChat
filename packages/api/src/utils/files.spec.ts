@@ -554,7 +554,7 @@ describe('resolveUploadErrorMessage', () => {
     );
   });
 
-  // [knauf] KK20-190 — forward the encrypted-file + per-category-too-large i18n
+  // [knauf] KK20-190 / KK20-297 / NO-TICKET — forward user-facing Knauf upload error keys
   // keys verbatim so the client localizes them via `localize(msg) || msg`. The
   // too-large entry is a prefix matched as a substring against all three suffixes.
   test('forwards the encrypted-file i18n key verbatim', () => {
@@ -578,9 +578,8 @@ describe('resolveUploadErrorMessage', () => {
       'com_knauf_error_file_too_large_document',
       'com_knauf_error_file_too_large_data',
       'com_knauf_error_file_too_large_image',
-      // [knauf] NO-TICKET — native SVG upload cap uses the same user-facing prefix.
+      // Native SVG upload cap uses the same user-facing prefix.
       'com_knauf_error_file_too_large_svg',
-      // End [knauf]
     ]) {
       expect(resolveUploadErrorMessage({ message: key })).toBe(key);
     }
@@ -599,6 +598,12 @@ describe('resolveUploadErrorMessage', () => {
   test('forwards the friendly unsupported-type i18n key verbatim', () => {
     expect(resolveUploadErrorMessage({ message: 'com_knauf_error_unsupported_type' })).toBe(
       'com_knauf_error_unsupported_type',
+    );
+    expect(resolveUploadErrorMessage({ message: 'com_knauf_error_idml_file_search' })).toBe(
+      'com_knauf_error_idml_file_search',
+    );
+    expect(resolveUploadErrorMessage({ message: 'com_knauf_error_code_execution_required' })).toBe(
+      'com_knauf_error_code_execution_required',
     );
   });
   // End [knauf]

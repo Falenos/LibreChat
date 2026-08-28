@@ -1848,6 +1848,30 @@ describe('AgentClient - titleConvo', () => {
       },
     );
 
+    // [knauf] KK20-297 — IDML stays tool-visible without becoming provider input_file data.
+    it('keeps IDML attached without forwarding the binary package as a provider document', async () => {
+      const currentFile = makeUploadedFile(
+        'idml-file',
+        'datasheet.idml',
+        'application/vnd.adobe.indesign-idml-package',
+      );
+      const message = {
+        messageId: 'msg-1',
+        parentMessageId: null,
+        sender: 'User',
+        text: 'Inspect this IDML.',
+        isCreatedByUser: true,
+      };
+      client.addDocuments = jest.fn();
+
+      const files = await client.processAttachments(message, [currentFile]);
+
+      expect(client.addDocuments).not.toHaveBeenCalled();
+      expect(message.documents).toBeUndefined();
+      expect(files).toEqual([currentFile]);
+    });
+    // End [knauf]
+
     // [knauf] NO-TICKET — only file_search suppresses duplicate legacy vector
     // augmentation; runs without the effective tool keep the provider fallback.
     it.each([

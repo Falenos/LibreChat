@@ -74,8 +74,7 @@ function collectFileIds(acc, entries, only) {
  * union of the three linkages — no single one is complete:
  *   1. File.conversationId      — set on chat file_search uploads + execute_code outputs.
  *   2. Conversation.files[]     — file_id strings on the convo doc.
- *   3. Message.files[]          — message attachments carry NO conversationId, so this is
- *                                 the only link for them.
+ *   3. Message.files[] / attachments[] — generated/downloadable attachments can use either.
  * MUST run BEFORE the conversation + messages are deleted (links 2 and 3 vanish
  * with them; the File rows themselves survive, which is the bug we're fixing).
  * @param {{ user: string, conversationIds: string[] }} params
@@ -107,11 +106,16 @@ async function collectConvoFileDocs({ user, conversationIds }) {
 
   // 3. Message.files[]
   const messages = await Message.find(
-    { conversationId: { $in: conversationIds }, user, files: { $exists: true, $ne: null } },
-    'files',
+    {
+      conversationId: { $in: conversationIds },
+      user,
+      $or: [{ files: { $exists: true, $ne: null } }, { attachments: { $exists: true, $ne: null } }],
+    },
+    'files attachments',
   ).lean();
   for (const message of messages) {
     collectFileIds(fileIds, message.files);
+    collectFileIds(fileIds, message.attachments);
   }
 
   if (!fileIds.size) {
@@ -165,12 +169,18 @@ async function partitionByRefCount(files, { user, deletedConversationIds }) {
     {
       user,
       conversationId: { $nin: deletedConversationIds },
-      $or: [{ 'files.file_id': { $in: ids } }, { files: { $in: ids } }],
+      $or: [
+        { 'files.file_id': { $in: ids } },
+        { files: { $in: ids } },
+        { 'attachments.file_id': { $in: ids } },
+        { attachments: { $in: ids } },
+      ],
     },
-    'files',
+    'files attachments',
   ).lean();
   for (const message of msgRefs) {
     collectFileIds(stillReferenced, message.files, candidateIds);
+    collectFileIds(stillReferenced, message.attachments, candidateIds);
   }
 
   // An agent still references the file via tool_resources.<resource>.file_ids —
@@ -427,24 +437,30 @@ async function deletePlainRows({ req, plainRows }) {
   }
   // Lazy require (see top-of-file note) — only load the deletion chain when needed.
   const { processDeleteRequest } = require('~/server/services/Files/process');
-  await processDeleteRequest({ req, files: plainRows });
+  const deletion = await processDeleteRequest({ req, files: plainRows });
 
   // [knauf] Vector backstop: route agent files to Azure AI Search, rest to pgvector.
   const embeddedFiles = plainRows.filter((file) => file.embedded);
-  if (!embeddedFiles.length) {
-    return;
-  }
-  const { deleteVectorsForFiles } = require('~/server/services/Files/VectorDB/crud');
-  try {
-    await deleteVectorsForFiles(req, embeddedFiles);
-  } catch (vectorError) {
-    logger.warn(
-      `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedFiles.length} file(s); ` +
-        'embeddings may remain in pgvector or Azure AI Search',
-      vectorError,
-    );
+  if (embeddedFiles.length) {
+    const { deleteVectorsForFiles } = require('~/server/services/Files/VectorDB/crud');
+    try {
+      await deleteVectorsForFiles(req, embeddedFiles);
+    } catch (vectorError) {
+      logger.warn(
+        `[knauf][cascadeDeleteConvoFiles] vector backstop failed for ${embeddedFiles.length} file(s); ` +
+          'embeddings may remain in pgvector or Azure AI Search',
+        vectorError,
+      );
+    }
   }
   // End [knauf]
+  if (deletion?.failedFileIds?.length) {
+    const error = new Error(
+      `File cleanup failed for ${deletion.failedFileIds.length} translation output(s)`,
+    );
+    error.failedFileIds = deletion.failedFileIds;
+    throw error;
+  }
 }
 
 /**
@@ -523,8 +539,29 @@ async function cascadeDeleteCollectedFiles({ req, collected }) {
  * @param {{ req: import('express').Request, filter: Record<string, unknown> }} params
  */
 async function deleteConvosWithCleanup({ req, filter }) {
+  const conversationIds = await resolveConversationIds({ user: req.user.id, filter });
+  const { cancelTranslationJobsByConversation } = require('./translation/jobs');
+  // Cancellation is part of the delete transaction boundary: if the durable
+  // tombstone cannot be persisted, fail closed and leave the conversation.
+  await cancelTranslationJobsByConversation({
+    user: req.user.id,
+    tenantId: req.user.tenantId,
+    conversationIds,
+  });
   const collected = await collectConvoFilesForCleanup({ req, filter });
   const dbResponse = await db.deleteConvos(req.user.id, filter);
+  // Catch jobs admitted between the pre-delete tombstone and the conversation
+  // removal. Enqueue also checks existence, and the worker independently
+  // reconciles any active job whose conversation disappeared.
+  try {
+    await cancelTranslationJobsByConversation({
+      user: req.user.id,
+      tenantId: req.user.tenantId,
+      conversationIds,
+    });
+  } catch (error) {
+    logger.error('[knauf][cascadeDeleteConvoFiles] post-delete translation sweep failed', error);
+  }
   await cascadeDeleteCollectedFiles({ req, collected });
   return dbResponse;
 }

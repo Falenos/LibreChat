@@ -59,8 +59,11 @@ export const KNAUF_EXPECTED_DEPLOYMENT_SKILLS: readonly string[] = Object.freeze
   'business-plan-grilling',
   'karl-artifacts',
   'karl-brand',
+  'karl-file-translation',
   'karl-guide',
+  'karl-idml',
   'karl-image-generation',
+  'karl-xml',
   // [knauf] KK20-257 — the two code-execution skills. They were authored against the
   // Knauf code-adapter and tell the model to use bash_tool / /mnt/data, which only
   // exists once `execute_code` is an agent capability (librechat.yaml) and

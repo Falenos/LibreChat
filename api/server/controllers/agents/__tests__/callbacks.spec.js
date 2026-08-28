@@ -67,6 +67,19 @@ jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
 }));
 
+jest.mock('~/server/services/Files/retention', () => ({
+  getRetentionExpiry: jest.fn().mockResolvedValue({ expiredAt: new Date('2026-09-01') }),
+}));
+
+jest.mock('~/models', () => ({
+  updateFile: jest.fn(async (data) => ({
+    ...data,
+    filename: 'datasheet_de-DE.idml',
+    filepath: '/uploads/idml-output-1',
+    type: 'application/vnd.adobe.indesign-idml-package',
+  })),
+}));
+
 describe('createToolEndCallback', () => {
   let req, res, artifactPromises, createToolEndCallback;
   let logger;
@@ -259,6 +272,47 @@ describe('createToolEndCallback', () => {
   });
 
   describe('edge cases', () => {
+    // [knauf] KK20-297 — any persisted translation becomes a normal attachment.
+    it('returns translated file metadata with current message routing', async () => {
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+      const file = {
+        file_id: 'idml-output-1',
+        filename: 'datasheet_de-DE.idml',
+        filepath: '/uploads/idml-output-1',
+        type: 'application/vnd.adobe.indesign-idml-package',
+      };
+
+      await toolEndCallback(
+        {
+          output: {
+            tool_call_id: 'tool-idml',
+            artifact: { knauf_file_translation: { files: [file] } },
+          },
+        },
+        { run_id: 'run-idml', thread_id: 'thread-idml' },
+      );
+
+      await expect(Promise.all(artifactPromises)).resolves.toEqual([
+        expect.objectContaining({
+          file_id: file.file_id,
+          filename: file.filename,
+          messageId: 'run-idml',
+          toolCallId: 'tool-idml',
+          conversationId: 'thread-idml',
+        }),
+      ]);
+      expect(require('~/models').updateFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file_id: 'idml-output-1',
+          messageId: 'run-idml',
+          conversationId: 'thread-idml',
+          expiredAt: expect.any(Date),
+        }),
+        { user: 'user123' },
+      );
+    });
+    // End [knauf]
+
     it('should handle empty ui_resources data object', async () => {
       const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
 

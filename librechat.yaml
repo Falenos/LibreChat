@@ -530,8 +530,9 @@ fileConfig:
         - "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$"    # .docx
         - "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$"  # .pptx
         - "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$"          # .xlsx
-        - "^application/(csv|json)$"                                                           # .csv / .json
-        - "^text/(plain|markdown|csv)$"                                                        # .txt / .md / .csv
+        - "^application/vnd\\.adobe\\.indesign-idml-package$"                                  # .idml
+        - "^application/(csv|json|xml|typescript)$"                                            # data / XML / TypeScript
+        - "^text/(plain|markdown|csv|xml|html|css|javascript|x-python|x-script\\.python)$"      # text / source files
         - "^image/(png|jpeg|webp)$"                                                            # .png / .jpg / .jpeg / .webp
         - "^image/svg(?:\\+xml)?$"                                                           # .svg (editable artifact source)
       fileLimit: 5

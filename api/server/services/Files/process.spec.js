@@ -1890,9 +1890,37 @@ describe('filterFile per-category size caps', () => {
     });
     expect(() => filterFile({ req })).toThrow('com_knauf_error_file_too_large_document');
   });
+
+  // End [knauf]
+
+  // [knauf] KK20-297 — permanent knowledge rejects request-tool-only formats.
+  test('rejects IDML from permanent file_search knowledge', () => {
+    const req = makeFilterReq({
+      endpoint: 'agents',
+      mimetype: 'application/vnd.adobe.indesign-idml-package',
+      size: 1024,
+      tool_resource: EToolResources.file_search,
+    });
+    req.file.originalname = 'datasheet.idml';
+
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_idml_file_search');
+  });
+
+  test('rejects source code from permanent file_search knowledge', () => {
+    const req = makeFilterReq({
+      endpoint: 'agents',
+      mimetype: 'text/plain',
+      size: 1024,
+      tool_resource: EToolResources.file_search,
+    });
+    req.file.originalname = 'component.tsx';
+
+    expect(() => filterFile({ req })).toThrow('com_knauf_error_code_execution_required');
+  });
+  // End [knauf]
 });
 
-// filterFile actionable rejection for off-allow-list types (KK20-190). When
+// [knauf] filterFile actionable rejection for off-allow-list types (KK20-190). When
 // the endpoint's restricted allow-list rejects the mime, the Knauf endpoints throw
 // an actionable i18n key (legacy-Office Save-As help, or a friendly unsupported-type
 // message); other endpoints keep the upstream generic 'Unsupported file type'.
@@ -1938,6 +1966,26 @@ describe('filterFile legacy-Office / unsupported-type rejection', () => {
     expect(() => filterFile({ req })).toThrow('com_knauf_error_unsupported_type');
   });
 
+  // End [knauf]
+
+  // [knauf] KK20-297 — multipart MIME databases vary by OS; the recognized
+  // source extension is authoritative at the server boundary too.
+  test('canonicalizes a generic JavaScript MIME before allow-list validation', () => {
+    const config = makeRestrictiveConfig();
+    config.endpoints.azureOpenAI.supportedMimeTypes = [/^text\/javascript$/];
+    mergeFileConfig.mockReturnValue(config);
+    const req = makeReq({
+      endpoint: 'azureOpenAI',
+      mimetype: 'application/octet-stream',
+      originalname: 'source.js',
+    });
+
+    expect(() => filterFile({ req })).not.toThrow();
+    expect(req.file.mimetype).toBe('text/javascript');
+  });
+  // End [knauf]
+
+  // [knauf] KK20-190 — retain the upstream rejection on non-Knauf endpoints.
   test('keeps the upstream generic message on a non-Knauf endpoint', () => {
     const req = makeReq({ endpoint: 'bedrock', mimetype: XLS_MIME, originalname: 'sheet.xls' });
     expect(() => filterFile({ req })).toThrow('Unsupported file type');

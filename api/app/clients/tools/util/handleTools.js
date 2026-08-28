@@ -65,6 +65,25 @@ const {
   createEditArtifactTool,
 } = require('~/server/services/Artifacts/knauf/edit');
 // End [knauf]
+// [knauf] KK20-297 — request-scoped file round-trip translation.
+const {
+  TOOL_NAME: FILE_TRANSLATE_TOOL,
+  STATUS_TOOL_NAME: TRANSLATION_STATUS_TOOL,
+  buildFileToolContext,
+  createFileTranslateTool,
+  createTranslationStatusTool,
+} = require('~/server/services/Files/knauf/translation/tool');
+const {
+  TOOL_NAME: IDML_EDIT_TOOL,
+  buildIdmlToolContext,
+  createIdmlEditTool,
+} = require('~/server/services/Files/knauf/idml/edit');
+const {
+  TOOL_NAME: XML_EDIT_TOOL,
+  buildXmlToolContext,
+  createXmlEditTool,
+} = require('~/server/services/Files/knauf/xml/edit');
+// End [knauf]
 
 // [knauf] KK20-194 — extract exact http(s) URLs from the current user message
 // for open_url's fail-closed provenance check. Preserve balanced parentheses in
@@ -260,6 +279,31 @@ const loadTools = async ({
         toolContextMap[EDIT_ARTIFACT_TOOL] = context;
       }
       return createEditArtifactTool({ req: options.req });
+    },
+    // End [knauf]
+    // [knauf] KK20-297 — current attachments are resolved again inside the tool
+    // under the authenticated user/tenant boundary.
+    [FILE_TRANSLATE_TOOL]: async (toolContextMap) => {
+      const context = buildFileToolContext(options.req);
+      if (context) {
+        toolContextMap[FILE_TRANSLATE_TOOL] = context;
+      }
+      return createFileTranslateTool({ req: options.req, signal });
+    },
+    [TRANSLATION_STATUS_TOOL]: async () => createTranslationStatusTool({ req: options.req }),
+    [IDML_EDIT_TOOL]: async (toolContextMap) => {
+      const context = buildIdmlToolContext(options.req);
+      if (context) {
+        toolContextMap[IDML_EDIT_TOOL] = context;
+      }
+      return createIdmlEditTool({ req: options.req });
+    },
+    [XML_EDIT_TOOL]: async (toolContextMap) => {
+      const context = buildXmlToolContext(options.req);
+      if (context) {
+        toolContextMap[XML_EDIT_TOOL] = context;
+      }
+      return createXmlEditTool({ req: options.req });
     },
     // End [knauf]
     image_gen_oai: async (_toolContextMap, dynamicToolContextMap) => {

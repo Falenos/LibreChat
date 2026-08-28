@@ -171,6 +171,48 @@ describe('initializeClient — processAgent ACL gate', () => {
     expect(agentClientArgs.agent.edges).toEqual([]);
   });
 
+  // [knauf] KK20-297 — keep request-scoped file tools available on follow-up turns.
+  it('carries owner-authorized thread attachments into follow-up tool initialization', async () => {
+    const req = makeReq();
+    req.body.parentMessageId = 'assistant-1';
+    const historicalFile = {
+      file_id: 'idml-1',
+      filename: 'datasheet.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+      user: testUser._id.toString(),
+    };
+    jest.spyOn(db, 'getMessages').mockResolvedValueOnce([
+      {
+        messageId: 'user-1',
+        parentMessageId: Constants.NO_PARENT,
+        files: [{ file_id: historicalFile.file_id }],
+      },
+      { messageId: 'assistant-1', parentMessageId: 'user-1' },
+    ]);
+    const getFiles = jest.spyOn(db, 'getFiles').mockResolvedValueOnce([historicalFile]);
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+
+    await initializeClient({
+      req,
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption: makeEndpointOption(),
+    });
+
+    expect(mockInitializeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestFiles: [historicalFile] }),
+      expect.any(Object),
+    );
+    expect(req.body.files).toEqual([]);
+    expect(req.knaufToolFiles).toEqual([historicalFile]);
+    expect(getFiles).toHaveBeenCalledWith(
+      { file_id: { $in: [historicalFile.file_id] }, user: testUser._id.toString() },
+      null,
+      { text: 0 },
+    );
+  });
+  // End [knauf]
+
   it('should initialize handoff agent and keep its edge when user has VIEW access', async () => {
     const authorizedAgent = await createAgent({
       id: AUTHORIZED_ID,

@@ -188,6 +188,31 @@ mean the limiter is active unless its corresponding enable flag is true.
 | Delete retry | 15 minutes | `indexingReconciler.js` | Allows transient storage failures to recover. |
 | Migration batch | 500 | indexing migration | Keeps migration cursor-resumable and bounded. |
 
+## File translation
+
+All values below are code defaults unless marked as a provider ceiling. GitOps
+sets explicit dev, stage, and prod overrides; the effective limit is the
+strictest applicable upload, application, provider, or deployment value.
+
+| Limit | Default | Source/key | Rationale and interaction |
+| --- | ---: | --- | --- |
+| Files per job / aggregate bytes | 20 / 250 MiB | `translation/jobs.js` | Bounds one durable admission record; normal upload policy may reject individual files earlier. |
+| Buffered input per file | 50 MiB | `translation/tool.js` | Hard application memory backstop before parsing or provider upload. |
+| IDML and structured text | 25 MiB | `tool.js` | Bounds ZIP/XML/JSON/Markdown parsing; also capped at 10,000 segments and 500,000 translated characters. |
+| Azure synchronous document | 10 MiB | application routing threshold | Larger eligible documents route to batch translation. |
+| Azure batch document / image | 40 MiB / 5 MiB | provider ceiling | Applied before starting the Azure batch operation. |
+| Glossary payload | 900 KiB sync / 9 MiB batch | application safety margin below Azure limits | Required glossaries fail closed instead of truncating applicable terms. |
+| Active jobs | 3/user; 100/global | `KNAUF_TRANSLATION_MAX_ACTIVE_PER_USER`, `KNAUF_TRANSLATION_MAX_ACTIVE_GLOBAL` | Mongo partial-unique slots enforce admission across API replicas. Admission hash-spreads requests and probes the finite slot set; a full response is returned only after a fresh occupancy check. |
+| Worker concurrency | 2 jobs; 1 file/job | `KNAUF_TRANSLATION_WORKER_CONCURRENCY`, `KNAUF_TRANSLATION_FILE_CONCURRENCY` | GitOps currently lowers job concurrency to one inside a 1 GiB worker pod. |
+| Lease / heartbeat / poll | 12 minutes / 30 seconds / 2 seconds | `KNAUF_TRANSLATION_LEASE_MS`, `KNAUF_TRANSLATION_HEARTBEAT_MS`, `KNAUF_TRANSLATION_WORKER_POLL_MS` | Every lease is capped at the persisted whole-job deadline. Expired claims enter bounded backoff before reclaim; expired cancellations are finalized and release admission. |
+| Attempts / output ledger | 5 general; 2 authentication; 16 generations retained | `KNAUF_TRANSLATION_ATTEMPT_CAP`, `KNAUF_TRANSLATION_AUTH_ATTEMPT_CAP`, `translation/jobs.js` | Each claim gets a new generation and deterministic generation-specific output IDs. Configured attempt caps are clamped to the bounded 16-entry output ledger so cleanup debt cannot be evicted. |
+| Retry backoff | 10 seconds–10 minutes | `KNAUF_TRANSLATION_BACKOFF_BASE_MS`, `KNAUF_TRANSLATION_BACKOFF_MAX_MS` | Full jitter with provider `Retry-After` as the floor. A retry time at or beyond the persisted deadline terminally deadline-fails instead of retrying early. |
+| Whole-job age | 60 minutes | `KNAUF_TRANSLATION_MAX_JOB_AGE_MS` | Persisted as `deadline_at` on admission and enforced by claim, heartbeat, storage fencing, completion, recovery, and retry. Overdue queued/retrying jobs release admission. |
+| Inline wait | 15 seconds | `KNAUF_TRANSLATION_INLINE_WAIT_MS` | Tool returns a job id after this; the worker continues independently. |
+| Storage write timeout | 2 minutes | `KNAUF_TRANSLATION_STORAGE_WRITE_TIMEOUT_MS` | Bounds the application wait for one output write; its AbortSignal and timeout are passed to storage strategies. A timed-out underlying write is still covered by generation cleanup reconciliation. |
+| Cleanup quiescence / reconciliation | 30 seconds after the 2-minute write bound; every 30 seconds; 25 jobs/pass | `KNAUF_TRANSLATION_CLEANUP_QUIESCENCE_MS`, `KNAUF_TRANSLATION_RECONCILE_INTERVAL_MS`, `KNAUF_TRANSLATION_RECONCILE_BATCH_LIMIT` | Cleanup debt remains durable until an independent worker sweep runs after the maximum write window plus quiescence. Sweeps delete only the recorded generation's IDs through the normal dedup-aware file deletion path. |
+| Terminal job history | 7 days after cleanup convergence | `KNAUF_TRANSLATION_JOB_HISTORY_MS` | Terminal tombstones have no TTL while cleanup debt or the bounded late-write window remains. The TTL starts only after a successful reconciliation sweep confirms cleanup debt is clear. |
+
 ## Scheduler
 
 | Limit | Default | Source | Rationale |

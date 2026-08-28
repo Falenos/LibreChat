@@ -43,10 +43,13 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
       'karl-brand',
       // [knauf] KK20-257 — the code-execution skills ship now that the adapter does.
       'karl-data-analysis',
+      'karl-file-translation',
       'karl-guide',
+      'karl-idml',
       'karl-image-generation',
       'karl-mermaid',
       'karl-xlsx',
+      'karl-xml',
       // End [knauf]
       'web-research',
     ]);

@@ -20,6 +20,10 @@ const {
   isAssistantsEndpoint,
   getEndpointFileConfig,
   documentParserMimeTypes,
+  // [knauf] KK20-297 — normalize OS/browser MIME variants by trusted extension.
+  inferMimeType,
+  isKnaufSourceCodeFile,
+  // End [knauf]
   // [knauf] Per-category upload size caps (documents 25 / data 50 / images 20 MB). KK20-190.
   knaufCategorySizeLimit,
   knaufCategorySizeErrorKey,
@@ -2058,6 +2062,12 @@ function filterFile({ req, image, isAvatar }) {
   const { file } = req;
   const { endpoint, endpointType, file_id, width, height } = req.body;
 
+  // [knauf] KK20-297 — multer preserves the multipart MIME reported by the
+  // browser. Canonicalize recognized source/IDML extensions before both size
+  // classification and allow-list validation.
+  file.mimetype = inferMimeType(file.originalname ?? '', file.mimetype);
+  // End [knauf]
+
   if (!file_id && !isAvatar) {
     throw new Error('No file_id provided');
   }
@@ -2140,6 +2150,26 @@ function filterFile({ req, image, isAvatar }) {
     // End [knauf]
     throw new Error('Unsupported file type');
   }
+
+  // [knauf] KK20-297 — IDML is a ZIP package handled by the request-scoped
+  // parse/edit/translate tools, never by the permanent RAG knowledge pipeline.
+  if (
+    req.body.tool_resource === EToolResources.file_search &&
+    (file.mimetype === 'application/vnd.adobe.indesign-idml-package' ||
+      /\.idml$/i.test(file.originalname ?? ''))
+  ) {
+    throw new Error('com_knauf_error_idml_file_search');
+  }
+  // End [knauf]
+
+  // [knauf] KK20-297 — source files are sandbox inputs, never permanent RAG knowledge.
+  if (
+    req.body.tool_resource === EToolResources.file_search &&
+    isKnaufSourceCodeFile(file.originalname ?? '', file.mimetype)
+  ) {
+    throw new Error('com_knauf_error_code_execution_required');
+  }
+  // End [knauf]
 
   // [knauf] Per-category size cap (documents 25 / data 50 / images 20 MB) — the
   // authoritative size gate on the Knauf endpoints (replaces the generic check,

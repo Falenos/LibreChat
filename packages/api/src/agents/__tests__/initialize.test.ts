@@ -913,6 +913,9 @@ describe('initializeAgent — attachment scoping', () => {
       agentContextAttachments: [agentContextFile],
       tool_resources: undefined,
     });
+    mockFilterFilesByEndpointConfig.mockImplementationOnce(
+      (_req: unknown, { files }: { files: IMongoFile[] }) => files,
+    );
 
     const { agent, req, res, loadTools, db } = createMocks();
 
@@ -933,6 +936,89 @@ describe('initializeAgent — attachment scoping', () => {
     expect(result.requestAttachments).toEqual([requestFile]);
     expect(result.agentContextAttachments).toEqual([agentContextFile]);
   });
+
+  // [knauf] KK20-297 — request-scoped editors must be selected from the
+  // authorized server file, even when the client sent only its file_id.
+  it('loads edit_idml from resolved request attachment metadata', async () => {
+    const { primeResources } = jest.requireMock('../resources') as {
+      primeResources: jest.Mock;
+    };
+    const requestFile = {
+      file_id: 'idml-file',
+      filename: 'datasheet.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+    } as IMongoFile;
+    primeResources.mockResolvedValueOnce({
+      attachments: [requestFile],
+      requestAttachments: [requestFile],
+      agentContextAttachments: undefined,
+      tool_resources: undefined,
+    });
+
+    const { agent, req, res, loadTools, db } = createMocks();
+    (db.updateFilesUsage as jest.Mock).mockResolvedValueOnce([requestFile]);
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        requestFiles: [{ file_id: requestFile.file_id } as IMongoFile],
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(loadTools).toHaveBeenCalledWith(
+      expect.objectContaining({ tools: expect.arrayContaining(['edit_idml']) }),
+    );
+    expect((req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles).toEqual([
+      requestFile,
+    ]);
+    expect(agent.tools).toEqual([]);
+  });
+
+  it('does not expose dynamic or persisted request-scoped file tools on the compatibility API', async () => {
+    const { primeResources } = jest.requireMock('../resources') as {
+      primeResources: jest.Mock;
+    };
+    const requestFile = {
+      file_id: 'idml-file',
+      filename: 'datasheet.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+    } as IMongoFile;
+    primeResources.mockResolvedValueOnce({
+      attachments: [requestFile],
+      requestAttachments: [requestFile],
+      agentContextAttachments: undefined,
+      tool_resources: undefined,
+    });
+
+    const { agent, req, res, loadTools, db } = createMocks();
+    req.originalUrl = '/api/agents/v1/chat/completions';
+    agent.tools = ['translate_file', 'translation_status', 'edit_idml', 'edit_xml'];
+    (db.updateFilesUsage as jest.Mock).mockResolvedValueOnce([requestFile]);
+
+    await initializeAgent(
+      {
+        req,
+        res,
+        agent,
+        loadTools,
+        requestFiles: [{ file_id: requestFile.file_id } as IMongoFile],
+        endpointOption: { endpoint: EModelEndpoint.agents },
+        allowedProviders: new Set([Providers.OPENAI]),
+        isInitialAgent: true,
+      },
+      db,
+    );
+
+    expect(loadTools).toHaveBeenCalledWith(expect.objectContaining({ tools: [] }));
+  });
+  // End [knauf]
 
   // [knauf] KK20-190 — custom-agent chat attachments enable transient File Search.
   it('loads file_search for an embedded request attachment without persisting it', async () => {
@@ -956,6 +1042,7 @@ describe('initializeAgent — attachment scoping', () => {
 
     const { agent, req, res, loadTools, db } = createMocks();
     agent.tools = [Tools.web_search];
+    (db.updateFilesUsage as jest.Mock).mockResolvedValueOnce([requestFile]);
 
     await initializeAgent(
       {

@@ -1369,6 +1369,16 @@ class BaseClient {
         continue;
       }
 
+      // [knauf] KK20-297 — IDML is consumed by request-scoped tools, not provider file_data.
+      if (
+        file.type === 'application/vnd.adobe.indesign-idml-package' ||
+        /\.idml$/i.test(file.filename ?? '')
+      ) {
+        allFiles.push(file);
+        continue;
+      }
+      // End [knauf]
+
       if (file.type.startsWith('image/')) {
         categorizedAttachments.images.push(file);
       } else if (file.type === 'application/pdf') {

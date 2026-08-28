@@ -17,6 +17,13 @@ jest.mock('~/server/routes/files/multer', () => require(MOCKS).multerSetup());
 jest.mock('multer', () => require(MOCKS).multerLib());
 jest.mock('~/server/services/Endpoints/azureAssistants', () => require(MOCKS).assistantEndpoint());
 jest.mock('~/server/services/Endpoints/assistants', () => require(MOCKS).assistantEndpoint());
+// [knauf] KK20-297 — keep route tests focused while conversation deletion owns translation fencing.
+jest.mock('~/server/services/Files/knauf/cascadeDeleteConvoFiles', () => ({
+  deleteConvosWithCleanup: jest.fn(({ req, filter }) =>
+    require('~/models').deleteConvos(req.user.id, filter),
+  ),
+}));
+// End [knauf]
 
 describe('Convos Routes', () => {
   let app;

@@ -562,6 +562,11 @@ export default function useChatFunctions({
         // End [knauf]
         file_id: file.file_id,
         filepath: file.filepath,
+        // [knauf] KK20-297 — browsers commonly report an empty MIME for IDML.
+        // Preserve the server-resolved name so request-scoped file tools can
+        // classify the attachment by extension before loading stored metadata.
+        filename: file.filename ?? file.file?.name,
+        // End [knauf]
         type: file.type ?? '', // Ensure type is not undefined
         height: file.height,
         width: file.width,

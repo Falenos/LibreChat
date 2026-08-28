@@ -252,6 +252,36 @@ describe('[knauf] shipped deployment skills', () => {
   });
   // End [knauf]
 
+  // [knauf] KK20-297 — durable file translation plus XML-specific manipulation.
+  it('ships durable deterministic file-translation guidance', () => {
+    const translation = byName.get('karl-file-translation');
+
+    expect(translation).toBeDefined();
+    expect(translation?.body).toContain('translate_file');
+    expect(translation?.body).toContain('translation_status');
+    expect(translation?.body).toContain('source_locale');
+    expect(translation?.body).toContain('all_files: true');
+    expect(translation?.body).toMatch(/downloadable file\s+card/i);
+    expect(translation?.body).toMatch(/continues after the chat request/i);
+    expect(translation?.body).toMatch(/Source-code files are excluded/i);
+    expect(translation?.body).toMatch(/human\s+review/i);
+  });
+
+  it('ships bounded XML inspection, translation, and manipulation guidance', () => {
+    const xml = byName.get('karl-xml');
+    const reference = xml?.files.find((file) => file.relativePath === 'references/xml.md')?.content;
+
+    expect(xml).toBeDefined();
+    expect(xml?.body).toContain('edit_xml');
+    expect(xml?.body).toContain('translate_file');
+    expect(xml?.body).toMatch(/do not translate element names/i);
+    expect(xml?.body).toMatch(/DTD.*entity/i);
+    expect(xml?.body).toMatch(/schema or consuming-system review/i);
+    expect(reference).toContain('100,000 nodes');
+    expect(reference).toMatch(/Attributes are intentionally excluded/i);
+  });
+  // End [knauf]
+
   it('never authors a hex outside the token source', () => {
     // Every hex the token source declares, from its SKILL.md body AND its own
     // references — charts.md legitimately carries the ramps that SKILL.md only

@@ -53,4 +53,18 @@ describe('FileContainer chip label', () => {
     /** Title element exists but is empty — no crash, no `undefined`. */
     expect(container.querySelector('.font-medium')?.textContent).toBe('');
   });
+
+  // [knauf] KK20-297 — downloadable cards visibly expose their action.
+  it('renders an optional action affordance with its descriptive label', () => {
+    render(
+      <FileContainer
+        file={baseFile()}
+        action={{ icon: <span data-testid="download-icon" />, label: 'Download report.pdf' }}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Download report.pdf' })).toBeInTheDocument();
+    expect(screen.getByTestId('download-icon')).toBeInTheDocument();
+  });
+  // End [knauf]
 });

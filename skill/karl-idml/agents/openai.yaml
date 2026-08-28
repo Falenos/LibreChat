@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Karl IDML'
+  short_description: 'Inspect, edit, translate, and export IDML'
+  default_prompt: 'Use $karl-idml to inspect and safely edit this attached IDML file.'
