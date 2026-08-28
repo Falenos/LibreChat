@@ -214,7 +214,9 @@ const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> 
 const FileAttachmentGroup = memo(({ attachments }: { attachments: TAttachment[] }) => {
   const localize = useLocalize();
   const panelId = useId();
-  const [isExpanded, setIsExpanded] = useState(false);
+  // [knauf] KK20-297 — show small generated-file groups immediately; keep bulk output compact.
+  const [isExpanded, setIsExpanded] = useState(attachments.length <= 3);
+  // End [knauf]
   const { style: expandStyle, ref: expandRef } = useExpandCollapse(isExpanded);
   const visibleAttachments = useMemo(
     () => attachments.filter((attachment) => Boolean(attachment.filepath)),
