@@ -18,8 +18,11 @@ KARL has two request-scoped XML tools:
 ## Read and interpret
 
 Use `edit_xml` with `action: inspect`. Inspection returns bounded, paginated
-element paths, read-only attributes, and text nodes with stable IDs. Continue
-with `offset` or narrow with `query`; do not request an unbounded dump.
+element paths, read-only attributes, comments, processing instructions, and
+text nodes with stable IDs. Continue with `offset` or narrow with `query`; do
+not request an unbounded dump. Use the returned counts before claiming that a
+comment or processing instruction is absent. Large comment and processing-
+instruction bodies are marked `truncated` with their original character count.
 
 Explain what the XML contains from the inspected paths and text. Do not claim
 schema semantics that are not present in the file or supplied documentation.

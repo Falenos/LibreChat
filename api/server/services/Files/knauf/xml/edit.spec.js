@@ -18,10 +18,16 @@ describe('[knauf] edit_xml', () => {
       matchedElements: 0,
       totalSegments: 3,
       matchedSegments: 2,
+      totalComments: 0,
+      matchedComments: 0,
+      totalProcessingInstructions: 0,
+      matchedProcessingInstructions: 0,
       offset: 1,
       limit: 1,
       elements: [],
       segments: [{ id: 'x1', path: '/catalog[1]/item[2]/text()[1]', text: 'Hello world' }],
+      comments: [],
+      processingInstructions: [],
     });
   });
 
@@ -80,6 +86,36 @@ describe('[knauf] edit_xml', () => {
     expect(output).toBe(
       "<?xml version='1.0'?><root><keep>Keep&#13;line</keep><change>Hallo &amp; sicher</change><!--  keep  --><?job  keep?><empty /></root>",
     );
+  });
+
+  it('reports comments and processing instructions during inspection', () => {
+    const adapter = xmlAdapter(
+      Buffer.from('<?xml version="1.0"?><!--before--><root><?job keep?><!--inside--></root>'),
+    );
+
+    expect(inspectAdapter(adapter)).toMatchObject({
+      totalComments: 2,
+      matchedComments: 2,
+      comments: [{ text: 'before' }, { text: 'inside' }],
+      totalProcessingInstructions: 1,
+      matchedProcessingInstructions: 1,
+      processingInstructions: [{ target: 'job', body: 'keep' }],
+    });
+  });
+
+  it('bounds large read-only metadata in inspection responses', () => {
+    const adapter = xmlAdapter(
+      Buffer.from(`<root><!--${'x'.repeat(5000)}--><?job ${'y'.repeat(5000)}?></root>`),
+    );
+    const report = inspectAdapter(adapter);
+
+    expect(report.comments[0].truncated).toBe(true);
+    expect(report.comments[0].totalCharacters).toBe(5000);
+    expect(report.comments[0].text).toHaveLength(4000);
+    expect(report.processingInstructions[0].target).toBe('job');
+    expect(report.processingInstructions[0].truncated).toBe(true);
+    expect(report.processingInstructions[0].totalCharacters).toBe(5000);
+    expect(report.processingInstructions[0].body).toHaveLength(4000);
   });
 
   it('rejects IDML segment ids for XML edits', () => {

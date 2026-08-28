@@ -1989,7 +1989,12 @@ class AgentClient extends BaseClient {
 
       return sanitizeTitle(titleResult.title);
     } catch (err) {
-      logger.error('[api/server/controllers/agents/client.js #titleConvo] Error', err);
+      // [knauf] KK20-297 — keep title failures diagnosable without logging provider payloads.
+      logger.error(
+        '[api/server/controllers/agents/client.js #titleConvo] Error',
+        summarizeProviderError(err, 'title_generation'),
+      );
+      // End [knauf]
       return;
     }
   }

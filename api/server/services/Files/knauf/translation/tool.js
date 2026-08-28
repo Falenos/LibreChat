@@ -754,6 +754,8 @@ function svgAdapter(buffer) {
 
 function xmlTextRanges(source) {
   const ranges = [];
+  const comments = [];
+  const processingInstructions = [];
   let depth = 0;
   let boundary = 0;
   try {
@@ -785,7 +787,15 @@ function xmlTextRanges(source) {
       depth -= 1;
       boundary = parser.position;
     });
-    for (const event of ['comment', 'processinginstruction', 'xmldecl', 'doctype']) {
+    parser.on('comment', (text) => {
+      comments.push({ text });
+      boundary = parser.position;
+    });
+    parser.on('processinginstruction', ({ target, body }) => {
+      processingInstructions.push({ target, body });
+      boundary = parser.position;
+    });
+    for (const event of ['xmldecl', 'doctype']) {
       parser.on(event, () => {
         boundary = parser.position;
       });
@@ -795,7 +805,7 @@ function xmlTextRanges(source) {
     if (error instanceof IdmlError) throw error;
     throw new IdmlError('Attached XML is malformed', 'invalid_xml', 400);
   }
-  return ranges;
+  return { comments, processingInstructions, ranges };
 }
 
 function escapeXmlTextValue(value) {
@@ -831,7 +841,7 @@ function xmlAdapter(buffer) {
     throw new IdmlError('Attached XML is malformed', 'invalid_xml', 400);
   }
 
-  const ranges = xmlTextRanges(source);
+  const { comments, processingInstructions, ranges } = xmlTextRanges(source);
   let rangeIndex = 0;
   const nodes = [];
   const elements = [];
@@ -923,6 +933,8 @@ function xmlAdapter(buffer) {
   return {
     segments,
     elements,
+    comments,
+    processingInstructions,
     build(translations) {
       const replacements = [];
       nodes.forEach((item, index) => {

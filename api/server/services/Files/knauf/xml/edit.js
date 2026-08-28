@@ -19,6 +19,7 @@ const {
 const TOOL_NAME = 'edit_xml';
 const XML_MIME = 'application/xml';
 const MAX_INSPECT_SEGMENTS = 100;
+const MAX_INSPECT_METADATA_CHARACTERS = 4000;
 const isXmlFile = (file) => formatForFile(file)?.mode === 'xml';
 
 function publicError(error) {
@@ -61,11 +62,23 @@ function inspectAdapter(adapter, { query, offset = 0, limit = 50 } = {}) {
           ),
       )
     : adapter.elements;
+  const commentMatches = query
+    ? adapter.comments.filter((comment) => comment.text.includes(query))
+    : adapter.comments;
+  const processingInstructionMatches = query
+    ? adapter.processingInstructions.filter(
+        ({ target, body }) => target.includes(query) || body.includes(query),
+      )
+    : adapter.processingInstructions;
   return {
     totalElements: adapter.elements.length,
     matchedElements: elementMatches.length,
     totalSegments: adapter.segments.length,
     matchedSegments: matches.length,
+    totalComments: adapter.comments.length,
+    matchedComments: commentMatches.length,
+    totalProcessingInstructions: adapter.processingInstructions.length,
+    matchedProcessingInstructions: processingInstructionMatches.length,
     offset: safeOffset,
     limit: safeLimit,
     elements: elementMatches.slice(safeOffset, safeOffset + safeLimit),
@@ -74,6 +87,23 @@ function inspectAdapter(adapter, { query, offset = 0, limit = 50 } = {}) {
       path: segment.path,
       text: segment.source,
     })),
+    comments: commentMatches.slice(safeOffset, safeOffset + safeLimit).map(({ text }) => ({
+      text: text.slice(0, MAX_INSPECT_METADATA_CHARACTERS),
+      ...(text.length > MAX_INSPECT_METADATA_CHARACTERS && {
+        truncated: true,
+        totalCharacters: text.length,
+      }),
+    })),
+    processingInstructions: processingInstructionMatches
+      .slice(safeOffset, safeOffset + safeLimit)
+      .map(({ target, body }) => ({
+        target,
+        body: body.slice(0, MAX_INSPECT_METADATA_CHARACTERS),
+        ...(body.length > MAX_INSPECT_METADATA_CHARACTERS && {
+          truncated: true,
+          totalCharacters: body.length,
+        }),
+      })),
   };
 }
 
@@ -143,6 +173,7 @@ function buildXmlToolContext(req) {
   return [
     `XML structure/attribute inspection and text-node editing are available for: ${names.join(', ')}.`,
     'Use edit_xml action inspect before an uncertain edit, then replace exact text or a returned segment_id.',
+    'Inspection reports comments and processing instructions as read-only metadata.',
     'Element names, namespaces, attributes, comments, processing instructions, and order are preserved.',
     'DTD/entities and malformed XML are rejected. Validate the export against its schema or consuming system.',
   ].join('\n');

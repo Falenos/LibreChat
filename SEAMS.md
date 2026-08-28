@@ -1045,6 +1045,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/routes/__tests__/convos.spec.js` | conversation cleanup route mock | 20–26 | Keeps upstream route assertions isolated from the separately tested translation cancellation and file-cleanup transaction boundary | Self | KK20-297 |
 | `packages/api/src/agents/initialize.ts` | initial-agent `knaufToolFiles` publication | 746–751 | Prevents memory and handoff agent initialization from erasing the owner-validated current-message attachment scope before IDML/XML/translation tools execute | `packages/api/src/agents/__tests__/initialize.test.ts` (`preserves initial request tool files during secondary agent initialization`) | KK20-297 |
 | `packages/api/src/agents/__tests__/initialize.test.ts` | secondary-agent attachment-scope regression | 984–1033 | Reproduces the primary-then-secondary initialization sequence from browser chat and proves the authenticated IDML file remains available to request-scoped tools | Self | KK20-297 |
+| `api/server/controllers/agents/client.js` | `AgentClient.titleConvo` error handling | 1992–1997 | Emits bounded title-provider diagnostics instead of an empty serialized Error or sensitive provider payload | `api/server/controllers/agents/client.test.js` (`should handle errors gracefully and return undefined`) | KK20-297 |
+| `api/server/controllers/agents/client.test.js` | bounded title-error logging regression | 485–516 | Proves title failures expose stable status, code, retryability, and request ID without logging provider text | Self | KK20-297 |
 <!-- seams:auto:end -->
 
 ## Configuration
