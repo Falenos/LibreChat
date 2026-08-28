@@ -864,6 +864,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         const isIdmlFile =
           originalFile.type === 'application/vnd.adobe.indesign-idml-package' ||
           /\.idml$/i.test(originalFile.name);
+        // XML is structured editor input too; RAG must not parse it before edit_xml does.
+        const isXmlFile =
+          /^(?:application|text)\/xml$/i.test(originalFile.type) ||
+          /\.xml$/i.test(originalFile.name);
         const shouldRouteSourceToCode =
           isKnaufSourceRoutingEndpoint &&
           isKnaufSourceCodeFile(originalFile.name, originalFile.type);
@@ -877,7 +881,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
           effectiveToolResource = EToolResources.execute_code;
         } else if (isSvgFile) {
           effectiveToolResource = EToolResources.context;
-        } else if (_toolResource === EToolResources.file_search && (isImageFile || isIdmlFile)) {
+        } else if (
+          _toolResource === EToolResources.file_search &&
+          (isImageFile || isIdmlFile || isXmlFile)
+        ) {
           effectiveToolResource = undefined;
         } else if (
           _toolResource === EToolResources.file_search &&

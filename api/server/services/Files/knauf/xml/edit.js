@@ -116,7 +116,22 @@ async function inspectXml({ req, args }) {
   return { status: 'completed', action: 'inspect', files: reports };
 }
 
+function validateExplicitSegmentSelection(req, args) {
+  const requestedIds = (args?.segment_edits ?? []).map((edit) => edit?.segment_id);
+  if (!requestedIds.length) return;
+  const userText = typeof req?.body?.text === 'string' ? req.body.text : '';
+  const explicitIds = new Set(userText.match(/\bx\d+\b/g) ?? []);
+  if (requestedIds.some((segmentId) => !explicitIds.has(segmentId))) {
+    throw new IdmlError(
+      'Segment edits require the user to specify each segment_id; use replacements for text-only requests',
+      'segment_selection_required',
+      409,
+    );
+  }
+}
+
 async function editXml({ req, args }) {
+  validateExplicitSegmentSelection(req, args);
   const files = await selectedFiles(req, args?.filename);
   if ((args?.segment_edits?.length ?? 0) > 0 && files.length !== 1) {
     throw new IdmlError(
@@ -173,6 +188,7 @@ function buildXmlToolContext(req) {
   return [
     `XML structure/attribute inspection and text-node editing are available for: ${names.join(', ')}.`,
     'Use edit_xml action inspect before an uncertain edit, then replace exact text or a returned segment_id.',
+    'For text-only requests, use replacements. Use segment_edits only when the user explicitly supplies a segment_id; never infer one or bypass ambiguity.',
     'Inspection reports comments and processing instructions as read-only metadata.',
     'Element names, namespaces, attributes, comments, processing instructions, and order are preserved.',
     'DTD/entities and malformed XML are rejected. Validate the export against its schema or consuming system.',
@@ -235,4 +251,5 @@ module.exports = {
   inspectAdapter,
   inspectXml,
   isXmlFile,
+  validateExplicitSegmentSelection,
 };

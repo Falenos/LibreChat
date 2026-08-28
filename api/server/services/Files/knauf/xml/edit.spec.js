@@ -2,7 +2,7 @@
 
 const { applyTextEdits } = require('../idml/edit');
 const { xmlAdapter } = require('../translation/tool');
-const { inspectAdapter } = require('./edit');
+const { buildXmlToolContext, inspectAdapter, validateExplicitSegmentSelection } = require('./edit');
 
 const fixture = () =>
   xmlAdapter(
@@ -12,6 +12,33 @@ const fixture = () =>
   );
 
 describe('[knauf] edit_xml', () => {
+  it('tells the model not to bypass text ambiguity with an inferred segment id', () => {
+    const context = buildXmlToolContext({
+      body: { files: [{ file_id: 'xml-1', filename: 'sample.xml' }] },
+    });
+
+    expect(context).toContain('user explicitly supplies a segment_id');
+    expect(context).toContain('never infer');
+  });
+
+  it('rejects model-inferred segment ids absent from the user request', () => {
+    expect(() =>
+      validateExplicitSegmentSelection(
+        { body: { text: 'Replace "Hello" with "Hallo". Do not replace all occurrences.' } },
+        { segment_edits: [{ segment_id: 'x0', text: 'Hallo world' }] },
+      ),
+    ).toThrow(expect.objectContaining({ code: 'segment_selection_required' }));
+  });
+
+  it('allows a segment id explicitly supplied by the user', () => {
+    expect(() =>
+      validateExplicitSegmentSelection(
+        { body: { text: 'Replace segment x0 with "Hallo world".' } },
+        { segment_edits: [{ segment_id: 'x0', text: 'Hallo world' }] },
+      ),
+    ).not.toThrow();
+  });
+
   it('inspects bounded searchable text nodes with stable ids and paths', () => {
     expect(inspectAdapter(fixture(), { query: 'Hello', offset: 1, limit: 1 })).toEqual({
       totalElements: 4,

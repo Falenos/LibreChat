@@ -805,6 +805,21 @@ describe('useFileHandling', () => {
       const formData = mockMutate.mock.calls[0][0] as FormData;
       expect(formData.get('tool_resource')).toBeNull();
     });
+    it('drops file_search routing for an XML editor input', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const xmlFile = new File(['<root><item code="A">Hello</item></root>'], 'test.xml', {
+        type: 'application/xml',
+      });
+
+      await act(async () => {
+        await result.current.handleFiles([xmlFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('tool_resource')).toBeNull();
+    });
     it('keeps file_search tool_resource for a document', async () => {
       const useFileHandling = await loadHook();
       const { result } = renderHook(() => useFileHandling());

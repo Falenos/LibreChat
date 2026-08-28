@@ -80,7 +80,7 @@ export const editXmlSchema: ExtendedJsonSchema = {
       type: 'array',
       maxItems: 100,
       description:
-        'Replace whole XML text nodes returned by inspect. Select one filename when using this field.',
+        'Replace whole XML text nodes only when the user explicitly supplies a segment_id returned by inspect; never infer a segment_id from a text-only request or use one to bypass ambiguity. Select one filename when using this field.',
       items: {
         type: 'object',
         properties: {
