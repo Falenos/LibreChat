@@ -70,6 +70,7 @@ is: *what is this copy for, and does that purpose require real identity?*
 | 4 | **Shared agent knowledge files** (Azure AI Search / pgvector) | Answer *other people's* questions | **Sometimes** | **The genuine masking case** — see §4. Audience > uploader means upload is an internal disclosure and a purpose change |
 | 5 | **Memory store** (`memory.value`) | Help *this user* in future chats | User: yes. **Third parties: no** | Pseudonymize third-party identifiers at write (Ph 3.3); the purpose is "remember the user's context", not "profile colleagues and customers" |
 | 6 | **Logs / traces / search replica / reports** | Operations, debugging, analytics | **Almost never** | Minimize fields, redact patterns, pseudonymize identifiers, bound retention (Ph 0–2). Post-*SRB*, readers without the map may not even be processing personal data |
+| 7 | **Model reasoning ("think" parts)** | Transparency UI for the requesting user, this turn | Inherits the prompt's | **Payload, not telemetry.** Reasoning restates and elaborates the user's input, so it carries the prompt's PII — treat it exactly like message text in every sink. It is never re-sent to the model on later turns, so the sinks are the whole surface: keep it in Mongo with the message; **exclude it from the search index, TTS payloads and public shares** (workstream P1-5); in Langfuse it is generation-span payload under the same retention |
 
 The pattern in one sentence — and it is the whole design:
 
@@ -108,7 +109,7 @@ this hop by default would:
    inline pseudonymization at that provider's adapter becomes the *right* control.
 2. **A designated high-risk flow** where policy says specific identifier classes must not reach
    even the in-tenancy model — an HR-casework or works-council agent. This is Phase 4, gated on
-   a named flow *and* a written product decision (gate G4).
+   a named flow *and* a written product decision (gate MASK).
 3. **Credential-shaped content** — which is blocking, not masking (`messageFilter.pii`, Ph 0),
    because the correct response to a pasted API key is refusal, not substitution.
 
@@ -213,7 +214,7 @@ never crosses a trust boundary. Pseudonymize third-party names in `memory.value`
 
 ---
 
-## 7. Design rules (extend the assessment's R1–R11)
+## 7. Design rules (extend the assessment's R1–R9; R10–R11 arrive with the pending v1.2 — see workstream DOC-1)
 
 - **A1 — Purpose decides per copy.** Fidelity in the primary store; minimization/pseudonymization
   in every derived copy. No blanket "anonymize everything" and no blanket "we're in-tenancy so
@@ -221,7 +222,7 @@ never crosses a trust boundary. Pseudonymize third-party names in `memory.value`
 - **A2 — Never call reversible masking "anonymization"** in any document, ticket, DPIA, or UI
   string. Pseudonymization, always, with the vault named as personal data.
 - **A3 — No inline masking of the in-tenancy model hop by default.** Triggers that reopen the
-  question: a non-Azure provider, a G4-designated flow, credential-shaped content (block).
+  question: a non-Azure provider, a gate-MASK-designated flow, credential-shaped content (block).
 - **A4 — Shared-agent ingest: scan & flag is the floor** (mode A); masking modes are per-corpus
   policy. Mask before embed; deterministic per entity; both chokepoints, both sinks.
 - **A5 — Any vault is a first-class PII store**: separated, access-controlled, retained,
@@ -244,6 +245,6 @@ Nothing structural — this analysis *confirms* the phase ordering and sharpens 
   honestly before choosing it.
 - **P3-3 (memory pseudonymization):** scope the mapping per-user; re-hydrate at read for the
   owning user only (A7).
-- **P4 (inline masking):** the design doc for gate G4 must answer §5's five costs explicitly —
+- **P4-1 (inline masking):** the gate-MASK design doc must answer §5's five costs explicitly —
   shared mapping, vault governance, boundary-only re-hydration, streaming, multi-turn growth —
   before any implementation ticket is cut.
