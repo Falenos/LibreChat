@@ -1,5 +1,25 @@
 # PII masking & data anonymization for Agentic Karl (KK20-207)
 
+> [!WARNING]
+> **This document is v1.0 and is known to be out of date. Do not act on it directly.**
+>
+> Read **[workstream.md](./workstream.md)** first — its §2 carries a verified delta against the
+> current `main`, and §5 carries the ticket set that supersedes this document's §9.
+>
+> Three things in particular have changed since this was written (2026-07-03):
+>
+> - **§2's "LibreChat does not do this OOTB" needs a qualifier** — upstream v0.8.7 shipped
+>   `messageFilter.pii`. It is a regex *blocker*, not a masker, so the verdict mostly stands, but
+>   the sentence as written is now wrong.
+> - **§1.3's "Not yet wired: Langfuse" is false.** Langfuse is live in dev and prod, capturing
+>   prompts, completions, memory values and feedback. The §12-style activation gate this document
+>   asked for was never applied.
+> - **§8's Phase 0/1 items are partly shipped**, and Phase 2's `retentionMode` lever turns out to
+>   be a data-deleting one-way door rather than the config flip it looks like.
+>
+> A corrected **v1.2** exists unmerged on `origin/docs/KK20-207-pii-masking-recheck`; folding it in
+> plus the v1.3 delta is ticket **DOC-1** in [workstream.md](./workstream.md).
+
 > **Status:** proposal / discovery output. This is the deliverable of **KK20-207**
 > ("PII masking and data anonymization", related epic **KK20-80**). It classifies the personal
 > data Agentic Karl handles, maps where it lives, proposes a per-category protection strategy
@@ -9,10 +29,10 @@
 > strategy can be turned into scoped tickets. Implementing masking, final legal sign-off, and
 > vendor selection are explicitly out of scope (they are the follow-ups in §9).
 >
-> **Interactive companion:** a self-contained demo — data-flow map, the handling matrix, the
-> options comparison, and a masking playground — lives at
-> [assets/pii-masking-demo.html](assets/pii-masking-demo.html) and is published as an Artifact:
-> **<https://claude.ai/code/artifact/c48a5593-409e-413f-9fdd-4d3317d775a6>**.
+> **Interactive companion:** removed. It was a v1.0 snapshot whose data-flow map and handling
+> matrix showed none of the sinks added since (Langfuse, `auditLog`, Azure AI Search), so it
+> misrepresented the system on exactly the tabs people opened it for. This document and
+> [workstream.md](./workstream.md) are authoritative.
 >
 > **Pairs with:** [../future-work/file-management-roadmap.md](../future-work/file-management-roadmap.md)
 > (its S6 "DLP" and T3 "90-day retention sweep" rows are refined here into a phased plan),

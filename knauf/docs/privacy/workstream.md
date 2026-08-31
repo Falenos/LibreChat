@@ -1,6 +1,6 @@
 # PII & privacy workstream — ticket set, compliance mapping, rollout
 
-> **TL;DR** — [KK20-207](../proposals/pii-masking-and-anonymization.md) produced the strategy; this
+> **TL;DR** — [KK20-207](./pii-masking-and-anonymization.md) produced the strategy; this
 > plan turns it into executable work. It carries (1) the **delta** between what that assessment
 > claims and what the code does today, (2) a **GDPR / EU AI Act / BetrVG mapping**, (3) a
 > **phase-by-phase breakdown** of impact, priority and what gets built, (4) a **paste-ready ticket
@@ -240,7 +240,7 @@ the wrong one. Two independent sources converge on the same four-layer model:
 control need no code, no licence and no upstream PR, and they bound the blast radius of everything
 still captured. Blanket-disabling tool outputs would trade a large, immediate debuggability loss
 for a small privacy gain — and would directly undercut
-[`agent-retrieval-and-langgraph-reliability-plan.md`](./agent-retrieval-and-langgraph-reliability-plan.md),
+[`agent-retrieval-and-langgraph-reliability-plan.md`](../implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md),
 whose Sprint 5 is literally *"Make Langfuse prove the fix"* and whose validation method is Langfuse
 retrieval diagnostics.
 
@@ -487,7 +487,7 @@ refreshed or explicitly retired · [ ] `knauf/docs/README.md` entry updated · [
 given a prod section (it still reads "drafted — PR #31 (draft)", dev only).
 
 **Mechanics:** the v1.2 branch touches exactly one file — `git checkout
-origin/docs/KK20-207-pii-masking-recheck -- knauf/docs/proposals/pii-masking-and-anonymization.md`
+origin/docs/KK20-207-pii-masking-recheck -- knauf/docs/privacy/pii-masking-and-anonymization.md`
 onto a branch off `main`. No merge, no conflict, despite the 1251-commit gap.
 
 ---
@@ -924,8 +924,8 @@ npm run test:api && npm run test:client
 
 ## 11. Related
 
-- [`../proposals/pii-masking-and-anonymization.md`](../proposals/pii-masking-and-anonymization.md) — the KK20-207 strategy this plan executes
-- [`./langfuse-rollout.md`](./langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
-- [`./adobe-analytics-onetrust.md`](./adobe-analytics-onetrust.md) — the fork's already-shipped privacy control, and the model pattern for new data-emitting features
+- [`pii-masking-and-anonymization.md`](./pii-masking-and-anonymization.md) — the KK20-207 strategy this plan executes
+- [`./langfuse-rollout.md`](../implementation-plans/langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
+- [`./adobe-analytics-onetrust.md`](../implementation-plans/adobe-analytics-onetrust.md) — the fork's already-shipped privacy control, and the model pattern for new data-emitting features
 - [`../future-work/file-management-roadmap.md`](../future-work/file-management-roadmap.md) — its S6 (DLP) and T3 (retention sweep) rows are refined here
 - [`../architecture/files/async-indexing.md`](../architecture/files/async-indexing.md) — the FileAsset delete cascade that closed the File Search erasure gap
