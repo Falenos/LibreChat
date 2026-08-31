@@ -4,7 +4,7 @@
 > plan turns it into executable work. It carries (1) the **delta** between what that assessment
 > claims and what the code does today, (2) a **GDPR / EU AI Act / BetrVG mapping**, (3) a
 > **phase-by-phase breakdown** of impact, priority and what gets built, (4) a **paste-ready ticket
-> set**, and (5) a **bundling and sequencing** recommendation.
+> set**, and (5) the **five-wave execution plan** — what actually gets done, in what order (§6).
 >
 > The assessment's thesis is unchanged and still correct: **protect the durable copies and the
 > logs; do not mask prompts before the model.** What changed is everything underneath it. The
@@ -962,7 +962,31 @@ boundary-only re-hydration, streaming, multi-turn growth — before any implemen
 
 ---
 
-## 6. Bundling and sequence
+## 6. Execution plan — five waves, then the bundles
+
+One naming note first: the **P0/P1/P2 phase labels on tickets are taxonomy, not order**. The order
+is the waves below — set by three sorters applied in sequence: *mandatory before convention*
+(§4.4), *facts before fixes* (verifications first — their answers reshape everything downstream),
+and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't have to).
+
+### 6.1 The waves
+
+| Wave | When | What | Exit review — the wave is done when |
+|---|---|---|---|
+| **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · **P2-4a** (legacy-public link audit + Art. 33 assessment) · **G kickoff**: G-2 works-council briefing scheduled, G-1 DPIA opened, G-5 notice gap named to Legal | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way |
+| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · **P0-1** (in-repo reductions + the upstream `mask` issue opened) · **P2-7** (12-month audit-log purge wired to the existing `purgeAuditLogEntries`; write-time IP/metadata decisions) · **P2-6a** (manual DSAR runbook, tested once) · **Bundle C** (P0-4 + P1-1 — one upstream PR) | Every durable store except conversations/messages (wave 3's job) has a bounded retention; a DSAR arriving tomorrow has a rehearsed answer inside Art. 12(3)'s month |
+| **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (or with the next upstream sync) · **DOC-1** (v1.3 refresh) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
+| **3 · Retention & rights** *(gated on P2-1; G-2 unblocks it)* | When the DPO number lands | **P2-1** → **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** · **P2-5** (erasure recipe incl. the in-window Langfuse path) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
+| **4 · Engine** *(evidence-gated; start anytime capacity exists)* | Parallel to 2–3 | **P3-1** PoC → gate ENGINE → **P3-2** + **P3-3**. **P3-4** needs no engine — run it alongside wave 3 | Engine decision recorded on measured DE/EN data; the two persistence chokepoints protected with no user-visible utility loss |
+| **Parked** | Until gate MASK | **P4-1** | Only opens when a *named* high-risk flow exists and product accepts the utility loss in writing |
+
+**The close-out review** (when wave 3 lands): re-run a §2-style verification of every claim, update
+the assessment's verification log, confirm the §4.4 mandatory column is empty of un-met items, and
+then retire this plan per the implementation-plans lifecycle — promote the §1/§3/§4 material to
+`architecture/`, archive the rollout history. A plan that outlives its work is the failure mode
+this folder's README exists to prevent.
+
+### 6.2 The bundles (grouping rationale)
 
 | Bundle | Tickets | Why together |
 |---|---|---|
@@ -972,7 +996,7 @@ boundary-only re-hydration, streaming, multi-turn growth — before any implemen
 | **D · Observability review** | P0-5 + P1-2 + P1-4 + P1-5 | All four answer "what leaves the app and who reads it". P0-5 is the write-up the others feed; P1-5 closes the reasoning sinks |
 | **E · Retention** | P2-1 → P2-2, P2-3, P2-4, P2-8 | P2-1 is a hard gate on all four. Sequence, do not parallelise. Land P2-3 **last** among the code items — it is the only one that deletes data |
 | **F · Data-subject rights** | P2-5 + P2-6 + P2-7 | Art. 15/17 as one story: P2-5 the erasure evidence, P2-6 the access half, P2-7 the documented exception. A single DSAR touches all three |
-| **G · Governance** | G-1 + G-2 + G-3 + G-4 | DPO/Legal-led, parallel, no code dependency. **Start now** — G-2 unblocks E |
+| **G · Governance** | G-1 + G-2 + G-3 + G-4 + G-5 | DPO/Legal-led, parallel, no code dependency. **Start now** — G-2 unblocks E, and G-5 rides on G-2 (the notice text and the works agreement change together) |
 | **H · Engine** | P3-1 → P3-2, P3-3 | Gated on the ENGINE decision (the output of P3-1). Independent of A–F. **P3-4 is not in this gate** — Meilisearch field minimisation needs no engine and can run alongside Phase 2 |
 
 **Standalone, do immediately:** P0-6 and P0-7 (the two platform verifications — abuse-monitoring
@@ -985,14 +1009,15 @@ the first post-merge upstream sync, whichever lands first.
 migration, a data-integrity defect and a one-way door, and deserves its own review.
 
 ```
-now ──▶ A (investigate → fix) ──▶ C ──▶ B ──▶ D ─────────────▶ steady state
-         │                                                        ▲
-   G (governance, parallel from day one) ──▶ G-2 works agreement ──┤
-                                              │                    │
-                                              ▼                    │
-                                        E (P2-1 gate) ──▶ F ───────┘
+Wave 0            Wave 1                 Wave 2                Wave 3 (P2-1 gate)      close-out
+verify & decide ─▶ mandatory containment ─▶ config + hygiene ─▶ retention & rights ──▶ review, then
+P0-6 P0-7 P2-4a    P0-2 P0-1 P2-7          P0-3 P1-5 D          P2-2 P2-3 P2-4 P2-8    promote/archive
+P0-2(facts)        P2-6a  C                P1-3 DOC-1           P2-5 P2-6              this plan
+   │
+   └─ G (governance, parallel from day 0) ── G-2 works agreement ──▶ unblocks Wave 3
 
-   H (engine PoC) ──▶ ENGINE decision ──▶ P3-2 / P3-3   [independent of A–F; P3-4 needs no engine]
+Wave 4: P3-1 PoC ──▶ gate ENGINE ──▶ P3-2 / P3-3     [anytime; P3-4 rides with Wave 3]
+Parked: P4-1 until gate MASK
 ```
 
 ---
