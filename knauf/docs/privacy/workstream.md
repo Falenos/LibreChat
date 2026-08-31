@@ -220,6 +220,10 @@ obligations it discharges, and what actually gets built.
 | **4 · Inline masking** | Opt-in input masking for one named high-risk flow | Possibly none | **Never, by default** | — | — |
 | **G · Governance** | DPIA, works agreement, Art. 30 record, AI Act posture | Unblocks Phase 2 | **Start now, parallel** | DPO/Legal time | 35 · 6 · 30 · AI Act 4/50 · §87(1)(6) |
 
+> The Priority column above is the per-phase risk ranking; the **actual execution order is §6's
+> waves**, which deliberately interleave phases (parts of Phase 2 run in wave 1; bundle C runs in
+> wave 2).
+
 ### 4.2 The counter-intuitive part
 
 Two things are worth saying plainly, because instinct points the wrong way on both:
@@ -242,7 +246,7 @@ the wrong one. Two independent sources converge on the same four-layer model:
 
 - The **OpenTelemetry GenAI semantic conventions** capture *no* prompt content or tool arguments by
   default — only structural metadata (model, token counts, durations). Every content-bearing
-  attribute is explicitly **opt-in**, so "content never appears because someone forgot a flag". The
+  attribute is explicitly **opt-in** — forgetting a flag yields *no* capture, never accidental capture. The
   stated practice is: ship structural telemetry everywhere, enable payload attributes behind a
   config flag, with redaction and retention rules attached.
 - **Langfuse's own engineering guidance** is blunter about the tradeoff: *"aggressive whole-text
@@ -288,7 +292,7 @@ obligation is currently un-met, and this ticket is the cheapest documented way t
 | Class | Tickets | Basis |
 |---|---|---|
 | **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: Langfuse tracing, auditLog capture and memory profiling are live processing **outside the current notice**) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) · **P2-4a** (audit legacy shared links that silently migrated to public + record the Art. 33 assessment — a possible *past* confidentiality event, and it needs no DPO number) |
-| **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** · **P0-7** (Art. 28 due diligence on the search hop) |
+| **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
 | **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (the expiry half only — the legacy-public audit half is P2-4a, mandatory) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
 | **Optional** | **P4-1** (discretionary by design — double-gated, discharges no obligation on its own) |
 
@@ -438,8 +442,7 @@ service; P0-4 deletes fields already known to be identifiers), and the one case 
 fit — replacing P1-1's regexes — is architecturally incompatible: `redactFormat`
 (`packages/data-schemas/src/config/parsers.ts:356`) is a **synchronous** winston transform on every
 log line, and an engine call is a ~35–70 ms in-cluster HTTP round trip. Regexes are the correct
-tool there, not a stopgap. Deploying an engine early also pre-empts the very decision the ENGINE gate exists to make
-make on measured German/English performance.
+tool there, not a stopgap. Deploying an engine early also pre-empts the very decision the ENGINE gate exists to make — a decision made on measured German/English performance.
 
 This is the phase most likely to be started first for the wrong reason — "PII masking" is the
 ticket title, so it reads as the whole project. It is not.
@@ -588,7 +591,7 @@ masking. Bounding the rest is P0-2's job.
       `@langfuse/otel`'s `mask` parameter through `LangfuseConfig`. Never patch `node_modules`.
 
 **Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard is the precedent for
-per-run gating. `SEAMS.md:359` already has a `buildLangfuseConfig` row — **append**, never edit.
+per-run gating. SEAMS.md already has a row for `packages/api/src/agents/run.ts` (`buildLangfuseConfig`) — **append**, never edit.
 
 #### P0-2 · Langfuse platform retention & access *(cross-repo — `agk-deployment-configs`)*
 
@@ -690,7 +693,9 @@ top open question since v1.0 (2026-07-03) and was the only load-bearing item in 
 ticket. Pure verification — no code.
 
 **AC:** [ ] opt-out status confirmed with the Azure subscription owner and evidenced (portal
-screenshot / support case) · [ ] result recorded in the assessment §7.1 risk register · [ ] if NOT
+screenshot / support case) — **if unanswered after ~5 business days, record as
+escalated-and-pending and proceed; G-1 provisionally carries the 30-day Azure retention as a live
+processing fact until answered** · [ ] result recorded in the assessment §7.1 risk register · [ ] if NOT
 opted out: the assessment's §3 strategy has its first step re-argued and the DPIA (G-1) carries the 30-day
 retention as a live processing fact.
 
@@ -841,7 +846,10 @@ confidentiality event and arguably an **Art. 33 breach-assessment trigger**. The
 no retention number and should not wait in Phase 2's DPO-gated queue.
 
 **AC:** [ ] **(P2-4a, do first — needs no DPO gate)** existing links audited against the
-legacy-migrates-to-public path; an Art. 33 assessment recorded either way · [ ] expiry
+legacy-migrates-to-public path; an Art. 33 assessment recorded either way — **a positive finding
+hands off to the DPO the same day, with the 72-hour clock treated as running from audit
+completion** (engineering delivers the link inventory and any access evidence; the assessment
+itself is DPO-owned) · [ ] expiry
 configurable, expired links 404 · [ ] the public-by-default posture decision recorded.
 
 #### P2-5 · Staging erasure-verification recipe
@@ -866,6 +874,7 @@ half, this is the access half.
 - [ ] **Now, and mandatory (P2-6a):** a documented, *tested* manual DSAR runbook covering **all**
       sinks — Art. 15 is a live obligation with an Art. 12(3) one-month clock, and "manual
       archaeology" is not a compliant fulfilment path until it is written down and rehearsed once.
+      **Any pending or incoming DSAR promotes this item to immediate.**
 - [ ] The access scope enumerates **Langfuse traces** (addressable: tenant tags,
       `librechat.source.message.id` metadata) and the subject's **auditLog entries** (actor
       name/IP/userAgent) — access mirrors erasure: every sink P2-5 verifies, this discloses.
@@ -973,10 +982,10 @@ and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't h
 
 | Wave | When | What | Exit review — the wave is done when |
 |---|---|---|---|
-| **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · **P2-4a** (legacy-public link audit + Art. 33 assessment) · **G kickoff**: G-2 works-council briefing scheduled, G-1 DPIA opened, G-5 notice gap named to Legal | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way |
-| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · **P0-1** (in-repo reductions + the upstream `mask` issue opened) · **P2-7** (12-month audit-log purge wired to the existing `purgeAuditLogEntries`; write-time IP/metadata decisions) · **P2-6a** (manual DSAR runbook, tested once) · **Bundle C** (P0-4 + P1-1 — one upstream PR) | Every durable store except conversations/messages (wave 3's job) has a bounded retention; a DSAR arriving tomorrow has a rehearsed answer inside Art. 12(3)'s month |
-| **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (or with the next upstream sync) · **DOC-1** (v1.3 refresh) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
-| **3 · Retention & rights** *(gated on P2-1; G-2 unblocks it)* | When the DPO number lands | **P2-1** → **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** · **P2-5** (erasure recipe incl. the in-window Langfuse path) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
+| **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · **P2-4a** (carved out of P2-4's AC — legacy-public link audit; **a positive finding hands off to the DPO same-day, with the Art. 33 72-hour clock treated as running from audit completion**) · **DOC-1's restore step** (one `git show` command — v1.2 back on `main` so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
+| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · **P0-1** (in-repo reductions + the upstream `mask` issue opened) · **P2-7 core** (12-month purge wired to the existing `purgeAuditLogEntries` + the write-time IP/metadata decisions; the export-governance tail may trail into wave 2. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0) · **P2-6a** (the runbook half of P2-6's AC — manual DSAR runbook, tested once; **any pending or incoming DSAR promotes this to immediate**) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
+| **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
+| **3 · Retention & rights** | Opens when **P2-1's numbers land** (P2-1 itself started in wave 0; G-2 is what produces it) | **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** (waits deliberately: it needs *a* number, and setting one provisionally only to have P2-1 ratify a different one means bounding the same log twice) · **P2-5 full re-run** (after P2-2, as its AC specifies) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
 | **4 · Engine** *(evidence-gated; start anytime capacity exists)* | Parallel to 2–3 | **P3-1** PoC → gate ENGINE → **P3-2** + **P3-3**. **P3-4** needs no engine — run it alongside wave 3 | Engine decision recorded on measured DE/EN data; the two persistence chokepoints protected with no user-visible utility loss |
 | **Parked** | Until gate MASK | **P4-1** | Only opens when a *named* high-risk flow exists and product accepts the utility loss in writing |
 
@@ -993,10 +1002,10 @@ this folder's README exists to prevent.
 | **A · Langfuse containment** | P0-1 + P0-2 | One workstream across two repos. P0-2's investigation gates P0-1's urgency; P0-1 alone reduces new writes but deletes nothing |
 | **B · Config baseline** | P0-3 alone | One PR, one reviewer, fully revertible. The client copy seam **must** ride along — splitting it ships a raw error code to users |
 | **C · Log identity hygiene** | P0-4 + P1-1 | Same subsystem, same reviewer, same test surface; both upstream-contribution candidates — open one upstream PR from the pair. **Strongest bundle in the set** |
-| **D · Observability review** | P0-5 + P1-2 + P1-4 + P1-5 | All four answer "what leaves the app and who reads it". P0-5 is the write-up the others feed; P1-5 closes the reasoning sinks |
+| **D · Observability review** | P0-5 + P1-2 + P1-4 | All three answer "what leaves the app and who reads it"; P0-5 is the write-up the other two feed. P1-5 (reasoning sinks) lands beside them in wave 2 but is its own PR |
 | **E · Retention** | P2-1 → P2-2, P2-3, P2-4, P2-8 | P2-1 is a hard gate on all four. Sequence, do not parallelise. Land P2-3 **last** among the code items — it is the only one that deletes data |
-| **F · Data-subject rights** | P2-5 + P2-6 + P2-7 | Art. 15/17 as one story: P2-5 the erasure evidence, P2-6 the access half, P2-7 the documented exception. A single DSAR touches all three |
-| **G · Governance** | G-1 + G-2 + G-3 + G-4 + G-5 | DPO/Legal-led, parallel, no code dependency. **Start now** — G-2 unblocks E, and G-5 rides on G-2 (the notice text and the works agreement change together) |
+| **F · Data-subject rights** | P2-5 + P2-6 + P2-7 | Art. 15/17 as one story: P2-5 the erasure evidence, P2-6 the access half, P2-7 the documented exception. A single DSAR touches all three. **Deliberately split across waves**: the halves that need no DPO number (P2-7 core, P2-6a, P2-5's first run) go in wave 1; the re-run and the endpoint follow in wave 3 |
+| **G · Governance** | G-1 + G-2 + G-3 + G-4 + G-5 | DPO/Legal-led, parallel, no code dependency. **Start now** — G-2 unblocks E. G-5's **interim** notice ships on its own in wave 1 (a live Art. 13 gap must not wait for a works agreement); only the consolidated text rides with G-2 |
 | **H · Engine** | P3-1 → P3-2, P3-3 | Gated on the ENGINE decision (the output of P3-1). Independent of A–F. **P3-4 is not in this gate** — Meilisearch field minimisation needs no engine and can run alongside Phase 2 |
 
 **Standalone, do immediately:** P0-6 and P0-7 (the two platform verifications — abuse-monitoring
@@ -1009,12 +1018,13 @@ the first post-merge upstream sync, whichever lands first.
 migration, a data-integrity defect and a one-way door, and deserves its own review.
 
 ```
-Wave 0            Wave 1                 Wave 2                Wave 3 (P2-1 gate)      close-out
-verify & decide ─▶ mandatory containment ─▶ config + hygiene ─▶ retention & rights ──▶ review, then
-P0-6 P0-7 P2-4a    P0-2 P0-1 P2-7          P0-3 P1-5 D          P2-2 P2-3 P2-4 P2-8    promote/archive
-P0-2(facts)        P2-6a  C                P1-3 DOC-1           P2-5 P2-6              this plan
+Wave 0                Wave 1                    Wave 2                  Wave 3 (opens on       close-out
+verify & decide   ──▶ mandatory containment ──▶ config + hygiene   ──▶ P2-1's numbers)    ──▶ review, then
+P0-6 P0-7 P2-4a       P0-2 P0-1 P2-7(core)      P0-3 C(P0-4+P1-1)       P2-2 P2-3 P2-4 P2-8    promote/archive
+P0-2(facts)           P2-6a P2-5(1st run)       P1-5 D P1-3             P2-5(re-run) P2-6      this plan
+v1.2 restore          G-5 interim notice        DOC-1(v1.3) P2-7(tail)
    │
-   └─ G (governance, parallel from day 0) ── G-2 works agreement ──▶ unblocks Wave 3
+   └─ G track, all five, parallel from day 0: G-1 G-2 G-3 G-4 G-5 · P2-1 ──▶ numbers unblock Wave 3
 
 Wave 4: P3-1 PoC ──▶ gate ENGINE ──▶ P3-2 / P3-3     [anytime; P3-4 rides with Wave 3]
 Parked: P4-1 until gate MASK
@@ -1056,7 +1066,7 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`librechat.yaml`](../../../librechat.yaml) | Tier-0 surface for P0-3 — `messageFilter`, `mcpServers`, `remoteAgents`, `retentionMode`, `sharedLinks` |
 | [`packages/api/src/middleware/messageFilterPii.ts`](../../../packages/api/src/middleware/messageFilterPii.ts) | Upstream credential blocker — read before configuring it |
 | [`client/src/hooks/SSE/useResumableSSE.ts`](../../../client/src/hooks/SSE/useResumableSSE.ts) | `getStreamStartFailureData` — the copy seam P0-3 must ship |
-| [`packages/api/src/agents/run.ts`](../../../packages/api/src/agents/run.ts) | `buildLangfuseConfig` — the P0-1 seam (`SEAMS.md:359`) |
+| [`packages/api/src/agents/run.ts`](../../../packages/api/src/agents/run.ts) | `buildLangfuseConfig` — the P0-1 seam (SEAMS.md row keyed by this file's path) |
 | [`packages/api/src/agents/memory.ts`](../../../packages/api/src/agents/memory.ts) | Memory-agent Langfuse config; second P0-1 site |
 | [`packages/api/src/langfuse/feedback.ts`](../../../packages/api/src/langfuse/feedback.ts) | Free-text feedback → Langfuse `comment` |
 | [`api/server/routes/messages.js`](../../../api/server/routes/messages.js) | `sendFeedbackScore` call site — where P0-1 gates the text |
@@ -1145,7 +1155,7 @@ npm run test:api && npm run test:client
 
 - [`pii-masking-and-anonymization.md`](./pii-masking-and-anonymization.md) — the KK20-207 strategy this plan executes
 - [`anonymization-design.md`](./anonymization-design.md) — the per-surface design rationale behind Phases 3–4: when masking/pseudonymization belongs at send, at store, at ingest, and how the round-trip works
-- [`./langfuse-rollout.md`](../implementation-plans/langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
-- [`./adobe-analytics-onetrust.md`](../implementation-plans/adobe-analytics-onetrust.md) — the fork's already-shipped privacy control, and the model pattern for new data-emitting features
+- [`../implementation-plans/langfuse-rollout.md`](../implementation-plans/langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
+- [`../implementation-plans/adobe-analytics-onetrust.md`](../implementation-plans/adobe-analytics-onetrust.md) — the fork's already-shipped privacy control, and the model pattern for new data-emitting features
 - [`../future-work/file-management-roadmap.md`](../future-work/file-management-roadmap.md) — its S6 (DLP) and T3 (retention sweep) rows are refined here
 - [`../architecture/files/async-indexing.md`](../architecture/files/async-indexing.md) — the FileAsset delete cascade that closed the File Search erasure gap
