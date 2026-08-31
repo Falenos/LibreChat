@@ -756,14 +756,17 @@ violation log does not. Smaller than the assessment states.
 | # | Ticket | Note |
 |---|---|---|
 | P3-1 | **Engine PoC spike** — Presidio vs Azure AI Language container | Measure DE+EN precision/recall and latency on labelled Knauf data; verify Presidio governance. **Reuse [`knauf/parser-eval/`](../../parser-eval/)** (existing Python harness, labelled corpus, metrics) and **[`knauf/code-adapter/`](../../code-adapter/)** as the proven Tier-3 sidecar shape. *No masking code before this decision is recorded.* |
-| P3-2 | **RAG-ingest scan/flag** for shared-agent knowledge files | **Two** chokepoints: `VectorDB/crud.js:207` (sync) and `Files/knauf/generationRagClient.js` (async worker) |
-| P3-3 | **Memory-write pseudonymisation** at `setMemory` | The ideal non-streamed backend chokepoint |
+| P3-2 | **RAG-ingest scan/flag** for shared-agent knowledge files | **Two** chokepoints: `VectorDB/crud.js:207` (sync) and `Files/knauf/generationRagClient.js` (async worker). Default is scan-&-flag with owner acknowledgment; masking is per-corpus policy — modes and invariants (mask-before-embed, deterministic per entity) in [`anonymization-design.md`](./anonymization-design.md) §4 |
+| P3-3 | **Memory-write pseudonymisation** at `setMemory` | The ideal non-streamed backend chokepoint. Scope the mapping **per-user** and re-hydrate at read for the owning user only — [`anonymization-design.md`](./anonymization-design.md) §5/A7 |
 | P3-4 | **Meilisearch field minimisation** | Per-field `meiliIndex` flags exist; decide which fields stay indexed |
 
 ### Phase 4 tickets — opt-in inline input masking *(gate G4, unscheduled)*
 
 Only if a *named* high-risk flow exists **and** product accepts the utility loss. Input-side only;
-masking streamed output stays out of scope (a placeholder can split across chunk boundaries).
+masking streamed output stays out of scope (a placeholder can split across chunk boundaries). The
+G4 design must answer the five round-trip costs in [`anonymization-design.md`](./anonymization-design.md)
+§5 — shared mapping, vault governance, boundary-only re-hydration, streaming, multi-turn growth —
+before any implementation ticket is cut.
 
 ### Governance tickets *(DPO/Legal-led, parallel, no code dependency)*
 
@@ -925,6 +928,7 @@ npm run test:api && npm run test:client
 ## 11. Related
 
 - [`pii-masking-and-anonymization.md`](./pii-masking-and-anonymization.md) — the KK20-207 strategy this plan executes
+- [`anonymization-design.md`](./anonymization-design.md) — the per-surface design rationale behind Phases 3–4: when masking/pseudonymization belongs at send, at store, at ingest, and how the round-trip works
 - [`./langfuse-rollout.md`](../implementation-plans/langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
 - [`./adobe-analytics-onetrust.md`](../implementation-plans/adobe-analytics-onetrust.md) — the fork's already-shipped privacy control, and the model pattern for new data-emitting features
 - [`../future-work/file-management-roadmap.md`](../future-work/file-management-roadmap.md) — its S6 (DLP) and T3 (retention sweep) rows are refined here
