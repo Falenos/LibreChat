@@ -2,8 +2,9 @@
 
 > **TL;DR** — [KK20-207](../proposals/pii-masking-and-anonymization.md) produced the strategy; this
 > plan turns it into executable work. It carries (1) the **delta** between what that assessment
-> claims and what the code does today, (2) a **paste-ready ticket set** for every phase, (3) a
-> **GDPR / EU AI Act mapping** per ticket, and (4) a **bundling and sequencing** recommendation.
+> claims and what the code does today, (2) a **GDPR / EU AI Act / BetrVG mapping**, (3) a
+> **phase-by-phase breakdown** of impact, priority and what gets built, (4) a **paste-ready ticket
+> set**, and (5) a **bundling and sequencing** recommendation.
 >
 > The assessment's thesis is unchanged and still correct: **protect the durable copies and the
 > logs; do not mask prompts before the model.** What changed is everything underneath it. The
@@ -12,7 +13,7 @@
 > Most consequentially, one of the assessment's own activation triggers — *"Langfuse keys set"*,
 > which it named as requiring a PII review **before the first trace** — has fired in dev and prod.
 >
-> **Status: drafted 2026-08-28.** No ticket is filed yet; the drafts in §4 are ready to paste.
+> **Status: drafted 2026-08-28.** No ticket is filed yet; the drafts in §5 are ready to paste.
 
 > **Scope note on compliance.** §3 is engineering-facing analysis to put *to* the DPO — which
 > articles each change touches and what evidence it produces. It is not legal advice and does not
@@ -67,7 +68,7 @@ refresh (ticket **DOC-1**).
 | 2 | Redactor **deduped and now runs at every level** — deep-traverses metadata, redacts identity keys, Azure SAS `sig=`, image data URIs (PR #201, `SEAMS.md:1219`) | **Ph1 1.1 done; 1.2 half-done.** The remaining gap is PII *patterns*, not levels or duplication |
 | 3 | PR #115 merged — Azure AI Search delete propagation | Ph0 0.3 done |
 | 4 | Shared links: `isPublic` removed from the schema → ACL/grant model (upstream #13051). Legacy docs missing the field migrate to **public** (`share.isPublic !== false`, [`shared-links/service.ts:71`](../../../packages/api/src/shared-links/service.ts)). `expiredAt` + TTL index now exist | Ph0 0.6 inverts — no longer "audit the default", now "a decision went the other way". Ph2 2.4's mechanism exists |
-| 5 | TTL indexes on `expiredAt` for convo, message, share; `retentionMode: "all"` lever exists upstream | Ph2 2.2's *mechanism* exists — but it is **not** a config flip. See §6 |
+| 5 | TTL indexes on `expiredAt` for convo, message, share; `retentionMode: "all"` lever exists upstream | Ph2 2.2's *mechanism* exists — but it is **not** a config flip. See §7 |
 | 6 | A file retention sweep exists — [`packages/api/src/files/sweep.ts`](../../../packages/api/src/files/sweep.ts) on a dedicated cluster worker | "No scheduler anywhere" is dead. There is an in-process pattern to copy |
 | 7 | **Langfuse live in dev and prod** — traces prompts, completions, memory-agent runs and feedback | The assessment's §12.2 trigger fired without its gate. **P0** |
 | 8 | New `auditLog` collection — IP + userAgent + sessionId, every field `immutable`, hash-chained, append-only *by design*, admin CSV export | New durable PII store, in structural tension with Art. 17 |
@@ -118,7 +119,7 @@ category #4 (extracted document body, P0) removed by one line inside an existing
 | **17** erasure | Must reach Mongo + Meilisearch + pgvector + Azure AI Search + Blob **+ Langfuse**; `auditLog` is immutable | P0-2, P2-2, P2-5, P2-7 | Cascade verified for 23 stores; **Langfuse is a copy erasure does not reach** |
 | **25** by design & default | The whole Phase 0 argument; restrictive permission defaults | P0-3, P1-3 | Good instinct, thinly documented |
 | **28** processors | Azure DPA; Datadog; any future MCP endpoint | P1-2, G-4 | Azure fine; Datadog forwarding unreviewed |
-| **30** records of processing | The §1 data map is the natural source | **G-4** | Exists as prose, not as a record |
+| **30** records of processing | The assessment's §1.1 data map is the natural source | **G-4** | Exists as prose, not as a record |
 | **32** security | Tenant isolation, SAS TTLs, hash-chained audit log | existing + P0-3 | Strong |
 | **35** DPIA | Large-scale processing + profiling + workplace context | **G-1** | **Likely required, not done** |
 
@@ -162,7 +163,238 @@ in one conversation.
 
 ---
 
-## 4. Ticket set
+## 4. Phase-by-phase — impact, priority, and what gets done
+
+The phases are ordered by **risk removed per unit of effort**, not by how impressive they sound.
+Each block below answers the same four questions: what it changes, how much that matters, which
+obligations it discharges, and what actually gets built.
+
+### 4.1 At a glance
+
+| Phase | What it changes | Impact | Priority | Effort | Discharges |
+|---|---|---|---|---|---|
+| **0 · Containment** | Stops live over-collection; turns three inherited defaults into asserted decisions | High, narrow | **Do first** | Days | 5(1)(c) · 25 · 5(2) |
+| **1 · Log hygiene** | Makes logs structurally unable to carry identifiers, and makes it survive merges | Medium-high, rising | Next | ~1 sprint | 5(1)(c) · 32 · 28 · 25 |
+| **2 · Retention & rights** | Nothing personal persists without a period; erasure provable; DSARs answerable | **Highest** | Gated on DPO | 1–2 sprints + decisions | 5(1)(e) · 15/20 · 17 · 5(2) |
+| **3 · Engine** | Actual PII detection at the two persistence chokepoints that pay off | Medium | Deliberately last | PoC ~2wk, then 1–2 sprints | 5(1)(c) at sink · 9 |
+| **4 · Inline masking** | Opt-in input masking for one named high-risk flow | Possibly none | **Never, by default** | — | — |
+| **G · Governance** | DPIA, works agreement, Art. 30 record, AI Act posture | Unblocks Phase 2 | **Start now, parallel** | DPO/Legal time | 35 · 6 · 30 · AI Act 4/50 · §87(1)(6) |
+
+### 4.2 The counter-intuitive part
+
+Two things are worth saying plainly, because instinct points the wrong way on both:
+
+- **The phase everyone assumes is the project — Phase 3, "PII masking" — is the least urgent.**
+  It is the only phase with a real spend decision, it is gated on a PoC, and every phase above it
+  removes more risk per unit of effort. Reaching for it first is the most common way this kind of
+  work stalls.
+- **The track that costs engineering nothing has the longest lead time.** Governance (G) needs
+  DPO and works-council calendar time measured in weeks, and it **gates Phase 2** — which is where
+  the actual GDPR exposure sits. Starting G on day one is free and shortens the critical path more
+  than any engineering decision here.
+
+---
+
+### Phase 0 — containment and explicit decisions
+
+**What it is.** Stop the two live over-collections, remove identity from auth logs, and convert
+three inherited defaults into decisions somebody actually made.
+
+**Impact.** Langfuse stops recording extracted document text, code-interpreter output and users'
+free-text feedback. Login stops writing email and name into logs. MCP/shared-link/retention posture
+becomes explicit and converges across dev, stage and prod instead of drifting per environment.
+
+**How important.** **High, but narrowly.** The Langfuse half is the only genuinely time-sensitive
+item in the entire workstream — it is accumulating in production right now, and every day adds
+volume that later has to be justified, retained or deleted. The config half is **medium**: real
+defence-in-depth, but not a live hole, because `KNAUF_RESTRICT_USER_PERMISSIONS` already constrains
+the USER role in all three environments. Do not let the config half inherit the Langfuse half's
+urgency.
+
+**Compliance discharged.** Art. 5(1)(c) minimisation, directly and measurably. Art. 25 by design
+and by default — the explicit yaml blocks *are* the evidence that defaults were chosen rather than
+inherited. Art. 5(2) accountability, via the logging-posture one-pager.
+
+**What gets done.** P0-1 (Langfuse in-repo levers) · P0-2 (Langfuse platform retention and access,
+cross-repo — **investigate before coding**) · P0-3 (config baseline: `messageFilter.pii` with
+credential patterns only, MCP/`remoteAgents` restricted, `retentionMode` pinned, `sharedLinks` made
+explicit, plus the mandatory client copy seam) · P0-4 (OpenID and ban-log identity minimisation) ·
+P0-5 (logging-posture one-pager).
+
+**Done when.** No message content or raw identifier reaches prod logs by configuration; Langfuse
+traces carry no tool output or free-text feedback; MCP, shared-link and retention posture are
+recorded decisions verified as converged in Mongo.
+
+**Cost of not doing it.** Langfuse keeps accruing verbatim prompts, completions and memory values
+with no retention policy — the exact "durable copy without a purpose" the strategy is built to
+prevent, and the one thing here that gets *more* expensive to fix with time.
+
+---
+
+### Phase 1 — log and telemetry hygiene
+
+**What it is.** Make logs structurally incapable of carrying raw identifiers, and make that
+property survive the next upstream merge.
+
+**Impact.** Email, IP, phone and IBAN patterns are redacted at every level rather than relying on
+the production log level happening to be `warn`. Datadog's browser-log forwarding gets reviewed
+before it becomes a third-party disclosure nobody signed off. The upstream-sync ritual gains a
+regression checklist.
+
+**How important.** **Medium-high, and rising.** Today production is protected largely by accident:
+the root log level is `warn`, so the `info`-level identity leaks never reach a transport. That is a
+configuration side-effect, not a control. One `NODE_ENV` slip, one upstream change to the level
+logic, or one new `logger.warn` carrying a user object, and it is live. The fork has **already
+produced two silent privacy regressions** this way, which is exactly what P1-3 exists to stop.
+
+**Compliance discharged.** Art. 5(1)(c) minimisation and Art. 32 security — the substantive half.
+Art. 28 processors, via the Datadog review. Art. 25 by design — the checklist is the *mechanism*
+that keeps the property true, which is what "by design" actually asks for.
+
+**What gets done.** P1-1 (email/IP/phone/IBAN patterns in the redactor — note the scope is **half**
+what the assessment assumed, since deduplication and all-level application already shipped) ·
+P1-2 (Datadog browser-logs review) · P1-3 (PII-regression checklist in the upstream-sync ritual and
+PR template) · P1-4 (`open_url` provenance monitoring).
+
+**Done when.** A grep across a week of production logs finds zero raw emails, IPs or message
+content, and every subsequent upstream merge runs the checklist.
+
+**Cost of not doing it.** The protection stays accidental, and the next merge can silently remove
+it. P1-1 and P0-4 together are also the cleanest upstream contribution in the set — value that is
+lost if they drift apart.
+
+---
+
+### Phase 2 — retention, erasure and data-subject rights
+
+**What it is.** Give every stored category a defined period and a verified delete path, and make
+access requests answerable without manual archaeology.
+
+**Impact.** The largest single risk reduction in the workstream. Memory stops being an unbounded
+profiling store. Conversations acquire a real policy. Erasure is *provable* across Mongo,
+Meilisearch, pgvector, Azure AI Search, Blob and Langfuse. A DSAR becomes a button rather than a
+project.
+
+**How important.** **Highest in aggregate — and gated.** This is where the actual exposure lives:
+Art. 5(1)(e) is the weakest area in the whole assessment (memory has no expiry *at all*), and
+Art. 15 is a straightforward gap (no export endpoint exists). But it cannot start on engineering's
+say-so — it needs a retention number from the DPO, and ideally the works agreement from G-2, which
+settles the memory lawful-basis question at the same time.
+
+**It is also the only phase that can cause an incident.** P2-2 carries a genuine defect: enabling
+`retentionMode: "all"` naively would delete data with no backfill, silently truncate the start of
+active conversations, and leave TTL-deleted conversations **still searchable** in Meilisearch. See
+§7. That is why P2-2 stays unbundled and gets its own review.
+
+**Compliance discharged.** Art. 5(1)(e) storage limitation — the core of it. Art. 15 and 20 access
+and portability, via P2-6. Art. 17 erasure *plus the evidence for it*, via P2-5, which is the
+artefact a regulator or DPO would actually ask to see. Art. 5(2) accountability.
+
+**What gets done.** P2-1 (DPO retention matrix — the gate) · P2-2 (conversation and message
+retention, including the Meilisearch orphan fix and a dry-runnable backfill) · P2-3 (memory
+staleness sweep, shipped inert with dry-run default) · P2-4 (shared-link expiry and the
+legacy-migrates-to-public review) · P2-5 (staging erasure-verification recipe) · P2-6
+(data-subject access and portability endpoint) · P2-7 (`auditLog` retention vs erasure position) ·
+P2-8 (general violation-log TTL).
+
+**Done when.** Nothing personal persists without a defined period, and the erasure recipe passes
+end-to-end including both vector stores and Langfuse.
+
+**Cost of not doing it.** The two hardest questions in a DPO review — *"how long do you keep it?"*
+and *"show me a completed erasure"* — currently have no good answer.
+
+---
+
+### Phase 3 — engine and persistence chokepoints
+
+**What it is.** Choose a PII detection engine on measured evidence, then apply it at the two
+non-streamed persistence chokepoints where masking has clear ROI.
+
+**Impact.** Shared-agent knowledge files get scanned or masked before embedding — the one ingest
+flow whose output is exposed to *other* users. Memory values get pseudonymised at write. Neither
+touches live chat, so there is no user-visible utility loss.
+
+**How important.** **Medium, and deliberately last.** Everything in Phases 0–2 removes more risk
+per unit of effort, and this is the only phase carrying a licensing/infrastructure spend. It is
+also the phase most likely to be started first for the wrong reason — "PII masking" is the ticket
+title, so it reads as the whole project. It is not.
+
+**Compliance discharged.** Art. 5(1)(c) minimisation *at the sink*, which is the strongest form.
+Art. 9 special categories — pseudonymising memory is the most direct mitigation available for the
+health/beliefs content that inevitably lands in a free-text assistant.
+
+**What gets done.** P3-1 (engine PoC — Presidio vs Azure AI Language container, scored on German
+and English Knauf data). **Two existing assets cut this cost sharply:**
+[`knauf/parser-eval/`](../../parser-eval/) is already a Python evaluation harness with a labelled
+corpus and metrics, and [`knauf/code-adapter/`](../../code-adapter/) is a proven Tier-3 sidecar
+shape that unwires by dropping one env var. Then P3-2 (RAG-ingest scan — **two** chokepoints now,
+sync and async) · P3-3 (memory-write pseudonymisation) · P3-4 (Meilisearch field minimisation).
+
+**Done when.** The engine decision is evidence-based and recorded, the two chokepoints are
+protected, and normal chat is measurably unaffected.
+
+**Cost of not doing it.** Shared knowledge bases keep embedding whatever was uploaded, verbatim,
+into a store other users can retrieve from. Real, but bounded — and it does not grow the way the
+Phase 0 and 2 gaps do.
+
+---
+
+### Phase 4 — opt-in inline input masking
+
+**What it is.** Masking entities in the prompt before the model, for one designated high-risk flow,
+with re-hydration.
+
+**Impact.** Possibly none, and that is the intended outcome. It exists as the documented answer to
+*"why don't you just mask everything?"* — because masking `Frau Müller` before the model breaks the
+assistant's core job and pushes people to public ChatGPT, which is a strictly worse privacy
+outcome. Upstream's maintainer reached the same conclusion, which is why the feature is opt-in
+there too.
+
+**How important.** **Lowest, deliberately.** It is double-gated: a *named* high-risk flow must exist
+**and** product must accept the utility loss in writing. Without both, this phase never starts.
+Output-side masking of the live stream stays permanently out of scope — a placeholder can split
+across chunk boundaries after it has already been sent.
+
+**Compliance discharged.** Nothing on its own. It is a risk-appetite decision for a specific
+workflow, not an obligation.
+
+**What gets done.** Only after gate G4: a design (opt-in per model-spec or agent, input-side only,
+pseudonymise-with-re-hydration), then implementation for the named flow.
+
+---
+
+### Governance track — runs in parallel, start now
+
+**What it is.** The DPO/Legal work that no amount of engineering substitutes for.
+
+**Impact.** Unblocks Phase 2 by producing the retention numbers. Settles whether the memory feature
+has a lawful basis. Produces the two artefacts an audit actually asks for: a DPIA and an Art. 30
+record.
+
+**How important.** **High, and urgent for scheduling reasons rather than risk reasons.** It costs
+engineering nothing and sits on the critical path for the highest-value phase. **G-2 is the single
+highest-leverage item in this document**: a works agreement can settle the Art. 6 basis for memory,
+the BetrVG §87(1)(6) co-determination duty, *and* the P2-1 retention periods in one conversation.
+
+**Compliance discharged.** Art. 35 DPIA — likely required (large-scale processing, profiling,
+workplace context) and not done. Art. 6 lawful basis for memory profiling. Art. 30 records of
+processing. EU AI Act Art. 4 AI literacy, which has been **in force since 2025-02-02** and is a
+live obligation today, plus Art. 50 transparency. BetrVG §87(1)(6) and BDSG §26.
+
+**What gets done.** G-1 (DPIA) · G-2 (works council briefing) · G-3 (AI Act deployer posture,
+including registering the three Annex III.4 drift triggers as watch items) · G-4 (Art. 30 record,
+promoted from the assessment's §1.1 map and kept current by P1-3's checklist).
+
+**Done when.** A DPIA exists, retention periods are agreed, the works council position is recorded,
+and the AI Act determination (deployer, not provider; not Annex III today) is written down with its
+drift triggers.
+
+**Cost of not doing it.** Phase 2 stays blocked indefinitely, and the AI Act Art. 4 obligation —
+already in force — remains unevidenced.
+
+---
+
+## 5. Ticket set
 
 Paste-ready for the KK20 project. KK20-207 stays the discovery record; each PR anchors to its own
 leaf ticket.
@@ -189,7 +421,7 @@ onto a branch off `main`. No merge, no conflict, despite the 1251-commit gap.
 
 ---
 
-### Phase 0 — containment and explicit decisions
+### Phase 0 tickets — containment and explicit decisions
 
 #### P0-1 · Langfuse PII gate — reduce what is captured *(in-repo)*
 
@@ -251,7 +483,7 @@ decisions. No data deletion, no schema change.
       public: false` — **all four keys**, because `hasExplicitConfig`
       (`packages/api/src/app/permissions.ts:50-51`) only re-seeds when the key is present and
       `updateAccessPermissions` merges rather than replaces.
-- [ ] `retentionMode: 'temporary'` pinned explicitly, with §6's preconditions as a comment. A
+- [ ] `retentionMode: 'temporary'` pinned explicitly, with §7's preconditions as a comment. A
       **runtime no-op today** — it guards against an upstream default flip.
 - [ ] `sharedLinks` block added explicitly (same `hasExplicitConfig` reasoning — the permission is
       otherwise frozen at whatever each role document was first created with and never converges,
@@ -294,7 +526,7 @@ rotation, Datadog browser logs, Langfuse, `auditLog` · [ ] prod log read-access
 
 ---
 
-### Phase 1 — log & telemetry hygiene
+### Phase 1 tickets — log & telemetry hygiene
 
 #### P1-1 · PII patterns in the log redactor
 
@@ -339,7 +571,7 @@ recorded.
 
 ---
 
-### Phase 2 — retention, erasure, data-subject rights
+### Phase 2 tickets — retention, erasure, data-subject rights
 
 #### P2-1 · DPO retention matrix *(gates most of Phase 2)*
 
@@ -353,7 +585,7 @@ Knauf's official data classes.
 
 **Type:** Story · **Effort:** L · **Compliance:** Art. 5(1)(e), 17 · **Blocked on P2-1**
 
-**Summary:** `retentionMode: "all"` is not a config flip — see §6. Four blocking problems, one of
+**Summary:** `retentionMode: "all"` is not a config flip — see §7. Four blocking problems, one of
 which (Meilisearch orphans) would make the privacy posture **strictly worse**.
 
 **AC:** [ ] period from P2-1 · [ ] dry-runnable backfill migration for existing rows · [ ] message
@@ -416,7 +648,7 @@ governance decision, not a bug.
 
 **AC:** [ ] retention period set · [ ] documented position on how erasure requests interact with an
 append-only chain (typically retention under Art. 17(3), justified and time-boxed) · [ ] added to
-the §1 data map and the Art. 30 record.
+the assessment's §1.1 data map and the Art. 30 record.
 
 #### P2-8 · General violation-log TTL
 
@@ -429,7 +661,7 @@ violation log does not. Smaller than the assessment states.
 
 ---
 
-### Phase 3 — engine and persistence chokepoints *(gate G3)*
+### Phase 3 tickets — engine and persistence chokepoints *(gate G3)*
 
 | # | Ticket | Note |
 |---|---|---|
@@ -438,12 +670,12 @@ violation log does not. Smaller than the assessment states.
 | P3-3 | **Memory-write pseudonymisation** at `setMemory` | The ideal non-streamed backend chokepoint |
 | P3-4 | **Meilisearch field minimisation** | Per-field `meiliIndex` flags exist; decide which fields stay indexed |
 
-### Phase 4 — opt-in inline input masking *(gate G4, unscheduled)*
+### Phase 4 tickets — opt-in inline input masking *(gate G4, unscheduled)*
 
 Only if a *named* high-risk flow exists **and** product accepts the utility loss. Input-side only;
 masking streamed output stays out of scope (a placeholder can split across chunk boundaries).
 
-### Governance track *(DPO/Legal-led, parallel, no code dependency)*
+### Governance tickets *(DPO/Legal-led, parallel, no code dependency)*
 
 | # | Ticket | Note |
 |---|---|---|
@@ -454,7 +686,7 @@ masking streamed output stays out of scope (a placeholder can split across chunk
 
 ---
 
-## 5. Bundling and sequence
+## 6. Bundling and sequence
 
 | Bundle | Tickets | Why together |
 |---|---|---|
@@ -483,7 +715,7 @@ now ──▶ A (investigate → fix) ──▶ C ──▶ B ──▶ D ──
 
 ---
 
-## 6. `retentionMode: "all"` — why it is deferred
+## 7. `retentionMode: "all"` — why it is deferred
 
 Traced end to end, because a mis-set TTL **deletes user data**:
 
@@ -510,7 +742,7 @@ period silently adopts that as Knauf's corporate retention policy.
 
 ---
 
-## 7. Critical file map
+## 8. Critical file map
 
 | File | Role |
 |---|---|
@@ -526,14 +758,14 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`packages/data-schemas/src/config/parsers.ts`](../../../packages/data-schemas/src/config/parsers.ts) | The redactor — P1-1 adds patterns to `sensitiveKeys` |
 | [`packages/data-schemas/src/methods/memory.ts`](../../../packages/data-schemas/src/methods/memory.ts) | `setMemory` — single write chokepoint (P2-3, P3-3) |
 | [`packages/api/src/files/sweep.ts`](../../../packages/api/src/files/sweep.ts) | The sweep pattern P2-3 copies |
-| [`api/db/indexSync.js`](../../../api/db/indexSync.js) | Meilisearch reconciliation — the §6 orphan gap |
+| [`api/db/indexSync.js`](../../../api/db/indexSync.js) | Meilisearch reconciliation — the §7 orphan gap |
 | [`packages/data-schemas/src/models/plugins/mongoMeili.ts`](../../../packages/data-schemas/src/models/plugins/mongoMeili.ts) | `preprocessObjectForIndex` — the single Meili chokepoint (P3-4) |
 | [`packages/api/src/knauf/permissions/userRestrictions.ts`](../../../packages/api/src/knauf/permissions/userRestrictions.ts) | Why the MCP finding is de-escalated |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
 
 ---
 
-## 8. Verification recipes
+## 9. Verification recipes
 
 **P0-1 — Langfuse.** `npm run langfuse:traces` lists recent traces. Send a turn that uses file
 search and confirm chunk text is absent from the trace; submit a thumbs-down with free text and
@@ -572,7 +804,7 @@ npm run test:api && npm run test:client
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
 **DPO / Legal**
 - Retention periods per category (P2-1) — gates all of Phase 2.
@@ -595,7 +827,7 @@ npm run test:api && npm run test:client
 
 ---
 
-## 10. Related
+## 11. Related
 
 - [`../proposals/pii-masking-and-anonymization.md`](../proposals/pii-masking-and-anonymization.md) — the KK20-207 strategy this plan executes
 - [`./langfuse-rollout.md`](./langfuse-rollout.md) — Langfuse deployment (needs a prod section; see DOC-1)
