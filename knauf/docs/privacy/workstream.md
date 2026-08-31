@@ -63,15 +63,16 @@ Three properties drive every decision below:
 Verified against `main` @ `88baf689c` (2026-08-21). This is the input to the assessment's v1.3
 refresh (ticket **DOC-1**).
 
-> Phase-item numbers (`0.x`/`1.x`/`2.x`) and references to the assessment's §11–§13 follow the
-> **v1.2 numbering**, which is still unmerged — the v1.0 on `main` ends at §10. DOC-1 restores it.
+> Phase-item numbers (`0.x`/`1.x`/`2.x`) and references to the assessment's §11/§12 resolve
+> correctly: **v1.2 was restored to `main` on 2026-09-01** (DOC-1's restore step). What remains of
+> DOC-1 is the v1.3 delta — folding this section's rows into the assessment itself.
 
 | # | Change | Effect on the roadmap |
 |---|---|---|
 | 1 | `DEBUG_LOGGING` code default is now **false**; winston moved to [`packages/data-schemas/src/config/winston.ts`](../../../packages/data-schemas/src/config/winston.ts). Prod root level is `warn` (`winston.ts:78-81`), so `info`/`debug` reach **no transport** in prod | Ph0 0.1/0.2 largely retired. Identity leaks are prod-suppressed *by level*, not by redaction — still live in dev, one `NODE_ENV` slip from prod |
 | 2 | Redactor **deduped and now runs at every level** — deep-traverses metadata, redacts identity keys, Azure SAS `sig=`, image data URIs (PR #201; tracked in SEAMS.md's row for `packages/data-schemas/src/config/parsers.ts` — cite SEAMS rows by path, raw line numbers shift on every append) | **Ph1 1.1 done; 1.2 half-done.** The remaining gap is PII *patterns*, not levels or duplication |
 | 3 | PR #115 merged — Azure AI Search delete propagation | Ph0 0.3 done |
-| 4 | Shared links: `isPublic` removed from the schema → ACL/grant model (upstream #13051). Legacy docs missing the field migrate to **public** (`share.isPublic !== false`, [`shared-links/service.ts:71`](../../../packages/api/src/shared-links/service.ts)). `expiredAt` + TTL index now exist | Ph0 0.6 inverts — no longer "audit the default", now "a decision went the other way". Ph2 2.4's mechanism exists |
+| 4 | Shared links: `isPublic` removed from the schema → ACL/grant model (upstream #13051). `expiredAt` + TTL index now exist. **Correction (2026-09-01):** earlier drafts of this plan claimed legacy docs *missing* `isPublic` silently migrate to public. That is **wrong** — both migration entry points are guarded by `'isPublic' in doc` ([`access.ts:88`](../../../packages/api/src/shared-links/access.ts), [`service.ts:191`](../../../packages/api/src/shared-links/service.ts)), so a doc without the field never enters `autoMigrateLegacyLink` at all; inside it `isPublic !== false` only ever sees a doc where the field exists (`true` → public grant, matching its prior state; `false` → owner only). Confirmed by `service.test.ts`, whose every fixture `$set`s the field explicitly | Ph0 0.6 inverts — no longer "audit the default", now "a decision went the other way". Ph2 2.4's mechanism exists |
 | 5 | TTL indexes on `expiredAt` for convo, message, share; `retentionMode: "all"` lever exists upstream | Ph2 2.2's *mechanism* exists — but it is **not** a config flip. See §7 |
 | 6 | A file retention sweep exists — [`packages/api/src/files/sweep.ts`](../../../packages/api/src/files/sweep.ts) on a dedicated cluster worker | "No scheduler anywhere" is dead. There is an in-process pattern to copy |
 | 7 | **Langfuse live in dev and prod** — traces prompts, completions, memory-agent runs and feedback | The assessment's §12.2 trigger fired without its gate. **P0** |
@@ -291,9 +292,9 @@ obligation is currently un-met, and this ticket is the cheapest documented way t
 
 | Class | Tickets | Basis |
 |---|---|---|
-| **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: Langfuse tracing, auditLog capture and memory profiling are live processing **outside the current notice**) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) · **P2-4a** (audit legacy shared links that silently migrated to public + record the Art. 33 assessment — a possible *past* confidentiality event, and it needs no DPO number) |
+| **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: Langfuse tracing, auditLog capture and memory profiling are live processing **outside the current notice**) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) |
 | **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
-| **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (the expiry half only — the legacy-public audit half is P2-4a, mandatory) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
+| **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (link expiry; its P2-4a half was **closed by code reading** — the premise was wrong, see §2 row 4) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
 | **Optional** | **P4-1** (discretionary by design — double-gated, discharges no obligation on its own) |
 
 Two consequences worth stating: the **mandatory column is dominated by Phase 2 and the governance
@@ -404,7 +405,7 @@ artefact a regulator or DPO would actually ask to see. Art. 5(2) accountability.
 **What gets done.** P2-1 (DPO retention matrix — the gate) · P2-2 (conversation and message
 retention, including the Meilisearch orphan fix and a dry-runnable backfill) · P2-3 (memory
 staleness sweep, shipped inert with dry-run default) · P2-4 (shared-link expiry and the
-legacy-migrates-to-public review) · P2-5 (staging erasure-verification recipe) · P2-6
+expiry) · P2-5 (staging erasure-verification recipe) · P2-6
 (data-subject access and portability endpoint) · P2-7 (`auditLog` retention vs erasure position) ·
 P2-8 (general violation-log TTL).
 
@@ -538,7 +539,7 @@ since 2026-07-06 and is now 1251 commits behind; ~8 weeks of change have invalid
 claims, and one of its own activation triggers (Langfuse) has fired. Restore v1.2 and add a v1.3
 delta plus a verification log.
 
-**AC:** [ ] v1.2 restored onto `main` · [ ] §13 verification log with `file:line` evidence for all
+**AC:** [x] **v1.2 restored onto `main`** (2026-09-01) · [ ] §13 verification log with `file:line` evidence for all
 13 delta rows · [ ] new §1.1 rows for Langfuse, `auditLog`, Azure AI Search · [ ] §2 qualified re
 `messageFilter.pii` · [ ] §12.2 Langfuse trigger marked FIRED · [ ] §9 ticket list regenerated
 against this plan · [ ] hosted artifact URL removed (companions are in-repo HTML) · [ ] demo HTML
@@ -550,12 +551,13 @@ backend; neither is in the v1.0/v1.2 map) · [ ] new §1.1 rows for **cost/usage
 (`transactions` — already named as an Annex III.4 drift trigger and in P2-1's matrix, absent from
 the map) and a **model-reasoning** content dimension (P1-5).
 
-**Mechanics:** the v1.2 branch touches exactly one file, which on that branch still lives at its
-pre-move path — restore it with `git show
+**Mechanics:** ✅ **the restore is done** (2026-09-01) — v1.2 is on `main`, with the staleness
+banner and the demo-block replacement re-applied on top. It was one `git show
 origin/docs/KK20-207-pii-masking-recheck:knauf/docs/proposals/pii-masking-and-anonymization.md >
-knauf/docs/privacy/pii-masking-and-anonymization.md`. No merge, no conflict, despite the
-1251-commit gap. (A plain `git checkout <branch> -- <new path>` fails with a pathspec error — the
-file moved to `privacy/` after that branch was cut.)
+knauf/docs/privacy/pii-masking-and-anonymization.md` (a plain `git checkout <branch> -- <new path>`
+fails with a pathspec error — the file moved to `privacy/` after that branch was cut).
+**What remains is the v1.3 delta**: folding §2's rows into §1.1/§2/§8/§9 and adding a §13
+verification log.
 
 ---
 
@@ -705,13 +707,26 @@ retention as a live processing fact.
 
 **Summary:** `karl-web`'s native web search is live — user-derived queries leave to a search
 backend that appears in no data map and no processor review. Datadog's analogous forwarding got its
-own ticket (P1-2); the search hop has none. If the backend is Bing grounding, Microsoft's own terms
-place it **outside** the standard DPA/EU-Data-Boundary posture the assessment's §3 thesis leans on
-— which is exactly why it must be identified rather than assumed.
+own ticket (P1-2); the search hop has none.
 
-**AC:** [ ] the actual backend behind `web_search` identified and documented · [ ] its DPA /
-data-boundary posture confirmed · [ ] added to the assessment §1.1 map (DOC-1) and the §3.1 Art. 28
-row · [ ] if outside the boundary: escalated to the DPO with the query-content implications stated.
+> **Code half answered 2026-09-01.** The mechanism is the **Azure OpenAI Responses API's hosted
+> `web_search` tool**, enabled on the Azure group by `useResponsesApi: true` +
+> `addParams: { web_search: true }` ([`librechat.yaml`](../../../librechat.yaml), KK20-194/KK20-175)
+> — deliberately *not* a LibreChat capability, so no SERPER/Tavily/Firecrawl key is involved and no
+> query leaves through the app's own HTTP client. The request goes to Knauf's Azure OpenAI
+> resource; **Microsoft performs the grounding search server-side**.
+>
+> What remains is therefore **not a code question but a terms question**, and it is the sharp one:
+> does Microsoft's hosted grounding search sit under the same Azure OpenAI DPA and EU Data Boundary
+> commitments the assessment's §3 thesis relies on, or under separate search/grounding terms with
+> different retention and sub-processor handling? The query text is user-derived and can carry the
+> same PII as the prompt.
+
+**AC:** [x] the mechanism behind `web_search` identified and documented (above) · [ ] **the
+remaining question put to the DPO/Legal**: Microsoft's terms for hosted grounding search —
+same-DPA or separate? · [ ] added to the assessment §1.1 map (DOC-1) and the §3.1 Art. 28 row ·
+[ ] if outside the boundary: the query-content implications stated and the spec's exposure
+re-argued (it is one `addParams` key — cheaply reversible).
 
 ---
 
@@ -839,18 +854,20 @@ Close that half by citing it rather than building anything.
 
 **Type:** Task · **Effort:** M · **Compliance:** Art. 5(1)(e), 5(1)(f)
 
-**Summary split:** link **expiry** is genuine convention; the **legacy-migrates-to-public audit is
-not**. Legacy share docs missing `isPublic` silently migrated to PUBLIC (`share.isPublic !==
-false`) — if any previously-restricted link became publicly reachable, that is an Art. 5(1)(f)/32
-confidentiality event and arguably an **Art. 33 breach-assessment trigger**. The audit half needs
-no retention number and should not wait in Phase 2's DPO-gated queue.
+**Summary:** `expiredAt` + a TTL index now exist upstream, so link expiry is a config/product
+decision rather than a build. Expiry itself is convention, not obligation.
 
-**AC:** [ ] **(P2-4a, do first — needs no DPO gate)** existing links audited against the
-legacy-migrates-to-public path; an Art. 33 assessment recorded either way — **a positive finding
-hands off to the DPO the same day, with the 72-hour clock treated as running from audit
-completion** (engineering delivers the link inventory and any access evidence; the assessment
-itself is DPO-owned) · [ ] expiry
-configurable, expired links 404 · [ ] the public-by-default posture decision recorded.
+> **P2-4a was closed by code reading on 2026-09-01, before any audit ran.** It existed because this
+> plan claimed legacy links missing `isPublic` silently migrated to public — a possible past
+> Art. 5(1)(f)/32 event. **The claim was wrong** (see §2 delta row 4): migration is guarded by
+> `'isPublic' in doc` at both entry points, so a doc without the field never migrates, and one with
+> the field migrates to exactly the state it already had. No confidentiality event, no Art. 33
+> trigger, no audit required. What survives is a much smaller check, folded into the AC below.
+
+**AC:** [ ] a bounded check that no residual `{ isPublic: { $exists: true } }` documents remain
+un-migrated per environment (they are correct-by-construction, but an un-migrated legacy doc is
+served a 403 when auto-migration is disabled — an availability, not a confidentiality, issue) ·
+[ ] expiry configurable, expired links 404 · [ ] the public-by-default posture decision recorded.
 
 #### P2-5 · Staging erasure-verification recipe
 
@@ -982,7 +999,7 @@ and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't h
 
 | Wave | When | What | Exit review — the wave is done when |
 |---|---|---|---|
-| **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · **P2-4a** (carved out of P2-4's AC — legacy-public link audit; **a positive finding hands off to the DPO same-day, with the Art. 33 72-hour clock treated as running from audit completion**) · **DOC-1's restore step** (one `git show` command — v1.2 back on `main` so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
+| **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · ✅ **DOC-1's restore step done** (v1.2 back on `main`, so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
 | **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · **P0-1** (in-repo reductions + the upstream `mask` issue opened) · **P2-7 core** (12-month purge wired to the existing `purgeAuditLogEntries` + the write-time IP/metadata decisions; the export-governance tail may trail into wave 2. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0) · **P2-6a** (the runbook half of P2-6's AC — manual DSAR runbook, tested once; **any pending or incoming DSAR promotes this to immediate**) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
 | **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
 | **3 · Retention & rights** | Opens when **P2-1's numbers land** (P2-1 itself started in wave 0; G-2 is what produces it) | **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** (waits deliberately: it needs *a* number, and setting one provisionally only to have P2-1 ratify a different one means bounding the same log twice) · **P2-5 full re-run** (after P2-2, as its AC specifies) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
@@ -1010,8 +1027,7 @@ this folder's README exists to prevent.
 
 **Standalone, do immediately:** P0-6 and P0-7 (the two platform verifications — abuse-monitoring
 opt-out, search-backend identity) bundle with nothing; each is a one-day check the assessment's
-whole §3 strategy leans on. **P2-4a** (legacy-public link audit) also jumps the Phase-2 queue — it
-needs no retention number. **DOC-1** is standalone-anytime; **P1-3** rides with bundle C or with
+whole §3 strategy leans on. **DOC-1** is standalone-anytime; **P1-3** rides with bundle C or with
 the first post-merge upstream sync, whichever lands first.
 
 **Deliberately not bundled:** P2-2 stays alone despite belonging to bundle E — it carries a
@@ -1020,9 +1036,9 @@ migration, a data-integrity defect and a one-way door, and deserves its own revi
 ```
 Wave 0                Wave 1                    Wave 2                  Wave 3 (opens on       close-out
 verify & decide   ──▶ mandatory containment ──▶ config + hygiene   ──▶ P2-1's numbers)    ──▶ review, then
-P0-6 P0-7 P2-4a       P0-2 P0-1 P2-7(core)      P0-3 C(P0-4+P1-1)       P2-2 P2-3 P2-4 P2-8    promote/archive
-P0-2(facts)           P2-6a P2-5(1st run)       P1-5 D P1-3             P2-5(re-run) P2-6      this plan
-v1.2 restore          G-5 interim notice        DOC-1(v1.3) P2-7(tail)
+P0-6 P0-7 P0-2(facts) P0-2 P0-1 P2-7(core)      P0-3 C(P0-4+P1-1)       P2-2 P2-3 P2-4 P2-8    promote/archive
+v1.2 restore          P2-6a P2-5(1st run)       P1-5 D P1-3             P2-5(re-run) P2-6      this plan
+                      G-5 interim notice        DOC-1(v1.3) P2-7(tail)
    │
    └─ G track, all five, parallel from day 0: G-1 G-2 G-3 G-4 G-5 · P2-1 ──▶ numbers unblock Wave 3
 
@@ -1134,7 +1150,8 @@ npm run test:api && npm run test:client
 **Security**
 - Who can read production logs, and are those views redacted?
 - Who can read **Langfuse prod** traces?
-- Shared-link posture after the legacy-migrates-to-public path.
+- Shared-link posture: should links expire by default, and what is the public-share policy?
+  (The legacy-migration concern is closed — §2 row 4.)
 
 **Engineering / Platform**
 - What is `DEBUG_LOGGING` set to in prod? (Config lives in the deployment repos.)
@@ -1142,8 +1159,9 @@ npm run test:api && npm run test:client
   highest-leverage open verification — the assessment's whole "least risky hop" argument rests on
   it, and it has been open since v1.0.
 - Langfuse prod: separate instance, current retention, trace volume?
-- What is the actual backend behind `karl-web`'s native web search, and what are its DPA /
-  data-boundary terms? (P0-7 — Bing grounding sits outside the standard Azure DPA posture.)
+- **Do Microsoft's terms for the Azure OpenAI hosted `web_search` grounding tool carry the same
+  DPA / EU-Data-Boundary commitments as the completion itself?** (P0-7 — the mechanism is now
+  identified; this is the residual terms question, and it is load-bearing for §3's thesis.)
 - Is the Langfuse deployment **Enterprise-licensed**? Server-side ingestion masking
   (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL`) is EE-only, and it is the natural integration point
   for a Presidio masking callback later — so the answer shapes whether layer-3 masking arrives via
