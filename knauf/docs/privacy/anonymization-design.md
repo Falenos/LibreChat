@@ -39,11 +39,13 @@ Three consequences that shape everything below:
    replaced still supports singling out and inference ("the plant manager in Iphofen who raised
    the Q3 complaint"). Nothing in this document claims to anonymize conversations; the honest
    design space is *pseudonymization and minimization*.
-2. **The mapping is the crown jewel.** [EDPB Guidelines 01/2025 on
+2. **The mapping is the crown jewel.** The separation requirement comes from **Art. 4(5) GDPR
+   itself** — the additional information must be "kept separately and subject to technical and
+   organisational measures". [EDPB Guidelines 01/2025 on
    Pseudonymisation](https://www.edpb.europa.eu/system/files/2025-01/edpb_guidelines_202501_pseudonymisation_en.pdf)
-   require the "additional information" (the placeholder↔identity map) to be held separately,
-   access-controlled, and covered by its own technical and organisational measures. A
-   pseudonymization system without a governed vault is just a renaming exercise.
+   elaborate it (adopted **for consultation** January 2025; final version still pending and under
+   post-*SRB* revision — treat as strong supporting guidance, not settled text). A pseudonymization
+   system without a governed vault is just a renaming exercise.
 3. **The CJEU made pseudonymization worth more — for recipients, not for us.** In
    [*EDPS v SRB* (C-413/23 P, 4 Sept 2025)](https://curia.europa.eu/site/upload/docs/application/pdf/2025-09/cp250107en.pdf)
    the Court adopted a **relative approach**: pseudonymized data transferred to a recipient who has
@@ -207,7 +209,7 @@ never crosses a trust boundary. Pseudonymize third-party names in `memory.value`
 |---|---|
 | **GDPR Art. 5(1)(c), 25** | Minimization is judged against purpose — it compels minimizing *derived copies*, not degrading the primary function. Fidelity-primary/minimized-derived is a defensible Art. 25 architecture |
 | **GDPR Art. 4(5) + Recital 26** | Everything reversible here is pseudonymization; it stays in scope. Never write "anonymized" in a DPIA for placeholder substitution |
-| **[EDPB Guidelines 01/2025](https://www.edpb.europa.eu/system/files/2025-01/edpb_guidelines_202501_pseudonymisation_en.pdf)** | The mapping/vault needs separation, access control, and its own TOMs; pseudonymization is an Art. 32 measure and can support Art. 6(4) compatibility — but exempts nothing |
+| **[EDPB Guidelines 01/2025](https://www.edpb.europa.eu/system/files/2025-01/edpb_guidelines_202501_pseudonymisation_en.pdf)** *(consultation draft; final pending post-SRB revision)* | The mapping/vault needs separation, access control, and its own TOMs (anchored in Art. 4(5) directly); pseudonymization is an Art. 32 measure and can support Art. 6(4) compatibility — but exempts nothing |
 | **[CJEU *EDPS v SRB*, C-413/23 P](https://curia.europa.eu/site/upload/docs/application/pdf/2025-09/cp250107en.pdf)** | Relative approach: recipients without reasonable means of re-identification may fall outside "personal data" for that copy. Strengthens the case for pseudonymized support/reporting/debug views; changes nothing for Knauf-held stores |
 | **[EDPB LLM privacy report (Apr 2025)](https://www.edpb.europa.eu/system/files/2025-04/ai-privacy-risks-and-mitigations-in-llms.pdf)** | Risk methodology for LLM systems; names leakage, memorisation, unintentional profiling, re-identification — all mitigated by the derived-copy controls (Ph 0–2), none by inline masking of the primary flow |
 | **WP29 Opinion 05/2014 (WP216)** | The three anonymization tests (singling out, linkability, inference) — the reason this doc never claims anonymization of free text |

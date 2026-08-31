@@ -11,8 +11,8 @@ a single proposal, its docs graduate out of `proposals/` into a dedicated folder
 
 | Doc | What it is | Status |
 |---|---|---|
-| [`workstream.md`](./workstream.md) | **Start here.** The executable plan — verified delta against current `main`, phase-by-phase impact and priority, the GDPR / EU AI Act / BetrVG mapping, a paste-ready ticket set, and the bundling recommendation | ✅ current (2026-08-28) |
-| [`anonymization-design.md`](./anonymization-design.md) | The design rationale for *where* anonymization/pseudonymization belongs — per-surface decision framework (chat send / store / private files / shared knowledge files / derived copies), the round-trip ("does it map back?") analysis, and the EU legal frame (EDPB 01/2025, CJEU *EDPS v SRB*) | ✅ current (2026-08-31) |
+| [`workstream.md`](./workstream.md) | **Start here.** The executable plan — verified delta against current `main`, phase-by-phase impact and priority, the GDPR / EU AI Act / BetrVG mapping, the **audit-log retention analysis (§3.4 — 12 months, with the legal basis)**, the **mandatory-vs-convention necessity map (§4.4)**, a paste-ready ticket set, and the bundling recommendation | ✅ current (2026-08-31, adversarially verified) |
+| [`anonymization-design.md`](./anonymization-design.md) | The design rationale for *where* anonymization/pseudonymization belongs — per-surface decision framework across all seven copies (chat send / store / private files / shared knowledge files / memory / derived sinks / model reasoning), the round-trip ("does it map back?") analysis, and the EU legal frame (EDPB 01/2025, CJEU *EDPS v SRB*) | ✅ current (2026-08-31) |
 | [`pii-masking-and-anonymization.md`](./pii-masking-and-anonymization.md) | The KK20-207 discovery assessment — data classification, per-category handling matrix, engine options, the original phased roadmap | ⚠️ **v1.0, stale** — carries a banner explaining what changed; superseded in part by `workstream.md` |
 
 ## The one-paragraph version
