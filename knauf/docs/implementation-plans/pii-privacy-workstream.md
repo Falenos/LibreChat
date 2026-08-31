@@ -176,7 +176,7 @@ obligations it discharges, and what actually gets built.
 | **0 · Containment** | Stops live over-collection; turns three inherited defaults into asserted decisions | High, narrow | **Do first** | Days | 5(1)(c) · 25 · 5(2) |
 | **1 · Log hygiene** | Makes logs structurally unable to carry identifiers, and makes it survive merges | Medium-high, rising | Next | ~1 sprint | 5(1)(c) · 32 · 28 · 25 |
 | **2 · Retention & rights** | Nothing personal persists without a period; erasure provable; DSARs answerable | **Highest** | Gated on DPO | 1–2 sprints + decisions | 5(1)(e) · 15/20 · 17 · 5(2) |
-| **3 · Engine** | Actual PII detection at the two persistence chokepoints that pay off | Medium | Deliberately last | PoC ~2wk, then 1–2 sprints | 5(1)(c) at sink · 9 |
+| **3 · Engine** | Actual PII detection at the two persistence chokepoints that pay off | Medium | **PoC anytime**; wiring last | PoC ~2wk, then 1–2 sprints | 5(1)(c) at sink · 9 |
 | **4 · Inline masking** | Opt-in input masking for one named high-risk flow | Possibly none | **Never, by default** | — | — |
 | **G · Governance** | DPIA, works agreement, Art. 30 record, AI Act posture | Unblocks Phase 2 | **Start now, parallel** | DPO/Legal time | 35 · 6 · 30 · AI Act 4/50 · §87(1)(6) |
 
@@ -185,9 +185,11 @@ obligations it discharges, and what actually gets built.
 Two things are worth saying plainly, because instinct points the wrong way on both:
 
 - **The phase everyone assumes is the project — Phase 3, "PII masking" — is the least urgent.**
-  It is the only phase with a real spend decision, it is gated on a PoC, and every phase above it
-  removes more risk per unit of effort. Reaching for it first is the most common way this kind of
-  work stalls.
+  It is the only phase with a real spend decision, and every phase above it removes more risk per
+  unit of effort. Reaching for it first is the most common way this kind of work stalls. Note the
+  split, though: its **PoC** is unblocked today and can run in parallel; what stays last is wiring
+  masking into production paths. An engine can never be a *prerequisite* for Phases 0–1 — see
+  Phase 3 below for why none of those items can call one.
 - **The track that costs engineering nothing has the longest lead time.** Governance (G) needs
   DPO and works-council calendar time measured in weeks, and it **gates Phase 2** — which is where
   the actual GDPR exposure sits. Starting G on day one is free and shortens the critical path more
@@ -314,10 +316,28 @@ non-streamed persistence chokepoints where masking has clear ROI.
 flow whose output is exposed to *other* users. Memory values get pseudonymised at write. Neither
 touches live chat, so there is no user-visible utility loss.
 
-**How important.** **Medium, and deliberately last.** Everything in Phases 0–2 removes more risk
-per unit of effort, and this is the only phase carrying a licensing/infrastructure spend. It is
-also the phase most likely to be started first for the wrong reason — "PII masking" is the ticket
-title, so it reads as the whole project. It is not.
+**How important.** **Medium for the wiring — but the PoC has no dependencies and can start any
+time.** Separate the two halves, because they sequence differently:
+
+- **P3-1, the PoC, is unblocked today.** It needs only `agk-deployment-configs`, has no dependency
+  on Phases 0–2, and carries the same long-lead-time argument as the governance track. Starting it
+  in parallel is reasonable and shortens the critical path to a recorded engine decision.
+- **P3-2/P3-3, wiring masking into production paths, stays last.** Everything in Phases 0–2 removes
+  more risk per unit of effort, and this is the only phase carrying a licensing/infrastructure
+  spend.
+
+What must **not** happen is making an engine a *prerequisite* for earlier phases. It cannot be one:
+no Phase 0 item can consume it (Langfuse exposes no `mask` hook and `@librechat/agents` does not
+forward `@langfuse/otel`'s; `messageFilter.pii` compiles regex strings from yaml and cannot call a
+service; P0-4 deletes fields already known to be identifiers), and the one case that looks like a
+fit — replacing P1-1's regexes — is architecturally incompatible: `redactFormat`
+(`packages/data-schemas/src/config/parsers.ts:358`) is a **synchronous** winston transform on every
+log line, and an engine call is a ~35–70 ms in-cluster HTTP round trip. Regexes are the correct
+tool there, not a stopgap. Deploying an engine early also pre-empts the very decision G3 exists to
+make on measured German/English performance.
+
+This is the phase most likely to be started first for the wrong reason — "PII masking" is the
+ticket title, so it reads as the whole project. It is not.
 
 **Compliance discharged.** Art. 5(1)(c) minimisation *at the sink*, which is the strongest form.
 Art. 9 special categories — pseudonymising memory is the most direct mitigation available for the
