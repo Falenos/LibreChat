@@ -88,13 +88,20 @@ genuinely useful for **credential hygiene** and actively harmful for entity PII 
 message because it contains an email address is exactly the utility loss the assessment argues
 against. Enable it; do **not** put identity patterns in it.
 
-**Langfuse has more in-repo levers than expected.** `LangfuseConfig` exposes no `mask` hook, but
-`toolOutputTracing: { enabled: false }` **is** honoured per-run and strips RAG chunk text,
-code-interpreter output, file-search results and web-fetch bodies from traces — that is assessment
-category #4 (extracted document body, P0) removed by one line inside an existing seam. Separately,
-[`langfuse/feedback.ts:88`](../../../packages/api/src/langfuse/feedback.ts) sets
-`comment: [feedback.tag, feedback.text]…`, so users' **free-text** thumbs-down comments (category
-#11, "Current control: None") go verbatim into a second durable store.
+**Langfuse captures full payloads, and nobody chose that.** Traces carry prompts, completions,
+tool outputs (RAG chunk text, code-interpreter output, file-search results, web-fetch bodies),
+memory-agent values, and — via [`langfuse/feedback.ts:88`](../../../packages/api/src/langfuse/feedback.ts),
+which sets `comment: [feedback.tag, feedback.text]…` — users' **free-text** thumbs-down comments
+(assessment category #11, "Current control: None"). That is assessment category #4 (extracted
+document body, P0) plus the most profiling-grade content in the system, in a second store the
+Art. 17 cascade does not reach.
+
+**The problem is not that this data is useful — it is. The problem is that full payload capture
+happened by default rather than by decision, in production, with no retention period and no access
+review.** See §4.3 for the posture the industry has converged on and where KARL actually stands
+against it. In-repo levers are blunt (`enabled`, `toolOutputTracing`); the good lever — targeted
+field-level redaction — is **not currently reachable**, for two independent reasons recorded in
+§4.3.
 
 > **Trap:** `LANGFUSE_SAMPLE_RATE` is **not** a trace-volume control. It is read only by the
 > fork-local `feedback.ts:39`, where a value of `0` disables feedback scores. Do not let it be
@@ -195,6 +202,48 @@ Two things are worth saying plainly, because instinct points the wrong way on bo
   the actual GDPR exposure sits. Starting G on day one is free and shortens the critical path more
   than any engineering decision here.
 
+### 4.3 Observability posture — what the industry does, and where KARL sits
+
+This drives the largest Phase 0 item, and the intuitive answer ("stop sending sensitive fields") is
+the wrong one. Two independent sources converge on the same four-layer model:
+
+- The **OpenTelemetry GenAI semantic conventions** capture *no* prompt content or tool arguments by
+  default — only structural metadata (model, token counts, durations). Every content-bearing
+  attribute is explicitly **opt-in**, so "content never appears because someone forgot a flag". The
+  stated practice is: ship structural telemetry everywhere, enable payload attributes behind a
+  config flag, with redaction and retention rules attached.
+- **Langfuse's own engineering guidance** is blunter about the tradeoff: *"aggressive whole-text
+  scrubbing hurts debuggability; prefer **targeted redaction plus short retention** over blanking
+  everything."* Field-level redaction is preferred precisely because it preserves structure — a
+  masked trace still shows *that* a card or a name was discussed.
+
+| Layer | What it means | KARL today |
+|---|---|---|
+| **1 · Structure always** | Span tree, timings, model, token counts, tool names, status | ✅ fine |
+| **2 · Payloads by decision** | Prompts, completions, tool outputs — on deliberately, scoped by environment | ⚠️ **on by accident**, prod included |
+| **3 · Targeted redaction** | Field-level masking inside payloads; keeps traces debuggable | ❌ **not reachable** — see below |
+| **4 · Retention + access** | Short retention as the blast-radius backstop; RBAC on who can read | ❌ **neither set** |
+
+**Why layer 3 is blocked — two independent reasons:**
+
+1. **In-app:** `LangfuseConfig` exposes no `mask` hook. `@langfuse/otel` *does* accept a `mask`
+   function, but `@librechat/agents` constructs the span processor itself and forwards only
+   `{publicKey, secretKey, baseUrl}`. Reaching it needs an **upstream contribution**, not a local
+   change — and never a `node_modules` patch.
+2. **Server-side:** Langfuse self-hosted supports ingestion masking via an HTTP callback
+   (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL` on the worker), which would be an excellent fit for a
+   Presidio sidecar. But it is an **Enterprise Edition** feature and only covers the OTel ingestion
+   endpoint. Our rollout plan records no licence, so **confirm EE status before planning around
+   it** (this is an open question in §10, not an assumption).
+
+**Consequence for Phase 0:** the achievable win is **layer 4, not layer 2**. Retention and access
+control need no code, no licence and no upstream PR, and they bound the blast radius of everything
+still captured. Blanket-disabling tool outputs would trade a large, immediate debuggability loss
+for a small privacy gain — and would directly undercut
+[`agent-retrieval-and-langgraph-reliability-plan.md`](./agent-retrieval-and-langgraph-reliability-plan.md),
+whose Sprint 5 is literally *"Make Langfuse prove the fix"* and whose validation method is Langfuse
+retrieval diagnostics.
+
 ---
 
 ### Phase 0 — containment and explicit decisions
@@ -202,9 +251,10 @@ Two things are worth saying plainly, because instinct points the wrong way on bo
 **What it is.** Stop the two live over-collections, remove identity from auth logs, and convert
 three inherited defaults into decisions somebody actually made.
 
-**Impact.** Langfuse stops recording extracted document text, code-interpreter output and users'
-free-text feedback. Login stops writing email and name into logs. MCP/shared-link/retention posture
-becomes explicit and converges across dev, stage and prod instead of drifting per environment.
+**Impact.** Langfuse trace payloads become a bounded, reviewed decision — a retention period, a
+recorded read-access group, and environment separation — instead of unbounded capture nobody chose.
+Login stops writing email and name into logs. MCP/shared-link/retention posture becomes explicit
+and converges across dev, stage and prod instead of drifting per environment.
 
 **How important.** **High, but narrowly.** The Langfuse half is the only genuinely time-sensitive
 item in the entire workstream — it is accumulating in production right now, and every day adds
@@ -217,15 +267,16 @@ urgency.
 and by default — the explicit yaml blocks *are* the evidence that defaults were chosen rather than
 inherited. Art. 5(2) accountability, via the logging-posture one-pager.
 
-**What gets done.** P0-1 (Langfuse in-repo levers) · P0-2 (Langfuse platform retention and access,
-cross-repo — **investigate before coding**) · P0-3 (config baseline: `messageFilter.pii` with
+**What gets done.** P0-2 (Langfuse retention and access — **the main event, and mostly cross-repo**)
+· P0-1 (the narrow in-repo reductions that do not cost debuggability, plus opening the path to
+proper masking) · P0-3 (config baseline: `messageFilter.pii` with
 credential patterns only, MCP/`remoteAgents` restricted, `retentionMode` pinned, `sharedLinks` made
 explicit, plus the mandatory client copy seam) · P0-4 (OpenID and ban-log identity minimisation) ·
 P0-5 (logging-posture one-pager).
 
 **Done when.** No message content or raw identifier reaches prod logs by configuration; Langfuse
-traces carry no tool output or free-text feedback; MCP, shared-link and retention posture are
-recorded decisions verified as converged in Mongo.
+has a retention period, a recorded read-access group and dev/prod separation; MCP, shared-link and
+retention posture are recorded decisions verified as converged in Mongo.
 
 **Cost of not doing it.** Langfuse keeps accruing verbatim prompts, completions and memory values
 with no retention policy — the exact "durable copy without a purpose" the strategy is built to
@@ -448,39 +499,58 @@ onto a branch off `main`. No merge, no conflict, despite the 1251-commit gap.
 **Type:** Bug · **Effort:** S · **Compliance:** Art. 5(1)(c), 5(1)(e), 17
 
 **Summary:** Langfuse went live in dev and prod without the PII gate KK20-207 §12.2 named as a hard
-precondition. Traces capture prompts, completions, memory-agent runs and feedback verbatim into a
-store the Art. 17 erasure cascade does not reach. Langfuse is self-hosted in Knauf's own AKS, so
-this is a **retention and minimisation** issue, not a data-leaves-the-estate incident.
+precondition. Langfuse is self-hosted in Knauf's own AKS, so this is a **retention and minimisation**
+issue, not a data-leaves-the-estate incident.
+
+**Deliberately narrow.** Per §4.3, tool-output payloads are **kept** — they are the primary
+debugging artefact and an in-flight retrieval workstream validates against them. This ticket only
+removes payloads with low debug value or a redundant copy elsewhere, and opens the path to layer-3
+masking. Bounding the rest is P0-2's job.
 
 **AC:**
-- [ ] `toolOutputTracing: { enabled: false }` in `buildLangfuseConfig`
-      (`packages/api/src/agents/run.ts:887-918`) — removes RAG chunk text, code-interpreter output,
-      file-search results and web-fetch bodies from traces.
-- [ ] Feedback free-text no longer sent as the score `comment` (`api/server/routes/messages.js:419-433`
-      → drop `feedback.text`, keep `tag`).
-- [ ] The memory-agent trace (`packages/api/src/agents/memory.ts:464-474`) covered, not just the
-      main run — memory values are the most profiling-grade content in the system.
+- [ ] **Do not** blanket-disable `toolOutputTracing`. Record the decision to retain tool outputs,
+      with §4.3's reasoning, so it is not silently reversed.
+- [ ] Feedback free-text no longer sent as the Langfuse score `comment`
+      (`api/server/routes/messages.js:419-433` → keep `tag` and `rating`, drop `text`). Rationale:
+      `tag` carries the triage signal, and the free text is already durably stored in Mongo at
+      `message.feedback.text` — Langfuse is a redundant second copy of the highest-entropy
+      free-text field in the product.
+- [ ] Memory-agent trace payloads (`packages/api/src/agents/memory.ts:464-474`) reviewed
+      separately — highest sensitivity, lowest marginal debug value (the mechanism is debuggable
+      from structure; the stored value is rarely what is in question).
 - [ ] Identity posture pinned by a regression assertion (`userId`/`sessionId` stay pseudonymous).
 - [ ] `LANGFUSE_SAMPLE_RATE` documented as *not* a privacy control.
+- [ ] **Path to layer 3 opened:** an upstream issue or PR against `@librechat/agents` to forward
+      `@langfuse/otel`'s `mask` parameter through `LangfuseConfig`. Never patch `node_modules`.
 
-**Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard is the precedent.
-`SEAMS.md:359` already has a `buildLangfuseConfig` row — **append**, never edit.
+**Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard is the precedent for
+per-run gating. `SEAMS.md:359` already has a `buildLangfuseConfig` row — **append**, never edit.
 
 #### P0-2 · Langfuse platform retention & access *(cross-repo — `agk-deployment-configs`)*
 
 **Type:** Task · **Effort:** S · **Compliance:** Art. 5(1)(e), 17, 32
 
-**Summary:** P0-1 reduces what is written; only platform retention deletes it. Establish the
-deployment facts first, then set a period.
+**Summary:** **This is the main Langfuse control, not the supporting one.** Because layer-3 masking
+is unreachable today (§4.3), retention and access are what actually bound the exposure — and they
+need no code, no licence and no upstream change. Short retention is also what makes *keeping*
+debuggable payloads defensible.
 
-**AC:** [ ] documented: which environments send traces, whether prod uses a separate instance from
-`langfuse.agk.dev.knauf.digital`, current retention, which Okta group can read prod traces ·
-[ ] project data-retention period set (from P2-1) · [ ] ClickHouse / Postgres / MinIO lifecycle
-aligned · [ ] `LANGFUSE_TRACING_ENVIRONMENT` differs dev vs prod so retention can differ ·
-[ ] "who can read Langfuse prod" added to the assessment's §7.2 Security questions.
+**AC:**
+- [ ] Documented: which environments send traces, whether prod uses a separate instance from
+      `langfuse.agk.dev.knauf.digital`, current retention, and which Okta group can read prod traces.
+- [ ] **Project data-retention period set** (from P2-1). This is the single highest-value action in
+      the Langfuse workstream.
+- [ ] ClickHouse / Postgres / MinIO lifecycle aligned with that period — retention that the object
+      store ignores is not retention.
+- [ ] `LANGFUSE_TRACING_ENVIRONMENT` differs dev vs prod, so prod can carry a shorter period than dev.
+- [ ] **Read access reviewed and recorded** — trace payloads are message content; the group that can
+      read them is effectively a group that can read user conversations.
+- [ ] **EE licence status confirmed**, since server-side ingestion masking is Enterprise-only and
+      determines whether a Presidio masking callback is even an option later (§4.3).
+- [ ] Sampling considered if prod volume warrants it — reduces exposure and cost together.
+- [ ] "Who can read Langfuse prod" added to the assessment's §7.2 Security questions.
 
-> **Do P0-2's investigation before P0-1's code.** Its answers decide whether P0-1 is urgent or
-> routine.
+> **Do P0-2 first.** Its answers decide the shape of P0-1 and whether anything here is urgent.
 
 #### P0-3 · Phase 0 config baseline
 
@@ -787,9 +857,10 @@ period silently adopts that as Knauf's corporate retention policy.
 
 ## 9. Verification recipes
 
-**P0-1 — Langfuse.** `npm run langfuse:traces` lists recent traces. Send a turn that uses file
-search and confirm chunk text is absent from the trace; submit a thumbs-down with free text and
-confirm the score `comment` carries only the tag.
+**P0-1 — Langfuse.** `npm run langfuse:traces` lists recent traces. Submit a thumbs-down with free
+text and confirm the score `comment` carries only the tag. Send a turn that uses file search and
+confirm chunk text **is still present** — that is the regression test for §4.3's decision to keep
+tool outputs debuggable.
 
 ```bash
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'
@@ -844,6 +915,10 @@ npm run test:api && npm run test:client
   highest-leverage open verification — the assessment's whole "least risky hop" argument rests on
   it, and it has been open since v1.0.
 - Langfuse prod: separate instance, current retention, trace volume?
+- Is the Langfuse deployment **Enterprise-licensed**? Server-side ingestion masking
+  (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL`) is EE-only, and it is the natural integration point
+  for a Presidio masking callback later — so the answer shapes whether layer-3 masking arrives via
+  the platform or via an upstream `@librechat/agents` contribution (§4.3).
 
 ---
 
