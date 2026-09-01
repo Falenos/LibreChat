@@ -284,6 +284,9 @@ if (cluster.isMaster) {
     indexSync().catch((err) => {
       logger.error(`[Worker ${process.pid}][indexSync] Background sync failed:`, err);
     });
+    // [knauf] Keep experimental workers on the same periodic Meilisearch recovery path.
+    indexSync.startReconciliation();
+    // End [knauf]
 
     app.disable('x-powered-by');
     app.set('trust proxy', trusted_proxy);

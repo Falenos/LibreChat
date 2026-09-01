@@ -1,14 +1,18 @@
 const mongoose = require('mongoose');
-const { MeiliSearch } = require('meilisearch');
+// [knauf] Wait for queued reconciliation mutations instead of only accepting them.
+const { MeiliSearch, MeiliSearchTimeOutError } = require('meilisearch');
+// End [knauf]
 const { logger } = require('@librechat/data-schemas');
 const { CacheKeys } = require('librechat-data-provider');
 const { isEnabled, FlowStateManager } = require('@librechat/api');
+// [knauf] Serialize the full Meilisearch reconciliation operation across API replicas.
+const { withMeiliSyncLock } = require('~/knauf/db/meiliSyncLock');
+// End [knauf]
 const { getLogStores } = require('~/cache');
 const { batchResetMeiliFlags } = require('./utils');
 
 const searchEnabled = isEnabled(process.env.SEARCH);
 const indexingDisabled = isEnabled(process.env.MEILI_NO_SYNC);
-let currentTimeout = null;
 
 // [knauf] Periodically repair drift after an ephemeral Meilisearch restart.
 const reconciliationIntervalMs = 15 * 60 * 1000;
@@ -36,6 +40,25 @@ class MeiliSearchClient {
     return MeiliSearchClient.instance;
   }
 }
+
+// [knauf] Keep the operation lease until a queued Meilisearch mutation is terminal.
+async function waitForSuccessfulTask(client, taskUid, operation) {
+  while (true) {
+    try {
+      const task = await client.waitForTask(taskUid, { timeOutMs: 10_000, intervalMs: 250 });
+      if (task.status !== 'succeeded') {
+        throw new Error(`${operation} task ${taskUid} ended with ${task.status}`);
+      }
+      return;
+    } catch (error) {
+      if (error instanceof MeiliSearchTimeOutError) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+// End [knauf]
 
 // [knauf] Treat a missing ephemeral index as empty without hiding other provider failures.
 async function getIndexDocumentCount(index) {
@@ -78,7 +101,10 @@ async function deleteDocumentsWithoutUserField(index, indexName) {
         logger.info(
           `[indexSync] Deleting ${idsToDelete.length} documents without user field from ${indexName} index`,
         );
-        await index.deleteDocuments(idsToDelete);
+        // [knauf] Confirm cleanup before releasing reconciliation ownership.
+        const deletion = await index.deleteDocuments(idsToDelete);
+        await waitForSuccessfulTask(MeiliSearchClient.getInstance(), deletion.taskUid, indexName);
+        // End [knauf]
         deletedCount += idsToDelete.length;
       }
 
@@ -86,7 +112,9 @@ async function deleteDocumentsWithoutUserField(index, indexName) {
         break;
       }
 
-      offset += batchSize;
+      // [knauf] Completed deletions compact the result set; advance only past retained hits.
+      offset += searchResult.hits.length - idsToDelete.length;
+      // End [knauf]
     }
 
     if (deletedCount > 0) {
@@ -94,6 +122,9 @@ async function deleteDocumentsWithoutUserField(index, indexName) {
     }
   } catch (error) {
     logger.error(`[indexSync] Error deleting documents from ${indexName}:`, error);
+    // [knauf] Keep failed cleanup retryable under the operation lease.
+    throw error;
+    // End [knauf]
   }
 
   return deletedCount;
@@ -116,9 +147,12 @@ async function ensureFilterableAttributes(client) {
 
       if (!settings.filterableAttributes || !settings.filterableAttributes.includes('user')) {
         logger.info('[indexSync] Configuring messages index to filter by user...');
-        await messagesIndex.updateSettings({
+        const settingsTask = await messagesIndex.updateSettings({
           filterableAttributes: ['user'],
         });
+        // [knauf] Confirm settings application before resetting durable sync flags.
+        await waitForSuccessfulTask(client, settingsTask.taskUid, 'messages settings');
+        // End [knauf]
         logger.info('[indexSync] Messages index configured for user filtering');
         settingsUpdated = true;
       }
@@ -138,6 +172,9 @@ async function ensureFilterableAttributes(client) {
     } catch (error) {
       if (error.code !== 'index_not_found') {
         logger.warn('[indexSync] Could not check/update messages index settings:', error.message);
+        // [knauf] Do not release reconciliation ownership as successful after a failed settings task.
+        throw error;
+        // End [knauf]
       }
     }
 
@@ -148,9 +185,12 @@ async function ensureFilterableAttributes(client) {
 
       if (!settings.filterableAttributes || !settings.filterableAttributes.includes('user')) {
         logger.info('[indexSync] Configuring convos index to filter by user...');
-        await convosIndex.updateSettings({
+        const settingsTask = await convosIndex.updateSettings({
           filterableAttributes: ['user'],
         });
+        // [knauf] Confirm settings application before resetting durable sync flags.
+        await waitForSuccessfulTask(client, settingsTask.taskUid, 'convos settings');
+        // End [knauf]
         logger.info('[indexSync] Convos index configured for user filtering');
         settingsUpdated = true;
       }
@@ -170,6 +210,9 @@ async function ensureFilterableAttributes(client) {
     } catch (error) {
       if (error.code !== 'index_not_found') {
         logger.warn('[indexSync] Could not check/update convos index settings:', error.message);
+        // [knauf] Do not release reconciliation ownership as successful after a failed settings task.
+        throw error;
+        // End [knauf]
       }
     }
 
@@ -179,14 +222,26 @@ async function ensureFilterableAttributes(client) {
         const messagesIndex = client.index('messages');
         await deleteDocumentsWithoutUserField(messagesIndex, 'messages');
       } catch (error) {
-        logger.debug('[indexSync] Could not clean up messages:', error.message);
+        // [knauf] Tolerate only an index that disappeared; propagate real cleanup failures.
+        if (error.code === 'index_not_found') {
+          logger.debug('[indexSync] Messages index disappeared before cleanup');
+        } else {
+          throw error;
+        }
+        // End [knauf]
       }
 
       try {
         const convosIndex = client.index('convos');
         await deleteDocumentsWithoutUserField(convosIndex, 'convos');
       } catch (error) {
-        logger.debug('[indexSync] Could not clean up convos:', error.message);
+        // [knauf] Tolerate only an index that disappeared; propagate real cleanup failures.
+        if (error.code === 'index_not_found') {
+          logger.debug('[indexSync] Conversations index disappeared before cleanup');
+        } else {
+          throw error;
+        }
+        // End [knauf]
       }
 
       logger.info('[indexSync] Orphaned documents cleaned up without forcing resync.');
@@ -197,6 +252,9 @@ async function ensureFilterableAttributes(client) {
     }
   } catch (error) {
     logger.error('[indexSync] Error ensuring filterable attributes:', error);
+    // [knauf] Failed preflight mutations must fail the leased reconciliation attempt.
+    throw error;
+    // End [knauf]
   }
 
   return { settingsUpdated, orphanedDocsFound: hasOrphanedDocs };
@@ -359,11 +417,7 @@ async function performSync(flowManager, flowId, flowType) {
 /**
  * Main index sync function that uses FlowStateManager to prevent concurrent execution
  */
-async function indexSync() {
-  if (!searchEnabled) {
-    return;
-  }
-
+async function runIndexSync() {
   logger.info('[indexSync] Starting index synchronization check...');
 
   // Get or create FlowStateManager instance
@@ -402,30 +456,42 @@ async function indexSync() {
 
     if (err.message.includes('not found')) {
       logger.debug('[indexSync] Creating indices...');
-      currentTimeout = setTimeout(async () => {
-        try {
-          const Message = mongoose.models.Message;
-          const Conversation = mongoose.models.Conversation;
-          if (!Message || !Conversation) {
-            throw new Error(
-              '[indexSync] Models not registered. Ensure createModels() has been called before indexSync.',
-            );
-          }
-          await Message.syncWithMeili();
-          await Conversation.syncWithMeili();
-        } catch (err) {
-          logger.error('[indexSync] Trouble creating indices, try restarting the server.', err);
+      // [knauf] Keep missing-index recovery inside the cross-replica operation lease.
+      try {
+        const Message = mongoose.models.Message;
+        const Conversation = mongoose.models.Conversation;
+        if (!Message || !Conversation) {
+          throw new Error(
+            '[indexSync] Models not registered. Ensure createModels() has been called before indexSync.',
+          );
         }
-      }, 750);
+        await Message.syncWithMeili();
+        await Conversation.syncWithMeili();
+      } catch (syncError) {
+        logger.error('[indexSync] Trouble creating indices, try restarting the server.', syncError);
+        throw syncError;
+      }
+      // End [knauf]
     } else if (err.message.includes('Meilisearch not configured')) {
       logger.info('[indexSync] Meilisearch not configured, search will be disabled.');
     } else {
       logger.error('[indexSync] error', err);
+      throw err;
     }
   }
 }
 
-// [knauf] Run a silent bounded preflight; the existing Redis flow lock owns any required sync.
+// [knauf] Hold one renewable Mongo lease for every destructive reconciliation phase.
+async function indexSync() {
+  if (!searchEnabled) {
+    return;
+  }
+
+  return withMeiliSyncLock(mongoose, runIndexSync, { waitForLease: true });
+}
+// End [knauf]
+
+// [knauf] Run a silent bounded preflight; the operation lease owns any required sync.
 async function needsReconciliation() {
   const Message = mongoose.models.Message;
   const Conversation = mongoose.models.Conversation;
@@ -453,12 +519,13 @@ indexSync.startReconciliation = () => {
   if (!searchEnabled || indexingDisabled || reconciliationInterval) {
     return;
   }
-
   reconciliationInterval = setInterval(async () => {
     try {
-      if (await needsReconciliation()) {
-        await indexSync();
-      }
+      await withMeiliSyncLock(mongoose, async () => {
+        if (await needsReconciliation()) {
+          await runIndexSync();
+        }
+      });
     } catch (error) {
       logger.warn('[indexSync] Periodic reconciliation check failed:', error.message);
     }
@@ -473,8 +540,6 @@ indexSync.stopReconciliation = () => {
 // End [knauf]
 
 process.on('exit', () => {
-  logger.debug('[indexSync] Clearing sync timeouts before exiting...');
-  clearTimeout(currentTimeout);
   // [knauf] Release the periodic reconciliation timer during shutdown.
   indexSync.stopReconciliation();
   // End [knauf]

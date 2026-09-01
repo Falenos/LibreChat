@@ -59,6 +59,9 @@ const mockUpdateDocuments = jest.fn();
 const mockDeleteDocument = jest.fn();
 const mockDeleteDocuments = jest.fn();
 const mockGetDocument = jest.fn();
+// [knauf] Model terminal Meilisearch task completion for bulk-sync fencing tests.
+const mockWaitForTask = jest.fn();
+// End [knauf]
 const mockIndex = jest.fn().mockReturnValue({
   getRawInfo: jest.fn(),
   updateSettings: jest.fn(),
@@ -69,9 +72,15 @@ const mockIndex = jest.fn().mockReturnValue({
   deleteDocuments: mockDeleteDocuments,
   getDocument: mockGetDocument,
   getDocuments: jest.fn().mockReturnValue({ results: [] }),
+  // [knauf] Expose task polling on the mocked index.
+  waitForTask: mockWaitForTask,
+  // End [knauf]
 });
 jest.mock('meilisearch', () => {
   return {
+    // [knauf] Preserve instanceof checks used by the task polling loop.
+    MeiliSearchTimeOutError: class MeiliSearchTimeOutError extends Error {},
+    // End [knauf]
     MeiliSearch: jest.fn().mockImplementation(() => {
       return {
         index: mockIndex,
@@ -100,11 +109,18 @@ describe('Meilisearch Mongoose plugin', () => {
 
   beforeEach(() => {
     mockAddDocuments.mockClear();
-    mockAddDocumentsInBatches.mockClear();
+    // [knauf] Every bulk write returns one queued task that succeeds by default.
+    mockAddDocumentsInBatches.mockReset().mockResolvedValue([{ taskUid: 1 }]);
+    // End [knauf]
     mockUpdateDocuments.mockClear();
     mockDeleteDocument.mockClear();
-    mockDeleteDocuments.mockClear();
+    // [knauf] Cleanup mutations return queued task identifiers.
+    mockDeleteDocuments.mockReset().mockResolvedValue({ taskUid: 2 });
+    // End [knauf]
     mockGetDocument.mockClear();
+    // [knauf] Reset terminal task behavior between bulk-sync tests.
+    mockWaitForTask.mockReset().mockResolvedValue({ status: 'succeeded' });
+    // End [knauf]
   });
 
   afterAll(async () => {
@@ -697,7 +713,90 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(mockAddDocumentsInBatches).toHaveBeenCalledWith(expect.any(Array), undefined, {
         primaryKey: 'conversationId',
       });
+      expect(mockWaitForTask).toHaveBeenCalledWith(1, {
+        timeOutMs: 10_000,
+        intervalMs: 250,
+      });
     });
+
+    // [knauf] Mongo flags must remain false while Meilisearch still processes the batch.
+    test('does not mark Mongo documents indexed before the Meilisearch task succeeds', async () => {
+      const conversationModel = createConversationModel(
+        mongoose,
+      ) as unknown as SchemaWithMeiliMethods;
+      await conversationModel.deleteMany({});
+      let finishTask: ((task: { status: string }) => void) | undefined;
+      mockWaitForTask.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishTask = resolve;
+          }),
+      );
+
+      await conversationModel.collection.insertOne({
+        conversationId: new mongoose.Types.ObjectId(),
+        user: new mongoose.Types.ObjectId(),
+        title: 'Wait for Meilisearch',
+        endpoint: EModelEndpoint.openAI,
+        _meiliIndex: false,
+        expiredAt: null,
+      });
+
+      const syncing = conversationModel.syncWithMeili();
+      while (mockWaitForTask.mock.calls.length === 0) {
+        await wait(1);
+      }
+      expect(await conversationModel.countDocuments({ _meiliIndex: true })).toBe(0);
+
+      finishTask?.({ status: 'succeeded' });
+      await syncing;
+      expect(await conversationModel.countDocuments({ _meiliIndex: true })).toBe(1);
+    });
+
+    test('does not acknowledge a Mongo document changed while its task was running', async () => {
+      const conversationModel = createConversationModel(
+        mongoose,
+      ) as unknown as SchemaWithMeiliMethods;
+      await conversationModel.deleteMany({});
+      let finishTask: ((task: { status: string }) => void) | undefined;
+      mockWaitForTask.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishTask = resolve;
+          }),
+      );
+      const _id = new mongoose.Types.ObjectId();
+      const originalUpdatedAt = new Date('2026-09-01T10:00:00.000Z');
+      await conversationModel.collection.insertOne({
+        _id,
+        conversationId: new mongoose.Types.ObjectId(),
+        user: new mongoose.Types.ObjectId(),
+        title: 'Original snapshot',
+        endpoint: EModelEndpoint.openAI,
+        _meiliIndex: false,
+        expiredAt: null,
+        updatedAt: originalUpdatedAt,
+      });
+
+      const syncing = conversationModel.syncWithMeili();
+      while (mockWaitForTask.mock.calls.length === 0) {
+        await wait(1);
+      }
+      await conversationModel.collection.updateOne(
+        { _id },
+        {
+          $set: {
+            title: 'Newer snapshot',
+            updatedAt: new Date(originalUpdatedAt.getTime() + 1000),
+          },
+        },
+      );
+      finishTask?.({ status: 'succeeded' });
+      await syncing;
+
+      expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(0);
+    });
+    // End [knauf]
 
     test('addObjectToMeili retries on failure', async () => {
       const conversationModel = createConversationModel(
@@ -903,7 +1002,9 @@ describe('Meilisearch Mongoose plugin', () => {
       });
 
       // Mock addDocumentsInBatches to succeed but simulate updateMany failure
-      mockAddDocumentsInBatches.mockResolvedValueOnce({});
+      // [knauf] Match the SDK's queued-task array after a successful bulk submission.
+      mockAddDocumentsInBatches.mockResolvedValueOnce([{ taskUid: 1 }]);
+      // End [knauf]
 
       // Spy on updateMany and make it fail
       const updateManySpy = jest
@@ -1206,6 +1307,23 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(mockGetDocuments).toHaveBeenCalledTimes(1);
     });
 
+    // [knauf] Missing ephemeral indexes must remain recoverable through the normal bulk sync.
+    test('cleanupMeiliIndex treats a missing index as an empty cleanup target', async () => {
+      const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
+      const missingIndexError = Object.assign(new Error('Index not found'), {
+        code: 'index_not_found',
+      });
+      mockGetDocuments.mockRejectedValueOnce(missingIndexError);
+
+      const indexMock = mockIndex();
+
+      await expect(
+        messageModel.cleanupMeiliIndex(indexMock, 'messageId', 100, 0),
+      ).resolves.toBeUndefined();
+      expect(mockDeleteDocuments).not.toHaveBeenCalled();
+    });
+    // End [knauf]
+
     test('cleanupMeiliIndex stops when results.length < batchSize', async () => {
       const conversationModel = createConversationModel(
         mongoose,
@@ -1352,18 +1470,19 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(mockGetDocuments).toHaveBeenCalledTimes(3);
     });
 
-    test('cleanupMeiliIndex handles errors gracefully', async () => {
+    // [knauf] Cleanup failures must propagate so reconciliation retains retry semantics.
+    test('cleanupMeiliIndex propagates errors', async () => {
       const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
 
       mockGetDocuments.mockRejectedValueOnce(new Error('MeiliSearch connection error'));
 
       const indexMock = mockIndex();
 
-      // Should not throw, errors are caught and logged
-      await expect(
-        messageModel.cleanupMeiliIndex(indexMock, 'messageId', 100, 0),
-      ).resolves.not.toThrow();
+      await expect(messageModel.cleanupMeiliIndex(indexMock, 'messageId', 100, 0)).rejects.toThrow(
+        'MeiliSearch connection error',
+      );
     });
+    // End [knauf]
 
     test('cleanupMeiliIndex with all documents being orphaned', async () => {
       const conversationModel = createConversationModel(
