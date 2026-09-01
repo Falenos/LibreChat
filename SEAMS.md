@@ -1893,6 +1893,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/docs/privacy/workstream.md` | None (Markdown) | Low — plan doc only; no runtime coupling. Relative links to `librechat.yaml`, the Langfuse / openid / parsers / memory seams and sibling docs are advisory and break loudly on file moves, surfacing in PR review rather than at runtime | Docs only (manual link spot-check) | — |
 | `knauf/docs/privacy/README.md` | None (Markdown) | Low — folder index only; no runtime coupling. Advisory relative links to the two sibling privacy docs and to the analytics / Langfuse / files docs that stay in their own folders; they break loudly on file moves, surfacing in PR review rather than at runtime | Docs only (manual link spot-check) | — |
 | `knauf/docs/privacy/anonymization-design.md` | None (Markdown) | Low — design-rationale doc only; no runtime coupling. Advisory relative links to the two sibling privacy docs; external links to EDPB/CJEU sources are stable public URLs | Docs only (manual link spot-check) | — |
+| `knauf/docs/privacy/jira-tickets.md` | None (Markdown) | Low — filing-format transcription of the workstream plan's ticket set; no runtime coupling. Advisory relative links to the sibling privacy docs break loudly on file moves, surfacing in PR review rather than at runtime | Docs only (manual link spot-check) | — |
 <!-- seams:new:end -->
 
 ## Static Assets

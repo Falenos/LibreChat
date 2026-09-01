@@ -527,8 +527,10 @@ already in force — remains unevidenced.
 
 ## 5. Ticket set
 
-Paste-ready for the KK20 project. KK20-207 stays the discovery record; each PR anchors to its own
-leaf ticket.
+KK20-207 stays the discovery record; each PR anchors to its own leaf ticket. This section is the
+**analytical** source — evidence, file:line citations, reasoning. The twelve tickets for waves 0–1
+are transcribed into the project's Jira format in
+[`jira-tickets.md`](./jira-tickets.md), ready to paste.
 
 ### DOC-1 · Refresh the PII assessment to v1.3
 
