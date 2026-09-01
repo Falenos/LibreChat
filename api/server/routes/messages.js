@@ -8,6 +8,9 @@ const {
   sendFeedbackScore,
   traceIdForMessage,
 } = require('@librechat/api');
+// [knauf] KK20-327 — allow-list for the feedback tag forwarded to Langfuse.
+const { FEEDBACK_REASON_KEYS } = require('librechat-data-provider');
+// End [knauf]
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const { requireJwtAuth, validateMessageReq } = require('~/server/middleware');
 // [knauf] KK20-182 — Re-sign Azure SAS URLs embedded in
@@ -400,6 +403,15 @@ router.put('/:conversationId/:messageId', validateMessageReq, async (req, res) =
   }
 });
 
+// [knauf] KK20-327 — normalise a stored feedback tag to a known reason key, or drop it.
+// Accepts the string key the current client sends and the `{ key }` object form, and
+// returns undefined for anything not in the allow-list.
+function knaufSafeFeedbackTag(rawTag) {
+  const key = typeof rawTag === 'string' ? rawTag : rawTag?.key;
+  return FEEDBACK_REASON_KEYS.includes(key) ? key : undefined;
+}
+// End [knauf]
+
 router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (req, res) => {
   try {
     const { conversationId, messageId } = req.params;
@@ -418,7 +430,32 @@ router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (re
     if (!isAssistantsEndpoint(updatedMessage.endpoint)) {
       sendFeedbackScore({
         traceId: traceIdForMessage(messageId),
-        feedback: updatedMessage.feedback,
+        // [knauf] KK20-327 — Langfuse PII gate: send the structured signal, not the prose.
+        // `feedback.text` is the user's free-text comment — the highest-entropy free-text
+        // field in the product outside the chat itself, and the place a user names a
+        // colleague, customer or document. It is already durable in Mongo at
+        // `message.feedback.text`, so forwarding it here creates a second copy in a store
+        // the Art. 17 erasure cascade does not reach. `rating` + `tag` carry the whole
+        // triage signal (upstream builds the score value from `rating` and the comment
+        // from `[tag, text]`), so dropping `text` costs no observability.
+        // Nullish feedback is passed through unchanged — upstream treats it as the
+        // score-DELETE path, and rewriting it to an object would silently disable that.
+        // See knauf/docs/privacy/workstream.md §5 (P0-1).
+        feedback: updatedMessage.feedback
+          ? {
+              rating: updatedMessage.feedback.rating,
+              // `tag` is `Mixed` in the message schema and this route runs no Zod parse
+              // (`req.body.feedback` is stored as-is), so a crafted request can put free
+              // prose in `tag` and it would ride into the Langfuse comment exactly like
+              // `text` would — bypassing this gate. Forward it only when it is one of the
+              // known reason keys (`feedbackTagKeySchema`'s enum). The real client already
+              // sends a key string via `toMinimalFeedback`; the object form is tolerated
+              // for legacy rows, and anything unrecognised becomes `undefined` — this
+              // fails closed, which for a privacy gate is the correct direction.
+              tag: knaufSafeFeedbackTag(updatedMessage.feedback.tag),
+            }
+          : updatedMessage.feedback,
+        // End [knauf]
         metadata: {
           messageId: updatedMessage.messageId ?? messageId,
           parentMessageId: updatedMessage.parentMessageId,

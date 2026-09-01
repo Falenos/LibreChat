@@ -884,6 +884,20 @@ function buildSubagentConfigs(
 
 // [knauf] KK20-199 — correlate text runs, but disable capture when an image
 // input would place private bytes or identity metadata in Langfuse/OTEL.
+//
+// KK20-327 (within this same block) — Deliberately NOT setting
+// `toolOutputTracing: { enabled: false }`.
+// It is honoured per-run and would strip RAG chunk text, code-interpreter output,
+// file-search results and web-fetch bodies from traces — which looks like a privacy
+// win and is not one. Langfuse's own guidance is that "aggressive whole-text scrubbing
+// hurts debuggability; prefer targeted redaction plus short retention", tool output is
+// the primary artefact for answering "why did it answer wrong?", and Sprint 5 of
+// knauf/docs/implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md
+// validates against exactly these traces. The correct controls are retention + access
+// on the Langfuse project (cross-repo) and field-level masking once
+// `@librechat/agents` forwards `@langfuse/otel`'s `mask` parameter — neither of which
+// costs debuggability. Do not "fix" this by disabling capture.
+// Rationale: knauf/docs/privacy/workstream.md §4.3 (the four-layer posture).
 export function buildLangfuseConfig(
   tenantIdInput?: unknown,
   sourceMessageIdInput?: unknown,
