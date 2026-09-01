@@ -817,7 +817,12 @@ describe('AttachmentGroup routing', () => {
       bytes: 1024,
     });
     const { container } = renderWith(<AttachmentGroup attachments={[empty, real]} />);
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_show_n_files' }));
+    // [knauf] KK20-329 — small file groups already start expanded under the KK20-297 policy.
+    expect(screen.getByRole('button', { name: 'com_ui_hide_n_files' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    // End [knauf]
     const chips = Array.from(container.querySelectorAll('[data-testid="file-container"]'));
     expect(chips.length).toBe(2);
     const filenames = chips.map((c) => c.textContent ?? '');
@@ -851,19 +856,19 @@ describe('AttachmentGroup routing', () => {
       <AttachmentGroup attachments={[first, second, json, image]} />,
     );
 
-    const toggle = screen.getByRole('button', { name: 'com_ui_show_n_files' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
-    expect(panel?.firstElementChild).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.getByTestId('image')).toBeInTheDocument();
-    expect(screen.getAllByTestId('file-container').map((chip) => chip.textContent)).not.toContain(
-      'c.json',
-    );
-
-    fireEvent.click(toggle);
+    // [knauf] KK20-329 — three-file groups start expanded and remain independently collapsible.
+    const toggle = screen.getByRole('button', { name: 'com_ui_hide_n_files' });
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+    expect(panel?.firstElementChild).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.getByTestId('image')).toBeInTheDocument();
     expect(screen.getByText('c.json')).toBeInTheDocument();
     expect(container.querySelector('pre')?.textContent).toBe('{"c":true}');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(panel?.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+    // End [knauf]
   });
 
   it('passes a non-dotfile filename through to FileContainer unchanged', () => {
@@ -965,14 +970,18 @@ describe('AttachmentGroup routing', () => {
     // Mermaid render
     expect(screen.getByTestId('mermaid-render')).toBeInTheDocument();
     // JSON and plain zip are both downloadable file outputs, so they collapse together.
-    const toggle = screen.getByRole('button', { name: 'com_ui_show_n_files' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // [knauf] KK20-329 — two-file groups start expanded and can still be collapsed.
+    const toggle = screen.getByRole('button', { name: 'com_ui_hide_n_files' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     const chipLabels = screen.getAllByTestId('file-container').map((chip) => chip.textContent);
     expect(chipLabels).toContain('archive.zip');
-    expect(chipLabels).not.toContain('data.json');
-
-    fireEvent.click(toggle);
     expect(screen.getByText('data.json')).toBeInTheDocument();
     expect(container.querySelector('pre')?.textContent).toBe('{"a":1}');
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    const panel = document.getElementById(toggle.getAttribute('aria-controls') ?? '');
+    expect(panel?.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+    // End [knauf]
   });
 });
