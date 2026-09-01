@@ -17,8 +17,8 @@ tests:
   - packages/data-provider/src/file-config.spec.ts
 acceptance:
   - "Documents .pdf .docx .pptx .txt .md .json accepted"
-  - "Per-file size: Documents 25 MB; Data 50 MB; Images 20 MB"
-  - "Batch: 5 files/chat message; 50 MB combined"
+  - "Per-file size: Documents 25 MiB; Data 50 MiB; raster images 20 MiB; SVG 8 MiB"
+  - "Batch: chat 5 files / 100 MiB combined; agent count and aggregate disabled with 0"
   - "Encrypted PDF + OOXML rejected with localized error (en/de)"
 ---
 
@@ -171,18 +171,19 @@ Two different limits are easy to confuse:
 
 | Limit | Default | Configured today (`librechat.yaml`) | Meaning |
 |---|---|---|---|
-| `fileLimit` | **10** ([file-config.ts#L402](../../../../packages/data-provider/src/file-config.ts#L402)) | chat (`azureOpenAI`) **5**, agent (`agents`) **20**, `gptPlugins` 5 | Max **number of files** in one upload |
-| `fileSizeLimit` | 512 MB | **50 MB** on both endpoints | Per-file backstop (see per-category below) |
-| `totalSizeLimit` | 512 MB | chat **50 MB**, agent **100 MB** | Max **combined** size in one send (MB) |
-| `serverFileSizeLimit` | 512 MB | unset | Hard server-side ceiling for any single upload |
+| `fileLimit` | **10** ([file-config.ts#L402](../../../../packages/data-provider/src/file-config.ts#L402)) | chat (`azureOpenAI`) **5**, agent (`agents`) **0** (disabled), `gptPlugins` 5 | Max **number of files** in one upload |
+| `fileSizeLimit` | 512 MiB | **50 MiB** on both endpoints | Per-file backstop (see per-category below) |
+| `totalSizeLimit` | 512 MiB | chat **100 MiB**, agent **0** (disabled) | Max **combined** size in one send |
+| `serverFileSizeLimit` | 512 MiB | unset | Hard server-side ceiling for any single upload |
 
 **Per-category per-file caps (KK20-190)** — the schema has only one `fileSizeLimit` per endpoint, so a tighter cap is applied *on top* by `knaufCategorySizeLimit` ([file-config.ts](../../../../packages/data-provider/src/file-config.ts), client `validateFiles` + server `filterFile`), the same for both surfaces:
 
 | Category | Per-file cap |
 |---|---|
-| Documents (`.pdf .docx .pptx .txt .md .json`) | **25 MB** |
-| Data / spreadsheets (`.xlsx .csv`) | **50 MB** |
-| Images (`.png .jpg/.jpeg .webp`) | **20 MB** |
+| Documents (`.pdf .docx .pptx .txt .md .json`) | **25 MiB** |
+| Data / spreadsheets (`.xlsx .csv`) | **50 MiB** |
+| Raster images (`.png .jpg/.jpeg .webp`) | **20 MiB** |
+| SVG source (`.svg`) | **8 MiB** |
 
 `fileLimit`/`totalSizeLimit` are **client-side** (each file is a separate `POST /api/files`; the client validates the batch); per-file + per-category + MIME + encryption are enforced **server-side** too. All under `fileConfig.endpoints.<name>`.
 
@@ -192,22 +193,30 @@ Two different limits are easy to confuse:
 - **Chat composer** (default `karl` spec) → endpoint `azureOpenAI` → `fileConfig.endpoints.azureOpenAI`.
 - **Agent file search** (builder / custom agents) → endpoint `agents` → `fileConfig.endpoints.agents`.
 
-They're separate keys, set independently. The live values (chat tighter than agent knowledge — chat is ad-hoc, agent knowledge curated):
+They're separate keys, set independently. The committed values bound each chat
+send while allowing an agent's accumulated conversation and knowledge files to
+remain available:
 
 ```yaml
 fileConfig:
   endpoints:
     azureOpenAI:        # chat composer
       fileLimit: 5
-      fileSizeLimit: 50   # backstop; per-category caps (25/50/20) apply on top
-      totalSizeLimit: 50
-    agents:             # agent file_search / knowledge
-      fileLimit: 20
-      fileSizeLimit: 50
+      fileSizeLimit: 50   # backstop; per-category caps (25/50/20/8) apply on top
       totalSizeLimit: 100
+    agents:             # agent file_search / knowledge
+      fileLimit: 0        # disables this policy layer
+      fileSizeLimit: 50
+      totalSizeLimit: 0   # disables this policy layer
 ```
 
-Values are MB; the loader ([file-config.ts](../../../../packages/data-provider/src/file-config.ts)) converts to bytes. The endpoint `fileLimit`/`fileSizeLimit`/`totalSizeLimit` are **Tier 0** (config only); the per-category caps live in code (`knaufCategorySizeLimit`, Tier 5).
+Size values are MiB in effect because the loader
+([file-config.ts](../../../../packages/data-provider/src/file-config.ts))
+multiplies them by 1,048,576. Agent `0` values disable only the count and
+aggregate policy layers; per-file, category, MIME, transport, indexing, and
+Code Adapter limits remain active. The endpoint
+`fileLimit`/`fileSizeLimit`/`totalSizeLimit` are **Tier 0** (config only); the
+per-category caps live in code (`knaufCategorySizeLimit`, Tier 5).
 
 ---
 

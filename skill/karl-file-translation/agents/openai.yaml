@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Karl File Translation'
+  short_description: 'Translate attached files with durable Azure jobs'
+  default_prompt: 'Use $karl-file-translation to translate these attached files.'

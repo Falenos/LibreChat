@@ -8,6 +8,7 @@ import {
   QueryKeys,
   Constants,
   DynamicQueryKeys,
+  EModelEndpoint,
   EToolResources,
   megabyte,
   inferMimeType,
@@ -17,14 +18,11 @@ import {
   defaultAssistantsVersion,
   // [knauf] KK20-257 — tabular (spreadsheet/CSV/JSON) classifier for code-sandbox routing.
   isKnaufTabularMimeType,
+  // KK20-297 — source files always route to the sandbox, never RAG.
+  isKnaufSourceCodeFile,
   // End [knauf]
 } from 'librechat-data-provider';
-import type {
-  EModelEndpoint,
-  TEndpointsConfig,
-  TError,
-  TFileUpload,
-} from 'librechat-data-provider';
+import type { TEndpointsConfig, TError, TFileUpload } from 'librechat-data-provider';
 import type { TConversation } from 'librechat-data-provider';
 import type { ExtendedFile, FileSetter } from '~/common';
 import { logger, validateFiles, cachePreview, getCachedPreview, removePreviewEntry } from '~/utils';
@@ -289,8 +287,14 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     () => endpointOverride ?? conversation?.endpoint ?? 'default',
     [endpointOverride, conversation?.endpoint],
   );
+  // [knauf] KK20-297 — source-code sandbox routing only applies to Knauf endpoints.
+  const isKnaufSourceRoutingEndpoint =
+    endpoint === EModelEndpoint.azureOpenAI ||
+    endpoint === EModelEndpoint.agents ||
+    endpointType === EModelEndpoint.azureOpenAI ||
+    endpointType === EModelEndpoint.agents;
 
-  // [knauf] KK20-257 — may tabular files be routed to the code sandbox for THIS
+  // KK20-257/KK20-297 — may files be routed to the code sandbox for THIS
   // conversation? Both halves are required, and each prevents a different silent
   // failure:
   //   * `codeEnabled` (global capability) — without it the server throws on upload
@@ -305,17 +309,16 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
   //     ORs them too (packages/api/src/agents/load.ts): reading only the agent flag makes
   //     the client narrower than the backend, and a fresh conversation whose ephemeral
   //     agent has not been seeded yet would silently route a spreadsheet to file search.
-  // When the answer is false we leave the file on its original destination (file search),
-  // which is exactly the pre-KK20-257 behaviour. The same hook answers for the paperclip
-  // menu and the drag-drop picker, so a user cannot be offered a destination here that
-  // those refuse — or the reverse.
+  // When false, tabular data retains its old File Search fallback. Source code is
+  // different: KK20-297 rejects it before upload so executable content can never be
+  // silently indexed into RAG. The same hook answers for every upload entry point.
   const ephemeralAgentValue = useRecoilValue(
     ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
   );
   const { agentsConfig } = useGetAgentsConfig();
   const { codeEnabled } = useAgentCapabilities(agentsConfig?.capabilities);
   const { codeAllowedByAgent } = useAgentToolPermissions(agent_id, ephemeralAgentValue);
-  const canRouteTabularToCode = useKnaufCodeDestinationAllowed({
+  const canRouteToCode = useKnaufCodeDestinationAllowed({
     codeEnabled,
     codeAllowedByAgent,
     specName: conversation?.spec,
@@ -532,7 +535,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       }
       const tool_resource = extendedFile.tool_resource;
       if (tool_resource != null) {
-        formData.append('tool_resource', tool_resource);
+        // [knauf] KK20-297 — replace knowledge-upload metadata when per-file routing
+        // sends source code to the sandbox; duplicate FormData keys are ambiguous.
+        formData.set('tool_resource', tool_resource);
+        // End [knauf]
       }
       if (conversation?.agent_id != null && formData.get('agent_id') == null) {
         formData.append('agent_id', conversation.agent_id);
@@ -774,6 +780,20 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
       return;
     }
 
+    // [knauf] KK20-297 — fail closed when source code cannot reach Code Interpreter.
+    // Never fall back to File Search: users upload code for inspection/modification, and
+    // the destination is immutable after upload. Mixed batches fail together so the UI
+    // never claims the complete selection was accepted while silently dropping code.
+    const containsSourceCode =
+      isKnaufSourceRoutingEndpoint &&
+      fileList.some((file) => isKnaufSourceCodeFile(file.name, file.type));
+    if (containsSourceCode && !canRouteToCode) {
+      setError('com_knauf_error_code_execution_required');
+      setFilesLoading(false);
+      return;
+    }
+    // End [knauf]
+
     // [knauf] KK20-195 WP5b — a multi-file selection shares ONE client batch
     // id (plan §6.1 step 3); single files stay batch-less. Drives the §6.3
     // aggregate summary; the server scopes it to the owner, never authorization.
@@ -826,6 +846,10 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         // a redirected file is no longer semantically searchable, and the destination is
         // fixed at upload time (see knauf/docs/code-execution/how-it-works.md).
         //
+        // KK20-297 extends that rule to source code. Source files always go to Code
+        // Interpreter, even when the caller requested File Search/context, because their
+        // supported product workflow is inspect/modify/export and never RAG ingestion.
+        //
         // This is the single choke point for every upload path — picker, drag-drop, paste
         // and SharePoint all funnel through handleFiles — so the rule lives here rather
         // than in each caller. `validateFiles` has already normalised/inferred the MIME
@@ -836,18 +860,35 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         const isSvgFile =
           /^(?:image\/svg(?:\+xml)?)$/i.test(originalFile.type) ||
           /\.svg$/i.test(originalFile.name);
+        // KK20-297: IDML is a binary package consumed by translate_file, not a RAG document.
+        const isIdmlFile =
+          originalFile.type === 'application/vnd.adobe.indesign-idml-package' ||
+          /\.idml$/i.test(originalFile.name);
+        // XML is structured editor input too; RAG must not parse it before edit_xml does.
+        const isXmlFile =
+          /^(?:application|text)\/xml$/i.test(originalFile.type) ||
+          /\.xml$/i.test(originalFile.name);
+        const shouldRouteSourceToCode =
+          isKnaufSourceRoutingEndpoint &&
+          isKnaufSourceCodeFile(originalFile.name, originalFile.type);
 
-        // One decision, most specific first. SVG wins over the image rule below because an
-        // SVG is both (it matches `image/*`) and the markup is the point; tabular only
+        // One decision, most specific first. Source code is forced to the sandbox. SVG wins
+        // over the image rule below because it also matches `image/*`, while its markup is
+        // the point; tabular only
         // redirects the file_search default, so an explicitly chosen destination still wins.
         let effectiveToolResource = _toolResource;
-        if (isSvgFile) {
+        if (shouldRouteSourceToCode) {
+          effectiveToolResource = EToolResources.execute_code;
+        } else if (isSvgFile) {
           effectiveToolResource = EToolResources.context;
-        } else if (_toolResource === EToolResources.file_search && isImageFile) {
+        } else if (
+          _toolResource === EToolResources.file_search &&
+          (isImageFile || isIdmlFile || isXmlFile)
+        ) {
           effectiveToolResource = undefined;
         } else if (
           _toolResource === EToolResources.file_search &&
-          canRouteTabularToCode &&
+          canRouteToCode &&
           isKnaufTabularMimeType(originalFile.type)
         ) {
           effectiveToolResource = EToolResources.execute_code;

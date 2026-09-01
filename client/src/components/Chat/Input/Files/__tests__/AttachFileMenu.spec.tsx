@@ -371,6 +371,39 @@ describe('AttachFileMenu', () => {
       expect(screen.getByText('Upload files to edit')).toBeInTheDocument();
     });
 
+    // [knauf] KK20-297 — wait for a real picker selection before changing
+    // ephemeral-agent state; an earlier rerender can discard the file input.
+    it('enables Code Execution only after an edit file is selected', () => {
+      setupMocks();
+      mockUseAgentCapabilities.mockReturnValue({
+        contextEnabled: false,
+        fileSearchEnabled: false,
+        codeEnabled: true,
+      });
+      mockUseAgentToolPermissions.mockReturnValue({
+        fileSearchAllowedByAgent: false,
+        codeAllowedByAgent: true,
+        provider: undefined,
+      });
+      renderMenu({ endpointType: EModelEndpoint.openAI });
+
+      openMenu();
+      fireEvent.click(screen.getByText('Upload files to edit'));
+      expect(mockSetEphemeralAgent).not.toHaveBeenCalled();
+
+      const source = new File(['export const value = 1;'], 'source.js', {
+        type: 'text/javascript',
+      });
+      fireEvent.change(screen.getByTestId('file-input'), { target: { files: [source] } });
+
+      expect(mockSetEphemeralAgent).toHaveBeenCalledTimes(1);
+      expect(mockHandleFileChange).toHaveBeenCalledWith(
+        expect.anything(),
+        EToolResources.execute_code,
+      );
+    });
+    // End [knauf]
+
     it('shows all options when all capabilities are enabled', () => {
       setupMocks();
       mockUseAgentCapabilities.mockReturnValue({

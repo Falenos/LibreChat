@@ -73,10 +73,12 @@ export const useListAgentsQuery = <TData = t.AgentListResponse>(
     [QueryKeys.agents, params],
     () => fetchAllAgentPages(params),
     {
-      staleTime: 1000 * 5,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchOnMount: false,
+      // [knauf] KK20-282 — stale signed avatar URLs need a fresh server response.
+      staleTime: 2 * 60 * 1000,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
+      // End [knauf]
       retry: false,
       ...config,
       enabled: config?.enabled !== undefined ? config.enabled && enabled : enabled,
@@ -100,9 +102,12 @@ export const useGetAgentByIdQuery = (
         agent_id: agent_id as string,
       }),
     {
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchOnMount: false,
+      // [knauf] KK20-282 — the single-agent endpoint refreshes signed avatar URLs.
+      staleTime: 2 * 60 * 1000,
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
+      // End [knauf]
       retry: false,
       ...config,
       enabled: isValidAgentId && (config?.enabled ?? true),

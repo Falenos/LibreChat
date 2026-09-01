@@ -66,4 +66,18 @@ const summarizeProviderError = (error, operation) => {
   };
 };
 
-module.exports = { getProviderRequestId, isRetryableProviderError, summarizeProviderError };
+// [knauf] NO-TICKET — expose only stable, actionable generation classes.
+const getPublicGenerationError = (summary) => {
+  if (summary.code === 'attachment_unavailable') {
+    return summary.code;
+  }
+  return summary.providerStatus === 400 ? 'provider_bad_request' : 'provider_request_failed';
+};
+// End [knauf]
+
+module.exports = {
+  getProviderRequestId,
+  getPublicGenerationError,
+  isRetryableProviderError,
+  summarizeProviderError,
+};

@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Karl XML'
+  short_description: 'Inspect, translate, edit, and export XML'
+  default_prompt: 'Use $karl-xml to inspect and safely edit this attached XML file.'

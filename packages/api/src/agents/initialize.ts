@@ -6,7 +6,6 @@ import {
   ErrorTypes,
   EModelEndpoint,
   EToolResources,
-  paramEndpoints,
   isAgentsEndpoint,
   replaceSpecialVars,
   providerEndpointMap,
@@ -58,6 +57,10 @@ import { filterFilesByEndpointConfig } from '~/files';
 import { generateArtifactsPrompt } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
+// [knauf] KK20-297 — classify request-scoped file tools only after attachment
+// ownership and stored metadata have been resolved.
+import { filterRequestScopedFileToolNames, getRequestScopedFileTools } from './load';
+// End [knauf]
 
 /**
  * Fraction of context budget reserved as headroom when no explicit maxContextTokens is set.
@@ -602,6 +605,11 @@ export async function initializeAgent(
   }
 
   let currentFiles: IMongoFile[] | undefined;
+  // [knauf] KK20-297 — provider filtering may intentionally remove IDML/XML
+  // from model input. Retain only the owner-checked request records for
+  // request-scoped host tools before that filtering runs.
+  let resolvedRequestFiles: IMongoFile[] = [];
+  // End [knauf]
 
   const _modelOptions = structuredClone(
     Object.assign(
@@ -711,6 +719,7 @@ export async function initializeAgent(
               tenantId: req.user?.tenantId,
             })) as IMongoFile[])
           : [];
+      resolvedRequestFiles = requestUsageFiles;
       const requestUsageFileIds = new Set(requestUsageFiles.map((file) => file.file_id));
       const trustedToolFiles = allToolFiles.filter(
         (file) => !requestUsageFileIds.has(file.file_id),
@@ -731,19 +740,26 @@ export async function initializeAgent(
           tenantId: req.user?.tenantId,
         })) as IMongoFile[])
       : [];
+    resolvedRequestFiles = currentFiles;
   }
 
-  if (currentFiles && currentFiles.length) {
-    let endpointType: EModelEndpoint | undefined;
-    if (!paramEndpoints.has(agent.endpoint ?? '')) {
-      endpointType = EModelEndpoint.custom;
-    }
+  // [knauf] KK20-297 — execution must consume the same owner-validated
+  // records used for request-scoped tool selection, not client file-id stubs.
+  if (isInitialAgent) {
+    (req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles =
+      resolvedRequestFiles;
+  }
+  // End [knauf]
 
+  if (currentFiles && currentFiles.length) {
+    // [knauf] KK20-315 — initializeAgent always handles a logical agent run,
+    // including OpenAI-compatible routes that pass the model provider here.
     currentFiles = filterFilesByEndpointConfig(req, {
       files: currentFiles,
-      endpoint: agent.endpoint ?? '',
-      endpointType,
+      endpoint: EModelEndpoint.agents,
+      endpointType: undefined,
     });
+    // End [knauf]
   }
 
   const {
@@ -881,7 +897,10 @@ export async function initializeAgent(
     }
   }
 
-  const persistedToolNames = agent.tools ?? [];
+  // [knauf] KK20-297 — compatibility routes must not resurrect request-only
+  // artifact tools from persisted agent configuration.
+  const persistedToolNames = filterRequestScopedFileToolNames(agent.tools ?? [], req.originalUrl);
+  // End [knauf]
   // [knauf] KK20-190 — a chat-attached embedded file is usable for this turn
   // even when the persistent custom agent was created without file_search.
   const hasEmbeddedRequestAttachment =
@@ -890,13 +909,26 @@ export async function initializeAgent(
         file?.embedded === true &&
         requestFiles.some((requestFile) => requestFile.file_id === file.file_id),
     ) === true;
-  const baseToolNames =
-    hasEmbeddedRequestAttachment && !persistedToolNames.includes(Tools.file_search)
-      ? [...persistedToolNames, Tools.file_search]
-      : persistedToolNames;
   // End [knauf]
-  const requestedToolNames =
-    extraAllowedToolNames.length > 0 ? [...baseToolNames, ...extraAllowedToolNames] : baseToolNames;
+  // [knauf] KK20-297 — the early agent loader may see only client file IDs.
+  // Reconcile against authorized, server-resolved request attachments before
+  // loading tools so picker, drag/drop, retry, and direct API uploads agree.
+  const requestScopedFileTools = getRequestScopedFileTools(resolvedRequestFiles, req.originalUrl);
+  const baseToolNames = [
+    ...new Set([
+      ...persistedToolNames,
+      ...(hasEmbeddedRequestAttachment ? [Tools.file_search] : []),
+      ...requestScopedFileTools,
+    ]),
+  ];
+  // End [knauf]
+  // [knauf] KK20-297 — apply the same compatibility boundary after
+  // skill-derived tools are unioned into the effective request tool set.
+  const requestedToolNames = filterRequestScopedFileToolNames(
+    extraAllowedToolNames.length > 0 ? [...baseToolNames, ...extraAllowedToolNames] : baseToolNames,
+    req.originalUrl,
+  );
+  // End [knauf]
 
   /**
    * `loadTools` failures take two forms:

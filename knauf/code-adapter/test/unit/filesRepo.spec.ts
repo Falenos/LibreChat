@@ -217,6 +217,16 @@ describe('Table-backed FilesRepo', () => {
     expect(after).toEqual(before);
   });
 
+  it('allows owned deletion workflows to locate expired metadata without reviving it', async () => {
+    const doc = await repo.insertStaged(input());
+    clock = new Date(doc.expiresAt);
+
+    await expect(repo.find(sessionId, doc.fileId)).resolves.toBeNull();
+    await expect(repo.findForDeletion(sessionId, doc.fileId)).resolves.toEqual(doc);
+    await expect(repo.delete(sessionId, doc.fileId)).resolves.toBe(doc.blobPath);
+    await expect(repo.findForDeletion(sessionId, doc.fileId)).resolves.toBeNull();
+  });
+
   it('conditionally deletes metadata first while preserving a retargeted filename index', async () => {
     const doc = await repo.insertStaged(input());
     const filenameIndex = table
@@ -246,8 +256,6 @@ describe('Table-backed FilesRepo', () => {
       lookupValue: 'different.csv',
     });
 
-    await expect(repo.upsertCaptured(input(), candidate())).rejects.toThrow(
-      /filename index hash/,
-    );
+    await expect(repo.upsertCaptured(input(), candidate())).rejects.toThrow(/filename index hash/);
   });
 });

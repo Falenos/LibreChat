@@ -43,7 +43,7 @@ const axios = createAxiosInstance();
 
 /**
  * Creates a fallback download URL response when file cannot be processed locally.
- * Used when: file exceeds size limit, storage strategy unavailable, or download error occurs.
+ * Used when: file exceeds size limit, storage strategy unavailable, or local persistence fails.
  * @param {Object} params - The parameters.
  * @param {string} params.name - The filename.
  * @param {string} params.session_id - The code execution session ID.
@@ -51,7 +51,7 @@ const axios = createAxiosInstance();
  * @param {string} params.conversationId - The current conversation ID.
  * @param {string} params.toolCallId - The tool call ID that generated the file.
  * @param {string} params.messageId - The current message ID.
- * @param {number} params.expiresAt - Expiration timestamp (24 hours from creation).
+ * @param {number} params.expiresAt - Expiration timestamp from Code Adapter metadata.
  * @returns {Object} Fallback response with download URL.
  */
 const createDownloadFallback = ({
@@ -67,6 +67,9 @@ const createDownloadFallback = ({
   return {
     filename: name,
     filepath: `${basePath}/api/files/code/download/${session_id}/${id}`,
+    // [knauf] KK20-316 — identify fallback attachments as staging-only Code Adapter files.
+    source: FileSources.execute_code,
+    // End [knauf]
     expiresAt,
     conversationId,
     toolCallId,
@@ -308,9 +311,9 @@ const runPreviewFinalize = ({ finalize, fileId, previewRevision, onResolved }) =
  *     expected (office buckets — DOCX/XLSX/XLS/ODS/CSV/PPTX). Caller
  *     decides whether to await or fire-and-forget.
  *
- * Existing fallback paths (size limit, missing storage strategy, error
- * catch) return `{ file }` with no `finalize` — there's nothing to
- * extract.
+ * Existing fallback paths (size limit, missing storage strategy, or a
+ * local persistence failure after download) return `{ file }` with no
+ * `finalize` — there's nothing to extract.
  *
  * @param {ServerRequest} params.req - The Express request object.
  * @param {string} params.id - The file ID from the code environment.
@@ -332,6 +335,9 @@ const processCodeOutput = async ({
 }) => {
   const appConfig = req.config;
   const currentDate = new Date();
+  // [knauf] KK20-316 — distinguish a staged output from a failed adapter download.
+  let outputDownloaded = false;
+  // End [knauf]
   const baseURL = getCodeBaseURL();
   const fileExt = path.extname(name).toLowerCase();
   const isImage = fileExt && imageExtRegex.test(name);
@@ -364,6 +370,9 @@ const processCodeOutput = async ({
       httpsAgent: codeServerHttpsAgent,
       timeout: 15000,
     });
+    // [knauf] KK20-316 — only offer the staging fallback after bytes reached LibreChat.
+    outputDownloaded = true;
+    // End [knauf]
 
     const buffer = Buffer.from(response.data, 'binary');
 
@@ -373,15 +382,17 @@ const processCodeOutput = async ({
         `[processCodeOutput] File "${name}" (${(buffer.length / megabyte).toFixed(2)} MB) exceeds size limit of ${(fileSizeLimit / megabyte).toFixed(2)} MB, falling back to download URL`,
       );
       return {
-        file: createDownloadFallback({
+        // [knauf] KK20-316 — use the adapter's current sliding-expiry value.
+        file: await createStagingDownloadFallback({
+          req,
           id,
           name,
           messageId,
           toolCallId,
           session_id,
           conversationId,
-          expiresAt: currentDate.getTime() + 86400000,
         }),
+        // End [knauf]
       };
     }
 
@@ -484,15 +495,17 @@ const processCodeOutput = async ({
         `[processCodeOutput] saveBuffer not available for strategy ${appConfig.fileStrategy}, falling back to download URL`,
       );
       return {
-        file: createDownloadFallback({
+        // [knauf] KK20-316 — use the adapter's current sliding-expiry value.
+        file: await createStagingDownloadFallback({
+          req,
           id,
           name,
           messageId,
           toolCallId,
           session_id,
           conversationId,
-          expiresAt: currentDate.getTime() + 86400000,
         }),
+        // End [knauf]
       };
     }
 
@@ -651,43 +664,40 @@ const processCodeOutput = async ({
       error,
     });
     logger.warn(
-      `[processCodeOutput] Falling back to Code API download URL for strategy ${appConfig.fileStrategy}`,
+      `[processCodeOutput] Code output processing failed for strategy ${appConfig.fileStrategy}`,
     );
 
-    // Fallback for download errors - return download URL so user can still manually download
-    return {
-      file: createDownloadFallback({
-        id,
-        name,
-        messageId,
-        toolCallId,
-        session_id,
-        conversationId,
-        expiresAt: currentDate.getTime() + 86400000,
-      }),
-    };
+    // [knauf] KK20-316 — never present an active-looking link after the adapter download failed.
+    if (outputDownloaded) {
+      return {
+        file: await createStagingDownloadFallback({
+          req,
+          id,
+          name,
+          messageId,
+          toolCallId,
+          session_id,
+          conversationId,
+        }),
+      };
+    }
+    throw new Error(
+      'The Code Execution output could not be saved or made available for download.',
+      { cause: error },
+    );
+    // End [knauf]
   }
 };
 
-function checkIfActive(dateString) {
-  const givenDate = new Date(dateString);
-  const currentDate = new Date();
-  const timeDifference = currentDate - givenDate;
-  const hoursPassed = timeDifference / (1000 * 60 * 60);
-  return hoursPassed < 23;
-}
-
 /**
- * Retrieves the `lastModified` time string for a specified file from Code Execution Server.
+ * Retrieves active metadata for a specified file from Code Execution Server.
  *
  * @param {import('librechat-data-provider').CodeEnvRef} ref - Typed pointer
  *   into codeapi storage. Carries kind/id/storage_session_id/file_id;
  *   codeapi resolves the sessionKey from the request's auth context.
  * @param {ServerRequest} [req] - Current authenticated request, used to mint Code API auth.
  *
- * @returns {Promise<string|null>}
- *          A promise that resolves to the `lastModified` time string of the file if successful, or null if there is an
- *          error in initialization or fetching the info.
+ * @returns {Promise<Object|null>} Active object metadata, or null only when missing/expired.
  */
 async function getSessionInfo(ref, req) {
   try {
@@ -716,14 +726,58 @@ async function getSessionInfo(ref, req) {
       timeout: 5000,
     });
 
-    return response.data?.lastModified;
+    return response.data;
   } catch (error) {
-    logger.debug(
-      `[getSessionInfo] session lookup failed (treating as cache miss): ${error?.message ?? String(error)}`,
+    // [knauf] KK20-316 — only a terminal 404 is a cache miss; operational failures fail closed.
+    if (error?.response?.status === 404) {
+      return null;
+    }
+    logAxiosError({
+      message: 'Error getting Code Execution attachment metadata',
+      error,
+    });
+    throw new Error(
+      'Code Execution attachment availability could not be verified. Retry the request.',
+      { cause: error },
     );
-    return null;
+    // End [knauf]
   }
 }
+
+// [knauf] KK20-316 — fallback links carry the adapter's authoritative staging expiry.
+async function createStagingDownloadFallback({
+  req,
+  id,
+  name,
+  messageId,
+  toolCallId,
+  session_id,
+  conversationId,
+}) {
+  const info = await getSessionInfo(
+    {
+      kind: 'user',
+      id: req.user.id,
+      storage_session_id: session_id,
+      file_id: id,
+    },
+    req,
+  );
+  const expiresAt = Date.parse(info?.expiresAt);
+  if (!Number.isFinite(expiresAt)) {
+    throw new Error('The Code Execution output staging expiry is unavailable.');
+  }
+  return createDownloadFallback({
+    id,
+    name,
+    messageId,
+    toolCallId,
+    session_id,
+    conversationId,
+    expiresAt,
+  });
+}
+// End [knauf]
 
 const getPreviewContextSuffix = (file) => {
   if (file.status === 'pending') {
@@ -805,14 +859,12 @@ const primeFiles = async (options) => {
   dbFiles = dbFiles.concat(resourceFiles);
 
   const files = [];
-  const sessions = new Map();
   let toolContext = '';
 
   /* Per-file path counters — emitted at the bottom so a single
    * grep on `[primeCodeFiles]` shows the input volume, the per-file
    * paths taken, and the final dispatch summary in one trace. */
   let skippedNoRef = 0;
-  let reuploadFailures = 0;
 
   for (let i = 0; i < dbFiles.length; i++) {
     const file = dbFiles[i];
@@ -868,14 +920,6 @@ const primeFiles = async (options) => {
       });
     };
 
-    if (sessions.has(session_id)) {
-      logger.debug(
-        `[primeCodeFiles] file=${file.file_id} path=cache-hit-by-session storage_session_id=${session_id}`,
-      );
-      pushFile();
-      continue;
-    }
-
     const reuploadFile = async () => {
       try {
         const { getDownloadStream } = getStrategyFunctions(file.source);
@@ -927,38 +971,35 @@ const primeFiles = async (options) => {
           file_id: file.file_id,
           metadata: updatedMetadata,
         });
-        sessions.set(newRef.storage_session_id, true);
         pushFile(newRef.storage_session_id, newRef.file_id);
         logger.debug(
           `[primeCodeFiles] file=${file.file_id} path=reupload-success ` +
             `oldSession=${session_id} newSession=${newRef.storage_session_id} newFileId=${newRef.file_id}`,
         );
       } catch (error) {
-        reuploadFailures += 1;
         logger.error(
           `[primeCodeFiles] file=${file.file_id} path=reupload-failed session=${session_id}: ${error.message}`,
           error,
         );
+        // [knauf] KK20-316 — never continue execution with an attachment silently omitted.
+        throw new Error(
+          'A Code Execution attachment could not be restored. Retry the request or reattach the file.',
+          { cause: error },
+        );
+        // End [knauf]
       }
     };
-    const uploadTime = await getSessionInfo(ref, req);
-    if (!uploadTime) {
+    // [knauf] KK20-316 — expiry is per object; a shared session cannot prove sibling files active.
+    const sessionInfo = await getSessionInfo(ref, req);
+    if (!sessionInfo) {
       logger.debug(
-        `[primeCodeFiles] file=${file.file_id} path=reupload reason=no-uploadtime ` +
+        `[primeCodeFiles] file=${file.file_id} path=reupload reason=missing-or-expired ` +
           `storage_session_id=${session_id}`,
       );
       await reuploadFile();
       continue;
     }
-    if (!checkIfActive(uploadTime)) {
-      logger.debug(
-        `[primeCodeFiles] file=${file.file_id} path=reupload reason=stale ` +
-          `uploadTime=${uploadTime} storage_session_id=${session_id}`,
-      );
-      await reuploadFile();
-      continue;
-    }
-    sessions.set(session_id, true);
+    // End [knauf]
     logger.debug(
       `[primeCodeFiles] file=${file.file_id} path=fresh-active storage_session_id=${session_id}`,
     );
@@ -968,10 +1009,7 @@ const primeFiles = async (options) => {
   /* Dispatch summary — emitted unconditionally so a single grep on
    * `[primeCodeFiles] out` always shows the final state, not only
    * the per-path trail leading up to it. */
-  logger.debug(
-    `[primeCodeFiles] out: returned=${files.length} ` +
-      `skippedNoRef=${skippedNoRef} reuploadFailures=${reuploadFailures}`,
-  );
+  logger.debug(`[primeCodeFiles] out: returned=${files.length} ` + `skippedNoRef=${skippedNoRef}`);
 
   return { files, toolContext };
 };
@@ -1145,7 +1183,6 @@ async function writeSandboxFile({ file_path, content, session_id, files, req }) 
 
 module.exports = {
   primeFiles,
-  checkIfActive,
   getSessionInfo,
   processCodeOutput,
   readSandboxFile,

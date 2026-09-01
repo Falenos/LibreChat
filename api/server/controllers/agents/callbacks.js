@@ -31,6 +31,29 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, runPreviewFinalize } = require('~/server/services/Files/Code/process');
 const { saveBase64Image } = require('~/server/services/Files/process');
+// [knauf] KK20-297 — artifact key for already-persisted file round-trip outputs.
+const FILE_TRANSLATION_ARTIFACT_KEY = 'knauf_file_translation';
+
+async function bindTranslationOutput(req, file, metadata) {
+  const { updateFile } = require('~/models');
+  const { getRetentionExpiry } = require('~/server/services/Files/retention');
+  const conversationId = metadata.thread_id;
+  const messageId = metadata.run_id;
+  const retention = await getRetentionExpiry({
+    user: req.user,
+    config: req.config,
+    body: { ...req.body, conversationId },
+  });
+  const bound = await updateFile(
+    { file_id: file.file_id, conversationId, messageId, ...retention },
+    { user: req.user.id, ...(req.user.tenantId ? { tenantId: req.user.tenantId } : {}) },
+  );
+  if (!bound) {
+    throw new Error(`translation output ${file.file_id} is unavailable`);
+  }
+  return bound;
+}
+// End [knauf]
 // [knauf] KK20-194 — preserve the authoritative final native-search phase.
 const { getFinalWebSearchResponseText } = require('~/server/knauf/nativeWebSearchOutput');
 // End [knauf]
@@ -1042,6 +1065,28 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null }) 
       );
     }
 
+    // [knauf] KK20-297 — file round-trip tools persist outputs before returning;
+    // emit those owned file records directly as downloadable attachments.
+    if (output.artifact[FILE_TRANSLATION_ARTIFACT_KEY]?.files) {
+      for (const file of output.artifact[FILE_TRANSLATION_ARTIFACT_KEY].files) {
+        artifactPromises.push(
+          bindTranslationOutput(req, file, metadata)
+            .then((persisted) => {
+              const attachment = { ...persisted, toolCallId: output.tool_call_id };
+              if (isStreamWritable(res, streamId)) {
+                writeAttachment(res, streamId, attachment);
+              }
+              return attachment;
+            })
+            .catch((error) => {
+              logger.error('Error binding translated file output:', error);
+              return null;
+            }),
+        );
+      }
+    }
+    // End [knauf]
+
     if (output.artifact.content) {
       /** @type {FormattedContent[]} */
       const content = output.artifact.content;
@@ -1301,6 +1346,31 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
       );
     }
 
+    // [knauf] KK20-297 — Responses API projection for persisted file outputs.
+    if (output.artifact[FILE_TRANSLATION_ARTIFACT_KEY]?.files) {
+      for (const file of output.artifact[FILE_TRANSLATION_ARTIFACT_KEY].files) {
+        artifactPromises.push(
+          bindTranslationOutput(req, file, metadata)
+            .then((fileMetadata) => {
+              if (isStreamWritable(res, null)) {
+                writeResponsesAttachment(
+                  res,
+                  tracker,
+                  buildResponsesAttachment(fileMetadata, output.tool_call_id),
+                  metadata,
+                );
+              }
+              return fileMetadata;
+            })
+            .catch((error) => {
+              logger.error('Error binding translated file output:', error);
+              return null;
+            }),
+        );
+      }
+    }
+    // End [knauf]
+
     if (output.artifact.content) {
       /** @type {FormattedContent[]} */
       const content = output.artifact.content;
@@ -1472,6 +1542,10 @@ function buildResponsesAttachment(fileMetadata, toolCallId) {
     textFormat: fileMetadata.textFormat ?? null,
     status: fileMetadata.status,
     previewError: fileMetadata.previewError,
+    // [knauf] KK20-316 — preserve adapter-owned fallback retention metadata in Responses API.
+    source: fileMetadata.source,
+    expiresAt: fileMetadata.expiresAt,
+    // End [knauf]
   };
 }
 

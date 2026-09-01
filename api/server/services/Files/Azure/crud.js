@@ -327,6 +327,8 @@ async function ensureAzureContainer(containerClient, containerName) {
  * @param {string} params.fileName - The name of the file.
  * @param {string} [params.basePath='images'] - The base folder within the container.
  * @param {string} [params.containerName] - The Azure Blob container name.
+ * @param {AbortSignal} [params.abortSignal] - Cancels the Azure upload.
+ * @param {AbortSignal} [params.signal] - Compatibility alias for abortSignal.
  * @returns {Promise<string>} The URL of the uploaded blob.
  */
 async function saveBufferToAzure({
@@ -335,6 +337,8 @@ async function saveBufferToAzure({
   fileName,
   basePath = defaultBasePath,
   containerName,
+  abortSignal,
+  signal,
 }) {
   try {
     const containerClient = await getAzureContainerClient(containerName);
@@ -343,7 +347,9 @@ async function saveBufferToAzure({
     // End [knauf]
     const blobPath = `${basePath}/${userId}/${fileName}`;
     const blockBlobClient = containerClient.getBlockBlobClient(blobPath);
-    await blockBlobClient.uploadData(buffer);
+    // [knauf] KK20-297 — stop timed-out/fenced translation uploads at the provider.
+    await blockBlobClient.uploadData(buffer, { abortSignal: abortSignal ?? signal });
+    // End [knauf]
 
     // [knauf] KK20-167 — return a signed SAS URL when private, plain URL when public.
     if (!isPublicAccess()) {
@@ -461,15 +467,17 @@ async function deleteFileFromAzure(req, file) {
     await blockBlobClient.delete();
     logger.debug('[deleteFileFromAzure] Blob deleted successfully from Azure Blob Storage');
   } catch (error) {
+    // [knauf] NO-TICKET — an already-gone blob is successful idempotent cleanup.
+    if (error.statusCode === 404 || error.response?.status === 404) {
+      return;
+    }
+    // End [knauf]
     // [knauf] KK20-199 — omit Blob paths and raw Azure errors from delete logs.
     logger.error(
       '[deleteFileFromAzure] Blob delete failed',
       summarizeProviderError(error, 'azure_blob_delete'),
     );
     // End [knauf]
-    if (error.statusCode === 404) {
-      return;
-    }
     throw error;
   }
 }
@@ -618,6 +626,12 @@ async function getAzureFileStream(_req, fileURL) {
     });
     return response.data;
   } catch (error) {
+    // [knauf] NO-TICKET — the attachment lifecycle reconciles missing blobs and
+    // owns the single actionable warning, so do not amplify the same 404 here.
+    if (error.statusCode === 404 || error.response?.status === 404) {
+      throw error;
+    }
+    // End [knauf]
     // [knauf] KK20-199 — Axios errors carry config.url, including SAS and user paths.
     logger.error(
       '[getAzureFileStream] Blob download failed',

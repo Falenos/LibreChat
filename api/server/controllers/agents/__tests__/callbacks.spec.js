@@ -7,6 +7,9 @@ jest.mock('nanoid', () => ({
 
 jest.mock('@librechat/api', () => ({
   sendEvent: jest.fn(),
+  // [knauf] KK20-316 — observe Responses API attachment projections in lifecycle tests.
+  writeAttachmentEvent: jest.fn(),
+  // End [knauf]
   HOST_FILE_AUTHORING_ARTIFACT_KEY: '__librechat_file_authoring',
   isCodeSessionToolName: jest.fn((name) =>
     ['execute_code', 'bash_tool', 'read_file'].includes(name),
@@ -62,6 +65,19 @@ jest.mock('~/server/services/Tools/credentials', () => ({
 
 jest.mock('~/server/services/Files/process', () => ({
   saveBase64Image: jest.fn(),
+}));
+
+jest.mock('~/server/services/Files/retention', () => ({
+  getRetentionExpiry: jest.fn().mockResolvedValue({ expiredAt: new Date('2026-09-01') }),
+}));
+
+jest.mock('~/models', () => ({
+  updateFile: jest.fn(async (data) => ({
+    ...data,
+    filename: 'datasheet_de-DE.idml',
+    filepath: '/uploads/idml-output-1',
+    type: 'application/vnd.adobe.indesign-idml-package',
+  })),
 }));
 
 describe('createToolEndCallback', () => {
@@ -256,6 +272,47 @@ describe('createToolEndCallback', () => {
   });
 
   describe('edge cases', () => {
+    // [knauf] KK20-297 — any persisted translation becomes a normal attachment.
+    it('returns translated file metadata with current message routing', async () => {
+      const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
+      const file = {
+        file_id: 'idml-output-1',
+        filename: 'datasheet_de-DE.idml',
+        filepath: '/uploads/idml-output-1',
+        type: 'application/vnd.adobe.indesign-idml-package',
+      };
+
+      await toolEndCallback(
+        {
+          output: {
+            tool_call_id: 'tool-idml',
+            artifact: { knauf_file_translation: { files: [file] } },
+          },
+        },
+        { run_id: 'run-idml', thread_id: 'thread-idml' },
+      );
+
+      await expect(Promise.all(artifactPromises)).resolves.toEqual([
+        expect.objectContaining({
+          file_id: file.file_id,
+          filename: file.filename,
+          messageId: 'run-idml',
+          toolCallId: 'tool-idml',
+          conversationId: 'thread-idml',
+        }),
+      ]);
+      expect(require('~/models').updateFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file_id: 'idml-output-1',
+          messageId: 'run-idml',
+          conversationId: 'thread-idml',
+          expiredAt: expect.any(Date),
+        }),
+        { user: 'user123' },
+      );
+    });
+    // End [knauf]
+
     it('should handle empty ui_resources data object', async () => {
       const toolEndCallback = createToolEndCallback({ req, res, artifactPromises });
 
@@ -647,6 +704,60 @@ describe('createToolEndCallback', () => {
     });
   });
 });
+
+// [knauf] KK20-316 — pin temporary Code Execution retention metadata in Responses API events.
+describe('createResponsesToolEndCallback', () => {
+  it('emits adapter-owned source and expiry for a temporary code output', async () => {
+    const { writeAttachmentEvent } = require('@librechat/api');
+    const { processCodeOutput } = require('~/server/services/Files/Code/process');
+    const { createResponsesToolEndCallback } = require('../callbacks');
+    const expiresAt = Date.parse('2026-08-26T09:00:00.000Z');
+    processCodeOutput.mockResolvedValue({
+      file: {
+        filename: 'large-result.csv',
+        filepath: '/api/code/files/session-1/file-1',
+        source: Tools.execute_code,
+        expiresAt,
+      },
+    });
+    const artifactPromises = [];
+    const tracker = { nextSequence: jest.fn(() => 7) };
+    const callback = createResponsesToolEndCallback({
+      req: { user: { id: 'user123' } },
+      res: { headersSent: true, writableEnded: false },
+      tracker,
+      artifactPromises,
+    });
+
+    await callback(
+      {
+        output: {
+          name: 'execute_code',
+          tool_call_id: 'tool-1',
+          artifact: {
+            session_id: 'session-1',
+            files: [{ id: 'file-1', name: 'large-result.csv' }],
+          },
+        },
+      },
+      { run_id: 'run-1', thread_id: 'thread-1' },
+    );
+    await Promise.all(artifactPromises);
+
+    expect(writeAttachmentEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      7,
+      expect.objectContaining({
+        filename: 'large-result.csv',
+        url: '/api/code/files/session-1/file-1',
+        source: Tools.execute_code,
+        expiresAt,
+      }),
+      { messageId: 'run-1', conversationId: 'thread-1' },
+    );
+  });
+});
+// End [knauf]
 
 describe('isStreamWritable', () => {
   /* Direct parametric coverage of the predicate that gates SSE writes

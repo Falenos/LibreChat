@@ -18,7 +18,10 @@ const exportLimiter = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: 'Too many artifact exports. Try again later' },
+  message: {
+    code: 'artifact_rate_limit',
+    message: 'Too many artifact exports. Try again later',
+  },
 });
 
 const sendExport = async (req, res) => {
@@ -35,10 +38,15 @@ const handleExport = (handler) => async (req, res) => {
     await handler(req, res);
   } catch (error) {
     const status = error instanceof ArtifactExportError ? error.status : 500;
+    const isSafeError = error instanceof ArtifactExportError && status < 500;
     if (status === 500) {
       logger.error('[artifactExport] Export failed', { status });
     }
-    res.status(status).json({ message: status === 500 ? 'Artifact export failed' : error.message });
+    res.status(status).json({
+      message: status === 500 ? 'Artifact export failed' : error.message,
+      ...(isSafeError && error.code ? { code: error.code } : {}),
+      ...(isSafeError && error.details ? { details: error.details } : {}),
+    });
   }
 };
 

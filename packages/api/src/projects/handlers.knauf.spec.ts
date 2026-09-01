@@ -214,6 +214,34 @@ describe('createProjectHandlers project files [knauf]', () => {
     );
   });
 
+  // [knauf] KK20-297 — Project Knowledge accepts only files entering File Search.
+  it('rejects a Code Interpreter-only file from Project Knowledge', async () => {
+    const deps = createDeps({
+      getFiles: jest.fn(async () => [
+        {
+          file_id: 'source-file',
+          filename: 'component.tsx',
+          type: 'text/plain',
+          bytes: 10,
+          embedded: false,
+        },
+      ]),
+      createChatProjectSource: jest.fn(),
+    });
+    const handlers = createProjectHandlers(deps);
+    const res = createResponse();
+
+    await handlers.addProjectFile(
+      { params: { projectId }, body: { file_id: 'source-file' }, user: { id: userId } } as any,
+      res,
+    );
+
+    expect(deps.createChatProjectSource).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'File is not indexable as project knowledge' });
+  });
+  // End [knauf]
+
   it('redirects project file download only after verifying project attachment', async () => {
     const deps = createDeps({
       listChatProjectSources: jest.fn(async () => [source('file-1')]),

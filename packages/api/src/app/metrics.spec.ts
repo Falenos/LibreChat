@@ -8,6 +8,9 @@ import {
   instrumentMongooseQueryMetrics,
   normalizePath,
   recordFoundryModelCall,
+  recordFileTranslationOutcome,
+  recordFileTranslationQueue,
+  recordFileTranslationWorkerError,
   recordGenerationJob,
   recordGenerationStreamResumePendingEvents,
   recordGenerationStreamSubscription,
@@ -73,6 +76,9 @@ describe('normalizePath', () => {
 describe('createMetrics', () => {
   afterEach(() => {
     delete process.env.METRICS_SECRET;
+    delete process.env.KNAUF_FILE_TRANSLATION_WORKER_ENABLED;
+    delete process.env.AZURE_TRANSLATOR_ENDPOINT;
+    delete process.env.AZURE_TRANSLATOR_KEY;
   });
 
   it('uses a no-op middleware and unauthorized router when metrics are not configured', async () => {
@@ -435,7 +441,9 @@ describe('createMetrics', () => {
     const { metricsRouter } = createMetrics();
     app.use('/metrics', metricsRouter);
 
+    // [knauf] NO-TICKET — generation reasons survive Prometheus exposition.
     recordGenerationJob('memory', 'created');
+    recordGenerationJob('redis', 'error', 'attachment_unavailable');
     setGenerationJobsInFlight('memory', 2);
     recordGenerationStreamSubscription('redis', 'resume', 'not_found');
     recordGenerationStreamSubscription('redis', 'resume_state', 'missing');
@@ -446,7 +454,13 @@ describe('createMetrics', () => {
       .set('Authorization', 'Bearer test-secret')
       .expect(200);
 
-    expect(response.text).toMatch(/generation_jobs_total\{store="memory",result="created"\} 1/);
+    expect(response.text).toMatch(
+      /generation_jobs_total\{store="memory",result="created",reason="none"\} 1/,
+    );
+    expect(response.text).toMatch(
+      /generation_jobs_total\{store="redis",result="error",reason="attachment_unavailable"\} 1/,
+    );
+    // End [knauf]
     expect(response.text).toMatch(/generation_jobs_in_flight\{store="memory"\} 2/);
     expect(response.text).toMatch(
       /generation_stream_subscriptions_total\{store="redis",type="resume",result="not_found"\} 1/,
@@ -458,4 +472,39 @@ describe('createMetrics', () => {
       /generation_stream_resume_pending_events_total\{store="memory"\} 3/,
     );
   });
+
+  // [knauf] KK20-297 — translation metrics expose bounded lifecycle/pressure only.
+  it('tracks durable file-translation outcomes and queue pressure', async () => {
+    const app = express();
+    process.env.METRICS_SECRET = 'test-secret';
+    process.env.KNAUF_FILE_TRANSLATION_WORKER_ENABLED = 'true';
+    process.env.AZURE_TRANSLATOR_ENDPOINT = 'https://translator.example';
+    process.env.AZURE_TRANSLATOR_KEY = 'secret';
+    const { metricsRouter } = createMetrics();
+    app.use('/metrics', metricsRouter);
+
+    recordFileTranslationOutcome('completed', 2.5);
+    recordFileTranslationQueue(4, 6, 12, 2, 30);
+    recordFileTranslationWorkerError('cleanup_reconcile');
+
+    const response = await request(app)
+      .get('/metrics')
+      .set('Authorization', 'Bearer test-secret')
+      .expect(200);
+
+    expect(response.text).toMatch(/knauf_file_translation_jobs_total\{outcome="completed"\} 1/);
+    expect(response.text).toMatch(
+      /knauf_file_translation_duration_seconds_count\{outcome="completed"\} 1/,
+    );
+    expect(response.text).toMatch(/knauf_file_translation_queue_depth 4/);
+    expect(response.text).toMatch(/knauf_file_translation_active_jobs 6/);
+    expect(response.text).toMatch(/knauf_file_translation_oldest_queue_age_seconds 12/);
+    expect(response.text).toMatch(/knauf_file_translation_cleanup_pending_jobs 2/);
+    expect(response.text).toMatch(/knauf_file_translation_oldest_cleanup_age_seconds 30/);
+    expect(response.text).toMatch(
+      /knauf_file_translation_worker_errors_total\{operation="cleanup_reconcile"\} 1/,
+    );
+    expect(response.text).toMatch(/knauf_file_translation_configured 1/);
+  });
+  // End [knauf]
 });

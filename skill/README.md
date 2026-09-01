@@ -19,10 +19,17 @@ are not persisted as Skill documents in MongoDB.
 | Skill | Purpose | Invocation | Gate |
 |---|---|---|---|
 | `agent-builder-coach` | Designs, configures, tests, and prepares governed custom agents for admin-controlled publication. | model-invocable + `$agent-builder-coach` | skill gates |
+| `business-case-writeup` | Turns an agreed business discussion into a decision paper or delivery specification. | narrow model match + `$business-case-writeup` | skill gates |
+| `business-idea-stress-test` | Tests an uncommitted business idea, its evidence, alternatives, and load-bearing assumptions. | narrow model match + `$business-idea-stress-test` | skill gates |
+| `business-jira-breakdown` | Turns an agreed delivery plan into a reviewable Jira work breakdown and, after approval, Jira import CSV content. It does not connect to Jira or create a downloadable file. | explicit Jira request + `$business-jira-breakdown` | skill gates |
+| `business-plan-grilling` | Challenges execution readiness for an already-chosen plan through short question rounds. | narrow model match + `$business-plan-grilling` | skill gates |
 | `karl-brand` | Single source of truth for Knauf brand tokens: official colours and fonts, validated chart palette, ink/surface tokens, the real KNAUF wordmark SVG. Read by `karl-artifacts` and usable for non-artifact deliverables. | model-invocable + `$karl-brand` | skill gates |
 | `karl-artifacts` | Choosing an artifact type, avoiding preview breakage, and the branded report / slides / dashboard templates. | model-invocable + `$karl-artifacts` | skill gates |
 | `karl-guide` | Product guidance for Karl capabilities, navigation, roles, groups, settings, limits, and troubleshooting. | model-invocable + `$karl-guide` | skill gates |
+| `karl-idml` | Routes attached IDML translation, bounded text inspection, exact story-text manipulation, safe export, and human InDesign acceptance. | model-invocable + `$karl-idml` | skill gates; IDML tools require a current-message `.idml` attachment |
+| `karl-image-generation` | GPT Image generation/edit routing, prompt structure, reference preservation, and quality/size/format selection. | model-invocable + `$karl-image-generation` | skill gates; image tool must be enabled |
 | `karl-mermaid` | Mermaid 11.15.0 generation and repair guardrails, including sequence diagrams and streaming-sensitive `xychart-beta` output. | model-invocable + `$karl-mermaid` | skill gates |
+| `karl-xml` | Routes attached XML interpretation, translation, bounded text-node inspection, exact manipulation, safe export, and schema review. | model-invocable + `$karl-xml` | skill gates; XML tools require a current-message `.xml` attachment |
 | `web-research` | Uses model-native public-web search by default and the request-scoped `open_url` fetch only for an exact HTTPS link pasted in the current message; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
 | `karl-data-analysis` | General "run code on data" sandbox workflow (CSV/JSON/logs, stats, matplotlib, `/mnt/data`). | model-invocable + `$karl-data-analysis` | `execute_code` environment gate |
 | `karl-xlsx` | Dedicated spreadsheet workflow (read/analyze/author `.xlsx`/`.xls`/`.xlsb`/csv; formulas, formatting, charts, and LibreOffice recalculation). | model-invocable + `$karl-xlsx` | `execute_code` environment gate |
@@ -38,6 +45,10 @@ so this stays true even if discovery depth changes upstream.
 
 Skill gates are the endpoint `skills` capability, the user's `SKILLS.USE` permission, and skills
 being enabled for the current chat or persisted agent.
+
+The four `business-*` skills are on demand. Their narrow descriptions permit model selection only
+for the matching workflow, each also supports explicit `$skill` invocation, and none is
+always-applied.
 
 ## Per-skill maintainer constraints
 

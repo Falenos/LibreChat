@@ -14,6 +14,9 @@ const FileContainer = ({
   containerClassName,
   onDelete,
   onClick,
+  // [knauf] KK20-297 — explicit affordance for actionable file cards.
+  action,
+  // End [knauf]
 }: {
   file: Partial<ExtendedFile | TFile>;
   overrideType?: string;
@@ -36,6 +39,9 @@ const FileContainer = ({
   containerClassName?: string;
   onDelete?: () => void;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  // [knauf] KK20-297 — upload and preview-only chips omit this.
+  action?: Readonly<{ icon: ReactNode; label: string }>;
+  // End [knauf]
 }) => {
   const fileType = getFileType(overrideType ?? file.type);
   const visibleName = displayName ?? file.filename ?? '';
@@ -47,7 +53,11 @@ const FileContainer = ({
       <button
         type="button"
         onClick={onClick}
-        aria-label={visibleName}
+        aria-label={
+          // [knauf] KK20-297 — action cards get a descriptive localized label.
+          action?.label ?? visibleName
+          // End [knauf]
+        }
         className={cn(
           'relative overflow-hidden rounded-2xl border border-border-light bg-surface-hover-alt',
           buttonClassName,
@@ -68,6 +78,9 @@ const FileContainer = ({
                 </div>
               )}
             </div>
+            {/* [knauf] KK20-297 — affordance inside the existing button; no nested control. */}
+            {action && <span className="ml-auto shrink-0 text-text-secondary">{action.icon}</span>}
+            {/* End [knauf] */}
           </div>
         </div>
       </button>

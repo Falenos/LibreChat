@@ -467,7 +467,14 @@ describe('helpers', () => {
       .mockRejectedValueOnce(new Error('metrics unavailable'))
       .mockResolvedValue({ queued: 3, oldestAgeSeconds: 12 });
     const record = jest.fn();
-    const sampler = createQueueMetricsSampler({ sample, record, logger, intervalMs: 30_000 });
+    const onError = jest.fn();
+    const sampler = createQueueMetricsSampler({
+      sample,
+      record,
+      logger,
+      intervalMs: 30_000,
+      onError,
+    });
 
     sampler.start();
     await Promise.resolve();
@@ -481,6 +488,9 @@ describe('helpers', () => {
     await jest.advanceTimersByTimeAsync(30_000);
     expect(logger.warn).toHaveBeenCalledWith(
       '[indexingWorker][metrics] queue sample failed: metrics unavailable',
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'metrics unavailable' }),
     );
 
     await jest.advanceTimersByTimeAsync(30_000);

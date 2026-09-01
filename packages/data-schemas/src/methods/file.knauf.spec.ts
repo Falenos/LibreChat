@@ -74,3 +74,35 @@ describe('createFile with ownerScope (KK20-195 WP3a)', () => {
   });
 });
 // End [knauf]
+
+// [knauf] KK20-297 — persisted translation outputs use application-managed
+// `expiredAt`; disabling the temporary upload TTL removes only `expiresAt`.
+describe('translation output retention', () => {
+  test('retention expiry survives creation and later conversation binding', async () => {
+    const expiredAt = new Date('2030-01-02T03:04:05.000Z');
+    const created = await methods.createFile(baseFile({ expiredAt }), true, {
+      userId: String(userA),
+    });
+
+    expect(created?.expiredAt).toEqual(expiredAt);
+    expect(created?.expiresAt).toBeUndefined();
+
+    const bound = await methods.updateFile(
+      {
+        file_id: 'shared-uuid-1',
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+        expiredAt,
+      },
+      { user: userA },
+    );
+
+    expect(bound).toMatchObject({
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      expiredAt,
+    });
+    expect(bound?.expiresAt).toBeUndefined();
+  });
+});
+// End [knauf]

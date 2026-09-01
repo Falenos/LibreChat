@@ -177,6 +177,38 @@ describe('useChatFunctions — Knauf analytics', () => {
 
     expect(dispatchAdobeAppInteraction).not.toHaveBeenCalled();
   });
+
+  // [knauf] KK20-297 — extension-only uploads must retain their filename in
+  // the request so the backend can expose request-scoped IDML tools.
+  it('preserves attachment filenames when the browser MIME is empty', () => {
+    const setSubmission = jest.fn();
+    const files = new Map([
+      [
+        'idml-1',
+        {
+          file_id: 'idml-1',
+          filename: 'datasheet.idml',
+          filepath: '/files/datasheet.idml',
+          type: '',
+        },
+      ],
+    ]);
+    const { result } = renderUseChatFunctions({ files, setSubmission });
+
+    act(() => {
+      result.current.ask({ text: 'Inspect this IDML' });
+    });
+
+    const submission = setSubmission.mock.calls.at(-1)?.[0] as TSubmission;
+    expect(submission.userMessage.files).toEqual([
+      expect.objectContaining({
+        file_id: 'idml-1',
+        filename: 'datasheet.idml',
+        type: '',
+      }),
+    ]);
+  });
+  // End [knauf]
 });
 
 // [knauf] Keep ordinary sends linear across message hydration and start-failure recovery.

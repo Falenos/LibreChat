@@ -63,6 +63,7 @@ const EXPECTED_SKILL_NAMES = KNAUF_EXPECTED_DEPLOYMENT_SKILLS;
 /** The token source of truth. Every other skill mirrors, never authors. */
 const TOKEN_SOURCE_SKILL = 'karl-brand';
 const MERMAID_SKILL = 'karl-mermaid';
+const IMAGE_GENERATION_SKILL = 'karl-image-generation';
 
 const HEX_PATTERN = /#[0-9a-fA-F]{6}\b/g;
 /** `read_file` reference paths: `skills/<skill-name>/<relative/path>`. */
@@ -97,6 +98,31 @@ describe('[knauf] shipped deployment skills', () => {
       .map((skill) => `${skill.name}: ${skill.description.length} chars`);
     expect(overLong).toEqual([]);
   });
+
+  // [knauf] NO-TICKET — business workflows stay selectable, narrow, and never global.
+  it('routes business workflows only for their matching job or explicit invocation', () => {
+    const stressTest = byName.get('business-idea-stress-test');
+    const grilling = byName.get('business-plan-grilling');
+    const writeup = byName.get('business-case-writeup');
+    const jira = byName.get('business-jira-breakdown');
+    const businessSkills = [stressTest, grilling, writeup, jira];
+
+    for (const skill of businessSkills) {
+      expect(skill).toBeDefined();
+      expect(skill?.userInvocable).not.toBe(false);
+      expect(skill?.disableModelInvocation).not.toBe(true);
+      expect(skill?.alwaysApply).not.toBe(true);
+    }
+
+    expect(stressTest?.description).toContain('uncommitted business idea');
+    expect(grilling?.description).toContain('chosen business plan');
+    expect(writeup?.description).toContain('agreed business discussion');
+    expect(jira?.description).toContain('only when the user explicitly asks for Jira');
+    expect(writeup?.body).toContain('Do not promise a downloadable document file');
+    expect(jira?.body).toContain('does not connect to Jira');
+    expect(jira?.body).toContain('not creating a downloadable file');
+  });
+  // End [knauf]
 
   it('keeps the token-source skill readable across skills', () => {
     const source = byName.get(TOKEN_SOURCE_SKILL);
@@ -210,6 +236,51 @@ describe('[knauf] shipped deployment skills', () => {
     expect(mermaid?.description).toContain('render error');
     expect(mermaid?.body).toContain('Mermaid **11.15.0**');
   });
+
+  // [knauf] KK20-168 — ship concise, model-invocable GPT Image 2 production guidance.
+  it('ships model-invocable image generation and editing guidance', () => {
+    const image = byName.get(IMAGE_GENERATION_SKILL);
+    expect(image).toBeDefined();
+    expect(image?.disableModelInvocation).not.toBe(true);
+    expect(image?.alwaysApply).not.toBe(true);
+    expect(image?.description).toMatch(/generation|edit/i);
+    expect(image?.body).toContain('image_gen_oai');
+    expect(image?.body).toContain('image_edit_oai');
+    expect(image?.body).toContain('output_compression: 85');
+    expect(image?.body).toContain('not WebP or transparent output');
+    expect(image?.body).toContain('skills/karl-brand/SKILL.md');
+  });
+  // End [knauf]
+
+  // [knauf] KK20-297 — durable file translation plus XML-specific manipulation.
+  it('ships durable deterministic file-translation guidance', () => {
+    const translation = byName.get('karl-file-translation');
+
+    expect(translation).toBeDefined();
+    expect(translation?.body).toContain('translate_file');
+    expect(translation?.body).toContain('translation_status');
+    expect(translation?.body).toContain('source_locale');
+    expect(translation?.body).toContain('all_files: true');
+    expect(translation?.body).toMatch(/downloadable file\s+card/i);
+    expect(translation?.body).toMatch(/continues after the chat request/i);
+    expect(translation?.body).toMatch(/Source-code files are excluded/i);
+    expect(translation?.body).toMatch(/human\s+review/i);
+  });
+
+  it('ships bounded XML inspection, translation, and manipulation guidance', () => {
+    const xml = byName.get('karl-xml');
+    const reference = xml?.files.find((file) => file.relativePath === 'references/xml.md')?.content;
+
+    expect(xml).toBeDefined();
+    expect(xml?.body).toContain('edit_xml');
+    expect(xml?.body).toContain('translate_file');
+    expect(xml?.body).toMatch(/do not translate element names/i);
+    expect(xml?.body).toMatch(/DTD.*entity/i);
+    expect(xml?.body).toMatch(/schema or consuming-system review/i);
+    expect(reference).toContain('100,000 nodes');
+    expect(reference).toMatch(/Attributes are intentionally excluded/i);
+  });
+  // End [knauf]
 
   it('never authors a hex outside the token source', () => {
     // Every hex the token source declares, from its SKILL.md body AND its own

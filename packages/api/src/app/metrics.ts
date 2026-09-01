@@ -137,6 +137,15 @@ export interface PrometheusMetrics {
 export type OpenIDUserLookupResult = 'found' | 'not_found' | 'migration' | 'auth_failed' | 'error';
 export type GenerationJobStore = 'memory' | 'redis';
 export type GenerationJobResult = 'created' | 'completed' | 'error' | 'aborted' | 'abort_failed';
+// [knauf] NO-TICKET — bounded generation failure classes; never provider text or identifiers.
+export type GenerationJobReason =
+  | 'none'
+  | 'provider_bad_request'
+  | 'provider_request_failed'
+  | 'attachment_unavailable'
+  | 'generation_timeout'
+  | 'unknown';
+// End [knauf]
 export type GenerationStreamSubscriptionType = 'initial' | 'resume' | 'resume_state';
 export type GenerationStreamSubscriptionResult =
   | 'success'
@@ -180,7 +189,13 @@ let mongooseQueryMetrics: MongooseQueryMetrics = {
 };
 
 type GenerationJobMetrics = {
-  recordJob: (store: GenerationJobStore, result: GenerationJobResult) => void;
+  // [knauf] NO-TICKET — attach a bounded reason to terminal generation metrics.
+  recordJob: (
+    store: GenerationJobStore,
+    result: GenerationJobResult,
+    reason: GenerationJobReason,
+  ) => void;
+  // End [knauf]
   setJobsInFlight: (store: GenerationJobStore, count: number) => void;
   recordSubscription: (
     store: GenerationJobStore,
@@ -273,6 +288,48 @@ let fileIndexMetrics: FileIndexMetrics = {
 };
 // End [knauf]
 
+// [knauf] KK20-297 — durable translation queue metrics. Labels are bounded
+// lifecycle outcomes only; never user, tenant, filename, locale, or job id.
+export type FileTranslationOutcome =
+  | 'accepted'
+  | 'idempotent'
+  | 'user_limited'
+  | 'capacity_limited'
+  | 'completed'
+  | 'partial'
+  | 'retrying'
+  | 'failed'
+  | 'cancelled'
+  | 'lease_lost'
+  | 'ambiguous';
+
+export type FileTranslationWorkerOperation =
+  | 'claim'
+  | 'conversation_reconcile'
+  | 'cleanup_scan'
+  | 'cleanup_reconcile'
+  | 'finalize_reconcile'
+  | 'queue_sample';
+
+type FileTranslationMetrics = {
+  recordOutcome: (outcome: FileTranslationOutcome, durationSeconds?: number) => void;
+  recordQueue: (
+    queued: number,
+    active: number,
+    oldestAgeSeconds: number,
+    cleanupPending: number,
+    oldestCleanupAgeSeconds: number,
+  ) => void;
+  recordWorkerError: (operation: FileTranslationWorkerOperation) => void;
+};
+
+let fileTranslationMetrics: FileTranslationMetrics = {
+  recordOutcome: () => undefined,
+  recordQueue: () => undefined,
+  recordWorkerError: () => undefined,
+};
+// End [knauf]
+
 const resetMetricRecorders = (): void => {
   openIDUserLookupMetrics = {
     recordLookup: () => undefined,
@@ -303,11 +360,24 @@ const resetMetricRecorders = (): void => {
     recordWorkerQueue: () => undefined,
   };
   // End [knauf]
+  // [knauf] KK20-297 — reset translation recorders to no-ops.
+  fileTranslationMetrics = {
+    recordOutcome: () => undefined,
+    recordQueue: () => undefined,
+    recordWorkerError: () => undefined,
+  };
+  // End [knauf]
 };
 
-export function recordGenerationJob(store: GenerationJobStore, result: GenerationJobResult): void {
-  generationJobMetrics.recordJob(store, result);
+// [knauf] NO-TICKET — lifecycle-only events use the stable none bucket.
+export function recordGenerationJob(
+  store: GenerationJobStore,
+  result: GenerationJobResult,
+  reason: GenerationJobReason = 'none',
+): void {
+  generationJobMetrics.recordJob(store, result, reason);
 }
+// End [knauf]
 
 export function setGenerationJobsInFlight(store: GenerationJobStore, count: number): void {
   generationJobMetrics.setJobsInFlight(store, count);
@@ -368,6 +438,35 @@ export function recordFileIndexWorkerClaim(outcome: WorkerClaimOutcome): void {
 export function recordFileIndexWorkerQueue(queued: number, oldestAgeSeconds: number): void {
   fileIndexMetrics.recordWorkerQueue(queued, oldestAgeSeconds);
 }
+
+// [knauf] KK20-297 — public wrappers keep callers independent of prom-client.
+export function recordFileTranslationOutcome(
+  outcome: FileTranslationOutcome,
+  durationSeconds?: number,
+): void {
+  fileTranslationMetrics.recordOutcome(outcome, durationSeconds);
+}
+
+export function recordFileTranslationQueue(
+  queued: number,
+  active: number,
+  oldestAgeSeconds: number,
+  cleanupPending: number,
+  oldestCleanupAgeSeconds: number,
+): void {
+  fileTranslationMetrics.recordQueue(
+    queued,
+    active,
+    oldestAgeSeconds,
+    cleanupPending,
+    oldestCleanupAgeSeconds,
+  );
+}
+
+export function recordFileTranslationWorkerError(operation: FileTranslationWorkerOperation): void {
+  fileTranslationMetrics.recordWorkerError(operation);
+}
+// End [knauf]
 // End [knauf]
 
 const getElapsedSeconds = (startedAt: bigint): number =>
@@ -620,8 +719,10 @@ export function createMetrics(): PrometheusMetrics {
 
   const generationJobs = new Counter({
     name: 'generation_jobs_total',
-    help: 'Generation jobs by backing store and result',
-    labelNames: ['store', 'result'] as const,
+    help: 'Generation jobs by backing store, result, and bounded failure reason',
+    // [knauf] NO-TICKET — reason is an allow-listed class, not an error message.
+    labelNames: ['store', 'result', 'reason'] as const,
+    // End [knauf]
     registers: [registry],
   });
 
@@ -654,7 +755,9 @@ export function createMetrics(): PrometheusMetrics {
   });
 
   generationJobMetrics = {
-    recordJob: (store, result) => generationJobs.inc({ store, result }),
+    // [knauf] NO-TICKET — emit the allow-listed class as an OpenMetrics label.
+    recordJob: (store, result, reason) => generationJobs.inc({ store, result, reason }),
+    // End [knauf]
     setJobsInFlight: (store, count) => generationJobsInFlight.set({ store }, count),
     recordSubscription: (store, type, result) =>
       generationStreamSubscriptions.inc({ store, type, result }),
@@ -763,6 +866,81 @@ export function createMetrics(): PrometheusMetrics {
       fileIndexQueueDepth.set(queued);
       fileIndexQueueOldestAge.set(oldestAgeSeconds);
     },
+  };
+  // End [knauf]
+
+  // [knauf] KK20-297 — durable translation admission, execution, and pressure.
+  const fileTranslationJobs = new Counter({
+    name: 'knauf_file_translation_jobs_total',
+    help: 'Durable file-translation lifecycle outcomes',
+    labelNames: ['outcome'] as const,
+    registers: [registry],
+  });
+  const fileTranslationDuration = new Histogram({
+    name: 'knauf_file_translation_duration_seconds',
+    help: 'Translation worker execution duration by terminal/retry outcome',
+    labelNames: ['outcome'] as const,
+    buckets: [1, 5, 15, 30, 60, 120, 300, 600, 1200],
+    registers: [registry],
+  });
+  const fileTranslationQueueDepth = new Gauge({
+    name: 'knauf_file_translation_queue_depth',
+    help: 'Queued or retrying translation jobs',
+    registers: [registry],
+  });
+  const fileTranslationActive = new Gauge({
+    name: 'knauf_file_translation_active_jobs',
+    help: 'Active durable translation jobs including queued and processing',
+    registers: [registry],
+  });
+  const fileTranslationOldestAge = new Gauge({
+    name: 'knauf_file_translation_oldest_queue_age_seconds',
+    help: 'Age of the oldest queued or retrying translation job',
+    registers: [registry],
+  });
+  const fileTranslationCleanupPending = new Gauge({
+    name: 'knauf_file_translation_cleanup_pending_jobs',
+    help: 'Translation jobs with durable unpublished-output cleanup debt',
+    registers: [registry],
+  });
+  const fileTranslationOldestCleanupAge = new Gauge({
+    name: 'knauf_file_translation_oldest_cleanup_age_seconds',
+    help: 'Age past the cleanup deadline for the oldest translation cleanup debt',
+    registers: [registry],
+  });
+  const fileTranslationWorkerErrors = new Counter({
+    name: 'knauf_file_translation_worker_errors_total',
+    help: 'Translation worker infrastructure failures by bounded operation',
+    labelNames: ['operation'] as const,
+    registers: [registry],
+  });
+  const fileTranslationConfigured = new Gauge({
+    name: 'knauf_file_translation_configured',
+    help: 'Whether this process has translation enabled and required provider credentials',
+    registers: [registry],
+  });
+  const translationRoleEnabled =
+    process.env.KNAUF_FILE_TRANSLATION_WORKER_ENABLED === 'true' ||
+    process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true';
+  fileTranslationConfigured.set(
+    Number(
+      translationRoleEnabled &&
+        Boolean(process.env.AZURE_TRANSLATOR_ENDPOINT && process.env.AZURE_TRANSLATOR_KEY),
+    ),
+  );
+  fileTranslationMetrics = {
+    recordOutcome: (outcome, durationSeconds) => {
+      fileTranslationJobs.inc({ outcome });
+      if (durationSeconds != null) fileTranslationDuration.observe({ outcome }, durationSeconds);
+    },
+    recordQueue: (queued, active, oldestAgeSeconds, cleanupPending, oldestCleanupAgeSeconds) => {
+      fileTranslationQueueDepth.set(queued);
+      fileTranslationActive.set(active);
+      fileTranslationOldestAge.set(oldestAgeSeconds);
+      fileTranslationCleanupPending.set(cleanupPending);
+      fileTranslationOldestCleanupAge.set(oldestCleanupAgeSeconds);
+    },
+    recordWorkerError: (operation) => fileTranslationWorkerErrors.inc({ operation }),
   };
   // End [knauf]
 

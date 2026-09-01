@@ -7,6 +7,7 @@
 // (covered by process.integration.spec.js) and is mocked here.
 
 const mongoose = require('mongoose');
+const fs = require('fs');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const { createModels, createMethods } = require('@librechat/data-schemas');
 const { FileSources } = require('librechat-data-provider');
@@ -57,12 +58,21 @@ jest.mock('~/models', () => {
 });
 
 require('module-alias/register');
+const { deleteLocalFile } = require('../Local/crud');
 const {
   collectConvoFilesForCleanup,
   cascadeDeleteCollectedFiles,
+  deleteConvosWithCleanup,
   partitionByRefCount,
   deleteFilesWithDedupAwareness,
 } = require('./cascadeDeleteConvoFiles');
+const {
+  claimNextTranslationJob,
+  completeTranslationJob,
+  enqueueTranslationJob,
+  getTranslationJobModel,
+  prepareTranslationAttempt,
+} = require('./translation/jobs');
 
 describe('cascadeDeleteConvoFiles (KK20-203)', () => {
   let mongoServer;
@@ -96,6 +106,7 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       Agent.deleteMany({}),
       // KK20-195 WP3d — ledger rows seeded by the FileAsset-lifecycle tests.
       mongoose.models.KnaufFileAsset.deleteMany({}),
+      getTranslationJobModel().deleteMany({}),
     ]);
     mockProcessDeleteRequest.mockClear();
     mockDeleteVectorsByIds.mockClear();
@@ -120,6 +131,28 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       ...extra,
     });
 
+  test('local cleanup propagates non-idempotent filesystem failures', async () => {
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const unlinkSpy = jest.spyOn(fs.promises, 'unlink').mockRejectedValueOnce(error);
+    try {
+      await expect(
+        deleteLocalFile(
+          {
+            user: { id: userId.toString() },
+            config: { paths: { uploads: '/tmp/uploads', publicPath: '/tmp/public' } },
+          },
+          {
+            file_id: 'local-output',
+            filepath: `/uploads/${userId}/local-output.docx`,
+            embedded: false,
+          },
+        ),
+      ).rejects.toBe(error);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
   const seedConvo = (conversationId, files = []) =>
     Conversation.create({ conversationId, user: userId, title: 'Test', endpoint: 'openAI', files });
 
@@ -135,6 +168,109 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
   // Message.files[] is Mixed: legacy/imported messages can carry bare-string ids.
   const seedRawMessage = (messageId, conversationId, rawFiles) =>
     Message.create({ messageId, conversationId, user: userId, text: 'hi', files: rawFiles });
+
+  const seedAttachmentMessage = (messageId, conversationId, fileIds) =>
+    Message.create({
+      messageId,
+      conversationId,
+      user: userId,
+      text: 'generated',
+      attachments: fileIds.map((file_id) => ({ file_id })),
+    });
+
+  test('conversation deletion tombstones translation jobs before removing the chat', async () => {
+    await seedConvo('translated-chat');
+    const { job } = await enqueueTranslationJob({
+      user: userId.toString(),
+      conversationId: 'translated-chat',
+      files: [
+        {
+          file_id: 'source-file',
+          filename: 'source.docx',
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          bytes: 10,
+        },
+      ],
+      targetLocale: 'de-DE',
+    });
+
+    await deleteConvosWithCleanup({
+      req: buildReq(),
+      filter: { conversationId: 'translated-chat' },
+    });
+
+    expect(await Conversation.exists({ conversationId: 'translated-chat' })).toBeNull();
+    await expect(
+      getTranslationJobModel().findOne({ job_id: job.job_id }).lean(),
+    ).resolves.toMatchObject({
+      status: 'cancelled',
+      active: false,
+      cancel_requested_at: expect.any(Date),
+    });
+  });
+
+  test('conversation deletion fails closed when translation cancellation cannot persist', async () => {
+    await seedConvo('protected-chat');
+    const Job = getTranslationJobModel();
+    const update = jest
+      .spyOn(Job, 'updateMany')
+      .mockRejectedValueOnce(new Error('Mongo unavailable'));
+
+    await expect(
+      deleteConvosWithCleanup({
+        req: buildReq(),
+        filter: { conversationId: 'protected-chat' },
+      }),
+    ).rejects.toThrow('Mongo unavailable');
+
+    expect(await Conversation.exists({ conversationId: 'protected-chat' })).not.toBeNull();
+    update.mockRestore();
+  });
+
+  test('conversation deletion tombstones a publication that won immediately before the barrier', async () => {
+    await seedConvo('published-chat');
+    const { job } = await enqueueTranslationJob({
+      user: userId.toString(),
+      conversationId: 'published-chat',
+      files: [
+        {
+          file_id: 'source-file',
+          filename: 'source.docx',
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          bytes: 10,
+        },
+      ],
+      targetLocale: 'de-DE',
+    });
+    const claim = await claimNextTranslationJob({ workerId: 'publish-worker' });
+    const prepared = await prepareTranslationAttempt({
+      jobId: claim.job_id,
+      token: claim.execution_token,
+      generation: claim.target_generation,
+    });
+    await completeTranslationJob({
+      jobId: prepared.job_id,
+      token: prepared.execution_token,
+      generation: prepared.target_generation,
+      outputFileIds: prepared.current_output_file_ids,
+      report: { status: 'completed' },
+    });
+
+    await deleteConvosWithCleanup({
+      req: buildReq(),
+      filter: { conversationId: 'published-chat' },
+    });
+
+    const current = await getTranslationJobModel().findOne({ job_id: job.job_id }).lean();
+    expect(current.status).toBe('cancelled');
+    expect(current.expires_at).toBeNull();
+    expect(current.attempt_outputs).toContainEqual(
+      expect.objectContaining({
+        generation: prepared.target_generation,
+        cleanup_status: 'cleanup_pending',
+      }),
+    );
+  });
 
   const seedAgent = (id, toolResources, extra = {}) =>
     Agent.create({
@@ -178,6 +314,19 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
     await cascadeDeleteCollectedFiles({ req: buildReq(), collected });
     expect(deletedFileIds()).toEqual(['f-msg']);
+  });
+
+  test('collects a generated file linked only via Message.attachments[]', async () => {
+    await seedConvo('convo-output');
+    await seedFile('f-output');
+    await seedAttachmentMessage('m-output', 'convo-output', ['f-output']);
+
+    const collected = await collectConvoFilesForCleanup({
+      req: buildReq(),
+      filter: { conversationId: 'convo-output' },
+    });
+
+    expect(collected.files.map((file) => file.file_id)).toContain('f-output');
   });
 
   test('keeps a file still referenced by another surviving conversation', async () => {
@@ -237,6 +386,19 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
 
       expect(deletable).toHaveLength(0);
       expect(sharedStillReferenced.map((f) => f.file_id)).toEqual(['f-x']);
+    });
+
+    test('a surviving message attachment keeps the file out of the deletable set', async () => {
+      await seedFile('f-attachment');
+      await seedAttachmentMessage('m-keep-output', 'survivor-convo', ['f-attachment']);
+
+      const { deletable, sharedStillReferenced } = await partitionByRefCount(
+        [{ file_id: 'f-attachment' }],
+        { user: userId.toString(), deletedConversationIds: ['convo-deleted'] },
+      );
+
+      expect(deletable).toHaveLength(0);
+      expect(sharedStillReferenced.map((file) => file.file_id)).toEqual(['f-attachment']);
     });
 
     test('a file referenced only by the deleted conversations is deletable', async () => {
@@ -468,6 +630,22 @@ describe('cascadeDeleteConvoFiles (KK20-203)', () => {
       expect(await File.findOne({ file_id: 'canon-1' })).not.toBeNull(); // asset owner survives
       expect(mockDeleteVectorsByIds).not.toHaveBeenCalled(); // group not empty → asset kept
       expect(mockStrategyDeleteFile).not.toHaveBeenCalled();
+    });
+
+    test('propagates per-file storage cleanup failures to the translation debt owner', async () => {
+      await seedFile('translation-output', {
+        source: FileSources.local,
+        filepath: '/uploads/user/translation-output.docx',
+      });
+      const files = await db.getFiles({ user: userId, file_id: 'translation-output' });
+      mockProcessDeleteRequest.mockResolvedValueOnce({
+        deletedFileIds: [],
+        failedFileIds: ['translation-output'],
+      });
+
+      await expect(deleteFilesWithDedupAwareness({ req: buildReq(), files })).rejects.toMatchObject(
+        { failedFileIds: ['translation-output'] },
+      );
     });
 
     // The exact bug this fix closes: directly deleting the canonical ROW while a

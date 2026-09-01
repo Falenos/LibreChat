@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Maintain KARL Release Notes'
+  short_description: 'Capture and publish weekly KARL changes'
+  default_prompt: 'Use $maintain-release-notes to publish this week’s KARL release notes.'

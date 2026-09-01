@@ -696,6 +696,22 @@ describe('Azure crud.js - URL refresh tests', () => {
         /sig=SECRET|user-secret|download failed for/i,
       );
     });
+
+    // [knauf] NO-TICKET — a missing blob is owned by attachment reconciliation.
+    it('leaves a missing blob for the attachment lifecycle without logging it again', async () => {
+      const notFound = Object.assign(new Error('not found'), {
+        response: { status: 404 },
+      });
+      axios.mockRejectedValueOnce(notFound);
+
+      await expect(
+        getAzureFileStream({}, 'https://test.blob.core.windows.net/files/images/user123/gone.png'),
+      ).rejects.toBe(notFound);
+
+      expect(axios).toHaveBeenCalledTimes(1);
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+    // End [knauf]
   });
   // End [knauf]
 
@@ -745,6 +761,9 @@ describe('Azure crud.js - URL refresh tests', () => {
         filepath: 'https://test.blob.core.windows.net/files/images/user123/gone.pdf',
       };
       await expect(deleteFileFromAzure(req, file)).resolves.toBeUndefined();
+      // [knauf] NO-TICKET — expected idempotent cleanup must not emit an error.
+      expect(logger.error).not.toHaveBeenCalled();
+      // End [knauf]
     });
 
     // [knauf] KK20-199 — Azure delete failures retain diagnosis without Blob identity.

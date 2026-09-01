@@ -1,4 +1,7 @@
 import type { ExtendedJsonSchema } from '../registry/definitions';
+// [knauf] Keep the model-visible tool contract aligned with GPT Image 2. KK20-168.
+import { gptImage2OutputProperties } from '~/knauf/tools/imageOptions';
+// End [knauf]
 
 /** Default descriptions for image generation tool  */
 const DEFAULT_IMAGE_GEN_DESCRIPTION =
@@ -75,23 +78,9 @@ const imageGenOaiJsonSchema: ExtendedJsonSchema = {
       maxLength: 32000,
       description: getImageGenPromptDescription(),
     },
-    background: {
-      type: 'string',
-      enum: ['transparent', 'opaque', 'auto'],
-      description:
-        'Sets transparency for the background. Must be one of transparent, opaque or auto (default). When transparent, the output format should be png or webp.',
-    },
-    quality: {
-      type: 'string',
-      enum: ['auto', 'high', 'medium', 'low'],
-      description: 'The quality of the image. One of auto (default), high, medium, or low.',
-    },
-    size: {
-      type: 'string',
-      enum: ['auto', '1024x1024', '1536x1024', '1024x1536'],
-      description:
-        'The size of the generated image. One of 1024x1024, 1536x1024 (landscape), 1024x1536 (portrait), or auto (default).',
-    },
+    // [knauf] Shared GPT Image 2 size, quality, format, compression, and background controls.
+    ...gptImage2OutputProperties,
+    // End [knauf]
   },
   required: ['prompt'],
 };
@@ -103,6 +92,7 @@ const imageEditOaiJsonSchema: ExtendedJsonSchema = {
       type: 'array',
       items: { type: 'string' },
       minItems: 1,
+      maxItems: 16,
       description: `IDs (image ID strings) of previously generated or uploaded images that should guide the edit.
 
 Guidelines:
@@ -115,18 +105,9 @@ Guidelines:
       maxLength: 32000,
       description: getImageEditPromptDescription(),
     },
-    quality: {
-      type: 'string',
-      enum: ['auto', 'high', 'medium', 'low'],
-      description:
-        'The quality of the image. One of auto (default), high, medium, or low. High/medium/low only supported for gpt-image-1.',
-    },
-    size: {
-      type: 'string',
-      enum: ['auto', '1024x1024', '1536x1024', '1024x1536', '256x256', '512x512'],
-      description:
-        'The size of the generated images. For gpt-image-1: auto (default), 1024x1024, 1536x1024, 1024x1536. For dall-e-2: 256x256, 512x512, 1024x1024.',
-    },
+    // [knauf] Editing supports the same GPT Image 2 output controls as generation.
+    ...gptImage2OutputProperties,
+    // End [knauf]
   },
   required: ['image_ids', 'prompt'],
 };

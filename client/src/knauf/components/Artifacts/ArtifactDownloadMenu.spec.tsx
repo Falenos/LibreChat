@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import ArtifactDownloadMenu from './ArtifactDownloadMenu';
 
 const mockPostArtifactExport = jest.fn();
+const mockDownloadOriginal = jest.fn();
 const mockTriggerDownload = jest.fn();
 const mockShowToast = jest.fn();
 let mockCurrentCode: string | undefined;
@@ -20,8 +21,9 @@ jest.mock('@librechat/client', () => ({
   DropdownMenuItem: ({
     children,
     onSelect,
-  }: Readonly<{ children: ReactNode; onSelect: () => void }>) => (
-    <button role="menuitem" onClick={onSelect}>
+    ...props
+  }: Readonly<{ children: ReactNode; onSelect: () => void; disabled?: boolean }>) => (
+    <button role="menuitem" onClick={onSelect} {...props}>
       {children}
     </button>
   ),
@@ -29,7 +31,12 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
+  AuthContext: jest.requireActual('react').createContext(undefined),
   useLocalize: () => (key: string) => key,
+}));
+
+jest.mock('~/data-provider', () => ({
+  useFileDownload: () => ({ refetch: mockDownloadOriginal }),
 }));
 
 jest.mock('~/hooks/Artifacts/useArtifactProps', () => ({
@@ -61,6 +68,7 @@ describe('ArtifactDownloadMenu', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockCurrentCode = 'export default () => <main>Edited</main>;';
+    mockDownloadOriginal.mockResolvedValue({ data: 'blob:original-file' });
     mockPostArtifactExport.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -75,6 +83,44 @@ describe('ArtifactDownloadMenu', () => {
 
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:artifact-export', 'App.tsx');
     expect(mockPostArtifactExport).not.toHaveBeenCalled();
+  });
+
+  it('downloads the original generated file when a source file is available', async () => {
+    render(
+      <ArtifactDownloadMenu
+        artifact={{
+          ...artifact,
+          title: 'data.csv',
+          type: 'spreadsheet-preview',
+          sourceFileId: 'file-1',
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_source' }));
+
+    await waitFor(() => expect(mockDownloadOriginal).toHaveBeenCalled());
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:original-file', 'data.csv');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('disables unavailable original spreadsheet downloads in shared artifacts', () => {
+    render(
+      <ArtifactDownloadMenu
+        artifact={{ ...artifact, type: 'spreadsheet-preview' }}
+        shareId="share-1"
+      />,
+    );
+
+    expect(
+      screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_source' }),
+    ).toBeDisabled();
+  });
+
+  it('renders public shared artifacts without an AuthProvider', () => {
+    render(<ArtifactDownloadMenu artifact={artifact} shareId="share-1" />);
+
+    expect(screen.getByRole('button', { name: 'com_ui_download_artifact' })).toBeEnabled();
   });
 
   it.each([
@@ -165,5 +211,34 @@ describe('ArtifactDownloadMenu', () => {
     await waitFor(() =>
       expect(mockPostArtifactExport).toHaveBeenCalledWith(expect.any(Object), 'pdf', 'share-1'),
     );
+  });
+
+  it.each([
+    [
+      'artifact_page_limit',
+      { actualPages: 26, maxPages: 25 },
+      'com_knauf_artifact_download_page_limit',
+    ],
+    [
+      'artifact_png_height_limit',
+      { actualPages: 21, maxPages: 13 },
+      'com_knauf_artifact_download_png_limit',
+    ],
+    ['artifact_output_too_large', undefined, 'com_knauf_artifact_download_output_too_large'],
+    ['artifact_renderer_busy', undefined, 'com_knauf_artifact_download_busy'],
+    ['artifact_rate_limit', undefined, 'com_knauf_artifact_download_busy'],
+  ])('shows the %s export guidance', async (code, details, message) => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockPostArtifactExport.mockRejectedValue({ code, details });
+    render(<ArtifactDownloadMenu artifact={artifact} />);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'com_knauf_artifact_download_png' }));
+
+    await waitFor(() =>
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message, severity: 'error' }),
+      ),
+    );
+    consoleError.mockRestore();
   });
 });

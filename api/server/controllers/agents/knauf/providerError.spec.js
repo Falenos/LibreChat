@@ -1,6 +1,7 @@
 const { createRequire } = require('node:module');
 const {
   getProviderRequestId,
+  getPublicGenerationError,
   isRetryableProviderError,
   summarizeProviderError,
 } = require('./providerError');
@@ -148,5 +149,18 @@ describe('[knauf] provider error safety', () => {
     expect(
       getProviderRequestId({ headers: { 'x-request-id': 'unsafe request id' } }),
     ).toBeUndefined();
+  });
+
+  it('preserves only the stable missing-attachment outcome', () => {
+    expect(getPublicGenerationError({ code: 'attachment_unavailable' })).toBe(
+      'attachment_unavailable',
+    );
+    expect(getPublicGenerationError({ code: 'private_provider_code' })).toBe(
+      'provider_request_failed',
+    );
+  });
+
+  it('classifies provider 400 responses without provider text', () => {
+    expect(getPublicGenerationError({ providerStatus: 400 })).toBe('provider_bad_request');
   });
 });

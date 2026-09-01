@@ -56,6 +56,8 @@ const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResDat
     text = 'Some project files are still being indexed. Please wait until they are ready and try again.';
   } else if (errorData?.error === 'file_readiness_unavailable') {
     text = 'File readiness is temporarily unavailable. Please try again shortly.';
+  } else if (errorData?.error === 'attachment_unavailable') {
+    text = 'A previous attachment is no longer available. Please upload it again and retry.';
   } else if (
     errorData?.error === 'provider_bad_request' ||
     errorData?.error === 'provider_request_failed' ||

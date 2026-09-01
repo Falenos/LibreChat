@@ -77,6 +77,10 @@ export class FakeFilesRepo {
     return this.repo.find(sessionId, fileId);
   }
 
+  findForDeletion(sessionId: string, fileId: string): Promise<FileDoc | null> {
+    return this.repo.findForDeletion(sessionId, fileId);
+  }
+
   listBySession(sessionId: string): Promise<FileDoc[]> {
     return this.repo.listBySession(sessionId);
   }
@@ -156,16 +160,13 @@ export class FakeBlobStore implements BlobStore {
 
 /** Programmable ACA client (single code-interpreter pool). */
 export class FakeAcaClient implements AcaClient {
-  executeImpl: (
-    identifier: string,
-    code: string,
-    signal?: AbortSignal,
-  ) => Promise<AcaExecOutcome> = async () => ({
-    succeeded: true,
-    stdout: '',
-    stderr: '',
-    raw: {},
-  });
+  executeImpl: (identifier: string, code: string, signal?: AbortSignal) => Promise<AcaExecOutcome> =
+    async () => ({
+      succeeded: true,
+      stdout: '',
+      stderr: '',
+      raw: {},
+    });
   pushed: { identifier: string; name: string; data: Buffer }[] = [];
   sessionFiles: AcaSessionFile[] = [];
   listFilesImpl: () => Promise<AcaSessionFile[]> = async () => this.sessionFiles;
@@ -178,20 +179,11 @@ export class FakeAcaClient implements AcaClient {
   };
   private activePushes = 0;
 
-  async execute(
-    identifier: string,
-    code: string,
-    signal?: AbortSignal,
-  ): Promise<AcaExecOutcome> {
+  async execute(identifier: string, code: string, signal?: AbortSignal): Promise<AcaExecOutcome> {
     return this.executeImpl(identifier, code, signal);
   }
 
-  async pushFile(
-    identifier: string,
-    name: string,
-    data: Readable,
-    _size: number,
-  ): Promise<void> {
+  async pushFile(identifier: string, name: string, data: Readable, _size: number): Promise<void> {
     this.activePushes += 1;
     this.maxConcurrentPushes = Math.max(this.maxConcurrentPushes, this.activePushes);
     // Yield so any overlapping caller is observed before this one resolves.

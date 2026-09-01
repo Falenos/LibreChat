@@ -63,6 +63,27 @@ describe('Agent Utilities', () => {
       expect(img).toHaveClass('rounded-full', 'object-cover', 'shadow-lg');
     });
 
+    // [knauf] Broken or expired agent avatar URLs must resolve to a visible fallback. (KK20-282)
+    it('should render Knauf logo fallback when the avatar fails to load', () => {
+      const agent = {
+        id: '1',
+        name: 'Test Agent',
+        avatar: '/expired-avatar.png',
+      } as unknown as t.Agent;
+
+      render(<div>{renderAgentAvatar(agent)}</div>);
+      React.act(() => {
+        screen.getByAltText('Test Agent avatar').dispatchEvent(new Event('error'));
+      });
+
+      expect(screen.getByAltText('Test Agent avatar')).toHaveAttribute(
+        'src',
+        '/assets/knauf-logo.png',
+      );
+      expect(screen.getByAltText('Test Agent avatar')).toHaveClass('object-contain');
+    });
+    // End [knauf]
+
     // [knauf] Agents without uploaded avatars fall back to the Knauf logo.
     it('should render Knauf logo fallback when no avatar', () => {
       const agent = {

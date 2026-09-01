@@ -1,5 +1,28 @@
+const mockFormDataInstances = [];
+const { Readable } = require('stream');
+const axios = require('axios');
 const OpenAI = require('openai');
 const createOpenAIImageTools = require('~/app/clients/tools/structured/OpenAIImageTools');
+const { getStrategyFunctions } = require('~/server/services/Files/strategies');
+
+jest.mock(
+  'form-data',
+  () =>
+    class MockFormData {
+      constructor() {
+        this.fields = [];
+        mockFormDataInstances.push(this);
+      }
+
+      append(name, value) {
+        this.fields.push([name, value]);
+      }
+
+      getHeaders() {
+        return {};
+      }
+    },
+);
 
 // [knauf] Mock image usage transaction ledger used by the FinOps cost visibility seam.
 const mockSpendTokens = jest.fn();
@@ -7,6 +30,7 @@ const mockSpendStructuredTokens = jest.fn();
 // End [knauf]
 
 jest.mock('openai');
+jest.mock('axios');
 jest.mock('@librechat/data-schemas', () => ({
   logger: {
     warn: jest.fn(),
@@ -55,6 +79,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFormDataInstances.length = 0;
     // [knauf] Reset image usage transaction mock between cost visibility cases.
     mockSpendTokens.mockResolvedValue(undefined);
     mockSpendStructuredTokens.mockResolvedValue(undefined);
@@ -80,7 +105,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
     process.env = originalEnv;
   });
 
-  it('should use default model "gpt-image-1" when IMAGE_GEN_OAI_MODEL is not set', async () => {
+  it('should use default model "gpt-image-2" when IMAGE_GEN_OAI_MODEL is not set', async () => {
     delete process.env.IMAGE_GEN_OAI_MODEL;
 
     const [imageGenTool] = createOpenAIImageTools({
@@ -107,7 +132,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
 
     expect(mockGenerate).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: 'gpt-image-1',
+        model: 'gpt-image-2',
       }),
       expect.any(Object),
     );
@@ -179,7 +204,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
     );
   });
 
-  // [knauf] Pin gpt-image-1 usage to conversation/message transaction records for cost visibility.
+  // [knauf] Pin GPT Image usage to conversation/message transaction records for cost visibility.
   it('records image generation token usage in the transaction ledger', async () => {
     delete process.env.IMAGE_GEN_OAI_MODEL;
 
@@ -218,7 +243,7 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
     expect(mockSpendStructuredTokens).toHaveBeenCalledWith(
       {
         user: 'test-user',
-        model: 'gpt-image-1',
+        model: 'gpt-image-2',
         messageId: 'message-1',
         conversationId: 'conversation-1',
         context: 'image_generation',
@@ -230,6 +255,92 @@ describe('OpenAIImageTools - IMAGE_GEN_OAI_MODEL environment variable', () => {
         completionTokens: 456,
       },
     );
+  });
+  // End [knauf]
+
+  // [knauf] KK20-168 — pin GPT Image 2 generation/edit output payloads.
+  it('sends one generated image with the requested GPT Image 2 output controls', async () => {
+    process.env.IMAGE_GEN_OAI_MODEL = 'gpt-image-2';
+    const mockGenerate = jest.fn().mockResolvedValue({
+      data: [{ b64_json: 'base64-encoded-image-data' }],
+    });
+    OpenAI.mockImplementation(() => ({ images: { generate: mockGenerate } }));
+
+    const [imageGenTool] = createOpenAIImageTools({
+      isAgent: true,
+      override: false,
+      req: { user: { id: 'test-user' } },
+    });
+
+    await imageGenTool.func({
+      prompt: 'test prompt',
+      background: 'opaque',
+      output_format: 'jpeg',
+      output_compression: 85,
+      quality: 'medium',
+      size: '1536x1024',
+    });
+
+    expect(mockGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'gpt-image-2',
+        n: 1,
+        background: 'opaque',
+        output_format: 'jpeg',
+        output_compression: 85,
+        quality: 'medium',
+        size: '1536x1024',
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('sends matching GPT Image 2 output controls for edits', async () => {
+    process.env.IMAGE_GEN_OAI_MODEL = 'gpt-image-2';
+    getStrategyFunctions.mockReturnValue({
+      getDownloadStream: jest.fn().mockResolvedValue(Readable.from('image')),
+    });
+    axios.post.mockResolvedValue({
+      data: { data: [{ b64_json: 'edited-base64-image-data' }] },
+    });
+
+    const [, imageEditTool] = createOpenAIImageTools({
+      isAgent: true,
+      override: false,
+      req: { user: { id: 'test-user' } },
+      imageFiles: [
+        {
+          file_id: 'image-1',
+          source: 'local',
+          filepath: '/tmp/image.png',
+          filename: 'image.png',
+          type: 'image/png',
+        },
+      ],
+    });
+
+    const result = await imageEditTool.func({
+      prompt: 'change only the lighting',
+      image_ids: ['image-1'],
+      background: 'opaque',
+      output_format: 'jpeg',
+      output_compression: 85,
+      quality: 'high',
+      size: '1024x1536',
+    });
+
+    const fields = mockFormDataInstances[0].fields;
+    expect(fields).toEqual(
+      expect.arrayContaining([
+        ['model', 'gpt-image-2'],
+        ['background', 'opaque'],
+        ['output_format', 'jpeg'],
+        ['output_compression', '85'],
+        ['quality', 'high'],
+        ['size', '1024x1536'],
+      ]),
+    );
+    expect(result[1].content[0].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
   });
   // End [knauf]
 });

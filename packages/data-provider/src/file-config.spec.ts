@@ -16,6 +16,9 @@ import {
   knaufCategorySizeErrorKey,
   knaufChatUploadAccept,
   knaufLegacyOfficeErrorKey,
+  // [knauf] KK20-297 — source-code classifier under test.
+  isKnaufSourceCodeFile,
+  // End [knauf]
 } from './file-config';
 import { EModelEndpoint } from './schemas';
 
@@ -31,6 +34,21 @@ describe('inferMimeType', () => {
   it('should normalize application/x-zip-compressed to application/zip', () => {
     expect(inferMimeType('archive.zip', 'application/x-zip-compressed')).toBe('application/zip');
   });
+
+  // [knauf] KK20-297 — source uploads use canonical MIME values at both gates.
+  it.each([
+    ['app.js', 'application/javascript', 'text/javascript'],
+    ['app.js', 'application/x-javascript', 'text/javascript'],
+    ['app.js', 'application/octet-stream', 'text/javascript'],
+    ['app.ts', 'application/x-typescript', 'application/typescript'],
+    ['app.ts', 'text/typescript', 'application/typescript'],
+    ['app.jsx', 'text/jsx', 'text/plain'],
+    ['app.tsx', 'text/tsx', 'text/plain'],
+    ['app.py', 'application/x-python', 'text/x-python'],
+  ])('normalizes %s from %s to %s', (name, browserType, expected) => {
+    expect(inferMimeType(name, browserType)).toBe(expected);
+  });
+  // End [knauf]
 
   it('should return a type that matches textMimeTypes after normalization', () => {
     const normalized = inferMimeType('test.py', 'text/x-python-script');
@@ -51,7 +69,24 @@ describe('inferMimeType', () => {
     expect(inferMimeType('mark.svg', '')).toBe('image/svg+xml');
     // End [knauf]
     expect(inferMimeType('Main.java', '')).toBe('text/x-java');
+    // [knauf] KK20-297 — Safari/drag-and-drop may omit the IDML MIME.
+    expect(inferMimeType('datasheet.idml', '')).toBe('application/vnd.adobe.indesign-idml-package');
+    expect(inferMimeType('catalog.xml', '')).toBe('application/xml');
+    // End [knauf]
   });
+
+  // [knauf] KK20-297 — IDML is a ZIP package and browser MIME sniffing is not stable.
+  it.each([
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/octet-stream',
+    'application/vnd.adobe.indesign-idml',
+  ])('should normalize an IDML generic browser type: %s', (browserType) => {
+    expect(inferMimeType('datasheet.idml', browserType)).toBe(
+      'application/vnd.adobe.indesign-idml-package',
+    );
+  });
+  // End [knauf]
 
   it('should return empty string for unknown extension with no browser type', () => {
     expect(inferMimeType('file.xyz', '')).toBe('');
@@ -108,6 +143,9 @@ describe('applicationMimeTypes', () => {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    // [knauf] KK20-297
+    'application/vnd.adobe.indesign-idml-package',
+    // End [knauf]
   ];
 
   it.each(existingTypes)('matches existing type: %s', (mimeType) => {
@@ -1407,7 +1445,71 @@ describe('knaufCategorySizeLimit / knaufCategorySizeErrorKey', () => {
     expect(knaufChatUploadAccept).toContain('.svg');
     expect(knaufChatUploadAccept).toContain('image/svg+xml');
   });
+
+  // KK20-297: picker and server allow-list expose native IDML.
+  it('accepts IDML files in the chat picker', () => {
+    expect(knaufChatUploadAccept).toContain('.idml');
+    expect(knaufChatUploadAccept).toContain('application/vnd.adobe.indesign-idml-package');
+    expect(knaufChatUploadAccept).toContain('.xml');
+    expect(knaufChatUploadAccept).toContain('application/xml');
+    expect(knaufChatUploadAccept).toContain('text/xml');
+  });
+
+  // KK20-297: source files are editable sandbox inputs, never RAG documents.
+  it.each([
+    '.html',
+    '.htm',
+    '.css',
+    '.scss',
+    '.sass',
+    '.less',
+    '.js',
+    '.jsx',
+    '.mjs',
+    '.cjs',
+    '.ts',
+    '.tsx',
+    '.mts',
+    '.cts',
+    '.py',
+    '.vue',
+    '.svelte',
+    '.astro',
+    'text/html',
+    'text/css',
+    'text/javascript',
+    'text/x-python',
+    'application/typescript',
+  ])('accepts source file selector %s in the chat picker', (selector) => {
+    expect(knaufChatUploadAccept.split(',')).toContain(selector);
+  });
   // End [knauf]
+});
+
+// KK20-297 — code goes to Code Interpreter while prose stays eligible for RAG.
+describe('isKnaufSourceCodeFile', () => {
+  it.each([
+    'index.html',
+    'styles.scss',
+    'component.jsx',
+    'module.mjs',
+    'config.cjs',
+    'component.tsx',
+    'module.mts',
+    'script.py',
+    'Widget.vue',
+    'Page.svelte',
+    'Layout.astro',
+  ])('classifies %s as source code', (name) => {
+    expect(isKnaufSourceCodeFile(name, '')).toBe(true);
+  });
+
+  it.each(['notes.txt', 'readme.md', 'catalog.xml', 'data.csv', 'layout.idml'])(
+    'does not classify %s as source code',
+    (name) => {
+      expect(isKnaufSourceCodeFile(name, 'text/plain')).toBe(false);
+    },
+  );
 });
 
 describe('knaufLegacyOfficeErrorKey', () => {

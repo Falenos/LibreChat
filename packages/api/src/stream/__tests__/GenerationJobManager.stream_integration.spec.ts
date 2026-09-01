@@ -1854,6 +1854,34 @@ describe('GenerationJobManager Integration Tests', () => {
     });
     // End [knauf]
 
+    // [knauf] NO-TICKET — delayed request cleanup must preserve a Redis abort.
+    test('keeps a Redis-mode abort terminal when completion arrives later', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const updateJob = jest.spyOn(jobStore, 'updateJob');
+      const manager = new GenerationJobManagerClass();
+      manager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: true,
+        cleanupOnComplete: true,
+      });
+      manager.initialize();
+
+      const streamId = `abort-then-complete-${Date.now()}`;
+      const job = await manager.createJob(streamId, 'user-1');
+
+      expect((await manager.abortJob(streamId)).success).toBe(true);
+      expect((await manager.getJob(streamId))?.status).toBe('aborted');
+      updateJob.mockClear();
+
+      await manager.completeJob(streamId, 'Request aborted', job.generationId);
+
+      expect(updateJob).not.toHaveBeenCalled();
+      expect((await manager.getJob(streamId))?.status).toBe('aborted');
+      await manager.destroy();
+    });
+    // End [knauf]
+
     test('should send stored error to late-connecting subscriber', async () => {
       GenerationJobManager.configure({
         jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),

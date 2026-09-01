@@ -482,8 +482,17 @@ describe('AgentClient - titleConvo', () => {
       expect(result).toBe('Untitled Conversation');
     });
 
+    // [knauf] KK20-297 — title failures retain bounded diagnostics without provider payloads.
     it('should handle errors gracefully and return undefined', async () => {
-      mockRun.generateTitle.mockRejectedValue(new Error('Title generation failed'));
+      const { logger } = require('@librechat/data-schemas');
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => logger);
+      mockRun.generateTitle.mockRejectedValue(
+        Object.assign(new Error('private title payload'), {
+          status: 429,
+          code: 'server_error',
+          request_id: 'title-request-123',
+        }),
+      );
 
       const text = 'Test conversation text';
       const abortController = new AbortController();
@@ -491,7 +500,20 @@ describe('AgentClient - titleConvo', () => {
       const result = await client.titleConvo({ text, abortController });
 
       expect(result).toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[api/server/controllers/agents/client.js #titleConvo] Error',
+        {
+          operation: 'title_generation',
+          retryable: true,
+          providerStatus: 429,
+          code: 'server_error',
+          errorName: 'Error',
+          requestId: 'title-request-123',
+        },
+      );
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('private title payload');
     });
+    // End [knauf]
 
     it('should skip title generation when titleConvo is set to false', async () => {
       // Set titleConvo to false in endpoint config
@@ -1187,6 +1209,65 @@ describe('AgentClient - titleConvo', () => {
         error: 'An error occurred while processing the request',
       });
     });
+
+    // KK20-260 — a persisted image is a successful tool outcome even when
+    // the router's redundant follow-up call fails.
+    it.each(['image_gen_oai', 'image_edit_oai'])(
+      'keeps a completed %s image instead of appending a false error',
+      async (toolName) => {
+        const toolCallId = `${toolName}-call`;
+        const followUpError = Object.assign(new Error('router follow-up failed'), {
+          code: 'server_error',
+        });
+        mockCreateRun.mockResolvedValueOnce({
+          processStream: jest.fn().mockRejectedValue(followUpError),
+          getCalibrationRatio: jest.fn(() => 0),
+        });
+        client.run = null;
+        client.contentParts = [
+          {
+            type: ContentTypes.TOOL_CALL,
+            tool_call: { id: toolCallId, name: toolName, progress: 1 },
+          },
+        ];
+        client.artifactPromises = [
+          Promise.resolve({ type: 'image/png', toolCallId, file_id: 'persisted-image' }),
+        ];
+
+        await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+        expect(client.contentParts).not.toContainEqual({
+          type: ContentTypes.ERROR,
+          error: 'An error occurred while processing the request',
+        });
+      },
+    );
+
+    it('keeps a genuine post-image provider failure visible', async () => {
+      const toolCallId = 'image-call';
+      const providerError = Object.assign(new Error('content rejected'), {
+        code: 'content_filter',
+      });
+      mockCreateRun.mockResolvedValueOnce({
+        processStream: jest.fn().mockRejectedValue(providerError),
+        getCalibrationRatio: jest.fn(() => 0),
+      });
+      client.run = null;
+      client.contentParts = [
+        {
+          type: ContentTypes.TOOL_CALL,
+          tool_call: { id: toolCallId, name: 'image_gen_oai', progress: 1 },
+        },
+      ];
+      client.artifactPromises = [Promise.resolve({ type: 'image/png', toolCallId })];
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(client.contentParts).toContainEqual({
+        type: ContentTypes.ERROR,
+        error: 'An error occurred while processing the request',
+      });
+    });
   });
   // End [knauf]
 
@@ -1788,6 +1869,30 @@ describe('AgentClient - titleConvo', () => {
         expect(files).toEqual([currentFile]);
       },
     );
+
+    // [knauf] KK20-297 — IDML stays tool-visible without becoming provider input_file data.
+    it('keeps IDML attached without forwarding the binary package as a provider document', async () => {
+      const currentFile = makeUploadedFile(
+        'idml-file',
+        'datasheet.idml',
+        'application/vnd.adobe.indesign-idml-package',
+      );
+      const message = {
+        messageId: 'msg-1',
+        parentMessageId: null,
+        sender: 'User',
+        text: 'Inspect this IDML.',
+        isCreatedByUser: true,
+      };
+      client.addDocuments = jest.fn();
+
+      const files = await client.processAttachments(message, [currentFile]);
+
+      expect(client.addDocuments).not.toHaveBeenCalled();
+      expect(message.documents).toBeUndefined();
+      expect(files).toEqual([currentFile]);
+    });
+    // End [knauf]
 
     // [knauf] NO-TICKET — only file_search suppresses duplicate legacy vector
     // augmentation; runs without the effective tool keep the provider fallback.

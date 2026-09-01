@@ -67,6 +67,9 @@ export const fullMimeTypesList = [
   'application/vnd.oasis.opendocument.spreadsheet',
   'application/vnd.oasis.opendocument.presentation',
   'application/vnd.oasis.opendocument.graphics',
+  // [knauf] KK20-297 — Adobe InDesign Markup package.
+  'application/vnd.adobe.indesign-idml-package',
+  // End [knauf]
   'image/svg',
   'image/svg+xml',
   // Video formats
@@ -186,8 +189,10 @@ export const excelMimeTypes =
 export const textMimeTypes =
   /^(text\/(x-c|x-csharp|tab-separated-values|x-c\+\+|x-h|x-java|html|markdown|x-php|x-python|x-script\.python|x-ruby|x-tex|plain|css|vtt|javascript|csv|xml|calendar))$/;
 
+// [knauf] KK20-297 — admit Adobe IDML as a bounded application document MIME.
 export const applicationMimeTypes =
-  /^(application\/(epub\+zip|csv|json|msword|pdf|x-tar|x-sh|x-zip-compressed|typescript|sql|yaml|x-parquet|vnd\.apache\.parquet|vnd\.coffeescript|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation|spreadsheetml\.sheet)|vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)|xml|zip))$/;
+  /^(application\/(epub\+zip|csv|json|msword|pdf|x-tar|x-sh|x-zip-compressed|typescript|sql|yaml|x-parquet|vnd\.apache\.parquet|vnd\.coffeescript|vnd\.adobe\.indesign-idml-package|vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation|spreadsheetml\.sheet)|vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)|xml|zip))$/;
+// End [knauf]
 
 export const imageMimeTypes = /^image\/(jpeg|gif|png|webp|heic|heif)$/;
 // [knauf] NO-TICKET — SVG is editable source, kept separate from raster-image limits/routing.
@@ -252,10 +257,19 @@ export const codeTypeMapping: { [key: string]: string } = {
   tex: 'text/x-tex', // .tex - LaTeX source
   java: 'text/x-java', // .java - Java source
   js: 'text/javascript', // .js - JavaScript source
+  // [knauf] KK20-297 — canonical MIME inference for JavaScript/TypeScript modules.
+  mjs: 'text/javascript',
+  cjs: 'text/javascript',
+  mts: 'application/typescript',
+  cts: 'application/typescript',
+  // End [knauf]
   sh: 'application/x-sh', // .sh - Shell script
   ts: 'application/typescript', // .ts - TypeScript source
   tar: 'application/x-tar', // .tar - Tar archive
   zip: 'application/zip', // .zip - ZIP archive
+  // [knauf] KK20-297 — browsers commonly omit the MIME for .idml.
+  idml: 'application/vnd.adobe.indesign-idml-package',
+  // End [knauf]
   txt: 'text/plain', // .txt - Plain text file
   log: 'text/plain', // .log - Log file
   csv: 'text/csv', // .csv - Comma-separated values
@@ -376,6 +390,15 @@ export const imageTypeMapping: { [key: string]: string } = {
 /** Normalizes non-standard MIME types that browsers may report to their canonical forms */
 export const mimeTypeAliases: Readonly<Record<string, string>> = {
   'application/x-zip-compressed': 'application/zip',
+  // [knauf] KK20-297 — canonicalize common browser/OS source-code MIME variants.
+  'application/javascript': 'text/javascript',
+  'application/x-javascript': 'text/javascript',
+  'application/x-python': 'text/x-python',
+  'application/x-typescript': 'application/typescript',
+  'text/jsx': 'text/plain',
+  'text/tsx': 'text/plain',
+  'text/typescript': 'application/typescript',
+  // End [knauf]
   'text/x-python-script': 'text/x-python',
   'text/x-markdown': 'text/markdown',
 };
@@ -388,11 +411,22 @@ export const mimeTypeAliases: Readonly<Record<string, string>> = {
  * @returns The normalized or inferred MIME type; empty string if unresolvable
  */
 export function inferMimeType(fileName: string, currentType: string): string {
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+  // [knauf] KK20-297 — IDML is a ZIP package, so browsers commonly report a generic archive MIME.
+  if (extension === 'idml') {
+    return codeTypeMapping.idml;
+  }
+  // Source extensions are authoritative too: OS/browser MIME databases vary
+  // between text/javascript, application/javascript, and generic binary types.
+  if (isKnaufSourceCodeFile(fileName)) {
+    return codeTypeMapping[extension] ?? currentType;
+  }
+  // End [knauf]
+
   if (currentType) {
     return mimeTypeAliases[currentType] ?? currentType;
   }
 
-  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
   return codeTypeMapping[extension] || imageTypeMapping[extension] || currentType;
 }
 
@@ -899,6 +933,16 @@ export function isKnaufTabularMimeType(mimetype?: string | null): boolean {
   );
 }
 
+// KK20-297 — source files are editable sandbox inputs, never RAG documents.
+const knaufSourceCodeExtension =
+  /\.(?:html?|css|scss|sass|less|js|jsx|mjs|cjs|ts|tsx|mts|cts|py|vue|svelte|astro)$/i;
+const knaufSourceCodeMimeType =
+  /^(?:text\/(?:html|css|javascript|x-python)|application\/typescript)$/i;
+
+export function isKnaufSourceCodeFile(fileName: string, mimetype?: string | null): boolean {
+  return knaufSourceCodeExtension.test(fileName) || knaufSourceCodeMimeType.test(mimetype ?? '');
+}
+
 /**
  * Single source for the chat file-picker `accept` attribute (extensions + image
  * MIME types). Mirrors the server-side allow-list (`supportedMimeTypes:
@@ -906,7 +950,7 @@ export function isKnaufTabularMimeType(mimetype?: string | null): boolean {
  * AttachFileMenu and pinned by its spec so a change here surfaces in review.
  */
 export const knaufChatUploadAccept =
-  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,.svg,image/png,image/jpeg,image/webp,image/svg+xml';
+  '.pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.json,.xml,.idml,.html,.htm,.css,.scss,.sass,.less,.js,.jsx,.mjs,.cjs,.ts,.tsx,.mts,.cts,.py,.vue,.svelte,.astro,.svg,application/xml,text/xml,text/html,text/css,text/javascript,text/x-python,application/typescript,application/vnd.adobe.indesign-idml-package,image/png,image/jpeg,image/webp,image/svg+xml';
 // End [knauf]
 
 // [knauf] Legacy Office binary detection (KK20-190 upload-guidance follow-up).

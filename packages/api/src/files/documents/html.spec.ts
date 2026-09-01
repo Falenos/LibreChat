@@ -313,6 +313,20 @@ describe('Office HTML producers', () => {
       const html = await csvToHtml(Buffer.from('', 'utf-8'));
       expect(html).toMatch(/^<!DOCTYPE html>/);
     });
+
+    // [knauf] KK20-275 — generated long CSV previews stay bounded and usable.
+    test('truncates a long CSV with a visible download hint', async () => {
+      const rows = Array.from(
+        { length: 5_001 },
+        (_, index) => `row-${String(index + 1).padStart(5, '0')}`,
+      );
+      const html = await csvToHtml(Buffer.from(['value', ...rows].join('\n'), 'utf-8'));
+
+      expect(html).toContain('Showing first 5,000 of 5,002 rows');
+      expect(html).toContain('row-04999');
+      expect(html).not.toContain('row-05000');
+    });
+    // End [knauf]
   });
 
   describe('pptxToSlideListHtml', () => {

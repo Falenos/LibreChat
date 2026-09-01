@@ -45,7 +45,7 @@ const getWorkerConfig = () => ({
  * reconciler. Slow samples never overlap and telemetry failures never stop the
  * worker claim loop.
  */
-function createQueueMetricsSampler({ sample, record, logger, intervalMs }) {
+function createQueueMetricsSampler({ sample, record, logger, intervalMs, onError }) {
   let timer;
   let inFlight;
   const runOnce = () => {
@@ -55,9 +55,10 @@ function createQueueMetricsSampler({ sample, record, logger, intervalMs }) {
     inFlight = Promise.resolve()
       .then(sample)
       .then(({ queued, oldestAgeSeconds }) => record(queued, oldestAgeSeconds))
-      .catch((error) =>
-        logger.warn(`[indexingWorker][metrics] queue sample failed: ${error?.message}`),
-      )
+      .catch((error) => {
+        onError?.(error);
+        logger.warn(`[indexingWorker][metrics] queue sample failed: ${error?.message}`);
+      })
       .finally(() => {
         inFlight = undefined;
       });

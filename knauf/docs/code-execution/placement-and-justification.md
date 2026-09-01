@@ -61,8 +61,8 @@ not "sidecar vs nothing"; it is **ClickHouse path ≈ 9 owned deployables vs ACA
 ### 3.1 Failure isolation and resource profile — sidecar
 
 Code execution is structurally the most abusive workload KARL will host: synchronous requests held up to **220 s**
-(the ACA platform cap), file buffers up to **128 MB**, and adversarial inputs _by design_ (the feature exists to run
-model-generated code). In-process, those buffers and held sockets share heap and event loop with every user's chat
+(the ACA platform cap), staged files up to **128 MiB**, and adversarial inputs _by design_ (the feature exists to run
+model-generated code). In-process, those inputs and held sockets share heap and event loop with every user's chat
 SSE stream — an exec-driven OOM or crash restarts chat for everyone, and every app deploy kills in-flight executions.
 As a sidecar, the worst case is "code execution is down"; chat never notices. Two `replicaCount: 2` pods restart in
 seconds with no state loss (state is in Blob/Table, never in the pod).
@@ -136,7 +136,7 @@ In-process: zero extra processes. Sidecar: one extra command
 | Dimension                                            | A. In-process router                            | B. Sidecar (current)                          | Winner               |
 | ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------- | -------------------- |
 | Removes the HTTP hop                                 | No — loopback POST to self                      | No                                            | tie (myth dispelled) |
-| Failure isolation (220 s holds, 128 MB buffers, OOM) | Shares the chat process                         | Fully isolated                                | **B**                |
+| Failure isolation (220 s holds, 128 MiB inputs, OOM) | Shares the chat process                         | Fully isolated                                | **B**                |
 | Code-exec credential exposure                        | Ambient in the whole app                        | 8-endpoint pod, nothing else co-located       | **B**                |
 | Network exposure of the exec API                     | Public via app ingress (code-gated)             | ClusterIP-only (topology-gated)               | **B**                |
 | First workload-identity pod on AGK                   | The main app deployment                         | A disposable small pod                        | **B**                |

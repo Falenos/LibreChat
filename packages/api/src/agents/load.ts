@@ -5,6 +5,9 @@ import {
   isAgentsEndpoint,
   isEphemeralAgentId,
   encodeEphemeralAgentId,
+  // [knauf] KK20-297 — keep source code outside deterministic translation.
+  isKnaufSourceCodeFile,
+  // End [knauf]
 } from 'librechat-data-provider';
 import type {
   AgentModelParameters,
@@ -20,7 +23,114 @@ const { mcp_all, mcp_delimiter } = Constants;
 // [knauf] NO-TICKET — runtime-only tool for exact, owned artifact edits.
 const EDIT_ARTIFACT_TOOL = 'edit_artifact';
 // End [knauf]
+// [knauf] KK20-297 — request-only tool for translatable Knauf upload formats.
+const FILE_TRANSLATE_TOOL = 'translate_file';
+const TRANSLATION_STATUS_TOOL = 'translation_status';
+const IDML_EDIT_TOOL = 'edit_idml';
+const XML_EDIT_TOOL = 'edit_xml';
+const REQUEST_SCOPED_FILE_TOOLS = new Set([
+  FILE_TRANSLATE_TOOL,
+  TRANSLATION_STATUS_TOOL,
+  IDML_EDIT_TOOL,
+  XML_EDIT_TOOL,
+]);
+const IDML_EXTENSION = /\.idml$/i;
+const IDML_MIME_TYPE = 'application/vnd.adobe.indesign-idml-package';
+const XML_EXTENSION = /\.xml$/i;
+const XML_MIME_TYPES = new Set(['application/xml', 'text/xml']);
+const TRANSLATABLE_EXTENSIONS =
+  /\.(?:idml|pdf|docx|pptx|xlsx|csv|txt|md|markdown|json|xml|svg|png|jpe?g|webp)$/i;
+const TRANSLATABLE_MIME_TYPES = new Set([
+  'application/vnd.adobe.indesign-idml-package',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/csv',
+  'application/json',
+  'application/xml',
+  'text/csv',
+  'text/plain',
+  'text/markdown',
+  'text/xml',
+  'image/svg+xml',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+]);
+// End [knauf]
 type ModelParametersWithPromptPrefix = AgentModelParameters & { promptPrefix?: string | null };
+
+// [knauf] KK20-297 — keep deterministic translation request-scoped and fail closed
+// unless both the rollout switch and provider credentials are present.
+export type RequestFile = { file_id?: string; filename?: string; name?: string; type?: string };
+
+function isFileTranslationConfigured(): boolean {
+  return (
+    process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
+    Boolean(process.env.AZURE_TRANSLATOR_ENDPOINT && process.env.AZURE_TRANSLATOR_KEY)
+  );
+}
+
+function hasTranslatableRequestFile(files: readonly RequestFile[]): boolean {
+  return files.some(
+    (file) =>
+      !isKnaufSourceCodeFile(file.filename ?? file.name ?? '', file.type) &&
+      (TRANSLATABLE_MIME_TYPES.has(file.type ?? '') ||
+        TRANSLATABLE_EXTENSIONS.test(file.filename ?? file.name ?? '')),
+  );
+}
+
+function hasIdmlRequestFile(files: readonly RequestFile[]): boolean {
+  return files.some(
+    (file) => file.type === IDML_MIME_TYPE || IDML_EXTENSION.test(file.filename ?? file.name ?? ''),
+  );
+}
+
+function hasXmlRequestFile(files: readonly RequestFile[]): boolean {
+  return files.some(
+    (file) =>
+      XML_MIME_TYPES.has(file.type ?? '') || XML_EXTENSION.test(file.filename ?? file.name ?? ''),
+  );
+}
+
+export function getRequestScopedFileTools(
+  files: readonly RequestFile[],
+  requestPath?: string,
+): string[] {
+  if (isCompatibilityAgentsRoute(requestPath)) {
+    return [];
+  }
+  const tools: string[] = [];
+  if (isFileTranslationConfigured()) {
+    tools.push(TRANSLATION_STATUS_TOOL);
+    if (hasTranslatableRequestFile(files)) {
+      tools.push(FILE_TRANSLATE_TOOL);
+    }
+  }
+  if (hasIdmlRequestFile(files)) {
+    tools.push(IDML_EDIT_TOOL);
+  }
+  if (hasXmlRequestFile(files)) {
+    tools.push(XML_EDIT_TOOL);
+  }
+  return tools;
+}
+
+export function isCompatibilityAgentsRoute(requestPath?: string): boolean {
+  return requestPath?.startsWith('/api/agents/v1/') === true;
+}
+
+export function filterRequestScopedFileToolNames(
+  toolNames: readonly string[],
+  requestPath?: string,
+): string[] {
+  if (!isCompatibilityAgentsRoute(requestPath)) {
+    return [...toolNames];
+  }
+  return toolNames.filter((toolName) => !REQUEST_SCOPED_FILE_TOOLS.has(toolName));
+}
+// End [knauf]
 
 export interface LoadAgentDeps {
   getAgent: (searchParameter: { id: string }) => Promise<Agent | null>;
@@ -32,11 +142,13 @@ export interface LoadAgentDeps {
 
 export interface LoadAgentParams {
   req: {
+    originalUrl?: string;
     user?: { id?: string };
     config?: AppConfig;
     body?: {
       promptPrefix?: string;
       ephemeralAgent?: TEphemeralAgent;
+      files?: RequestFile[];
     };
   };
   spec?: string;
@@ -91,6 +203,9 @@ export async function loadEphemeralAgent(
   if (ephemeralAgent?.artifacts) {
     tools.push(EDIT_ARTIFACT_TOOL);
   }
+  // End [knauf]
+  // [knauf] KK20-297 — expose file translation only for this request.
+  tools.push(...getRequestScopedFileTools(req.body?.files ?? [], req.originalUrl));
   // End [knauf]
 
   const addedServers = new Set<string>();
@@ -215,10 +330,18 @@ export async function loadAgent(
   // their existing artifacts field is enabled. Runtime clone only: never write
   // this internal tool name back to the persisted builder configuration.
   const artifactEditingEnabled = typeof agent.artifacts === 'string' && agent.artifacts !== '';
+  const runtimeTools = [...(agent.tools ?? [])];
+  if (artifactEditingEnabled && !runtimeTools.includes(EDIT_ARTIFACT_TOOL)) {
+    runtimeTools.push(EDIT_ARTIFACT_TOOL);
+  }
+  // KK20-297: same request-only injection for persistent agents.
+  for (const tool of getRequestScopedFileTools(req.body?.files ?? [], req.originalUrl)) {
+    if (!runtimeTools.includes(tool)) {
+      runtimeTools.push(tool);
+    }
+  }
   const agentWithVersion = (
-    artifactEditingEnabled && !agent.tools?.includes(EDIT_ARTIFACT_TOOL)
-      ? { ...agent, tools: [...(agent.tools ?? []), EDIT_ARTIFACT_TOOL] }
-      : agent
+    runtimeTools.length === (agent.tools ?? []).length ? agent : { ...agent, tools: runtimeTools }
   ) as Agent & { versions?: unknown[]; version?: number };
   // End [knauf]
   agentWithVersion.version = agentWithVersion.versions ? agentWithVersion.versions.length : 0;

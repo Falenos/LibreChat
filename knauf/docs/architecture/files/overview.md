@@ -305,9 +305,9 @@ Cross-cutting config index. Storage-specific and RAG-specific detail lives in th
 ### Exposed
 
 - **`fileStrategy`** / **`fileStrategies`** — pick the blob backend (global or per-context). → [`storage.md`](./storage.md)
-- **`fileConfig.serverFileSizeLimit`** — global single-upload ceiling (default 512 MB).
+- **`fileConfig.serverFileSizeLimit`** — global single-upload ceiling (default 512 MiB).
 - **`fileConfig.fileTokenLimit`** — how much extracted document text can ride inline in a prompt (the "talk-to-doc" budget; §2d).
-- **`fileConfig.endpoints.<name>`** — per-endpoint `disabled` / `fileLimit` / `fileSizeLimit` / `totalSizeLimit` / `supportedMimeTypes`. Knauf sets a **restricted allow-list** + distinct limits: chat (`azureOpenAI`) 5 files / 50 MB combined, agent (`agents`) 20 files / 100 MB combined; per-file caps are **per-category** (25 MB docs / 50 MB data / 20 MB images), enforced in code on top of the 50 MB backstop. Exact list → [`processing.md`](./processing.md) §5–6.
+- **`fileConfig.endpoints.<name>`** — per-endpoint `disabled` / `fileLimit` / `fileSizeLimit` / `totalSizeLimit` / `supportedMimeTypes`. Knauf sets a **restricted allow-list** + distinct limits: chat (`azureOpenAI`) 5 files / 100 MiB combined; agent (`agents`) count and aggregate limits are disabled with `0`. Both retain the 50 MiB per-file endpoint backstop, with tighter **per-category** caps (25 MiB documents / 50 MiB data / 20 MiB raster images / 8 MiB SVG) enforced in code. Unlimited agent count/aggregate does not bypass those per-file, MIME, transport, indexing, or Code Adapter limits. Exact list → [`processing.md`](./processing.md) §5–6.
 - **`fileConfig.ocr|text|stt.supportedMimeTypes`** — MIME routing into OCR / text-parse / speech-to-text. → [`processing.md`](./processing.md).
 - **`interface.fileSearch`** — `false` — hides the BYOK file-search **chip** in the composer. It does **not** gate routing: the chat "Upload files" item routes documents to File Search whenever `endpoints.agents.capabilities` includes `file_search` (`capabilities.fileSearchEnabled`) on an Azure-Responses endpoint (§2b/§2e). → [`rag-search.md`](./rag-search.md)
 - **`endpoints.agents.capabilities`** — must include `file_search` for the RAG path (`tools` + `file_search` today). → [`rag-search.md`](./rag-search.md)

@@ -6,7 +6,7 @@ const { ALLOWED_ARTIFACT_TYPES, MAX_ARTIFACT_BYTES, extractDirectiveContent } = 
 const EXPORT_TIMEOUT_MS = 30_000;
 const MAX_ACTIVE_EXPORTS = 2;
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024;
-const MAX_ARTIFACT_PAGES = 20;
+const MAX_ARTIFACT_PAGES = 25;
 const MAX_PNG_HEIGHT = 12_000;
 const SNAPSHOT_TTL_MS = 60_000;
 const VIEWPORT = { width: 1440, height: 900 };
@@ -14,10 +14,12 @@ const snapshots = new Map();
 let activeExports = 0;
 
 class ArtifactExportError extends Error {
-  constructor(message, status = 400, options) {
+  constructor(message, status = 400, options = {}) {
     super(message, options);
     this.name = 'ArtifactExportError';
     this.status = status;
+    this.code = options.code;
+    this.details = options.details;
   }
 }
 
@@ -307,7 +309,9 @@ const renderArtifact = async (input, format) => {
     throw new ArtifactExportError('Export format must be png or pdf');
   }
   if (activeExports >= MAX_ACTIVE_EXPORTS) {
-    throw new ArtifactExportError('Artifact renderer is busy. Try again later', 429);
+    throw new ArtifactExportError('Artifact renderer is busy. Try again later', 429, {
+      code: 'artifact_renderer_busy',
+    });
   }
 
   activeExports += 1;
@@ -343,11 +347,21 @@ const renderArtifact = async (input, format) => {
     if (pageCount < 1) {
       throw new ArtifactExportError('Artifact preview did not become ready', 500);
     }
-    if (
-      pageCount > MAX_ARTIFACT_PAGES ||
-      (format === 'png' && height * pageCount > MAX_PNG_HEIGHT)
-    ) {
-      throw new ArtifactExportError('Artifact has too many pages to export', 413);
+    if (pageCount > MAX_ARTIFACT_PAGES) {
+      throw new ArtifactExportError('Artifact has too many pages to export', 413, {
+        code: 'artifact_page_limit',
+        details: { format, actualPages: pageCount, maxPages: MAX_ARTIFACT_PAGES },
+      });
+    }
+    if (format === 'png' && height * pageCount > MAX_PNG_HEIGHT) {
+      throw new ArtifactExportError('Artifact is too tall to export as PNG', 413, {
+        code: 'artifact_png_height_limit',
+        details: {
+          format,
+          actualPages: pageCount,
+          maxPages: Math.floor(MAX_PNG_HEIGHT / height),
+        },
+      });
     }
     const screenshots = [];
     let screenshotBytes = 0;
@@ -362,7 +376,10 @@ const renderArtifact = async (input, format) => {
       const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
       screenshotBytes += screenshot.length;
       if (screenshotBytes > MAX_OUTPUT_BYTES) {
-        throw new ArtifactExportError('Rendered artifact is too large', 413);
+        throw new ArtifactExportError('Rendered artifact is too large', 413, {
+          code: 'artifact_output_too_large',
+          details: { format, maxBytes: MAX_OUTPUT_BYTES },
+        });
       }
       screenshots.push(screenshot);
     }
@@ -390,7 +407,10 @@ const renderArtifact = async (input, format) => {
     }
     const buffer = Buffer.from(output);
     if (buffer.length > MAX_OUTPUT_BYTES) {
-      throw new ArtifactExportError('Rendered artifact is too large', 413);
+      throw new ArtifactExportError('Rendered artifact is too large', 413, {
+        code: 'artifact_output_too_large',
+        details: { format, maxBytes: MAX_OUTPUT_BYTES },
+      });
     }
     return {
       buffer,

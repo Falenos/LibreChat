@@ -20,19 +20,18 @@ jest.mock('~/server/middleware/canAccessSharedLink', () => (req, _res, next) => 
   next();
 });
 
-jest.mock(
-  '~/server/services/Artifacts/knauf/export',
-  () => ({
-    ArtifactExportError: class ArtifactExportError extends Error {
-      constructor(message, status = 400) {
-        super(message);
-        this.status = status;
-      }
-    },
-    getRenderSnapshot: jest.fn(),
-    renderArtifact: (...args) => mockRenderArtifact(...args),
-  }),
-);
+jest.mock('~/server/services/Artifacts/knauf/export', () => ({
+  ArtifactExportError: class ArtifactExportError extends Error {
+    constructor(message, status = 400, options = {}) {
+      super(message);
+      this.status = status;
+      this.code = options.code;
+      this.details = options.details;
+    }
+  },
+  getRenderSnapshot: jest.fn(),
+  renderArtifact: (...args) => mockRenderArtifact(...args),
+}));
 
 const artifactExportRouter = require('./artifactExport');
 
@@ -100,7 +99,12 @@ describe('artifact PNG/PDF export routes', () => {
 
   it('does not write renderer internals to logs or the response', async () => {
     const errorLog = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
-    mockRenderArtifact.mockRejectedValue(new Error('secret renderer detail'));
+    mockRenderArtifact.mockRejectedValue(
+      Object.assign(new Error('secret renderer detail'), {
+        code: 'SECRET_PROVIDER_CODE',
+        details: { path: '/secret/path' },
+      }),
+    );
 
     const response = await request(createApp()).post('/').send({ artifact, format: 'png' });
 
@@ -108,5 +112,27 @@ describe('artifact PNG/PDF export routes', () => {
     expect(response.body).toEqual({ message: 'Artifact export failed' });
     expect(errorLog).toHaveBeenCalledWith('[artifactExport] Export failed', { status: 500 });
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain('secret renderer detail');
+  });
+
+  it('returns safe structured details for a known export limit', async () => {
+    mockRenderArtifact.mockRejectedValue(
+      new (jest.requireMock('~/server/services/Artifacts/knauf/export').ArtifactExportError)(
+        'Artifact has too many pages to export',
+        413,
+        {
+          code: 'artifact_page_limit',
+          details: { format: 'pdf', actualPages: 26, maxPages: 25 },
+        },
+      ),
+    );
+
+    const response = await request(createApp()).post('/').send({ artifact, format: 'pdf' });
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({
+      message: 'Artifact has too many pages to export',
+      code: 'artifact_page_limit',
+      details: { format: 'pdf', actualPages: 26, maxPages: 25 },
+    });
   });
 });

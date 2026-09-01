@@ -1,6 +1,9 @@
 import { WebSearchToolDefinition, CalculatorToolDefinition } from '@librechat/agents';
 import { geminiToolkit } from '~/tools/toolkits/gemini';
 import { oaiToolkit } from '~/tools/toolkits/oai';
+// [knauf] KK20-297 — keep large file-edit schemas out of this upstream registry.
+import { editIdmlSchema, editXmlSchema } from '~/knauf/tools/fileEditSchemas';
+// End [knauf]
 
 /** Extended JSON Schema type that includes standard validation keywords */
 export type ExtendedJsonSchema = {
@@ -434,6 +437,65 @@ export const editArtifactSchema: ExtendedJsonSchema = {
 };
 // End [knauf]
 
+// [knauf] KK20-297 — translate supported current-message attachments.
+export const translateFileSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    target_locale: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 64,
+      description: 'Requested BCP-47 target locale, for example de-DE, fr-FR, ar-SA, or ja-JP.',
+    },
+    source_locale: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 64,
+      description: 'Required source BCP-47 locale, for example en, de-DE, fr-FR, or ar-SA.',
+    },
+    filenames: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 20,
+      uniqueItems: true,
+      items: { type: 'string', minLength: 1, maxLength: 255 },
+      description:
+        'Exact available filenames to translate. Required when multiple files are available unless the user explicitly requested all files.',
+    },
+    all_files: {
+      type: 'boolean',
+      description:
+        'Set true only when the user explicitly requests translation of every available file.',
+    },
+  },
+  required: ['target_locale', 'source_locale'],
+  additionalProperties: false,
+};
+// End [knauf]
+
+// [knauf] KK20-297 — inspect or cancel a durable file-translation job.
+export const translationStatusSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['status', 'cancel'],
+      description: 'Read current status/downloads or request cancellation.',
+    },
+    job_id: {
+      type: 'string',
+      minLength: 36,
+      maxLength: 36,
+      pattern:
+        '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+      description: 'Translation job ID returned by translate_file.',
+    },
+  },
+  required: ['action', 'job_id'],
+  additionalProperties: false,
+};
+// End [knauf]
+
 /** Tool definitions registry - maps tool names to their definitions */
 export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   google: {
@@ -546,6 +608,46 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
       "Update an existing artifact with small exact source replacements. Use the identifier and expected_sha256 token from the current artifact edit context. Every old value must occur exactly once. The server applies all replacements atomically to the authenticated user's artifact. After success: Do not re-emit the artifact or its full source; reply with a short confirmation. If the tool rejects the edit, retry only with the current token and safer exact matches, otherwise fall back to a complete artifact update.",
     schema: editArtifactSchema,
     toolType: 'builtin',
+  },
+  // End [knauf]
+  // [knauf] KK20-297 — runtime-injected for translatable current-message attachments.
+  translate_file: {
+    name: 'translate_file',
+    description:
+      'Translate selected supported files with Azure Translator and return downloadable files in their original formats. When multiple files are available, pass exact filenames or all_files=true only for an explicit translate-all request. Supports IDML, PDF, DOCX, PPTX, XLSX, CSV, TXT, Markdown, JSON, XML, SVG, PNG, JPEG, and WebP. Accepts any valid BCP-47 locale supported by Azure. Preserves document structure and layout where the format/provider allows it; final visual acceptance remains human.',
+    schema: translateFileSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
+  },
+  // End [knauf]
+  // [knauf] KK20-297 — runtime status/cancellation for durable translation jobs.
+  translation_status: {
+    name: 'translation_status',
+    description:
+      'Check a durable file-translation job and return completed downloadable files, or request cancellation. Use the jobId returned by translate_file. Do not invent job IDs.',
+    schema: translationStatusSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
+  },
+  // End [knauf]
+  // [knauf] KK20-297 — runtime-injected for attached IDML files.
+  edit_idml: {
+    name: 'edit_idml',
+    description:
+      'Inspect text segments in IDML files attached to the current message, or export changed IDML files using exact story-text replacements. Use inspect before uncertain edits. Ambiguous matches fail unless replace_all is explicit. Preserves non-story package entries; does not edit styles, images, frames, or visual layout.',
+    schema: editIdmlSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
+  },
+  // End [knauf]
+  // [knauf] KK20-297 — runtime-injected for attached XML files.
+  edit_xml: {
+    name: 'edit_xml',
+    description:
+      'Inspect element paths, read-only attributes, and text nodes in XML files attached to the current message, or export changed XML using exact text replacements. Attribute editing is unsupported: do not call this tool for an attribute edit; explain that attributes are read-only and no output file was created. Use inspect before uncertain edits. For text-only requests use replacements; use segment_edits only when the user explicitly supplies a segment_id. Never infer a segment_id to bypass ambiguity. Ambiguous matches fail unless replace_all is explicit. Preserves element names, namespaces, attributes, comments, processing instructions, and order. Rejects DTD/entities and malformed XML.',
+    schema: editXmlSchema,
+    toolType: 'builtin',
+    responseFormat: 'content_and_artifact',
   },
   // End [knauf]
 };

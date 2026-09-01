@@ -3,6 +3,7 @@ const { Readable } = require('node:stream');
 const mockPrepareImagePayload = jest.fn();
 const mockGetDownloadStream = jest.fn();
 const mockDetermineFileType = jest.fn();
+const mockDeleteFilesWithDedupAwareness = jest.fn();
 const PNG_BYTES = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl9sAAAAASUVORK5CYII=',
   'base64',
@@ -10,7 +11,11 @@ const PNG_BYTES = Buffer.from(
 const JPEG_BYTES = Buffer.from('ffd8ffe000104a46494600', 'hex');
 
 jest.mock('@librechat/data-schemas', () => ({
-  logger: { error: jest.fn() },
+  logger: { error: jest.fn(), warn: jest.fn() },
+}));
+
+jest.mock('~/server/services/Files/knauf/cascadeDeleteConvoFiles', () => ({
+  deleteFilesWithDedupAwareness: (...args) => mockDeleteFilesWithDedupAwareness(...args),
 }));
 
 jest.mock('@librechat/api', () => ({
@@ -57,6 +62,7 @@ describe('[knauf] image provider payload normalization', () => {
     mockDetermineFileType.mockResolvedValue({ ext: 'png', mime: 'image/png' });
     mockPrepareImagePayload.mockImplementation(async (_req, file) => [file, file.filepath]);
     mockGetDownloadStream.mockResolvedValue(Readable.from(PNG_BYTES));
+    mockDeleteFilesWithDedupAwareness.mockResolvedValue(undefined);
   });
 
   it('supplies private Azure blob bytes to Foundry without forwarding its signed URL', async () => {
@@ -133,6 +139,34 @@ describe('[knauf] image provider payload normalization', () => {
       ),
     ).rejects.toThrow('Image normalization failed');
     expect(mockPrepareImagePayload).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a missing Azure attachment once and returns a stable public code', async () => {
+    const image = makeImage();
+    mockGetDownloadStream.mockRejectedValueOnce({ response: { status: 404 } });
+
+    await expect(
+      encodeAndFormat(
+        makeRequest(),
+        [image],
+        { endpoint: EModelEndpoint.agents, provider: EModelEndpoint.azureOpenAI },
+        VisionModes.agents,
+      ),
+    ).rejects.toMatchObject({ code: 'attachment_unavailable', message: 'attachment_unavailable' });
+
+    expect(mockGetDownloadStream).toHaveBeenCalledTimes(1);
+    expect(mockDeleteFilesWithDedupAwareness).toHaveBeenCalledTimes(1);
+    expect(mockDeleteFilesWithDedupAwareness).toHaveBeenCalledWith({
+      req: expect.any(Object),
+      files: [image],
+    });
+    const { logger } = require('@librechat/data-schemas');
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Attachment unavailable', {
+      operation: 'attachment_reconciliation',
+      storageSource: FileSources.azure_blob,
+      cleanup: 'completed',
+    });
   });
 
   it('rejects unsupported stored image metadata before provider serialization', async () => {

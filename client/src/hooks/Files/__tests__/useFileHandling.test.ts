@@ -1,4 +1,4 @@
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import {
   Constants,
   DynamicQueryKeys,
@@ -789,6 +789,37 @@ describe('useFileHandling', () => {
       expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
     });
 
+    // KK20-297: IDML stays a binary message attachment for translate_idml.
+    it('drops file_search routing for an IDML package', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const idmlFile = new File([new ArrayBuffer(1024)], 'datasheet.idml', {
+        type: 'application/vnd.adobe.indesign-idml-package',
+      });
+
+      await act(async () => {
+        await result.current.handleFiles([idmlFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('tool_resource')).toBeNull();
+    });
+    it('drops file_search routing for an XML editor input', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const xmlFile = new File(['<root><item code="A">Hello</item></root>'], 'test.xml', {
+        type: 'application/xml',
+      });
+
+      await act(async () => {
+        await result.current.handleFiles([xmlFile], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBeUndefined();
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('tool_resource')).toBeNull();
+    });
     it('keeps file_search tool_resource for a document', async () => {
       const useFileHandling = await loadHook();
       const { result } = renderHook(() => useFileHandling());
@@ -828,6 +859,114 @@ describe('useFileHandling', () => {
   });
   // End [knauf]
 
+  // KK20-297 — source code is an editable sandbox input, never a RAG document.
+  describe('source-code→sandbox routing', () => {
+    beforeEach(() => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.azureOpenAI,
+        endpointType: undefined,
+        spec: 'karl',
+      };
+      mockCodeEnabled = true;
+      mockCodeAllowedByAgent = true;
+      mockSpecExecuteCode = true;
+    });
+
+    it.each([
+      ['HTML', 'index.html', 'text/html'],
+      ['CSS', 'styles.css', 'text/css'],
+      ['JavaScript', 'app.js', 'text/javascript'],
+      ['JSX', 'Component.jsx', 'text/plain'],
+      ['TypeScript', 'app.ts', 'application/typescript'],
+      ['TSX', 'Component.tsx', 'text/plain'],
+      ['Python', 'script.py', 'text/x-python'],
+      ['Vue', 'Widget.vue', 'text/plain'],
+      ['Svelte', 'Page.svelte', 'text/plain'],
+      ['Astro', 'Layout.astro', 'text/plain'],
+    ])('routes %s directly to Code Interpreter', async (_label, name, type) => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File(['source'], name, { type });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.get('tool_resource')).toBe(EToolResources.execute_code);
+    });
+
+    it('overrides an explicit context destination so TSX cannot enter model context/RAG', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File(['source'], 'Component.tsx', { type: 'text/plain' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.context);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.execute_code);
+    });
+
+    it('replaces Agent Knowledge metadata instead of submitting two routing values', async () => {
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() =>
+        useFileHandling({
+          endpointOverride: EModelEndpoint.agents,
+          endpointTypeOverride: EModelEndpoint.agents,
+          additionalMetadata: {
+            agent_id: 'agent-1',
+            tool_resource: EToolResources.file_search,
+          },
+        }),
+      );
+      const file = new File(['source'], 'app.ts', { type: 'application/typescript' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      const formData = mockMutate.mock.calls[0][0] as FormData;
+      expect(formData.getAll('tool_resource')).toEqual([EToolResources.execute_code]);
+    });
+
+    it('rejects source code instead of falling back to RAG when Code Interpreter is off', async () => {
+      mockCodeEnabled = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File(['source'], 'app.js', { type: 'text/javascript' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile).not.toHaveBeenCalled();
+      expect(mockMutate).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(mockLocalize).toHaveBeenCalledWith('com_knauf_error_code_execution_required'),
+      );
+    });
+
+    it('does not change source routing for non-Knauf endpoints', async () => {
+      mockConversation = {
+        conversationId: 'convo-1',
+        endpoint: EModelEndpoint.openAI,
+        endpointType: 'custom',
+      };
+      mockCodeEnabled = false;
+      const useFileHandling = await loadHook();
+      const { result } = renderHook(() => useFileHandling());
+      const file = new File(['source'], 'app.ts', { type: 'application/typescript' });
+
+      await act(async () => {
+        await result.current.handleFiles([file], EToolResources.file_search);
+      });
+
+      expect(mockAddFile.mock.calls[0][0].tool_resource).toBe(EToolResources.file_search);
+    });
+  });
   // [knauf] KK20-257 — tabular data belongs in the code sandbox, not the RAG corpus:
   // embedding a spreadsheet gives searchable chunks but nothing you can aggregate or
   // chart. Both halves of the gate matter, because each prevents a different silent

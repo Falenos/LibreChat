@@ -12,6 +12,14 @@ const mockCreateMCPTools = jest.fn();
 const mockGetServerConfig = jest.fn();
 const mockPrimeSearchFiles = jest.fn();
 const mockCreateFileSearchTool = jest.fn();
+const mockBuildFileToolContext = jest.fn();
+const mockCreateFileTranslateTool = jest.fn();
+
+jest.mock('~/server/services/Files/knauf/translation/tool', () => ({
+  TOOL_NAME: 'translate_file',
+  buildFileToolContext: (...args) => mockBuildFileToolContext(...args),
+  createFileTranslateTool: (...args) => mockCreateFileTranslateTool(...args),
+}));
 
 jest.mock('./fileSearch', () => ({
   primeFiles: (...args) => mockPrimeSearchFiles(...args),
@@ -302,6 +310,25 @@ describe('Tool Handlers', () => {
       expect(authTool).toBeInstanceOf(ToolClass);
       expect(mockPluginService.getUserPluginAuthValue).not.toHaveBeenCalled();
     });
+
+    // [knauf] KK20-297 — deleting the handleTools registration must break this seam test.
+    it('constructs translate_file with request scope and publishes attachment context', async () => {
+      const req = { user: { id: fakeUser._id.toString() }, body: { files: [] } };
+      const translationTool = { name: 'translate_file' };
+      mockBuildFileToolContext.mockReturnValue('translation context');
+      mockCreateFileTranslateTool.mockReturnValue(translationTool);
+
+      const result = await loadTools({
+        user: fakeUser._id.toString(),
+        tools: ['translate_file'],
+        options: { req },
+      });
+
+      expect(result.loadedTools).toEqual([translationTool]);
+      expect(result.toolContextMap.translate_file).toBe('translation context');
+      expect(mockCreateFileTranslateTool).toHaveBeenCalledWith({ req, signal: undefined });
+    });
+    // End [knauf]
 
     it('should initialize an authenticated tool with alternate auth field when primary is missing', async () => {
       delete process.env.DALLE3_API_KEY; // Ensure the primary key is not set

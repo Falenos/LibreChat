@@ -16,7 +16,7 @@
 import { memo, useRef, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
 import * as Menu from '@ariakit/react/menu';
-import { FileText, LogOut } from 'lucide-react';
+import { BookOpen, FileText, LogOut } from 'lucide-react';
 import { Avatar, DropdownMenuSeparator, GearIcon } from '@librechat/client';
 import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import Settings from '~/components/Nav/Settings';
@@ -74,6 +74,15 @@ function KnaufTopBar() {
             <FileText className="icon-md" aria-hidden="true" />
             {localize('com_nav_my_files')}
           </Menu.MenuItem>
+          {/* [knauf] KK20-250 / KK20-283 — discoverable user docs and release notes. */}
+          <Menu.MenuItem
+            onClick={() => window.open('/help/index.html', '_blank', 'noopener,noreferrer')}
+            className="select-item text-sm"
+          >
+            <BookOpen className="icon-md" aria-hidden="true" />
+            {localize('com_nav_karl_help')}
+          </Menu.MenuItem>
+          {/* End [knauf] */}
           <Menu.MenuItem onClick={() => setShowSettings(true)} className="select-item text-sm">
             <GearIcon className="icon-md" aria-hidden="true" />
             {localize('com_nav_settings')}

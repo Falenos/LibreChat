@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Karl Image Generation'
+  short_description: 'Create and edit production-ready images'
+  default_prompt: 'Use $karl-image-generation to create or edit an image with appropriate quality, dimensions, and format.'

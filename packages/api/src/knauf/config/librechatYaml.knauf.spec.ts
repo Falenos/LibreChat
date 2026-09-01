@@ -109,6 +109,15 @@ describe('[knauf] librechat.yaml — default KARL response latency', () => {
   });
 });
 
+describe('[knauf] librechat.yaml — complete user-facing sources', () => {
+  it('does not cap the source footer below the files used in the answer', () => {
+    const prompt = specs.find((spec) => spec.name === 'karl')?.preset?.promptPrefix ?? '';
+
+    expect(prompt).toMatch(/include every source you used for answer generation/i);
+    expect(prompt).not.toMatch(/maximum of 3/i);
+  });
+});
+
 describe('[knauf] librechat.yaml — Admin-managed prompt sharing', () => {
   it('does not override prompt or People Picker permissions', () => {
     expect(config.interface).not.toHaveProperty('prompts');

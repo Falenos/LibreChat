@@ -220,6 +220,25 @@ describe('AttachmentGroup', () => {
     expect(screen.getByTestId('file-container')).toHaveTextContent('output.json');
   });
 
+  // [knauf] KK20-297 — keep small generated-file groups visible without expanding bulk output.
+  it.each([
+    [3, 'com_ui_hide_n_files'],
+    [4, 'com_ui_show_n_files'],
+  ])('sets the initial expansion state for %i downloadable files', (count, expectedLabel) => {
+    const attachments = Array.from({ length: count }, (_, index) =>
+      textAttachment({
+        file_id: `file-${index}`,
+        filename: `file-${index}.zip`,
+        text: undefined,
+      }),
+    );
+
+    render(<AttachmentGroup attachments={attachments} />);
+
+    expect(screen.getByRole('button', { name: expectedLabel })).toBeInTheDocument();
+  });
+  // End [knauf]
+
   it('keeps long grouped text previews clamped until the nested preview is expanded', () => {
     setScrollHeight(800);
     const longJson = Array.from({ length: 1000 }, (_, index) => `{"line":${index}}`).join('\n');
@@ -238,8 +257,12 @@ describe('AttachmentGroup', () => {
     ] as TAttachment[];
 
     const { container } = render(<AttachmentGroup attachments={attachments} />);
-    const groupToggle = screen.getByRole('button', { name: 'com_ui_show_n_files' });
-    fireEvent.click(groupToggle);
+    // [knauf] KK20-297 — small groups now begin expanded.
+    expect(screen.getByRole('button', { name: 'com_ui_hide_n_files' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    // End [knauf]
 
     expect(screen.getByText('output.json')).toBeInTheDocument();
     const pre = container.querySelector('pre');

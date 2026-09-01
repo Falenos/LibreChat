@@ -102,6 +102,7 @@ const {
   resolveAgentCapabilities,
 } = require('../ToolService');
 const { reinitMCPServer } = require('~/server/services/Tools/mcp');
+const { primeFiles: primeCodeFiles } = require('~/server/services/Files/Code/process');
 const { PENDING_STALE_MS } = require('@librechat/api');
 
 function createMockReq(capabilities) {
@@ -340,6 +341,46 @@ describe('ToolService - Action Capability Gating', () => {
 
       expect(result.actionsEnabled).toBe(false);
     });
+
+    // [knauf] KK20-297 — IDML editing is a native request-scoped host tool.
+    it('registers edit_idml and publishes its current attachment context', async () => {
+      const capabilities = [AgentCapabilities.tools];
+      const req = createMockReq(capabilities);
+      req.body = { files: [{ filename: 'datasheet.idml' }] };
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+
+      const result = await loadAgentTools({
+        req,
+        res: {},
+        agent: { id: 'agent_123', tools: ['edit_idml', 'translation_status'] },
+        definitionsOnly: true,
+      });
+
+      const [, definitionDeps] = mockLoadToolDefinitions.mock.calls[0];
+      expect(definitionDeps.isBuiltInTool('edit_idml')).toBe(true);
+      expect(definitionDeps.isBuiltInTool('translation_status')).toBe(true);
+      expect(result.toolContextMap.edit_idml).toContain('datasheet.idml');
+    });
+    // End [knauf]
+
+    // [knauf] KK20-316 — an expected Code Execution attachment must not disappear silently.
+    it('propagates code-file priming failures', async () => {
+      const capabilities = [AgentCapabilities.tools, AgentCapabilities.execute_code];
+      const req = createMockReq(capabilities);
+      mockGetEndpointsConfig.mockResolvedValue(createEndpointsConfig(capabilities));
+      primeCodeFiles.mockRejectedValueOnce(new Error('attachment unavailable'));
+
+      await expect(
+        loadAgentTools({
+          req,
+          res: {},
+          agent: { id: 'agent_123', tools: [Tools.execute_code] },
+          tool_resources: { execute_code: { file_ids: ['file-1'], files: [] } },
+          definitionsOnly: true,
+        }),
+      ).rejects.toThrow('attachment unavailable');
+    });
+    // End [knauf]
 
     it('emits separate MCP OAuth login steps and completion events for multiple pending servers', async () => {
       const req = createMockReq([AgentCapabilities.tools]);

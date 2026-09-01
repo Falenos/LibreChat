@@ -35,13 +35,21 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
   it('lists the skills this image ships', () => {
     expect([...KNAUF_EXPECTED_DEPLOYMENT_SKILLS].sort()).toEqual([
       'agent-builder-coach',
+      'business-case-writeup',
+      'business-idea-stress-test',
+      'business-jira-breakdown',
+      'business-plan-grilling',
       'karl-artifacts',
       'karl-brand',
       // [knauf] KK20-257 — the code-execution skills ship now that the adapter does.
       'karl-data-analysis',
+      'karl-file-translation',
       'karl-guide',
+      'karl-idml',
+      'karl-image-generation',
       'karl-mermaid',
       'karl-xlsx',
+      'karl-xml',
       // End [knauf]
       'web-research',
     ]);

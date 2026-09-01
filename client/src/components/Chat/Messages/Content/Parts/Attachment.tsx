@@ -123,6 +123,10 @@ const PreviewPlaceholderCard = memo(
 PreviewPlaceholderCard.displayName = 'PreviewPlaceholderCard';
 
 const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> }) => {
+  // [knauf] KK20-297 — generated/downloadable files need an explicit action label and icon.
+  const localize = useLocalize();
+  const visibleFilename = displayFilename(attachment.filename);
+  // End [knauf]
   const [isVisible, setIsVisible] = useState(false);
   const file = attachment as TFile & TAttachmentMetadata;
   const { handleDownload } = useAttachmentLink({
@@ -193,9 +197,15 @@ const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> 
         file={attachment}
         onClick={handleDownload}
         overrideType={extension}
-        displayName={displayFilename(attachment.filename)}
+        displayName={visibleFilename}
         containerClassName="max-w-fit"
         buttonClassName="bg-surface-secondary hover:cursor-pointer hover:bg-surface-hover active:bg-surface-secondary focus:bg-surface-hover hover:border-border-heavy active:border-border-heavy"
+        /* [knauf] KK20-297 — keep the whole card clickable, visibly identify the action. */
+        action={{
+          icon: <Download className="size-4" aria-hidden="true" />,
+          label: `${localize('com_ui_download')} ${visibleFilename}`,
+        }}
+        /* End [knauf] */
       />
     </div>
   );
@@ -204,7 +214,9 @@ const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> 
 const FileAttachmentGroup = memo(({ attachments }: { attachments: TAttachment[] }) => {
   const localize = useLocalize();
   const panelId = useId();
-  const [isExpanded, setIsExpanded] = useState(false);
+  // [knauf] KK20-297 — show small generated-file groups immediately; keep bulk output compact.
+  const [isExpanded, setIsExpanded] = useState(attachments.length <= 3);
+  // End [knauf]
   const { style: expandStyle, ref: expandRef } = useExpandCollapse(isExpanded);
   const visibleAttachments = useMemo(
     () => attachments.filter((attachment) => Boolean(attachment.filepath)),

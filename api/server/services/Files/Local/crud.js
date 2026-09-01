@@ -196,7 +196,13 @@ const unlinkFile = async (filepath) => {
   try {
     await fs.promises.unlink(filepath);
   } catch (error) {
+    // [knauf] KK20-297 — surface real local-storage cleanup failures to durable cleanup debt.
+    if (error?.code === 'ENOENT') {
+      return;
+    }
     logger.error('Error deleting file:', error);
+    throw error;
+    // End [knauf]
   }
 };
 

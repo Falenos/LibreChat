@@ -2,6 +2,7 @@ import express from 'express';
 import { pinoHttp } from 'pino-http';
 import { createJwtMiddleware } from './auth/verifyJwt.js';
 import { createErrorHandler } from './middleware/errorHandler.js';
+import { normalizeHttpRoute, traceHttpRequest } from './middleware/telemetry.js';
 import { createExecRouter } from './routes/exec.js';
 import { createUploadRouter } from './routes/upload.js';
 import { createDownloadRouter } from './routes/download.js';
@@ -34,10 +35,18 @@ export function createApp(deps: AppDeps): Express {
   const { config, logger, metrics } = deps;
   const app = express();
   app.disable('x-powered-by');
+  app.use(traceHttpRequest);
 
   app.use(
     pinoHttp({
       logger,
+      serializers: {
+        req: (serialized) => ({
+          method: serialized.method,
+          route: normalizeHttpRoute(serialized.url),
+        }),
+        res: (serialized) => ({ statusCode: serialized.statusCode }),
+      },
       autoLogging: {
         ignore: (req) => req.url === '/healthz' || req.url === '/readyz' || req.url === '/metrics',
       },
@@ -67,6 +76,6 @@ export function createApp(deps: AppDeps): Express {
   v1.use(createObjectsRouter({ blob: deps.blob, repo: deps.repo, logger }));
   app.use('/v1', v1);
 
-  app.use(createErrorHandler(logger));
+  app.use(createErrorHandler(logger, config.uploadMaxBytes));
   return app;
 }

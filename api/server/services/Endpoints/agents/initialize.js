@@ -13,6 +13,9 @@ const {
   resolveAgentScopedSkillIds,
   resolveModelSpecSkillIds,
   buildAgentContextAttachmentsByAgentId,
+  // [knauf] KK20-297 — restore thread attachment IDs before request-scoped tools load.
+  getThreadData,
+  // End [knauf]
   // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
   isKnaufCodeExecutionEnabled,
   // End [knauf]
@@ -27,6 +30,9 @@ const {
   AgentCapabilities,
   MAX_SUBAGENT_GRAPH_NODES,
   isEphemeralAgentId,
+  // [knauf] KK20-297 — distinguish real follow-ups from the no-parent sentinel.
+  Constants,
+  // End [knauf]
 } = require('librechat-data-provider');
 const {
   createToolEndCallback,
@@ -333,8 +339,40 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
 
   /** Event-driven mode: only load tool definitions, not full instances */
   const loadTools = createToolLoader(signal, streamId, true);
+  /** @type {string} */
+  const conversationId = req.body.conversationId;
+  /** @type {string | undefined} */
+  const parentMessageId = req.body.parentMessageId;
   /** @type {Array<MongoFile>} */
   let requestFiles = req.body.files ?? [];
+  // [knauf] KK20-297 — follow-up requests do not resend prior attachment metadata.
+  // Rehydrate only the active parent chain, owner-scoped, before request-only
+  // tools are selected and constructed. This keeps IDML/XML edit and deterministic
+  // translation available without trusting file metadata from conversation history.
+  if (
+    conversationId &&
+    parentMessageId &&
+    parentMessageId !== Constants.NO_PARENT &&
+    req.user?.id
+  ) {
+    const messages = await db.getMessages(
+      { conversationId },
+      'messageId parentMessageId files attachments',
+    );
+    const currentFileIds = new Set(requestFiles.map((file) => file.file_id).filter(Boolean));
+    const historicalFileIds = getThreadData(messages ?? [], parentMessageId).fileIds.filter(
+      (fileId) => !currentFileIds.has(fileId),
+    );
+    if (historicalFileIds.length > 0) {
+      const ownerFilter = { file_id: { $in: historicalFileIds }, user: req.user.id };
+      if (req.user.tenantId) {
+        ownerFilter.tenantId = req.user.tenantId;
+      }
+      const historicalFiles = (await db.getFiles(ownerFilter, null, { text: 0 })) ?? [];
+      requestFiles = requestFiles.concat(historicalFiles);
+    }
+  }
+  // End [knauf]
   // [knauf] KK20-248 — hydrate agent runs with ready project knowledge files so
   // project-scoped chats carry their attached library context into initialization.
   if (endpointOption.chatProjectId && req.user?.id) {
@@ -343,20 +381,20 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       endpointOption.chatProjectId,
     );
     if (projectFileIds.length > 0) {
-      const projectFiles = (await db.getFiles(
-        { file_id: { $in: projectFileIds }, user: req.user.id },
-        null,
-        { text: 0 },
-      )) ?? [];
+      const projectFiles =
+        (await db.getFiles({ file_id: { $in: projectFileIds }, user: req.user.id }, null, {
+          text: 0,
+        })) ?? [];
       const seenFileIds = new Set(requestFiles.map((file) => file.file_id));
-      requestFiles = requestFiles.concat(projectFiles.filter((file) => !seenFileIds.has(file.file_id)));
+      requestFiles = requestFiles.concat(
+        projectFiles.filter((file) => !seenFileIds.has(file.file_id)),
+      );
     }
   }
   // End [knauf]
-  /** @type {string} */
-  const conversationId = req.body.conversationId;
-  /** @type {string | undefined} */
-  const parentMessageId = req.body.parentMessageId;
+  // [knauf] KK20-297 — keep hydrated history tool-scoped on follow-up turns.
+  req.knaufToolFiles = requestFiles;
+  // End [knauf]
   /**
    * Skill names the user invoked via the `$` popover for this turn. Only flows
    * to the primary agent — handoff agents are follow-up turns that don't see

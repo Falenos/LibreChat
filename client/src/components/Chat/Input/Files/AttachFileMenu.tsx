@@ -333,9 +333,6 @@ const AttachFileMenu = ({
           // End [knauf]
           onClick: () => {
             setToolResource(EToolResources.execute_code);
-            // [knauf] updater lifted to module scope to satisfy S2004 (max nesting). KK20-190.
-            setEphemeralAgent(enableEphemeralCodeExecution);
-            // End [knauf]
             onAction();
           },
           icon: <TerminalSquareIcon className="icon-md" />,
@@ -477,6 +474,16 @@ const AttachFileMenu = ({
             (!agentId || isEphemeralAgent(agentId))
           ) {
             setEphemeralAgent(enableEphemeralFileSearch);
+          }
+          // End [knauf]
+          // [knauf] KK20-297 — enable Code Execution only after the native
+          // picker returns files. Updating agent state before input.click()
+          // can rerender away the live input and lose the selection.
+          if (
+            toolResourceRef.current === EToolResources.execute_code &&
+            (e.target.files?.length ?? 0) > 0
+          ) {
+            setEphemeralAgent(enableEphemeralCodeExecution);
           }
           // End [knauf]
           handleFileChange(e, toolResourceRef.current);

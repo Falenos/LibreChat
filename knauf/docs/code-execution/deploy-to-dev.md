@@ -362,7 +362,7 @@ agentic-karl-code-adapter:
     EXEC_TOTAL_TIMEOUT_MS: "300000"
     READINESS_CACHE_MS: "30000"
     READINESS_TIMEOUT_MS: "10000"
-    # Capacity guardrails — see scaling.md §3. The 256 MB default does not fit this pod.
+    # Capacity guardrails — see scaling.md §3. The 256 MiB default does not fit this pod.
     CAPTURE_MAX_TOTAL_BYTES: "67108864"
     CAPTURE_MAX_FILES: "20"                 # also caps files per /upload/batch request
     # Cap the V8 heap as the app (6144) and worker (2048) do. This pod is memory-bound by

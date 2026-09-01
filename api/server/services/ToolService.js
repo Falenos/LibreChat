@@ -87,6 +87,23 @@ const {
   buildArtifactEditContext,
 } = require('~/server/services/Artifacts/knauf/edit');
 // End [knauf]
+// [knauf] KK20-297 — request-scoped file tools are native host tools, not
+// manifest plugins. Definitions-only agent runs must recognize them and
+// receive attachment context before the model chooses a tool.
+const {
+  TOOL_NAME: FILE_TRANSLATE_TOOL,
+  STATUS_TOOL_NAME: TRANSLATION_STATUS_TOOL,
+  buildFileToolContext,
+} = require('~/server/services/Files/knauf/translation/tool');
+const {
+  TOOL_NAME: IDML_EDIT_TOOL,
+  buildIdmlToolContext,
+} = require('~/server/services/Files/knauf/idml/edit');
+const {
+  TOOL_NAME: XML_EDIT_TOOL,
+  buildXmlToolContext,
+} = require('~/server/services/Files/knauf/xml/edit');
+// End [knauf]
 
 const domainSeparatorRegex = new RegExp(actionDomainSeparator, 'g');
 
@@ -527,6 +544,12 @@ const nativeTools = new Set([
   // [knauf] NO-TICKET — injected at runtime when agent.artifacts is enabled.
   EDIT_ARTIFACT_TOOL,
   // End [knauf]
+  // [knauf] KK20-297 — injected only for matching current-message files.
+  FILE_TRANSLATE_TOOL,
+  TRANSLATION_STATUS_TOOL,
+  IDML_EDIT_TOOL,
+  XML_EDIT_TOOL,
+  // End [knauf]
 ]);
 
 // [knauf] KK20-194 — use open_url only for links in the current user message.
@@ -553,8 +576,8 @@ const exposeOpenUrlForUserLink = ({ tools, agent, areToolsEnabled, req }) => {
 const isBuiltInTool = (toolName) =>
   Boolean(
     manifestToolMap[toolName] ||
-      toolkits.some((t) => t.pluginKey === toolName) ||
-      nativeTools.has(toolName),
+    toolkits.some((t) => t.pluginKey === toolName) ||
+    nativeTools.has(toolName),
   );
 
 /**
@@ -1025,6 +1048,19 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
   }
   // End [knauf]
 
+  // [knauf] KK20-297 — IDML/XML stay out of provider file input, so tell the
+  // model which current-message files its native host tools can access.
+  if (filteredTools.includes(FILE_TRANSLATE_TOOL)) {
+    toolContextMap[FILE_TRANSLATE_TOOL] = buildFileToolContext(req);
+  }
+  if (filteredTools.includes(IDML_EDIT_TOOL)) {
+    toolContextMap[IDML_EDIT_TOOL] = buildIdmlToolContext(req);
+  }
+  if (filteredTools.includes(XML_EDIT_TOOL)) {
+    toolContextMap[XML_EDIT_TOOL] = buildXmlToolContext(req);
+  }
+  // End [knauf]
+
   if (hasWebSearch) {
     // [knauf] KK20-201 — deterministic locale/timezone context (Accept-Language
     // header plus the browser-supplied req.body.timezone, no hardcoded
@@ -1062,6 +1098,9 @@ async function loadToolDefinitionsWrapper({ req, res, agent, streamId = null, to
       }
     } catch (error) {
       logger.error('[loadToolDefinitionsWrapper] Error priming code files:', error);
+      // [knauf] KK20-316 — attachments are part of the execution contract; fail instead of omitting.
+      throw error;
+      // End [knauf]
     }
   }
 
