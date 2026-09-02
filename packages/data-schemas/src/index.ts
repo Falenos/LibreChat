@@ -30,6 +30,8 @@ export {
   MAX_AUDIT_VERIFY_ROWS,
   // [knauf] KK20-195 WP3b — FileAsset methods factory for api-side specs.
   createFileAssetMethods,
+  // KK20-328 — scope key shared by the retention sweep and chain verification.
+  auditRetentionScopeKey,
   // End [knauf]
 } from './methods';
 export type * from './types';

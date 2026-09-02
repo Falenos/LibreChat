@@ -4,6 +4,11 @@ import { createUserMethods, DEFAULT_SESSION_EXPIRY, type UserMethods } from './u
 import { createFileMethods, type FileMethods, type FileOwnerScope } from './file';
 // [knauf] KK20-195 WP2 — FileAsset state-machine methods.
 import { createFileAssetMethods, type FileAssetMethods } from './fileAsset';
+// KK20-328 — audit-retention checkpoint store.
+import {
+  createAuditRetentionCheckpointMethods,
+  type AuditRetentionCheckpointMethods,
+} from './auditRetentionCheckpoint';
 // End [knauf]
 import { createTokenMethods, type TokenMethods } from './token';
 import { createRoleMethods, RoleConflictError } from './role';
@@ -112,6 +117,8 @@ export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY
 // [knauf] KK20-195 WP3b — factory exported for api-side specs that run the
 // real FileAsset state machine against mongodb-memory-server.
 export { createFileAssetMethods };
+// KK20-328 — scope-key helper shared by the retention sweep and chain verification.
+export { auditRetentionScopeKey } from './auditRetentionCheckpoint';
 // End [knauf]
 export { tokenValues, cacheTokenValues, premiumTokenValues, defaultRate, createTxMethods };
 export { permissionBitSupersets };
@@ -135,6 +142,9 @@ export type AllMethods = UserMethods &
   FileMethods &
   // [knauf] KK20-195 WP2 — FileAsset state machine.
   FileAssetMethods &
+  // [knauf] KK20-328 — audit-retention checkpoint store.
+  AuditRetentionCheckpointMethods &
+  // End [knauf]
   // End [knauf]
   MemoryMethods &
   AgentCategoryMethods &
@@ -268,6 +278,8 @@ export function createMethods(
     ...createFileMethods(mongoose),
     // [knauf] KK20-195 WP2 — FileAsset state machine.
     ...createFileAssetMethods(mongoose),
+    // KK20-328 — audit-retention checkpoint store.
+    ...createAuditRetentionCheckpointMethods(mongoose),
     // End [knauf]
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
