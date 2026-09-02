@@ -195,6 +195,28 @@ const createMeiliMongooseModel = ({
 }) => {
   const syncConfig = { ...getSyncConfig(), ...syncOptions };
 
+  // [knauf] Keep reconciliation ownership until each queued bulk-index task is terminal.
+  const waitForSuccessfulTask = async (taskUid: number): Promise<void> => {
+    while (true) {
+      try {
+        const task = await index.waitForTask(taskUid, {
+          timeOutMs: 10_000,
+          intervalMs: 250,
+        });
+        if (task.status !== 'succeeded') {
+          throw new Error(`Meilisearch indexing task ${taskUid} ended with ${task.status}`);
+        }
+        return;
+      } catch (error) {
+        if (error instanceof MeiliSearchTimeOutError) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  };
+  // End [knauf]
+
   class MeiliMongooseModel {
     /**
      * Get the current sync progress
@@ -255,7 +277,9 @@ const createMeiliMongooseModel = ({
 
         try {
           const documents = await this.find(query)
-            .select(attributesToIndex.join(' ') + ' _meiliIndex')
+            // [knauf] Snapshot updatedAt so a concurrent write cannot receive a stale acknowledgement.
+            .select(attributesToIndex.join(' ') + ' _meiliIndex updatedAt')
+            // End [knauf]
             .limit(batchSize)
             .lean();
 
@@ -309,17 +333,31 @@ const createMeiliMongooseModel = ({
 
       try {
         // Add documents to MeiliSearch
-        await index.addDocumentsInBatches(formattedDocs, undefined, { primaryKey });
+        // [knauf] Do not mark Mongo flags until Meilisearch has applied every queued batch.
+        const enqueuedTasks = await index.addDocumentsInBatches(formattedDocs, undefined, {
+          primaryKey,
+        });
+        for (const task of enqueuedTasks) {
+          await waitForSuccessfulTask(task.taskUid);
+        }
+        // End [knauf]
 
         // Update MongoDB to mark documents as indexed.
         // { timestamps: false } prevents Mongoose from touching updatedAt, preserving
         // original conversation/message timestamps (fixes sidebar chronological sort).
-        const docsIds = documents.map((doc) => doc._id);
+        // [knauf] Acknowledge only documents unchanged since the submitted snapshot.
+        const snapshotFilter = documents.map((doc) => ({
+          _id: doc._id,
+          ...(doc.updatedAt == null
+            ? { updatedAt: { $exists: false } }
+            : { updatedAt: doc.updatedAt }),
+        }));
         await this.updateMany(
-          { _id: { $in: docsIds } },
+          { ...getIndexableQuery(), $or: snapshotFilter },
           { $set: { _meiliIndex: true } },
           { timestamps: false },
         );
+        // End [knauf]
       } catch (error) {
         logger.error('[processSyncBatch] Error processing batch:', error);
         throw error;
@@ -362,7 +400,10 @@ const createMeiliMongooseModel = ({
           // Delete documents that don't exist in MongoDB
           const toDelete = meiliIds.filter((id) => !existingIds.has(id));
           if (toDelete.length > 0) {
-            await index.deleteDocuments(toDelete.map(String));
+            // [knauf] Keep the operation lease until orphan cleanup is terminal.
+            const deletion = await index.deleteDocuments(toDelete.map(String));
+            await waitForSuccessfulTask(deletion.taskUid);
+            // End [knauf]
             logger.debug(`[cleanupMeiliIndex] Deleted ${toDelete.length} orphaned documents`);
           }
           // if fetch documents request returns less documents than limit, all documents are processed
@@ -378,7 +419,18 @@ const createMeiliMongooseModel = ({
           }
         }
       } catch (error) {
+        // [knauf] A missing index is an empty cleanup target; the subsequent add creates it.
+        if ((error as { code?: string })?.code === 'index_not_found') {
+          logger.info(
+            `[cleanupMeiliIndex] Index ${index.uid} does not exist yet; skipping cleanup`,
+          );
+          return;
+        }
+        // End [knauf]
         logger.error('[cleanupMeiliIndex] Error during cleanup:', error);
+        // [knauf] Failed cleanup must keep reconciliation retryable.
+        throw error;
+        // End [knauf]
       }
     }
 

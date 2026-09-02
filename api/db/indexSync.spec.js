@@ -17,8 +17,12 @@ const mockLogger = {
 const mockMeiliHealth = jest.fn();
 const mockMeiliIndex = jest.fn();
 const mockMeiliGetStats = jest.fn();
+// [knauf] Model terminal reconciliation tasks returned by Meilisearch.
+const mockWaitForTask = jest.fn();
+// End [knauf]
 const mockBatchResetMeiliFlags = jest.fn();
 const mockIsEnabled = jest.fn();
+const mockWithMeiliSyncLock = jest.fn();
 const mockGetLogStores = jest.fn();
 
 // Create mock models that will be reused
@@ -38,14 +42,24 @@ jest.mock('@librechat/data-schemas', () => ({
 }));
 
 jest.mock('meilisearch', () => ({
+  // [knauf] Preserve timeout instanceof checks in the task polling loop.
+  MeiliSearchTimeOutError: class MeiliSearchTimeOutError extends Error {},
+  // End [knauf]
   MeiliSearch: jest.fn(() => ({
     health: mockMeiliHealth,
     index: mockMeiliIndex,
+    // [knauf] Expose task polling on the mocked client.
+    waitForTask: mockWaitForTask,
+    // End [knauf]
   })),
 }));
 
 jest.mock('./utils', () => ({
   batchResetMeiliFlags: mockBatchResetMeiliFlags,
+}));
+
+jest.mock('~/knauf/db/meiliSyncLock', () => ({
+  withMeiliSyncLock: mockWithMeiliSyncLock,
 }));
 
 jest.mock('@librechat/api', () => ({
@@ -97,13 +111,19 @@ describe('performSync() - syncThreshold logic', () => {
 
     // Mock isEnabled
     mockIsEnabled.mockImplementation((val) => val === 'true' || val === true);
+    mockWithMeiliSyncLock.mockImplementation((_mongoose, handler) => handler());
 
     // Mock MeiliSearch client responses
     mockMeiliHealth.mockResolvedValue({ status: 'available' });
+    // [knauf] Reconciliation mutations succeed by default.
+    mockWaitForTask.mockResolvedValue({ status: 'succeeded' });
+    // End [knauf]
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: ['user'] }),
       getStats: mockMeiliGetStats,
-      updateSettings: jest.fn().mockResolvedValue({}),
+      // [knauf] Meilisearch mutations return queued task identifiers.
+      updateSettings: jest.fn().mockResolvedValue({ taskUid: 1 }),
+      // End [knauf]
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
     mockMeiliGetStats.mockResolvedValue({ numberOfDocuments: Number.MAX_SAFE_INTEGER });
@@ -213,6 +233,136 @@ describe('performSync() - syncThreshold logic', () => {
     );
     jest.useRealTimers();
   });
+
+  // Only the operation lease coordinator may inspect or rebuild shared indexes.
+  test('delegates startup synchronization to the waiting operation lease path', async () => {
+    mockWithMeiliSyncLock.mockResolvedValue(undefined);
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockWithMeiliSyncLock).toHaveBeenCalledWith(expect.anything(), expect.any(Function), {
+      waitForLease: true,
+    });
+    expect(mockMeiliHealth).not.toHaveBeenCalled();
+    expect(mockGetLogStores).not.toHaveBeenCalled();
+  });
+
+  test('skips periodic reconciliation checks when another replica holds the lease', async () => {
+    jest.useFakeTimers();
+    mockWithMeiliSyncLock.mockResolvedValue(undefined);
+
+    const indexSync = require('./indexSync');
+    indexSync.startReconciliation();
+    await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+    indexSync.stopReconciliation();
+
+    expect(Message.getSyncProgress).not.toHaveBeenCalled();
+    expect(Conversation.getSyncProgress).not.toHaveBeenCalled();
+    expect(mockMeiliGetStats).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  test('creates missing indexes immediately inside the operation lease', async () => {
+    const createFlowWithHandler = jest.fn().mockRejectedValue(new Error('index not found'));
+    const { FlowStateManager } = require('@librechat/api');
+    FlowStateManager.mockImplementationOnce(() => ({ createFlowWithHandler }));
+    mockGetLogStores.mockReturnValueOnce({});
+    Message.syncWithMeili.mockResolvedValue(undefined);
+    Conversation.syncWithMeili.mockResolvedValue(undefined);
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockWithMeiliSyncLock).toHaveBeenCalledTimes(1);
+    expect(Message.syncWithMeili).toHaveBeenCalledTimes(1);
+    expect(Conversation.syncWithMeili).toHaveBeenCalledTimes(1);
+  });
+
+  test('propagates synchronization failures through the operation lease', async () => {
+    const createFlowWithHandler = jest.fn().mockRejectedValue(new Error('sync failed'));
+    const { FlowStateManager } = require('@librechat/api');
+    FlowStateManager.mockImplementationOnce(() => ({ createFlowWithHandler }));
+    mockGetLogStores.mockReturnValueOnce({});
+
+    const indexSync = require('./indexSync');
+
+    await expect(indexSync()).rejects.toThrow('sync failed');
+    expect(mockLogger.error).toHaveBeenCalledWith('[indexSync] error', expect.any(Error));
+  });
+
+  // [knauf] Terminal preflight task failures must keep the operation retryable.
+  test('propagates failed settings tasks through the operation lease', async () => {
+    mockMeiliIndex.mockReturnValue({
+      getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }),
+      getStats: mockMeiliGetStats,
+      updateSettings: jest.fn().mockResolvedValue({ taskUid: 17 }),
+      search: jest.fn().mockResolvedValue({ hits: [] }),
+    });
+    mockWaitForTask.mockResolvedValue({ status: 'failed' });
+
+    const indexSync = require('./indexSync');
+
+    await expect(indexSync()).rejects.toThrow('messages settings task 17 ended with failed');
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalled();
+  });
+
+  test('propagates failed orphan-deletion tasks through the operation lease', async () => {
+    const deleteDocuments = jest.fn().mockResolvedValue({ taskUid: 23 });
+    mockMeiliIndex.mockReturnValue({
+      getSettings: jest.fn().mockResolvedValue({ filterableAttributes: ['user'] }),
+      getStats: mockMeiliGetStats,
+      updateSettings: jest.fn(),
+      search: jest.fn().mockResolvedValue({ hits: [{ id: 'legacy-document' }] }),
+      deleteDocuments,
+    });
+    mockWaitForTask.mockResolvedValue({ status: 'canceled' });
+
+    const indexSync = require('./indexSync');
+
+    await expect(indexSync()).rejects.toThrow('messages task 23 ended with canceled');
+    expect(deleteDocuments).toHaveBeenCalledWith(['legacy-document']);
+  });
+
+  test('does not skip orphaned documents after deleting a full search page', async () => {
+    const firstPageIds = Array.from({ length: 1000 }, (_, index) => `legacy-${index}`);
+    const deleteDocuments = jest
+      .fn()
+      .mockResolvedValueOnce({ taskUid: 31 })
+      .mockResolvedValueOnce({ taskUid: 32 });
+    const search = jest
+      .fn()
+      .mockResolvedValueOnce({ hits: [{ id: firstPageIds[0] }] })
+      .mockResolvedValueOnce({ hits: [] })
+      .mockResolvedValueOnce({ hits: firstPageIds.map((id) => ({ id })) })
+      .mockResolvedValueOnce({ hits: [{ id: 'legacy-final' }] })
+      .mockResolvedValueOnce({ hits: [] });
+    mockMeiliIndex.mockReturnValue({
+      getSettings: jest.fn().mockResolvedValue({ filterableAttributes: ['user'] }),
+      getStats: mockMeiliGetStats,
+      updateSettings: jest.fn(),
+      search,
+      deleteDocuments,
+    });
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 1,
+      totalDocuments: 1,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 1,
+      totalDocuments: 1,
+      isComplete: true,
+    });
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(search).toHaveBeenNthCalledWith(4, '', { limit: 1000, offset: 0 });
+    expect(deleteDocuments).toHaveBeenNthCalledWith(1, firstPageIds);
+    expect(deleteDocuments).toHaveBeenNthCalledWith(2, ['legacy-final']);
+  });
+  // End [knauf]
   // End [knauf]
 
   test('skips sync when unindexed messages are below syncThreshold', async () => {
@@ -410,7 +560,9 @@ describe('performSync() - syncThreshold logic', () => {
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
       getStats: mockMeiliGetStats,
-      updateSettings: jest.fn().mockResolvedValue({}),
+      // [knauf] Settings changes return queued task identifiers.
+      updateSettings: jest.fn().mockResolvedValue({ taskUid: 1 }),
+      // End [knauf]
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
 
@@ -454,7 +606,9 @@ describe('performSync() - syncThreshold logic', () => {
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
       getStats: mockMeiliGetStats,
-      updateSettings: jest.fn().mockResolvedValue({}),
+      // [knauf] Settings changes return queued task identifiers.
+      updateSettings: jest.fn().mockResolvedValue({ taskUid: 1 }),
+      // End [knauf]
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
 
@@ -500,7 +654,9 @@ describe('performSync() - syncThreshold logic', () => {
     mockMeiliIndex.mockReturnValue({
       getSettings: jest.fn().mockResolvedValue({ filterableAttributes: [] }), // No user field
       getStats: mockMeiliGetStats,
-      updateSettings: jest.fn().mockResolvedValue({}),
+      // [knauf] Settings changes return queued task identifiers.
+      updateSettings: jest.fn().mockResolvedValue({ taskUid: 1 }),
+      // End [knauf]
       search: jest.fn().mockResolvedValue({ hits: [] }),
     });
 
