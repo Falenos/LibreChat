@@ -1,6 +1,9 @@
 const express = require('express');
 const { createAdminAuditLogHandlers } = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
+// [knauf] KK20-328 — scope-key helper shared by the retention sweep and verification.
+const { auditRetentionScopeKey } = require('@librechat/data-schemas');
+// End [knauf]
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
 const db = require('~/models');
@@ -15,6 +18,11 @@ const handlers = createAdminAuditLogHandlers({
   findAuditLogEntry: db.findAuditLogEntry,
   streamAuditLogEntries: db.streamAuditLogEntries,
   verifyAuditChain: db.verifyAuditChain,
+  // [knauf] KK20-328 — supply the retention trust boundary so chain verification
+  // still passes on chains the 12-month purge has trimmed.
+  getAuditRetentionCheckpoint: db.getAuditRetentionCheckpoint,
+  auditRetentionScopeKey,
+  // End [knauf]
 });
 
 /**

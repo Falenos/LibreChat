@@ -62,8 +62,21 @@ export interface AdminAuditLogDeps {
   ) => Promise<{ count: number; truncated: boolean }>;
   verifyAuditChain: (
     tenantId: string | undefined,
-    options?: { isCancelled?: () => boolean; maxRows?: number },
+    options?: {
+      isCancelled?: () => boolean;
+      maxRows?: number;
+      // [knauf] KK20-328 — trust boundary minted by the retention purge.
+      trustedCheckpoint?: { throughSeq: number; prevHash: string };
+      // End [knauf]
+    },
   ) => Promise<AuditChainVerification>;
+  /* [knauf] KK20-328 — reads the boundary the retention sweep persisted. Optional
+   * so callers that never purge (and existing tests) need not supply it. */
+  getAuditRetentionCheckpoint?: (
+    scopeKey: string,
+  ) => Promise<{ throughSeq: number; prevHash: string } | undefined>;
+  auditRetentionScopeKey?: (tenantId?: string) => string;
+  // End [knauf]
 }
 
 interface CallerContext {
@@ -276,7 +289,16 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
   verifyAuditLog: (req: ServerRequest, res: Response) => Promise<Response>;
   exportAuditLogCsv: (req: ServerRequest, res: Response) => Promise<Response | void>;
 } {
-  const { listAuditLogPage, findAuditLogEntry, streamAuditLogEntries, verifyAuditChain } = deps;
+  const {
+    listAuditLogPage,
+    findAuditLogEntry,
+    streamAuditLogEntries,
+    verifyAuditChain,
+    // [knauf] KK20-328 — retention checkpoint lookup.
+    getAuditRetentionCheckpoint,
+    auditRetentionScopeKey,
+    // End [knauf]
+  } = deps;
 
   async function listAuditLogHandler(req: ServerRequest, res: Response) {
     try {
@@ -340,9 +362,22 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
       req.once('aborted', markAborted);
 
       try {
+        /* [knauf] KK20-328 — once retention has purged a prefix the chain no
+         * longer starts at genesis, and verification without the boundary the
+         * purge minted returns ok:false ("prefix purged or deleted"). That is a
+         * false tamper alarm on a security feature, so feed the persisted
+         * checkpoint in. Absent (never purged) it stays undefined and upstream
+         * behaviour is unchanged. */
+        const trustedCheckpoint =
+          getAuditRetentionCheckpoint && auditRetentionScopeKey
+            ? await getAuditRetentionCheckpoint(auditRetentionScopeKey(caller.tenantId))
+            : undefined;
+        // End [knauf]
+
         const result = await verifyAuditChain(caller.tenantId, {
           isCancelled: () => clientAborted,
           maxRows: MAX_AUDIT_VERIFY_ROWS,
+          ...(trustedCheckpoint ? { trustedCheckpoint } : {}),
         });
 
         if (clientAborted) return res;

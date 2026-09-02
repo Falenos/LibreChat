@@ -42,6 +42,9 @@ const initializeOAuthReconnectManager = require('./services/initializeOAuthRecon
 const { capabilityContextMiddleware } = require('./middleware/roles/capabilities');
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
+// [knauf] KK20-328 — audit-log retention sweep.
+const { startKnaufAuditRetentionSweep } = require('./services/Audit/knaufAuditRetention');
+// End [knauf]
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
 const { jwtLogin, ldapLogin, passportLogin } = require('~/strategies');
 const { checkMigrations } = require('./services/start/migration');
@@ -153,6 +156,12 @@ const startServer = async () => {
   // End [knauf]
   initializeGitHubSkillSync(appConfig);
   startExpiredFileSweep({ appConfig, loadAppConfig: getAppConfig });
+  /* [knauf] KK20-328 — audit-log retention. This is the path the container
+   * actually runs (Dockerfile CMD -> `npm run backend` -> this file); the
+   * clustered `experimental.js` entrypoint starts it on its designated retention
+   * worker instead. No-op unless KNAUF_AUDIT_RETENTION_DAYS is set. */
+  startKnaufAuditRetentionSweep();
+  // End [knauf]
   await runAsSystem(async () => {
     await performStartupChecks(appConfig);
     await updateInterfacePermissions({ appConfig, getRoleByName, updateAccessPermissions });

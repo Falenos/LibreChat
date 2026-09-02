@@ -87,6 +87,9 @@ export * from './knauf/context/locationContext';
 // directory as success and logs the zero case at `debug`.
 export * from './knauf/skills/deploymentSkillsCheck';
 // End [knauf]
+// [knauf] KK20-328 — audit-log retention sweep (12-month purge + checkpoint).
+export * from './knauf/audit/retention';
+// End [knauf]
 // [knauf] KK20-252 — strips YAML frontmatter from a skill body before it is
 // injected as a user message. Exported for parity with the module above; the
 // in-package call sites (agents/skills.ts, agents/skillFiles.ts) import it via
