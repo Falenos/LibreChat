@@ -2,6 +2,8 @@
 'use strict';
 
 const { Readable } = require('stream');
+const JSZip = require('jszip');
+const { IdmlError } = require('../idml/core');
 
 const mockSaveBuffer = jest.fn();
 const mockDeleteFile = jest.fn();
@@ -10,7 +12,9 @@ const mockGetFiles = jest.fn();
 const mockCreateFile = jest.fn();
 const mockTranslateDocumentWithAzure = jest.fn();
 const mockTranslateBatchWithAzure = jest.fn();
+const mockTranslateWithAzure = jest.fn();
 const mockGlossaryForRequest = jest.fn();
+const mockMergePreservedTerms = jest.fn();
 const mockGetOwnedTranslationJob = jest.fn();
 const mockRequestTranslationCancellation = jest.fn();
 const mockRecordFileTranslationOutcome = jest.fn();
@@ -28,9 +32,10 @@ jest.mock('./providers/azure', () => ({
   AZURE_BATCH_GLOSSARY_MAX_BYTES: 9 * 1024 * 1024,
   AZURE_SYNC_GLOSSARY_MAX_BYTES: 900 * 1024,
   glossaryForRequest: (...args) => mockGlossaryForRequest(...args),
+  mergePreservedTerms: (...args) => mockMergePreservedTerms(...args),
   translateBatchWithAzure: (...args) => mockTranslateBatchWithAzure(...args),
   translateDocumentWithAzure: (...args) => mockTranslateDocumentWithAzure(...args),
-  translateWithAzure: jest.fn(),
+  translateWithAzure: (...args) => mockTranslateWithAzure(...args),
 }));
 jest.mock('./jobs', () => ({
   ...jest.requireActual('./jobs'),
@@ -53,6 +58,7 @@ jest.mock('@librechat/api', () => ({
 
 const {
   persistOutput,
+  normalizePreserveTerms,
   resolveInputFileResults,
   resolveInputFiles,
   selectTranslationFiles,
@@ -65,6 +71,25 @@ const request = (files = []) => ({
   body: { files, conversationId: 'conversation-1' },
   config: { fileStrategy: 'local' },
 });
+
+async function idmlFixture(
+  story = '<ParagraphStyleRange><CharacterStyleRange><Content>HERADESIGN panel</Content></CharacterStyleRange></ParagraphStyleRange>',
+) {
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/vnd.adobe.indesign-idml-package', {
+    compression: 'STORE',
+    createFolders: false,
+  });
+  zip.file(
+    'designmap.xml',
+    '<?xml version="1.0"?><Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><idPkg:Story src="Stories/Story_u1.xml"/></Document>',
+  );
+  zip.file(
+    'Stories/Story_u1.xml',
+    `<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u1">${story}</Story></idPkg:Story>`,
+  );
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
 
 describe('[knauf] file translation lifecycle', () => {
   beforeEach(() => {
@@ -79,6 +104,7 @@ describe('[knauf] file translation lifecycle', () => {
       entries: [],
       stats: { configured: false, applied: 0, bytes: 0 },
     });
+    mockMergePreservedTerms.mockImplementation((glossary) => glossary);
     mockGetRetentionExpiry.mockResolvedValue({});
     process.env.KNAUF_TRANSLATION_FILE_CONCURRENCY = '1';
     delete process.env.KNAUF_TRANSLATION_STORAGE_WRITE_TIMEOUT_MS;
@@ -384,6 +410,22 @@ describe('[knauf] file translation lifecycle', () => {
     );
   });
 
+  it('normalizes and bounds exact terms that must remain untranslated', () => {
+    expect(
+      normalizePreserveTerms([
+        ' Knauf Ceiling Solutions ',
+        'HERADESIGN',
+        'knauf ceiling solutions',
+      ]),
+    ).toEqual(['HERADESIGN', 'Knauf Ceiling Solutions', 'knauf ceiling solutions']);
+    expect(() => normalizePreserveTerms(['line\nbreak'])).toThrow(
+      expect.objectContaining({ code: 'invalid_preserve_terms', status: 400 }),
+    );
+    expect(() => normalizePreserveTerms(Array.from({ length: 101 }, () => 'term'))).toThrow(
+      expect.objectContaining({ code: 'invalid_preserve_terms', status: 400 }),
+    );
+  });
+
   it('returns a complete failed report when every attachment is unavailable', async () => {
     mockGetFiles.mockResolvedValue([]);
     const result = await translateFiles({
@@ -477,6 +519,194 @@ describe('[knauf] file translation lifecycle', () => {
     expect(mockTranslateDocumentWithAzure).not.toHaveBeenCalled();
   });
 
+  it('merges explicit preserved terms before translating a native document', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockMergePreservedTerms.mockReturnValueOnce({
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+      stats: { configured: false, applied: 1, preservedApplied: 1, bytes: 24 },
+    });
+    mockTranslateDocumentWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await translateFiles({
+      req: request([file]),
+      args: {
+        source_locale: 'en',
+        target_locale: 'de',
+        preserve_terms: ['HERADESIGN'],
+      },
+    });
+
+    expect(mockMergePreservedTerms).toHaveBeenCalledWith(
+      expect.objectContaining({ entries: [] }),
+      ['HERADESIGN'],
+      [],
+      expect.objectContaining({ filterToDocument: false }),
+    );
+    expect(mockTranslateDocumentWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        glossary: expect.objectContaining({
+          entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+        }),
+      }),
+    );
+  });
+
+  it('passes exact protected terms through the IDML segmented translation path', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'brochure.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+      source: 'local',
+      filepath: '/uploads/brochure.idml',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockReturnValueOnce(Readable.from([await idmlFixture()]));
+    mockMergePreservedTerms.mockImplementationOnce((glossary) => ({
+      ...glossary,
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+      stats: {
+        ...glossary.stats,
+        configured: true,
+        preservedApplied: 1,
+        bytes: 24,
+      },
+    }));
+    mockTranslateWithAzure.mockImplementationOnce(async ({ segments }) => ({
+      translations: new Map(segments.map((segment) => [segment.id, segment.source])),
+      providerLocale: 'pl',
+      batches: 1,
+    }));
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: {
+          source_locale: 'en',
+          target_locale: 'pl-PL',
+          preserve_terms: ['HERADESIGN'],
+        },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        files: [{ glossary: { preservedApplied: 1 } }],
+      },
+    });
+
+    expect(mockMergePreservedTerms).toHaveBeenCalledWith(
+      expect.objectContaining({ entries: [] }),
+      ['HERADESIGN'],
+      expect.arrayContaining([expect.objectContaining({ source: 'HERADESIGN panel' })]),
+    );
+    expect(mockTranslateWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        glossary: expect.objectContaining({
+          entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+        }),
+      }),
+    );
+  });
+
+  it('does not translate or persist IDML when protected terms cross segment boundaries', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'brochure.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+      source: 'local',
+      filepath: '/uploads/brochure.idml',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockReturnValueOnce(
+      Readable.from([
+        await idmlFixture(
+          '<ParagraphStyleRange><CharacterStyleRange><Content>HERA</Content></CharacterStyleRange><CharacterStyleRange><Content>DESIGN</Content></CharacterStyleRange></ParagraphStyleRange>',
+        ),
+      ]),
+    );
+    mockMergePreservedTerms.mockImplementationOnce((_glossary, _terms, segments) => {
+      expect(segments).toEqual([
+        expect.objectContaining({ source: 'HERA', contentIndex: 0, partCount: 1 }),
+        expect.objectContaining({ source: 'DESIGN', contentIndex: 1, partCount: 1 }),
+      ]);
+      const error = new IdmlError(
+        'A protected term spans multiple IDML text segments and cannot be preserved safely',
+        'protected_term_spans_segments',
+        400,
+      );
+      error.protectedTermsRequired = true;
+      throw error;
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: {
+          source_locale: 'en',
+          target_locale: 'pl-PL',
+          preserve_terms: ['HERADESIGN'],
+        },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'failed',
+        files: [
+          {
+            code: 'protected_term_spans_segments',
+            protectedTermsRequired: true,
+          },
+        ],
+      },
+    });
+
+    expect(mockTranslateWithAzure).not.toHaveBeenCalled();
+    expect(mockSaveBuffer).not.toHaveBeenCalled();
+    expect(mockCreateFile).not.toHaveBeenCalled();
+  });
+
+  it('does not restart segmented translation after a later batch was accepted', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'brochure.idml',
+      type: 'application/vnd.adobe.indesign-idml-package',
+      source: 'local',
+      filepath: '/uploads/brochure.idml',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockReturnValueOnce(Readable.from([await idmlFixture()]));
+    mockGlossaryForRequest.mockResolvedValueOnce({
+      entries: [{ source: 'panel', target: 'Panel' }],
+      stats: { configured: true, applied: 1, bytes: 12 },
+    });
+    const error = new IdmlError('provider rejected a later batch', 'translator_rejected', 400);
+    error.translationBatchesCompleted = 1;
+    mockTranslateWithAzure.mockRejectedValueOnce(error);
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { source_locale: 'en', target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'failed',
+        files: [{ code: 'translator_rejected' }],
+      },
+    });
+
+    expect(mockTranslateWithAzure).toHaveBeenCalledTimes(1);
+  });
+
   it('retries native document translation without an optional provider-rejected glossary', async () => {
     const file = {
       file_id: 'file-1',
@@ -520,6 +750,133 @@ describe('[knauf] file translation lifecycle', () => {
       2,
       expect.objectContaining({ glossary: expect.objectContaining({ entries: [] }) }),
     );
+  });
+
+  it('retains explicit protected terms when the optional managed glossary is rejected', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockGlossaryForRequest.mockResolvedValueOnce({
+      entries: [{ source: 'Board', target: 'Platte' }],
+      stats: { configured: true, applied: 1, bytes: 13 },
+    });
+    mockMergePreservedTerms
+      .mockReturnValueOnce({
+        entries: [
+          { source: 'HERADESIGN', target: 'HERADESIGN' },
+          { source: 'Board', target: 'Platte' },
+        ],
+        stats: {
+          configured: true,
+          dictionaryConfigured: true,
+          dictionaryApplied: 1,
+          applied: 2,
+          preservedApplied: 1,
+          bytes: 37,
+        },
+      })
+      .mockReturnValueOnce({
+        entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+        stats: {
+          configured: true,
+          dictionaryConfigured: true,
+          dictionaryApplied: 1,
+          dictionaryRetained: 0,
+          applied: 1,
+          preservedApplied: 1,
+          bytes: 24,
+        },
+      });
+    mockTranslateDocumentWithAzure
+      .mockRejectedValueOnce(
+        Object.assign(new Error('provider rejected glossary'), { code: 'translator_rejected' }),
+      )
+      .mockResolvedValueOnce({
+        buffer: Buffer.from('translated'),
+        providerLocale: 'de',
+        batches: 1,
+      });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: {
+          source_locale: 'en',
+          target_locale: 'de',
+          preserve_terms: ['HERADESIGN'],
+        },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        files: [
+          {
+            glossary: {
+              applied: 1,
+              dictionaryApplied: 0,
+              dictionaryRequested: 1,
+              preservedApplied: 1,
+              reason: 'dictionary_provider_rejected',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(mockTranslateDocumentWithAzure).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        glossary: expect.objectContaining({
+          entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+        }),
+      }),
+    );
+  });
+
+  it('fails without hiding the provider cause when protected terms were required', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockMergePreservedTerms.mockReturnValueOnce({
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+      stats: {
+        configured: true,
+        dictionaryConfigured: false,
+        dictionaryApplied: 0,
+        applied: 1,
+        preservedApplied: 1,
+        bytes: 24,
+      },
+    });
+    mockTranslateDocumentWithAzure.mockRejectedValueOnce(
+      new IdmlError('provider rejected glossary', 'translator_rejected', 400),
+    );
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: {
+          source_locale: 'en',
+          target_locale: 'de',
+          preserve_terms: ['HERADESIGN'],
+        },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'failed',
+        files: [{ code: 'translator_rejected', protectedTermsRequired: true }],
+      },
+    });
+    expect(mockTranslateDocumentWithAzure).toHaveBeenCalledTimes(1);
   });
 
   it('does not hide an optional-glossary transport failure', async () => {
@@ -599,6 +956,34 @@ describe('[knauf] file translation lifecycle', () => {
     });
 
     expect(mockRecordFileTranslationOutcome).toHaveBeenCalledWith('cancelled');
+  });
+
+  it('reports when a failed durable job required protected terms', async () => {
+    mockGetOwnedTranslationJob.mockResolvedValue({
+      job_id: 'job-1',
+      status: 'failed',
+      conversation_id: 'conversation-1',
+      source_locale: 'en',
+      target_locale: 'de',
+      attempt_count: 1,
+      output_file_ids: [],
+      last_error_code: 'translator_rejected',
+      last_error_detail: 'Azure Translator rejected the request',
+      protected_terms_required: true,
+    });
+
+    await expect(
+      translationJobAction({
+        req: request(),
+        args: { job_id: 'job-1', action: 'status' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'failed',
+        code: 'translator_rejected',
+        protectedTermsRequired: true,
+      },
+    });
   });
 
   it('does not expose or cancel a job from another conversation', async () => {

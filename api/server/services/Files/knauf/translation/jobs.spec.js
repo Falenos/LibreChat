@@ -1,5 +1,6 @@
 'use strict';
 
+const { createHash } = require('crypto');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const {
@@ -18,12 +19,14 @@ const {
   getOwnedTranslationJob,
   getTranslationJobModel,
   heartbeatTranslationJob,
+  makeIdempotencyKey,
   prepareTranslationAttempt,
   prepareTranslationStorageLocator,
   reconcileMissingConversationTranslationJobs,
   recoverExpiredTranslationJob,
   releaseOverdueQueuedTranslationJobs,
   requestTranslationCancellation,
+  translationArgsForJob,
   upgradeActiveTranslationJobs,
 } = require('./jobs');
 
@@ -123,6 +126,66 @@ describe('[knauf] durable translation jobs', () => {
 
     expect(new Set(jobs.map(({ job }) => job.job_id)).size).toBe(1);
     expect(await Model.countDocuments()).toBe(1);
+  });
+
+  it('persists preserved terms and includes them in job idempotency', async () => {
+    const first = await enqueue({ preserveTerms: ['HERADESIGN'] });
+    const duplicate = await enqueue({ preserveTerms: ['HERADESIGN'] });
+    const different = await enqueue({ preserveTerms: ['Knauf Ceiling Solutions'] });
+
+    expect(first.job.preserve_terms).toEqual(['HERADESIGN']);
+    expect(duplicate).toMatchObject({ created: false, job: { job_id: first.job.job_id } });
+    expect(different.job.job_id).not.toBe(first.job.job_id);
+    expect(await Model.countDocuments()).toBe(2);
+  });
+
+  it('keeps the legacy idempotency payload when no preserved terms are supplied', () => {
+    const params = {
+      user: 'u1',
+      tenantId: 't1',
+      conversationId: 'c1',
+      files: [file()],
+      sourceLocale: null,
+      targetLocale: 'de-DE',
+      preserveTerms: [],
+    };
+    const legacyPayload = {
+      user: 'u1',
+      tenantId: 't1',
+      conversationId: 'c1',
+      files: ['f1'],
+      sourceLocale: null,
+      targetLocale: 'de-DE',
+      glossaryRevision: process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION || 'none',
+    };
+
+    expect(makeIdempotencyKey(params)).toBe(
+      createHash('sha256').update(JSON.stringify(legacyPayload)).digest('hex'),
+    );
+  });
+
+  it('reconstructs exact protected terms for worker execution', () => {
+    expect(
+      translationArgsForJob({
+        source_locale: 'en',
+        target_locale: 'pl-PL',
+        preserve_terms: ['HERADESIGN', 'Heradesign'],
+      }),
+    ).toEqual({
+      source_locale: 'en',
+      target_locale: 'pl-PL',
+      preserve_terms: ['HERADESIGN', 'Heradesign'],
+    });
+    expect(
+      translationArgsForJob({
+        source_locale: null,
+        target_locale: 'de',
+        preserve_terms: [],
+      }),
+    ).toEqual({
+      source_locale: undefined,
+      target_locale: 'de',
+    });
   });
 
   it.each(['failed', 'cancelled'])('creates one fresh attempt after a %s job', async (status) => {
@@ -459,6 +522,24 @@ describe('[knauf] durable translation jobs', () => {
     expect(failed).toMatchObject({ status: 'failed', active: false });
     delete process.env.KNAUF_TRANSLATION_ATTEMPT_CAP;
     delete process.env.KNAUF_TRANSLATION_AUTH_ATTEMPT_CAP;
+  });
+
+  it('persists whether a terminal error involved required protected terms', async () => {
+    const { job } = await enqueue({ preserveTerms: ['HERADESIGN'] });
+    const claim = await claimNextTranslationJob({ workerId: 'w1' });
+    const error = Object.assign(new Error('provider rejected'), {
+      status: 400,
+      code: 'translator_rejected',
+      protectedTermsRequired: true,
+    });
+
+    const failed = await failTranslationJob({ job: claim, error });
+
+    expect(failed).toMatchObject({
+      job_id: job.job_id,
+      status: 'failed',
+      protected_terms_required: true,
+    });
   });
 
   it('treats the whole-job deadline as permanent', () => {

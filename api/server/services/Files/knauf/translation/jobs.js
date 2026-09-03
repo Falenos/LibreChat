@@ -95,6 +95,7 @@ function buildSchema() {
       },
       source_locale: { type: String, default: null },
       target_locale: { type: String, required: true },
+      preserve_terms: { type: [String], default: [] },
       glossary_revision: { type: String, default: 'none' },
       status: {
         type: String,
@@ -122,6 +123,7 @@ function buildSchema() {
       report: { type: mongoose.Schema.Types.Mixed, default: null },
       last_error_code: { type: String, default: null },
       last_error_detail: { type: String, maxlength: ERROR_DETAIL_MAX, default: null },
+      protected_terms_required: { type: Boolean, default: false },
       queued_at: { type: Date, required: true },
       started_at: { type: Date, default: null },
       finished_at: { type: Date, default: null },
@@ -176,18 +178,36 @@ async function translationConversationExists(params) {
   return Boolean(await Conversation.exists(conversationScope(params)));
 }
 
-function makeIdempotencyKey({ user, tenantId, conversationId, files, sourceLocale, targetLocale }) {
-  return sha256(
-    JSON.stringify({
-      user: String(user),
-      tenantId: tenantKey(tenantId),
-      conversationId: conversationId ?? null,
-      files: files.map((file) => file.file_id),
-      sourceLocale: sourceLocale ?? null,
-      targetLocale,
-      glossaryRevision: process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION || 'none',
-    }),
-  );
+function makeIdempotencyKey({
+  user,
+  tenantId,
+  conversationId,
+  files,
+  sourceLocale,
+  targetLocale,
+  preserveTerms = [],
+}) {
+  const payload = {
+    user: String(user),
+    tenantId: tenantKey(tenantId),
+    conversationId: conversationId ?? null,
+    files: files.map((file) => file.file_id),
+    sourceLocale: sourceLocale ?? null,
+    targetLocale,
+    glossaryRevision: process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION || 'none',
+  };
+  if (preserveTerms.length > 0) {
+    payload.preserveTerms = preserveTerms;
+  }
+  return sha256(JSON.stringify(payload));
+}
+
+function translationArgsForJob(job) {
+  return {
+    source_locale: job.source_locale ?? undefined,
+    target_locale: job.target_locale,
+    ...(job.preserve_terms?.length ? { preserve_terms: job.preserve_terms } : {}),
+  };
 }
 
 function validateFiles(files) {
@@ -376,6 +396,7 @@ async function enqueueTranslationJob({
   files,
   sourceLocale,
   targetLocale,
+  preserveTerms = [],
   outputExpiresAt = null,
   outputRetentionResolved = false,
 }) {
@@ -399,6 +420,7 @@ async function enqueueTranslationJob({
     files,
     sourceLocale,
     targetLocale,
+    preserveTerms,
   });
   const scope = { user: String(user), tenantId: tenantKey(tenantId) };
   const userOrder = slotOrder(config.userSlots, `${requestKey}:user`);
@@ -473,6 +495,7 @@ async function enqueueTranslationJob({
         input_files: files.map((file) => ({ ...file, output_file_id: null })),
         source_locale: sourceLocale ?? null,
         target_locale: targetLocale,
+        preserve_terms: preserveTerms,
         glossary_revision: process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION || 'none',
         user_slot: pair.userSlot,
         global_slot: pair.globalSlot,
@@ -1156,6 +1179,7 @@ async function completeTranslationJob({
           published_generation: generation,
           output_file_ids: outputFileIds,
           report,
+          protected_terms_required: false,
           finished_at: now,
           expires_at: null,
           lease_owner: null,
@@ -1255,6 +1279,7 @@ async function failTranslationJob({ job, error, now = new Date() }) {
         last_error_detail: deadlineFailure
           ? 'Translation job exceeded its maximum age'
           : safeErrorDetail(error),
+        protected_terms_required: Boolean(error?.protectedTermsRequired),
         lease_owner: null,
         lease_expires_at: null,
         execution_token: null,
@@ -1548,6 +1573,7 @@ module.exports = {
   releaseOverdueQueuedTranslationJobs,
   requestTranslationCancellation,
   retryAfterMs,
+  translationArgsForJob,
   translationConversationExists,
   upgradeActiveTranslationJobs,
 };

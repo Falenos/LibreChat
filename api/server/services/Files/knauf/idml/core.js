@@ -411,6 +411,7 @@ function extractStory(entryName, xml, storyIndex, budget) {
         entryName,
         contentIndex,
         partIndex,
+        partCount: parts.length,
         source: whitespace.text,
         prefix: whitespace.prefix,
         suffix: whitespace.suffix,
