@@ -297,6 +297,27 @@ whose Sprint 5 is literally *"Make Langfuse prove the fix"*.
 
 ---
 
+### 4.4 What is actually mandatory — and what is convention
+
+Asked directly: which of these tickets does the law *compel*? The honest frame first: **GDPR
+compels outcomes, not mechanisms.** It requires a defined retention period, erasure that
+demonstrably works, answerable DSARs, a DPIA where Art. 35 bites — it almost never requires a
+particular regex, sweep, or endpoint. "Mandatory" below therefore means: *a specific live
+obligation is currently un-met, and this ticket is the cheapest documented way to meet it.*
+
+| Class | Tickets | Basis |
+|---|---|---|
+| **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: the notice **affirmatively denies profiling** while memory performs it, names another product, and omits Langfuse and the auditLog — live processing *contrary to*, not just outside, the notice) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) |
+| **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1) · **P1-6** (identifier redaction on the trace copy via an OTel Collector — 5(1)(c)/25 defence-in-depth; the *mandatory* outcome is P0-2's retention + access)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
+| **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (link expiry; its P2-4a half was **closed by code reading** — the premise was wrong, see §2 row 4) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
+| **Optional** | **P4-1** (discretionary by design — double-gated, discharges no obligation on its own) |
+
+Two consequences worth stating: the **mandatory column is dominated by Phase 2 and the governance
+track** — not by anything with "masking" in its name; and nothing in Phase 3 is legally compelled,
+which is exactly why it sits behind an evidence gate rather than a deadline.
+
+---
+
 ### Phase 0 — containment and explicit decisions
 
 **What it is.** Stop the two live over-collections, remove identity from auth logs, and convert
