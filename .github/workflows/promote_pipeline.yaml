@@ -106,10 +106,16 @@ jobs:
           STAGE_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$APP_VALUES" | tr -d "\"'")
           STAGE_WORKER_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$WORKER_VALUES" | tr -d "\"'")
           STAGE_SCHEDULER_VERSION=$(awk '$1 == "tag:" { print $2; exit }' "$SCHEDULER_VALUES" | tr -d "\"'")
+          STAGE_APP_RELEASE=$(awk '$1 == "LANGFUSE_RELEASE:" { print $2; exit }' "$APP_VALUES" | tr -d "\"'")
+          STAGE_WORKER_RELEASE=$(awk '$1 == "LANGFUSE_RELEASE:" { print $2; exit }' "$WORKER_VALUES" | tr -d "\"'")
           VERSION="$STAGE_VERSION"
 
           if [ "$STAGE_WORKER_VERSION" != "$STAGE_VERSION" ] || [ "$STAGE_SCHEDULER_VERSION" != "$STAGE_VERSION" ]; then
             echo "::error::STAGE app ($STAGE_VERSION), worker ($STAGE_WORKER_VERSION), and scheduler ($STAGE_SCHEDULER_VERSION) tags differ"
+            exit 1
+          fi
+          if [ "$STAGE_APP_RELEASE" != "$VERSION" ] || [ "$STAGE_WORKER_RELEASE" != "$VERSION" ]; then
+            echo "::error::STAGE app ($STAGE_APP_RELEASE) and worker ($STAGE_WORKER_RELEASE) Langfuse releases must match $VERSION"
             exit 1
           fi
 
@@ -511,9 +517,11 @@ jobs:
           test -f "$PROD_WORKER_VALUES"
           test -f "$PROD_SCHEDULER_VALUES"
           sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$PROD_WORKER_VALUES"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$PROD_WORKER_VALUES"
           sed -i -E "s/tag: ['\"]v[0-9]+\\.[0-9]+\\.[0-9]+['\"]/tag: \"$VERSION\"/" "$PROD_SCHEDULER_VALUES"
           sed -i -E '0,/^  replicaCount:/{s/^  replicaCount:.*/  replicaCount: 2/}' "$PROD_SCHEDULER_VALUES"
           grep -F "tag: \"$VERSION\"" "$PROD_WORKER_VALUES"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$PROD_WORKER_VALUES"
           grep -F "tag: \"$VERSION\"" "$PROD_SCHEDULER_VALUES"
           grep -F "  replicaCount: 2" "$PROD_SCHEDULER_VALUES"
           BUMP_PATHS+=("$PROD_WORKER_VALUES" "$PROD_SCHEDULER_VALUES")

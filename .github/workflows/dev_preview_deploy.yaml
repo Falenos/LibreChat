@@ -149,7 +149,9 @@ jobs:
           WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
           if [ -f "$WORKER_VALUES" ]; then
             sed -i -E "/^[[:space:]]+tag:/s#tag:.*#tag: \"$VERSION\"#" "$WORKER_VALUES"
+            sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s#LANGFUSE_RELEASE:.*#LANGFUSE_RELEASE: \"$VERSION\"#" "$WORKER_VALUES"
             grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+            grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$WORKER_VALUES"
             CONFIG_FILES+=("$WORKER_VALUES")
           fi
 

@@ -1189,6 +1189,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `client/src/locales/{en,de}/translation.json` | KK20-297 — explains that IDML is a chat tool attachment, not permanent Agent/Project Knowledge; JSON has no comment syntax, so this row records the seam. |
 
 | `.github/workflows/publish-release-notes.yml` | KK20-250 — every Monday at 07:00 UTC (plus manual dispatch), aggregates pending bilingual user changes into generated help content and opens one reviewable release-notes PR; skips when no rows exist or another automation PR is open. |
+| `.github/workflows/{dev_preview_deploy,release_pipeline,promote_pipeline}.yaml` | KK20-330 — keeps worker `LANGFUSE_RELEASE` synchronized with its deployed image tag across preview, DEV, STAGE, and PROD updates, and blocks promotion when STAGE app/worker release attribution does not match the candidate version. |
 
 ## Net-New Files
 
