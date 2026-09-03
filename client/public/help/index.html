@@ -6,13 +6,46 @@
     <title>KARL help and release notes</title>
     <style>
       :root {
-        color-scheme: light dark;
+        color-scheme: light;
         font-family: Arial, sans-serif;
+        --page-background: #f5f7fa;
+        --surface-background: white;
+        --text-color: #172033;
+        --border-color: #dfe4eb;
+        --accent-color: #0057b8;
+        --select-border-color: #9aa5b1;
+        --support-card-background: white;
+        --support-shadow: 0 8px 24px rgb(23 32 51 / 8%);
+        --support-request-accent: #0057b8;
+        --support-request-hover: #00458f;
+        --support-request-tint: #eef6ff;
+        --support-incident-accent: #b54708;
+        --support-incident-hover: #93370d;
+        --support-incident-tint: #fff7ed;
+        --support-action-text: white;
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --page-background: #111827;
+        --surface-background: #1f2937;
+        --text-color: #e5e7eb;
+        --border-color: #374151;
+        --accent-color: #69a9ff;
+        --select-border-color: #6b7280;
+        --support-card-background: #111827;
+        --support-shadow: none;
+        --support-request-accent: #69a9ff;
+        --support-request-hover: #8bbcff;
+        --support-request-tint: #17243a;
+        --support-incident-accent: #fb923c;
+        --support-incident-hover: #fdba74;
+        --support-incident-tint: #332116;
+        --support-action-text: #111827;
       }
       body {
         margin: 0;
-        background: #f5f7fa;
-        color: #172033;
+        background: var(--page-background);
+        color: var(--text-color);
       }
       main {
         width: min(900px, calc(100% - 32px));
@@ -28,10 +61,10 @@
       }
       select {
         min-height: 40px;
-        border: 1px solid #9aa5b1;
+        border: 1px solid var(--select-border-color);
         border-radius: 8px;
-        background: white;
-        color: #172033;
+        background: var(--surface-background);
+        color: var(--text-color);
         padding: 8px 32px 8px 12px;
         font: inherit;
       }
@@ -40,8 +73,8 @@
       }
       header,
       section {
-        background: white;
-        border: 1px solid #dfe4eb;
+        background: var(--surface-background);
+        border: 1px solid var(--border-color);
         border-radius: 12px;
         padding: 24px;
         margin-bottom: 20px;
@@ -52,7 +85,7 @@
         margin-top: 0;
       }
       h1 {
-        color: #0057b8;
+        color: var(--accent-color);
       }
       nav {
         display: flex;
@@ -60,7 +93,7 @@
         gap: 16px;
       }
       a {
-        color: #0057b8;
+        color: var(--accent-color);
       }
       table {
         width: 100%;
@@ -68,7 +101,7 @@
       }
       th,
       td {
-        border-top: 1px solid #dfe4eb;
+        border-top: 1px solid var(--border-color);
         padding: 12px 8px;
         text-align: left;
         vertical-align: top;
@@ -87,24 +120,27 @@
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       }
       .support-card {
-        --support-accent: #0057b8;
-        --support-accent-hover: #00458f;
-        --support-action-text: white;
-        --support-tint: #eef6ff;
+        --support-accent: var(--support-request-accent);
+        --support-accent-hover: var(--support-request-hover);
+        --support-tint: var(--support-request-tint);
         display: flex;
         flex-direction: column;
         min-height: 100%;
-        border: 1px solid #dfe4eb;
+        border: 1px solid var(--border-color);
         border-top: 4px solid var(--support-accent);
         border-radius: 12px;
-        background: linear-gradient(180deg, var(--support-tint), white 38%);
-        box-shadow: 0 8px 24px rgb(23 32 51 / 8%);
+        background: linear-gradient(
+          180deg,
+          var(--support-tint),
+          var(--support-card-background) 38%
+        );
+        box-shadow: var(--support-shadow);
         padding: 20px;
       }
       .support-card.incident {
-        --support-accent: #b54708;
-        --support-accent-hover: #93370d;
-        --support-tint: #fff7ed;
+        --support-accent: var(--support-incident-accent);
+        --support-accent-hover: var(--support-incident-hover);
+        --support-tint: var(--support-incident-tint);
       }
       .support-eyebrow {
         margin: 0 0 8px;
@@ -157,41 +193,23 @@
         margin-top: 20px;
       }
       @media (prefers-color-scheme: dark) {
-        body {
-          background: #111827;
-          color: #e5e7eb;
-        }
-        header,
-        section {
-          background: #1f2937;
-          border-color: #374151;
-        }
-        h1,
-        a {
-          color: #69a9ff;
-        }
-        th,
-        td {
-          border-color: #374151;
-        }
-        select {
-          border-color: #6b7280;
-          background: #1f2937;
-          color: #e5e7eb;
-        }
-        .support-card {
-          --support-accent: #69a9ff;
-          --support-accent-hover: #8bbcff;
+        :root:not([data-theme]) {
+          color-scheme: dark;
+          --page-background: #111827;
+          --surface-background: #1f2937;
+          --text-color: #e5e7eb;
+          --border-color: #374151;
+          --accent-color: #69a9ff;
+          --select-border-color: #6b7280;
           --support-action-text: #111827;
-          --support-tint: #17243a;
-          background: linear-gradient(180deg, var(--support-tint), #111827 38%);
-          border-color: #374151;
-          box-shadow: none;
-        }
-        .support-card.incident {
-          --support-accent: #fb923c;
-          --support-accent-hover: #fdba74;
-          --support-tint: #332116;
+          --support-card-background: #111827;
+          --support-shadow: none;
+          --support-request-accent: #69a9ff;
+          --support-request-hover: #8bbcff;
+          --support-request-tint: #17243a;
+          --support-incident-accent: #fb923c;
+          --support-incident-hover: #fdba74;
+          --support-incident-tint: #332116;
         }
       }
     </style>
@@ -642,6 +660,11 @@
       </section>
     </main>
     <script>
+      const requestedTheme = new URLSearchParams(window.location.search).get('theme');
+      if (requestedTheme === 'light' || requestedTheme === 'dark') {
+        document.documentElement.dataset.theme = requestedTheme;
+      }
+
       const languageSelect = document.querySelector('#language-select');
       const languageLabel = document.querySelector('#language-label');
       const languagePages = document.querySelectorAll('[data-language-page]');

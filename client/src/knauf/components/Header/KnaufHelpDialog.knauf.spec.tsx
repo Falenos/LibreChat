@@ -8,6 +8,7 @@ const SERVICE_REQUEST_URL =
   'https://knauf.service-now.com/it?id=sc_cat_item&sys_id=e16cc0b8dba806dc609363cad39619e4&table=sc_cat_item&searchTerm=knauf%20digital';
 const INCIDENT_URL =
   'https://knauf.service-now.com/it?id=sc_cat_item&sys_id=3f1dd0320a0a0b99000a53f7604a2ef9';
+let mockIsDark = false;
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) =>
@@ -15,14 +16,22 @@ jest.mock('~/hooks', () => ({
 }));
 
 jest.mock('@librechat/client', () => ({
+  ThemeContext: jest.requireActual<typeof import('react')>('react').createContext({
+    theme: 'light',
+  }),
+  isDark: () => mockIsDark,
   OGDialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
     open ? <div>{children}</div> : null,
-  OGDialogContent: ({ children }: { children: ReactNode }) => <div role="dialog">{children}</div>,
+  OGDialogContent: ({ children, className }: { children: ReactNode; className?: string }) => (
+    <div role="dialog" className={className}>
+      {children}
+    </div>
+  ),
   OGDialogHeader: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   OGDialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
 
-function loadHelpPage() {
+function loadHelpPage(theme?: 'light' | 'dark') {
   const html = fs.readFileSync(path.join(__dirname, '../../../../public/help/index.html'), 'utf8');
   const frame = document.createElement('iframe');
   document.body.appendChild(frame);
@@ -34,21 +43,49 @@ function loadHelpPage() {
   frameDocument.open();
   frameDocument.write(html);
   frameDocument.close();
-  frameWindow.eval(frameDocument.querySelector('script')?.textContent ?? '');
+  const script = frameDocument.querySelector('script')?.textContent ?? '';
+  const executableScript = theme
+    ? script.replace('window.location.search', JSON.stringify(`?theme=${theme}`))
+    : script;
+  frameWindow.eval(executableScript);
   return { frameDocument, frameWindow };
 }
 
 describe('[knauf] KnaufHelpDialog — KK20-250 in-app release notes', () => {
+  beforeEach(() => {
+    mockIsDark = false;
+  });
+
   it('renders the bundled help page inside the dialog', () => {
     render(<KnaufHelpDialog open onOpenChange={jest.fn()} />);
 
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveClass('bg-surface-primary', 'text-text-primary');
     expect(screen.getByRole('heading', { name: 'KARL help & release notes' })).toBeInTheDocument();
     expect(screen.getByTitle('KARL help & release notes')).toHaveAttribute(
       'src',
-      '/help/index.html',
+      '/help/index.html?theme=light',
     );
   });
+
+  it('passes the selected dark theme to the help page', () => {
+    mockIsDark = true;
+
+    render(<KnaufHelpDialog open onOpenChange={jest.fn()} />);
+
+    expect(screen.getByTitle('KARL help & release notes')).toHaveAttribute(
+      'src',
+      '/help/index.html?theme=dark',
+    );
+  });
+
+  it.each(['light', 'dark'] as const)(
+    'applies an explicit %s theme inside the bundled help page',
+    (theme) => {
+      const { frameDocument } = loadHelpPage(theme);
+
+      expect(frameDocument.documentElement).toHaveAttribute('data-theme', theme);
+    },
+  );
 
   it('keeps English as the help-page default and allows switching to German', () => {
     const { frameDocument, frameWindow } = loadHelpPage();
