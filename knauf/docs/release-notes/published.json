@@ -3,68 +3,40 @@
     {
       "id": "2026-09-03",
       "date": {
-        "en": "September 3, 2026",
-        "de": "3. September 2026"
+        "en": "September 1–3, 2026",
+        "de": "1.–3. September 2026"
       },
       "items": [
         {
-          "id": "kk20-250-2026-08-25-1",
-          "ticket": "KK20-250",
-          "date": "2026-08-25",
-          "en": "KARL help now opens in English and lets users switch between English and German.",
-          "de": "Die KARL-Hilfe wird jetzt auf Englisch geöffnet; Nutzer können zwischen Englisch und Deutsch wechseln."
-        },
-        {
-          "id": "kk20-275-2026-08-25-2",
-          "ticket": "KK20-275",
-          "date": "2026-08-25",
-          "en": "Public artifact links open correctly for users who are not signed in.",
-          "de": "Öffentliche Artefakt-Links öffnen sich für nicht angemeldete Nutzer wieder korrekt."
-        },
-        {
-          "id": "kk20-315-2026-08-26-3",
-          "ticket": "KK20-315",
-          "date": "2026-08-26",
-          "en": "Agent conversations keep earlier uploaded files available when more files are added later.",
-          "de": "In Agent-Unterhaltungen bleiben frühere hochgeladene Dateien verfügbar, wenn später weitere Dateien hinzugefügt werden."
-        },
-        {
-          "id": "kk20-297-2026-08-28-4",
-          "ticket": "KK20-297",
-          "date": "2026-08-28",
-          "en": "Users can translate supported files and inspect or edit IDML and XML attachments with downloadable results.",
-          "de": "Nutzer können unterstützte Dateien übersetzen sowie IDML- und XML-Anhänge prüfen oder bearbeiten und die Ergebnisse herunterladen."
-        },
-        {
-          "id": "kk20-323-2026-09-01-5",
+          "id": "kk20-323-2026-09-01-1",
           "ticket": "KK20-323",
           "date": "2026-09-01",
           "en": "Search recovery remains stable after restarts instead of launching duplicate full reindexing work.",
           "de": "Die Suchwiederherstellung bleibt nach Neustarts stabil, anstatt doppelte vollständige Neuindizierungen zu starten."
         },
         {
-          "id": "kk20-323-2026-09-03-6",
+          "id": "kk20-323-2026-09-03-2",
           "ticket": "KK20-323",
           "date": "2026-09-03",
           "en": "Search recovery stops safely when legacy cleanup or continuously changing records cannot make progress.",
           "de": "Die Suchwiederherstellung wird sicher beendet, wenn die Bereinigung älterer Daten oder sich fortlaufend ändernde Einträge keinen Fortschritt erzielen."
         },
         {
-          "id": "kk20-250-2026-09-03-7",
+          "id": "kk20-250-2026-09-03-3",
           "ticket": "KK20-250",
           "date": "2026-09-03",
           "en": "Users can open KARL help and release notes inside the app without reaching a missing-page error.",
           "de": "Nutzer können die KARL-Hilfe und Versionshinweise direkt in der App öffnen, ohne auf eine Fehlerseite zu gelangen."
         },
         {
-          "id": "kk20-321-2026-09-03-8",
+          "id": "kk20-321-2026-09-03-4",
           "ticket": "KK20-321",
           "date": "2026-09-03",
           "en": "Users can open the KARL service-request form from Help and see which information to provide.",
           "de": "Nutzer können das KARL-Serviceanfrageformular über die Hilfe öffnen und sehen, welche Angaben erforderlich sind."
         },
         {
-          "id": "kk20-322-2026-09-03-9",
+          "id": "kk20-322-2026-09-03-5",
           "ticket": "KK20-322",
           "date": "2026-09-03",
           "en": "Users can open the KARL incident form from Help and see which troubleshooting details to include.",
@@ -73,53 +45,350 @@
       ]
     },
     {
+      "id": "2026-08-28",
+      "date": {
+        "en": "August 25–28, 2026",
+        "de": "25.–28. August 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-168-2026-08-25-1",
+          "ticket": "KK20-168",
+          "date": "2026-08-25",
+          "en": "KARL can generate and edit images with GPT Image 2, including quality, size, PNG or JPEG format, and background controls.",
+          "de": "KARL kann Bilder mit GPT Image 2 erstellen und bearbeiten, einschließlich Einstellungen für Qualität, Größe, PNG- oder JPEG-Format und Hintergrund."
+        },
+        {
+          "id": "kk20-250-2026-08-25-2",
+          "ticket": "KK20-250",
+          "date": "2026-08-25",
+          "en": "KARL help opens in English by default and lets users switch between English and German.",
+          "de": "Die KARL-Hilfe wird standardmäßig auf Englisch geöffnet; Nutzer können zwischen Englisch und Deutsch wechseln."
+        },
+        {
+          "id": "attachment-recovery-2026-08-25-3",
+          "ticket": null,
+          "date": "2026-08-25",
+          "en": "Missing image attachments no longer fail repeatedly; affected chats show clear guidance to upload the file again.",
+          "de": "Fehlende Bildanhänge führen nicht mehr zu wiederholten Fehlern; betroffene Chats zeigen einen klaren Hinweis zum erneuten Hochladen."
+        },
+        {
+          "id": "kk20-222-2026-08-25-4",
+          "ticket": "KK20-222",
+          "date": "2026-08-25",
+          "en": "Answers that use multiple files cite every source used instead of limiting the source list to three.",
+          "de": "Antworten, die mehrere Dateien verwenden, nennen alle verwendeten Quellen statt nur die ersten drei."
+        },
+        {
+          "id": "kk20-260-2026-08-25-5",
+          "ticket": "KK20-260",
+          "date": "2026-08-25",
+          "en": "Completed image generations and edits remain available when a redundant provider follow-up fails.",
+          "de": "Fertig erzeugte und bearbeitete Bilder bleiben verfügbar, wenn eine zusätzliche Provider-Anfrage fehlschlägt."
+        },
+        {
+          "id": "kk20-275-2026-08-25-6",
+          "ticket": "KK20-275",
+          "date": "2026-08-25",
+          "en": "Artifact owners can download original generated files, and public artifact links open correctly for users who are not signed in.",
+          "de": "Eigentümer von Artefakten können die ursprünglich erzeugten Dateien herunterladen; öffentliche Artefakt-Links funktionieren auch ohne Anmeldung."
+        },
+        {
+          "id": "kk20-282-2026-08-25-7",
+          "ticket": "KK20-282",
+          "date": "2026-08-25",
+          "en": "Custom Agent avatars refresh expired image links automatically and show a clear fallback if an image cannot load.",
+          "de": "Avatare benutzerdefinierter Agenten erneuern abgelaufene Bildlinks automatisch und zeigen bei Ladefehlern eine klare Ersatzdarstellung."
+        },
+        {
+          "id": "kk20-316-2026-08-25-8",
+          "ticket": "KK20-316",
+          "date": "2026-08-25",
+          "en": "Code Execution validates temporary files before a run, avoids dead download links, and gives actionable guidance when files have expired.",
+          "de": "Code Execution prüft temporäre Dateien vor der Ausführung, vermeidet ungültige Download-Links und gibt klare Hinweise bei abgelaufenen Dateien."
+        },
+        {
+          "id": "kk20-315-2026-08-26-9",
+          "ticket": "KK20-315",
+          "date": "2026-08-26",
+          "en": "Agent conversations keep earlier uploaded files available when more files are added later.",
+          "de": "In Agent-Unterhaltungen bleiben frühere hochgeladene Dateien verfügbar, wenn später weitere Dateien hinzugefügt werden."
+        },
+        {
+          "id": "artifact-export-2026-08-27-10",
+          "ticket": null,
+          "date": "2026-08-27",
+          "en": "Artifact PDF exports support up to 25 slides, while known page, image-height, file-size, capacity, and rate limits produce actionable messages.",
+          "de": "PDF-Exporte von Artefakten unterstützen bis zu 25 Folien; bekannte Seiten-, Bildhöhen-, Dateigrößen-, Kapazitäts- und Ratenlimits werden verständlich erklärt."
+        },
+        {
+          "id": "business-workflows-2026-08-27-11",
+          "ticket": null,
+          "date": "2026-08-27",
+          "en": "New on-demand skills help users test business ideas, challenge plans, write business cases, and prepare Jira work breakdowns.",
+          "de": "Neue bedarfsgesteuerte Skills helfen beim Prüfen von Geschäftsideen, Hinterfragen von Plänen, Erstellen von Business Cases und Vorbereiten von Jira-Arbeitspaketen."
+        },
+        {
+          "id": "kk20-297-2026-08-28-12",
+          "ticket": "KK20-297",
+          "date": "2026-08-28",
+          "en": "Users can translate supported files and inspect or edit IDML and XML attachments with downloadable results.",
+          "de": "Nutzer können unterstützte Dateien übersetzen sowie IDML- und XML-Anhänge prüfen oder bearbeiten und die Ergebnisse herunterladen."
+        }
+      ]
+    },
+    {
+      "id": "2026-08-24",
+      "date": {
+        "en": "August 15–24, 2026",
+        "de": "15.–24. August 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-285-2026-08-20-1",
+          "ticket": "KK20-285",
+          "date": "2026-08-20",
+          "en": "Code Execution became more reliable for large files and long-running jobs, with stable files across restarts, clear resource limits, and dependable cleanup.",
+          "de": "Code Execution wurde für große Dateien und länger laufende Aufgaben zuverlässiger, mit stabilen Dateien nach Neustarts, klaren Ressourcengrenzen und verlässlicher Bereinigung."
+        },
+        {
+          "id": "kk20-286-2026-08-20-2",
+          "ticket": "KK20-286",
+          "date": "2026-08-20",
+          "en": "Agent Builder permissions are restored when missing while preserving choices already made by administrators.",
+          "de": "Fehlende Agent-Builder-Berechtigungen werden wiederhergestellt, ohne bereits von Administratoren gewählte Einstellungen zu überschreiben."
+        }
+      ]
+    },
+    {
       "id": "2026-08-14",
       "date": {
-        "en": "August 4–14, 2026",
-        "de": "4.–14. August 2026"
+        "en": "August 1–14, 2026",
+        "de": "1.–14. August 2026"
       },
       "items": [
         {
           "id": "scheduled-agents",
-          "ticket": null,
-          "date": "2026-08-14",
+          "ticket": "KK20-255",
+          "date": "2026-08-12",
           "en": "Scheduled Agents: create recurring project tasks, run them immediately, and manage schedules in one place.",
           "de": "Geplante Agenten: wiederkehrende Projektaufgaben erstellen, sofort ausführen und Zeitpläne zentral verwalten."
         },
         {
           "id": "better-artifacts",
           "ticket": null,
-          "date": "2026-08-14",
+          "date": "2026-08-07",
           "en": "Better Artifacts: edit SVG graphics, recover earlier versions, and export or continue shared artifacts more reliably.",
           "de": "Bessere Artefakte: SVG-Grafiken bearbeiten, frühere Versionen wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen."
         },
         {
           "id": "project-knowledge",
-          "ticket": null,
-          "date": "2026-08-14",
+          "ticket": "KK20-248",
+          "date": "2026-08-10",
           "en": "Project Knowledge: see upload and processing status, retry failures, and keep project files synchronized.",
           "de": "Projektwissen: Upload- und Verarbeitungsstatus sehen, Fehler erneut versuchen und Projektdateien synchron halten."
         },
         {
           "id": "prompt-sharing",
           "ticket": null,
-          "date": "2026-08-14",
+          "date": "2026-08-03",
           "en": "Prompt Sharing: share prompts with permitted colleagues through the existing access controls.",
           "de": "Prompts teilen: Prompts über die vorhandenen Zugriffsrechte mit berechtigten Kolleginnen und Kollegen teilen."
         },
         {
           "id": "clearer-answers",
-          "ticket": null,
-          "date": "2026-08-14",
+          "ticket": "KK20-194",
+          "date": "2026-08-06",
           "en": "Clearer Answers: shorter direct answers for simple questions and safer retries for interrupted model output.",
           "de": "Klarere Antworten: kürzere direkte Antworten auf einfache Fragen und sicherere Wiederholungen bei unterbrochenen Modellausgaben."
         },
         {
           "id": "reliable-chats-files",
           "ticket": null,
-          "date": "2026-08-14",
+          "date": "2026-08-10",
           "en": "More reliable chats and files: fewer duplicate responses, automatic image-link recovery, and clearer upload errors.",
           "de": "Zuverlässigere Chats und Dateien: weniger doppelte Antworten, automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler."
+        },
+        {
+          "id": "kk20-257-2026-08-11-7",
+          "ticket": "KK20-257",
+          "date": "2026-08-11",
+          "en": "Code Execution lets supported Agents run code in isolated Azure sessions and return generated files to the conversation.",
+          "de": "Code Execution ermöglicht unterstützten Agenten, Code in isolierten Azure-Sitzungen auszuführen und erzeugte Dateien im Chat bereitzustellen."
+        }
+      ]
+    },
+    {
+      "id": "2026-07-31",
+      "date": {
+        "en": "July 2026",
+        "de": "Juli 2026"
+      },
+      "items": [
+        {
+          "id": "knowledge-retrieval-2026-07-01-1",
+          "ticket": "KK20-188",
+          "date": "2026-07-01",
+          "en": "Project and Agent Knowledge gained clearer file lists, duplicate-content protection, cleanup, and more reliable retrieval.",
+          "de": "Projekt- und Agentenwissen erhielt übersichtlichere Dateilisten, Schutz vor doppelten Inhalten, Bereinigung und zuverlässigere Suche."
+        },
+        {
+          "id": "kk20-195-2026-07-21-2",
+          "ticket": "KK20-195",
+          "date": "2026-07-21",
+          "en": "File Search processing became asynchronous, with visible progress, bounded retries, duplicate skipping, and reliable recovery after worker restarts.",
+          "de": "Die Verarbeitung für File Search erfolgt asynchron, mit sichtbarem Fortschritt, begrenzten Wiederholungen, Überspringen von Duplikaten und zuverlässiger Wiederherstellung nach Worker-Neustarts."
+        },
+        {
+          "id": "web-access-2026-07-16-3",
+          "ticket": "KK20-194",
+          "date": "2026-07-16",
+          "en": "KARL uses native web search and can safely open supplied links while respecting the user's locale and request context.",
+          "de": "KARL verwendet die native Websuche und kann bereitgestellte Links sicher öffnen, wobei Gebietsschema und Anfragekontext berücksichtigt werden."
+        },
+        {
+          "id": "upload-reliability-2026-07-24-4",
+          "ticket": null,
+          "date": "2026-07-24",
+          "en": "Uploads remain available when queued during streaming, retry transient or rate-limited failures, and provide clearer guidance for partial limits.",
+          "de": "Uploads bleiben erhalten, wenn sie während einer laufenden Antwort eingereiht werden, wiederholen vorübergehende oder ratenbegrenzte Fehler und erklären Teillimits verständlicher."
+        },
+        {
+          "id": "sharing-groups-2026-07-23-5",
+          "ticket": null,
+          "date": "2026-07-23",
+          "en": "Administrators can manage Agent groups, and prompt access and chat conflicts are handled more clearly.",
+          "de": "Administratoren können Agentengruppen verwalten; Prompt-Zugriffe und Chat-Konflikte werden verständlicher behandelt."
+        },
+        {
+          "id": "project-chats-2026-07-27-6",
+          "ticket": null,
+          "date": "2026-07-27",
+          "en": "Project chats persist correctly, and users can export generated code files from conversations.",
+          "de": "Projekt-Chats bleiben zuverlässig erhalten, und Nutzer können erzeugte Codedateien aus Unterhaltungen exportieren."
+        },
+        {
+          "id": "kk20-243-2026-07-31-7",
+          "ticket": "KK20-243",
+          "date": "2026-07-31",
+          "en": "Artifacts and Skills became available in KARL, including Knauf brand guidance, Mermaid recovery, SVG workflows, and safer sharing.",
+          "de": "Artefakte und Skills wurden in KARL verfügbar, einschließlich Knauf-Markenvorgaben, Mermaid-Wiederherstellung, SVG-Abläufen und sichererem Teilen."
+        },
+        {
+          "id": "context-guides-2026-07-31-8",
+          "ticket": null,
+          "date": "2026-07-31",
+          "en": "KARL gained a larger 256k context window, public usage guides, and default skills for common tasks.",
+          "de": "KARL erhielt ein größeres Kontextfenster mit 256.000 Tokens, öffentliche Nutzungshilfen und Standard-Skills für häufige Aufgaben."
+        }
+      ]
+    },
+    {
+      "id": "2026-06-30",
+      "date": {
+        "en": "June 2026",
+        "de": "Juni 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-123-2026-06-02-1",
+          "ticket": "KK20-123",
+          "date": "2026-06-02",
+          "en": "Users can upload files before saving a new Agent, and the default KARL chat accepts supported documents and images.",
+          "de": "Nutzer können Dateien hochladen, bevor ein neuer Agent gespeichert wird; der standardmäßige KARL-Chat akzeptiert unterstützte Dokumente und Bilder."
+        },
+        {
+          "id": "kk20-159-2026-06-02-2",
+          "ticket": "KK20-159",
+          "date": "2026-06-02",
+          "en": "KARL received Knauf branding, a dedicated top header, clearer onboarding, and a consolidated user menu.",
+          "de": "KARL erhielt das Knauf-Branding, eine eigene Kopfzeile, verständlichere Einstiegshinweise und ein gebündeltes Benutzermenü."
+        },
+        {
+          "id": "kk20-175-2026-06-08-3",
+          "ticket": "KK20-175",
+          "date": "2026-06-08",
+          "en": "The standard KARL chat gained default internet search, together with Knauf-branded login and browser metadata.",
+          "de": "Der Standard-KARL-Chat erhielt eine standardmäßig aktivierte Internetsuche sowie Knauf-Branding für Anmeldung und Browser-Metadaten."
+        },
+        {
+          "id": "agreements-2026-06-09-4",
+          "ticket": null,
+          "date": "2026-06-09",
+          "en": "KARL added public privacy and user-agreement pages and applies consent before optional analytics.",
+          "de": "KARL erhielt öffentliche Datenschutz- und Nutzungsbedingungen und aktiviert optionale Analysen erst nach Zustimmung."
+        },
+        {
+          "id": "kk20-179-2026-06-12-5",
+          "ticket": "KK20-179",
+          "date": "2026-06-12",
+          "en": "Agent Builders gained a richer prompt-writing experience with templates, formatted preview, AI-assisted merging, and an expanded editor.",
+          "de": "Nutzer des Agent Builders erhielten eine verbesserte Prompt-Erstellung mit Vorlagen, formatierter Vorschau, KI-gestütztem Zusammenführen und erweitertem Editor."
+        },
+        {
+          "id": "agent-builder-role-2026-06-11-6",
+          "ticket": null,
+          "date": "2026-06-11",
+          "en": "AI Champions can use a dedicated Agent Builder role to create and share Agents without receiving full administrator access.",
+          "de": "AI Champions können mit einer eigenen Agent-Builder-Rolle Agenten erstellen und teilen, ohne vollständigen Administratorzugriff zu erhalten."
+        },
+        {
+          "id": "kk20-190-2026-06-21-7",
+          "ticket": "KK20-190",
+          "date": "2026-06-21",
+          "en": "Chat uploads route supported documents to File Search and images to vision, with clearer format, size, and batch limits.",
+          "de": "Chat-Uploads leiten unterstützte Dokumente an File Search und Bilder an die Bildverarbeitung weiter, mit klareren Format-, Größen- und Mengenlimits."
+        },
+        {
+          "id": "kk20-194-2026-06-25-8",
+          "ticket": "KK20-194",
+          "date": "2026-06-25",
+          "en": "KARL can open and use information from links supplied by the user through a bounded, security-checked tool.",
+          "de": "KARL kann Informationen aus vom Nutzer bereitgestellten Links über ein begrenztes und sicherheitsgeprüftes Werkzeug öffnen und verwenden."
+        }
+      ]
+    },
+    {
+      "id": "2026-05-31",
+      "date": {
+        "en": "May 2026",
+        "de": "Mai 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-124-2026-05-19-1",
+          "ticket": "KK20-124",
+          "date": "2026-05-19",
+          "en": "The Agent Marketplace moved into the main sidebar for faster, more discoverable access.",
+          "de": "Der Agent Marketplace wurde für einen schnelleren und leichter auffindbaren Zugriff in die Hauptseitenleiste verschoben."
+        },
+        {
+          "id": "kk20-125-2026-05-20-2",
+          "ticket": "KK20-125",
+          "date": "2026-05-20",
+          "en": "Administrators can switch between the detailed Agent Builder and the simplified view used by regular users.",
+          "de": "Administratoren können zwischen dem detaillierten Agent Builder und der vereinfachten Ansicht für reguläre Nutzer wechseln."
+        },
+        {
+          "id": "kk20-128-2026-05-21-3",
+          "ticket": "KK20-128",
+          "date": "2026-05-21",
+          "en": "Agents gained Fast Mode, optional reasoning-step display, and a simpler agent-first selector and tools experience.",
+          "de": "Agenten erhielten einen Schnellmodus, eine optionale Anzeige von Denkschritten sowie eine einfachere agentenzentrierte Auswahl und Werkzeugbedienung."
+        },
+        {
+          "id": "kk20-167-2026-05-26-4",
+          "ticket": "KK20-167",
+          "date": "2026-05-26",
+          "en": "Private files moved to Azure Blob Storage with expiring signed links and automatic link refresh.",
+          "de": "Private Dateien wurden in Azure Blob Storage mit ablaufenden signierten Links und automatischer Link-Erneuerung verlagert."
+        },
+        {
+          "id": "kk20-168-2026-05-28-5",
+          "ticket": "KK20-168",
+          "date": "2026-05-28",
+          "en": "Persistent-Agent chats can enable image generation per conversation from a dedicated composer control.",
+          "de": "Chats mit persistenten Agenten können die Bilderstellung pro Unterhaltung über ein eigenes Eingabeelement aktivieren."
         }
       ]
     }

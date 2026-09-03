@@ -339,12 +339,8 @@
         <p>Available user-facing release notes appear here, with the newest entry first.</p>
         <!-- release-notes:en:begin -->
         <article class="release-group">
-          <h3>September 3, 2026</h3>
+          <h3>September 1–3, 2026</h3>
           <ul>
-            <li>KARL help now opens in English and lets users switch between English and German.</li>
-            <li>Public artifact links open correctly for users who are not signed in.</li>
-            <li>Agent conversations keep earlier uploaded files available when more files are added later.</li>
-            <li>Users can translate supported files and inspect or edit IDML and XML attachments with downloadable results.</li>
             <li>Search recovery remains stable after restarts instead of launching duplicate full reindexing work.</li>
             <li>Search recovery stops safely when legacy cleanup or continuously changing records cannot make progress.</li>
             <li>Users can open KARL help and release notes inside the app without reaching a missing-page error.</li>
@@ -353,7 +349,31 @@
           </ul>
         </article>
         <article class="release-group">
-          <h3>August 4–14, 2026</h3>
+          <h3>August 25–28, 2026</h3>
+          <ul>
+            <li>KARL can generate and edit images with GPT Image 2, including quality, size, PNG or JPEG format, and background controls.</li>
+            <li>KARL help opens in English by default and lets users switch between English and German.</li>
+            <li>Missing image attachments no longer fail repeatedly; affected chats show clear guidance to upload the file again.</li>
+            <li>Answers that use multiple files cite every source used instead of limiting the source list to three.</li>
+            <li>Completed image generations and edits remain available when a redundant provider follow-up fails.</li>
+            <li>Artifact owners can download original generated files, and public artifact links open correctly for users who are not signed in.</li>
+            <li>Custom Agent avatars refresh expired image links automatically and show a clear fallback if an image cannot load.</li>
+            <li>Code Execution validates temporary files before a run, avoids dead download links, and gives actionable guidance when files have expired.</li>
+            <li>Agent conversations keep earlier uploaded files available when more files are added later.</li>
+            <li>Artifact PDF exports support up to 25 slides, while known page, image-height, file-size, capacity, and rate limits produce actionable messages.</li>
+            <li>New on-demand skills help users test business ideas, challenge plans, write business cases, and prepare Jira work breakdowns.</li>
+            <li>Users can translate supported files and inspect or edit IDML and XML attachments with downloadable results.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>August 15–24, 2026</h3>
+          <ul>
+            <li>Code Execution became more reliable for large files and long-running jobs, with stable files across restarts, clear resource limits, and dependable cleanup.</li>
+            <li>Agent Builder permissions are restored when missing while preserving choices already made by administrators.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>August 1–14, 2026</h3>
           <ul>
             <li>Scheduled Agents: create recurring project tasks, run them immediately, and manage schedules in one place.</li>
             <li>Better Artifacts: edit SVG graphics, recover earlier versions, and export or continue shared artifacts more reliably.</li>
@@ -361,6 +381,43 @@
             <li>Prompt Sharing: share prompts with permitted colleagues through the existing access controls.</li>
             <li>Clearer Answers: shorter direct answers for simple questions and safer retries for interrupted model output.</li>
             <li>More reliable chats and files: fewer duplicate responses, automatic image-link recovery, and clearer upload errors.</li>
+            <li>Code Execution lets supported Agents run code in isolated Azure sessions and return generated files to the conversation.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>July 2026</h3>
+          <ul>
+            <li>Project and Agent Knowledge gained clearer file lists, duplicate-content protection, cleanup, and more reliable retrieval.</li>
+            <li>File Search processing became asynchronous, with visible progress, bounded retries, duplicate skipping, and reliable recovery after worker restarts.</li>
+            <li>KARL uses native web search and can safely open supplied links while respecting the user&#39;s locale and request context.</li>
+            <li>Uploads remain available when queued during streaming, retry transient or rate-limited failures, and provide clearer guidance for partial limits.</li>
+            <li>Administrators can manage Agent groups, and prompt access and chat conflicts are handled more clearly.</li>
+            <li>Project chats persist correctly, and users can export generated code files from conversations.</li>
+            <li>Artifacts and Skills became available in KARL, including Knauf brand guidance, Mermaid recovery, SVG workflows, and safer sharing.</li>
+            <li>KARL gained a larger 256k context window, public usage guides, and default skills for common tasks.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>June 2026</h3>
+          <ul>
+            <li>Users can upload files before saving a new Agent, and the default KARL chat accepts supported documents and images.</li>
+            <li>KARL received Knauf branding, a dedicated top header, clearer onboarding, and a consolidated user menu.</li>
+            <li>The standard KARL chat gained default internet search, together with Knauf-branded login and browser metadata.</li>
+            <li>KARL added public privacy and user-agreement pages and applies consent before optional analytics.</li>
+            <li>Agent Builders gained a richer prompt-writing experience with templates, formatted preview, AI-assisted merging, and an expanded editor.</li>
+            <li>AI Champions can use a dedicated Agent Builder role to create and share Agents without receiving full administrator access.</li>
+            <li>Chat uploads route supported documents to File Search and images to vision, with clearer format, size, and batch limits.</li>
+            <li>KARL can open and use information from links supplied by the user through a bounded, security-checked tool.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>May 2026</h3>
+          <ul>
+            <li>The Agent Marketplace moved into the main sidebar for faster, more discoverable access.</li>
+            <li>Administrators can switch between the detailed Agent Builder and the simplified view used by regular users.</li>
+            <li>Agents gained Fast Mode, optional reasoning-step display, and a simpler agent-first selector and tools experience.</li>
+            <li>Private files moved to Azure Blob Storage with expiring signed links and automatic link refresh.</li>
+            <li>Persistent-Agent chats can enable image generation per conversation from a dedicated composer control.</li>
           </ul>
         </article>
         <!-- release-notes:en:end -->
@@ -500,12 +557,8 @@
         <p>Verfügbare nutzerbezogene Versionshinweise stehen hier, neueste zuerst.</p>
         <!-- release-notes:de:begin -->
         <article class="release-group">
-          <h3>3. September 2026</h3>
+          <h3>1.–3. September 2026</h3>
           <ul>
-            <li>Die KARL-Hilfe wird jetzt auf Englisch geöffnet; Nutzer können zwischen Englisch und Deutsch wechseln.</li>
-            <li>Öffentliche Artefakt-Links öffnen sich für nicht angemeldete Nutzer wieder korrekt.</li>
-            <li>In Agent-Unterhaltungen bleiben frühere hochgeladene Dateien verfügbar, wenn später weitere Dateien hinzugefügt werden.</li>
-            <li>Nutzer können unterstützte Dateien übersetzen sowie IDML- und XML-Anhänge prüfen oder bearbeiten und die Ergebnisse herunterladen.</li>
             <li>Die Suchwiederherstellung bleibt nach Neustarts stabil, anstatt doppelte vollständige Neuindizierungen zu starten.</li>
             <li>Die Suchwiederherstellung wird sicher beendet, wenn die Bereinigung älterer Daten oder sich fortlaufend ändernde Einträge keinen Fortschritt erzielen.</li>
             <li>Nutzer können die KARL-Hilfe und Versionshinweise direkt in der App öffnen, ohne auf eine Fehlerseite zu gelangen.</li>
@@ -514,7 +567,31 @@
           </ul>
         </article>
         <article class="release-group">
-          <h3>4.–14. August 2026</h3>
+          <h3>25.–28. August 2026</h3>
+          <ul>
+            <li>KARL kann Bilder mit GPT Image 2 erstellen und bearbeiten, einschließlich Einstellungen für Qualität, Größe, PNG- oder JPEG-Format und Hintergrund.</li>
+            <li>Die KARL-Hilfe wird standardmäßig auf Englisch geöffnet; Nutzer können zwischen Englisch und Deutsch wechseln.</li>
+            <li>Fehlende Bildanhänge führen nicht mehr zu wiederholten Fehlern; betroffene Chats zeigen einen klaren Hinweis zum erneuten Hochladen.</li>
+            <li>Antworten, die mehrere Dateien verwenden, nennen alle verwendeten Quellen statt nur die ersten drei.</li>
+            <li>Fertig erzeugte und bearbeitete Bilder bleiben verfügbar, wenn eine zusätzliche Provider-Anfrage fehlschlägt.</li>
+            <li>Eigentümer von Artefakten können die ursprünglich erzeugten Dateien herunterladen; öffentliche Artefakt-Links funktionieren auch ohne Anmeldung.</li>
+            <li>Avatare benutzerdefinierter Agenten erneuern abgelaufene Bildlinks automatisch und zeigen bei Ladefehlern eine klare Ersatzdarstellung.</li>
+            <li>Code Execution prüft temporäre Dateien vor der Ausführung, vermeidet ungültige Download-Links und gibt klare Hinweise bei abgelaufenen Dateien.</li>
+            <li>In Agent-Unterhaltungen bleiben frühere hochgeladene Dateien verfügbar, wenn später weitere Dateien hinzugefügt werden.</li>
+            <li>PDF-Exporte von Artefakten unterstützen bis zu 25 Folien; bekannte Seiten-, Bildhöhen-, Dateigrößen-, Kapazitäts- und Ratenlimits werden verständlich erklärt.</li>
+            <li>Neue bedarfsgesteuerte Skills helfen beim Prüfen von Geschäftsideen, Hinterfragen von Plänen, Erstellen von Business Cases und Vorbereiten von Jira-Arbeitspaketen.</li>
+            <li>Nutzer können unterstützte Dateien übersetzen sowie IDML- und XML-Anhänge prüfen oder bearbeiten und die Ergebnisse herunterladen.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>15.–24. August 2026</h3>
+          <ul>
+            <li>Code Execution wurde für große Dateien und länger laufende Aufgaben zuverlässiger, mit stabilen Dateien nach Neustarts, klaren Ressourcengrenzen und verlässlicher Bereinigung.</li>
+            <li>Fehlende Agent-Builder-Berechtigungen werden wiederhergestellt, ohne bereits von Administratoren gewählte Einstellungen zu überschreiben.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>1.–14. August 2026</h3>
           <ul>
             <li>Geplante Agenten: wiederkehrende Projektaufgaben erstellen, sofort ausführen und Zeitpläne zentral verwalten.</li>
             <li>Bessere Artefakte: SVG-Grafiken bearbeiten, frühere Versionen wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen.</li>
@@ -522,6 +599,43 @@
             <li>Prompts teilen: Prompts über die vorhandenen Zugriffsrechte mit berechtigten Kolleginnen und Kollegen teilen.</li>
             <li>Klarere Antworten: kürzere direkte Antworten auf einfache Fragen und sicherere Wiederholungen bei unterbrochenen Modellausgaben.</li>
             <li>Zuverlässigere Chats und Dateien: weniger doppelte Antworten, automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler.</li>
+            <li>Code Execution ermöglicht unterstützten Agenten, Code in isolierten Azure-Sitzungen auszuführen und erzeugte Dateien im Chat bereitzustellen.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>Juli 2026</h3>
+          <ul>
+            <li>Projekt- und Agentenwissen erhielt übersichtlichere Dateilisten, Schutz vor doppelten Inhalten, Bereinigung und zuverlässigere Suche.</li>
+            <li>Die Verarbeitung für File Search erfolgt asynchron, mit sichtbarem Fortschritt, begrenzten Wiederholungen, Überspringen von Duplikaten und zuverlässiger Wiederherstellung nach Worker-Neustarts.</li>
+            <li>KARL verwendet die native Websuche und kann bereitgestellte Links sicher öffnen, wobei Gebietsschema und Anfragekontext berücksichtigt werden.</li>
+            <li>Uploads bleiben erhalten, wenn sie während einer laufenden Antwort eingereiht werden, wiederholen vorübergehende oder ratenbegrenzte Fehler und erklären Teillimits verständlicher.</li>
+            <li>Administratoren können Agentengruppen verwalten; Prompt-Zugriffe und Chat-Konflikte werden verständlicher behandelt.</li>
+            <li>Projekt-Chats bleiben zuverlässig erhalten, und Nutzer können erzeugte Codedateien aus Unterhaltungen exportieren.</li>
+            <li>Artefakte und Skills wurden in KARL verfügbar, einschließlich Knauf-Markenvorgaben, Mermaid-Wiederherstellung, SVG-Abläufen und sichererem Teilen.</li>
+            <li>KARL erhielt ein größeres Kontextfenster mit 256.000 Tokens, öffentliche Nutzungshilfen und Standard-Skills für häufige Aufgaben.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>Juni 2026</h3>
+          <ul>
+            <li>Nutzer können Dateien hochladen, bevor ein neuer Agent gespeichert wird; der standardmäßige KARL-Chat akzeptiert unterstützte Dokumente und Bilder.</li>
+            <li>KARL erhielt das Knauf-Branding, eine eigene Kopfzeile, verständlichere Einstiegshinweise und ein gebündeltes Benutzermenü.</li>
+            <li>Der Standard-KARL-Chat erhielt eine standardmäßig aktivierte Internetsuche sowie Knauf-Branding für Anmeldung und Browser-Metadaten.</li>
+            <li>KARL erhielt öffentliche Datenschutz- und Nutzungsbedingungen und aktiviert optionale Analysen erst nach Zustimmung.</li>
+            <li>Nutzer des Agent Builders erhielten eine verbesserte Prompt-Erstellung mit Vorlagen, formatierter Vorschau, KI-gestütztem Zusammenführen und erweitertem Editor.</li>
+            <li>AI Champions können mit einer eigenen Agent-Builder-Rolle Agenten erstellen und teilen, ohne vollständigen Administratorzugriff zu erhalten.</li>
+            <li>Chat-Uploads leiten unterstützte Dokumente an File Search und Bilder an die Bildverarbeitung weiter, mit klareren Format-, Größen- und Mengenlimits.</li>
+            <li>KARL kann Informationen aus vom Nutzer bereitgestellten Links über ein begrenztes und sicherheitsgeprüftes Werkzeug öffnen und verwenden.</li>
+          </ul>
+        </article>
+        <article class="release-group">
+          <h3>Mai 2026</h3>
+          <ul>
+            <li>Der Agent Marketplace wurde für einen schnelleren und leichter auffindbaren Zugriff in die Hauptseitenleiste verschoben.</li>
+            <li>Administratoren können zwischen dem detaillierten Agent Builder und der vereinfachten Ansicht für reguläre Nutzer wechseln.</li>
+            <li>Agenten erhielten einen Schnellmodus, eine optionale Anzeige von Denkschritten sowie eine einfachere agentenzentrierte Auswahl und Werkzeugbedienung.</li>
+            <li>Private Dateien wurden in Azure Blob Storage mit ablaufenden signierten Links und automatischer Link-Erneuerung verlagert.</li>
+            <li>Chats mit persistenten Agenten können die Bilderstellung pro Unterhaltung über ein eigenes Eingabeelement aktivieren.</li>
           </ul>
         </article>
         <!-- release-notes:de:end -->
