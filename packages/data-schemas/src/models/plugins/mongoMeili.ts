@@ -92,6 +92,9 @@ const getSyncConfig = () => ({
   batchSize: parseInt(process.env.MEILI_SYNC_BATCH_SIZE || '100', 10),
   delayMs: parseInt(process.env.MEILI_SYNC_DELAY_MS || '100', 10),
 });
+// [knauf] Bound retries for snapshots changed while a reconciliation batch is in flight.
+const MAX_SYNC_RETRY_PASSES = 10;
+// End [knauf]
 
 const hasSchemaPath = (schema: Schema, path: string): boolean =>
   Object.prototype.hasOwnProperty.call(schema.obj, path);
@@ -265,10 +268,13 @@ const createMeiliMongooseModel = ({
         throw error;
       }
 
+      // [knauf] Pace every retry pass and fail if continuously changing documents never converge.
       let processedCount = 0;
-      let hasMore = true;
+      let batchPasses = 0;
+      const maxBatchPasses = Math.ceil(approxTotalCount / batchSize) + MAX_SYNC_RETRY_PASSES;
+      // End [knauf]
 
-      while (hasMore) {
+      while (true) {
         const indexableQuery = getIndexableQuery();
         const query: FilterQuery<unknown> = {
           ...indexableQuery,
@@ -289,19 +295,25 @@ const createMeiliMongooseModel = ({
             break;
           }
 
+          // [knauf] Release the renewable lease through an explicit failure instead of hot-looping.
+          if (batchPasses >= maxBatchPasses) {
+            throw new Error(
+              `[syncWithMeili] Reconciliation did not converge after ${maxBatchPasses} batches`,
+            );
+          }
+          batchPasses += 1;
+          // End [knauf]
+
           // Process the batch
           await this.processSyncBatch(index, documents);
           processedCount += documents.length;
           logger.info(`[syncWithMeili] Processed: ${processedCount}`);
 
-          if (documents.length < batchSize) {
-            hasMore = false;
-          }
-
-          // Add delay to prevent overwhelming resources
-          if (hasMore && delayMs > 0) {
+          // [knauf] Delay before every subsequent query, including retries of a short final batch.
+          if (delayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
+          // End [knauf]
         } catch (error) {
           logger.error('[syncWithMeili] Error processing documents batch:', error);
           throw error;

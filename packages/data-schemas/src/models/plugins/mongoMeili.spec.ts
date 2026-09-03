@@ -16,7 +16,12 @@ interface DynamicMeiliDocument extends mongoose.Document {
 
 type DynamicMeiliModel = mongoose.Model<DynamicMeiliDocument> & SchemaWithMeiliMethods;
 
-const createDynamicMeiliModel = (modelName: string): DynamicMeiliModel => {
+// [knauf] Let reconciliation tests configure batch sizing and retry pacing.
+const createDynamicMeiliModel = (
+  modelName: string,
+  syncOptions: { syncBatchSize?: number; syncDelayMs?: number } = {},
+): DynamicMeiliModel => {
+  // End [knauf]
   const schema = new mongoose.Schema<DynamicMeiliDocument>({
     docId: {
       type: String,
@@ -46,6 +51,9 @@ const createDynamicMeiliModel = (modelName: string): DynamicMeiliModel => {
     apiKey: 'bar',
     indexName: modelName.toLowerCase(),
     primaryKey: 'docId',
+    // [knauf] Exercise the production retry budget with deterministic test limits.
+    ...syncOptions,
+    // End [knauf]
   });
 
   return mongoose.model<DynamicMeiliDocument>(modelName, schema) as unknown as DynamicMeiliModel;
@@ -719,7 +727,7 @@ describe('Meilisearch Mongoose plugin', () => {
       });
     });
 
-    // [knauf] Mongo flags must remain false while Meilisearch still processes the batch.
+    // [knauf] Fence task snapshots, requeue concurrent changes, and bound unstable retries.
     test('does not mark Mongo documents indexed before the Meilisearch task succeeds', async () => {
       const conversationModel = createConversationModel(
         mongoose,
@@ -753,7 +761,7 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(await conversationModel.countDocuments({ _meiliIndex: true })).toBe(1);
     });
 
-    test('does not acknowledge a Mongo document changed while its task was running', async () => {
+    test('requeues a Mongo document changed while its task was running', async () => {
       const conversationModel = createConversationModel(
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
@@ -794,7 +802,53 @@ describe('Meilisearch Mongoose plugin', () => {
       finishTask?.({ status: 'succeeded' });
       await syncing;
 
-      expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(0);
+      expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(2);
+      expect(mockAddDocumentsInBatches).toHaveBeenLastCalledWith(
+        [expect.objectContaining({ title: 'Newer snapshot' })],
+        undefined,
+        { primaryKey: 'conversationId' },
+      );
+      expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(1);
+    });
+
+    test('bounds repeated retry passes when a document never stabilizes', async () => {
+      const modelName = `UnstableSync${Date.now()}`;
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      let updateVersion = 0;
+      try {
+        await Model.collection.insertOne({
+          docId: 'unstable-document',
+          user: 'user',
+          title: 'Initial title',
+          isTemporary: false,
+          expiredAt: null,
+          _meiliIndex: false,
+          updatedAt: new Date(0),
+        });
+        mockWaitForTask.mockImplementation(async () => {
+          updateVersion += 1;
+          await Model.collection.updateOne(
+            { docId: 'unstable-document' },
+            {
+              $set: {
+                title: `Updated ${updateVersion}`,
+                updatedAt: new Date(updateVersion),
+              },
+            },
+          );
+          return { status: 'succeeded' };
+        });
+
+        await expect(Model.syncWithMeili()).rejects.toThrow(
+          '[syncWithMeili] Reconciliation did not converge after 11 batches',
+        );
+        expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(11);
+      } finally {
+        mongoose.deleteModel(modelName);
+      }
     });
     // End [knauf]
 

@@ -77,12 +77,16 @@ async function getIndexDocumentCount(index) {
  * Deletes documents from MeiliSearch index that are missing the user field
  * @param {import('meilisearch').Index} index - MeiliSearch index instance
  * @param {string} indexName - Name of the index for logging
+ * @param {string} primaryKey - Primary key configured for the index
  * @returns {Promise<number>} - Number of documents deleted
  */
-async function deleteDocumentsWithoutUserField(index, indexName) {
+// [knauf] Use each index's real primary key and detect cleanup pages that cannot advance.
+async function deleteDocumentsWithoutUserField(index, indexName, primaryKey) {
   let deletedCount = 0;
   let offset = 0;
+  let previousPageSignature;
   const batchSize = 1000;
+  // End [knauf]
 
   try {
     while (true) {
@@ -95,7 +99,20 @@ async function deleteDocumentsWithoutUserField(index, indexName) {
         break;
       }
 
-      const idsToDelete = searchResult.hits.filter((hit) => !hit.user).map((hit) => hit.id);
+      // [knauf] Fail retryably instead of renewing the operation lease around a stalled page.
+      const orphanedHits = searchResult.hits.filter((hit) => !hit.user);
+      if (orphanedHits.some((hit) => hit[primaryKey] == null)) {
+        throw new Error(`[indexSync] Cannot clean ${indexName} document without ${primaryKey}`);
+      }
+      const pageSignature = `${offset}:${searchResult.hits
+        .map((hit) => String(hit[primaryKey]))
+        .join(',')}`;
+      if (pageSignature === previousPageSignature) {
+        throw new Error(`[indexSync] ${indexName} cleanup made no progress`);
+      }
+      previousPageSignature = pageSignature;
+      const idsToDelete = orphanedHits.map((hit) => hit[primaryKey]);
+      // End [knauf]
 
       if (idsToDelete.length > 0) {
         logger.info(
@@ -220,7 +237,9 @@ async function ensureFilterableAttributes(client) {
     if (hasOrphanedDocs) {
       try {
         const messagesIndex = client.index('messages');
-        await deleteDocumentsWithoutUserField(messagesIndex, 'messages');
+        // [knauf] Meilisearch message documents are keyed by messageId, not a generic id.
+        await deleteDocumentsWithoutUserField(messagesIndex, 'messages', 'messageId');
+        // End [knauf]
       } catch (error) {
         // [knauf] Tolerate only an index that disappeared; propagate real cleanup failures.
         if (error.code === 'index_not_found') {
@@ -233,7 +252,9 @@ async function ensureFilterableAttributes(client) {
 
       try {
         const convosIndex = client.index('convos');
-        await deleteDocumentsWithoutUserField(convosIndex, 'convos');
+        // [knauf] Meilisearch conversation documents are keyed by conversationId.
+        await deleteDocumentsWithoutUserField(convosIndex, 'convos', 'conversationId');
+        // End [knauf]
       } catch (error) {
         // [knauf] Tolerate only an index that disappeared; propagate real cleanup failures.
         if (error.code === 'index_not_found') {
