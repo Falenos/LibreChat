@@ -47,6 +47,7 @@ const {
   getTranslationJobConfig,
   getTranslationJobModel,
   prepareTranslationStorageLocator,
+  translationArgsForJob,
 } = require('~/server/services/Files/knauf/translation/jobs');
 const {
   createTranslationOutputCleanup,
@@ -87,6 +88,7 @@ const translationFailure = (report) => {
     statusByCode[failure.code] ?? 422,
   );
   error.retryAfter = failure.retryAfter;
+  error.protectedTermsRequired = Boolean(failure.protectedTermsRequired);
   return error;
 };
 
@@ -295,10 +297,7 @@ const main = async () => {
         execute: async (job, signal) => {
           const result = await translateFiles({
             req: buildTranslationRequest(job, appConfig),
-            args: {
-              source_locale: job.source_locale ?? undefined,
-              target_locale: job.target_locale,
-            },
+            args: translationArgsForJob(job),
             signal,
             expectedGlossaryRevision: job.glossary_revision,
           });

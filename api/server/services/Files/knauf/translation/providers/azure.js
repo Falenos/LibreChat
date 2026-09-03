@@ -23,6 +23,7 @@ const AZURE_SYNC_OUTPUT_MAX_BYTES = 50 * 1024 * 1024;
 const AZURE_BATCH_TIMEOUT_MS = 10 * 60 * 1000;
 const AZURE_CANCEL_TIMEOUT_MS = 30 * 1000;
 const GLOSSARY_SOURCE_MAX_BYTES = 20 * 1024 * 1024;
+const MAX_REPORTED_PRESERVED_TERMS = 10;
 const LANGUAGE_2_TO_3 = {
   ar: 'ara',
   az: 'aze',
@@ -317,9 +318,53 @@ async function readGlossaryTable(glossaryRef) {
   return glossaryTableCache;
 }
 
-function termPattern(term) {
+function termPattern(term, flags = 'iu') {
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, flags);
+}
+
+function documentSurfaceForms(documentText, term) {
+  return Array.from(
+    new Set(Array.from(documentText.matchAll(termPattern(term, 'giu')), (match) => match[0])),
+  );
+}
+
+function adjacentIdmlSegments(previous, current) {
+  if (
+    !previous?.entryName ||
+    previous.entryName !== current?.entryName ||
+    !Number.isInteger(previous.contentIndex) ||
+    !Number.isInteger(current.contentIndex) ||
+    !Number.isInteger(previous.partIndex) ||
+    !Number.isInteger(current.partIndex)
+  ) {
+    return false;
+  }
+  if (previous.contentIndex === current.contentIndex) {
+    return current.partIndex === previous.partIndex + 1;
+  }
+  return (
+    current.contentIndex === previous.contentIndex + 1 &&
+    Number.isInteger(previous.partCount) &&
+    previous.partIndex === previous.partCount - 1 &&
+    current.partIndex === 0
+  );
+}
+
+function protectedTermSpansIdmlSegments(term, segments) {
+  const pattern = termPattern(term, 'u');
+  let previous;
+  let window = '';
+  for (const segment of segments) {
+    const visibleText = `${segment.prefix ?? ''}${segment.source}${segment.suffix ?? ''}`;
+    window = adjacentIdmlSegments(previous, segment) ? `${window}${visibleText}` : visibleText;
+    if (pattern.test(window)) {
+      return true;
+    }
+    window = window.slice(-(term.length + 2));
+    previous = segment;
+  }
+  return false;
 }
 
 async function resolveGlossary({
@@ -344,7 +389,6 @@ async function resolveGlossary({
   }
 
   const documentText = segments.map((segment) => segment.source).join('\n');
-  const foldedDocumentText = documentText.normalize('NFKC').toLocaleLowerCase('en-US');
   const terms = new Map();
   let malformedRows = 0;
   let emptyTargets = 0;
@@ -356,12 +400,13 @@ async function resolveGlossary({
     }
     const source = String(row[sourceIndex] ?? '').trim();
     const target = String(row[targetIndex] ?? '').trim();
-    const key = source.normalize('NFKC').toLocaleLowerCase('en-US');
-    if (
-      !source ||
-      (filterToDocument &&
-        (!foldedDocumentText.includes(key) || !termPattern(source).test(documentText)))
-    ) {
+    if (!source) {
+      continue;
+    }
+    // Azure applies glossary terms within sentences case-sensitively, so emit
+    // the exact source surfaces found in locally inspectable documents.
+    const surfaceForms = filterToDocument ? documentSurfaceForms(documentText, source) : [source];
+    if (surfaceForms.length === 0) {
       continue;
     }
     if (!target) {
@@ -372,12 +417,19 @@ async function resolveGlossary({
       nonLinguisticIdentity += 1;
       continue;
     }
-    const current = terms.get(key) ?? { source, targets: new Set(), categories: new Set() };
-    current.targets.add(target);
-    if (row[1]) {
-      current.categories.add(String(row[1]));
+    for (const surface of surfaceForms) {
+      const key = surface.normalize('NFC');
+      const current = terms.get(key) ?? {
+        source: surface,
+        targets: new Set(),
+        categories: new Set(),
+      };
+      current.targets.add(source === target ? surface : target);
+      if (row[1]) {
+        current.categories.add(String(row[1]));
+      }
+      terms.set(key, current);
     }
-    terms.set(key, current);
   }
 
   const entries = [];
@@ -422,6 +474,110 @@ async function resolveGlossary({
       truncated,
       bytes,
       filteredToDocument: filterToDocument,
+    },
+  };
+}
+
+function mergePreservedTerms(
+  glossary,
+  preserveTerms,
+  segments,
+  { filterToDocument = true, maxBytes = AZURE_SYNC_GLOSSARY_MAX_BYTES } = {},
+) {
+  if (!preserveTerms.length) {
+    return glossary;
+  }
+  const documentText = segments.map((segment) => segment.source).join('\n');
+  const indexedGlossary = glossary.entries.map((entry) => ({
+    entry,
+    key: entry.source.normalize('NFC'),
+  }));
+  const managedBySource = new Map();
+  for (const indexed of indexedGlossary) {
+    const group = managedBySource.get(indexed.key) ?? [];
+    group.push(indexed.entry);
+    managedBySource.set(indexed.key, group);
+  }
+  const preservedEntries = new Map();
+  const protectedKeys = new Set();
+  let preservedApplied = 0;
+  let preservedMissing = 0;
+  let preservedOverrides = 0;
+  const preservedMissingTerms = [];
+  for (const term of preserveTerms) {
+    if (
+      filterToDocument &&
+      (!documentText.includes(term) || !termPattern(term, 'u').test(documentText))
+    ) {
+      if (protectedTermSpansIdmlSegments(term, segments)) {
+        const error = new IdmlError(
+          'A protected term spans multiple IDML text segments and cannot be preserved safely',
+          'protected_term_spans_segments',
+          400,
+        );
+        error.protectedTermsRequired = true;
+        throw error;
+      }
+      preservedMissing += 1;
+      if (preservedMissingTerms.length < MAX_REPORTED_PRESERVED_TERMS) {
+        preservedMissingTerms.push(term);
+      }
+      continue;
+    }
+    const key = term.normalize('NFC');
+    if (!protectedKeys.has(key)) {
+      preservedOverrides += (managedBySource.get(key) ?? []).filter(
+        (entry) =>
+          (entry.source.normalize('NFC') !== term || entry.target.normalize('NFC') !== term),
+      ).length;
+    }
+    protectedKeys.add(key);
+    preservedEntries.set(term, { source: term, target: term });
+    preservedApplied += 1;
+  }
+  const mergedEntries = [
+    ...indexedGlossary
+      .filter((indexed) => !protectedKeys.has(indexed.key))
+      .map((indexed) => indexed.entry),
+    ...preservedEntries.values(),
+  ].sort((left, right) => {
+    if (left.source.length !== right.source.length) {
+      return right.source.length - left.source.length;
+    }
+    return left.source < right.source ? -1 : 1;
+  });
+  const bytes = mergedEntries.reduce(
+    (total, entry) => total + Buffer.byteLength(`${entry.source}\t${entry.target}\n`, 'utf8'),
+    0,
+  );
+  if (bytes > maxBytes) {
+    throw new IdmlError(
+      'Glossary and preserved terms exceed the Azure Translator glossary limit',
+      'glossary_too_large',
+      400,
+    );
+  }
+  return {
+    entries: mergedEntries,
+    stats: {
+      ...glossary.stats,
+      configured: Boolean(glossary.stats.configured) || preservedApplied > 0,
+      dictionaryConfigured: Boolean(glossary.stats.configured),
+      dictionaryApplied: glossary.stats.applied ?? glossary.entries.length,
+      dictionaryRetained: mergedEntries.length - preservedEntries.size,
+      applied: mergedEntries.length,
+      requestConfigured: true,
+      preservedRequested: preserveTerms.length,
+      preservedApplied,
+      preservedMissing,
+      preservedMissingTerms,
+      preservedMissingTermsTruncated: Math.max(
+        0,
+        preservedMissing - preservedMissingTerms.length,
+      ),
+      preservedOverrides,
+      preservedUnverified: filterToDocument ? 0 : preservedApplied,
+      bytes,
     },
   };
 }
@@ -617,16 +773,25 @@ async function translateWithAzure({ segments, sourceLocale, targetLocale, glossa
   const translations = new Map();
   const batches = makeAzureXliffBatches(segments);
   let providerLocale = targetLocale;
-  for (const batch of batches) {
-    const result = await translateDocumentWithAzure({
-      buffer: buildXliff(batch, sourceLocale, targetLocale),
-      filename: 'source.xlf',
-      mimeType: 'application/xliff+xml',
-      sourceLocale,
-      targetLocale,
-      glossary,
-      signal,
-    });
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    const batch = batches[batchIndex];
+    let result;
+    try {
+      result = await translateDocumentWithAzure({
+        buffer: buildXliff(batch, sourceLocale, targetLocale),
+        filename: 'source.xlf',
+        mimeType: 'application/xliff+xml',
+        sourceLocale,
+        targetLocale,
+        glossary,
+        signal,
+      });
+    } catch (error) {
+      if (error && typeof error === 'object') {
+        error.translationBatchesCompleted = batchIndex;
+      }
+      throw error;
+    }
     providerLocale = result.providerLocale;
     for (const [id, text] of parseTranslatedXliff(result.buffer, batch)) {
       translations.set(id, text);
@@ -942,6 +1107,7 @@ module.exports = {
   AZURE_BATCH_GLOSSARY_MAX_BYTES,
   AZURE_SYNC_GLOSSARY_MAX_BYTES,
   glossaryForRequest,
+  mergePreservedTerms,
   translateBatchWithAzure,
   translateDocumentWithAzure,
   translateWithAzure,

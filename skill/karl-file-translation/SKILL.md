@@ -16,6 +16,14 @@ When multiple files are available, pass their exact names in `filenames`. Set
 Never infer all files from singular or ambiguous wording. When exactly one file
 is available, the selection can be omitted.
 
+When the user names product, brand, or technical terms that must not be
+translated, pass those exact strings in `preserve_terms`, including the spelling
+and casing used in the source document. Do not infer protected terms from
+general context; ask the user to name them when the request is ambiguous.
+Recurring approved terminology is supplied by the deployed glossary
+automatically. This is deterministic exact-term preservation, not a free-form
+translation prompt.
+
 The tool may complete immediately or return a durable `jobId`. If queued or
 retrying, tell the user the job continues after the chat request and use
 `translation_status` with `action: status` when they ask for progress. Use

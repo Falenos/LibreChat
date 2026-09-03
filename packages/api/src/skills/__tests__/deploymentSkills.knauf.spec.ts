@@ -261,6 +261,8 @@ describe('[knauf] shipped deployment skills', () => {
     expect(translation?.body).toContain('translation_status');
     expect(translation?.body).toContain('source_locale');
     expect(translation?.body).toContain('all_files: true');
+    expect(translation?.body).toContain('preserve_terms');
+    expect(translation?.body).toMatch(/spelling\s+and\s+casing/i);
     expect(translation?.body).toMatch(/downloadable file\s+card/i);
     expect(translation?.body).toMatch(/continues after the chat request/i);
     expect(translation?.body).toMatch(/Source-code files are excluded/i);

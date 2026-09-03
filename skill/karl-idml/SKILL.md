@@ -26,6 +26,12 @@ translate segment-by-segment when the deterministic file translator is available
 If `translate_file` is not available, say that deterministic translation is disabled;
 do not simulate a file round trip.
 
+Pass exact product, brand, or technical names the user explicitly says must stay
+unchanged in `preserve_terms`, including the spelling and casing used in the
+source IDML. Do not treat broader style guidance as a translation prompt; the
+deterministic provider accepts locales, file selection, the deployed glossary,
+and exact preserved terms only.
+
 ## Manipulation
 
 Use `edit_idml` with `action: inspect` when the requested source text or segment

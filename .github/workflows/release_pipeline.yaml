@@ -205,7 +205,9 @@ jobs:
           WORKER_VALUES="$AGK_WORKER_CONFIG_DIRECTORY/values.yaml"
           if [ -f "$WORKER_VALUES" ]; then
             sed -i -E 's#^([[:space:]]+tag:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$WORKER_VALUES"
+            sed -i -E 's#^([[:space:]]+LANGFUSE_RELEASE:[[:space:]]*).*$#\1"'"$VERSION"'"#' "$WORKER_VALUES"
             grep -Eq "^[[:space:]]+tag:[[:space:]]*\"$VERSION\"$" "$WORKER_VALUES"
+            grep -Eq "^[[:space:]]+LANGFUSE_RELEASE:[[:space:]]*\"$VERSION\"$" "$WORKER_VALUES"
             CONFIG_FILES+=("$WORKER_VALUES")
           fi
           SCHEDULER_VALUES="$AGK_SCHEDULER_CONFIG_DIRECTORY/values.yaml"
@@ -476,7 +478,9 @@ jobs:
           WORKER_VALUES="$AGK_STAGE_WORKER_CONFIG_DIRECTORY/values.yaml"
           test -f "$WORKER_VALUES"
           sed -i -E "/^[[:space:]]+tag:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
+          sed -i -E "/^[[:space:]]+LANGFUSE_RELEASE:/s/['\"]?v[0-9]+\\.[0-9]+\\.[0-9]+['\"]?/\"$VERSION\"/" "$WORKER_VALUES"
           grep -F "tag: \"$VERSION\"" "$WORKER_VALUES"
+          grep -F "LANGFUSE_RELEASE: \"$VERSION\"" "$WORKER_VALUES"
 
           SCHEDULER_VALUES="$AGK_STAGE_SCHEDULER_CONFIG_DIRECTORY/values.yaml"
           test -f "$SCHEDULER_VALUES"

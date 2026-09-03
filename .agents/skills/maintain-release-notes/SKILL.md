@@ -25,19 +25,32 @@ Use this format:
 
 ## Publish the weekly notes
 
-1. Start from a clean worktree synchronized with the release candidate branch. Use the exact
-   previous-release and candidate commits supplied by the release workflow; do not guess a range.
-2. Read the pending rows and verify each ticket/change is merged inside that release range. Treat
-   inclusion in the approved release candidate as the ship signal; leave every other row pending.
-3. Combine duplicate entries and group related outcomes. Keep the wording short and non-technical.
-4. Add a newest-first dated list to both `#en-release-notes` and `#de-release-notes` in
-   `client/public/help/index.html`, matching the existing `<h3>date</h3><ul><li>…</li></ul>` shape.
-5. Remove only the published rows from `unreleased.md`; Git history remains the audit trail.
-6. Verify the English-default selector and both translations with:
+The `Publish KARL Release Notes` workflow runs every Monday at 07:00 UTC and can also be started
+with `workflow_dispatch`. It opens a reviewable PR instead of writing directly to `main`.
 
-   ```bash
-   cd client
-   npm run test:ci -- --runInBand src/knauf/components/Header/KnaufTopBar.knauf.spec.tsx
-   ```
+The workflow:
 
-7. Run Prettier and `git diff --check` before committing.
+1. Reads every pending row already merged into `main`.
+2. Adds one bilingual publication group to `knauf/docs/release-notes/published.json`.
+3. Regenerates both marked release-note sections in `client/public/help/index.html`.
+4. Keeps the latest eight groups expanded and retains older groups in a collapsed archive.
+5. Removes only the published rows from `unreleased.md`.
+6. Opens one PR. A later run skips while an automation release-notes PR remains open.
+
+Do not hand-edit content between the `release-notes:{en,de}:begin/end` markers. To publish locally
+or recover a failed workflow, start from a clean `main` worktree and run:
+
+```bash
+node knauf/scripts/publish-release-notes.js --date=YYYY-MM-DD
+node knauf/scripts/publish-release-notes.js --check
+node --test knauf/scripts/publish-release-notes.spec.js
+cd client
+npm run test:ci -- --runInBand \
+  src/knauf/components/Header/KnaufTopBar.knauf.spec.tsx \
+  src/knauf/components/Header/KnaufHelpDialog.knauf.spec.tsx
+npm run build
+test -f dist/help/index.html
+```
+
+Review the generated English/German wording and included tickets before merging the PR. Run
+Prettier and `git diff --check` before committing any manual recovery.

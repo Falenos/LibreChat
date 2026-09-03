@@ -54,6 +54,7 @@ function beginTranslationObservation(job, logger) {
     sourceLocale: job.source_locale ?? 'auto',
     targetLocale: job.target_locale,
     fileCount: job.input_files?.length ?? 0,
+    preserveTermCount: job.preserve_terms?.length ?? 0,
     attempt: job.attempt_count,
     generation: job.target_generation,
   };
@@ -65,6 +66,7 @@ function beginTranslationObservation(job, logger) {
         'translation.source_locale': metadata.sourceLocale,
         'translation.target_locale': metadata.targetLocale,
         'translation.file_count': metadata.fileCount,
+        'translation.preserve_term_count': metadata.preserveTermCount,
         'translation.attempt': metadata.attempt,
         'translation.generation': metadata.generation,
       },

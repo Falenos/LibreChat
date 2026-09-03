@@ -29,6 +29,7 @@ const {
   AZURE_BATCH_GLOSSARY_MAX_BYTES,
   AZURE_SYNC_GLOSSARY_MAX_BYTES,
   glossaryForRequest,
+  mergePreservedTerms,
   translateBatchWithAzure,
   translateDocumentWithAzure,
   translateWithAzure,
@@ -61,6 +62,8 @@ const MAX_XML_ATTRIBUTE_CHARACTERS = 500000;
 const MAX_XML_DEPTH = 256;
 const MAX_STRUCTURED_SEGMENTS = 10000;
 const MAX_STRUCTURED_CHARACTERS = 500000;
+const MAX_PRESERVE_TERMS = 100;
+const MAX_PRESERVE_TERM_CHARACTERS = 200;
 
 const FORMATS = {
   idml: { mime: IDML_MIME, mode: 'idml' },
@@ -979,7 +982,99 @@ function xmlAdapter(buffer) {
   };
 }
 
-async function translateOneFile({ req, file, sourceLocale, targetLocale, signal }) {
+function dictionaryEntryCount(glossary) {
+  return (
+    glossary.stats.dictionaryRetained ??
+    glossary.stats.dictionaryApplied ??
+    glossary.stats.applied ??
+    glossary.entries.length
+  );
+}
+
+function protectedOnlyGlossary({
+  baseStats,
+  preserveTerms,
+  segments,
+  filterToDocument,
+  maxBytes,
+}) {
+  return mergePreservedTerms(
+    { entries: [], stats: { ...baseStats, applied: 0, bytes: 0 } },
+    preserveTerms,
+    segments,
+    { filterToDocument, maxBytes },
+  );
+}
+
+function markProtectedTermsRequired(error, glossary) {
+  if ((glossary.stats.preservedApplied ?? 0) > 0 && error && typeof error === 'object') {
+    error.protectedTermsRequired = true;
+  }
+  return error;
+}
+
+async function translateWithOptionalGlossaryFallback({
+  translate,
+  glossary,
+  preserveTerms,
+  segments,
+  filterToDocument,
+  maxBytes,
+}) {
+  try {
+    return { result: await translate(glossary), glossary };
+  } catch (error) {
+    const dictionaryApplied = dictionaryEntryCount(glossary);
+    const optionalDictionaryRejected =
+      dictionaryApplied > 0 &&
+      (error?.translationBatchesCompleted ?? 0) === 0 &&
+      process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED !== 'true' &&
+      error?.code === 'translator_rejected';
+    if (!optionalDictionaryRejected) {
+      throw markProtectedTermsRequired(error, glossary);
+    }
+
+    logger.warn(
+      '[translate_file] Azure rejected the optional managed glossary; retrying without managed entries',
+      {
+        code: error.code,
+        preserveTermCount: preserveTerms.length,
+      },
+    );
+    const fallback = protectedOnlyGlossary({
+      baseStats: glossary.stats,
+      preserveTerms,
+      segments,
+      filterToDocument,
+      maxBytes,
+    });
+    fallback.stats = {
+      ...fallback.stats,
+      dictionaryConfigured:
+        glossary.stats.dictionaryConfigured ?? Boolean(glossary.stats.configured),
+      dictionaryRequested: dictionaryApplied,
+      dictionaryApplied: 0,
+      dictionaryRetained: 0,
+      requested: dictionaryApplied,
+      reason: preserveTerms.length > 0 ? 'dictionary_provider_rejected' : 'provider_rejected',
+    };
+
+    try {
+      return { result: await translate(fallback), glossary: fallback };
+    } catch (fallbackError) {
+      throw markProtectedTermsRequired(fallbackError, fallback);
+    }
+  }
+}
+
+async function translateOneFile({
+  req,
+  file,
+  sourceLocale,
+  targetLocale,
+  preserveTerms = [],
+  signal,
+}) {
   throwIfAborted(signal);
   const format = formatForFile(file);
   const input = await readFileBuffer(req, file, signal);
@@ -996,10 +1091,30 @@ async function translateOneFile({ req, file, sourceLocale, targetLocale, signal 
     }
     const parsed = await parseIdml(input);
     segments = parsed.segments;
-    glossary = await glossaryForRequest({ sourceLocale, targetLocale, segments });
-    result = segments.length
-      ? await translateWithAzure({ segments, sourceLocale, targetLocale, glossary, signal })
-      : { translations: new Map(), providerLocale: targetLocale, batches: 0 };
+    glossary = mergePreservedTerms(
+      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      preserveTerms,
+      segments,
+    );
+    if (segments.length) {
+      ({ result, glossary } = await translateWithOptionalGlossaryFallback({
+        translate: (requestGlossary) =>
+          translateWithAzure({
+            segments,
+            sourceLocale,
+            targetLocale,
+            glossary: requestGlossary,
+            signal,
+          }),
+        glossary,
+        preserveTerms,
+        segments,
+        filterToDocument: true,
+        maxBytes: AZURE_SYNC_GLOSSARY_MAX_BYTES,
+      }));
+    } else {
+      result = { translations: new Map(), providerLocale: targetLocale, batches: 0 };
+    }
     output = (await buildIdml(parsed, result.translations)).buffer;
   } else if (['json', 'markdown', 'xml', 'svg'].includes(format.mode)) {
     if (input.length > MAX_SEGMENTED_BYTES) {
@@ -1019,10 +1134,30 @@ async function translateOneFile({ req, file, sourceLocale, targetLocale, signal 
       adapter = svgAdapter(input);
     }
     segments = adapter.segments;
-    glossary = await glossaryForRequest({ sourceLocale, targetLocale, segments });
-    result = segments.length
-      ? await translateWithAzure({ segments, sourceLocale, targetLocale, glossary, signal })
-      : { translations: new Map(), providerLocale: targetLocale, batches: 0 };
+    glossary = mergePreservedTerms(
+      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      preserveTerms,
+      segments,
+    );
+    if (segments.length) {
+      ({ result, glossary } = await translateWithOptionalGlossaryFallback({
+        translate: (requestGlossary) =>
+          translateWithAzure({
+            segments,
+            sourceLocale,
+            targetLocale,
+            glossary: requestGlossary,
+            signal,
+          }),
+        glossary,
+        preserveTerms,
+        segments,
+        filterToDocument: true,
+        maxBytes: AZURE_SYNC_GLOSSARY_MAX_BYTES,
+      }));
+    } else {
+      result = { translations: new Map(), providerLocale: targetLocale, batches: 0 };
+    }
     output = adapter.build(result.translations);
     layoutValidation = ['json', 'xml'].includes(format.mode) ? 'not_applicable' : 'human_required';
   } else {
@@ -1030,13 +1165,18 @@ async function translateOneFile({ req, file, sourceLocale, targetLocale, signal 
     const translateTextWithinImage = ['docx', 'pptx'].includes(
       path.extname(file.filename).slice(1).toLowerCase(),
     );
-    glossary = await glossaryForRequest({
-      sourceLocale,
-      targetLocale,
-      segments: [],
-      filterToDocument: false,
-      maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES,
-    });
+    glossary = mergePreservedTerms(
+      await glossaryForRequest({
+        sourceLocale,
+        targetLocale,
+        segments: [],
+        filterToDocument: false,
+        maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES,
+      }),
+      preserveTerms,
+      [],
+      { filterToDocument: false, maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES },
+    );
     const mustBatch =
       isImage ||
       format.mode === 'batch' ||
@@ -1060,32 +1200,14 @@ async function translateOneFile({ req, file, sourceLocale, targetLocale, signal 
         translateTextWithinImage,
         signal,
       });
-    try {
-      result = await translateDocument(glossary);
-    } catch (error) {
-      const optionalGlossaryRejected =
-        glossary.entries.length > 0 &&
-        process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED !== 'true' &&
-        error?.code === 'translator_rejected';
-      if (!optionalGlossaryRejected) throw error;
-      logger.warn(
-        '[translate_file] Azure rejected an optional native-document glossary; retrying without it',
-        {
-          filename: file.filename,
-          code: error.code,
-        },
-      );
-      glossary = {
-        entries: [],
-        stats: {
-          ...glossary.stats,
-          requested: glossary.stats.applied,
-          applied: 0,
-          reason: 'provider_rejected',
-        },
-      };
-      result = await translateDocument(glossary);
-    }
+    ({ result, glossary } = await translateWithOptionalGlossaryFallback({
+      translate: translateDocument,
+      glossary,
+      preserveTerms,
+      segments: [],
+      filterToDocument: false,
+      maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES,
+    }));
     output = result.buffer;
   }
 
@@ -1139,9 +1261,51 @@ async function mapLimited(items, limit, worker, signal) {
 
 function publicError(error) {
   if (error instanceof IdmlError) {
-    return { code: error.code, error: error.message, retryAfter: error.retryAfter };
+    return {
+      code: error.code,
+      error: error.message,
+      retryAfter: error.retryAfter,
+      ...(error.protectedTermsRequired ? { protectedTermsRequired: true } : {}),
+    };
   }
   return { code: 'translation_transport_failed', error: 'Translation temporarily failed' };
+}
+
+function normalizePreserveTerms(value) {
+  if (value == null) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_PRESERVE_TERMS) {
+    throw new IdmlError(
+      `preserve_terms must contain at most ${MAX_PRESERVE_TERMS} strings`,
+      'invalid_preserve_terms',
+      400,
+    );
+  }
+  const terms = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      throw new IdmlError(
+        'preserve_terms must contain only strings',
+        'invalid_preserve_terms',
+        400,
+      );
+    }
+    const term = item.trim();
+    if (!term || term.length > MAX_PRESERVE_TERM_CHARACTERS || /[\t\r\n]/.test(term)) {
+      throw new IdmlError(
+        `Each preserved term must be 1-${MAX_PRESERVE_TERM_CHARACTERS} characters without tabs or newlines`,
+        'invalid_preserve_terms',
+        400,
+      );
+    }
+    if (!seen.has(term)) {
+      seen.add(term);
+      terms.push(term);
+    }
+  }
+  return terms.sort();
 }
 
 async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
@@ -1158,6 +1322,14 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
   const sourceLocale = args?.source_locale
     ? normalizeLocale(args.source_locale, 'source_locale')
     : null;
+  const preserveTerms = normalizePreserveTerms(args?.preserve_terms);
+  if (preserveTerms.length > 0 && !sourceLocale) {
+    throw new IdmlError(
+      'source_locale is required when preserving exact terms',
+      'source_locale_required',
+      400,
+    );
+  }
   if (sourceLocale && targetLocale.toLowerCase() === sourceLocale.toLowerCase()) {
     throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
   }
@@ -1175,7 +1347,14 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
         try {
           return {
             status: 'fulfilled',
-            value: await translateOneFile({ req, file, sourceLocale, targetLocale, signal }),
+            value: await translateOneFile({
+              req,
+              file,
+              sourceLocale,
+              targetLocale,
+              preserveTerms,
+              signal,
+            }),
           };
         } catch (error) {
           if (signal?.aborted) {
@@ -1246,6 +1425,7 @@ async function jobToolResult(req, job) {
       attemptCount: job.attempt_count,
       ...(job.report ?? {}),
       ...(job.last_error_code ? { code: job.last_error_code, error: job.last_error_detail } : {}),
+      ...(job.protected_terms_required ? { protectedTermsRequired: true } : {}),
       ...(job.cancel_requested_at && job.status === 'processing'
         ? { cancellation: 'requested' }
         : {}),
@@ -1267,12 +1447,13 @@ async function waitForTranslationJob({ req, job, signal }) {
   return jobToolResult(req, current ?? job);
 }
 
-function sourceLocaleRequired(files) {
+function sourceLocaleRequired(files, preserveTerms = []) {
   const glossaryConfigured =
     process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED === 'true' ||
     !['', 'none'].includes(process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION ?? 'none');
   return (
     glossaryConfigured ||
+    preserveTerms.length > 0 ||
     files.some((file) =>
       ['idml', 'json', 'markdown', 'xml', 'svg'].includes(formatForFile(file)?.mode),
     )
@@ -1284,8 +1465,9 @@ async function enqueueTranslationFiles({ req, args, signal }) {
   const sourceLocale = args?.source_locale
     ? normalizeLocale(args.source_locale, 'source_locale')
     : null;
+  const preserveTerms = normalizePreserveTerms(args?.preserve_terms);
   const files = selectTranslationFiles(await resolveInputFiles(req), args);
-  if (sourceLocaleRequired(files) && !sourceLocale) {
+  if (sourceLocaleRequired(files, preserveTerms) && !sourceLocale) {
     throw new IdmlError(
       'source_locale is required for structured text or glossary-backed translation',
       'source_locale_required',
@@ -1308,6 +1490,7 @@ async function enqueueTranslationFiles({ req, args, signal }) {
     })),
     sourceLocale,
     targetLocale,
+    preserveTerms,
     outputExpiresAt: retentionExpiry.expiredAt ?? null,
     outputRetentionResolved: true,
   });
@@ -1352,7 +1535,7 @@ function buildFileToolContext(req) {
   const names = files.map((file) => file.filename ?? file.name ?? 'attached file');
   return [
     `File translation is available for: ${names.join(', ')}.`,
-    'Call translate_file with a BCP-47 target_locale. If multiple files are available, pass the exact requested filenames, or all_files=true only when the user explicitly requests every file. A single available file needs no selection. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request.',
+    'Call translate_file with a BCP-47 target_locale. If multiple files are available, pass the exact requested filenames, or all_files=true only when the user explicitly requests every file. A single available file needs no selection. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.',
     'The call may finish inline or return a durable job_id. Use translation_status later to check or cancel that job.',
     'Azure Translator returns each completed downloadable file in its original format.',
     'Tell the user that final layout, overflow, and OCR acceptance remains a human review.',
@@ -1450,6 +1633,7 @@ module.exports = {
   isTranslatableFile,
   jsonAdapter,
   markdownAdapter,
+  normalizePreserveTerms,
   persistOutput,
   readFileBuffer,
   requestToolFiles,

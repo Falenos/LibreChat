@@ -462,6 +462,14 @@ export const translateFileSchema: ExtendedJsonSchema = {
       description:
         'Exact available filenames to translate. Required when multiple files are available unless the user explicitly requested all files.',
     },
+    preserve_terms: {
+      type: 'array',
+      maxItems: 100,
+      uniqueItems: true,
+      items: { type: 'string', minLength: 1, maxLength: 200 },
+      description:
+        'Exact product, brand, or technical terms that must remain unchanged, including their source-document spelling and casing.',
+    },
     all_files: {
       type: 'boolean',
       description:
@@ -614,7 +622,7 @@ export const toolDefinitions: Record<string, ToolRegistryDefinition> = {
   translate_file: {
     name: 'translate_file',
     description:
-      'Translate selected supported files with Azure Translator and return downloadable files in their original formats. When multiple files are available, pass exact filenames or all_files=true only for an explicit translate-all request. Supports IDML, PDF, DOCX, PPTX, XLSX, CSV, TXT, Markdown, JSON, XML, SVG, PNG, JPEG, and WebP. Accepts any valid BCP-47 locale supported by Azure. Preserves document structure and layout where the format/provider allows it; final visual acceptance remains human.',
+      'Translate selected supported files with Azure Translator and return downloadable files in their original formats. When multiple files are available, pass exact filenames or all_files=true only for an explicit translate-all request. Pass explicitly named product, brand, or technical terms that must stay unchanged in preserve_terms, using their exact source-document spelling and casing. Supports IDML, PDF, DOCX, PPTX, XLSX, CSV, TXT, Markdown, JSON, XML, SVG, PNG, JPEG, and WebP. Accepts any valid BCP-47 locale supported by Azure. Preserves document structure and layout where the format/provider allows it; final visual acceptance remains human.',
     schema: translateFileSchema,
     toolType: 'builtin',
     responseFormat: 'content_and_artifact',

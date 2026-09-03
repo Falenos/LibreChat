@@ -63,7 +63,7 @@ module.exports = {
     'LICENSE',
   ]),
 
-  sourceExtensions: new Set(['.js', '.jsx', '.ts', '.tsx', '.css']),
+  sourceExtensions: new Set(['.js', '.cjs', '.jsx', '.ts', '.tsx', '.css']),
 
   // Dockerfiles have no standard extension; match by base name.
   // Matches: `Dockerfile`, `Dockerfile.multi`, `Dockerfile.dev`, etc.

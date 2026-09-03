@@ -687,6 +687,7 @@ test('lib/classify · loads with classifyFile + isSourceFile', () => {
   assert.equal(typeof m.classifyFile, 'function');
   assert.equal(typeof m.isSourceFile, 'function');
   assert.equal(m.classifyFile('api/server/index.js'), 'upstream');
+  assert.equal(m.isSourceFile('client/scripts/post-build.cjs'), true);
 });
 
 test('lib/glob · compile + matches handle ** correctly', () => {

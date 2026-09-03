@@ -2,6 +2,8 @@
 'use strict';
 
 const { createHash } = require('crypto');
+const JSZip = require('jszip');
+const { parseIdml } = require('../../idml/core');
 
 const mockSourceBlob = {
   url: 'https://storage.example.test/translation-source/job/source.pdf',
@@ -38,6 +40,7 @@ jest.mock('@azure/storage-blob', () => ({
 
 const {
   glossaryForRequest,
+  mergePreservedTerms,
   translateBatchWithAzure,
   translateDocumentWithAzure,
   translateWithAzure,
@@ -50,6 +53,44 @@ const segments = [
 const glossary = {
   entries: [{ source: 'High light reflectance (86%)', target: 'Hoher Lichtreflexionsgrad (86 %)' }],
 };
+
+async function splitTermIdmlFixture() {
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/vnd.adobe.indesign-idml-package', {
+    compression: 'STORE',
+    createFolders: false,
+  });
+  zip.file(
+    'designmap.xml',
+    '<?xml version="1.0"?><Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><idPkg:Story src="Stories/Story_u1.xml"/></Document>',
+  );
+  zip.file(
+    'Stories/Story_u1.xml',
+    '<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u1"><ParagraphStyleRange><CharacterStyleRange><Content>HERA</Content></CharacterStyleRange><CharacterStyleRange><Content>DESIGN</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>',
+  );
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+async function separateStoryTermIdmlFixture() {
+  const zip = new JSZip();
+  zip.file('mimetype', 'application/vnd.adobe.indesign-idml-package', {
+    compression: 'STORE',
+    createFolders: false,
+  });
+  zip.file(
+    'designmap.xml',
+    '<?xml version="1.0"?><Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><idPkg:Story src="Stories/Story_u1.xml"/><idPkg:Story src="Stories/Story_u2.xml"/></Document>',
+  );
+  zip.file(
+    'Stories/Story_u1.xml',
+    '<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u1"><ParagraphStyleRange><CharacterStyleRange><Content>HERA</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>',
+  );
+  zip.file(
+    'Stories/Story_u2.xml',
+    '<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u2"><ParagraphStyleRange><CharacterStyleRange><Content>DESIGN</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>',
+  );
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
 
 describe('[knauf] Azure translation provider', () => {
   const originalEnv = process.env;
@@ -174,6 +215,216 @@ describe('[knauf] Azure translation provider', () => {
       ],
       stats: { nonLinguisticIdentity: 1 },
     });
+  });
+
+  it('uses the source document casing for managed identity terms', async () => {
+    const csv = Buffer.from(
+      'id,a,b,c,eng_GLO,deu_GLO\n1,,,,Heradesign,Heradesign\n',
+    );
+    process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
+    process.env.AZURE_STORAGE_CONNECTION_STRING =
+      'DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test-key';
+    mockTargetBlob.getProperties.mockResolvedValue({ contentLength: csv.length, etag: 'v3c' });
+    mockTargetBlob.downloadToBuffer.mockResolvedValue(csv);
+
+    await expect(
+      glossaryForRequest({
+        sourceLocale: 'en',
+        targetLocale: 'de',
+        segments: [{ source: 'Use HERADESIGN panels' }],
+      }),
+    ).resolves.toMatchObject({
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+    });
+  });
+
+  it('merges exact preserved terms over conflicting dictionary translations', () => {
+    expect(
+      mergePreservedTerms(
+        {
+          entries: [
+            { source: 'HERADESIGN', target: 'HERADESIGN Akustik' },
+            { source: 'Board', target: 'Platte' },
+          ],
+          stats: { configured: true, applied: 2, bytes: 48 },
+        },
+        ['HERADESIGN', 'Knauf Ceiling Solutions', 'Missing Product'],
+        [{ source: 'HERADESIGN by Knauf Ceiling Solutions' }],
+      ),
+    ).toEqual({
+      entries: [
+        { source: 'Knauf Ceiling Solutions', target: 'Knauf Ceiling Solutions' },
+        { source: 'HERADESIGN', target: 'HERADESIGN' },
+        { source: 'Board', target: 'Platte' },
+      ],
+      stats: {
+        configured: true,
+        dictionaryConfigured: true,
+        dictionaryApplied: 2,
+        dictionaryRetained: 1,
+        applied: 3,
+        requestConfigured: true,
+        preservedRequested: 3,
+        preservedApplied: 2,
+        preservedMissing: 1,
+        preservedMissingTerms: ['Missing Product'],
+        preservedMissingTermsTruncated: 0,
+        preservedOverrides: 1,
+        preservedUnverified: 0,
+        bytes: expect.any(Number),
+      },
+    });
+  });
+
+  it('requires preserved terms to match the exact document casing', () => {
+    expect(
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN', 'Heradesign'],
+        [{ source: 'Use HERADESIGN panels' }],
+      ),
+    ).toEqual({
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+      stats: {
+        configured: true,
+        dictionaryConfigured: false,
+        dictionaryApplied: 0,
+        dictionaryRetained: 0,
+        applied: 1,
+        requestConfigured: true,
+        preservedRequested: 2,
+        preservedApplied: 1,
+        preservedMissing: 1,
+        preservedMissingTerms: ['Heradesign'],
+        preservedMissingTermsTruncated: 0,
+        preservedOverrides: 0,
+        preservedUnverified: 0,
+        bytes: expect.any(Number),
+      },
+    });
+  });
+
+  it('keeps differently cased terms separate under Azure case-sensitive matching', () => {
+    expect(
+      mergePreservedTerms(
+        {
+          entries: [{ source: 'Heradesign', target: 'Heradesign Akustik' }],
+          stats: { configured: true, applied: 1, bytes: 40 },
+        },
+        ['HERADESIGN'],
+        [{ source: 'Use HERADESIGN panels' }],
+      ),
+    ).toEqual({
+      entries: [
+        { source: 'HERADESIGN', target: 'HERADESIGN' },
+        { source: 'Heradesign', target: 'Heradesign Akustik' },
+      ],
+      stats: {
+        configured: true,
+        dictionaryConfigured: true,
+        dictionaryApplied: 1,
+        dictionaryRetained: 1,
+        applied: 2,
+        requestConfigured: true,
+        preservedRequested: 1,
+        preservedApplied: 1,
+        preservedMissing: 0,
+        preservedMissingTerms: [],
+        preservedMissingTermsTruncated: 0,
+        preservedOverrides: 0,
+        preservedUnverified: 0,
+        bytes: expect.any(Number),
+      },
+    });
+  });
+
+  it('retains separately requested casing variants that both occur in the document', () => {
+    expect(
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN', 'Heradesign'],
+        [{ source: 'HERADESIGN and Heradesign' }],
+      ),
+    ).toMatchObject({
+      entries: [
+        { source: 'HERADESIGN', target: 'HERADESIGN' },
+        { source: 'Heradesign', target: 'Heradesign' },
+      ],
+      stats: {
+        preservedRequested: 2,
+        preservedApplied: 2,
+        preservedMissing: 0,
+        preservedOverrides: 0,
+      },
+    });
+  });
+
+  it('fails when a protected term spans adjacent IDML content segments', async () => {
+    const parsed = await parseIdml(await splitTermIdmlFixture());
+
+    expect(() =>
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN'],
+        parsed.segments,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'protected_term_spans_segments',
+        status: 400,
+        protectedTermsRequired: true,
+      }),
+    );
+  });
+
+  it('does not join protected terms across separate IDML stories', async () => {
+    const parsed = await parseIdml(await separateStoryTermIdmlFixture());
+
+    expect(
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN'],
+        parsed.segments,
+      ),
+    ).toMatchObject({
+      entries: [],
+      stats: {
+        preservedApplied: 0,
+        preservedMissing: 1,
+        preservedMissingTerms: ['HERADESIGN'],
+      },
+    });
+  });
+
+  it('marks native-document protected terms as unverified', () => {
+    expect(
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN'],
+        [],
+        { filterToDocument: false },
+      ),
+    ).toMatchObject({
+      entries: [{ source: 'HERADESIGN', target: 'HERADESIGN' }],
+      stats: {
+        configured: true,
+        dictionaryConfigured: false,
+        preservedApplied: 1,
+        preservedMissing: 0,
+        preservedUnverified: 1,
+      },
+    });
+  });
+
+  it('rejects preserved terms that exceed the provider glossary limit', () => {
+    expect(() =>
+      mergePreservedTerms(
+        { entries: [], stats: { configured: false, applied: 0, bytes: 0 } },
+        ['HERADESIGN'],
+        [],
+        { filterToDocument: false, maxBytes: 1 },
+      ),
+    ).toThrow(expect.objectContaining({ code: 'glossary_too_large', status: 400 }));
   });
 
   it('fails instead of silently truncating applicable glossary terms', async () => {

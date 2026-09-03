@@ -1,0 +1,128 @@
+name: Publish KARL Release Notes
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.repository }}-release-notes
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Open weekly release-notes PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get GitHub token
+        run: |
+          set -euo pipefail
+          GITHUB_PAT=$(az keyvault secret show \
+            --vault-name kv-ct-shared-devops-001 \
+            --name GITHUB-PAT \
+            --query value \
+            -o tsv)
+          echo "::add-mask::$GITHUB_PAT"
+          echo "GH_TOKEN=$GITHUB_PAT" >> "$GITHUB_ENV"
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Skip while another release-notes PR is open
+        id: existing
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --limit 1000 \
+            --json baseRefName,headRefName,isCrossRepository,url \
+            --jq '[.[] | select(.baseRefName == "main" and .isCrossRepository == false and (.headRefName | startswith("automation/karl-release-notes-")))][0].url // empty')
+          if [ -n "$PR_URL" ]; then
+            echo "Existing release-notes PR: $PR_URL"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        if: steps.existing.outputs.skip != 'true'
+        id: generate
+        run: |
+          set -euo pipefail
+          PUBLICATION_DATE=$(date -u +%F)
+          node knauf/scripts/publish-release-notes.js --date="$PUBLICATION_DATE"
+          node knauf/scripts/publish-release-notes.js --check
+          node --test knauf/scripts/publish-release-notes.spec.js
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "publication-date=$PUBLICATION_DATE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open release-notes pull request
+        if: steps.generate.outputs.changed == 'true'
+        id: open-pr
+        env:
+          PUBLICATION_DATE: ${{ steps.generate.outputs.publication-date }}
+        run: |
+          set -euo pipefail
+          BRANCH="automation/karl-release-notes-$PUBLICATION_DATE-$GITHUB_RUN_ID"
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git checkout -b "$BRANCH"
+          git add \
+            client/public/help/index.html \
+            knauf/docs/release-notes/published.json \
+            knauf/docs/release-notes/unreleased.md
+          git commit \
+            -m "docs: publish KARL release notes for $PUBLICATION_DATE" \
+            -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git push --force-with-lease origin "$BRANCH"
+
+          PR_URL=$(gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$BRANCH" \
+            --title "docs: publish KARL release notes for $PUBLICATION_DATE" \
+            --body "Automated Monday release-note publication. Groups the pending bilingual user-facing changes, keeps the latest eight release groups expanded, retains older history in the collapsed archive, and clears only the published pending rows.")
+          echo "opened=true" >> "$GITHUB_OUTPUT"
+          echo "pr-url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## KARL release-note publication"
+            echo
+            if [ "${{ steps.existing.outcome }}" = "failure" ]; then
+              echo "Failed while checking for an existing release-notes PR."
+            elif [ "${{ steps.existing.outputs.skip }}" = "true" ]; then
+              echo "Skipped because an automation PR is already open: ${{ steps.existing.outputs.pr-url }}"
+            elif [ "${{ steps.generate.outcome }}" = "failure" ]; then
+              echo "Failed while generating or validating release notes."
+            elif [ "${{ steps.generate.outputs.changed }}" != "true" ]; then
+              echo "No pending user-facing release notes were available."
+            elif [ "${{ steps.open-pr.outcome }}" = "success" ] && [ "${{ steps.open-pr.outputs.opened }}" = "true" ]; then
+              echo "Opened release-notes PR: ${{ steps.open-pr.outputs.pr-url }}"
+            else
+              echo "Release notes were generated, but the pull request was not opened successfully."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
