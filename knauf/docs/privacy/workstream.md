@@ -706,8 +706,9 @@ pseudonymous) · [ ] IP removed from the `banViolation.js:68-72` log line — **
 unsalted hash over IPv4 is trivially reversible · [ ] `req.ip` retained as the Keyv key at `:77`
 (`checkBan` looks up by it — removing it silently disables IP banning) · [ ] ban event raised
 `info` → `warn`, because at prod's `warn` root level the ban audit trail is currently **invisible**
-· [ ] the existing assertion at `openidStrategy.spec.js:1961` still passes · [ ] considered for
-upstream PR.
+· [ ] the existing assertion at `openidStrategy.spec.js:1961` still passes · [ ] **`UserController.js`
+`deleteUserController` no longer logs the erased subject's email** (`User deleted account. Email: …`
+at `info` — found by P2-5; keep the id, drop the email) · [ ] considered for upstream PR.
 
 #### P0-5 · Logging-posture one-pager
 
@@ -929,12 +930,33 @@ served a 403 when auto-migration is disabled — an availability, not a confiden
 
 **Type:** Task · **Effort:** M · **Compliance:** **Art. 17 evidence**
 
-**AC:** [ ] delete an account and a conversation, verify Mongo, Meilisearch, pgvector, Azure AI
-Search, Blob **and Langfuse** are clean · [ ] **a defined Langfuse deletion path for an Art. 17
-request arriving *inside* the retention window** (traces are addressable — deterministic trace ids,
-`tenant:` tags, `librechat.source.message.id` metadata; retention alone does not answer a live
-erasure request) · [ ] run green · [ ] becomes the standing DSAR erasure evidence · [ ] re-run
-after P2-2.
+**Status:** **built 2026-09-04 (KK20-TBD — ID pending), in PR, awaiting review.** Runbook
+[`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) + verifier `knauf/scripts/erasure-verify.js`
+(`before` / `langfuse-delete` / `after` phases; probes all nine §1 sinks the way the app does —
+same `rag_api` JWT, same Blob client, same Langfuse project keys; "not probed" never counts as
+clean). **The staging run is the open AC.**
+
+**AC:** [x] a recipe that deletes an account **and** a conversation through the **real product
+paths** (`DELETE /api/user/delete`, `DELETE /api/convos`) and verifies Mongo, Meilisearch, pgvector,
+Azure AI Search, Blob **and Langfuse** are clean · [x] **a defined Langfuse deletion path for an
+Art. 17 request arriving *inside* the retention window** — `DELETE /api/public/traces` with
+`{ traceIds }` batches against the ids captured before deletion (Langfuse `userId` = Mongo id);
+asynchronous, cascades to observations/scores · [x] the two legitimate residuals (`auditlogs` under
+Art. 17(3)(b)/(e); the deletion `info` log line for ≤14 days) reported **with their basis**, never
+silently ignored · [ ] **run green on staging** with a subject seeded in all nine sinks · [ ] becomes
+the standing DSAR erasure evidence (attached to the DSAR register entry) · [ ] re-run after P2-2.
+
+**Found while building it — two facts the recipe is built on and the spec pins:**
+
+1. **`config/delete-user.js` is not erasure-complete.** It raw-`deleteMany`s the collections and
+   never calls `processDeleteRequest`, so **Blob bytes and both vector sinks are orphaned**, shared-
+   link grants and the scheduler purge are skipped, and Meilisearch is synced only if the script's
+   process happens to load the `mongoMeili` plugin. An admin-driven deletion through it is therefore
+   **not** an Art. 17 erasure. The recipe tests the controller path instead; **follow-up ticket:**
+   route the script through the controller's cascade or delete it (see §10).
+2. **`deleteUserController` logs the erased subject's email at `info`** after the cascade
+   (`User deleted account. Email: … ID: …`). Suppressed in prod by the `warn` root level; present in
+   dev/stage for the 14-day rotation. Folded into P0-4's identity-minimisation list.
 
 #### P2-6 · Data-subject access & portability endpoint
 
@@ -1120,6 +1142,7 @@ this folder's README exists to prevent.
 | 2026-09-01 | Wave 0 in-repo: assessment v1.2 restored; **P2-4a closed by code reading** (the legacy-shared-link premise was wrong — see §2 row 4); P0-7's code half answered | The first thing implementation does is find out which tickets were built on a misreading |
 | 2026-09-01 | **KK20-327** (P0-1) built; code-review pass applied; PR #340 open, awaiting human review | The AC as written would have shipped a bypass: `tag` was unvalidated. Code review, not the AC, caught it |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
+| 2026-09-04 | **P2-5** (KK20-TBD — ID pending) built: erasure runbook + `erasure-verify.js`; PR open, stacked on #349 | Reading the deletion paths showed `config/delete-user.js` **is not an erasure** (no Blob/vector/grant cleanup) and that the controller logs the erased email at `info`. The recipe tests the product path and pins both facts in its spec |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
 | 2026-09-04 | **P0-2 rewritten; P1-6 added.** Langfuse data-retention policies are Enterprise-only (pricing page + discussion #13390), like server-side masking — and Knauf holds no licence | Both server-side Langfuse controls the plan leaned on are unavailable. Retention has to be *built* (CronJob via the public delete API — not ClickHouse TTL, which orphans MinIO media); redaction goes through an OTel Collector on `LANGFUSE_BASE_URL`. Until then the Okta group is the only control. The retention docs page omits the gating — verify features against the pricing page |
 | 2026-09-03 | **KK20-331** (P2-6a) — DSAR runbook + collector written; rehearsal pending | Two things the plan had not seen: the audit admin API cannot filter by subject *id*, and `rag_api` cannot read vectors back per subject. Both would have surfaced mid-DSAR with the clock running |
@@ -1214,6 +1237,9 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
 | [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) | KK20-331 — the Art. 15 procedure across all nine sinks; Art. 15(4) and 12(3) encoded |
 | [`knauf/scripts/dsar-collect.js`](../../scripts/dsar-collect.js) | KK20-331 — read-only collector: 25 Mongo stores + scheduler + auditLog (redacted) + Langfuse/Meili commands + Blob/vector attestations. Inventory pinned to the deletion cascade by its spec |
+| [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) | P2-5 (KK20-TBD) — the Art. 17 verification procedure: real product deletion paths, the Langfuse public-API leg, the retained-by-design table, and why `config/delete-user.js` is not an erasure path |
+| [`knauf/scripts/erasure-verify.js`](../../scripts/erasure-verify.js) | P2-5 (KK20-TBD) — `before`/`langfuse-delete`/`after` verifier over all nine sinks; reuses the KK20-331 inventory; exit 3 on residuals; Langfuse `DELETE /api/public/traces` batches are its only write |
+| [`api/server/controllers/UserController.js`](../../../api/server/controllers/UserController.js) · [`config/delete-user.js`](../../../config/delete-user.js) | The erasure-complete cascade vs the ops script that is not — pinned by `erasure-verify.spec.js` |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
 
 ---
@@ -1251,6 +1277,16 @@ pins the inventory to the deletion cascade.
 ```bash
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'
 ```
+
+**P2-5 — erasure verification (KK20-TBD).** On **staging** with a seeded test subject (file in a
+chat, knowledge file on an agent, a memory, a thumbs-down, a shared link):
+`node knauf/scripts/erasure-verify.js --phase before --user <email> --out ./erasure-test/` — every
+sink should show a non-zero count (a zero proves nothing; seed it). Delete one chat and then the
+account **through the product**, run `--phase langfuse-delete --confirm`, wait 15 minutes, run
+`--phase after`. Expect exit code 0 and `report.md` with **CLEAN**, `auditlogs` marked *retained by
+design — Art. 17(3)*, and no **NOT PROBED** rows. Then `grep -r "<user id>" api/logs/` — the one
+expected hit is the `User deleted account` info line. `npm run test:erasure` runs the spec that pins
+the product path, the ops-script gap and the Langfuse body shape.
 
 **P0-3 — message filter.** Paste `sk-proj-FAKEKEY123456` into a chat → a readable red bubble, **not**
 `message_filter_pii_block`, and no reconnect loop. Then paste an ordinary message containing an
@@ -1313,6 +1349,11 @@ npm run test:api && npm run test:client
   or the upstream `@librechat/agents` `mask` contribution, and retention is a CronJob (P0-2).
 - Which Azure region do the Langfuse AKS cluster and its ClickHouse/Postgres/MinIO sit in? The EULA
   says "the Netherlands" (G-5) — P0-2 part 1 answers it.
+- **`config/delete-user.js` is not an erasure.** Found by P2-5 (2026-09-04): it raw-`deleteMany`s the
+  collections and never calls `processDeleteRequest`, so Blob bytes and both vector sinks are orphaned
+  and shared-link grants / the scheduler purge are skipped. Decide: route it through the controller's
+  cascade, or delete the script and make `DELETE /api/user/delete` (admin-assisted) the only path.
+  Candidate follow-up ticket — pinned by `erasure-verify.spec.js` until resolved.
 
 ---
 

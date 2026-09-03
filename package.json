@@ -77,6 +77,7 @@
     "test:packages:data-schemas": "cd packages/data-schemas && npm run test:ci",
     "test:seams": "node --test knauf/scripts/seams.spec.js",
     "test:dsar": "node --test knauf/scripts/dsar-collect.spec.js",
+    "test:erasure": "node --test knauf/scripts/erasure-verify.spec.js",
     "langfuse:project": "LANGFUSE_HOST=https://langfuse.agk.dev.knauf.digital LANGFUSE_PUBLIC_KEY=pk-lf-agk-dev-agentic-karl-001 LANGFUSE_SECRET_KEY=\"$(az keyvault secret show --vault-name kv-agntkarl-nonprod-001 --name langfuse-dev-LANGFUSE-INIT-PROJECT-SECRET-KEY --query value -o tsv)\" langfuse api projects get-public --json | jq -e 'select(.ok == true and .status < 300)'",
     "langfuse:traces": "LANGFUSE_HOST=https://langfuse.agk.dev.knauf.digital LANGFUSE_PUBLIC_KEY=pk-lf-agk-dev-agentic-karl-001 LANGFUSE_SECRET_KEY=\"$(az keyvault secret show --vault-name kv-agntkarl-nonprod-001 --name langfuse-dev-LANGFUSE-INIT-PROJECT-SECRET-KEY --query value -o tsv)\" langfuse api traces list --limit 5 --order-by timestamp.desc --json | jq -e 'select(.ok == true and .status < 300)'",
     "test:config": "jest --config config/jest.config.js",
