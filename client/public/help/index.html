@@ -80,6 +80,82 @@
         border-left: 4px solid #0057b8;
         padding-left: 12px;
       }
+      .support-grid {
+        display: grid;
+        gap: 16px;
+        margin-top: 20px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      .support-card {
+        --support-accent: #0057b8;
+        --support-accent-hover: #00458f;
+        --support-action-text: white;
+        --support-tint: #eef6ff;
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+        border: 1px solid #dfe4eb;
+        border-top: 4px solid var(--support-accent);
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--support-tint), white 38%);
+        box-shadow: 0 8px 24px rgb(23 32 51 / 8%);
+        padding: 20px;
+      }
+      .support-card.incident {
+        --support-accent: #b54708;
+        --support-accent-hover: #93370d;
+        --support-tint: #fff7ed;
+      }
+      .support-eyebrow {
+        margin: 0 0 8px;
+        color: var(--support-accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .support-card h3 {
+        margin-bottom: 8px;
+      }
+      .support-card h4 {
+        margin: 16px 0 4px;
+        font-size: 14px;
+      }
+      .support-card ul {
+        margin: 4px 0 20px;
+        padding-left: 20px;
+      }
+      .support-card li + li {
+        margin-top: 6px;
+      }
+      .support-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        align-self: flex-start;
+        margin-top: auto;
+        border-radius: 8px;
+        background: var(--support-accent);
+        color: var(--support-action-text);
+        padding: 10px 14px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      .support-action:hover {
+        background: var(--support-accent-hover);
+        color: var(--support-action-text);
+      }
+      .release-group + .release-group,
+      .release-archive {
+        margin-top: 24px;
+      }
+      .release-archive summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .release-archive-content {
+        margin-top: 20px;
+      }
       @media (prefers-color-scheme: dark) {
         body {
           background: #111827;
@@ -103,6 +179,20 @@
           background: #1f2937;
           color: #e5e7eb;
         }
+        .support-card {
+          --support-accent: #69a9ff;
+          --support-accent-hover: #8bbcff;
+          --support-action-text: #111827;
+          --support-tint: #17243a;
+          background: linear-gradient(180deg, var(--support-tint), #111827 38%);
+          border-color: #374151;
+          box-shadow: none;
+        }
+        .support-card.incident {
+          --support-accent: #fb923c;
+          --support-accent-hover: #fdba74;
+          --support-tint: #332116;
+        }
       }
     </style>
   </head>
@@ -121,6 +211,7 @@
         <p>Plain-language guidance for everyday KARL use. No technical setup required.</p>
         <nav aria-label="Page sections">
           <a href="#en-prompts">Prompts and instructions</a>
+          <a href="#en-support">Get support</a>
           <a href="#en-release-notes">What's new</a>
         </nav>
       </header>
@@ -187,36 +278,78 @@
         </p>
       </section>
 
+      <section id="en-support" lang="en" data-language-page="en">
+        <h2>Get support for KARL</h2>
+        <p>Choose the form that matches what you need so the request reaches the right team.</p>
+        <div class="support-grid">
+          <article class="support-card request">
+            <p class="support-eyebrow">Service request</p>
+            <h3>Request a service or change</h3>
+            <p>
+              Use this form for access, configuration, minor changes, or another KARL-related
+              request that is not an outage or malfunction.
+            </p>
+            <h4>Include</h4>
+            <ul>
+              <li>Describe what you need and provide as much detail as possible.</li>
+              <li>Select <strong>KARL</strong> as the subcategory.</li>
+              <li>Select <strong>Knauf Employee</strong> as the initiator.</li>
+            </ul>
+            <a
+              href="https://knauf.service-now.com/it?id=sc_cat_item&amp;sys_id=e16cc0b8dba806dc609363cad39619e4&amp;table=sc_cat_item&amp;searchTerm=knauf%20digital"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="support-action"
+            >
+              Open KARL service request
+            </a>
+          </article>
+          <article class="support-card incident">
+            <p class="support-eyebrow">Incident</p>
+            <h3>Report an incident</h3>
+            <p>
+              Use this form when KARL is unavailable, malfunctioning, or not working as expected.
+            </p>
+            <h4>Include</h4>
+            <ul>
+              <li>Enter a clear short description.</li>
+              <li>
+                Select <strong>Knauf.com - Digital Platform</strong> as the category and
+                <strong>KARL</strong> as the subcategory.
+              </li>
+              <li>
+                Add the impact, when it started, affected users, a chat ID or shared chat link when
+                possible, and your preferred contact method.
+              </li>
+            </ul>
+            <a
+              href="https://knauf.service-now.com/it?id=sc_cat_item&amp;sys_id=3f1dd0320a0a0b99000a53f7604a2ef9"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="support-action"
+            >
+              Open KARL incident form
+            </a>
+          </article>
+        </div>
+      </section>
+
       <section id="en-release-notes" lang="en" data-language-page="en">
         <h2>What's new in KARL</h2>
         <p>Available user-facing release notes appear here, with the newest entry first.</p>
-        <h3>August 4–14, 2026</h3>
-        <ul>
-          <li>
-            <strong>Scheduled Agents:</strong> create recurring project tasks, run them immediately,
-            and manage schedules in one place.
-          </li>
-          <li>
-            <strong>Better Artifacts:</strong> edit SVG graphics, recover earlier versions, and
-            export or continue shared artifacts more reliably.
-          </li>
-          <li>
-            <strong>Project Knowledge:</strong> see upload and processing status, retry failures,
-            and keep project files synchronized.
-          </li>
-          <li>
-            <strong>Prompt Sharing:</strong> share prompts with permitted colleagues through the
-            existing access controls.
-          </li>
-          <li>
-            <strong>Clearer Answers:</strong> shorter direct answers for simple questions and safer
-            retries for interrupted model output.
-          </li>
-          <li>
-            <strong>More reliable chats and files:</strong> fewer duplicate responses, automatic
-            image-link recovery, and clearer upload errors.
-          </li>
-        </ul>
+        <!-- release-notes:en:begin -->
+        <article class="release-group">
+          <h3>August 4–14, 2026</h3>
+          <ul>
+            <li>Scheduled Agents: create recurring project tasks, run them immediately, and manage schedules in one place.</li>
+            <li>Better Artifacts: edit SVG graphics, recover earlier versions, and export or continue shared artifacts more reliably.</li>
+            <li>Project Knowledge: see upload and processing status, retry failures, and keep project files synchronized.</li>
+            <li>Prompt Sharing: share prompts with permitted colleagues through the existing access controls.</li>
+            <li>Clearer Answers: shorter direct answers for simple questions and safer retries for interrupted model output.</li>
+            <li>More reliable chats and files: fewer duplicate responses, automatic image-link recovery, and clearer upload errors.</li>
+          </ul>
+        </article>
+        <!-- release-notes:en:end -->
       </section>
 
       <header id="de" lang="de" data-language-page="de" hidden>
@@ -224,6 +357,7 @@
         <p>Verständliche Hilfe für die tägliche Arbeit mit KARL. Keine technische Einrichtung.</p>
         <nav aria-label="Seitenbereiche">
           <a href="#de-prompts">Prompts und Anweisungen</a>
+          <a href="#de-support">Support erhalten</a>
           <a href="#de-release-notes">Neuigkeiten</a>
         </nav>
       </header>
@@ -290,36 +424,79 @@
         </p>
       </section>
 
+      <section id="de-support" lang="de" data-language-page="de" hidden>
+        <h2>Support für KARL erhalten</h2>
+        <p>Wählen Sie das passende Formular, damit Ihre Anfrage das richtige Team erreicht.</p>
+        <div class="support-grid">
+          <article class="support-card request">
+            <p class="support-eyebrow">Serviceanfrage</p>
+            <h3>Service oder Änderung anfragen</h3>
+            <p>
+              Verwenden Sie dieses Formular für Zugriffe, Konfigurationen, kleinere Änderungen oder
+              andere KARL-Anfragen, die keine Störung oder Fehlfunktion sind.
+            </p>
+            <h4>Erforderliche Angaben</h4>
+            <ul>
+              <li>Beschreiben Sie Ihren Bedarf und geben Sie möglichst viele Details an.</li>
+              <li>Wählen Sie <strong>KARL</strong> als Unterkategorie.</li>
+              <li>Wählen Sie <strong>Knauf Employee</strong> als Initiator.</li>
+            </ul>
+            <a
+              href="https://knauf.service-now.com/it?id=sc_cat_item&amp;sys_id=e16cc0b8dba806dc609363cad39619e4&amp;table=sc_cat_item&amp;searchTerm=knauf%20digital"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="support-action"
+            >
+              KARL-Serviceanfrage öffnen
+            </a>
+          </article>
+          <article class="support-card incident">
+            <p class="support-eyebrow">Störung</p>
+            <h3>Störung melden</h3>
+            <p>
+              Verwenden Sie dieses Formular, wenn KARL nicht verfügbar ist, eine Fehlfunktion hat
+              oder nicht wie erwartet arbeitet.
+            </p>
+            <h4>Erforderliche Angaben</h4>
+            <ul>
+              <li>Geben Sie eine klare Kurzbeschreibung ein.</li>
+              <li>
+                Wählen Sie <strong>Knauf.com - Digital Platform</strong> als Kategorie und
+                <strong>KARL</strong> als Unterkategorie.
+              </li>
+              <li>
+                Ergänzen Sie die Auswirkung, den Beginn, betroffene Nutzer, möglichst eine Chat-ID
+                oder einen geteilten Chat-Link sowie Ihre bevorzugte Kontaktmethode.
+              </li>
+            </ul>
+            <a
+              href="https://knauf.service-now.com/it?id=sc_cat_item&amp;sys_id=3f1dd0320a0a0b99000a53f7604a2ef9"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="support-action"
+            >
+              KARL-Störungsformular öffnen
+            </a>
+          </article>
+        </div>
+      </section>
+
       <section id="de-release-notes" lang="de" data-language-page="de" hidden>
         <h2>Neuigkeiten in KARL</h2>
         <p>Verfügbare nutzerbezogene Versionshinweise stehen hier, neueste zuerst.</p>
-        <h3>4.–14. August 2026</h3>
-        <ul>
-          <li>
-            <strong>Geplante Agenten:</strong> wiederkehrende Projektaufgaben erstellen, sofort
-            ausführen und Zeitpläne zentral verwalten.
-          </li>
-          <li>
-            <strong>Bessere Artefakte:</strong> SVG-Grafiken bearbeiten, frühere Versionen
-            wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen.
-          </li>
-          <li>
-            <strong>Projektwissen:</strong> Upload- und Verarbeitungsstatus sehen, Fehler erneut
-            versuchen und Projektdateien synchron halten.
-          </li>
-          <li>
-            <strong>Prompts teilen:</strong> Prompts über die vorhandenen Zugriffsrechte mit
-            berechtigten Kolleginnen und Kollegen teilen.
-          </li>
-          <li>
-            <strong>Klarere Antworten:</strong> kürzere direkte Antworten auf einfache Fragen und
-            sicherere Wiederholungen bei unterbrochenen Modellausgaben.
-          </li>
-          <li>
-            <strong>Zuverlässigere Chats und Dateien:</strong> weniger doppelte Antworten,
-            automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler.
-          </li>
-        </ul>
+        <!-- release-notes:de:begin -->
+        <article class="release-group">
+          <h3>4.–14. August 2026</h3>
+          <ul>
+            <li>Geplante Agenten: wiederkehrende Projektaufgaben erstellen, sofort ausführen und Zeitpläne zentral verwalten.</li>
+            <li>Bessere Artefakte: SVG-Grafiken bearbeiten, frühere Versionen wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen.</li>
+            <li>Projektwissen: Upload- und Verarbeitungsstatus sehen, Fehler erneut versuchen und Projektdateien synchron halten.</li>
+            <li>Prompts teilen: Prompts über die vorhandenen Zugriffsrechte mit berechtigten Kolleginnen und Kollegen teilen.</li>
+            <li>Klarere Antworten: kürzere direkte Antworten auf einfache Fragen und sicherere Wiederholungen bei unterbrochenen Modellausgaben.</li>
+            <li>Zuverlässigere Chats und Dateien: weniger doppelte Antworten, automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler.</li>
+          </ul>
+        </article>
+        <!-- release-notes:de:end -->
       </section>
     </main>
     <script>

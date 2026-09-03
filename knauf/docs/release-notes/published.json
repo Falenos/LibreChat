@@ -1,0 +1,55 @@
+{
+  "groups": [
+    {
+      "id": "2026-08-14",
+      "date": {
+        "en": "August 4–14, 2026",
+        "de": "4.–14. August 2026"
+      },
+      "items": [
+        {
+          "id": "scheduled-agents",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "Scheduled Agents: create recurring project tasks, run them immediately, and manage schedules in one place.",
+          "de": "Geplante Agenten: wiederkehrende Projektaufgaben erstellen, sofort ausführen und Zeitpläne zentral verwalten."
+        },
+        {
+          "id": "better-artifacts",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "Better Artifacts: edit SVG graphics, recover earlier versions, and export or continue shared artifacts more reliably.",
+          "de": "Bessere Artefakte: SVG-Grafiken bearbeiten, frühere Versionen wiederherstellen und geteilte Artefakte zuverlässiger exportieren oder fortsetzen."
+        },
+        {
+          "id": "project-knowledge",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "Project Knowledge: see upload and processing status, retry failures, and keep project files synchronized.",
+          "de": "Projektwissen: Upload- und Verarbeitungsstatus sehen, Fehler erneut versuchen und Projektdateien synchron halten."
+        },
+        {
+          "id": "prompt-sharing",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "Prompt Sharing: share prompts with permitted colleagues through the existing access controls.",
+          "de": "Prompts teilen: Prompts über die vorhandenen Zugriffsrechte mit berechtigten Kolleginnen und Kollegen teilen."
+        },
+        {
+          "id": "clearer-answers",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "Clearer Answers: shorter direct answers for simple questions and safer retries for interrupted model output.",
+          "de": "Klarere Antworten: kürzere direkte Antworten auf einfache Fragen und sicherere Wiederholungen bei unterbrochenen Modellausgaben."
+        },
+        {
+          "id": "reliable-chats-files",
+          "ticket": null,
+          "date": "2026-08-14",
+          "en": "More reliable chats and files: fewer duplicate responses, automatic image-link recovery, and clearer upload errors.",
+          "de": "Zuverlässigere Chats und Dateien: weniger doppelte Antworten, automatische Wiederherstellung von Bildlinks und klarere Upload-Fehler."
+        }
+      ]
+    }
+  ]
+}

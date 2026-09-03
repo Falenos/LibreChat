@@ -5,13 +5,13 @@
  * above the sidebar + chat split. Carries the Knauf wordmark on the
  * left and the user avatar with a dropdown menu on the right. The menu
  * items mirror the (now hidden) sidebar `AccountSettings` —
- * Email row, optional Balance row, My Files, Settings, Log out —
+ * Email row, optional Balance row, My Files, KARL help, Settings, Log out —
  * so the top bar is the single user-menu surface.
  *
  * Reuses every dependency `AccountSettings` already pulled in
  * (`useAuthContext`, `useGetStartupConfig`, `useGetUserBalance`,
- * `MyFilesModal`, `Settings`, `Avatar`, etc.) — no new locale keys,
- * no new dialog components.
+ * `MyFilesModal`, `Settings`, `Avatar`, etc.) and mounts the Knauf-owned
+ * help dialog so the release notes do not depend on a separately served route.
  */
 import { memo, useRef, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
@@ -22,6 +22,7 @@ import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import Settings from '~/components/Nav/Settings';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
+import KnaufHelpDialog from './KnaufHelpDialog';
 
 function KnaufTopBar() {
   const localize = useLocalize();
@@ -32,6 +33,7 @@ function KnaufTopBar() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const avatarButtonRef = useRef<HTMLButtonElement>(null);
   const menuStore = Ariakit.useMenuStore({ placement: 'bottom-end' });
 
@@ -75,10 +77,7 @@ function KnaufTopBar() {
             {localize('com_nav_my_files')}
           </Menu.MenuItem>
           {/* [knauf] KK20-250 / KK20-283 — discoverable user docs and release notes. */}
-          <Menu.MenuItem
-            onClick={() => window.open('/help/index.html', '_blank', 'noopener,noreferrer')}
-            className="select-item text-sm"
-          >
+          <Menu.MenuItem onClick={() => setShowHelp(true)} className="select-item text-sm">
             <BookOpen className="icon-md" aria-hidden="true" />
             {localize('com_nav_karl_help')}
           </Menu.MenuItem>
@@ -95,6 +94,13 @@ function KnaufTopBar() {
         </Menu.Menu>
         {showFiles && (
           <MyFilesModal open={showFiles} onOpenChange={setShowFiles} triggerRef={avatarButtonRef} />
+        )}
+        {showHelp && (
+          <KnaufHelpDialog
+            open={showHelp}
+            onOpenChange={setShowHelp}
+            triggerRef={avatarButtonRef}
+          />
         )}
         {showSettings && <Settings open={showSettings} onOpenChange={setShowSettings} />}
       </Menu.MenuProvider>

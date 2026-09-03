@@ -4,8 +4,6 @@
  * Mocks every upstream dependency and pins the Knauf user-menu contract.
  */
 import React from 'react';
-import fs from 'fs';
-import path from 'path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import KnaufTopBar from './KnaufTopBar';
 
@@ -14,6 +12,7 @@ const mockUseGetStartupConfig = jest.fn();
 const mockUseGetUserBalance = jest.fn();
 const mockLogout = jest.fn();
 const mockMyFilesModal = jest.fn();
+const mockHelpDialog = jest.fn();
 const mockSettings = jest.fn();
 
 jest.mock('~/hooks', () => ({
@@ -38,6 +37,14 @@ jest.mock('~/components/Nav/Settings', () => ({
   default: (props: { open: boolean }) => {
     mockSettings(props);
     return props.open ? <div data-testid="settings-dialog" /> : null;
+  },
+}));
+
+jest.mock('./KnaufHelpDialog', () => ({
+  __esModule: true,
+  default: (props: { open: boolean }) => {
+    mockHelpDialog(props);
+    return props.open ? <div data-testid="knauf-help-dialog" /> : null;
   },
 }));
 
@@ -71,23 +78,17 @@ function setBalance(data: { tokenCredits: number } | null = null) {
 }
 
 describe('[knauf] KnaufTopBar — KK20-173 top header user menu', () => {
-  const originalWindowOpen = window.open;
-
   beforeEach(() => {
     mockUseAuthContext.mockReset();
     mockUseGetStartupConfig.mockReset();
     mockUseGetUserBalance.mockReset();
     mockLogout.mockReset();
     mockMyFilesModal.mockReset();
+    mockHelpDialog.mockReset();
     mockSettings.mockReset();
     setAuth();
     setStartupConfig();
     setBalance(null);
-    window.open = jest.fn();
-  });
-
-  afterEach(() => {
-    window.open = originalWindowOpen;
   });
 
   it('renders the Knauf logo and the user avatar button', () => {
@@ -115,51 +116,21 @@ describe('[knauf] KnaufTopBar — KK20-173 top header user menu', () => {
     render(<KnaufTopBar />);
     fireEvent.click(screen.getByTestId('knauf-topbar-user'));
     expect(screen.queryByText('com_nav_help_faq')).not.toBeInTheDocument();
-    expect(window.open).not.toHaveBeenCalled();
   });
 
-  // [knauf] KK20-250 / KK20-283 — ship one discoverable user guide and release-note surface.
-  it.each(['en', 'de'])('opens KARL help in English by default for app language %s', (language) => {
-    document.documentElement.lang = language;
+  // [knauf] KK20-250 / KK20-283 — open help in-app instead of relying on a static route.
+  it('opens the KARL help and release-note dialog', () => {
     render(<KnaufTopBar />);
     fireEvent.click(screen.getByTestId('knauf-topbar-user'));
     fireEvent.click(screen.getByText('com_nav_karl_help'));
-    expect(window.open).toHaveBeenCalledWith('/help/index.html', '_blank', 'noopener,noreferrer');
-  });
-
-  it('defaults the help page to English and lets the user switch to German', () => {
-    const html = fs.readFileSync(
-      path.join(__dirname, '../../../../public/help/index.html'),
-      'utf8',
+    expect(screen.getByTestId('knauf-help-dialog')).toBeInTheDocument();
+    expect(mockHelpDialog).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        open: true,
+        onOpenChange: expect.any(Function),
+        triggerRef: expect.any(Object),
+      }),
     );
-    const frame = document.createElement('iframe');
-    document.body.appendChild(frame);
-    const frameDocument = frame.contentDocument;
-    const frameWindow = frame.contentWindow;
-    if (frameDocument == null || frameWindow == null) {
-      throw new Error('Help-page test frame is unavailable');
-    }
-    frameDocument.open();
-    frameDocument.write(html);
-    frameDocument.close();
-    frameWindow.eval(frameDocument.querySelector('script')?.textContent ?? '');
-    const languageSelect = frameDocument.querySelector<HTMLSelectElement>('#language-select');
-    const englishPage = frameDocument.querySelector<HTMLElement>('[data-language-page="en"]');
-    const germanPage = frameDocument.querySelector<HTMLElement>('[data-language-page="de"]');
-
-    expect(languageSelect?.value).toBe('en');
-    expect(englishPage?.hidden).toBe(false);
-    expect(germanPage?.hidden).toBe(true);
-
-    if (languageSelect == null) {
-      throw new Error('Language selector is missing');
-    }
-    languageSelect.value = 'de';
-    languageSelect.dispatchEvent(new frameWindow.Event('change', { bubbles: true }));
-
-    expect(frameDocument.documentElement.lang).toBe('de');
-    expect(englishPage?.hidden).toBe(true);
-    expect(germanPage?.hidden).toBe(false);
   });
   // End [knauf]
 
