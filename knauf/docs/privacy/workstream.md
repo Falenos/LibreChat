@@ -13,8 +13,10 @@
 > Most consequentially, one of the assessment's own activation triggers — *"Langfuse keys set"*,
 > which it named as requiring a PII review **before the first trace** — has fired in dev and prod.
 >
-> **Status: drafted 2026-08-28, validated & extended 2026-08-31** (retention law checked, ticket
-> citations adversarially verified). No ticket is filed yet; the drafts in §5 are ready to paste.
+> **Status: drafted 2026-08-28 · validated 2026-08-31 · implementation started 2026-09-01.**
+> Wave 0's in-repo items are done; wave 1's two code tickets are filed and in open PRs —
+> **KK20-327** (P0-1, PR #340) and **KK20-328** (P2-7, PR #341). See the implementation log at the
+> end of §6.1 for what implementation taught, including three AC errors the code review caught.
 
 > **Scope note on compliance.** §3 is engineering-facing analysis to put *to* the DPO — which
 > articles each change touches and what evidence it produces. It is not legal advice and does not
@@ -126,7 +128,7 @@ field-level redaction — is **not currently reachable**, for two independent re
 | **5(2)** accountability | Evidence controls exist and were reviewed | DOC-1, P0-5, P0-6, P1-3, G-4 | The assessment + its verification logs *are* the evidence |
 | **6** lawful basis | Assistant use is straightforward; **memory profiling is the contested one** | G-1, G-2 | Open |
 | **9** special categories | Free-text chat can carry health, beliefs, union membership — unavoidable in a corporate assistant | G-1, P2-3 | Unassessed. Argues for short memory retention |
-| **13/14** transparency | EULA cites Art. 13, 15–18, 20, 7(3) — but the notice **predates Langfuse tracing, the auditLog fields and memory profiling**, all live processing today | **G-5** | **Stale — an un-met live obligation**, not "done" |
+| **13/14** transparency | EULA cites Art. 13, 15–18, 20, 21, 7(3) — but read it: it **states KARL does "not carry out … profiling"** while memory is LLM-written user profiling; it refers to "the operation of the **Survey website**" (boilerplate from another product); its stated purposes are only "Authentication and content filtering"; and it claims storage "in the Netherlands", unverified against Langfuse/Azure AI Search | **G-5** | **Contradicted, not merely stale** — an affirmative statement to data subjects that live processing contradicts. Most urgent single line in the plan |
 | **15 / 20** access & portability | **No export endpoint.** DSARs are manual | **P2-6** | **Real gap** |
 | **17** erasure | Must reach Mongo + Meilisearch + pgvector + Azure AI Search + Blob **+ Langfuse**; `auditLog` is immutable | P0-2, P2-2, P2-5, P2-7 | Cascade verified for ~25 stores; **Langfuse is a copy erasure does not reach** |
 | **25** by design & default | The whole Phase 0 argument; restrictive permission defaults | P0-3, P1-3 | Good instinct, thinly documented |
@@ -292,7 +294,7 @@ obligation is currently un-met, and this ticket is the cheapest documented way t
 
 | Class | Tickets | Basis |
 |---|---|---|
-| **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: Langfuse tracing, auditLog capture and memory profiling are live processing **outside the current notice**) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) |
+| **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: the notice **affirmatively denies profiling** while memory performs it, names another product, and omits Langfuse and the auditLog — live processing *contrary to*, not just outside, the notice) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) |
 | **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
 | **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (link expiry; its P2-4a half was **closed by code reading** — the premise was wrong, see §2 row 4) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
 | **Optional** | **P4-1** (discretionary by design — double-gated, discharges no obligation on its own) |
@@ -567,7 +569,7 @@ verification log.
 
 #### P0-1 · Langfuse PII gate — reduce what is captured *(in-repo)*
 
-**Type:** Bug · **Effort:** S · **Compliance:** Art. 5(1)(c), 5(1)(e), 17
+**Jira:** [KK20-327](https://knauf.atlassian.net/browse/KK20-327) · **PR:** #340 (open) · **Type:** Bug · **Effort:** S · **Compliance:** Art. 5(1)(c), 5(1)(e), 17
 
 **Summary:** Langfuse went live in dev and prod without the PII gate KK20-207 §12.2 named as a hard
 precondition. Langfuse is self-hosted in Knauf's own AKS, so this is a **retention and minimisation**
@@ -579,23 +581,29 @@ removes payloads with low debug value or a redundant copy elsewhere, and opens t
 masking. Bounding the rest is P0-2's job.
 
 **AC:**
-- [ ] **Do not** blanket-disable `toolOutputTracing`. Record the decision to retain tool outputs,
-      with §4.3's reasoning, so it is not silently reversed.
-- [ ] Feedback free-text no longer sent as the Langfuse score `comment`
-      (`api/server/routes/messages.js:419-433` → keep `tag` and `rating`, drop `text`). Rationale:
-      `tag` carries the triage signal, and the free text is already durably stored in Mongo at
-      `message.feedback.text` — Langfuse is a redundant second copy of the highest-entropy
-      free-text field in the product.
-- [ ] Memory-agent trace payloads (`packages/api/src/agents/memory.ts:464-474`) reviewed
-      separately — highest sensitivity, lowest marginal debug value (the mechanism is debuggable
-      from structure; the stored value is rarely what is in question).
-- [ ] Identity posture pinned by a regression assertion (`userId`/`sessionId` stay pseudonymous).
-- [ ] `LANGFUSE_SAMPLE_RATE` documented as *not* a privacy control.
-- [ ] **Path to layer 3 opened:** an upstream issue or PR against `@librechat/agents` to forward
-      `@langfuse/otel`'s `mask` parameter through `LangfuseConfig`. Never patch `node_modules`.
+- [x] `toolOutputTracing` **not** blanket-disabled; the decision and §4.3's reasoning recorded in
+      `buildLangfuseConfig` so it is not silently reversed.
+- [x] Feedback free-text no longer sent as the Langfuse score `comment` — `rating` and `tag` kept,
+      `text` dropped (already durable in Mongo at `message.feedback.text`; Langfuse was a redundant
+      second copy of the highest-entropy free-text field in the product).
+- [x] **Added in review — this AC was missing, and the original list would have shipped a
+      bypass:** `tag` is **allow-listed** against `FEEDBACK_REASON_KEYS`. `tag` is `Mixed` in the
+      schema and the route runs no Zod parse, so a crafted request could put the same prose in `tag`
+      that the gate strips from `text`. Legacy `{ key }` objects normalise; anything unrecognised
+      fails closed to `undefined`.
+- [ ] **Still open after the PR** — memory-agent trace payloads
+      (`packages/api/src/agents/memory.ts:464-474`) reviewed separately. Highest sensitivity, lowest
+      marginal debug value. `memory.ts` was not touched by KK20-327.
+- [x] Identity posture pinned by a regression assertion (`userId`/`sessionId` stay pseudonymous).
+- [x] `LANGFUSE_SAMPLE_RATE` documented in `.env.example` as *not* a privacy control.
+- [ ] **Still open after the PR** — path to layer 3: an upstream issue or PR against
+      `@librechat/agents` to forward `@langfuse/otel`'s `mask` parameter through `LangfuseConfig`.
+      Not yet opened. Never patch `node_modules`.
 
-**Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard is the precedent for
-per-run gating. SEAMS.md already has a row for `packages/api/src/agents/run.ts` (`buildLangfuseConfig`) — **append**, never edit.
+**Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard was the precedent for
+per-run gating. The two open ACs must not close with the PR by default — keep KK20-327 open or cut
+a small follow-up. Seam test: `api/server/routes/__tests__/messagesFeedback.knauf.spec.js` (7 cases,
+verified to fail when the gate is reverted).
 
 #### P0-2 · Langfuse platform retention & access *(cross-repo — `agk-deployment-configs`)*
 
@@ -890,56 +898,93 @@ after P2-2.
 half, this is the access half.
 
 **AC:**
-- [ ] **Now, and mandatory (P2-6a):** a documented, *tested* manual DSAR runbook covering **all**
-      sinks — Art. 15 is a live obligation with an Art. 12(3) one-month clock, and "manual
-      archaeology" is not a compliant fulfilment path until it is written down and rehearsed once.
-      **Any pending or incoming DSAR promotes this item to immediate.**
-- [ ] The access scope enumerates **Langfuse traces** (addressable: tenant tags,
-      `librechat.source.message.id` metadata) and the subject's **auditLog entries** (actor
-      name/IP/userAgent) — access mirrors erasure: every sink P2-5 verifies, this discloses.
+- [ ] **Now, and mandatory (P2-6a):** a documented, *tested* manual DSAR runbook covering **all
+      nine sinks in §1** — Art. 15 is a live obligation with an Art. 12(3) clock (one month,
+      extendable by two more for complex requests if the subject is told within the first), and
+      "manual archaeology" is not a compliant fulfilment path until it is written down and rehearsed
+      once. **Any pending or incoming DSAR promotes this item to immediate.**
+- [ ] The access scope enumerates every §1 sink, not the obvious seven: Mongo, Meilisearch,
+      pgvector, Azure AI Search, Blob, **Langfuse traces** (addressable: tenant tags,
+      `librechat.source.message.id` metadata), the subject's **auditLog entries**, **winston logs**
+      (error logs carry `userId`/`requestId`, 14-day rotation — searched or excluded, with the
+      reason written down) and **Datadog** (pseudonymous session id only — document the exclusion
+      rather than silently omit it). Access mirrors erasure: every sink P2-5 verifies, this discloses.
+- [ ] **Art. 15(4) — third-party data:** a subject's auditLog entries name the *admin* who acted
+      on them (`actor.name`). Access must not adversely affect others' rights; redact actor identity
+      when the requester is the target, not the actor.
 - [ ] Then the self-service endpoint: a user can export conversations, messages, memories, file
       metadata and feedback · machine-readable format · fulfilment time measured.
 
 #### P2-7 · `auditLog` retention, minimisation & export governance
 
-**Type:** Task · **Effort:** M · **Compliance:** **Art. 5(1)(e), 17 vs 5(1)(f)/32**
+**Jira:** [KK20-328](https://knauf.atlassian.net/browse/KK20-328) · **PR:** #341 (open) · **Type:** Task · **Effort:** M · **Compliance:** **Art. 5(1)(e), 17 vs 5(1)(f)/32**
 
 **Summary:** `auditLog` is today a **grants-only** trail (exactly three writers — `grant.assigned`
 / `grant.removed` via `recordAuditEntry`; `packages/api/src/admin/grants.ts:423-430, :495-502`,
-`admin/roles.ts:199-213`), storing actor name, full IP, userAgent and requestId — `sessionId` is schema-reserved but no
-writer populates it — every field
-`immutable`, hash-chained, append-only. **No retention exists, but the purge mechanism already
-does**: `purgeAuditLogEntries` (`packages/data-schemas/src/methods/auditLog.ts:634-704`) is fully
-built, chain-safe (prefix purge + checkpoint), and **wired to nothing**. Retention period per
-**§3.4: 12 months rolling**, with per-record legal-hold extensions.
+`admin/roles.ts:199-213`), storing actor name, full IP, userAgent and requestId (`sessionId` is
+schema-reserved but no writer populates it) — every field `immutable`, hash-chained, append-only.
+**No retention existed.** `purgeAuditLogEntries` (`packages/data-schemas/src/methods/auditLog.ts:634-704`)
+already existed, chain-safe (it converts the date into a contiguous `seq` prefix) and gated on
+`confirm` — wired to nothing. **What did not exist was anywhere to keep the checkpoint it mints**:
+without one, `verifyAuditChain` returns `ok:false` ("prefix purged or deleted") on every purged
+chain — a false tamper alarm on a security feature. So the purge and a checkpoint ledger had to
+land together. Period per **§3.4: 12 months rolling**, with per-record legal-hold extensions.
 
-**AC:**
-- [ ] **12-month rolling purge wired** to the existing `purgeAuditLogEntries` (scheduled job, not a
-      policy PDF), persisting the chain checkpoint so verification of the remainder survives.
-- [ ] **Write-time IP/userAgent minimisation decided** — `buildAuditContext`
-      (`packages/api/src/admin/context.ts:12-21`) captures full IP + full UA verbatim; because the
-      hash covers them, they can never be truncated retroactively. Minimise at write or accept in
-      writing.
+> **Compliance nuance:** German DSK guidance treats "a few days to several months" as normal for
+> routine logs. 12 months for an *admin-only, purpose-limited* security log is defensible — but
+> that defence rests on G-2's works agreement actually being concluded. G-2 is on this ticket's
+> critical path, not adjacent to it.
+
+**AC — done in KK20-328:**
+- [x] 12-month rolling purge wired to `purgeAuditLogEntries`, modelled on the file-retention sweep.
+- [x] **Review correction:** the plan said "wired at `experimental.js` on a dedicated cluster
+      worker". Alone, that ships a feature that **never runs** — `Dockerfile CMD → npm run backend →
+      api/server/index.js`. Both entrypoints are wired: `index.js` directly, `experimental.js` on its
+      designated retention worker (one worker, one purge — concurrent purges on a chain can
+      interleave deletes and checkpoint writes).
+- [x] **Review correction:** the plan said dry-run comes "for free" from the `confirm` flag.
+      **False** — `purgeAuditLogEntries` returns `{ deletedCount: 0 }` on its first line when
+      `confirm` is false, no query, no count. Dry-run now counts separately (`countPurgeable`, an
+      explicit upper-bound estimate), or "read the counts, then enable" is fiction.
+- [x] **Review correction:** "persist the chain checkpoint" was understated. A ledger
+      (`KnaufAuditRetentionCheckpoint` — schema/model/methods, forward-only advance) was built and
+      the admin verify route feeds the persisted boundary back into `verifyAuditChain`. **And** a
+      purge that *empties* a chain must **clear** its boundary: the chain restarts at seq 1 from
+      genesis, and a stale far-ahead boundary would fail the forward-only guard on the next purge
+      and wedge verification permanently. The integration spec reproduces the wedge and the heal.
+- [x] Ships inert — retention unset ⇒ the sweep does not run; **no fallback** to 365; dry-run
+      default true; only the literal `"false"` enables deletion.
+- [x] Every scope incl. the platform chain, enumerated via the **indexed** `chainKey` with the
+      exact stored `tenantId` read off one entry — `tenantId` has no index, and reconstructing it
+      from the chain key would duplicate a private upstream constant.
+
+**AC — deferred to a follow-up ticket** (the wave plan's core/tail split):
 - [ ] **`metadata` write-guard**: the field is `Schema.Types.Mixed` and the CSV export dumps it
-      verbatim as a `Details` JSON column. Today only `{ capability }` lands there; adopt the rule
-      that **no free text, tool arguments, filenames, or message content may enter audit metadata**
-      — enforce with a write-time allowlist, because entries are immutable and unredactable.
-- [ ] **`actor.name` fallback reviewed**: `name || username || email || userId`
-      (`grants.ts:186`, and identically `admin/roles.ts:197`) can immortalise an **email address** in an unredactable record; prefer the
-      opaque id + display-name-only.
+      verbatim as `Details`. Today only `{ capability }` lands there; enforce with a write-time
+      allowlist that **no free text, tool arguments, filenames or message content** may enter —
+      entries are immutable and unredactable.
 - [ ] **The export is itself audited**: `GET /api/admin/audit-log/export.csv` (17 columns incl. IP
-      and `Details`) is capability-gated but leaves **no trail of who exported what when** — an
-      auditor cannot audit the auditors; exported files are ungoverned PII at rest. Emit an audit
-      entry per export and state a handling rule for exported files.
-- [ ] **Account-deletion position documented**: the UserController cascade (~25 stores) never
-      touches AuditLog — deletion currently resolves silently in favour of retain-forever. Record
-      the Art. 17(3) position (retention for security/legal-claim purposes, time-boxed by the
-      12-month purge) rather than leaving it implicit.
-- [ ] Documented position added to the assessment's §1.1 data map and the Art. 30 record; the
-      taxonomy's unwritten categories (`agent_run`/`tool_call`/`mcp`/`auth`/`approval` are reserved
-      but nothing writes them) noted so reviewers don't assume broader coverage than exists.
-- [ ] Works-council: this log is squarely a § 87(1) Nr. 6 BetrVG system — fold into G-2's agreement
-      (purpose limited to security/audit, expressly no performance monitoring, named-role access).
+      and `Details`) is capability-gated but leaves **no trail of who exported what when**. Emit an
+      entry per export; state a handling rule for exported files.
+
+**AC — decisions still open:**
+- [ ] **Write-time IP/userAgent minimisation decided** — `buildAuditContext`
+      (`packages/api/src/admin/context.ts:12-21`) captures both verbatim; the hash covers them, so
+      they can never be truncated retroactively. Minimise at write or accept in writing.
+- [ ] **`actor.name` fallback reviewed** — `name || username || email || userId` (`grants.ts:186`,
+      `roles.ts:197`) can immortalise an **email address** in an unredactable record.
+- [ ] **Account-deletion position documented** — the UserController cascade (~25 stores) never
+      touches AuditLog. Record the Art. 17(3) basis (security purpose still necessary under 6(1)(f);
+      17(3)(e) for legal claims), time-boxed by the 12-month purge.
+- [ ] Added to the assessment's §1.1 map and the Art. 30 record; reviewers told the taxonomy's
+      `agent_run`/`tool_call`/`mcp`/`auth`/`approval` categories are **reserved but unwritten**.
+- [ ] Works-council: the purge design is on G-2's agenda (purpose limited to security/audit,
+      expressly no performance monitoring, named-role access).
+
+**Notes:** data-safe on day one — the collection shipped 2026-06-18 (upstream #13087), so a
+12-month purge deletes nothing before ~2027-06. Specs: `packages/api/src/knauf/audit/retention.spec.ts`
+(15) and `packages/data-schemas/src/methods/auditRetentionCheckpoint.spec.ts` (6, real Mongo; proves
+verification fails without the checkpoint and passes with it).
 
 #### P2-8 · General violation-log TTL
 
@@ -982,11 +1027,11 @@ boundary-only re-hydration, streaming, multi-turn growth — before any implemen
 
 | # | Ticket | Note |
 |---|---|---|
-| G-1 | **DPIA (Art. 35)** | Large-scale processing + profiling + workplace context. Likely required, not done. The assessment is the input, not a substitute |
-| G-2 | **Works council briefing** (BetrVG §87(1)(6), BDSG §26) | **Highest-leverage governance item.** A works agreement can settle the Art. 6 basis for memory, the §87(1)(6) duty and P2-1's retention periods at once |
-| G-3 | **EU AI Act deployer posture** | Record the deployer (not provider) determination; evidence Art. 4 AI literacy (live since 2025-02-02) and Art. 50 transparency; register the three Annex III.4 drift triggers as watch items |
+| G-1 | **DPIA (Art. 35)** | Against WP248 rev.01 the honest count is four or five criteria (two suffice): **sensitive data** (Art. 9 categories in free-text chat), **large scale**, **vulnerable subjects** (employees — WP248 names them), **innovative technology**, arguably **systematic monitoring**. Art. 35(3)(a) is *engaged* by memory's profiling but not squarely met (its second limb needs decisions with legal effects) — rest the duty on 35(1) and say so. **Art. 35(9)** consultation of data-subject representatives = G-2; the two are one conversation. Not done. The assessment is the input, not a substitute |
+| G-2 | **Works-council agreement** (BetrVG §87(1) Nr. 6, BDSG §26) — **carries P2-1** | **Highest-leverage governance item.** Co-determination is discharged by a concluded **Betriebsvereinbarung** (or conciliation-board ruling), not a briefing. One agreement settles three things: the §87(1) Nr. 6 duty; the **legal basis** for employee processing incl. memory (**Art. 88 GDPR / §26(4) BDSG** let a collective agreement serve as that basis); and **P2-1, the retention periods per category** — this is P2-1's forum, and the 12-month audit retention in KK20-328 is defensible under DSK guidance *because* it is agreed here |
+| G-3 | **EU AI Act deployer posture** | Record the deployer (not provider) determination **including the Art. 25(1) test** — a deployer that substantially modifies a system or changes its intended purpose becomes its provider; a general assistant with system prompts does not cross it, a purpose-built HR agent might. Evidence Art. 4 AI literacy (live since 2025-02-02) and Art. 50(1)/(4) user-disclosure (since 2026-08-02; the 50(2) marking duty is provider-side); register the three Annex III.4 drift triggers |
 | G-4 | **Art. 30 record of processing** | Promote the assessment's §1.1 into a formal record; P1-3's checklist is the mechanism that keeps it current |
-| G-5 | **Privacy-notice (Art. 13) update** | The EULA predates **Langfuse tracing, the auditLog's IP/userAgent capture, and memory profiling** — live processing outside the current notice. Update the notice (and the works-agreement text with it, via G-2); re-review on every new sink |
+| G-5 | **Privacy-notice correction (Art. 13)** — **Bug, not gap** | Reading the EULA (`librechat.yaml:115-154`) shows contradiction, not omission: it **states KARL does "not carry out … profiling"** while memory performs it; refers to "the operation of the **Survey website**"; states purposes as only "Authentication and content filtering"; claims storage "in the Netherlands" (verify against Langfuse AKS and Azure AI Search). The "no profiling" sentence and the wrong-product reference can be fixed in hours and must not wait for the works agreement; the consolidated text rides with G-2. Re-review on every new sink |
 
 ---
 
@@ -1002,7 +1047,7 @@ and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't h
 | Wave | When | What | Exit review — the wave is done when |
 |---|---|---|---|
 | **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · ✅ **DOC-1's restore step done** (v1.2 back on `main`, so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
-| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · **P0-1** (in-repo reductions + the upstream `mask` issue opened) · **P2-7 core** (12-month purge wired to the existing `purgeAuditLogEntries` + the write-time IP/metadata decisions; the export-governance tail may trail into wave 2. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0) · **P2-6a** (the runbook half of P2-6's AC — manual DSAR runbook, tested once; **any pending or incoming DSAR promotes this to immediate**) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
+| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · ✅ **P0-1** (**KK20-327**, PR #340 — code merged to the branch; two ACs still open: memory-agent review, upstream `mask` issue) · ✅ **P2-7 core** (**KK20-328**, PR #341 — purge + checkpoint ledger + both entrypoints wired, inert by default. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0. The write-time IP/metadata decisions and the export-governance tail are the follow-up) · **P2-6a** (the runbook half of P2-6's AC — manual DSAR runbook, tested once; **any pending or incoming DSAR promotes this to immediate**) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
 | **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
 | **3 · Retention & rights** | Opens when **P2-1's numbers land** (P2-1 itself started in wave 0; G-2 is what produces it) | **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** (waits deliberately: it needs *a* number, and setting one provisionally only to have P2-1 ratify a different one means bounding the same log twice) · **P2-5 full re-run** (after P2-2, as its AC specifies) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
 | **4 · Engine** *(evidence-gated; start anytime capacity exists)* | Parallel to 2–3 | **P3-1** PoC → gate ENGINE → **P3-2** + **P3-3**. **P3-4** needs no engine — run it alongside wave 3 | Engine decision recorded on measured DE/EN data; the two persistence chokepoints protected with no user-visible utility loss |
@@ -1013,6 +1058,15 @@ the assessment's verification log, confirm the §4.4 mandatory column is empty o
 then retire this plan per the implementation-plans lifecycle — promote the §1/§3/§4 material to
 `architecture/`, archive the rollout history. A plan that outlives its work is the failure mode
 this folder's README exists to prevent.
+
+**Implementation log**
+
+| Date | What | What it taught |
+|---|---|---|
+| 2026-09-01 | Wave 0 in-repo: assessment v1.2 restored; **P2-4a closed by code reading** (the legacy-shared-link premise was wrong — see §2 row 4); P0-7's code half answered | The first thing implementation does is find out which tickets were built on a misreading |
+| 2026-09-01 | **KK20-327** (P0-1) built and reviewed; PR #340 | The AC as written would have shipped a bypass: `tag` was unvalidated. Code review, not the AC, caught it |
+| 2026-09-02 | **KK20-328** (P2-7) built and reviewed; PR #341 | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
+| 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
 
 ### 6.2 The bundles (grouping rationale)
 
@@ -1096,16 +1150,38 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`api/db/indexSync.js`](../../../api/db/indexSync.js) | Meilisearch reconciliation — the §7 orphan gap |
 | [`packages/data-schemas/src/models/plugins/mongoMeili.ts`](../../../packages/data-schemas/src/models/plugins/mongoMeili.ts) | `preprocessObjectForIndex` — the single Meili chokepoint (P3-4) |
 | [`packages/api/src/knauf/permissions/userRestrictions.ts`](../../../packages/api/src/knauf/permissions/userRestrictions.ts) | Why the MCP finding is de-escalated |
+| [`api/server/routes/__tests__/messagesFeedback.knauf.spec.js`](../../../api/server/routes/__tests__/messagesFeedback.knauf.spec.js) | KK20-327 seam test — 7 cases incl. the `tag` bypass; verified to fail when the gate is reverted |
+| [`packages/api/src/knauf/audit/retention.ts`](../../../packages/api/src/knauf/audit/retention.ts) | KK20-328 — pure sweep logic behind injected deps; inert unless `KNAUF_AUDIT_RETENTION_DAYS` is set |
+| [`packages/data-schemas/src/methods/auditRetentionCheckpoint.ts`](../../../packages/data-schemas/src/methods/auditRetentionCheckpoint.ts) | KK20-328 — the checkpoint ledger upstream never shipped; forward-only advance + `clear()` for emptied chains |
+| [`api/server/services/Audit/knaufAuditRetention.js`](../../../api/server/services/Audit/knaufAuditRetention.js) | KK20-328 — dependency binding; enumerates the indexed `chainKey`, counts for dry-run |
+| [`api/server/index.js`](../../../api/server/index.js) · [`api/server/experimental.js`](../../../api/server/experimental.js) | Both entrypoints start the sweep — `index.js` is what the container runs |
+| [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
 
 ---
 
 ## 9. Verification recipes
 
-**P0-1 — Langfuse.** `npm run langfuse:traces` lists recent traces. Submit a thumbs-down with free
-text and confirm the score `comment` carries only the tag. Send a turn that uses file search and
-confirm chunk text **is still present** — that is the regression test for §4.3's decision to keep
-tool outputs debuggable.
+**P0-1 — Langfuse (KK20-327).** `npm run langfuse:traces` lists recent traces. Submit a thumbs-down
+with free text (`SECRET-CANARY-123`) and confirm the score `comment` carries only the tag. Reopen the
+message — the user still sees their comment (it is in Mongo; only the Langfuse copy is gone). Clear
+the rating — the score is **deleted** (the nullish passthrough preserves upstream's DELETE path).
+**Bypass check:** replay the feedback `PUT` from devtools with `"tag":"SECRET-CANARY-123"` → 200 and
+**no** `comment` in Langfuse. Send a turn that uses file search and confirm chunk text **is still
+present** — the regression test for §4.3's decision to keep tool outputs debuggable.
+
+**P2-7 — audit retention (KK20-328).** Start with **no** `KNAUF_AUDIT_RETENTION_DAYS`: one log
+line, `[auditRetention] Disabled — set KNAUF_AUDIT_RETENTION_DAYS to enable`, and nothing runs. Set
+it to `365` and restart: `Enabled: 365d retention, …, dryRun=true` and a `sweep complete` line with
+`totalWouldDelete`; **row count unchanged**; admin → verify chain still `ok: true`. To exercise
+deletion safely, use a scratch database with seeded entries, `KNAUF_AUDIT_RETENTION_DAYS=1` **and**
+`KNAUF_AUDIT_SWEEP_DRY_RUN=false`: old rows go, and verify **still** returns `ok: true` — that last
+assertion is the checkpoint ledger doing its job.
+
+```bash
+cd packages/data-schemas && npx jest src/methods/auditRetentionCheckpoint   # 6 — incl. purge→persist→verify
+cd packages/api && npx jest src/knauf/audit                                # 15
+```
 
 ```bash
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'
@@ -1157,10 +1233,13 @@ npm run test:api && npm run test:client
 
 **Engineering / Platform**
 - What is `DEBUG_LOGGING` set to in prod? (Config lives in the deployment repos.)
-- Is the Azure OpenAI **modified-abuse-monitoring opt-out** in place? This remains the single
+- Is the Azure OpenAI **modified-abuse-monitoring opt-out** in place (Microsoft's Limited Access /
+  modified-abuse-monitoring request form)? This remains the single
   highest-leverage open verification — the assessment's whole "least risky hop" argument rests on
   it, and it has been open since v1.0.
-- Langfuse prod: separate instance, current retention, trace volume?
+- Langfuse prod: separate instance, current retention, trace volume — **and which Azure region**
+  the AKS cluster and its ClickHouse/Postgres/MinIO storage sit in? The EULA tells users data is
+  stored "in the Netherlands" (G-5); Langfuse and Azure AI Search need to be checked against that.
 - **Do Microsoft's terms for the Azure OpenAI hosted `web_search` grounding tool carry the same
   DPA / EU-Data-Boundary commitments as the completion itself?** (P0-7 — the mechanism is now
   identified; this is the residual terms question, and it is load-bearing for §3's thesis.)
