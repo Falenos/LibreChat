@@ -17,86 +17,97 @@ const {
   sweepAuditRetention: sweepAuditRetentionWithDeps,
   startAuditRetentionSweep: startAuditRetentionSweepWithDeps,
   getAuditSweepLeaseMs,
+  getAuditSweepIntervalMs,
+  getAuditCheckpointSigningKeys,
 } = require('@librechat/api');
 const db = require('~/models');
 
 const OWNER = `${os.hostname()}:${process.pid}`;
 
 /**
- * Every audit scope that currently has entries. Enumerates the INDEXED `chainKey`
- * (four compound indexes) rather than `tenantId` (none), then reads the exact stored
- * tenant id off one entry — upstream's `tenant:` prefix is a private constant this
- * layer must not reconstruct. Platform entries carry no tenantId; they are matched
- * via the exported sentinel. Recomputed per pass so late-onboarded tenants sweep too.
+ * Every audit scope that currently has entries, in ONE round trip: a `$group` on the
+ * INDEXED `chainKey` with any row's stored `tenantId` (all rows of a chain share it).
+ * The platform chain carries no tenantId and is matched via the exported sentinel.
+ * Recomputed per pass so late-onboarded tenants sweep too. Because retention never
+ * empties a chain, every scope that ever had rows still has at least one — so this
+ * enumeration also reaches every scope that could hold a leftover intent.
  */
 async function listAuditScopes() {
   const AuditLog = mongoose.models.AuditLog;
   if (!AuditLog) {
     return [];
   }
-  const chainKeys = await AuditLog.distinct('chainKey');
+  const groups = await AuditLog.aggregate([
+    { $group: { _id: '$chainKey', tenantId: { $first: '$tenantId' } } },
+  ]);
   const scopes = [];
-  for (const chainKey of chainKeys) {
-    if (chainKey === PLATFORM_CHAIN_KEY) {
+  for (const g of groups) {
+    if (g._id === PLATFORM_CHAIN_KEY) {
       scopes.push({ scopeKey: auditRetentionScopeKey(undefined), tenantId: undefined });
-      continue;
-    }
-    const sample = await AuditLog.findOne({ chainKey }).select('tenantId').lean();
-    const tenantId = sample?.tenantId;
-    if (typeof tenantId === 'string' && tenantId.trim().length > 0) {
-      scopes.push({ scopeKey: auditRetentionScopeKey(tenantId), tenantId });
+    } else if (typeof g.tenantId === 'string' && g.tenantId.trim().length > 0) {
+      scopes.push({ scopeKey: auditRetentionScopeKey(g.tenantId), tenantId: g.tenantId });
     }
   }
   return scopes;
 }
 
-function signingKey() {
-  const key = process.env.KNAUF_AUDIT_CHECKPOINT_HMAC_KEY;
-  return typeof key === 'string' && key.length > 0 ? key : undefined;
-}
-
-function buildDeps() {
+function buildDeps({ oneShot = false } = {}) {
   const ttlMs = getAuditSweepLeaseMs();
+  const intervalMs = getAuditSweepIntervalMs();
   return {
     listAuditScopes,
     computeBoundary: (scope, before) => db.computeAuditRetentionBoundary(scope.tenantId, before),
-    beginPurge: db.beginAuditRetentionPurge,
+    /* Signed at begin with the key held outside Mongo; carries the lease fence. */
+    beginPurge: ({ scopeKey, boundary, cutoff, now, fence }) =>
+      db.beginAuditRetentionPurge({
+        scopeKey,
+        boundary,
+        cutoff,
+        now,
+        fence,
+        owner: OWNER,
+        signingKeys: getAuditCheckpointSigningKeys(),
+      }),
     purgeScope: (scope, purgeOptions) => db.purgeAuditLogEntries(scope.tenantId, purgeOptions),
-    finalizePurge: ({ scope, deletedCount, now, recovered }) =>
+    finalizePurge: ({ scope, fence, deletedCount, now, recovered }) =>
       db.finalizeAuditRetentionPurge({
         scopeKey: scope.scopeKey,
         tenantId: scope.tenantId,
+        fence,
         deletedCount,
         now,
         recovered,
-        signingKey: signingKey(),
+        signingKeys: getAuditCheckpointSigningKeys(),
       }),
     countPurgeable: (scope, before) => db.countAuditEntriesBefore(scope.tenantId, before),
     lease: {
       owner: OWNER,
       ttlMs,
-      acquire: (now) => db.acquireAuditRetentionLease({ owner: OWNER, ttlMs, now }),
-      renew: (now) => db.renewAuditRetentionLease({ owner: OWNER, ttlMs, now }),
-      release: () => db.releaseAuditRetentionLease({ owner: OWNER }),
+      /* Half the cadence: ten replicas booting together run ONE pass, not ten. A
+       * one-shot (CronJob) invocation is the schedule itself and never skips. */
+      minGapMs: oneShot ? 0 : Math.floor(intervalMs / 2),
+      acquire: (now) =>
+        db.acquireAuditRetentionLease({
+          owner: OWNER,
+          ttlMs,
+          now,
+          minGapMs: oneShot ? 0 : Math.floor(intervalMs / 2),
+        }),
+      renew: (fence, now) => db.renewAuditRetentionLease({ owner: OWNER, fence, ttlMs, now }),
+      release: (fence, now) => db.releaseAuditRetentionLease({ owner: OWNER, fence, now }),
     },
     now: () => new Date(),
     logger,
   };
 }
 
-async function sweepAuditRetention(options = {}) {
-  return sweepAuditRetentionWithDeps(options, buildDeps());
+async function sweepAuditRetention(options = {}, { oneShot = false } = {}) {
+  return sweepAuditRetentionWithDeps(options, buildDeps({ oneShot }));
 }
 
 function startKnaufAuditRetentionSweep() {
   return startAuditRetentionSweepWithDeps({ sweepAuditRetention, runAsSystem, logger });
 }
 
-module.exports = {
-  OWNER,
-  listAuditScopes,
-  buildDeps,
-  sweepAuditRetention,
-  startKnaufAuditRetentionSweep,
-};
+module.exports = { sweepAuditRetention, startKnaufAuditRetentionSweep };
 // End [knauf]

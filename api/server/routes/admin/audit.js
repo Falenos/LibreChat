@@ -1,12 +1,9 @@
 const express = require('express');
 const { createAdminAuditLogHandlers } = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
-// [knauf] KK20-328 — scope-key helper shared by the retention sweep and verification,
-// plus the checkpoint signature verifier (key held outside Mongo).
-const {
-  auditRetentionScopeKey,
-  verifyAuditCheckpointSignature,
-} = require('@librechat/data-schemas');
+// [knauf] KK20-328 — the retention key ring (signing key held outside Mongo), read in
+// exactly one place for both the sweep and verification.
+const { getAuditCheckpointSigningKeys } = require('@librechat/api');
 // End [knauf]
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
 const { requireJwtAuth } = require('~/server/middleware');
@@ -25,9 +22,7 @@ const handlers = createAdminAuditLogHandlers({
   // [knauf] KK20-328 — supply the retention trust boundary so chain verification
   // still passes on chains the 12-month purge has trimmed.
   getAuditRetentionCheckpoint: db.getAuditRetentionCheckpoint,
-  auditRetentionScopeKey,
-  verifyAuditCheckpointSignature,
-  getAuditCheckpointSigningKey: () => process.env.KNAUF_AUDIT_CHECKPOINT_HMAC_KEY || undefined,
+  getAuditCheckpointSigningKeys,
   // End [knauf]
 });
 
