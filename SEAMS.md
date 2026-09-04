@@ -1196,6 +1196,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 
 | `.github/workflows/publish-release-notes.yml` | KK20-250 — every Monday at 07:00 UTC (plus manual dispatch), aggregates pending bilingual user changes into generated help content and opens one reviewable release-notes PR; skips when no rows exist or another automation PR is open. |
 | `.github/workflows/{dev_preview_deploy,release_pipeline,promote_pipeline}.yaml` | KK20-330 — keeps worker `LANGFUSE_RELEASE` synchronized with its deployed image tag across preview, DEV, STAGE, and PROD updates, and blocks promotion when STAGE app/worker release attribution does not match the candidate version. |
+| `.github/workflows/release_pipeline.yaml` | KK20-323 — makes release retries fail closed when GitHub release lookup is rate-limited and replaces high-frequency `gh run watch` calls with bounded 15-second API polling so transient rate limits do not falsely fail a healthy DEV smoke or informational STAGE E2E run. |
 
 ## Net-New Files
 
