@@ -23,19 +23,10 @@ import type {
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 
-// [knauf] KK20-328 — shape of the persisted retention checkpoint (see data-schemas knauf/audit/types).
-type KnaufAuditRetentionState = {
-  scopeKey: string;
-  generation: number;
-  throughSeq: number;
-  prevHash: string;
-  terminal: boolean;
-  purgedAt?: Date;
-  totalDeleted: number;
-  recoveredCommits: number;
-  signature?: string;
-  pending?: unknown;
-};
+// [knauf] KK20-328 — retention-trust policy lives in ~/knauf/audit/verifyTrust; the
+// handler only wires it in (see the verify handler).
+import { resolveAuditRetentionTrust } from '~/knauf/audit/verifyTrust';
+import type { AuditRetentionCheckpointState, AuditSigningKeys } from '@librechat/data-schemas';
 // End [knauf]
 
 const FORMULA_PREFIX = /^[=+\-@\t\r]/;
@@ -85,16 +76,13 @@ export interface AdminAuditLogDeps {
       // End [knauf]
     },
   ) => Promise<AuditChainVerification>;
-  /* [knauf] KK20-328 — reads the boundary the retention sweep persisted. Optional
-   * so callers that never purge (and existing tests) need not supply it. */
-  getAuditRetentionCheckpoint?: (scopeKey: string) => Promise<KnaufAuditRetentionState | undefined>;
-  auditRetentionScopeKey?: (tenantId?: string) => string;
-  /** Validates the checkpoint's HMAC against the key held outside Mongo. */
-  verifyAuditCheckpointSignature?: (
-    checkpoint: KnaufAuditRetentionState,
-    key: string | undefined,
-  ) => 'unsigned' | 'valid' | 'invalid';
-  getAuditCheckpointSigningKey?: () => string | undefined;
+  /* [knauf] KK20-328 — reads the boundary the retention sweep persisted, and the key
+   * ring that signs it. Optional so callers that never purge (and existing tests) need
+   * not supply them; absent ⇒ the response is upstream's, byte for byte. */
+  getAuditRetentionCheckpoint?: (
+    scopeKey: string,
+  ) => Promise<AuditRetentionCheckpointState | undefined>;
+  getAuditCheckpointSigningKeys?: () => AuditSigningKeys;
   // End [knauf]
 }
 
@@ -315,9 +303,7 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
     verifyAuditChain,
     // [knauf] KK20-328 — retention checkpoint lookup.
     getAuditRetentionCheckpoint,
-    auditRetentionScopeKey,
-    verifyAuditCheckpointSignature,
-    getAuditCheckpointSigningKey,
+    getAuditCheckpointSigningKeys,
     // End [knauf]
   } = deps;
 
@@ -383,60 +369,40 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
       req.once('aborted', markAborted);
 
       try {
-        /* [knauf] KK20-328 — once retention has purged a prefix the chain no
-         * longer starts at genesis, and verification without the boundary the
-         * purge minted returns ok:false ("prefix purged or deleted"). That is a
-         * false tamper alarm on a security feature, so feed the persisted
-         * checkpoint in. Absent (never purged) it stays undefined and upstream
-         * behaviour is unchanged. */
-        const state =
-          getAuditRetentionCheckpoint && auditRetentionScopeKey
-            ? await getAuditRetentionCheckpoint(auditRetentionScopeKey(caller.tenantId))
-            : undefined;
-        /* A checkpoint is only trusted if its signature checks out against the key
-         * held OUTSIDE Mongo (or no key is configured — then it is explicitly
-         * "unsigned", never silently trusted-as-signed). An invalid signature means
-         * someone with the database credential edited the boundary: the chain is
-         * verified WITHOUT it, so a purged prefix shows up as a break, and the
-         * response says why. */
-        let signature: 'unsigned' | 'valid' | 'invalid' | undefined;
-        if (state) {
-          signature = verifyAuditCheckpointSignature
-            ? verifyAuditCheckpointSignature(state, getAuditCheckpointSigningKey?.())
-            : 'unsigned';
+        /* [knauf] KK20-328 — once retention has purged a prefix the chain no longer
+         * starts at genesis, and upstream's verify reports that as tampering unless a
+         * trusted checkpoint is supplied. The trust policy (signature, activation,
+         * pending intents) lives in ~/knauf/audit/verifyTrust; absent deps ⇒ upstream
+         * behaviour unchanged. */
+        const trust = getAuditRetentionCheckpoint
+          ? await resolveAuditRetentionTrust({
+              tenantId: caller.tenantId,
+              getAuditRetentionCheckpoint,
+              signingKeys: getAuditCheckpointSigningKeys?.(),
+            })
+          : undefined;
+        const verifyWith = (trustedCheckpoint?: { throughSeq: number; prevHash: string }) =>
+          verifyAuditChain(caller.tenantId, {
+            isCancelled: () => clientAborted,
+            maxRows: MAX_AUDIT_VERIFY_ROWS,
+            ...(trustedCheckpoint ? { trustedCheckpoint } : {}),
+          });
+        let result = await verifyWith(trust?.trustedCheckpoint);
+        let retention = trust?.retention;
+        /* A purge caught between its delete and its commit leaves the chain ahead of
+         * the committed boundary for up to one sweep interval. The announced (signed)
+         * intent is then the right witness — try it before calling it tampering. */
+        if (!result.ok && !clientAborted && trust?.pendingCheckpoint) {
+          const viaPending = await verifyWith(trust.pendingCheckpoint);
+          if (viaPending.ok) {
+            result = viaPending;
+            retention = { ...trust.retention, state: 'recovery-pending' };
+          }
         }
-        const trustedCheckpoint =
-          state && signature !== 'invalid'
-            ? { throughSeq: state.throughSeq, prevHash: state.prevHash }
-            : undefined;
-        // End [knauf]
-
-        const result = await verifyAuditChain(caller.tenantId, {
-          isCancelled: () => clientAborted,
-          maxRows: MAX_AUDIT_VERIFY_ROWS,
-          ...(trustedCheckpoint ? { trustedCheckpoint } : {}),
-        });
-
         if (clientAborted) return res;
-        // [knauf] KK20-328 — report the retention state alongside the chain verdict so
-        // an operator can tell "empty because it all expired" (terminal checkpoint)
-        // from "empty and nobody knows why" (no checkpoint), and see signature status.
-        // Only when the retention deps are wired — absent, the response is upstream's.
-        if (!getAuditRetentionCheckpoint) {
+        if (!trust) {
           return res.status(200).json(result);
         }
-        const retention = state
-          ? {
-              state: state.terminal ? 'terminal' : 'active',
-              generation: state.generation,
-              throughSeq: state.throughSeq,
-              totalDeleted: state.totalDeleted,
-              recoveredCommits: state.recoveredCommits,
-              purgedAt: state.purgedAt,
-              pendingIntent: state.pending != null,
-              signature,
-            }
-          : { state: 'never-purged' };
         return res.status(200).json({ ...result, retention });
         // End [knauf]
       } finally {
