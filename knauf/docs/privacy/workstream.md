@@ -1003,13 +1003,17 @@ replica. Each is now a tested invariant, and none required touching upstream cod
       inside upstream's `purgeAuditLogEntries` (no session parameter), Cosmos DB for MongoDB does not
       guarantee cross-collection transactions, and a transaction would not survive a process kill
       between delete and commit anyway.
-- [x] **Terminal checkpoint + generation instead of `clear()`.** A purge that empties a chain now
-      leaves a `terminal` checkpoint with the last hash; the next purge opens **generation N+1**
-      (no wedge). An empty chain *with* a terminal checkpoint is an authorized full expiry; an empty
-      chain *without* one is unexplained — and the admin verify endpoint now says which
-      (`retention.state: never-purged | active | terminal`). Caveat, stated honestly: the restart at
-      seq 1 from genesis is upstream's `recordAuditEntry` behaviour; making appends carry an explicit
-      generation transition needs an upstream change, tracked as a contribution candidate.
+- [x] **Never empty a chain — instead of a terminal checkpoint.** The second pass replaced
+      `clear()` with a terminal checkpoint and a generation counter; the third pass showed that
+      any design that lets retention *empty* a chain is fragile: upstream's delete degrades to an
+      unbounded `deleteMany({ chainKey })` (a row appended mid-purge is destroyed), a partial
+      terminal delete could be certified, and recovery had to guess whether a chain had restarted.
+      The purge now **always retains the newest row** as the chain anchor and purges through the
+      one before it, handing upstream that row's own `createdAt` so the delete stays bounded.
+      Consequences: every checkpoint is exactly upstream's `{ throughSeq, prevHash }`; a chain
+      never restarts at genesis by retention; an **empty chain is unexplained by construction**
+      (the property the reviewer wanted from a tombstone, without the tombstone). Cost, stated in
+      `.env.example`: one most-recent admin row per chain may outlive the window until superseded.
 - [x] **One purge per estate.** Each pass takes a **renewable distributed Mongo lease** (single
       document, expiry compared against the caller's clock, owner `host:pid`), so the 2–10 API
       replicas cannot purge concurrently; a lost renewal is logged. `KNAUF_AUDIT_SWEEP_INTERVAL_MS=0`
@@ -1031,28 +1035,51 @@ replica. Each is now a tested invariant, and none required touching upstream cod
       CronJob entrypoint under `api/knauf/audit/`; only registration seams (model/method/type
       barrels, two `start…()` calls, the admin verify deps) remain in upstream directories.
 
-**AC — deferred to a follow-up ticket** (the wave plan's core/tail split):
-- [ ] **`metadata` write-guard**: the field is `Schema.Types.Mixed` and the CSV export dumps it
-      verbatim as `Details`. Today only `{ capability }` lands there; enforce with a write-time
-      allowlist that **no free text, tool arguments, filenames or message content** may enter —
-      entries are immutable and unredactable.
-- [ ] **The export is itself audited**: `GET /api/admin/audit-log/export.csv` (17 columns incl. IP
-      and `Details`) is capability-gated but leaves **no trail of who exported what when**. Emit an
-      entry per export; state a handling rule for exported files.
+**AC — added by the third review (Falenos, 2026-09-04, at `f46d747e9`) and done in the same PR.**
+Three correctness/security blockers, all real:
+- [x] **Terminal recovery was ambiguous.** Resolved at the root by never emptying a chain (above):
+      there is no terminal state left to recover. Recovery reads the first surviving row and
+      commits only within the announced intent; an emptied chain is refused outright.
+- [x] **The intent was an HMAC signing oracle.** Anyone with the Mongo credential could write a
+      `pending` intent, delete the prefix, and let the legitimate scheduler recover and sign it.
+      Intents are now **signed at `begin`** with the external key over boundary, cutoff, lease
+      owner and fencing token; recovery **verifies the intent** before it may commit or sign —
+      forged, unsigned or edited intents are dropped as `untrusted-intent`, logged at error level,
+      and the deletion stays visible as a chain break.
+- [x] **Lease renewal failure only warned.** The lease grants a **monotonic fencing token** carried
+      into every ledger write (`lastFence`; a lower token is rejected as `stale-fence` at begin,
+      finalize *and* drop, **including the first document for a scope**); the lease is
+      **re-confirmed synchronously right before each delete**; a refused *or rejected* renewal, or a
+      stale fence anywhere, marks the lease lost and **aborts the pass before any further deletion**.
+      Release expires the row instead of deleting it so the fence keeps counting across holders.
+- [x] Tests for each: forged/edited intents; lease loss during a multi-scope sweep (refused,
+      rejected, heartbeat-detected); competing writers with different boundaries incl. the
+      first-document race; concurrent appends across purge phases; a row appended mid-purge.
 
-**AC — decisions still open:**
-- [ ] **Write-time IP/userAgent minimisation decided** — `buildAuditContext`
-      (`packages/api/src/admin/context.ts:12-21`) captures both verbatim; the hash covers them, so
-      they can never be truncated retroactively. Minimise at write or accept in writing.
-- [ ] **`actor.name` fallback reviewed** — `name || username || email || userId` (`grants.ts:186`,
-      `roles.ts:197`) can immortalise an **email address** in an unredactable record.
-- [ ] **Account-deletion position documented** — the UserController cascade (~25 stores) never
-      touches AuditLog. Record the Art. 17(3) basis (security purpose still necessary under 6(1)(f);
-      17(3)(e) for legal claims), time-boxed by the 12-month purge.
-- [ ] Added to the assessment's §1.1 map and the Art. 30 record; reviewers told the taxonomy's
-      `agent_run`/`tool_call`/`mcp`/`auth`/`approval` categories are **reserved but unwritten**.
-- [ ] Works-council: the purge design is on G-2's agenda (purpose limited to security/audit,
-      expressly no performance monitoring, named-role access).
+**Self-review pass (2026-09-04, `/code-review` at high effort before the third push) — findings
+that were real and are fixed in the same commit:**
+- [x] `verifyAuditCheckpointSignature` was exported from the methods barrel but **not from the
+      package root** the route imports, so the HMAC check would have silently degraded to
+      `unsigned` in production. The trust policy now lives in `packages/api/src/knauf/audit/verifyTrust.ts`
+      (imports through the root, which now exports it; pinned by the spec), and the upstream
+      handler seam shrank to a few lines.
+- [x] Unique indexes the fence and CAS rely on were never created when `MONGO_AUTO_INDEX=false`
+      — `createIndexes()` runs once before the first write, as upstream does for `{chainKey, seq}`.
+- [x] Key **activation/rotation looked like tampering**: a missing signature is now `missing`
+      (distinct from `invalid`), a never-committed document reports `never-purged`, and
+      `KNAUF_AUDIT_CHECKPOINT_HMAC_KEY_PREVIOUS` verifies during rotation. Activation order (key
+      first, then destructive) is written into `.env.example`.
+- [x] A purge caught **between delete and commit** made admin verify report a checkpoint mismatch
+      for up to one cadence; the handler now retries verification against the announced (signed)
+      intent and reports `retention.state: recovery-pending`.
+- [x] Lease TTL floor raised to 30 s (a 1 s TTL equalled the heartbeat period); dry run made
+      strictly read-only (it no longer recovers intents); the one-shot CronJob entrypoint now
+      always `process.exit`s (Redis handles kept the pod alive) and exits 2 on an aborted pass;
+      scope enumeration is one `$group` instead of N+1; a boot-storm guard refuses a pass that
+      completed less than half a cadence ago.
+- [x] The parallel `scope:tenant:` key space is gone — the checkpoint `scopeKey` IS upstream's
+      `chainKey` via the exported `auditChainKey`. Registration edits in the data-schemas barrels
+      carry their own `[knauf] KK20-328` markers instead of riding inside KK20-195 blocks.
 
 **Required before production rollout (from the same review — agreed, tracked, not in #341):**
 
@@ -1069,8 +1096,10 @@ replica. Each is now a tested invariant, and none required touching upstream cod
 
 **Notes:** data-safe on day one — the collection shipped 2026-06-18 (upstream #13087), so a
 12-month purge deletes nothing before ~2027-06. Specs: `packages/api/src/knauf/audit/retention.spec.ts`
-(19) and `packages/data-schemas/src/knauf/audit/checkpoint.spec.ts` (17, real Mongo; purge → commit →
-verify, crash recovery incl. partial delete, generations, 12-way races, lease, signatures).
+(24), `packages/api/src/knauf/audit/verifyTrust.spec.ts` (9) and
+`packages/data-schemas/src/knauf/audit/checkpoint.spec.ts` (27, real Mongo; never-empty boundary incl.
+a row appended mid-purge, purge → commit → verify, crash recovery incl. partial delete, forged intents,
+rotation, fencing incl. the first-document race and competing writers, 12-way races, lease, signatures).
 
 #### P2-8 · General violation-log TTL
 
@@ -1153,6 +1182,8 @@ this folder's README exists to prevent.
 | 2026-09-01 | **KK20-327** (P0-1) built; code-review pass applied; PR #340 open, awaiting human review | The AC as written would have shipped a bypass: `tag` was unvalidated. Code review, not the AC, caught it |
 | 2026-09-04 | **KK20-327** second review (Falenos): `rating` was unvalidated too; the gate moved from a call-site transformation to a **boundary Zod parse + Knauf egress adapter** with adversarial payload tests and kill-switch handling; `run.ts`/`.env.example` corrected to say retention + access are **not** in place | The reviewer was right that a one-route fix is not an invariant — an upstream merge or a second caller reintroduces the leak. Also right that our own comment described unimplemented cross-repo controls as the boundary. Their production-rollout list maps onto P0-2 and is tracked there, not folded into this PR |
 | 2026-09-04 | **KK20-328** second review (Falenos): delete-before-checkpoint, cleared terminal boundary, per-replica scheduler, exists/create race, undefined threat model, files in upstream dirs — all addressed in the PR (write-ahead intent + CAS finalize from the chain, terminal checkpoint + generations, distributed lease + CronJob entrypoint, HMAC signing, Knauf paths); production-rollout list mapped to owners | The reviewer was right on every mechanism point. The instinct to reach for a transaction was wrong for this stack (upstream delete has no session, Cosmos, process kill); announcing intent first and committing what the chain shows is both simpler and recoverable from a partial delete, which a transaction could not have been |
+| 2026-09-04 | **KK20-328** third review (Falenos, at `f46d747e9`): terminal-recovery ambiguity, intent as HMAC oracle, lease-loss-only-warns — all addressed (tail-row witness, signed + generation-checked intents, fencing tokens + abort-before-delete) | Each blocker was a gap between what the design *said* (recoverable, signed, single-writer) and what it *enforced*. The fixes make the enforcement mechanical: the chain is the witness, the key is the authorization, the fence is the writer identity |
+| 2026-09-04 | **KK20-328** self-review pass before the third push (`/code-review`, 7 angles): root export gap that would have silently disabled the HMAC check in prod, missing `createIndexes`, activation-looks-like-tampering, verify blind to a pending intent, dry run not read-only, CronJob pod never exiting, 1 s lease floor — all fixed; the terminal/generation design replaced by **never emptying a chain** | Reviewing my own change with the same rigour as the human review found a production-disabling bug (root export) that every green test had missed, because the tests imported from the barrel, not the root. The spec now imports through the root |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
 
@@ -1267,8 +1298,8 @@ deletion safely, use a scratch database with seeded entries, `KNAUF_AUDIT_RETENT
 assertion is the checkpoint ledger doing its job.
 
 ```bash
-cd packages/data-schemas && npx jest src/knauf/audit   # 17 — purge→commit→verify, crash recovery, generations, races, lease, signatures
-cd packages/api && npx jest src/knauf/audit             # 19 — call order, lease skip, recovery, inert default
+cd packages/data-schemas && npx jest src/knauf/audit   # 27 — never-empty boundary, purge→commit→verify, crash recovery, forged intents, fencing, races, lease, signatures
+cd packages/api && npx jest src/knauf/audit             # 33 — sweep (24: call order, fences, lease loss aborts, read-only dry run) + trust policy (9)
 ```
 
 ```bash
