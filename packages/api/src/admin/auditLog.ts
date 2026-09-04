@@ -23,6 +23,21 @@ import type {
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 
+// [knauf] KK20-328 — shape of the persisted retention checkpoint (see data-schemas knauf/audit/types).
+type KnaufAuditRetentionState = {
+  scopeKey: string;
+  generation: number;
+  throughSeq: number;
+  prevHash: string;
+  terminal: boolean;
+  purgedAt?: Date;
+  totalDeleted: number;
+  recoveredCommits: number;
+  signature?: string;
+  pending?: unknown;
+};
+// End [knauf]
+
 const FORMULA_PREFIX = /^[=+\-@\t\r]/;
 /** UTF-8 BOM, written first so Excel recognizes the encoding on import. Spelled
  * as a Unicode escape so readers can see the constant in editors that hide the
@@ -72,10 +87,14 @@ export interface AdminAuditLogDeps {
   ) => Promise<AuditChainVerification>;
   /* [knauf] KK20-328 — reads the boundary the retention sweep persisted. Optional
    * so callers that never purge (and existing tests) need not supply it. */
-  getAuditRetentionCheckpoint?: (
-    scopeKey: string,
-  ) => Promise<{ throughSeq: number; prevHash: string } | undefined>;
+  getAuditRetentionCheckpoint?: (scopeKey: string) => Promise<KnaufAuditRetentionState | undefined>;
   auditRetentionScopeKey?: (tenantId?: string) => string;
+  /** Validates the checkpoint's HMAC against the key held outside Mongo. */
+  verifyAuditCheckpointSignature?: (
+    checkpoint: KnaufAuditRetentionState,
+    key: string | undefined,
+  ) => 'unsigned' | 'valid' | 'invalid';
+  getAuditCheckpointSigningKey?: () => string | undefined;
   // End [knauf]
 }
 
@@ -297,6 +316,8 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
     // [knauf] KK20-328 — retention checkpoint lookup.
     getAuditRetentionCheckpoint,
     auditRetentionScopeKey,
+    verifyAuditCheckpointSignature,
+    getAuditCheckpointSigningKey,
     // End [knauf]
   } = deps;
 
@@ -368,9 +389,25 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
          * false tamper alarm on a security feature, so feed the persisted
          * checkpoint in. Absent (never purged) it stays undefined and upstream
          * behaviour is unchanged. */
-        const trustedCheckpoint =
+        const state =
           getAuditRetentionCheckpoint && auditRetentionScopeKey
             ? await getAuditRetentionCheckpoint(auditRetentionScopeKey(caller.tenantId))
+            : undefined;
+        /* A checkpoint is only trusted if its signature checks out against the key
+         * held OUTSIDE Mongo (or no key is configured — then it is explicitly
+         * "unsigned", never silently trusted-as-signed). An invalid signature means
+         * someone with the database credential edited the boundary: the chain is
+         * verified WITHOUT it, so a purged prefix shows up as a break, and the
+         * response says why. */
+        let signature: 'unsigned' | 'valid' | 'invalid' | undefined;
+        if (state) {
+          signature = verifyAuditCheckpointSignature
+            ? verifyAuditCheckpointSignature(state, getAuditCheckpointSigningKey?.())
+            : 'unsigned';
+        }
+        const trustedCheckpoint =
+          state && signature !== 'invalid'
+            ? { throughSeq: state.throughSeq, prevHash: state.prevHash }
             : undefined;
         // End [knauf]
 
@@ -381,7 +418,27 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
         });
 
         if (clientAborted) return res;
-        return res.status(200).json(result);
+        // [knauf] KK20-328 — report the retention state alongside the chain verdict so
+        // an operator can tell "empty because it all expired" (terminal checkpoint)
+        // from "empty and nobody knows why" (no checkpoint), and see signature status.
+        // Only when the retention deps are wired — absent, the response is upstream's.
+        if (!getAuditRetentionCheckpoint) {
+          return res.status(200).json(result);
+        }
+        const retention = state
+          ? {
+              state: state.terminal ? 'terminal' : 'active',
+              generation: state.generation,
+              throughSeq: state.throughSeq,
+              totalDeleted: state.totalDeleted,
+              recoveredCommits: state.recoveredCommits,
+              purgedAt: state.purgedAt,
+              pendingIntent: state.pending != null,
+              signature,
+            }
+          : { state: 'never-purged' };
+        return res.status(200).json({ ...result, retention });
+        // End [knauf]
       } finally {
         res.removeListener('close', markAborted);
         req.removeListener('aborted', markAborted);

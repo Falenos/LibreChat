@@ -990,6 +990,47 @@ land together. Period per **§3.4: 12 months rolling**, with per-record legal-ho
       exact stored `tenantId` read off one entry — `tenantId` has no index, and reconstructing it
       from the chain key would duplicate a private upstream constant.
 
+**AC — added by the second review (Falenos, 2026-09-04) and done in the same PR.** The reviewer's
+core point was right: the first version could delete rows and then fail to record the boundary,
+cleared the only evidence of a chain when it emptied, and ran a destructive scheduler in every
+replica. Each is now a tested invariant, and none required touching upstream code:
+- [x] **Crash-safe purge, without transactions.** A write-ahead *intent* records the boundary
+      before the delete; afterwards `finalize` reads the chain's first surviving entry and commits
+      the boundary it *actually* has, by compare-and-set, **only within the announced intent**. A
+      crash before the delete drops the intent; after the delete, the next pass commits it as
+      recovered; **mid-`deleteMany`** (partial prefix gone) commits the real boundary; deletion
+      *beyond* the intent is never legitimized. Transactions were rejected on purpose: the delete is
+      inside upstream's `purgeAuditLogEntries` (no session parameter), Cosmos DB for MongoDB does not
+      guarantee cross-collection transactions, and a transaction would not survive a process kill
+      between delete and commit anyway.
+- [x] **Terminal checkpoint + generation instead of `clear()`.** A purge that empties a chain now
+      leaves a `terminal` checkpoint with the last hash; the next purge opens **generation N+1**
+      (no wedge). An empty chain *with* a terminal checkpoint is an authorized full expiry; an empty
+      chain *without* one is unexplained — and the admin verify endpoint now says which
+      (`retention.state: never-purged | active | terminal`). Caveat, stated honestly: the restart at
+      seq 1 from genesis is upstream's `recordAuditEntry` behaviour; making appends carry an explicit
+      generation transition needs an upstream change, tracked as a contribution candidate.
+- [x] **One purge per estate.** Each pass takes a **renewable distributed Mongo lease** (single
+      document, expiry compared against the caller's clock, owner `host:pid`), so the 2–10 API
+      replicas cannot purge concurrently; a lost renewal is logged. `KNAUF_AUDIT_SWEEP_INTERVAL_MS=0`
+      plus `npm run audit:retention:sweep` (`api/knauf/audit/sweepOnce.js`) runs it as a singleton
+      **CronJob** instead — the reviewer's preferred shape; both are safe because both hold the lease.
+- [x] **Atomic first checkpoint.** The `exists()`-then-`create()` sequence is gone: `begin` is an
+      upsert (duplicate-key retried) and `finalize` is a CAS on the exact state read. 12 concurrent
+      begin/finalize pairs ⇒ one document, one commit (real-Mongo test).
+- [x] **Threat model written down, and raised where it cheaply could be.** The checkpoint is a
+      mutable row under the application credential; it distinguishes authorized purges from
+      accidental loss and from deletion by a party *without* the signing key. It is **not**
+      tamper-proof against Mongo-credential + key — and neither is the upstream chain (tail
+      truncation is undetectable). Optional **HMAC-SHA256 signing** with `KNAUF_AUDIT_CHECKPOINT_HMAC_KEY`
+      held outside Mongo (Key Vault → env): an `invalid` signature means the chain is verified
+      *without* the checkpoint, so a moved boundary surfaces as a break. Unset ⇒ `unsigned`, stated
+      in the response, never assumed. A WORM / independently protected copy is a platform
+      prerequisite (below), not claimed here.
+- [x] **Knauf-owned paths.** Ledger under `packages/data-schemas/src/knauf/audit/`, binding and
+      CronJob entrypoint under `api/knauf/audit/`; only registration seams (model/method/type
+      barrels, two `start…()` calls, the admin verify deps) remain in upstream directories.
+
 **AC — deferred to a follow-up ticket** (the wave plan's core/tail split):
 - [ ] **`metadata` write-guard**: the field is `Schema.Types.Mixed` and the CSV export dumps it
       verbatim as `Details`. Today only `{ capability }` lands there; enforce with a write-time
@@ -1013,10 +1054,23 @@ land together. Period per **§3.4: 12 months rolling**, with per-record legal-ho
 - [ ] Works-council: the purge design is on G-2's agenda (purpose limited to security/audit,
       expressly no performance monitoring, named-role access).
 
+**Required before production rollout (from the same review — agreed, tracked, not in #341):**
+
+| Item | Where it lives |
+|---|---|
+| Explicit `KNAUF_AUDIT_*` settings in `agk-deployment-configs` per environment; **today none is set anywhere**, so deploying enforces no retention. Sequence: dev dry-run → read `totalWouldDelete` → dev destructive → stage → separately approved prod activation | GitOps change, owned with the platform team; the `.env.example` block states the rollout state |
+| Singleton CronJob (`npm run audit:retention:sweep`) vs in-process scheduler — decide per environment | GitOps; both shapes are lease-protected |
+| Metrics + alerts: sweep success/failure, failed scopes, checkpoint (finalize) failures, retention lag, lease contention, post-sweep verify failures | Structured log fields exist on every outcome (`[auditRetention] sweep complete`, `finalized a leftover purge intent`, `rows deleted but boundary not committed`, `lease renewal failed`); promoting them to metrics/alerts is platform observability work |
+| Capacity: validate indexes and one-shot `deleteMany` behaviour against production-scale data | The delete is one contiguous-prefix `deleteMany` on the indexed `{chainKey, seq}`; the admin log is low-volume — measure on stage before prod activation |
+| Cosmos MongoDB backup-retention / restore policy: a restored database must have retention re-applied before it is accessible | Platform runbook; the first sweep after a restore re-purges to the cutoff automatically, the *policy* that it must run first is what has to be written |
+| Operational recovery procedure for missing / mismatched checkpoints | The admin verify response (`retention.*`, `signature`) is the diagnostic; the runbook wording is a follow-up in `runbooks/` |
+| Independently protected / WORM copy of the checkpoint (or signing key rotation policy) | Infrastructure; HMAC signing is the in-repo half |
+| Upstream contribution: explicit generation transition on append after a terminal purge | `danny-avila/LibreChat` issue/PR candidate (see [[reference-upstream-pr-personal-account]] in notes) |
+
 **Notes:** data-safe on day one — the collection shipped 2026-06-18 (upstream #13087), so a
 12-month purge deletes nothing before ~2027-06. Specs: `packages/api/src/knauf/audit/retention.spec.ts`
-(15) and `packages/data-schemas/src/methods/auditRetentionCheckpoint.spec.ts` (6, real Mongo; proves
-verification fails without the checkpoint and passes with it).
+(19) and `packages/data-schemas/src/knauf/audit/checkpoint.spec.ts` (17, real Mongo; purge → commit →
+verify, crash recovery incl. partial delete, generations, 12-way races, lease, signatures).
 
 #### P2-8 · General violation-log TTL
 
@@ -1098,6 +1152,7 @@ this folder's README exists to prevent.
 | 2026-09-01 | Wave 0 in-repo: assessment v1.2 restored; **P2-4a closed by code reading** (the legacy-shared-link premise was wrong — see §2 row 4); P0-7's code half answered | The first thing implementation does is find out which tickets were built on a misreading |
 | 2026-09-01 | **KK20-327** (P0-1) built; code-review pass applied; PR #340 open, awaiting human review | The AC as written would have shipped a bypass: `tag` was unvalidated. Code review, not the AC, caught it |
 | 2026-09-04 | **KK20-327** second review (Falenos): `rating` was unvalidated too; the gate moved from a call-site transformation to a **boundary Zod parse + Knauf egress adapter** with adversarial payload tests and kill-switch handling; `run.ts`/`.env.example` corrected to say retention + access are **not** in place | The reviewer was right that a one-route fix is not an invariant — an upstream merge or a second caller reintroduces the leak. Also right that our own comment described unimplemented cross-repo controls as the boundary. Their production-rollout list maps onto P0-2 and is tracked there, not folded into this PR |
+| 2026-09-04 | **KK20-328** second review (Falenos): delete-before-checkpoint, cleared terminal boundary, per-replica scheduler, exists/create race, undefined threat model, files in upstream dirs — all addressed in the PR (write-ahead intent + CAS finalize from the chain, terminal checkpoint + generations, distributed lease + CronJob entrypoint, HMAC signing, Knauf paths); production-rollout list mapped to owners | The reviewer was right on every mechanism point. The instinct to reach for a transaction was wrong for this stack (upstream delete has no session, Cosmos, process kill); announcing intent first and committing what the chain shows is both simpler and recoverable from a partial delete, which a transaction could not have been |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
 
@@ -1185,8 +1240,8 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`packages/api/src/knauf/permissions/userRestrictions.ts`](../../../packages/api/src/knauf/permissions/userRestrictions.ts) | Why the MCP finding is de-escalated |
 | [`api/server/routes/__tests__/messagesFeedback.knauf.spec.js`](../../../api/server/routes/__tests__/messagesFeedback.knauf.spec.js) | KK20-327 seam test — 7 cases incl. the `tag` bypass; verified to fail when the gate is reverted |
 | [`packages/api/src/knauf/audit/retention.ts`](../../../packages/api/src/knauf/audit/retention.ts) | KK20-328 — pure sweep logic behind injected deps; inert unless `KNAUF_AUDIT_RETENTION_DAYS` is set |
-| [`packages/data-schemas/src/methods/auditRetentionCheckpoint.ts`](../../../packages/data-schemas/src/methods/auditRetentionCheckpoint.ts) | KK20-328 — the checkpoint ledger upstream never shipped; forward-only advance + `clear()` for emptied chains |
-| [`api/server/services/Audit/knaufAuditRetention.js`](../../../api/server/services/Audit/knaufAuditRetention.js) | KK20-328 — dependency binding; enumerates the indexed `chainKey`, counts for dry-run |
+| [`packages/data-schemas/src/knauf/audit/methods.ts`](../../../packages/data-schemas/src/knauf/audit/methods.ts) | KK20-328 — the checkpoint ledger upstream never shipped: write-ahead intent, CAS commit from the chain's actual state, terminal checkpoints + generations, distributed lease |
+| [`api/knauf/audit/retention.js`](../../../api/knauf/audit/retention.js) · [`api/knauf/audit/sweepOnce.js`](../../../api/knauf/audit/sweepOnce.js) | KK20-328 — dependency binding (indexed `chainKey` enumeration, lease owner, HMAC key) and the one-shot CronJob entrypoint |
 | [`api/server/index.js`](../../../api/server/index.js) · [`api/server/experimental.js`](../../../api/server/experimental.js) | Both entrypoints start the sweep — `index.js` is what the container runs |
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
@@ -1212,8 +1267,8 @@ deletion safely, use a scratch database with seeded entries, `KNAUF_AUDIT_RETENT
 assertion is the checkpoint ledger doing its job.
 
 ```bash
-cd packages/data-schemas && npx jest src/methods/auditRetentionCheckpoint   # 6 — incl. purge→persist→verify
-cd packages/api && npx jest src/knauf/audit                                # 15
+cd packages/data-schemas && npx jest src/knauf/audit   # 17 — purge→commit→verify, crash recovery, generations, races, lease, signatures
+cd packages/api && npx jest src/knauf/audit             # 19 — call order, lease skip, recovery, inert default
 ```
 
 ```bash

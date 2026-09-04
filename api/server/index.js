@@ -43,7 +43,7 @@ const { capabilityContextMiddleware } = require('./middleware/roles/capabilities
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
 // [knauf] KK20-328 — audit-log retention sweep.
-const { startKnaufAuditRetentionSweep } = require('./services/Audit/knaufAuditRetention');
+const { startKnaufAuditRetentionSweep } = require('~/knauf/audit/retention');
 // End [knauf]
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
 const { jwtLogin, ldapLogin, passportLogin } = require('~/strategies');
@@ -159,7 +159,11 @@ const startServer = async () => {
   /* [knauf] KK20-328 — audit-log retention. This is the path the container
    * actually runs (Dockerfile CMD -> `npm run backend` -> this file); the
    * clustered `experimental.js` entrypoint starts it on its designated retention
-   * worker instead. No-op unless KNAUF_AUDIT_RETENTION_DAYS is set. */
+   * worker instead. Every replica starts the scheduler, but each pass takes a
+   * distributed Mongo lease first, so 2–10 replicas never purge concurrently.
+   * Set KNAUF_AUDIT_SWEEP_INTERVAL_MS=0 and run api/knauf/audit/sweepOnce.js from
+   * a CronJob to keep the destructive task out of the web pods entirely.
+   * No-op unless KNAUF_AUDIT_RETENTION_DAYS is set. */
   startKnaufAuditRetentionSweep();
   // End [knauf]
   await runAsSystem(async () => {

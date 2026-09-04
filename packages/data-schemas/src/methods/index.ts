@@ -8,7 +8,7 @@ import { createFileAssetMethods, type FileAssetMethods } from './fileAsset';
 import {
   createAuditRetentionCheckpointMethods,
   type AuditRetentionCheckpointMethods,
-} from './auditRetentionCheckpoint';
+} from '~/knauf/audit/methods';
 // End [knauf]
 import { createTokenMethods, type TokenMethods } from './token';
 import { createRoleMethods, RoleConflictError } from './role';
@@ -118,7 +118,12 @@ export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY
 // real FileAsset state machine against mongodb-memory-server.
 export { createFileAssetMethods };
 // KK20-328 — scope-key helper shared by the retention sweep and chain verification.
-export { auditRetentionScopeKey } from './auditRetentionCheckpoint';
+export { auditRetentionScopeKey, AUDIT_RETENTION_SWEEP_LEASE } from '~/knauf/audit/methods';
+export {
+  signAuditCheckpoint,
+  verifyAuditCheckpointSignature,
+  canonicalAuditCheckpoint,
+} from '~/knauf/audit/signature';
 // End [knauf]
 export { tokenValues, cacheTokenValues, premiumTokenValues, defaultRate, createTxMethods };
 export { permissionBitSupersets };
