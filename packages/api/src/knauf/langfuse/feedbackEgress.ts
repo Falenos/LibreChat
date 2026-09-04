@@ -49,17 +49,37 @@ const storedTagSchema = z.union([
     .transform((t) => t.key),
 ]);
 
+/* Same token list as the upstream transport's module-private `isFalseEnv`
+ * (packages/api/src/langfuse/feedback.ts). Kept as a copy on purpose: exporting it
+ * from the upstream file would be a Tier-5 edit for a four-token list. If upstream
+ * changes its list, this one must follow — the spec pins both switches. */
 function isFalseEnv(value?: string): boolean {
   return value != null && ['0', 'false', 'no', 'off'].includes(value.trim().toLowerCase());
 }
 
+/** Mirrors the transport: `LANGFUSE_SAMPLE_RATE` of exactly `0` disables feedback scores. */
+function isSampleRateEnabled(value?: string): boolean {
+  if (value == null || value.trim() === '') {
+    return true;
+  }
+  const parsed = Number(value);
+  return !Number.isFinite(parsed) || parsed !== 0;
+}
+
 /**
  * Honour every disable switch in use: `LANGFUSE_ENABLED=false` (the Knauf translation
- * sidecar's switch), `LANGFUSE_TRACING_ENABLED=false` (upstream's), and absent keys.
- * Evaluated per call, not at module load, so an operator flip is testable and immediate.
+ * sidecar's switch), `LANGFUSE_TRACING_ENABLED=false` and `LANGFUSE_SAMPLE_RATE=0`
+ * (upstream's — the transport skips silently on both, so the adapter must agree or it
+ * would report `sent: true` for a request that was never made), and absent keys.
+ * Evaluated per call so an operator flip to OFF is immediate. Caveat: the upstream
+ * transport snapshots its own `ENABLED` at module load, so a flip from OFF to ON still
+ * needs a restart — `sent: true` means "handed to the transport", not "left the process".
  */
 export function isKnaufLangfuseFeedbackEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (isFalseEnv(env.LANGFUSE_ENABLED) || isFalseEnv(env.LANGFUSE_TRACING_ENABLED)) {
+    return false;
+  }
+  if (!isSampleRateEnabled(env.LANGFUSE_SAMPLE_RATE)) {
     return false;
   }
   return Boolean(env.LANGFUSE_PUBLIC_KEY && env.LANGFUSE_SECRET_KEY);
