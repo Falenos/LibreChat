@@ -357,13 +357,18 @@ const createMeiliMongooseModel = ({
         // Update MongoDB to mark documents as indexed.
         // { timestamps: false } prevents Mongoose from touching updatedAt, preserving
         // original conversation/message timestamps (fixes sidebar chronological sort).
-        // [knauf] Acknowledge only documents unchanged since the submitted snapshot.
-        const snapshotFilter = documents.map((doc) => ({
-          _id: doc._id,
-          ...(doc.updatedAt == null
-            ? { updatedAt: { $exists: false } }
-            : { updatedAt: doc.updatedAt }),
-        }));
+        // [knauf] Acknowledge only the exact submitted snapshot, including legacy null timestamps.
+        const snapshotFilter = documents.map((doc) => {
+          let updatedAtFilter: FilterQuery<unknown>;
+          if (doc.updatedAt === undefined) {
+            updatedAtFilter = { updatedAt: { $exists: false } };
+          } else if (doc.updatedAt === null) {
+            updatedAtFilter = { updatedAt: { $eq: null, $exists: true } };
+          } else {
+            updatedAtFilter = { updatedAt: doc.updatedAt };
+          }
+          return { _id: doc._id, ...updatedAtFilter };
+        });
         await this.updateMany(
           { ...getIndexableQuery(), $or: snapshotFilter },
           { $set: { _meiliIndex: true } },

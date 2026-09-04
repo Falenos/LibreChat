@@ -761,6 +761,29 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(await conversationModel.countDocuments({ _meiliIndex: true })).toBe(1);
     });
 
+    test('acknowledges an explicit null updatedAt snapshot without requeueing it', async () => {
+      const conversationModel = createConversationModel(
+        mongoose,
+      ) as unknown as SchemaWithMeiliMethods;
+      await conversationModel.deleteMany({});
+      const _id = new mongoose.Types.ObjectId();
+      await conversationModel.collection.insertOne({
+        _id,
+        conversationId: new mongoose.Types.ObjectId(),
+        user: new mongoose.Types.ObjectId(),
+        title: 'Null timestamp snapshot',
+        endpoint: EModelEndpoint.openAI,
+        _meiliIndex: false,
+        expiredAt: null,
+        updatedAt: null,
+      });
+
+      await expect(conversationModel.syncWithMeili()).resolves.toBeUndefined();
+
+      expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(1);
+      expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(1);
+    });
+
     test('requeues a Mongo document changed while its task was running', async () => {
       const conversationModel = createConversationModel(
         mongoose,
