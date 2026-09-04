@@ -229,6 +229,7 @@ describe('Langfuse feedback egress adapter', () => {
       ['LANGFUSE_ENABLED', '0'],
       ['LANGFUSE_TRACING_ENABLED', 'false'],
       ['LANGFUSE_TRACING_ENABLED', 'off'],
+      ['LANGFUSE_SAMPLE_RATE', '0'], // the transport skips on this too; the adapter must agree
     ])('%s=%s stops score creation and deletion alike', async (key, value) => {
       process.env[key] = value;
       const { sendKnaufFeedbackScore } = await load();
@@ -240,6 +241,17 @@ describe('Langfuse feedback egress adapter', () => {
       expect(created).toEqual({ sent: false, reason: 'disabled' });
       expect(cleared).toEqual({ sent: false, reason: 'disabled' });
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('a non-zero sample rate does not disable it (it is not a sampler)', async () => {
+      process.env.LANGFUSE_SAMPLE_RATE = '0.5';
+      const { sendKnaufFeedbackScore } = await load();
+      const result = await sendKnaufFeedbackScore({
+        traceId: 't1',
+        storedFeedback: { rating: 'thumbsUp' },
+      });
+      expect(result.sent).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it('missing credentials disable it', async () => {
