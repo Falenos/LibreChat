@@ -87,6 +87,10 @@ export * from './knauf/context/locationContext';
 // directory as success and logs the zero case at `debug`.
 export * from './knauf/skills/deploymentSkillsCheck';
 // End [knauf]
+// [knauf] KK20-327 — Langfuse feedback egress adapter: the only path by which message
+// feedback may leave for Langfuse (allow-list contract, fail-closed, kill-switch aware).
+// Consumed by api/server/routes/messages.js.
+export * from './knauf/langfuse/feedbackEgress';
 // [knauf] KK20-328 — audit-log retention sweep (12-month purge + checkpoint).
 export * from './knauf/audit/retention';
 // End [knauf]

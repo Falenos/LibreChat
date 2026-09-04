@@ -604,6 +604,27 @@ masking. Bounding the rest is P0-2's job.
       schema and the route runs no Zod parse, so a crafted request could put the same prose in `tag`
       that the gate strips from `text`. Legacy `{ key }` objects normalise; anything unrecognised
       fails closed to `undefined`.
+- [x] **Added in the second review (2026-09-04) — `rating` was the same bypass again.** The schema
+      has an enum on `rating`, but `updateMessage` runs `findOneAndUpdate` without validators, so a
+      crafted request could persist prose in `rating`, and upstream's transport copies `rating` into
+      the score metadata verbatim. Fixed as the reviewer asked, as an **invariant rather than a
+      call-site transformation**: (1) the **complete feedback object is Zod-parsed at the
+      authenticated boundary** with upstream's `feedbackSchema` in strict mode — enum rating, enum
+      tag, text ≤ 1024, unknown properties rejected with 400 *before* anything is stored; (2) a
+      **Knauf-owned egress adapter** (`packages/api/src/knauf/langfuse/feedbackEgress.ts`) is now the
+      only path to Langfuse — its contract type can carry only `rating` + `tag`, it rebuilds the
+      object so legacy rows cannot smuggle properties, a non-enum rating fails closed to the
+      score-DELETE path, and metadata keys are allow-listed; (3) **adversarial coverage on the
+      serialized outbound request** (14 cases: prose/object/nested rating, unexpected properties,
+      metadata leaks, every kill switch ⇒ zero requests).
+- [x] **Feedback export honours the disable switches** — `LANGFUSE_ENABLED=false` and
+      `LANGFUSE_TRACING_ENABLED=false` both stop score creation *and* deletion, evaluated per call.
+      Caveat recorded in `.env.example`: there is **no single kill switch** in the system —
+      `@librechat/agents` traces whenever the two keys are set. Normalising one is P0-2 part 3.
+- [x] `run.ts` comment and `.env.example` no longer present retention + access as the completed
+      boundary. They are **not in place** (no EE licence, no GitOps retention/lifecycle/access audit)
+      and are stated as a production-rollout blocker owned by P0-2 / P1-6. SEAMS has its own
+      KK20-327 row for the `run.ts` comment instead of leaning on the KK20-199 row.
 - [ ] **Still open after the PR** — memory-agent trace payloads
       (`packages/api/src/agents/memory.ts:464-474`) reviewed separately. Highest sensitivity, lowest
       marginal debug value. `memory.ts` was not touched by KK20-327.
@@ -613,10 +634,21 @@ masking. Bounding the rest is P0-2's job.
       `@librechat/agents` to forward `@langfuse/otel`'s `mask` parameter through `LangfuseConfig`.
       Not yet opened. Never patch `node_modules`.
 
+**Required before production rollout (from the 2026-09-04 review — agreed, tracked, not in #340):**
+
+| Item | Where it lives |
+|---|---|
+| Inventory and delete/sanitise **historical** Langfuse score comments carrying feedback prose (scores created before KK20-327) | **P0-2 part 4 (new)** — one-off via `GET /api/public/scores` → `DELETE /api/public/scores/{id}`; recreate without comment where the rating matters |
+| Bounded retention across ClickHouse/Postgres, events, media (MinIO), exports and backups | **P0-2** — retention CronJob via `DELETE /api/public/traces` (EE retention unavailable); lifecycle on MinIO/backups is the platform half |
+| One tested kill switch across app, worker, traces, translation observations, score create/delete, in dev/stage/prod | **P0-2 part 3 (new)** — today only unsetting the keys stops everything; `LANGFUSE_ENABLED` is honoured by feedback + translation, not by `@librechat/agents` |
+| Langfuse project membership / read access auditable and consistent across environments | **P0-2 part 2** |
+| Environment-level canary: sensitive text absent from score comments and metadata; disabling Langfuse produces no outbound request | **P0-2 acceptance** — the adapter spec is the unit-level half; the environment run reuses the P2-5 recipe pattern |
+
 **Notes:** the existing `[knauf] KK20-199` `enabled: false` image-input guard was the precedent for
 per-run gating. The two open ACs must not close with the PR by default — keep KK20-327 open or cut
-a small follow-up. Seam test: `api/server/routes/__tests__/messagesFeedback.knauf.spec.js` (7 cases,
-verified to fail when the gate is reverted).
+a small follow-up. Seam tests: `api/server/routes/__tests__/messagesFeedback.knauf.spec.js` (17 cases,
+boundary + wiring) and `packages/api/src/knauf/langfuse/feedbackEgress.spec.ts` (14 adversarial cases
+on the serialized outbound request).
 
 #### P0-2 · Langfuse platform controls — facts, read access, and a licence-free retention job *(cross-repo — `agk-deployment-configs`)*
 
@@ -1141,6 +1173,7 @@ this folder's README exists to prevent.
 |---|---|---|
 | 2026-09-01 | Wave 0 in-repo: assessment v1.2 restored; **P2-4a closed by code reading** (the legacy-shared-link premise was wrong — see §2 row 4); P0-7's code half answered | The first thing implementation does is find out which tickets were built on a misreading |
 | 2026-09-01 | **KK20-327** (P0-1) built; code-review pass applied; PR #340 open, awaiting human review | The AC as written would have shipped a bypass: `tag` was unvalidated. Code review, not the AC, caught it |
+| 2026-09-04 | **KK20-327** second review (Falenos): `rating` was unvalidated too; the gate moved from a call-site transformation to a **boundary Zod parse + Knauf egress adapter** with adversarial payload tests and kill-switch handling; `run.ts`/`.env.example` corrected to say retention + access are **not** in place | The reviewer was right that a one-route fix is not an invariant — an upstream merge or a second caller reintroduces the leak. Also right that our own comment described unimplemented cross-repo controls as the boundary. Their production-rollout list maps onto P0-2 and is tracked there, not folded into this PR |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
 | 2026-09-04 | **P2-5** (KK20-TBD — ID pending) built: erasure runbook + `erasure-verify.js`; PR open, stacked on #349 | Reading the deletion paths showed `config/delete-user.js` **is not an erasure** (no Blob/vector/grant cleanup) and that the controller logs the erased email at `info`. The recipe tests the product path and pins both facts in its spec |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
