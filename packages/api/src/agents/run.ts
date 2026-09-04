@@ -893,11 +893,19 @@ function buildSubagentConfigs(
 // hurts debuggability; prefer targeted redaction plus short retention", tool output is
 // the primary artefact for answering "why did it answer wrong?", and Sprint 5 of
 // knauf/docs/implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md
-// validates against exactly these traces. The correct controls are retention + access
-// on the Langfuse project (cross-repo) and field-level masking once
-// `@librechat/agents` forwards `@langfuse/otel`'s `mask` parameter — neither of which
-// costs debuggability. Do not "fix" this by disabling capture.
-// Rationale: knauf/docs/privacy/workstream.md §4.3 (the four-layer posture).
+// validates against exactly these traces.
+//
+// What bounds full tool-output capture is therefore retention + access on the Langfuse
+// project, plus field-level masking. NONE of those is in place today: this deployment
+// has no Langfuse Enterprise licence, so the built-in retention policy and server-side
+// masking are unavailable; no retention job, ClickHouse/MinIO lifecycle or access audit
+// exists in the GitOps sources; and `@librechat/agents` does not forward
+// `@langfuse/otel`'s `mask` parameter. Keeping capture on is a decision that is only
+// acceptable together with those controls, so it is a PRODUCTION ROLLOUT BLOCKER with
+// owned work: retention CronJob via `DELETE /api/public/traces` + access audit (P0-2),
+// OTel Collector redaction (P1-6), upstream `mask` contribution (P0-1 open AC). Do not
+// "fix" this by disabling capture, and do not describe those controls as present until
+// they are. Rationale and status: knauf/docs/privacy/workstream.md §4.3, §5 (P0-1, P0-2).
 export function buildLangfuseConfig(
   tenantIdInput?: unknown,
   sourceMessageIdInput?: unknown,
