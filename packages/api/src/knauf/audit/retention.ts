@@ -11,16 +11,27 @@
 //
 // Shape of one pass (per scope), designed so a crash at ANY point is recoverable:
 //   1. finalize   — commit or drop any intent a previous pass left behind
-//   2. boundary   — compute what the purge will delete through (read-only)
-//   3. begin      — persist that intent (write-ahead)
-//   4. purge      — upstream `purgeAuditLogEntries` (the only delete)
+//   2. boundary   — compute what the purge will delete through (read-only; always
+//                   retains the newest row, so the chain is never emptied)
+//   3. begin      — persist and sign that intent (write-ahead, fenced)
+//   4. purge      — re-confirm the lease, then upstream `purgeAuditLogEntries`
+//                   bounded by the boundary's own `purgeBefore` (the only delete)
 //   5. finalize   — read the chain, commit the boundary it actually has
-// The whole pass runs under a renewable distributed lease so 2–10 API replicas
-// cannot purge the same chain concurrently. Ships INERT: with no retention
-// configured this module does nothing at all.
+// The whole pass runs under a renewable distributed lease so 2–10 API replicas cannot
+// purge the same chain concurrently. The lease grants a FENCING TOKEN carried into
+// every ledger write (a lapsed holder's writes are rejected as stale, which aborts the
+// pass), renewal failure ABORTS before any further delete, and a dry run is READ-ONLY.
+// Ships INERT: with no retention configured this module does nothing at all.
+//
+// Deliberate duplication, do not converge on an upstream sync: `startAuditRetentionSweep`
+// mirrors `files/sweep.ts`'s runner shape (isSweeping guard, unref'd interval) rather
+// than extracting a shared runner from the upstream file; the fenced Mongo lease lives
+// in data-schemas `knauf/audit` rather than reusing `api/knauf/db/meiliSyncLock.js`
+// (no fence) or upstream's Redis `LeaderElection` (Redis-only) — the fence is the point.
 import type {
   AuditRetentionBoundary,
   AuditRetentionFinalizeOutcome,
+  AuditRetentionLeaseGrant,
 } from '@librechat/data-schemas';
 
 /** 12 months — the §3.4 recommendation, used only once retention is switched on. */
@@ -31,6 +42,9 @@ export const DEFAULT_AUDIT_SWEEP_INTERVAL_MS: number = 6 * 60 * 60 * 1000;
 /** Ten minutes. A pass over a low-volume log takes seconds; the lease is renewed
  *  at a third of this while the pass runs, so only a dead holder lets it lapse. */
 export const DEFAULT_AUDIT_SWEEP_LEASE_MS: number = 10 * 60 * 1000;
+/** Floor for the lease TTL: the heartbeat runs at TTL/3, so anything shorter than this
+ *  would let a healthy holder's own lease lapse between renewals. */
+export const MIN_AUDIT_SWEEP_LEASE_MS: number = 30 * 1000;
 
 export interface AuditScope {
   scopeKey: string;
@@ -45,9 +59,6 @@ export interface AuditPurgeOutcome {
   wouldDelete?: number;
   /** A boundary was committed to the ledger (this pass or by recovery). */
   checkpointAdvanced: boolean;
-  /** The committed boundary emptied the chain (a new generation follows). */
-  terminal?: boolean;
-  generation?: number;
   /** A leftover intent from an earlier crashed pass was finalized first. */
   recoveredPending?: AuditRetentionFinalizeOutcome;
 }
@@ -56,8 +67,13 @@ export interface AuditRetentionSweepResult {
   /** False when retention is unset — the sweep did not run at all. */
   enabled: boolean;
   dryRun: boolean;
-  /** Set when another replica held the lease: nothing ran, by design. */
-  skipped?: 'lease-held';
+  /** Set when the pass did not run: another replica holds the lease, or a pass
+   *  completed too recently (boot-storm guard). */
+  skipped?: 'lease-held' | 'recently-completed';
+  /** Set when the lease was lost mid-pass: remaining scopes were NOT touched. */
+  aborted?: 'lease-lost';
+  /** Fencing token this pass ran under. */
+  fence?: number;
   cutoff?: Date;
   chains: AuditPurgeOutcome[];
   totalDeleted: number;
@@ -67,12 +83,14 @@ export interface AuditRetentionSweepResult {
 export interface AuditRetentionSweepDependencies {
   listAuditScopes(): Promise<AuditScope[]>;
   computeBoundary(scope: AuditScope, before: Date): Promise<AuditRetentionBoundary | null>;
+  /** Write-ahead + signature. False ⇒ our fence is stale: do NOT delete. */
   beginPurge(params: {
     scopeKey: string;
     boundary: AuditRetentionBoundary;
     cutoff: Date;
     now: Date;
-  }): Promise<void>;
+    fence: number;
+  }): Promise<boolean>;
   /** The only delete. `confirm:false` makes upstream a no-op that reports 0. */
   purgeScope(
     scope: AuditScope,
@@ -80,6 +98,7 @@ export interface AuditRetentionSweepDependencies {
   ): Promise<{ deletedCount: number }>;
   finalizePurge(params: {
     scope: AuditScope;
+    fence: number;
     deletedCount?: number;
     now: Date;
     recovered?: boolean;
@@ -89,9 +108,13 @@ export interface AuditRetentionSweepDependencies {
   lease: {
     owner: string;
     ttlMs: number;
-    acquire(now: Date): Promise<boolean>;
-    renew(now: Date): Promise<boolean>;
-    release(): Promise<void>;
+    /** Refuse a pass that would start less than this long after the previous one
+     *  completed. 0 disables the guard (one-shot / CronJob mode). */
+    minGapMs: number;
+    acquire(now: Date): Promise<AuditRetentionLeaseGrant>;
+    /** False ⇒ the lease is no longer ours (expired or taken over). */
+    renew(fence: number, now: Date): Promise<boolean>;
+    release(fence: number, now: Date): Promise<void>;
   };
   now(): Date;
   logger: {
@@ -130,7 +153,9 @@ export function getAuditSweepLeaseMs(
 ): number {
   if (raw == null || raw.trim() === '') return DEFAULT_AUDIT_SWEEP_LEASE_MS;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 1000) return DEFAULT_AUDIT_SWEEP_LEASE_MS;
+  if (!Number.isFinite(value) || value < MIN_AUDIT_SWEEP_LEASE_MS) {
+    return DEFAULT_AUDIT_SWEEP_LEASE_MS;
+  }
   return value;
 }
 
@@ -149,11 +174,25 @@ export function computeAuditCutoff(now: Date, retentionDays: number): Date {
   return new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 }
 
+class AuditSweepAbortedError extends Error {
+  constructor() {
+    super('audit retention sweep aborted: lease lost');
+    this.name = 'AuditSweepAbortedError';
+  }
+}
+
+interface SweepContext {
+  fence: number;
+  /** True once a renewal failed or rejected. Checked before every destructive phase. */
+  isLeaseLost(): boolean;
+}
+
 async function sweepScope(
   scope: AuditScope,
   cutoff: Date,
   dryRun: boolean,
   deps: AuditRetentionSweepDependencies,
+  ctx: SweepContext,
 ): Promise<AuditPurgeOutcome> {
   const outcome: AuditPurgeOutcome = {
     scopeKey: scope.scopeKey,
@@ -161,25 +200,36 @@ async function sweepScope(
     checkpointAdvanced: false,
   };
 
+  /* Dry run is READ-ONLY — it does not even recover leftover intents, because that is
+   * a ledger write (and may sign). It reports what a real pass would remove. */
+  if (dryRun) {
+    outcome.wouldDelete = await deps.countPurgeable(scope, cutoff);
+    return outcome;
+  }
+
   /* 1. Recovery. A previous pass may have announced an intent and died before
-   *    (or during, or after) the delete. The chain says what actually happened. */
-  const recovered = await deps.finalizePurge({ scope, now: deps.now(), recovered: true });
+   *    (or during, or after) the delete. The chain says what actually happened;
+   *    the ledger verifies the intent's signature and fence before believing it. */
+  const recovered = await deps.finalizePurge({
+    scope,
+    fence: ctx.fence,
+    now: deps.now(),
+    recovered: true,
+  });
   if (recovered.action !== 'none') {
     outcome.recoveredPending = recovered;
-    deps.logger.warn('[auditRetention] finalized a leftover purge intent', {
+    if (recovered.action === 'dropped' && recovered.reason === 'stale-fence') {
+      throw new AuditSweepAbortedError(); // a higher fence has written: we lost the lease
+    }
+    const level =
+      recovered.action === 'dropped' && recovered.reason === 'untrusted-intent' ? 'error' : 'warn';
+    deps.logger[level]('[auditRetention] finalized a leftover purge intent', {
       scopeKey: scope.scopeKey,
       recovered,
     });
     if (recovered.action === 'committed') {
       outcome.checkpointAdvanced = true;
-      outcome.terminal = recovered.boundary.terminal;
-      outcome.generation = recovered.generation;
     }
-  }
-
-  if (dryRun) {
-    outcome.wouldDelete = await deps.countPurgeable(scope, cutoff);
-    return outcome;
   }
 
   /* 2–3. Announce before deleting. */
@@ -187,23 +237,48 @@ async function sweepScope(
   if (!boundary) {
     return outcome;
   }
-  await deps.beginPurge({ scopeKey: scope.scopeKey, boundary, cutoff, now: deps.now() });
+  const announced = await deps.beginPurge({
+    scopeKey: scope.scopeKey,
+    boundary,
+    cutoff,
+    now: deps.now(),
+    fence: ctx.fence,
+  });
+  if (!announced) {
+    throw new AuditSweepAbortedError(); // stale fence at announce: we lost the lease
+  }
 
-  /* 4. The only delete. Same `before`, therefore the same prefix upstream computes. */
-  const purge = await deps.purgeScope(scope, { before: cutoff, confirm: true });
+  /* 4. The only delete — preceded by a synchronous lease re-confirmation, because
+   *    the heartbeat is periodic and this is the one step that cannot be undone. The
+   *    `before` handed to upstream is the boundary's own, so the delete is bounded by
+   *    the retained row even when every row is older than the cutoff. */
+  if (ctx.isLeaseLost()) {
+    throw new AuditSweepAbortedError();
+  }
+  let stillOurs = false;
+  try {
+    stillOurs = await deps.lease.renew(ctx.fence, deps.now());
+  } catch {
+    stillOurs = false; // cannot prove we hold it ⇒ treat as lost
+  }
+  if (!stillOurs) {
+    throw new AuditSweepAbortedError();
+  }
+  const purge = await deps.purgeScope(scope, { before: boundary.purgeBefore, confirm: true });
   outcome.deletedCount = purge.deletedCount ?? 0;
 
-  /* 5. Commit what the chain actually shows. If this throws, the intent stays and
-   *    step 1 of the next pass finishes the job — no log line has to be "recovery". */
+  /* 5. Commit what the chain actually shows. If this throws or is rejected, the
+   *    intent stays and step 1 of the next pass finishes the job. */
   const result = await deps.finalizePurge({
     scope,
+    fence: ctx.fence,
     deletedCount: outcome.deletedCount,
     now: deps.now(),
   });
   if (result.action === 'committed') {
     outcome.checkpointAdvanced = true;
-    outcome.terminal = result.boundary.terminal;
-    outcome.generation = result.generation;
+  } else if (result.action === 'dropped' && result.reason === 'stale-fence') {
+    throw new AuditSweepAbortedError();
   } else if (outcome.deletedCount > 0) {
     deps.logger.error('[auditRetention] rows deleted but boundary not committed', {
       scopeKey: scope.scopeKey,
@@ -216,7 +291,9 @@ async function sweepScope(
 /**
  * One pass over every audit chain, under the distributed lease. A chain that
  * throws is logged and skipped so a single bad chain cannot stall retention for
- * the rest — the next pass retries it (and recovers its intent first).
+ * the rest — the next pass retries it (and recovers its intent first). Losing
+ * the lease is different: it aborts the pass, and the remaining scopes are left
+ * untouched for whoever holds the lease now.
  */
 export async function sweepAuditRetention(
   options: { retentionDays?: number; dryRun?: boolean },
@@ -228,24 +305,41 @@ export async function sweepAuditRetention(
     return { enabled: false, dryRun, chains: [], totalDeleted: 0 };
   }
 
-  if (!(await deps.lease.acquire(deps.now()))) {
-    deps.logger.info('[auditRetention] another replica holds the sweep lease; skipping this pass', {
-      owner: deps.lease.owner,
-    });
-    return { enabled: true, dryRun, skipped: 'lease-held', chains: [], totalDeleted: 0 };
+  const grant = await deps.lease.acquire(deps.now());
+  if (!grant.ok) {
+    const skipped = grant.reason === 'recently-completed' ? 'recently-completed' : 'lease-held';
+    deps.logger.info(
+      skipped === 'lease-held'
+        ? '[auditRetention] another replica holds the sweep lease; skipping this pass'
+        : '[auditRetention] a pass completed recently; skipping this pass',
+      { owner: deps.lease.owner },
+    );
+    return { enabled: true, dryRun, skipped, chains: [], totalDeleted: 0 };
   }
+  const fence = grant.fence;
+  let leaseLost = false;
+  const markLost = (why: string, meta?: unknown) => {
+    if (!leaseLost) {
+      leaseLost = true;
+      deps.logger.error(
+        `[auditRetention] lease lost (${why}) — aborting before any further deletion`,
+        { owner: deps.lease.owner, fence, ...(meta ? { meta } : {}) },
+      );
+    }
+  };
   const heartbeat = setInterval(
     () => {
-      void deps.lease.renew(deps.now()).then((ok) => {
-        if (!ok)
-          deps.logger.warn('[auditRetention] lease renewal failed — another holder took over', {
-            owner: deps.lease.owner,
-          });
-      });
+      deps.lease
+        .renew(fence, deps.now())
+        .then((ok) => {
+          if (!ok) markLost('renewal refused');
+        })
+        .catch((error) => markLost('renewal failed', error));
     },
     Math.max(1000, Math.floor(deps.lease.ttlMs / 3)),
   );
   heartbeat.unref?.();
+  const ctx: SweepContext = { fence, isLeaseLost: () => leaseLost };
 
   try {
     const cutoff = computeAuditCutoff(deps.now(), retentionDays);
@@ -253,14 +347,24 @@ export async function sweepAuditRetention(
     const chains: AuditPurgeOutcome[] = [];
     let totalDeleted = 0;
     let totalWouldDelete = 0;
+    let aborted: 'lease-lost' | undefined;
 
     for (const scope of scopes) {
+      if (leaseLost) {
+        aborted = 'lease-lost';
+        break;
+      }
       try {
-        const outcome = await sweepScope(scope, cutoff, dryRun, deps);
+        const outcome = await sweepScope(scope, cutoff, dryRun, deps, ctx);
         totalDeleted += outcome.deletedCount;
         totalWouldDelete += outcome.wouldDelete ?? 0;
         chains.push(outcome);
       } catch (error) {
+        if (error instanceof AuditSweepAbortedError) {
+          markLost('re-confirmation before delete failed, or a higher fence has written');
+          aborted = 'lease-lost';
+          break;
+        }
         deps.logger.error('[auditRetention] scope sweep failed', {
           scopeKey: scope.scopeKey,
           error,
@@ -268,30 +372,37 @@ export async function sweepAuditRetention(
       }
     }
 
-    if (totalDeleted > 0 || dryRun || chains.some((c) => c.recoveredPending)) {
+    if (totalDeleted > 0 || dryRun || aborted || chains.some((c) => c.recoveredPending)) {
       deps.logger.info('[auditRetention] sweep complete', {
         dryRun,
         retentionDays,
+        fence,
         cutoff: cutoff.toISOString(),
         chains: chains.length,
+        scopes: scopes.length,
         totalDeleted,
         recovered: chains.filter((c) => c.recoveredPending).length,
+        ...(aborted ? { aborted } : {}),
         ...(dryRun ? { totalWouldDelete } : {}),
       });
     }
     return {
       enabled: true,
       dryRun,
+      fence,
       cutoff,
       chains,
       totalDeleted,
+      ...(aborted ? { aborted } : {}),
       ...(dryRun ? { totalWouldDelete } : {}),
     };
   } finally {
     clearInterval(heartbeat);
-    await deps.lease
-      .release()
-      .catch((error) => deps.logger.warn('[auditRetention] lease release failed', { error }));
+    if (!leaseLost) {
+      await deps.lease
+        .release(fence, deps.now())
+        .catch((error) => deps.logger.warn('[auditRetention] lease release failed', { error }));
+    }
   }
 }
 

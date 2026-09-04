@@ -93,6 +93,7 @@ export * from './knauf/skills/deploymentSkillsCheck';
 export * from './knauf/langfuse/feedbackEgress';
 // [knauf] KK20-328 — audit-log retention sweep (12-month purge + checkpoint).
 export * from './knauf/audit/retention';
+export * from './knauf/audit/verifyTrust';
 // End [knauf]
 // [knauf] KK20-252 — strips YAML frontmatter from a skill body before it is
 // injected as a user message. Exported for parity with the module above; the
