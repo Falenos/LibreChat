@@ -1074,6 +1074,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/db/indexSync.spec.js` | missing-index and FlowState classification regressions | 265–300 | Proves provider-confirmed index loss remains recoverable while a generic FlowState not-found error propagates without launching model synchronization | Self | KK20-323 |
 | `packages/data-schemas/src/models/plugins/mongoMeili.ts` | `processSyncBatch.snapshotFilter` | 360–377 | Distinguishes legacy explicit-null timestamps from absent fields so successful Meilisearch writes receive their matching durable Mongo acknowledgement | `packages/data-schemas/src/models/plugins/mongoMeili.spec.ts` | KK20-323 |
 | `packages/data-schemas/src/models/plugins/mongoMeili.spec.ts` | explicit-null snapshot acknowledgement regression | 764–785 | Proves a stored null timestamp is acknowledged after one terminal task and is not submitted repeatedly by the reconciliation loop | Self | KK20-323 |
+| `packages/data-schemas/src/models/plugins/mongoMeili.ts` | `createMeiliMongooseModel.cleanupBatchSize`, `syncWithMeili` cleanup call | 200–211, 275–280 | Separates Meilisearch cleanup page sizing from guarded Mongo acknowledgement batches, rejecting invalid overrides before reconciliation starts | `packages/data-schemas/src/models/plugins/mongoMeili.spec.ts` (`uses independent cleanup and indexing batch sizes`, `rejects invalid cleanup batch size`) | KK20-323 |
+| `packages/data-schemas/src/models/plugins/mongoMeili.spec.ts` | independent cleanup/indexing batch regressions | 730–799 | Proves a larger cleanup page leaves submitted document batches independently bounded and malformed cleanup limits fail fast | Self | KK20-323 |
 <!-- seams:auto:end -->
 
 ## Configuration

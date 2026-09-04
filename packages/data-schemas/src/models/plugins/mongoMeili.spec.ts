@@ -727,6 +727,77 @@ describe('Meilisearch Mongoose plugin', () => {
       });
     });
 
+    // [knauf] Keep fast index cleanup independent from bounded Mongo acknowledgement batches.
+    test('uses independent cleanup and indexing batch sizes', async () => {
+      const modelName = `IndependentCleanupBatch${Date.now()}`;
+      const previousCleanupBatchSize = process.env.MEILI_CLEANUP_BATCH_SIZE;
+      process.env.MEILI_CLEANUP_BATCH_SIZE = '3';
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      const cleanupSpy = jest.spyOn(Model, 'cleanupMeiliIndex').mockResolvedValue();
+
+      try {
+        await Model.collection.insertMany([
+          {
+            docId: 'cleanup-batch-1',
+            user: 'test-user',
+            title: 'First document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'cleanup-batch-2',
+            user: 'test-user',
+            title: 'Second document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+        ]);
+        mockAddDocumentsInBatches.mockClear();
+
+        await Model.syncWithMeili();
+
+        expect(cleanupSpy).toHaveBeenCalledWith(expect.anything(), 'docId', 3, 1);
+        expect(mockAddDocumentsInBatches.mock.calls.map(([documents]) => documents.length)).toEqual(
+          [1, 1],
+        );
+      } finally {
+        cleanupSpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+        if (previousCleanupBatchSize === undefined) {
+          delete process.env.MEILI_CLEANUP_BATCH_SIZE;
+        } else {
+          process.env.MEILI_CLEANUP_BATCH_SIZE = previousCleanupBatchSize;
+        }
+      }
+    });
+
+    test.each(['', '0', '-1', '3junk', '9007199254740992'])(
+      'rejects invalid cleanup batch size %p',
+      (cleanupBatchSize) => {
+        const previousCleanupBatchSize = process.env.MEILI_CLEANUP_BATCH_SIZE;
+        process.env.MEILI_CLEANUP_BATCH_SIZE = cleanupBatchSize;
+
+        try {
+          expect(() => createDynamicMeiliModel(`InvalidCleanupBatch${Date.now()}`)).toThrow(
+            'MEILI_CLEANUP_BATCH_SIZE must be a positive integer',
+          );
+        } finally {
+          if (previousCleanupBatchSize === undefined) {
+            delete process.env.MEILI_CLEANUP_BATCH_SIZE;
+          } else {
+            process.env.MEILI_CLEANUP_BATCH_SIZE = previousCleanupBatchSize;
+          }
+        }
+      },
+    );
+    // End [knauf]
+
     // [knauf] Fence task snapshots, requeue concurrent changes, and bound unstable retries.
     test('does not mark Mongo documents indexed before the Meilisearch task succeeds', async () => {
       const conversationModel = createConversationModel(

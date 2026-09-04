@@ -197,6 +197,18 @@ const createMeiliMongooseModel = ({
   syncOptions: { batchSize: number; delayMs: number };
 }) => {
   const syncConfig = { ...getSyncConfig(), ...syncOptions };
+  // [knauf] Let cleanup use larger read pages without widening Mongo acknowledgement batches.
+  const cleanupBatchSizeValue = process.env.MEILI_CLEANUP_BATCH_SIZE;
+  const parsedCleanupBatchSize =
+    cleanupBatchSizeValue == null ? syncConfig.batchSize : Number(cleanupBatchSizeValue);
+  if (
+    cleanupBatchSizeValue != null &&
+    (!/^[1-9]\d*$/.test(cleanupBatchSizeValue) || !Number.isSafeInteger(parsedCleanupBatchSize))
+  ) {
+    throw new Error('MEILI_CLEANUP_BATCH_SIZE must be a positive integer');
+  }
+  const cleanupBatchSize = parsedCleanupBatchSize;
+  // End [knauf]
 
   // [knauf] Keep reconciliation ownership until each queued bulk-index task is terminal.
   const waitForSuccessfulTask = async (taskUid: number): Promise<void> => {
@@ -260,8 +272,12 @@ const createMeiliMongooseModel = ({
 
       try {
         // First, handle documents that need to be removed from Meili
-        logger.info(`[syncWithMeili] Starting cleanup of Meili index ${index.uid} before sync`);
-        await this.cleanupMeiliIndex(index, primaryKey, batchSize, delayMs);
+        // [knauf] Report and apply the independently bounded cleanup page size.
+        logger.info(
+          `[syncWithMeili] Starting cleanup of Meili index ${index.uid} with batch size ${cleanupBatchSize} before sync`,
+        );
+        await this.cleanupMeiliIndex(index, primaryKey, cleanupBatchSize, delayMs);
+        // End [knauf]
         logger.info(`[syncWithMeili] Completed cleanup of Meili index: ${index.uid}`);
       } catch (error) {
         logger.error('[syncWithMeili] Error during cleanup Meili before sync:', error);
