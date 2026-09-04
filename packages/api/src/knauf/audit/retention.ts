@@ -9,23 +9,29 @@
 // creates an Art. 5(1)(e)/§26 BDSG problem instead of compliance.
 // Rationale: knauf/docs/privacy/workstream.md §3.4.
 //
-// The heavy lifting already existed: `purgeAuditLogEntries` is chain-safe (it
-// translates the date into a contiguous `seq` prefix so clock skew can never punch
-// a hole mid-chain) and gated on `confirm`. What was missing is a caller — and a
-// place to keep the checkpoint it mints, without which `verifyAuditChain` reports
-// `ok: false` on every purged chain.
-//
-// Ships INERT: with no retention configured this module does nothing at all.
-import type { AuditCheckpoint } from '@librechat/data-schemas';
+// Shape of one pass (per scope), designed so a crash at ANY point is recoverable:
+//   1. finalize   — commit or drop any intent a previous pass left behind
+//   2. boundary   — compute what the purge will delete through (read-only)
+//   3. begin      — persist that intent (write-ahead)
+//   4. purge      — upstream `purgeAuditLogEntries` (the only delete)
+//   5. finalize   — read the chain, commit the boundary it actually has
+// The whole pass runs under a renewable distributed lease so 2–10 API replicas
+// cannot purge the same chain concurrently. Ships INERT: with no retention
+// configured this module does nothing at all.
+import type {
+  AuditRetentionBoundary,
+  AuditRetentionFinalizeOutcome,
+} from '@librechat/data-schemas';
 
 /** 12 months — the §3.4 recommendation, used only once retention is switched on. */
 export const DEFAULT_AUDIT_RETENTION_DAYS: number = 365;
 /** Six hours. The log is low-volume (admin/security events), so this is about
  *  bounding lag after a period change, not about throughput. */
 export const DEFAULT_AUDIT_SWEEP_INTERVAL_MS: number = 6 * 60 * 60 * 1000;
+/** Ten minutes. A pass over a low-volume log takes seconds; the lease is renewed
+ *  at a third of this while the pass runs, so only a dead holder lets it lapse. */
+export const DEFAULT_AUDIT_SWEEP_LEASE_MS: number = 10 * 60 * 1000;
 
-/** One audit scope to sweep. `tenantId` is undefined for the platform chain;
- *  `scopeKey` is the stable key used for the checkpoint store and for logs. */
 export interface AuditScope {
   scopeKey: string;
   tenantId?: string;
@@ -33,46 +39,60 @@ export interface AuditScope {
 
 export interface AuditPurgeOutcome {
   scopeKey: string;
-  /** Rows actually removed. Always 0 in a dry run. */
+  /** Rows actually removed by this pass. Always 0 in a dry run. */
   deletedCount: number;
-  /** Dry-run only: rows older than the cutoff. An estimate — the real purge
-   *  deletes a contiguous `seq` prefix and may retain a few extra rows under
-   *  clock skew, so this is an upper bound, never an undercount. */
+  /** Dry-run only: rows older than the cutoff (an upper-bound estimate). */
   wouldDelete?: number;
+  /** A boundary was committed to the ledger (this pass or by recovery). */
   checkpointAdvanced: boolean;
-  /** True when the purge emptied the chain and the stale boundary was dropped. */
-  checkpointCleared?: boolean;
+  /** The committed boundary emptied the chain (a new generation follows). */
+  terminal?: boolean;
+  generation?: number;
+  /** A leftover intent from an earlier crashed pass was finalized first. */
+  recoveredPending?: AuditRetentionFinalizeOutcome;
 }
 
 export interface AuditRetentionSweepResult {
   /** False when retention is unset — the sweep did not run at all. */
   enabled: boolean;
   dryRun: boolean;
+  /** Set when another replica held the lease: nothing ran, by design. */
+  skipped?: 'lease-held';
   cutoff?: Date;
   chains: AuditPurgeOutcome[];
   totalDeleted: number;
-  /** Dry-run only: total rows a real run would remove. */
   totalWouldDelete?: number;
 }
 
 export interface AuditRetentionSweepDependencies {
   listAuditScopes(): Promise<AuditScope[]>;
+  computeBoundary(scope: AuditScope, before: Date): Promise<AuditRetentionBoundary | null>;
+  beginPurge(params: {
+    scopeKey: string;
+    boundary: AuditRetentionBoundary;
+    cutoff: Date;
+    now: Date;
+  }): Promise<void>;
+  /** The only delete. `confirm:false` makes upstream a no-op that reports 0. */
   purgeScope(
     scope: AuditScope,
     options: { before: Date; confirm: boolean },
-  ): Promise<{ deletedCount: number; checkpoint?: AuditCheckpoint }>;
-  advanceCheckpoint(params: {
-    scopeKey: string;
-    checkpoint: AuditCheckpoint;
-    purgedAt: Date;
-    deletedCount: number;
-  }): Promise<void>;
-  /** Drop a scope's boundary after a purge emptied its chain — see the sweep. */
-  clearCheckpoint(scopeKey: string): Promise<void>;
-  /** Rows older than `before` for a scope. Used only in dry-run: the upstream
-   *  purge short-circuits on `confirm:false` and reports 0, so without this a dry
-   *  run could never tell an operator what enabling deletion would remove. */
+  ): Promise<{ deletedCount: number }>;
+  finalizePurge(params: {
+    scope: AuditScope;
+    deletedCount?: number;
+    now: Date;
+    recovered?: boolean;
+  }): Promise<AuditRetentionFinalizeOutcome>;
+  /** Rows older than `before`. Dry-run only — upstream reports 0 on `confirm:false`. */
   countPurgeable(scope: AuditScope, before: Date): Promise<number>;
+  lease: {
+    owner: string;
+    ttlMs: number;
+    acquire(now: Date): Promise<boolean>;
+    renew(now: Date): Promise<boolean>;
+    release(): Promise<void>;
+  };
   now(): Date;
   logger: {
     info(msg: string, meta?: unknown): void;
@@ -105,6 +125,15 @@ export function getAuditSweepIntervalMs(
   return value;
 }
 
+export function getAuditSweepLeaseMs(
+  raw: string | undefined = process.env.KNAUF_AUDIT_SWEEP_LEASE_MS,
+): number {
+  if (raw == null || raw.trim() === '') return DEFAULT_AUDIT_SWEEP_LEASE_MS;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1000) return DEFAULT_AUDIT_SWEEP_LEASE_MS;
+  return value;
+}
+
 /**
  * Dry-run unless explicitly disabled. Defaults to ON so that merging this and
  * setting a retention period still deletes nothing — an operator has to opt into
@@ -120,9 +149,74 @@ export function computeAuditCutoff(now: Date, retentionDays: number): Date {
   return new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 }
 
+async function sweepScope(
+  scope: AuditScope,
+  cutoff: Date,
+  dryRun: boolean,
+  deps: AuditRetentionSweepDependencies,
+): Promise<AuditPurgeOutcome> {
+  const outcome: AuditPurgeOutcome = {
+    scopeKey: scope.scopeKey,
+    deletedCount: 0,
+    checkpointAdvanced: false,
+  };
+
+  /* 1. Recovery. A previous pass may have announced an intent and died before
+   *    (or during, or after) the delete. The chain says what actually happened. */
+  const recovered = await deps.finalizePurge({ scope, now: deps.now(), recovered: true });
+  if (recovered.action !== 'none') {
+    outcome.recoveredPending = recovered;
+    deps.logger.warn('[auditRetention] finalized a leftover purge intent', {
+      scopeKey: scope.scopeKey,
+      recovered,
+    });
+    if (recovered.action === 'committed') {
+      outcome.checkpointAdvanced = true;
+      outcome.terminal = recovered.boundary.terminal;
+      outcome.generation = recovered.generation;
+    }
+  }
+
+  if (dryRun) {
+    outcome.wouldDelete = await deps.countPurgeable(scope, cutoff);
+    return outcome;
+  }
+
+  /* 2–3. Announce before deleting. */
+  const boundary = await deps.computeBoundary(scope, cutoff);
+  if (!boundary) {
+    return outcome;
+  }
+  await deps.beginPurge({ scopeKey: scope.scopeKey, boundary, cutoff, now: deps.now() });
+
+  /* 4. The only delete. Same `before`, therefore the same prefix upstream computes. */
+  const purge = await deps.purgeScope(scope, { before: cutoff, confirm: true });
+  outcome.deletedCount = purge.deletedCount ?? 0;
+
+  /* 5. Commit what the chain actually shows. If this throws, the intent stays and
+   *    step 1 of the next pass finishes the job — no log line has to be "recovery". */
+  const result = await deps.finalizePurge({
+    scope,
+    deletedCount: outcome.deletedCount,
+    now: deps.now(),
+  });
+  if (result.action === 'committed') {
+    outcome.checkpointAdvanced = true;
+    outcome.terminal = result.boundary.terminal;
+    outcome.generation = result.generation;
+  } else if (outcome.deletedCount > 0) {
+    deps.logger.error('[auditRetention] rows deleted but boundary not committed', {
+      scopeKey: scope.scopeKey,
+      result,
+    });
+  }
+  return outcome;
+}
+
 /**
- * One pass over every audit chain. A chain that throws is logged and skipped so a
- * single bad chain cannot stall retention for the rest — the next pass retries it.
+ * One pass over every audit chain, under the distributed lease. A chain that
+ * throws is logged and skipped so a single bad chain cannot stall retention for
+ * the rest — the next pass retries it (and recovers its intent first).
  */
 export async function sweepAuditRetention(
   options: { retentionDays?: number; dryRun?: boolean },
@@ -130,95 +224,75 @@ export async function sweepAuditRetention(
 ): Promise<AuditRetentionSweepResult> {
   const retentionDays = options.retentionDays ?? getAuditRetentionDays();
   const dryRun = options.dryRun ?? isAuditSweepDryRun();
-
   if (retentionDays == null) {
     return { enabled: false, dryRun, chains: [], totalDeleted: 0 };
   }
 
-  const cutoff = computeAuditCutoff(deps.now(), retentionDays);
-  const scopes = await deps.listAuditScopes();
-  const chains: AuditPurgeOutcome[] = [];
-  let totalDeleted = 0;
-  let totalWouldDelete = 0;
-
-  for (const scope of scopes) {
-    try {
-      /* `confirm: false` makes the upstream purge a no-op that reports nothing, so
-       * a dry run cannot delete even if everything below is wrong. */
-      /* A dry run cannot learn anything from the purge itself: upstream returns
-       * `{ deletedCount: 0 }` on its first line when `confirm` is false. Count
-       * separately so "read the counts, then enable" is a real workflow. */
-      if (dryRun) {
-        const wouldDelete = await deps.countPurgeable(scope, cutoff);
-        totalWouldDelete += wouldDelete;
-        chains.push({
-          scopeKey: scope.scopeKey,
-          deletedCount: 0,
-          wouldDelete,
-          checkpointAdvanced: false,
-        });
-        continue;
-      }
-
-      const result = await deps.purgeScope(scope, { before: cutoff, confirm: true });
-      const deletedCount = result.deletedCount ?? 0;
-      let checkpointAdvanced = false;
-      let checkpointCleared = false;
-
-      /* Upstream only mints a checkpoint when rows actually went away — a no-op
-       * purge returning one would let a caller legitimize a prefix it never
-       * authorized. Persist it before counting the purge as done: if this throws,
-       * the rows are gone but the boundary is not recorded, and verification
-       * would report a break. Logged loudly for exactly that reason. */
-      if (result.checkpoint && deletedCount > 0) {
-        await deps.advanceCheckpoint({
-          scopeKey: scope.scopeKey,
-          checkpoint: result.checkpoint,
-          purgedAt: deps.now(),
-          deletedCount,
-        });
-        checkpointAdvanced = true;
-      } else if (deletedCount > 0) {
-        /* Rows went but no checkpoint came back: the purge emptied the chain.
-         * `recordAuditEntry` restarts an empty chain at seq 1 from GENESIS, which
-         * verifies on its own — but a leftover far-ahead boundary would fail the
-         * forward-only advance guard on every later purge and pin this scope at
-         * ok:false forever. Drop it. */
-        await deps.clearCheckpoint(scope.scopeKey);
-        checkpointCleared = true;
-      }
-
-      totalDeleted += deletedCount;
-      chains.push({
-        scopeKey: scope.scopeKey,
-        deletedCount,
-        checkpointAdvanced,
-        checkpointCleared,
-      });
-    } catch (error) {
-      deps.logger.error('[auditRetention] scope sweep failed', { scopeKey: scope.scopeKey, error });
-    }
+  if (!(await deps.lease.acquire(deps.now()))) {
+    deps.logger.info('[auditRetention] another replica holds the sweep lease; skipping this pass', {
+      owner: deps.lease.owner,
+    });
+    return { enabled: true, dryRun, skipped: 'lease-held', chains: [], totalDeleted: 0 };
   }
+  const heartbeat = setInterval(
+    () => {
+      void deps.lease.renew(deps.now()).then((ok) => {
+        if (!ok)
+          deps.logger.warn('[auditRetention] lease renewal failed — another holder took over', {
+            owner: deps.lease.owner,
+          });
+      });
+    },
+    Math.max(1000, Math.floor(deps.lease.ttlMs / 3)),
+  );
+  heartbeat.unref?.();
 
-  if (totalDeleted > 0 || dryRun) {
-    deps.logger.info('[auditRetention] sweep complete', {
+  try {
+    const cutoff = computeAuditCutoff(deps.now(), retentionDays);
+    const scopes = await deps.listAuditScopes();
+    const chains: AuditPurgeOutcome[] = [];
+    let totalDeleted = 0;
+    let totalWouldDelete = 0;
+
+    for (const scope of scopes) {
+      try {
+        const outcome = await sweepScope(scope, cutoff, dryRun, deps);
+        totalDeleted += outcome.deletedCount;
+        totalWouldDelete += outcome.wouldDelete ?? 0;
+        chains.push(outcome);
+      } catch (error) {
+        deps.logger.error('[auditRetention] scope sweep failed', {
+          scopeKey: scope.scopeKey,
+          error,
+        });
+      }
+    }
+
+    if (totalDeleted > 0 || dryRun || chains.some((c) => c.recoveredPending)) {
+      deps.logger.info('[auditRetention] sweep complete', {
+        dryRun,
+        retentionDays,
+        cutoff: cutoff.toISOString(),
+        chains: chains.length,
+        totalDeleted,
+        recovered: chains.filter((c) => c.recoveredPending).length,
+        ...(dryRun ? { totalWouldDelete } : {}),
+      });
+    }
+    return {
+      enabled: true,
       dryRun,
-      retentionDays,
-      cutoff: cutoff.toISOString(),
-      chains: chains.length,
+      cutoff,
+      chains,
       totalDeleted,
       ...(dryRun ? { totalWouldDelete } : {}),
-    });
+    };
+  } finally {
+    clearInterval(heartbeat);
+    await deps.lease
+      .release()
+      .catch((error) => deps.logger.warn('[auditRetention] lease release failed', { error }));
   }
-
-  return {
-    enabled: true,
-    dryRun,
-    cutoff,
-    chains,
-    totalDeleted,
-    ...(dryRun ? { totalWouldDelete } : {}),
-  };
 }
 
 export interface StartAuditRetentionSweepDependencies {
@@ -231,9 +305,10 @@ export interface StartAuditRetentionSweepDependencies {
 }
 
 /**
- * Start the periodic sweep, or return null when it should not run. Mirrors
- * `startExpiredFileSweep`: an `isSweeping` guard so a slow pass cannot overlap
- * itself, and an unref'd timer so it never holds the process open.
+ * Start the periodic in-process sweep, or return null when it should not run.
+ * The process-local `isSweeping` guard only prevents self-overlap; cross-replica
+ * exclusion is the lease inside `sweepAuditRetention`. Deployments that prefer a
+ * singleton CronJob run `api/knauf/audit/sweepOnce.js` and set the interval to 0.
  */
 export function startAuditRetentionSweep(
   deps: StartAuditRetentionSweepDependencies,
@@ -245,13 +320,13 @@ export function startAuditRetentionSweep(
     );
     return null;
   }
-
   const intervalMs = getAuditSweepIntervalMs();
   if (intervalMs === 0) {
-    deps.logger.info('[auditRetention] Disabled by KNAUF_AUDIT_SWEEP_INTERVAL_MS=0');
+    deps.logger.info(
+      '[auditRetention] In-process scheduler disabled by KNAUF_AUDIT_SWEEP_INTERVAL_MS=0 (run sweepOnce.js from a CronJob)',
+    );
     return null;
   }
-
   const dryRun = isAuditSweepDryRun();
   deps.logger.info(
     `[auditRetention] Enabled: ${retentionDays}d retention, ${intervalMs}ms interval, dryRun=${dryRun}`,
@@ -269,7 +344,6 @@ export function startAuditRetentionSweep(
       isSweeping = false;
     }
   };
-
   void runSweep();
   const timer = setInterval(runSweep, intervalMs);
   timer.unref?.();

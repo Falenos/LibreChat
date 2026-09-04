@@ -29,7 +29,7 @@ const { capabilityContextMiddleware } = require('./middleware/roles/capabilities
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
 // [knauf] KK20-328 — audit-log retention sweep, started on the retention worker.
-const { startKnaufAuditRetentionSweep } = require('./services/Audit/knaufAuditRetention');
+const { startKnaufAuditRetentionSweep } = require('~/knauf/audit/retention');
 // End [knauf]
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
 const { jwtLogin, ldapLogin, passportLogin } = require('~/strategies');
