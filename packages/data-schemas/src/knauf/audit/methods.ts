@@ -65,6 +65,20 @@ function currentKey(keys: string | AuditSigningKeys | undefined): string | undef
   return keys?.current && keys.current.length > 0 ? keys.current : undefined;
 }
 
+function toState(doc: IKnaufAuditRetentionCheckpoint): AuditRetentionCheckpointState {
+  return {
+    scopeKey: doc.scopeKey,
+    throughSeq: doc.throughSeq,
+    prevHash: doc.prevHash,
+    purgedAt: doc.purgedAt ?? undefined,
+    totalDeleted: doc.totalDeleted,
+    recoveredCommits: doc.recoveredCommits ?? 0,
+    lastFence: doc.lastFence ?? 0,
+    signature: doc.signature ?? undefined,
+    pending: doc.pending ?? null,
+  };
+}
+
 /** Explicit return type: `--isolatedDeclarations` rejects the inferred factory shape. */
 export interface AuditRetentionCheckpointMethods {
   getAuditRetentionCheckpoint(scopeKey: string): Promise<AuditRetentionCheckpointState | undefined>;
@@ -143,20 +157,6 @@ export function createAuditRetentionCheckpointMethods(
       () => undefined,
     );
     return indexesReady;
-  }
-
-  function toState(doc: IKnaufAuditRetentionCheckpoint): AuditRetentionCheckpointState {
-    return {
-      scopeKey: doc.scopeKey,
-      throughSeq: doc.throughSeq,
-      prevHash: doc.prevHash,
-      purgedAt: doc.purgedAt ?? undefined,
-      totalDeleted: doc.totalDeleted,
-      recoveredCommits: doc.recoveredCommits ?? 0,
-      lastFence: doc.lastFence ?? 0,
-      signature: doc.signature ?? undefined,
-      pending: doc.pending ?? null,
-    };
   }
 
   async function getAuditRetentionCheckpoint(
@@ -295,9 +295,8 @@ export function createAuditRetentionCheckpointMethods(
     signingKeys?: string | AuditSigningKeys;
     recovered?: boolean;
   }): Promise<AuditRetentionFinalizeOutcome> {
-    const { scopeKey, tenantId, fence, now } = params;
-    const signingKey = currentKey(params.signingKeys);
-    const chainKey = auditChainKey(tenantId);
+    const { scopeKey, fence } = params;
+    const chainKey = auditChainKey(params.tenantId);
 
     for (let attempt = 1; attempt <= CAS_ATTEMPTS; attempt++) {
       const doc = await checkpoints().findOne({ scopeKey }).lean<IKnaufAuditRetentionCheckpoint>();
@@ -309,86 +308,134 @@ export function createAuditRetentionCheckpointMethods(
         return { action: 'dropped', reason: 'stale-fence' };
       }
       const intent = doc.pending;
-
-      /* AUTHENTICATED INTENT. Under a configured key, an intent that does not carry a
-       * valid signature (current or previous key) was not written by a legitimate
-       * `begin` — refuse to certify, and thereby sign, whatever deletion followed it. */
-      if (signingKey) {
-        const status = verifyAuditIntentSignature({ scopeKey, ...intent }, params.signingKeys);
-        if (status !== 'valid') {
-          return await dropPending(doc, 'untrusted-intent');
-        }
+      if (!isIntentTrusted(scopeKey, intent, params.signingKeys)) {
+        return await dropPending(scopeKey, fence, doc, 'untrusted-intent');
       }
-
-      /* The chain is the source of truth for what actually happened. Because retention
-       * never empties a chain, an empty chain here is always outside any intent. */
-      const first = await auditLog()
-        .findOne({ chainKey })
-        .sort({ seq: 1 })
-        .select('seq prevHash')
-        .lean<{ seq: number; prevHash: string }>();
-      if (!first) {
-        return await dropPending(doc, 'boundary-outside-intent');
+      const verdict = await judgeChain(chainKey, doc, intent);
+      if (verdict.drop) {
+        return await dropPending(scopeKey, fence, doc, verdict.drop);
       }
-      const actual = { throughSeq: first.seq - 1, prevHash: first.prevHash };
-
-      /* Never legitimize past the announced intent, and never move backwards. */
-      if (actual.throughSeq > intent.throughSeq) {
-        return await dropPending(doc, 'boundary-outside-intent');
-      }
-      if (actual.throughSeq <= doc.throughSeq) {
-        return await dropPending(doc, 'nothing-deleted');
-      }
-
-      const committed = { scopeKey, throughSeq: actual.throughSeq, prevHash: actual.prevHash };
-      const res = await checkpoints().updateOne(
-        /* CAS on the exact state read, fenced. A concurrent finalizer or a later
-         * lease holder changes one of these and this matches nothing. */
-        {
-          scopeKey,
-          throughSeq: doc.throughSeq,
-          lastFence: doc.lastFence ?? 0,
-          'pending.throughSeq': intent.throughSeq,
-          'pending.startedAt': intent.startedAt,
-          'pending.fence': intent.fence,
-        },
-        {
-          $set: {
-            ...committed,
-            purgedAt: now,
-            pending: null,
-            ...(signingKey ? { signature: signAuditCheckpoint(committed, signingKey) } : {}),
-          },
-          ...(signingKey ? {} : { $unset: { signature: '' } }),
-          $max: { lastFence: fence },
-          $inc: {
-            totalDeleted: params.deletedCount ?? 0,
-            recoveredCommits: params.recovered ? 1 : 0,
-          },
-        },
-      );
-      if (res.matchedCount === 1) {
-        return { action: 'committed', boundary: actual, recovered: params.recovered === true };
+      const committed = await commitBoundary({ doc, intent, actual: verdict.actual, ...params });
+      if (committed) {
+        return {
+          action: 'committed',
+          boundary: verdict.actual,
+          recovered: params.recovered === true,
+        };
       }
       /* Lost the race — re-read and re-evaluate against the winner's state. */
     }
     return { action: 'dropped', reason: 'lost-race' };
+  }
 
-    async function dropPending(
-      doc: IKnaufAuditRetentionCheckpoint,
-      reason: AuditRetentionDropReason,
-    ): Promise<AuditRetentionFinalizeOutcome> {
-      await checkpoints().updateOne(
-        {
-          scopeKey,
-          lastFence: { $lte: fence },
-          'pending.startedAt': doc.pending?.startedAt,
-          'pending.fence': doc.pending?.fence,
-        },
-        { $set: { pending: null }, $max: { lastFence: fence } },
-      );
-      return { action: 'dropped', reason };
+  /**
+   * AUTHENTICATED INTENT. Under a configured key, an intent that does not carry a valid
+   * signature (current or previous key) was not written by a legitimate `begin` — refuse
+   * to certify, and thereby sign, whatever deletion followed it. No key ⇒ trusted.
+   */
+  function isIntentTrusted(
+    scopeKey: string,
+    intent: AuditRetentionPendingPurge,
+    signingKeys: string | AuditSigningKeys | undefined,
+  ): boolean {
+    if (!currentKey(signingKeys)) {
+      return true;
     }
+    return verifyAuditIntentSignature({ scopeKey, ...intent }, signingKeys) === 'valid';
+  }
+
+  /**
+   * The chain is the source of truth for what actually happened. Because retention never
+   * empties a chain, an empty chain is always outside any intent. Never legitimize past
+   * the announced intent, and never move backwards.
+   */
+  async function judgeChain(
+    chainKey: string,
+    doc: IKnaufAuditRetentionCheckpoint,
+    intent: AuditRetentionPendingPurge,
+  ): Promise<
+    | { drop: AuditRetentionDropReason; actual?: undefined }
+    | { drop?: undefined; actual: { throughSeq: number; prevHash: string } }
+  > {
+    const first = await auditLog()
+      .findOne({ chainKey })
+      .sort({ seq: 1 })
+      .select('seq prevHash')
+      .lean<{ seq: number; prevHash: string }>();
+    if (!first) {
+      return { drop: 'boundary-outside-intent' };
+    }
+    const actual = { throughSeq: first.seq - 1, prevHash: first.prevHash };
+    if (actual.throughSeq > intent.throughSeq) {
+      return { drop: 'boundary-outside-intent' };
+    }
+    if (actual.throughSeq <= doc.throughSeq) {
+      return { drop: 'nothing-deleted' };
+    }
+    return { actual };
+  }
+
+  /** Fenced compare-and-set on the exact state read. False ⇒ someone else got there first. */
+  async function commitBoundary(p: {
+    scopeKey: string;
+    doc: IKnaufAuditRetentionCheckpoint;
+    intent: AuditRetentionPendingPurge;
+    actual: { throughSeq: number; prevHash: string };
+    fence: number;
+    now: Date;
+    deletedCount?: number;
+    signingKeys?: string | AuditSigningKeys;
+    recovered?: boolean;
+  }): Promise<boolean> {
+    const signingKey = currentKey(p.signingKeys);
+    const committed = {
+      scopeKey: p.scopeKey,
+      throughSeq: p.actual.throughSeq,
+      prevHash: p.actual.prevHash,
+    };
+    const res = await checkpoints().updateOne(
+      {
+        scopeKey: p.scopeKey,
+        throughSeq: p.doc.throughSeq,
+        lastFence: p.doc.lastFence ?? 0,
+        'pending.throughSeq': p.intent.throughSeq,
+        'pending.startedAt': p.intent.startedAt,
+        'pending.fence': p.intent.fence,
+      },
+      {
+        $set: {
+          ...committed,
+          purgedAt: p.now,
+          pending: null,
+          ...(signingKey ? { signature: signAuditCheckpoint(committed, signingKey) } : {}),
+        },
+        ...(signingKey ? {} : { $unset: { signature: '' } }),
+        $max: { lastFence: p.fence },
+        $inc: {
+          totalDeleted: p.deletedCount ?? 0,
+          recoveredCommits: p.recovered ? 1 : 0,
+        },
+      },
+    );
+    return res.matchedCount === 1;
+  }
+
+  async function dropPending(
+    scopeKey: string,
+    fence: number,
+    doc: IKnaufAuditRetentionCheckpoint,
+    reason: AuditRetentionDropReason,
+  ): Promise<AuditRetentionFinalizeOutcome> {
+    await checkpoints().updateOne(
+      {
+        scopeKey,
+        lastFence: { $lte: fence },
+        'pending.startedAt': doc.pending?.startedAt,
+        'pending.fence': doc.pending?.fence,
+      },
+      { $set: { pending: null }, $max: { lastFence: fence } },
+    );
+    return { action: 'dropped', reason };
   }
 
   /* ------------------------------------------------------------------ lease */
