@@ -161,10 +161,12 @@ jobs:
             git push origin "$VERSION"
           fi
 
-          # Idempotent: skip if release already exists
-          if gh release view "$VERSION" >/dev/null 2>&1; then
+          # [knauf] KK20-323 — fail closed when GitHub release lookup is rate-limited
+          RELEASE_LOOKUP_ERROR=$(mktemp)
+          if gh api --silent "/repos/${{ github.repository }}/releases/tags/$VERSION" \
+            >/dev/null 2>"$RELEASE_LOOKUP_ERROR"; then
             echo "Release $VERSION already exists — skipping release creation"
-          else
+          elif grep -Fq '(HTTP 404)' "$RELEASE_LOOKUP_ERROR"; then
             gh api \
               --method POST \
               -H "Accept: application/vnd.github+json" \
@@ -172,7 +174,13 @@ jobs:
               -f tag_name="$VERSION" \
               -f name="$VERSION" \
               -F generate_release_notes=true
+          else
+            cat "$RELEASE_LOOKUP_ERROR" >&2
+            rm -f "$RELEASE_LOOKUP_ERROR"
+            exit 1
           fi
+          rm -f "$RELEASE_LOOKUP_ERROR"
+          # End [knauf]
 
       - name: Check out AGK deployment config repository
         run: git clone "https://${{ env.GITHUB_PAT }}@github.com/$AGK_CONFIG_REPOSITORY.git" agk-deployment-configs
@@ -391,7 +399,32 @@ jobs:
           fi
 
           echo "DEV health smoke run: $run_url"
-          gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status
+          # [knauf] KK20-323 — avoid gh run watch's high-frequency API polling
+          RUN_COMPLETED=false
+          for attempt in {1..80}; do
+            if RUN_JSON=$(gh api "/repos/$QUALITY_REPOSITORY/actions/runs/$run_id" 2>&1); then
+              RUN_STATUS=$(jq -r '.status' <<< "$RUN_JSON")
+              RUN_CONCLUSION=$(jq -r '.conclusion // ""' <<< "$RUN_JSON")
+              echo "Attempt $attempt: DEV health smoke status=$RUN_STATUS conclusion=${RUN_CONCLUSION:-pending}"
+              if [ "$RUN_STATUS" = "completed" ]; then
+                if [ "$RUN_CONCLUSION" != "success" ]; then
+                  echo "::error::DEV health smoke concluded with $RUN_CONCLUSION — see $run_url"
+                  exit 1
+                fi
+                RUN_COMPLETED=true
+                break
+              fi
+            else
+              echo "::warning::Unable to read DEV health smoke status (attempt $attempt); retrying"
+            fi
+            sleep 15
+          done
+
+          if [ "$RUN_COMPLETED" != "true" ]; then
+            echo "::error::Timed out waiting for DEV health smoke — see $run_url"
+            exit 1
+          fi
+          # End [knauf]
           echo "DEV health smoke passed"
           echo "| DEV health smoke | $run_url |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Stage deploy | automatic — see below |" >> "$GITHUB_STEP_SUMMARY"
@@ -698,14 +731,31 @@ jobs:
           fi
 
           echo "STAGE E2E run: $run_url"
-          if gh run watch "$run_id" --repo "$QUALITY_REPOSITORY" --exit-status; then
+          # [knauf] KK20-323 — avoid gh run watch's high-frequency API polling
+          RUN_CONCLUSION=""
+          for attempt in {1..80}; do
+            if RUN_JSON=$(gh api "/repos/$QUALITY_REPOSITORY/actions/runs/$run_id" 2>&1); then
+              RUN_STATUS=$(jq -r '.status' <<< "$RUN_JSON")
+              RUN_CONCLUSION=$(jq -r '.conclusion // ""' <<< "$RUN_JSON")
+              echo "Attempt $attempt: STAGE E2E status=$RUN_STATUS conclusion=${RUN_CONCLUSION:-pending}"
+              if [ "$RUN_STATUS" = "completed" ]; then
+                break
+              fi
+            else
+              echo "::warning::Unable to read STAGE E2E status (attempt $attempt); retrying"
+            fi
+            sleep 15
+          done
+
+          if [ "$RUN_CONCLUSION" = "success" ]; then
             echo "STAGE E2E (informational) passed"
             echo "| STAGE E2E (informational) | $run_url — passed |" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::STAGE E2E (informational) failed for $VERSION — see $run_url. Non-blocking; promote_pipeline.yaml re-runs E2E fresh before any prod promotion."
-            echo "| STAGE E2E (informational) | $run_url — FAILED (non-blocking, see warning) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::STAGE E2E (informational) ended with ${RUN_CONCLUSION:-a polling timeout} for $VERSION — see $run_url. Non-blocking; promote_pipeline.yaml re-runs E2E fresh before any prod promotion."
+            echo "| STAGE E2E (informational) | $run_url — ${RUN_CONCLUSION:-polling timeout} (non-blocking, see warning) |" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          # End [knauf]
 
       # [knauf] KK20-195 — nudge the worker ArgoCD app onto the new image.
       # Best-effort visibility only: the app deploy above is the release's success

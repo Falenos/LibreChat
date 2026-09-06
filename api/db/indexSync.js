@@ -475,7 +475,10 @@ async function runIndexSync() {
       return;
     }
 
-    if (err.message.includes('not found')) {
+    // [knauf] Only provider-confirmed missing indexes may launch a full recovery sync.
+    const isMissingIndex = err?.code === 'index_not_found';
+    // End [knauf]
+    if (isMissingIndex) {
       logger.debug('[indexSync] Creating indices...');
       // [knauf] Keep missing-index recovery inside the cross-replica operation lease.
       try {
