@@ -116,17 +116,22 @@ export function toLangfuseFeedbackMetadata(
   }
   for (const key of LANGFUSE_FEEDBACK_METADATA_KEYS) {
     const value = input[key];
-    if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
-      out[key] = value;
-    } else if (
-      typeof value === 'string' &&
-      value.length > 0 &&
-      value.length <= MAX_METADATA_STRING
-    ) {
+    if (isAllowedMetadataValue(value)) {
       out[key] = value;
     }
   }
   return out;
+}
+
+/** Booleans, finite numbers, and non-empty strings up to the cap — nothing structured. */
+function isAllowedMetadataValue(value: unknown): value is string | number | boolean {
+  if (typeof value === 'boolean') {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_METADATA_STRING;
 }
 
 export type SendKnaufFeedbackScoreParams = {
@@ -148,13 +153,15 @@ export type SendKnaufFeedbackScoreResult =
 
 export async function sendKnaufFeedbackScore(
   params: SendKnaufFeedbackScoreParams,
-  deps: SendKnaufFeedbackScoreDeps = { send: sendFeedbackScore, env: process.env },
+  deps?: Partial<SendKnaufFeedbackScoreDeps>,
 ): Promise<SendKnaufFeedbackScoreResult> {
-  if (!isKnaufLangfuseFeedbackEnabled(deps.env)) {
+  const send = deps?.send ?? sendFeedbackScore;
+  const env = deps?.env ?? process.env;
+  if (!isKnaufLangfuseFeedbackEnabled(env)) {
     return { sent: false, reason: 'disabled' };
   }
   const feedback = toLangfuseFeedback(params.storedFeedback);
-  await deps.send({
+  await send({
     traceId: params.traceId,
     feedback,
     metadata: toLangfuseFeedbackMetadata(params.metadata),
