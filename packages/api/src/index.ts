@@ -87,6 +87,11 @@ export * from './knauf/context/locationContext';
 // directory as success and logs the zero case at `debug`.
 export * from './knauf/skills/deploymentSkillsCheck';
 // End [knauf]
+// [knauf] KK20-327 — Langfuse feedback egress adapter: the only path by which message
+// feedback may leave for Langfuse (allow-list contract, fail-closed, kill-switch aware).
+// Consumed by api/server/routes/messages.js.
+export * from './knauf/langfuse/feedbackEgress';
+// End [knauf]
 // [knauf] KK20-252 — strips YAML frontmatter from a skill body before it is
 // injected as a user message. Exported for parity with the module above; the
 // in-package call sites (agents/skills.ts, agents/skillFiles.ts) import it via

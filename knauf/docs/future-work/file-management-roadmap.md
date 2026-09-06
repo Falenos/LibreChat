@@ -1,5 +1,13 @@
 # File management & governance — future-work roadmap
 
+> [!NOTE]
+> **Partly superseded (2026-08-31).** Two claims below are now stale: a retention **scheduler does
+> exist** (`packages/api/src/files/sweep.ts`, run on a dedicated cluster worker via
+> `FILE_RETENTION_SWEEP_INTERVAL_MS`), and the **cascade-on-chat-delete gap was closed** by
+> KK20-203/204 — see [`../architecture/files/async-indexing.md`](../architecture/files/async-indexing.md).
+> The **S6 (DLP / PII)** and **T3 (retention sweep)** rows are refined into phased, ticketed work in
+> [`../privacy/workstream.md`](../privacy/workstream.md); treat that as authoritative for those two.
+
 **Status:** backlog (not scheduled). **Owner:** Karl platform. **Related shipped work:** KK20-190 (chat File Search uploads — allow-list, per-category size limits, encrypted-file rejection, top-k context).
 
 KK20-190 controls **what** gets uploaded. It does **not** address the **lifecycle** of a file once stored — deduplication, cleanup when a chat is deleted, retention, or the security controls an enterprise deployment is expected to have. This doc captures the verified current state and a set of ready-to-file Jira ticket drafts so the work can be scheduled in priority order.
@@ -15,7 +23,7 @@ KK20-190 controls **what** gets uploaded. It does **not** address the **lifecycl
 | **Deduplication**          | ❌ None. Every upload gets a fresh random UUID `file_id`; no content hash on the File schema; `createFile` upserts by `file_id` only. The same PDF uploaded to 5 chats → **5 blobs + 5 pgvector embeddings + 5 Mongo rows**.                                                                                | [multer.js:23](../../../api/server/routes/files/multer.js#L23), [file.ts schema](../../../packages/data-schemas/src/schema/file.ts)                                                                                          |
 | **Cleanup on chat delete** | ❌ No cascade. Deleting a conversation removes the convo + messages only — its files/blobs/vectors are orphaned. Chat File Search files carry **no `conversationId`** (written `context:'agents'`, linked only to the ephemeral agent_id).                                                                  | [conversation.ts:454](../../../packages/data-schemas/src/methods/conversation.ts#L454), [convos.js:129](../../../api/server/routes/convos.js#L129), [process.js:716-731](../../../api/server/services/Files/process.js#L716) |
 | **Explicit file delete**   | ✅ Works — Mongo + blob + pgvector + agent-refs, via `processDeleteRequest`. Reuse this for cascade/sweep. ⚠️ pgvector delete is best-effort (warns but doesn't block on non-404 errors).                                                                                                                   | [process.js:125](../../../api/server/services/Files/process.js#L125), [VectorDB/crud.js:44](../../../api/server/services/Files/VectorDB/crud.js#L44)                                                                         |
-| **Retention / TTL**        | ❌ None for real files. TTL exists only for temp chats (`expiredAt`, 30d default) and the 1h temp-upload cache (`file.expiresAt`). **No scheduler** (no cron/agenda/node-cron anywhere). Only a manual orphan script that de-references agent file_id stubs — it does **not** delete records/blobs/vectors. | [convo.ts:47](../../../packages/data-schemas/src/schema/convo.ts#L47), [config/migrate-orphaned-agent-files.js](../../../config/migrate-orphaned-agent-files.js)                                                             |
+| **Retention / TTL**        | ❌ None for real files. TTL exists only for temp chats (`expiredAt`, 30d default) and the 1h temp-upload cache (`file.expiresAt`). ~~**No scheduler**~~ — **stale:** a file retention sweep now runs on a dedicated cluster worker (`packages/api/src/files/sweep.ts`); still no cron/agenda/node-cron. Only a manual orphan script that de-references agent file_id stubs — it does **not** delete records/blobs/vectors. | [convo.ts:47](../../../packages/data-schemas/src/schema/convo.ts#L47), [config/migrate-orphaned-agent-files.js](../../../config/migrate-orphaned-agent-files.js)                                                             |
 
 ### Security controls — gap matrix
 

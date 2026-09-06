@@ -2,12 +2,12 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { logger } = require('@librechat/data-schemas');
 const { ContentTypes, isAssistantsEndpoint } = require('librechat-data-provider');
-const {
-  unescapeLaTeX,
-  countTokens,
-  sendFeedbackScore,
-  traceIdForMessage,
-} = require('@librechat/api');
+const { unescapeLaTeX, countTokens, traceIdForMessage } = require('@librechat/api');
+// [knauf] KK20-327 — feedback leaves for Langfuse only through the Knauf egress adapter,
+// and enters only through the upstream Zod schema. See the feedback route below.
+const { sendKnaufFeedbackScore } = require('@librechat/api');
+const { feedbackSchema } = require('librechat-data-provider');
+// End [knauf]
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const { requireJwtAuth, validateMessageReq } = require('~/server/middleware');
 // [knauf] KK20-182 — Re-sign Azure SAS URLs embedded in
@@ -400,10 +400,33 @@ router.put('/:conversationId/:messageId', validateMessageReq, async (req, res) =
   }
 });
 
+// [knauf] KK20-327 — validate the complete feedback object at the authenticated boundary.
+// Upstream stores `req.body.feedback` as-is, and `updateMessage` runs `findOneAndUpdate`
+// without validators, so the schema's `rating` enum is NOT enforced on this path: a
+// crafted request could persist prose in `rating` or `tag`, and the stored record is what
+// gets forwarded to Langfuse. Parse with upstream's own `feedbackSchema` (rating enum, tag
+// enum, text ≤ 1024) in strict mode so unknown properties are rejected rather than stored.
+// Nullish feedback stays nullish — that is the "clear my rating" request.
+const knaufStrictFeedbackSchema = feedbackSchema.strict();
+function knaufParseFeedbackBody(raw) {
+  if (raw == null) {
+    return { ok: true, feedback: null };
+  }
+  const parsed = knaufStrictFeedbackSchema.safeParse(raw);
+  return parsed.success ? { ok: true, feedback: parsed.data } : { ok: false };
+}
+// End [knauf]
+
 router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (req, res) => {
   try {
     const { conversationId, messageId } = req.params;
-    const { feedback } = req.body;
+    // [knauf] KK20-327 — boundary validation (see knaufParseFeedbackBody above).
+    const parsedFeedback = knaufParseFeedbackBody(req.body?.feedback);
+    if (!parsedFeedback.ok) {
+      return res.status(400).json({ error: 'Invalid feedback' });
+    }
+    const feedback = parsedFeedback.feedback;
+    // End [knauf]
 
     const updatedMessage = await db.updateMessage(
       req?.user?.id,
@@ -416,9 +439,22 @@ router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (re
 
     // Best-effort: Assistants messages do not have deterministic AgentRun traces.
     if (!isAssistantsEndpoint(updatedMessage.endpoint)) {
-      sendFeedbackScore({
+      // [knauf] KK20-327 — Langfuse PII gate. Upstream called `sendFeedbackScore` with the
+      // whole stored feedback, whose transport joins `[tag, text]` into the score comment —
+      // the user's free-text comment (the highest-entropy free-text field outside the chat,
+      // where people name colleagues, customers and documents) landed verbatim in a second
+      // durable store the Art. 17 erasure cascade does not reach. It is already durable in
+      // Mongo at `message.feedback.text`, so Langfuse bought no observability.
+      //
+      // The outbound policy lives in `packages/api/src/knauf/langfuse/feedbackEgress.ts`,
+      // not here: its contract type can only carry `rating` + `tag` (both enums), it
+      // rebuilds the object so unknown properties on legacy rows cannot survive, a rating
+      // outside the enum fails closed to the score-DELETE path, metadata is allow-listed,
+      // and `LANGFUSE_ENABLED=false` / `LANGFUSE_TRACING_ENABLED=false` produce no request.
+      // Nullish feedback still reaches upstream's DELETE path. Workstream §5 (P0-1).
+      sendKnaufFeedbackScore({
         traceId: traceIdForMessage(messageId),
-        feedback: updatedMessage.feedback,
+        storedFeedback: updatedMessage.feedback,
         metadata: {
           messageId: updatedMessage.messageId ?? messageId,
           parentMessageId: updatedMessage.parentMessageId,
@@ -431,6 +467,7 @@ router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (re
           tokenCount: updatedMessage.tokenCount,
         },
       }).catch((err) => logger.error('[langfuse] feedback score failed:', err));
+      // End [knauf]
     }
 
     res.json({

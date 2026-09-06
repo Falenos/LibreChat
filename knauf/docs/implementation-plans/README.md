@@ -42,4 +42,8 @@ If you can't decide between promote and archive: archive.
 | [`idml-translation-spike.md`](./idml-translation-spike.md) | Agentic Karl maintainers + Marketing localisation reviewers | 2026-08-24 | KK20-297 — compare Model Router and Azure Translator on supplied IDML fixtures, then complete human InDesign acceptance |
 | [`file-translation-production-plan.md`](./file-translation-production-plan.md) | Agentic Karl maintainers + Marketing localisation reviewers | 2026-08-26 | KK20-274 / KK20-297 — durable worker execution, admission control, parser hardening, observability, and production acceptance |
 
+The PII & privacy workstream lives in [`../privacy/`](../privacy/) rather than here — it grew a
+strategy doc and a compliance mapping alongside the rollout, so it graduated into a topic folder
+the same way code execution did.
+
 When that table empties, this folder can be reconsidered — maybe it stays as a known home for the next workstream, maybe it gets dropped. For now it has a clear purpose.
