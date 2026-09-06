@@ -264,7 +264,10 @@ describe('performSync() - syncThreshold logic', () => {
   });
 
   test('creates missing indexes immediately inside the operation lease', async () => {
-    const createFlowWithHandler = jest.fn().mockRejectedValue(new Error('index not found'));
+    const missingIndexError = Object.assign(new Error('Index not found'), {
+      code: 'index_not_found',
+    });
+    const createFlowWithHandler = jest.fn().mockRejectedValue(missingIndexError);
     const { FlowStateManager } = require('@librechat/api');
     FlowStateManager.mockImplementationOnce(() => ({ createFlowWithHandler }));
     mockGetLogStores.mockReturnValueOnce({});
@@ -277,6 +280,22 @@ describe('performSync() - syncThreshold logic', () => {
     expect(mockWithMeiliSyncLock).toHaveBeenCalledTimes(1);
     expect(Message.syncWithMeili).toHaveBeenCalledTimes(1);
     expect(Conversation.syncWithMeili).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not treat a missing FlowState as a missing Meilisearch index', async () => {
+    const createFlowWithHandler = jest
+      .fn()
+      .mockRejectedValue(new Error('Flow state not found after retry'));
+    const { FlowStateManager } = require('@librechat/api');
+    FlowStateManager.mockImplementationOnce(() => ({ createFlowWithHandler }));
+    mockGetLogStores.mockReturnValueOnce({});
+
+    const indexSync = require('./indexSync');
+
+    await expect(indexSync()).rejects.toThrow('Flow state not found after retry');
+    expect(Message.syncWithMeili).not.toHaveBeenCalled();
+    expect(Conversation.syncWithMeili).not.toHaveBeenCalled();
+    expect(mockLogger.error).toHaveBeenCalledWith('[indexSync] error', expect.any(Error));
   });
 
   test('propagates synchronization failures through the operation lease', async () => {
