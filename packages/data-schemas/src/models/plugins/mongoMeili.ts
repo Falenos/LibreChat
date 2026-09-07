@@ -55,10 +55,12 @@ export type DocumentWithMeiliIndex = _DocumentWithMeiliIndex & IConversation & P
 export interface SchemaWithMeiliMethods extends Model<DocumentWithMeiliIndex> {
   syncWithMeili(): Promise<void>;
   getSyncProgress(): Promise<SyncProgress>;
+  // [knauf] Return the durable acknowledgement count for reconciliation telemetry.
   processSyncBatch(
     index: Index<MeiliIndexable>,
     documents: Array<Record<string, unknown>>,
-  ): Promise<void>;
+  ): Promise<number>;
+  // End [knauf]
   cleanupMeiliIndex(
     index: Index<MeiliIndexable>,
     primaryKey: string,
@@ -85,15 +87,28 @@ const searchEnabled = process.env.SEARCH != null && process.env.SEARCH.toLowerCa
 const meiliEnabled =
   process.env.MEILI_HOST != null && process.env.MEILI_MASTER_KEY != null && searchEnabled;
 
-/**
- * Get sync configuration from environment variables
- */
+// [knauf] Bound Mongo acknowledgements, Meilisearch submissions, and unstable retries.
+const MAX_MONGO_ACK_BATCH_SIZE = 100;
+const MAX_MEILI_SUBMISSION_BATCH_SIZE = 1000;
+const MAX_SYNC_RETRY_PASSES = 10;
+
+const validateBatchSize = (name: string, value: number | string, maximum: number): number => {
+  const rawValue = String(value);
+  const parsedValue = Number(rawValue);
+  if (!/^[1-9]\d*$/.test(rawValue) || !Number.isSafeInteger(parsedValue) || parsedValue > maximum) {
+    throw new Error(`${name} must be a positive integer no greater than ${maximum}`);
+  }
+  return parsedValue;
+};
+
 const getSyncConfig = () => ({
-  batchSize: parseInt(process.env.MEILI_SYNC_BATCH_SIZE || '100', 10),
+  batchSize: validateBatchSize(
+    'MEILI_SYNC_BATCH_SIZE',
+    process.env.MEILI_SYNC_BATCH_SIZE ?? '100',
+    MAX_MONGO_ACK_BATCH_SIZE,
+  ),
   delayMs: parseInt(process.env.MEILI_SYNC_DELAY_MS || '100', 10),
 });
-// [knauf] Bound retries for snapshots changed while a reconciliation batch is in flight.
-const MAX_SYNC_RETRY_PASSES = 10;
 // End [knauf]
 
 const hasSchemaPath = (schema: Schema, path: string): boolean =>
@@ -196,7 +211,24 @@ const createMeiliMongooseModel = ({
   primaryKey: string;
   syncOptions: { batchSize: number; delayMs: number };
 }) => {
-  const syncConfig = { ...getSyncConfig(), ...syncOptions };
+  // [knauf] Separate bounded Meilisearch submissions from paced Mongo acknowledgements.
+  const configuredSync = { ...getSyncConfig(), ...syncOptions };
+  const batchSize = validateBatchSize(
+    'MEILI_SYNC_BATCH_SIZE',
+    configuredSync.batchSize,
+    MAX_MONGO_ACK_BATCH_SIZE,
+  );
+  const submissionBatchSizeValue = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+  const submissionBatchSize =
+    submissionBatchSizeValue == null
+      ? batchSize
+      : validateBatchSize(
+          'MEILI_SYNC_SUBMISSION_BATCH_SIZE',
+          submissionBatchSizeValue,
+          MAX_MEILI_SUBMISSION_BATCH_SIZE,
+        );
+  const syncConfig = { ...configuredSync, batchSize, submissionBatchSize };
+  // End [knauf]
   // [knauf] Let cleanup use larger read pages without widening Mongo acknowledgement batches.
   const cleanupBatchSizeValue = process.env.MEILI_CLEANUP_BATCH_SIZE;
   const parsedCleanupBatchSize =
@@ -257,12 +289,14 @@ const createMeiliMongooseModel = ({
      * */
     static async syncWithMeili(this: SchemaWithMeiliMethods): Promise<void> {
       const startTime = Date.now();
-      const { batchSize, delayMs } = syncConfig;
+      // [knauf] Report independently bounded Meilisearch and Mongo cohort sizes.
+      const { batchSize, submissionBatchSize, delayMs } = syncConfig;
 
       const collectionName = primaryKey === 'messageId' ? 'messages' : 'conversations';
       logger.info(
-        `[syncWithMeili] Starting sync for ${collectionName} with batch size ${batchSize}`,
+        `[syncWithMeili] Starting sync for ${collectionName} with submission size ${submissionBatchSize} and acknowledgement size ${batchSize}`,
       );
+      // End [knauf]
 
       // Get approximate total count for raw estimation, the sync should not overcome this number
       const approxTotalCount = await this.estimatedDocumentCount();
@@ -285,9 +319,11 @@ const createMeiliMongooseModel = ({
       }
 
       // [knauf] Pace every retry pass and fail if continuously changing documents never converge.
-      let processedCount = 0;
+      let submittedCount = 0;
+      let acknowledgedCount = 0;
       let batchPasses = 0;
-      const maxBatchPasses = Math.ceil(approxTotalCount / batchSize) + MAX_SYNC_RETRY_PASSES;
+      const maxBatchPasses =
+        Math.ceil(approxTotalCount / submissionBatchSize) + MAX_SYNC_RETRY_PASSES;
       // End [knauf]
 
       while (true) {
@@ -302,7 +338,9 @@ const createMeiliMongooseModel = ({
             // [knauf] Snapshot updatedAt so a concurrent write cannot receive a stale acknowledgement.
             .select(attributesToIndex.join(' ') + ' _meiliIndex updatedAt')
             // End [knauf]
-            .limit(batchSize)
+            // [knauf] Read one bounded Meilisearch submission cohort at a time.
+            .limit(submissionBatchSize)
+            // End [knauf]
             .lean();
 
           // Check if there are more documents to process
@@ -321,9 +359,14 @@ const createMeiliMongooseModel = ({
           // End [knauf]
 
           // Process the batch
-          await this.processSyncBatch(index, documents);
-          processedCount += documents.length;
-          logger.info(`[syncWithMeili] Processed: ${processedCount}`);
+          // [knauf] Keep submitted work distinct from durable Mongo acknowledgement progress.
+          const acknowledgedInBatch = await this.processSyncBatch(index, documents);
+          submittedCount += documents.length;
+          acknowledgedCount += acknowledgedInBatch;
+          logger.info(
+            `[syncWithMeili] Progress for ${collectionName}: submitted=${submittedCount}, acknowledged=${acknowledgedCount}`,
+          );
+          // End [knauf]
 
           // [knauf] Delay before every subsequent query, including retries of a short final batch.
           if (delayMs > 0) {
@@ -337,37 +380,44 @@ const createMeiliMongooseModel = ({
       }
 
       const duration = Date.now() - startTime;
+      // [knauf] Report both provider submission and durable acknowledgement totals.
       logger.info(
-        `[syncWithMeili] Completed sync for ${collectionName}. Processed ${processedCount} documents in ${duration}ms`,
+        `[syncWithMeili] Completed sync for ${collectionName}. Submitted ${submittedCount} and acknowledged ${acknowledgedCount} documents in ${duration}ms`,
       );
+      // End [knauf]
     }
 
     /**
      * Process a batch of documents for syncing
      */
+    // [knauf] Return durable acknowledgements and make an empty cohort an explicit zero.
     static async processSyncBatch(
       this: SchemaWithMeiliMethods,
       index: Index<MeiliIndexable>,
       documents: Array<Record<string, unknown>>,
-    ): Promise<void> {
+    ): Promise<number> {
       if (documents.length === 0) {
-        return;
+        return 0;
       }
+      // End [knauf]
 
       // Format documents for MeiliSearch
       const formattedDocs = documents.map((doc) =>
         _.omitBy(_.pick(doc, attributesToIndex), (_v, k) => k.startsWith('$')),
       );
 
+      // [knauf] Submit one explicit bounded task and acknowledge Mongo only after it succeeds.
+      let acknowledgedCount = 0;
       try {
         // Add documents to MeiliSearch
-        // [knauf] Do not mark Mongo flags until Meilisearch has applied every queued batch.
-        const enqueuedTasks = await index.addDocumentsInBatches(formattedDocs, undefined, {
+        const taskStartedAt = Date.now();
+        const enqueuedTask = await index.addDocuments(formattedDocs, {
           primaryKey,
         });
-        for (const task of enqueuedTasks) {
-          await waitForSuccessfulTask(task.taskUid);
-        }
+        await waitForSuccessfulTask(enqueuedTask.taskUid);
+        logger.info(
+          `[processSyncBatch] Meilisearch task ${enqueuedTask.taskUid} succeeded for ${documents.length} documents in ${Date.now() - taskStartedAt}ms`,
+        );
         // End [knauf]
 
         // Update MongoDB to mark documents as indexed.
@@ -385,14 +435,33 @@ const createMeiliMongooseModel = ({
           }
           return { _id: doc._id, ...updatedAtFilter };
         });
-        await this.updateMany(
-          { ...getIndexableQuery(), $or: snapshotFilter },
-          { $set: { _meiliIndex: true } },
-          { timestamps: false },
+        // End [knauf]
+        // [knauf] Pace bounded acknowledgement chunks and stop after the first Mongo failure.
+        await processBatch(
+          snapshotFilter,
+          syncConfig.batchSize,
+          syncConfig.delayMs,
+          async (filterBatch) => {
+            const result = await this.updateMany(
+              { ...getIndexableQuery(), $or: filterBatch },
+              { $set: { _meiliIndex: true } },
+              { timestamps: false },
+            );
+            acknowledgedCount += result.modifiedCount;
+            logger.info(
+              `[processSyncBatch] Mongo acknowledgement chunk size=${filterBatch.length}, matched=${result.matchedCount}, modified=${result.modifiedCount}, acknowledged=${acknowledgedCount}/${documents.length}`,
+            );
+          },
         );
+        return acknowledgedCount;
         // End [knauf]
       } catch (error) {
-        logger.error('[processSyncBatch] Error processing batch:', error);
+        // [knauf] Surface partial durable progress when a later acknowledgement chunk fails.
+        logger.error(
+          `[processSyncBatch] Error processing batch after acknowledging ${acknowledgedCount}/${documents.length} documents:`,
+          error,
+        );
+        // End [knauf]
         throw error;
       }
     }

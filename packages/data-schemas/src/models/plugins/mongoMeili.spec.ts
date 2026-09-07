@@ -70,10 +70,18 @@ const mockGetDocument = jest.fn();
 // [knauf] Model terminal Meilisearch task completion for bulk-sync fencing tests.
 const mockWaitForTask = jest.fn();
 // End [knauf]
+// [knauf] Record explicit reconciliation submissions on the legacy bulk-write mock as well.
+const mockExplicitAddDocuments = (...args: Parameters<typeof mockAddDocuments>) => {
+  mockAddDocumentsInBatches(...args);
+  return mockAddDocuments(...args);
+};
+// End [knauf]
 const mockIndex = jest.fn().mockReturnValue({
   getRawInfo: jest.fn(),
   updateSettings: jest.fn(),
-  addDocuments: mockAddDocuments,
+  // [knauf] Exercise the explicit one-task reconciliation path while preserving legacy assertions.
+  addDocuments: mockExplicitAddDocuments,
+  // End [knauf]
   addDocumentsInBatches: mockAddDocumentsInBatches,
   updateDocuments: mockUpdateDocuments,
   deleteDocument: mockDeleteDocument,
@@ -116,8 +124,8 @@ describe('Meilisearch Mongoose plugin', () => {
   });
 
   beforeEach(() => {
-    mockAddDocuments.mockClear();
-    // [knauf] Every bulk write returns one queued task that succeeds by default.
+    // [knauf] Every Meilisearch write returns one queued task that succeeds by default.
+    mockAddDocuments.mockReset().mockResolvedValue({ taskUid: 1 });
     mockAddDocumentsInBatches.mockReset().mockResolvedValue([{ taskUid: 1 }]);
     // End [knauf]
     mockUpdateDocuments.mockClear();
@@ -697,12 +705,12 @@ describe('Meilisearch Mongoose plugin', () => {
   });
 
   describe('New batch processing and retry functionality', () => {
-    test('processSyncBatch uses addDocumentsInBatches', async () => {
+    // [knauf] Pin one explicit Meilisearch task per reconciliation cohort.
+    test('processSyncBatch submits one explicit Meilisearch task', async () => {
       const conversationModel = createConversationModel(
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
       mockAddDocuments.mockClear();
 
       await conversationModel.collection.insertOne({
@@ -717,8 +725,8 @@ describe('Meilisearch Mongoose plugin', () => {
       // Run sync which should call processSyncBatch internally
       await conversationModel.syncWithMeili();
 
-      // Verify addDocumentsInBatches was called with explicit primaryKey
-      expect(mockAddDocumentsInBatches).toHaveBeenCalledWith(expect.any(Array), undefined, {
+      // Verify addDocuments was called with explicit primaryKey
+      expect(mockAddDocuments).toHaveBeenCalledWith(expect.any(Array), {
         primaryKey: 'conversationId',
       });
       expect(mockWaitForTask).toHaveBeenCalledWith(1, {
@@ -726,6 +734,7 @@ describe('Meilisearch Mongoose plugin', () => {
         intervalMs: 250,
       });
     });
+    // End [knauf]
 
     // [knauf] Keep fast index cleanup independent from bounded Mongo acknowledgement batches.
     test('uses independent cleanup and indexing batch sizes', async () => {
@@ -757,14 +766,12 @@ describe('Meilisearch Mongoose plugin', () => {
             _meiliIndex: false,
           },
         ]);
-        mockAddDocumentsInBatches.mockClear();
+        mockAddDocuments.mockClear();
 
         await Model.syncWithMeili();
 
         expect(cleanupSpy).toHaveBeenCalledWith(expect.anything(), 'docId', 3, 1);
-        expect(mockAddDocumentsInBatches.mock.calls.map(([documents]) => documents.length)).toEqual(
-          [1, 1],
-        );
+        expect(mockAddDocuments.mock.calls.map(([documents]) => documents.length)).toEqual([1, 1]);
       } finally {
         cleanupSpy.mockRestore();
         await Model.deleteMany({});
@@ -776,7 +783,297 @@ describe('Meilisearch Mongoose plugin', () => {
         }
       }
     });
+    // End [knauf]
 
+    // [knauf] Prove larger submissions retain bounded, paced, fail-closed Mongo acknowledgements.
+    test('submits a larger cohort while acknowledging Mongo in bounded chunks', async () => {
+      const modelName = `IndependentSubmissionBatch${Date.now()}`;
+      const previousSubmissionBatchSize = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+      process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = '3';
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      const updateManySpy = jest.spyOn(Model, 'updateMany');
+
+      try {
+        await Model.collection.insertMany([
+          {
+            docId: 'submission-batch-1',
+            user: 'test-user',
+            title: 'First document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'submission-batch-2',
+            user: 'test-user',
+            title: 'Second document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'submission-batch-3',
+            user: 'test-user',
+            title: 'Third document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+        ]);
+        mockAddDocuments.mockClear();
+
+        await Model.syncWithMeili();
+
+        expect(mockAddDocuments.mock.calls.map(([documents]) => documents.length)).toEqual([3]);
+        expect(
+          updateManySpy.mock.calls.map(([filter]) => (filter.$or as unknown[]).length),
+        ).toEqual([1, 1, 1]);
+      } finally {
+        updateManySpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+        if (previousSubmissionBatchSize === undefined) {
+          delete process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+        } else {
+          process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = previousSubmissionBatchSize;
+        }
+      }
+    });
+
+    test('paces Mongo acknowledgement chunks with the configured delay', async () => {
+      const modelName = `PacedAcknowledgementChunks${Date.now()}`;
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 5,
+      });
+      const timeoutSpy = jest.spyOn(global, 'setTimeout');
+
+      try {
+        await Model.collection.insertMany(
+          ['paced-1', 'paced-2', 'paced-3'].map((docId) => ({
+            docId,
+            user: 'test-user',
+            title: docId,
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          })),
+        );
+        const documents = await Model.find({ _meiliIndex: false }).sort({ docId: 1 }).lean();
+
+        await expect(Model.processSyncBatch(mockIndex(), documents)).resolves.toBe(3);
+
+        expect(timeoutSpy.mock.calls.filter(([, delay]) => delay === 5)).toHaveLength(2);
+      } finally {
+        timeoutSpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+      }
+    });
+
+    test('leaves a later acknowledgement chunk retryable when its snapshot changes', async () => {
+      const modelName = `ChangedAcknowledgementChunk${Date.now()}`;
+      const previousSubmissionBatchSize = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+      process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = '3';
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      const originalUpdateMany = Model.updateMany.bind(Model);
+      let acknowledgementCalls = 0;
+      const updateManySpy = jest
+        .spyOn(Model, 'updateMany')
+        .mockImplementation(async (filter, update, options) => {
+          const result = await originalUpdateMany(filter, update, options);
+          acknowledgementCalls += 1;
+          if (acknowledgementCalls === 1) {
+            await Model.collection.updateOne(
+              { docId: 'changed-later' },
+              {
+                $set: {
+                  title: 'Changed after task success',
+                  updatedAt: new Date('2026-09-07T12:00:00.000Z'),
+                },
+              },
+            );
+          }
+          return result;
+        });
+
+      try {
+        await Model.collection.insertMany([
+          {
+            docId: 'acknowledged-first',
+            user: 'test-user',
+            title: 'First document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+            updatedAt: new Date('2026-09-07T10:00:00.000Z'),
+          },
+          {
+            docId: 'acknowledged-second',
+            user: 'test-user',
+            title: 'Second document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+            updatedAt: new Date('2026-09-07T10:00:00.000Z'),
+          },
+          {
+            docId: 'changed-later',
+            user: 'test-user',
+            title: 'Third document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+            updatedAt: new Date('2026-09-07T10:00:00.000Z'),
+          },
+        ]);
+        const documents = await Model.find({ _meiliIndex: false }).sort({ docId: 1 }).lean();
+
+        await expect(Model.processSyncBatch(mockIndex(), documents)).resolves.toBe(2);
+
+        expect(await Model.countDocuments({ _meiliIndex: true })).toBe(2);
+        expect(
+          await Model.countDocuments({ docId: 'changed-later', _meiliIndex: { $ne: true } }),
+        ).toBe(1);
+
+        updateManySpy.mockImplementation((filter, update, options) =>
+          originalUpdateMany(filter, update, options),
+        );
+        mockAddDocuments.mockClear();
+        await Model.syncWithMeili();
+        expect(mockAddDocuments).toHaveBeenCalledWith(
+          [expect.objectContaining({ title: 'Changed after task success' })],
+          { primaryKey: 'docId' },
+        );
+      } finally {
+        updateManySpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+        if (previousSubmissionBatchSize === undefined) {
+          delete process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+        } else {
+          process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = previousSubmissionBatchSize;
+        }
+      }
+    });
+
+    test('stops after a failed acknowledgement chunk and preserves earlier commits', async () => {
+      const modelName = `FailedAcknowledgementChunk${Date.now()}`;
+      const previousSubmissionBatchSize = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+      process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = '3';
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      const originalUpdateMany = Model.updateMany.bind(Model);
+      const updateManySpy = jest
+        .spyOn(Model, 'updateMany')
+        .mockImplementationOnce((filter, update, options) =>
+          originalUpdateMany(filter, update, options),
+        )
+        .mockRejectedValueOnce(new Error('Mongo acknowledgement failed'));
+
+      try {
+        await Model.collection.insertMany([
+          {
+            docId: 'chunk-1',
+            user: 'test-user',
+            title: 'First document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'chunk-2',
+            user: 'test-user',
+            title: 'Second document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'chunk-3',
+            user: 'test-user',
+            title: 'Third document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+        ]);
+        const documents = await Model.find({ _meiliIndex: false }).sort({ docId: 1 }).lean();
+
+        await expect(Model.processSyncBatch(mockIndex(), documents)).rejects.toThrow(
+          'Mongo acknowledgement failed',
+        );
+
+        expect(updateManySpy).toHaveBeenCalledTimes(2);
+        expect(await Model.countDocuments({ docId: 'chunk-1', _meiliIndex: true })).toBe(1);
+        expect(
+          await Model.countDocuments({
+            docId: { $in: ['chunk-2', 'chunk-3'] },
+            _meiliIndex: true,
+          }),
+        ).toBe(0);
+      } finally {
+        updateManySpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+        if (previousSubmissionBatchSize === undefined) {
+          delete process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+        } else {
+          process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = previousSubmissionBatchSize;
+        }
+      }
+    });
+
+    test.each(['', '0', '-1', '3junk', '101', '9007199254740992'])(
+      'rejects invalid acknowledgement batch size %p',
+      (batchSize) => {
+        const previousBatchSize = process.env.MEILI_SYNC_BATCH_SIZE;
+        process.env.MEILI_SYNC_BATCH_SIZE = batchSize;
+
+        try {
+          expect(() => createDynamicMeiliModel(`InvalidAckBatch${Date.now()}`)).toThrow(
+            'MEILI_SYNC_BATCH_SIZE must be a positive integer no greater than 100',
+          );
+        } finally {
+          if (previousBatchSize === undefined) {
+            delete process.env.MEILI_SYNC_BATCH_SIZE;
+          } else {
+            process.env.MEILI_SYNC_BATCH_SIZE = previousBatchSize;
+          }
+        }
+      },
+    );
+
+    test.each(['', '0', '-1', '3junk', '1001', '9007199254740992'])(
+      'rejects invalid submission batch size %p',
+      (submissionBatchSize) => {
+        const previousSubmissionBatchSize = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+        process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = submissionBatchSize;
+
+        try {
+          expect(() => createDynamicMeiliModel(`InvalidSubmissionBatch${Date.now()}`)).toThrow(
+            'MEILI_SYNC_SUBMISSION_BATCH_SIZE must be a positive integer no greater than 1000',
+          );
+        } finally {
+          if (previousSubmissionBatchSize === undefined) {
+            delete process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+          } else {
+            process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = previousSubmissionBatchSize;
+          }
+        }
+      },
+    );
+    // End [knauf]
+
+    // [knauf] Reject malformed cleanup limits before reconciliation starts.
     test.each(['', '0', '-1', '3junk', '9007199254740992'])(
       'rejects invalid cleanup batch size %p',
       (cleanupBatchSize) => {
@@ -851,7 +1148,7 @@ describe('Meilisearch Mongoose plugin', () => {
 
       await expect(conversationModel.syncWithMeili()).resolves.toBeUndefined();
 
-      expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(1);
+      expect(mockAddDocuments).toHaveBeenCalledTimes(1);
       expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(1);
     });
 
@@ -896,36 +1193,39 @@ describe('Meilisearch Mongoose plugin', () => {
       finishTask?.({ status: 'succeeded' });
       await syncing;
 
-      expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(2);
-      expect(mockAddDocumentsInBatches).toHaveBeenLastCalledWith(
+      expect(mockAddDocuments).toHaveBeenCalledTimes(2);
+      expect(mockAddDocuments).toHaveBeenLastCalledWith(
         [expect.objectContaining({ title: 'Newer snapshot' })],
-        undefined,
         { primaryKey: 'conversationId' },
       );
       expect(await conversationModel.countDocuments({ _id, _meiliIndex: true })).toBe(1);
     });
 
-    test('bounds repeated retry passes when a document never stabilizes', async () => {
+    test('uses submission cohorts to bound repeated retry passes', async () => {
       const modelName = `UnstableSync${Date.now()}`;
+      const previousSubmissionBatchSize = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+      process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = '3';
       const Model = createDynamicMeiliModel(modelName, {
         syncBatchSize: 1,
         syncDelayMs: 1,
       });
       let updateVersion = 0;
       try {
-        await Model.collection.insertOne({
-          docId: 'unstable-document',
-          user: 'user',
-          title: 'Initial title',
-          isTemporary: false,
-          expiredAt: null,
-          _meiliIndex: false,
-          updatedAt: new Date(0),
-        });
+        await Model.collection.insertMany(
+          ['unstable-1', 'unstable-2', 'unstable-3'].map((docId) => ({
+            docId,
+            user: 'user',
+            title: 'Initial title',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+            updatedAt: new Date(0),
+          })),
+        );
         mockWaitForTask.mockImplementation(async () => {
           updateVersion += 1;
-          await Model.collection.updateOne(
-            { docId: 'unstable-document' },
+          await Model.collection.updateMany(
+            { docId: { $in: ['unstable-1', 'unstable-2', 'unstable-3'] } },
             {
               $set: {
                 title: `Updated ${updateVersion}`,
@@ -939,9 +1239,15 @@ describe('Meilisearch Mongoose plugin', () => {
         await expect(Model.syncWithMeili()).rejects.toThrow(
           '[syncWithMeili] Reconciliation did not converge after 11 batches',
         );
-        expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(11);
+        expect(mockAddDocuments).toHaveBeenCalledTimes(11);
       } finally {
+        await Model.deleteMany({});
         mongoose.deleteModel(modelName);
+        if (previousSubmissionBatchSize === undefined) {
+          delete process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
+        } else {
+          process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE = previousSubmissionBatchSize;
+        }
       }
     });
     // End [knauf]
@@ -1097,13 +1403,14 @@ describe('Meilisearch Mongoose plugin', () => {
     });
   });
 
+  // [knauf] Adapt bulk reconciliation error coverage to the explicit one-task submission path.
   describe('Error handling in processSyncBatch', () => {
-    test('syncWithMeili fails when processSyncBatch encounters addDocumentsInBatches error', async () => {
+    test('syncWithMeili fails when processSyncBatch encounters addDocuments error', async () => {
       const conversationModel = createConversationModel(
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Insert a document to sync
       await conversationModel.collection.insertOne({
@@ -1115,8 +1422,8 @@ describe('Meilisearch Mongoose plugin', () => {
         expiredAt: null,
       });
 
-      // Mock addDocumentsInBatches to fail
-      mockAddDocumentsInBatches.mockRejectedValueOnce(new Error('MeiliSearch connection error'));
+      // Mock addDocuments to fail
+      mockAddDocuments.mockRejectedValueOnce(new Error('MeiliSearch connection error'));
 
       // Sync should throw the error
       await expect(conversationModel.syncWithMeili()).rejects.toThrow(
@@ -1124,7 +1431,7 @@ describe('Meilisearch Mongoose plugin', () => {
       );
 
       // Verify the error was logged
-      expect(mockAddDocumentsInBatches).toHaveBeenCalled();
+      expect(mockAddDocuments).toHaveBeenCalled();
 
       // Document should NOT be marked as indexed since sync failed
       // Note: direct collection.insertOne doesn't set default values, so _meiliIndex may be undefined
@@ -1137,7 +1444,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Insert a document
       await conversationModel.collection.insertOne({
@@ -1149,10 +1456,8 @@ describe('Meilisearch Mongoose plugin', () => {
         expiredAt: null,
       });
 
-      // Mock addDocumentsInBatches to succeed but simulate updateMany failure
-      // [knauf] Match the SDK's queued-task array after a successful bulk submission.
-      mockAddDocumentsInBatches.mockResolvedValueOnce([{ taskUid: 1 }]);
-      // End [knauf]
+      // Mock addDocuments to succeed but simulate updateMany failure
+      mockAddDocuments.mockResolvedValueOnce({ taskUid: 1 });
 
       // Spy on updateMany and make it fail
       const updateManySpy = jest
@@ -1168,11 +1473,11 @@ describe('Meilisearch Mongoose plugin', () => {
       updateManySpy.mockRestore();
     });
 
-    test('processSyncBatch logs error and throws when addDocumentsInBatches fails', async () => {
+    test('processSyncBatch logs error and throws when addDocuments fails', async () => {
       const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
       await messageModel.deleteMany({});
 
-      mockAddDocumentsInBatches.mockRejectedValueOnce(new Error('Network timeout'));
+      mockAddDocuments.mockRejectedValueOnce(new Error('Network timeout'));
 
       await messageModel.collection.insertOne({
         messageId: new mongoose.Types.ObjectId(),
@@ -1191,7 +1496,7 @@ describe('Meilisearch Mongoose plugin', () => {
         'Network timeout',
       );
 
-      expect(mockAddDocumentsInBatches).toHaveBeenCalled();
+      expect(mockAddDocuments).toHaveBeenCalled();
     });
 
     test('processSyncBatch handles empty document array gracefully', async () => {
@@ -1201,10 +1506,10 @@ describe('Meilisearch Mongoose plugin', () => {
       const indexMock = mockIndex();
 
       // Should not throw with empty array
-      await expect(conversationModel.processSyncBatch(indexMock, [])).resolves.not.toThrow();
+      await expect(conversationModel.processSyncBatch(indexMock, [])).resolves.toBe(0);
 
-      // Should not call addDocumentsInBatches
-      expect(mockAddDocumentsInBatches).not.toHaveBeenCalled();
+      // Should not call addDocuments
+      expect(mockAddDocuments).not.toHaveBeenCalled();
     });
 
     test('syncWithMeili stops processing when batch fails and does not process remaining documents', async () => {
@@ -1212,7 +1517,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Create multiple documents
       for (let i = 0; i < 5; i++) {
@@ -1226,14 +1531,14 @@ describe('Meilisearch Mongoose plugin', () => {
         });
       }
 
-      // Mock addDocumentsInBatches to fail on first call
-      mockAddDocumentsInBatches.mockRejectedValueOnce(new Error('First batch failed'));
+      // Mock addDocuments to fail on first call
+      mockAddDocuments.mockRejectedValueOnce(new Error('First batch failed'));
 
       // Sync should fail on the first batch
       await expect(conversationModel.syncWithMeili()).rejects.toThrow('First batch failed');
 
       // Should have attempted only once before failing
-      expect(mockAddDocumentsInBatches).toHaveBeenCalledTimes(1);
+      expect(mockAddDocuments).toHaveBeenCalledTimes(1);
 
       // No documents should be indexed since sync failed
       const indexedCount = await conversationModel.countDocuments({ _meiliIndex: true });
@@ -1245,7 +1550,7 @@ describe('Meilisearch Mongoose plugin', () => {
       await messageModel.deleteMany({});
 
       const testError = new Error('Test error for logging');
-      mockAddDocumentsInBatches.mockRejectedValueOnce(testError);
+      mockAddDocuments.mockRejectedValueOnce(testError);
 
       await messageModel.collection.insertOne({
         messageId: new mongoose.Types.ObjectId(),
@@ -1268,7 +1573,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       await conversationModel.collection.insertOne({
         conversationId: new mongoose.Types.ObjectId(),
@@ -1280,12 +1585,13 @@ describe('Meilisearch Mongoose plugin', () => {
       });
 
       const customError = new Error('Custom sync error');
-      mockAddDocumentsInBatches.mockRejectedValueOnce(customError);
+      mockAddDocuments.mockRejectedValueOnce(customError);
 
       // The error should propagate all the way up
       await expect(conversationModel.syncWithMeili()).rejects.toThrow('Custom sync error');
     });
   });
+  // End [knauf]
 
   describe('cleanupMeiliIndex', () => {
     let mockGetDocuments: jest.Mock;
