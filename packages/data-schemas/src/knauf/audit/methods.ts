@@ -37,7 +37,7 @@ import type {
   IKnaufAuditRetentionCheckpoint,
   IKnaufAuditRetentionLease,
 } from './types';
-import type { AuditSigningKeys } from './signature';
+import type { AuditSigningKeyInput } from './signature';
 import type { IAuditLog } from '~/types';
 import { signAuditCheckpoint, signAuditIntent, verifyAuditIntentSignature } from './signature';
 import { auditChainKey } from '~/methods/auditLog';
@@ -58,7 +58,7 @@ export const AUDIT_RETENTION_SWEEP_LEASE: string = 'knauf-audit-retention-sweep'
 
 const CAS_ATTEMPTS = 3;
 
-function currentKey(keys: string | AuditSigningKeys | undefined): string | undefined {
+function currentKey(keys: AuditSigningKeyInput): string | undefined {
   if (typeof keys === 'string') {
     return keys.length > 0 ? keys : undefined;
   }
@@ -77,6 +77,22 @@ function toState(doc: IKnaufAuditRetentionCheckpoint): AuditRetentionCheckpointS
     signature: doc.signature ?? undefined,
     pending: doc.pending ?? null,
   };
+}
+
+/**
+ * AUTHENTICATED INTENT. Under a configured key, an intent that does not carry a valid
+ * signature (current or previous key) was not written by a legitimate `begin` — refuse
+ * to certify, and thereby sign, whatever deletion followed it. No key ⇒ trusted.
+ */
+function isIntentTrusted(
+  scopeKey: string,
+  intent: AuditRetentionPendingPurge,
+  signingKeys: AuditSigningKeyInput,
+): boolean {
+  if (!currentKey(signingKeys)) {
+    return true;
+  }
+  return verifyAuditIntentSignature({ scopeKey, ...intent }, signingKeys) === 'valid';
 }
 
 /** Explicit return type: `--isolatedDeclarations` rejects the inferred factory shape. */
@@ -99,7 +115,7 @@ export interface AuditRetentionCheckpointMethods {
     now: Date;
     owner: string;
     fence: number;
-    signingKeys?: string | AuditSigningKeys;
+    signingKeys?: AuditSigningKeyInput;
   }): Promise<boolean>;
   /** After the delete (or after a crash): verify the intent, read the chain, commit
    *  the boundary it actually has if it lies within the intent, else drop the intent. */
@@ -109,7 +125,7 @@ export interface AuditRetentionCheckpointMethods {
     fence: number;
     deletedCount?: number;
     now: Date;
-    signingKeys?: string | AuditSigningKeys;
+    signingKeys?: AuditSigningKeyInput;
     recovered?: boolean;
   }): Promise<AuditRetentionFinalizeOutcome>;
   acquireAuditRetentionLease(params: {
@@ -229,7 +245,7 @@ export function createAuditRetentionCheckpointMethods(
     now: Date;
     owner: string;
     fence: number;
-    signingKeys?: string | AuditSigningKeys;
+    signingKeys?: AuditSigningKeyInput;
   }): Promise<boolean> {
     const { scopeKey, boundary, cutoff, now, owner, fence } = params;
     const signingKey = currentKey(params.signingKeys);
@@ -292,7 +308,7 @@ export function createAuditRetentionCheckpointMethods(
     fence: number;
     deletedCount?: number;
     now: Date;
-    signingKeys?: string | AuditSigningKeys;
+    signingKeys?: AuditSigningKeyInput;
     recovered?: boolean;
   }): Promise<AuditRetentionFinalizeOutcome> {
     const { scopeKey, fence } = params;
@@ -326,22 +342,6 @@ export function createAuditRetentionCheckpointMethods(
       /* Lost the race — re-read and re-evaluate against the winner's state. */
     }
     return { action: 'dropped', reason: 'lost-race' };
-  }
-
-  /**
-   * AUTHENTICATED INTENT. Under a configured key, an intent that does not carry a valid
-   * signature (current or previous key) was not written by a legitimate `begin` — refuse
-   * to certify, and thereby sign, whatever deletion followed it. No key ⇒ trusted.
-   */
-  function isIntentTrusted(
-    scopeKey: string,
-    intent: AuditRetentionPendingPurge,
-    signingKeys: string | AuditSigningKeys | undefined,
-  ): boolean {
-    if (!currentKey(signingKeys)) {
-      return true;
-    }
-    return verifyAuditIntentSignature({ scopeKey, ...intent }, signingKeys) === 'valid';
   }
 
   /**
@@ -384,7 +384,7 @@ export function createAuditRetentionCheckpointMethods(
     fence: number;
     now: Date;
     deletedCount?: number;
-    signingKeys?: string | AuditSigningKeys;
+    signingKeys?: AuditSigningKeyInput;
     recovered?: boolean;
   }): Promise<boolean> {
     const signingKey = currentKey(p.signingKeys);
