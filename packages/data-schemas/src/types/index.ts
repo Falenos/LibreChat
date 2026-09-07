@@ -54,6 +54,7 @@ export * from './fileAsset';
 export * from '../knauf/audit/types';
 export type {
   AuditCheckpointSignatureStatus,
+  AuditSigningKeyInput,
   AuditSigningKeys,
   SignableAuditCheckpoint,
   SignableAuditIntent,

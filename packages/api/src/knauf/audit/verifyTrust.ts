@@ -4,13 +4,14 @@
 // upstream evolves that handler, and a 50-line Knauf block inside it conflicts on every
 // sync. Everything about "may this checkpoint be trusted, and what do we tell the
 // operator" lives here and is unit-tested here.
-import { verifyAuditIntentSignature } from '@librechat/data-schemas';
-import { auditRetentionScopeKey, verifyAuditCheckpointSignature } from '@librechat/data-schemas';
-import type {
-  AuditCheckpoint,
-  AuditCheckpointSignatureStatus,
-  AuditRetentionCheckpointState,
-  AuditSigningKeys,
+import {
+  auditRetentionScopeKey,
+  verifyAuditCheckpointSignature,
+  verifyAuditIntentSignature,
+  type AuditCheckpoint,
+  type AuditCheckpointSignatureStatus,
+  type AuditRetentionCheckpointState,
+  type AuditSigningKeys,
 } from '@librechat/data-schemas';
 
 export interface AuditRetentionTrustReport {
@@ -69,7 +70,7 @@ export async function resolveAuditRetentionTrust(
       ? { throughSeq: pending.throughSeq, prevHash: pending.prevHash }
       : undefined;
 
-  if (!state || !state.purgedAt) {
+  if (!state?.purgedAt) {
     return {
       ...(pendingCheckpoint ? { pendingCheckpoint } : {}),
       retention: { state: 'never-purged', pendingIntent: pending != null },
