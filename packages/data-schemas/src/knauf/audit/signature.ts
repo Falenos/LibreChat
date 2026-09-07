@@ -37,7 +37,10 @@ export interface AuditSigningKeys {
   previous?: string;
 }
 
-function normalizeKeys(keys: string | AuditSigningKeys | undefined): AuditSigningKeys {
+/** What callers may pass: a single key, a key ring, or nothing (unsigned mode). */
+export type AuditSigningKeyInput = string | AuditSigningKeys | undefined;
+
+function normalizeKeys(keys: AuditSigningKeyInput): AuditSigningKeys {
   if (typeof keys === 'string') {
     return { current: keys };
   }
@@ -99,14 +102,14 @@ export function signAuditIntent(i: SignableAuditIntent, key: string): string {
 
 export function verifyAuditCheckpointSignature(
   c: SignableAuditCheckpoint & { signature?: string },
-  keys: string | AuditSigningKeys | undefined,
+  keys: AuditSigningKeyInput,
 ): AuditCheckpointSignatureStatus {
   return compare(canonicalAuditCheckpoint(c), normalizeKeys(keys), c.signature);
 }
 
 export function verifyAuditIntentSignature(
   i: SignableAuditIntent & { signature?: string },
-  keys: string | AuditSigningKeys | undefined,
+  keys: AuditSigningKeyInput,
 ): AuditCheckpointSignatureStatus {
   return compare(canonicalAuditIntent(i), normalizeKeys(keys), i.signature);
 }

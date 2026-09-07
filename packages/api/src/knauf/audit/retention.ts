@@ -187,6 +187,93 @@ interface SweepContext {
   isLeaseLost(): boolean;
 }
 
+function isDropped(
+  outcome: AuditRetentionFinalizeOutcome,
+  reason: 'stale-fence' | 'untrusted-intent',
+): boolean {
+  return outcome.action === 'dropped' && outcome.reason === reason;
+}
+
+/**
+ * Phase 1 — recovery. A previous pass may have announced an intent and died before
+ * (or during, or after) the delete. The chain says what actually happened; the ledger
+ * verifies the intent's signature and fence before believing it. A stale fence here
+ * means a higher fence has written: we lost the lease.
+ */
+async function recoverLeftoverIntent(
+  scope: AuditScope,
+  deps: AuditRetentionSweepDependencies,
+  ctx: SweepContext,
+  outcome: AuditPurgeOutcome,
+): Promise<void> {
+  const recovered = await deps.finalizePurge({
+    scope,
+    fence: ctx.fence,
+    now: deps.now(),
+    recovered: true,
+  });
+  if (recovered.action === 'none') {
+    return;
+  }
+  outcome.recoveredPending = recovered;
+  if (isDropped(recovered, 'stale-fence')) {
+    throw new AuditSweepAbortedError();
+  }
+  const level = isDropped(recovered, 'untrusted-intent') ? 'error' : 'warn';
+  deps.logger[level]('[auditRetention] finalized a leftover purge intent', {
+    scopeKey: scope.scopeKey,
+    recovered,
+  });
+  if (recovered.action === 'committed') {
+    outcome.checkpointAdvanced = true;
+  }
+}
+
+/**
+ * Phase 4 guard — synchronous lease re-confirmation right before the only delete,
+ * because the heartbeat is periodic and this is the one step that cannot be undone.
+ * A rejection means we cannot prove we still hold the lease ⇒ treat as lost.
+ */
+async function confirmLeaseOrAbort(
+  deps: AuditRetentionSweepDependencies,
+  ctx: SweepContext,
+): Promise<void> {
+  if (ctx.isLeaseLost()) {
+    throw new AuditSweepAbortedError();
+  }
+  let stillOurs = false;
+  try {
+    stillOurs = await deps.lease.renew(ctx.fence, deps.now());
+  } catch {
+    stillOurs = false;
+  }
+  if (!stillOurs) {
+    throw new AuditSweepAbortedError();
+  }
+}
+
+/** Phase 5 — what the commit told us. A stale fence at commit is a lost lease too. */
+function recordCommit(
+  result: AuditRetentionFinalizeOutcome,
+  scope: AuditScope,
+  deps: AuditRetentionSweepDependencies,
+  outcome: AuditPurgeOutcome,
+): void {
+  if (result.action === 'committed') {
+    outcome.checkpointAdvanced = true;
+    return;
+  }
+  if (isDropped(result, 'stale-fence')) {
+    throw new AuditSweepAbortedError();
+  }
+  if (outcome.deletedCount > 0) {
+    deps.logger.error('[auditRetention] rows deleted but boundary not committed', {
+      scopeKey: scope.scopeKey,
+      result,
+    });
+  }
+}
+
 async function sweepScope(
   scope: AuditScope,
   cutoff: Date,
@@ -207,30 +294,7 @@ async function sweepScope(
     return outcome;
   }
 
-  /* 1. Recovery. A previous pass may have announced an intent and died before
-   *    (or during, or after) the delete. The chain says what actually happened;
-   *    the ledger verifies the intent's signature and fence before believing it. */
-  const recovered = await deps.finalizePurge({
-    scope,
-    fence: ctx.fence,
-    now: deps.now(),
-    recovered: true,
-  });
-  if (recovered.action !== 'none') {
-    outcome.recoveredPending = recovered;
-    if (recovered.action === 'dropped' && recovered.reason === 'stale-fence') {
-      throw new AuditSweepAbortedError(); // a higher fence has written: we lost the lease
-    }
-    const level =
-      recovered.action === 'dropped' && recovered.reason === 'untrusted-intent' ? 'error' : 'warn';
-    deps.logger[level]('[auditRetention] finalized a leftover purge intent', {
-      scopeKey: scope.scopeKey,
-      recovered,
-    });
-    if (recovered.action === 'committed') {
-      outcome.checkpointAdvanced = true;
-    }
-  }
+  await recoverLeftoverIntent(scope, deps, ctx, outcome);
 
   /* 2–3. Announce before deleting. */
   const boundary = await deps.computeBoundary(scope, cutoff);
@@ -248,22 +312,9 @@ async function sweepScope(
     throw new AuditSweepAbortedError(); // stale fence at announce: we lost the lease
   }
 
-  /* 4. The only delete — preceded by a synchronous lease re-confirmation, because
-   *    the heartbeat is periodic and this is the one step that cannot be undone. The
-   *    `before` handed to upstream is the boundary's own, so the delete is bounded by
-   *    the retained row even when every row is older than the cutoff. */
-  if (ctx.isLeaseLost()) {
-    throw new AuditSweepAbortedError();
-  }
-  let stillOurs = false;
-  try {
-    stillOurs = await deps.lease.renew(ctx.fence, deps.now());
-  } catch {
-    stillOurs = false; // cannot prove we hold it ⇒ treat as lost
-  }
-  if (!stillOurs) {
-    throw new AuditSweepAbortedError();
-  }
+  /* 4. The only delete. The `before` handed to upstream is the boundary's own, so the
+   *    delete is bounded by the retained row even when every row is older than the cutoff. */
+  await confirmLeaseOrAbort(deps, ctx);
   const purge = await deps.purgeScope(scope, { before: boundary.purgeBefore, confirm: true });
   outcome.deletedCount = purge.deletedCount ?? 0;
 
@@ -275,25 +326,98 @@ async function sweepScope(
     deletedCount: outcome.deletedCount,
     now: deps.now(),
   });
-  if (result.action === 'committed') {
-    outcome.checkpointAdvanced = true;
-  } else if (result.action === 'dropped' && result.reason === 'stale-fence') {
-    throw new AuditSweepAbortedError();
-  } else if (outcome.deletedCount > 0) {
-    deps.logger.error('[auditRetention] rows deleted but boundary not committed', {
-      scopeKey: scope.scopeKey,
-      result,
-    });
-  }
+  recordCommit(result, scope, deps, outcome);
   return outcome;
 }
 
+function skippedResult(
+  grant: { ok: false; reason: 'held' | 'recently-completed' },
+  deps: AuditRetentionSweepDependencies,
+  dryRun: boolean,
+): AuditRetentionSweepResult {
+  const skipped = grant.reason === 'recently-completed' ? 'recently-completed' : 'lease-held';
+  deps.logger.info(
+    skipped === 'lease-held'
+      ? '[auditRetention] another replica holds the sweep lease; skipping this pass'
+      : '[auditRetention] a pass completed recently; skipping this pass',
+    { owner: deps.lease.owner },
+  );
+  return { enabled: true, dryRun, skipped, chains: [], totalDeleted: 0 };
+}
+
+interface ScopesRun {
+  chains: AuditPurgeOutcome[];
+  totalDeleted: number;
+  totalWouldDelete: number;
+  aborted?: 'lease-lost';
+}
+
 /**
- * One pass over every audit chain, under the distributed lease. A chain that
- * throws is logged and skipped so a single bad chain cannot stall retention for
- * the rest — the next pass retries it (and recovers its intent first). Losing
- * the lease is different: it aborts the pass, and the remaining scopes are left
- * untouched for whoever holds the lease now.
+ * Every scope in turn. A chain that throws is logged and skipped so a single bad chain
+ * cannot stall retention for the rest — the next pass retries it (and recovers its
+ * intent first). Losing the lease is different: it aborts, and the remaining scopes are
+ * left untouched for whoever holds the lease now.
+ */
+async function runScopes(
+  scopes: AuditScope[],
+  cutoff: Date,
+  dryRun: boolean,
+  deps: AuditRetentionSweepDependencies,
+  ctx: SweepContext,
+  markLost: (why: string) => void,
+): Promise<ScopesRun> {
+  const run: ScopesRun = { chains: [], totalDeleted: 0, totalWouldDelete: 0 };
+  for (const scope of scopes) {
+    if (ctx.isLeaseLost()) {
+      run.aborted = 'lease-lost';
+      break;
+    }
+    try {
+      const outcome = await sweepScope(scope, cutoff, dryRun, deps, ctx);
+      run.totalDeleted += outcome.deletedCount;
+      run.totalWouldDelete += outcome.wouldDelete ?? 0;
+      run.chains.push(outcome);
+    } catch (error) {
+      if (error instanceof AuditSweepAbortedError) {
+        markLost('re-confirmation before delete failed, or a higher fence has written');
+        run.aborted = 'lease-lost';
+        break;
+      }
+      deps.logger.error('[auditRetention] scope sweep failed', {
+        scopeKey: scope.scopeKey,
+        error,
+      });
+    }
+  }
+  return run;
+}
+
+function logSweepComplete(
+  deps: AuditRetentionSweepDependencies,
+  meta: { dryRun: boolean; retentionDays: number; fence: number; cutoff: Date; scopes: number },
+  run: ScopesRun,
+): void {
+  const recovered = run.chains.filter((c) => c.recoveredPending).length;
+  if (run.totalDeleted === 0 && !meta.dryRun && !run.aborted && recovered === 0) {
+    return; // nothing happened; keep the log quiet
+  }
+  deps.logger.info('[auditRetention] sweep complete', {
+    dryRun: meta.dryRun,
+    retentionDays: meta.retentionDays,
+    fence: meta.fence,
+    cutoff: meta.cutoff.toISOString(),
+    chains: run.chains.length,
+    scopes: meta.scopes,
+    totalDeleted: run.totalDeleted,
+    recovered,
+    ...(run.aborted ? { aborted: run.aborted } : {}),
+    ...(meta.dryRun ? { totalWouldDelete: run.totalWouldDelete } : {}),
+  });
+}
+
+/**
+ * One pass over every audit chain, under the distributed lease. See `runScopes` for the
+ * per-scope failure policy and `sweepScope` for the five phases.
  */
 export async function sweepAuditRetention(
   options: { retentionDays?: number; dryRun?: boolean },
@@ -307,14 +431,7 @@ export async function sweepAuditRetention(
 
   const grant = await deps.lease.acquire(deps.now());
   if (!grant.ok) {
-    const skipped = grant.reason === 'recently-completed' ? 'recently-completed' : 'lease-held';
-    deps.logger.info(
-      skipped === 'lease-held'
-        ? '[auditRetention] another replica holds the sweep lease; skipping this pass'
-        : '[auditRetention] a pass completed recently; skipping this pass',
-      { owner: deps.lease.owner },
-    );
-    return { enabled: true, dryRun, skipped, chains: [], totalDeleted: 0 };
+    return skippedResult(grant, deps, dryRun);
   }
   const fence = grant.fence;
   let leaseLost = false;
@@ -344,57 +461,17 @@ export async function sweepAuditRetention(
   try {
     const cutoff = computeAuditCutoff(deps.now(), retentionDays);
     const scopes = await deps.listAuditScopes();
-    const chains: AuditPurgeOutcome[] = [];
-    let totalDeleted = 0;
-    let totalWouldDelete = 0;
-    let aborted: 'lease-lost' | undefined;
-
-    for (const scope of scopes) {
-      if (leaseLost) {
-        aborted = 'lease-lost';
-        break;
-      }
-      try {
-        const outcome = await sweepScope(scope, cutoff, dryRun, deps, ctx);
-        totalDeleted += outcome.deletedCount;
-        totalWouldDelete += outcome.wouldDelete ?? 0;
-        chains.push(outcome);
-      } catch (error) {
-        if (error instanceof AuditSweepAbortedError) {
-          markLost('re-confirmation before delete failed, or a higher fence has written');
-          aborted = 'lease-lost';
-          break;
-        }
-        deps.logger.error('[auditRetention] scope sweep failed', {
-          scopeKey: scope.scopeKey,
-          error,
-        });
-      }
-    }
-
-    if (totalDeleted > 0 || dryRun || aborted || chains.some((c) => c.recoveredPending)) {
-      deps.logger.info('[auditRetention] sweep complete', {
-        dryRun,
-        retentionDays,
-        fence,
-        cutoff: cutoff.toISOString(),
-        chains: chains.length,
-        scopes: scopes.length,
-        totalDeleted,
-        recovered: chains.filter((c) => c.recoveredPending).length,
-        ...(aborted ? { aborted } : {}),
-        ...(dryRun ? { totalWouldDelete } : {}),
-      });
-    }
+    const run = await runScopes(scopes, cutoff, dryRun, deps, ctx, markLost);
+    logSweepComplete(deps, { dryRun, retentionDays, fence, cutoff, scopes: scopes.length }, run);
     return {
       enabled: true,
       dryRun,
       fence,
       cutoff,
-      chains,
-      totalDeleted,
-      ...(aborted ? { aborted } : {}),
-      ...(dryRun ? { totalWouldDelete } : {}),
+      chains: run.chains,
+      totalDeleted: run.totalDeleted,
+      ...(run.aborted ? { aborted: run.aborted } : {}),
+      ...(dryRun ? { totalWouldDelete: run.totalWouldDelete } : {}),
     };
   } finally {
     clearInterval(heartbeat);
