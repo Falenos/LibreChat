@@ -70,18 +70,10 @@ const mockGetDocument = jest.fn();
 // [knauf] Model terminal Meilisearch task completion for bulk-sync fencing tests.
 const mockWaitForTask = jest.fn();
 // End [knauf]
-// [knauf] Record explicit reconciliation submissions on the legacy bulk-write mock as well.
-const mockExplicitAddDocuments = (...args: Parameters<typeof mockAddDocuments>) => {
-  mockAddDocumentsInBatches(...args);
-  return mockAddDocuments(...args);
-};
-// End [knauf]
 const mockIndex = jest.fn().mockReturnValue({
   getRawInfo: jest.fn(),
   updateSettings: jest.fn(),
-  // [knauf] Exercise the explicit one-task reconciliation path while preserving legacy assertions.
-  addDocuments: mockExplicitAddDocuments,
-  // End [knauf]
+  addDocuments: mockAddDocuments,
   addDocumentsInBatches: mockAddDocumentsInBatches,
   updateDocuments: mockUpdateDocuments,
   deleteDocument: mockDeleteDocument,
@@ -374,7 +366,7 @@ describe('Meilisearch Mongoose plugin', () => {
       mongoose,
     ) as unknown as SchemaWithMeiliMethods;
     await conversationModel.deleteMany({});
-    mockAddDocumentsInBatches.mockClear();
+    mockAddDocuments.mockClear();
     const conversationId = new mongoose.Types.ObjectId().toString();
 
     await conversationModel.collection.insertOne({
@@ -391,7 +383,7 @@ describe('Meilisearch Mongoose plugin', () => {
     await conversationModel.syncWithMeili();
     const storedDoc = await conversationModel.collection.findOne({ conversationId });
 
-    expect(mockAddDocumentsInBatches).not.toHaveBeenCalled();
+    expect(mockAddDocuments).not.toHaveBeenCalled();
     expect(storedDoc?._meiliIndex).toBe(false);
   });
 
@@ -483,7 +475,7 @@ describe('Meilisearch Mongoose plugin', () => {
   test('sync w/ meili excludes legacy temporary messages without isTemporary', async () => {
     const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
     await messageModel.deleteMany({});
-    mockAddDocumentsInBatches.mockClear();
+    mockAddDocuments.mockClear();
     const messageId = new mongoose.Types.ObjectId().toString();
 
     await messageModel.collection.insertOne({
@@ -501,14 +493,14 @@ describe('Meilisearch Mongoose plugin', () => {
     await messageModel.syncWithMeili();
     const storedDoc = await messageModel.collection.findOne({ messageId });
 
-    expect(mockAddDocumentsInBatches).not.toHaveBeenCalled();
+    expect(mockAddDocuments).not.toHaveBeenCalled();
     expect(storedDoc?._meiliIndex).toBe(false);
   });
 
   test('sync w/ meili treats null isTemporary with no expiration like missing legacy fields', async () => {
     const modelName = `DynamicMeiliNullTemporary${new mongoose.Types.ObjectId().toString()}`;
     const dynamicModel = createDynamicMeiliModel(modelName);
-    mockAddDocumentsInBatches.mockClear();
+    mockAddDocuments.mockClear();
 
     try {
       await dynamicModel.collection.insertOne({
@@ -525,7 +517,7 @@ describe('Meilisearch Mongoose plugin', () => {
       const storedDoc = await dynamicModel.collection.findOne({ docId: 'legacy-null-temporary' });
 
       expect(progress.totalDocuments).toBe(1);
-      expect(mockAddDocumentsInBatches).toHaveBeenCalled();
+      expect(mockAddDocuments).toHaveBeenCalled();
       expect(storedDoc?._meiliIndex).toBe(true);
     } finally {
       await mongoose.connection.dropCollection(modelName.toLowerCase()).catch(() => undefined);
@@ -536,7 +528,7 @@ describe('Meilisearch Mongoose plugin', () => {
   test('sync queries use a fresh expiration cutoff after plugin initialization', async () => {
     const modelName = `DynamicMeiliCutoff${new mongoose.Types.ObjectId().toString()}`;
     const dynamicModel = createDynamicMeiliModel(modelName);
-    mockAddDocumentsInBatches.mockClear();
+    mockAddDocuments.mockClear();
 
     try {
       await dynamicModel.collection.insertOne({
@@ -555,7 +547,7 @@ describe('Meilisearch Mongoose plugin', () => {
       const storedDoc = await dynamicModel.collection.findOne({ docId: 'expires-soon' });
 
       expect(progress.totalDocuments).toBe(0);
-      expect(mockAddDocumentsInBatches).not.toHaveBeenCalled();
+      expect(mockAddDocuments).not.toHaveBeenCalled();
       expect(storedDoc?._meiliIndex).toBe(false);
     } finally {
       await dynamicModel.deleteMany({});
@@ -729,6 +721,7 @@ describe('Meilisearch Mongoose plugin', () => {
       expect(mockAddDocuments).toHaveBeenCalledWith(expect.any(Array), {
         primaryKey: 'conversationId',
       });
+      expect(mockAddDocumentsInBatches).not.toHaveBeenCalled();
       expect(mockWaitForTask).toHaveBeenCalledWith(1, {
         timeOutMs: 10_000,
         intervalMs: 250,
@@ -1071,6 +1064,41 @@ describe('Meilisearch Mongoose plugin', () => {
         }
       },
     );
+
+    test.each(['', '-1', '3junk', '60001', '9007199254740992'])(
+      'rejects invalid sync delay %p',
+      (syncDelayMs) => {
+        const previousSyncDelayMs = process.env.MEILI_SYNC_DELAY_MS;
+        process.env.MEILI_SYNC_DELAY_MS = syncDelayMs;
+
+        try {
+          expect(() => createDynamicMeiliModel(`InvalidSyncDelay${Date.now()}`)).toThrow(
+            'MEILI_SYNC_DELAY_MS must be a non-negative integer no greater than 60000',
+          );
+        } finally {
+          if (previousSyncDelayMs === undefined) {
+            delete process.env.MEILI_SYNC_DELAY_MS;
+          } else {
+            process.env.MEILI_SYNC_DELAY_MS = previousSyncDelayMs;
+          }
+        }
+      },
+    );
+
+    test.each([-1, 1.5, 60001, Number.MAX_SAFE_INTEGER + 1])(
+      'rejects invalid sync delay plugin override %p',
+      (syncDelayMs) => {
+        expect(() =>
+          createDynamicMeiliModel(`InvalidSyncDelayOption${Date.now()}`, { syncDelayMs }),
+        ).toThrow('MEILI_SYNC_DELAY_MS must be a non-negative integer no greater than 60000');
+      },
+    );
+
+    test('accepts an explicit zero sync delay plugin override', () => {
+      const modelName = `ZeroSyncDelay${Date.now()}`;
+      expect(() => createDynamicMeiliModel(modelName, { syncDelayMs: 0 })).not.toThrow();
+      mongoose.deleteModel(modelName);
+    });
     // End [knauf]
 
     // [knauf] Reject malformed cleanup limits before reconciliation starts.
@@ -2017,7 +2045,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       const pastDate = new Date('2024-01-15T12:00:00Z');
 
@@ -2068,7 +2096,7 @@ describe('Meilisearch Mongoose plugin', () => {
     test('syncWithMeili preserves original updatedAt on messages', async () => {
       const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
       await messageModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       const pastDate = new Date('2023-06-01T08:30:00Z');
 
@@ -2118,7 +2146,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Insert documents with different _meiliIndex states
       await conversationModel.collection.insertMany([
@@ -2152,7 +2180,7 @@ describe('Meilisearch Mongoose plugin', () => {
       await conversationModel.syncWithMeili();
 
       // Should have processed 2 documents (missing and false, but not true)
-      expect(mockAddDocumentsInBatches).toHaveBeenCalled();
+      expect(mockAddDocuments).toHaveBeenCalled();
 
       // Check that both documents without _meiliIndex=true are now indexed
       const indexedCount = await conversationModel.countDocuments({
@@ -2261,7 +2289,7 @@ describe('Meilisearch Mongoose plugin', () => {
     test('syncWithMeili processes all documents where _meiliIndex is not true', async () => {
       const messageModel = createMessageModel(mongoose) as unknown as SchemaWithMeiliMethods;
       await messageModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Create a mix of documents with missing and false _meiliIndex
       await messageModel.collection.insertMany([
@@ -2313,7 +2341,7 @@ describe('Meilisearch Mongoose plugin', () => {
         mongoose,
       ) as unknown as SchemaWithMeiliMethods;
       await conversationModel.deleteMany({});
-      mockAddDocumentsInBatches.mockClear();
+      mockAddDocuments.mockClear();
 
       // Insert one document with missing _meiliIndex and one with false
       await conversationModel.collection.insertMany([

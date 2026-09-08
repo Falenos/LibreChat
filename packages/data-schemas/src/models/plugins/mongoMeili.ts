@@ -90,6 +90,7 @@ const meiliEnabled =
 // [knauf] Bound Mongo acknowledgements, Meilisearch submissions, and unstable retries.
 const MAX_MONGO_ACK_BATCH_SIZE = 100;
 const MAX_MEILI_SUBMISSION_BATCH_SIZE = 1000;
+const MAX_SYNC_DELAY_MS = 60_000;
 const MAX_SYNC_RETRY_PASSES = 10;
 
 const validateBatchSize = (name: string, value: number | string, maximum: number): number => {
@@ -101,13 +102,26 @@ const validateBatchSize = (name: string, value: number | string, maximum: number
   return parsedValue;
 };
 
+const validateDelayMs = (name: string, value: number | string): number => {
+  const rawValue = String(value);
+  const parsedValue = Number(rawValue);
+  if (
+    !/^(0|[1-9]\d*)$/.test(rawValue) ||
+    !Number.isSafeInteger(parsedValue) ||
+    parsedValue > MAX_SYNC_DELAY_MS
+  ) {
+    throw new Error(`${name} must be a non-negative integer no greater than ${MAX_SYNC_DELAY_MS}`);
+  }
+  return parsedValue;
+};
+
 const getSyncConfig = () => ({
   batchSize: validateBatchSize(
     'MEILI_SYNC_BATCH_SIZE',
     process.env.MEILI_SYNC_BATCH_SIZE ?? '100',
     MAX_MONGO_ACK_BATCH_SIZE,
   ),
-  delayMs: parseInt(process.env.MEILI_SYNC_DELAY_MS || '100', 10),
+  delayMs: validateDelayMs('MEILI_SYNC_DELAY_MS', process.env.MEILI_SYNC_DELAY_MS ?? '100'),
 });
 // End [knauf]
 
@@ -218,6 +232,7 @@ const createMeiliMongooseModel = ({
     configuredSync.batchSize,
     MAX_MONGO_ACK_BATCH_SIZE,
   );
+  const delayMs = validateDelayMs('MEILI_SYNC_DELAY_MS', configuredSync.delayMs);
   const submissionBatchSizeValue = process.env.MEILI_SYNC_SUBMISSION_BATCH_SIZE;
   const submissionBatchSize =
     submissionBatchSizeValue == null
@@ -227,7 +242,7 @@ const createMeiliMongooseModel = ({
           submissionBatchSizeValue,
           MAX_MEILI_SUBMISSION_BATCH_SIZE,
         );
-  const syncConfig = { ...configuredSync, batchSize, submissionBatchSize };
+  const syncConfig = { ...configuredSync, batchSize, delayMs, submissionBatchSize };
   // End [knauf]
   // [knauf] Let cleanup use larger read pages without widening Mongo acknowledgement batches.
   const cleanupBatchSizeValue = process.env.MEILI_CLEANUP_BATCH_SIZE;
@@ -788,10 +803,13 @@ export default function mongoMeili(schema: Schema, options: MongoMeiliOptions): 
   });
 
   const { host, apiKey, indexName, primaryKey } = options;
+  // [knauf] Preserve explicit zero delay and validate plugin overrides with environment settings.
+  const defaultSyncConfig = getSyncConfig();
   const syncOptions = {
-    batchSize: options.syncBatchSize || getSyncConfig().batchSize,
-    delayMs: options.syncDelayMs || getSyncConfig().delayMs,
+    batchSize: options.syncBatchSize ?? defaultSyncConfig.batchSize,
+    delayMs: options.syncDelayMs ?? defaultSyncConfig.delayMs,
   };
+  // End [knauf]
 
   const client = new MeiliSearch({ host, apiKey });
 
