@@ -330,18 +330,23 @@ async function performSync(flowManager, flowId, flowType) {
     // Check if we need to sync messages
     logger.info('[indexSync] Requesting message sync progress...');
     let messageProgress = await Message.getSyncProgress();
-    // [knauf] Mongo flags survive Meilisearch pod resets; reset them when the index falls behind.
+    // [knauf] Mongo flags survive Meilisearch resets; only an empty index proves total loss.
     const messagesInMeili = await getIndexDocumentCount(client.index('messages'));
-    const messagesIndexBehind = messagesInMeili < messageProgress.totalProcessed;
-    if (messagesIndexBehind) {
+    const messagesIndexEmpty = messagesInMeili === 0 && messageProgress.totalProcessed > 0;
+    if (messagesInMeili > 0 && messagesInMeili < messageProgress.totalProcessed) {
       logger.warn(
-        `[indexSync] Messages index has ${messagesInMeili} documents but Mongo marks ${messageProgress.totalProcessed} indexed. Forcing full re-sync.`,
+        `[indexSync] Messages index has ${messagesInMeili} documents while Mongo marks ${messageProgress.totalProcessed} indexed. Preserving Mongo flags because cross-store counts are not transactional.`,
+      );
+    }
+    if (messagesIndexEmpty) {
+      logger.warn(
+        `[indexSync] Messages index is empty or missing while Mongo marks ${messageProgress.totalProcessed} indexed. Forcing full re-sync.`,
       );
       await batchResetMeiliFlags(Message.collection);
       messageProgress = await Message.getSyncProgress();
     }
     // End [knauf]
-    if (!messageProgress.isComplete || settingsUpdated || messagesIndexBehind) {
+    if (!messageProgress.isComplete || settingsUpdated || messagesIndexEmpty) {
       logger.info(
         `[indexSync] Messages need syncing: ${messageProgress.totalProcessed}/${messageProgress.totalDocuments} indexed`,
       );
@@ -353,7 +358,7 @@ async function performSync(flowManager, flowId, flowType) {
 
       if (
         settingsUpdated ||
-        messagesIndexBehind ||
+        messagesIndexEmpty ||
         noneIndexed ||
         unindexedMessages > syncThreshold
       ) {
@@ -376,18 +381,23 @@ async function performSync(flowManager, flowId, flowType) {
 
     // Check if we need to sync conversations
     let convoProgress = await Conversation.getSyncProgress();
-    // [knauf] Apply the same persisted-flag reconciliation to the conversations index.
+    // [knauf] Apply the same non-destructive drift handling to conversations.
     const convosInMeili = await getIndexDocumentCount(client.index('convos'));
-    const convosIndexBehind = convosInMeili < convoProgress.totalProcessed;
-    if (convosIndexBehind) {
+    const convosIndexEmpty = convosInMeili === 0 && convoProgress.totalProcessed > 0;
+    if (convosInMeili > 0 && convosInMeili < convoProgress.totalProcessed) {
       logger.warn(
-        `[indexSync] Conversations index has ${convosInMeili} documents but Mongo marks ${convoProgress.totalProcessed} indexed. Forcing full re-sync.`,
+        `[indexSync] Conversations index has ${convosInMeili} documents while Mongo marks ${convoProgress.totalProcessed} indexed. Preserving Mongo flags because cross-store counts are not transactional.`,
+      );
+    }
+    if (convosIndexEmpty) {
+      logger.warn(
+        `[indexSync] Conversations index is empty or missing while Mongo marks ${convoProgress.totalProcessed} indexed. Forcing full re-sync.`,
       );
       await batchResetMeiliFlags(Conversation.collection);
       convoProgress = await Conversation.getSyncProgress();
     }
     // End [knauf]
-    if (!convoProgress.isComplete || settingsUpdated || convosIndexBehind) {
+    if (!convoProgress.isComplete || settingsUpdated || convosIndexEmpty) {
       logger.info(
         `[indexSync] Conversations need syncing: ${convoProgress.totalProcessed}/${convoProgress.totalDocuments} indexed`,
       );
@@ -399,7 +409,7 @@ async function performSync(flowManager, flowId, flowType) {
 
       if (
         settingsUpdated ||
-        convosIndexBehind ||
+        convosIndexEmpty ||
         noneConvosIndexed ||
         unindexedConvos > syncThreshold
       ) {
@@ -532,8 +542,8 @@ async function needsReconciliation() {
   ]);
 
   return (
-    messagesInMeili < messageProgress.totalProcessed ||
-    convosInMeili < convoProgress.totalProcessed ||
+    (messagesInMeili === 0 && messageProgress.totalProcessed > 0) ||
+    (convosInMeili === 0 && convoProgress.totalProcessed > 0) ||
     messageProgress.totalDocuments - messageProgress.totalProcessed > syncThreshold ||
     convoProgress.totalDocuments - convoProgress.totalProcessed > syncThreshold
   );
