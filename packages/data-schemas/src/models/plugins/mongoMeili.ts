@@ -458,7 +458,7 @@ const createMeiliMongooseModel = ({
           syncConfig.delayMs,
           async (filterBatch) => {
             const result = await this.updateMany(
-              { ...getIndexableQuery(), $or: filterBatch },
+              { $and: [getIndexableQuery(), { $or: filterBatch }] },
               { $set: { _meiliIndex: true } },
               { timestamps: false },
             );

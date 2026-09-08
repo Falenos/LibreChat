@@ -821,9 +821,11 @@ describe('Meilisearch Mongoose plugin', () => {
         await Model.syncWithMeili();
 
         expect(mockAddDocuments.mock.calls.map(([documents]) => documents.length)).toEqual([3]);
-        expect(
-          updateManySpy.mock.calls.map(([filter]) => (filter.$or as unknown[]).length),
-        ).toEqual([1, 1, 1]);
+        for (const [filter] of updateManySpy.mock.calls) {
+          const [retentionFilter, snapshotFilter] = filter.$and as mongoose.FilterQuery<unknown>[];
+          expect(retentionFilter.$or).toBeDefined();
+          expect(snapshotFilter.$or).toHaveLength(1);
+        }
       } finally {
         updateManySpy.mockRestore();
         await Model.deleteMany({});
@@ -862,6 +864,67 @@ describe('Meilisearch Mongoose plugin', () => {
         expect(timeoutSpy.mock.calls.filter(([, delay]) => delay === 5)).toHaveLength(2);
       } finally {
         timeoutSpy.mockRestore();
+        await Model.deleteMany({});
+        mongoose.deleteModel(modelName);
+      }
+    });
+
+    test('does not acknowledge a later chunk after it becomes retention-ineligible', async () => {
+      const modelName = `ExpiredAcknowledgementChunk${Date.now()}`;
+      const Model = createDynamicMeiliModel(modelName, {
+        syncBatchSize: 1,
+        syncDelayMs: 1,
+      });
+      const originalUpdateMany = Model.updateMany.bind(Model);
+      let acknowledgementCalls = 0;
+      const updateManySpy = jest
+        .spyOn(Model, 'updateMany')
+        .mockImplementation(async (filter, update, options) => {
+          const result = await originalUpdateMany(filter, update, options);
+          acknowledgementCalls += 1;
+          if (acknowledgementCalls === 1) {
+            await Model.collection.updateOne(
+              { docId: 'expires-before-ack' },
+              { $set: { expiredAt: new Date(0) } },
+            );
+          }
+          return result;
+        });
+
+      try {
+        await Model.collection.insertMany([
+          {
+            docId: 'acknowledged-first',
+            user: 'test-user',
+            title: 'First document',
+            isTemporary: false,
+            expiredAt: null,
+            _meiliIndex: false,
+          },
+          {
+            docId: 'expires-before-ack',
+            user: 'test-user',
+            title: 'Expires before acknowledgement',
+            isTemporary: false,
+            expiredAt: new Date(Date.now() + 60_000),
+            _meiliIndex: false,
+          },
+        ]);
+        const documents = await Model.find({ _meiliIndex: false }).sort({ docId: 1 }).lean();
+
+        await expect(Model.processSyncBatch(mockIndex(), documents)).resolves.toBe(1);
+
+        expect(await Model.countDocuments({ docId: 'acknowledged-first', _meiliIndex: true })).toBe(
+          1,
+        );
+        expect(
+          await Model.countDocuments({
+            docId: 'expires-before-ack',
+            _meiliIndex: { $ne: true },
+          }),
+        ).toBe(1);
+      } finally {
+        updateManySpy.mockRestore();
         await Model.deleteMany({});
         mongoose.deleteModel(modelName);
       }
