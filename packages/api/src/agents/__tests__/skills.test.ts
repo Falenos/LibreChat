@@ -618,6 +618,44 @@ describe('resolveModelSpecSkillIds', () => {
     expect(result).toEqual([]);
   });
   // End [knauf]
+
+  // [knauf] KK20-297 — model specs cannot retain translation-dependent skills while disabled.
+  it('filters translation-dependent skills when File Translation is unavailable', async () => {
+    const skillId = new Types.ObjectId();
+    const result = await resolveModelSpecSkillIds({
+      names: ['translation-skill'],
+      accessibleSkillIds: [skillId],
+      fileTranslationAvailable: false,
+      getSkillByName: jest.fn().mockResolvedValue({
+        _id: skillId,
+        name: 'translation-skill',
+        body: 'body',
+        author: userObjectId,
+        allowedTools: ['translate_file'],
+      }),
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it('resolves translation-dependent skills when File Translation is available', async () => {
+    const skillId = new Types.ObjectId();
+    const result = await resolveModelSpecSkillIds({
+      names: ['translation-skill'],
+      accessibleSkillIds: [skillId],
+      fileTranslationAvailable: true,
+      getSkillByName: jest.fn().mockResolvedValue({
+        _id: skillId,
+        name: 'translation-skill',
+        body: 'body',
+        author: userObjectId,
+        allowedTools: ['translate_file'],
+      }),
+    });
+
+    expect(result.map((id) => id.toString())).toEqual([skillId.toString()]);
+  });
+  // End [knauf]
 });
 
 describe('resolveSkillActive', () => {
@@ -876,6 +914,41 @@ describe('injectSkillCatalog', () => {
 
     expect(result.skillCount).toBe(1);
     expect(result.activeSkillNames).toEqual(new Set(['ordinary-skill']));
+  });
+  // End [knauf]
+
+  // [knauf] KK20-297 — unavailable translation skills are absent from catalog and runtime ACLs.
+  it('filters translation-dependent skills from the catalog when File Translation is unavailable', async () => {
+    const translationSkill = {
+      ...makeSkill('translation-skill'),
+      allowedTools: ['translate_file'],
+    };
+    const ordinarySkill = makeSkill('ordinary-skill');
+    const result = await injectSkillCatalog(
+      baseParams({
+        listSkillsByAccess: buildPager([[translationSkill, ordinarySkill]]),
+        fileTranslationAvailable: false,
+      }),
+    );
+
+    expect(result.skillCount).toBe(1);
+    expect(result.activeSkillNames).toEqual(new Set(['ordinary-skill']));
+  });
+
+  it('includes translation-dependent skills in the catalog when File Translation is available', async () => {
+    const translationSkill = {
+      ...makeSkill('translation-skill'),
+      allowedTools: ['translate_file'],
+    };
+    const result = await injectSkillCatalog(
+      baseParams({
+        listSkillsByAccess: buildPager([[translationSkill]]),
+        fileTranslationAvailable: true,
+      }),
+    );
+
+    expect(result.skillCount).toBe(1);
+    expect(result.activeSkillNames).toEqual(new Set(['translation-skill']));
   });
   // End [knauf]
 
@@ -1300,6 +1373,40 @@ describe('resolveManualSkills', () => {
     });
 
     expect(result).toEqual([]);
+  });
+  // End [knauf]
+
+  // [knauf] KK20-297 — API-direct manual invocation cannot bypass the translation gate.
+  it('filters translation-dependent manual skills when File Translation is unavailable', async () => {
+    const owned: SkillDoc = {
+      ...mkSkill('translation-skill', userOid, 'body'),
+      allowedTools: ['translate_file'],
+    };
+    const result = await resolveManualSkills({
+      names: ['translation-skill'],
+      getSkillByName: buildGetSkillByName({ 'translation-skill': owned }),
+      accessibleSkillIds: [owned._id],
+      userId,
+      fileTranslationAvailable: false,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it('resolves translation-dependent manual skills when File Translation is available', async () => {
+    const owned: SkillDoc = {
+      ...mkSkill('translation-skill', userOid, 'body'),
+      allowedTools: ['translate_file'],
+    };
+    const result = await resolveManualSkills({
+      names: ['translation-skill'],
+      getSkillByName: buildGetSkillByName({ 'translation-skill': owned }),
+      accessibleSkillIds: [owned._id],
+      userId,
+      fileTranslationAvailable: true,
+    });
+
+    expect(result).toHaveLength(1);
   });
   // End [knauf]
 
@@ -1976,6 +2083,38 @@ describe('resolveAlwaysApplySkills', () => {
     });
 
     expect(result).toEqual([]);
+  });
+  // End [knauf]
+
+  // [knauf] KK20-297 — always-apply cannot bypass the translation gate.
+  it('filters translation-dependent always-apply skills when File Translation is unavailable', async () => {
+    const row: AlwaysApplyRow = {
+      ...mkRow('translation-skill', userOid, 'body'),
+      allowedTools: ['translate_file'],
+    };
+    const result = await resolveAlwaysApplySkills({
+      listAlwaysApplySkills: buildLister([row]),
+      accessibleSkillIds: [row._id],
+      userId,
+      fileTranslationAvailable: false,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it('resolves translation-dependent always-apply skills when File Translation is available', async () => {
+    const row: AlwaysApplyRow = {
+      ...mkRow('translation-skill', userOid, 'body'),
+      allowedTools: ['translate_file'],
+    };
+    const result = await resolveAlwaysApplySkills({
+      listAlwaysApplySkills: buildLister([row]),
+      accessibleSkillIds: [row._id],
+      userId,
+      fileTranslationAvailable: true,
+    });
+
+    expect(result).toHaveLength(1);
   });
   // End [knauf]
 

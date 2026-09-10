@@ -82,6 +82,9 @@ jest.mock('@librechat/api', () => ({
   // [knauf] KK20-257 — preserve this controller suite's enabled Code Execution fixture.
   isKnaufCodeExecutionEnabled: jest.fn().mockReturnValue(true),
   // End [knauf]
+  // [knauf] KK20-297 — preserve this controller suite's enabled File Translation fixture.
+  isKnaufFileTranslationEnabled: jest.fn().mockReturnValue(true),
+  // End [knauf]
   createRun: jest.fn().mockResolvedValue({
     processStream: mockProcessStream,
   }),

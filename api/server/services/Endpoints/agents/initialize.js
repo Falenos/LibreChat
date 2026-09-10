@@ -19,6 +19,9 @@ const {
   // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
   isKnaufCodeExecutionEnabled,
   // End [knauf]
+  // [knauf] KK20-297 — canonical operator decision for File Translation availability.
+  isKnaufFileTranslationEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   ResourceType,
@@ -176,6 +179,11 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   // End [knauf]
   // [knauf] KK20-257 — static YAML alone must never activate sandbox runtime paths.
   const codeEnvAvailable = isKnaufCodeExecutionEnabled(enabledCapabilities);
+  // End [knauf]
+  // [knauf] KK20-297 — same fail-closed contract for File Translation: the
+  // deployment-baked `karl-file-translation` skill must never resolve/prime
+  // in an environment where `translate_file` isn't actually registered.
+  const fileTranslationAvailable = isKnaufFileTranslationEnabled();
   // End [knauf]
   const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
   const skillDbMethods = getSkillDbMethods();
@@ -427,8 +435,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
         names: selectedModelSpec.skills,
         accessibleSkillIds,
         getSkillByName: db.getSkillByName,
-        // [knauf] KK20-257 — model specs cannot retain code-dependent skills while disabled.
+        // [knauf] KK20-257 / KK20-297 — model specs cannot retain capability-dependent skills while disabled.
         codeEnvAvailable,
+        fileTranslationAvailable,
         // End [knauf]
       });
       primaryAgent.skills_enabled = true;
@@ -471,6 +480,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       accessibleSkillIds: primaryScopedSkillIds,
       skillAuthoringAvailable: primarySkillAuthoringAvailable,
       codeEnvAvailable,
+      fileTranslationAvailable,
       skillStates,
       defaultActiveOnShare,
       manualSkills,
@@ -546,6 +556,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       skillStates,
       defaultActiveOnShare,
       codeEnvAvailable,
+      fileTranslationAvailable,
     },
     {
       getAgent: db.getAgent,
@@ -617,6 +628,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
     skillStates,
     defaultActiveOnShare,
     codeEnvAvailable,
+    fileTranslationAvailable,
   });
 
   if (updatedMCPAuthMap) {
@@ -755,6 +767,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
            *  false`, so `bash_tool` / `read_file` sandbox fallback are
            *  silently gated off even though the seed walk found it. */
           codeEnvAvailable,
+          fileTranslationAvailable,
           skillStates,
           defaultActiveOnShare,
         },

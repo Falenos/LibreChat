@@ -18,6 +18,9 @@ import type {
 import type { AppConfig } from '@librechat/data-schemas';
 import { requiresEphemeralUserConnection } from '~/mcp/utils';
 import { getCustomEndpointConfig } from '~/app/config';
+// [knauf] KK20-297 — shared with the Skills API catalog so visibility can never drift from tool availability.
+import { isKnaufFileTranslationEnabled } from '~/knauf/translation/translationEnvGuard';
+// End [knauf]
 
 const { mcp_all, mcp_delimiter } = Constants;
 // [knauf] NO-TICKET — runtime-only tool for exact, owned artifact edits.
@@ -65,13 +68,6 @@ type ModelParametersWithPromptPrefix = AgentModelParameters & { promptPrefix?: s
 // unless both the rollout switch and provider credentials are present.
 export type RequestFile = { file_id?: string; filename?: string; name?: string; type?: string };
 
-function isFileTranslationConfigured(): boolean {
-  return (
-    process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
-    Boolean(process.env.AZURE_TRANSLATOR_ENDPOINT && process.env.AZURE_TRANSLATOR_KEY)
-  );
-}
-
 function hasTranslatableRequestFile(files: readonly RequestFile[]): boolean {
   return files.some(
     (file) =>
@@ -102,7 +98,7 @@ export function getRequestScopedFileTools(
     return [];
   }
   const tools: string[] = [];
-  if (isFileTranslationConfigured()) {
+  if (isKnaufFileTranslationEnabled()) {
     tools.push(TRANSLATION_STATUS_TOOL);
     if (hasTranslatableRequestFile(files)) {
       tools.push(FILE_TRANSLATE_TOOL);
@@ -129,6 +125,33 @@ export function filterRequestScopedFileToolNames(
     return [...toolNames];
   }
   return toolNames.filter((toolName) => !REQUEST_SCOPED_FILE_TOOLS.has(toolName));
+}
+
+/**
+ * [knauf] KK20-297 — a skill's `allowed-tools` frontmatter (e.g.
+ * `karl-file-translation/SKILL.md` declaring `translate_file`) is skill
+ * *visibility* metadata, not a request-scoped grant. `unionPrimeAllowedTools`
+ * unions those declarations into `extraAllowedToolNames` whenever the skill
+ * is primed (manual `$` invocation or `always-apply`) — with no awareness of
+ * whether `getRequestScopedFileTools` actually authorized the tool for THIS
+ * request. Left unfiltered, priming the skill would hand the model
+ * `translate_file` even when translation is disabled, or when the request
+ * has no translatable attachment for it to act on, reproducing the exact
+ * broken/misleading flow this gate exists to prevent.
+ *
+ * Intersects skill-derived extras against the tools `getRequestScopedFileTools`
+ * granted for this request: any name in `REQUEST_SCOPED_FILE_TOOLS` is kept
+ * only if it also appears in `grantedRequestScopedFileTools`. Names outside
+ * that set (regular skill/MCP/etc. tools) pass through unchanged.
+ */
+export function filterSkillPrimedRequestScopedTools(
+  toolNames: readonly string[],
+  grantedRequestScopedFileTools: readonly string[],
+): string[] {
+  const granted = new Set(grantedRequestScopedFileTools);
+  return toolNames.filter(
+    (toolName) => !REQUEST_SCOPED_FILE_TOOLS.has(toolName) || granted.has(toolName),
+  );
 }
 // End [knauf]
 
