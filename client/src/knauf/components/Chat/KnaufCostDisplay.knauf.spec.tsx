@@ -15,14 +15,16 @@ jest.mock('~/hooks', () => ({
       com_knauf_cost_conversation_total: 'Conversation total: {{0}}',
       com_knauf_cost_disclaimer:
         'For information only — you are not charged for this usage now or in the future.',
-      com_knauf_cost_estimated: 'Upper-bound estimate because the routed model was unavailable',
+      com_knauf_cost_estimated:
+        'Upper-bound estimate using the highest configured Model Router rate.',
       com_knauf_cost_image_tokens: 'Image tokens: {{0}} input / {{1}} output',
       com_knauf_cost_input: 'Input tokens: {{0}}',
       com_knauf_cost_message: 'Message cost: {{0}}',
       com_knauf_cost_model_route: 'Requested → returned: {{0}} → {{1}} — {{2}}',
       com_knauf_cost_model_returned: 'Returned model: {{0}} — {{1}}',
       com_knauf_cost_output: 'Output tokens: {{0}}',
-      com_knauf_cost_pricing_pending: 'Image pricing pending',
+      com_knauf_cost_pricing_pending:
+        'Pricing is unavailable for some tokens; the displayed total excludes them.',
       com_knauf_cost_source: 'Rate source: {{0}}',
     };
     return (strings[key] ?? key).replace(/{{(\d+)}}/g, (_, index) => values?.[Number(index)] ?? '');
@@ -147,7 +149,7 @@ describe('[knauf] KnaufCostDisplay', () => {
     expect(screen.getByText('€0.00')).toBeInTheDocument();
   });
 
-  it('marks totals with unresolved image pricing as partial', () => {
+  it('marks totals with unsupported token pricing as partial', () => {
     mockUseKnaufConversationCosts.mockReturnValue({
       data: {
         ...data,
@@ -165,7 +167,9 @@ describe('[knauf] KnaufCostDisplay', () => {
 
     expect(screen.getByLabelText(/Conversation total:/)).toHaveAttribute(
       'title',
-      expect.stringContaining('Image pricing pending'),
+      expect.stringContaining(
+        'Pricing is unavailable for some tokens; the displayed total excludes them.',
+      ),
     );
     expect(screen.getByText(/\+$/)).toBeInTheDocument();
   });
