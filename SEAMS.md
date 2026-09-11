@@ -1214,6 +1214,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `.github/workflows/publish-release-notes.yml` | KK20-250 — every Monday at 07:00 UTC (plus manual dispatch), aggregates pending bilingual user changes into generated help content and opens one reviewable release-notes PR; skips when no rows exist or another automation PR is open. |
 | `.github/workflows/{dev_preview_deploy,release_pipeline,promote_pipeline}.yaml` | KK20-330 — keeps worker `LANGFUSE_RELEASE` synchronized with its deployed image tag across preview, DEV, STAGE, and PROD updates, and blocks promotion when STAGE app/worker release attribution does not match the candidate version. |
 | `.github/workflows/release_pipeline.yaml` | KK20-323 — makes release retries fail closed when GitHub release lookup is rate-limited and replaces high-frequency `gh run watch` calls with bounded 15-second API polling so transient rate limits do not falsely fail a healthy DEV smoke or informational STAGE E2E run. |
+| `client/src/locales/{en,de}/translation.json` | KK20-279 — generalizes unresolved-pricing and conservative-estimate copy so unsupported tokens are disclosed as excluded and routed fallbacks are clearly presented as upper bounds; JSON has no comment syntax, so this append-only configuration row records the unmarkable locale seam. |
 
 ## Net-New Files
 
@@ -2146,6 +2147,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/services/Files/knauf/idml/core.js` | JSZip, Saxes parser, XML decoding and validation helpers | High — exposes bounded segment adjacency metadata so protected terms split by InDesign formatting boundaries fail safely instead of being silently translated | `translation/providers/azure.spec.js`; `translation/tool.lifecycle.spec.js` | KK20-330 |
 | `packages/api/src/knauf/translation/translationEnvGuard.ts` | None — pure `process.env` read with no upstream imports | Low — single canonical availability decision (flag + Azure credentials) shared by `agents/load.ts` tool injection and the Skills API catalog filter so the two can never drift apart | `translationEnvGuard.knauf.spec.ts` | KK20-297 |
 | `packages/api/src/knauf/translation/translationEnvGuard.knauf.spec.ts` | Subject under test only | Low — pins the flag-plus-both-credentials contract, including each partial-configuration case | Self | KK20-297 |
+| `api/server/services/knauf/costs*.js` | `@librechat/api` cache helpers (lazy); authenticated transaction rows supplied by the Knauf cost route | Medium — prices every live GPT-5.6 router candidate, retains the higher existing Sol/router rates, and applies that conservative fallback to future routed models while direct unknown models remain unsupported | `api/server/services/knauf/costs.spec.js` | KK20-279 |
+| `client/src/knauf/components/Chat/KnaufCostDisplay.knauf.spec.tsx` | Subject under test; mocked cost context and localization hook | Low — pins the generic unsupported-token warning and partial-total suffix so future unpriced models cannot look like a valid zero-cost result | Self | KK20-279 |
 <!-- seams:new:end -->
 
 ## Static Assets
