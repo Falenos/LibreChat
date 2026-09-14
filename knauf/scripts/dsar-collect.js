@@ -82,8 +82,28 @@ const MONGO_SINKS = [
   { model: 'Token', field: 'userId', existenceOnly: true },
   { model: 'Session', field: 'user', existenceOnly: true },
   { model: 'SkillSyncCredential', field: 'createdBy', existenceOnly: true },
+  // Self-review: this was excluded with the reason "keyed by file/collection, not by
+  // subject", which described a different collection entirely. The schema header says
+  // "one document per allowed user (keyed by normalised email)", and `{timestamps:true}`
+  // records WHEN platform access was granted — an access decision about the subject.
+  // It is also the only email-keyed sink, hence `emailField`.
+  {
+    model: 'MigrationAllowlist',
+    field: 'emailNormalized',
+    emailField: true,
+    note: 'platform access decision + the date it was granted',
+  },
   { model: 'Group', field: 'memberIds', membership: true },
-  { model: 'AclEntry', field: 'principalId' },
+  {
+    model: 'AclEntry',
+    field: 'principalId',
+    // Self-review: `grantedBy` here is `ObjectId, ref: 'User'` — the colleague who
+    // shared the resource. The collector already redacts exactly this field on
+    // SystemGrant for Art. 15(4) and shipped it raw here. Same field, same third party,
+    // same rule.
+    redactFields: ['grantedBy'],
+    note: 'what the subject can access; grantedBy redacted as a third party',
+  },
 ];
 
 /**
@@ -98,7 +118,8 @@ const NOT_SUBJECT_SCOPED = {
   AccessRole: 'ACL role definitions — reference data, not per-subject',
   AgentCategory: 'marketplace taxonomy — reference data, not per-subject',
   Banner: 'global announcements — no subject scope',
-  MigrationAllowlist: 'operational allowlist keyed by file/collection, not by subject',
+  // NOTE: MigrationAllowlist is NOT here — it is one row per user, keyed by their
+  // normalised email, and is collected in MONGO_SINKS.
   KnaufAuditRetentionCheckpoint: 'retention bookkeeping (hash chain), carries no subject data',
   KnaufAuditRetentionLease: 'distributed lock document, carries no subject data',
 };
@@ -140,6 +161,17 @@ const NOT_SUBJECT_SCOPED_RAW = {
   // that IS collected. Say so if asked; do not claim the cache holds nothing.
   keyv: 'keyv cache namespace — opaque keys, TTL-bounded, no subject field to filter on',
   logs: 'keyv cache namespace (the instantiated store) — same as `keyv`',
+  // Reached raw in places, but the SAME collections as model sinks above — the raw
+  // access path is an implementation detail, not a second store.
+  sharedlinks: 'collected as the SharedLink model sink',
+  prompts: 'collected as the Prompt model sink',
+  // Legacy GLOBAL sharing registry: one row per project name holding agentIds/promptIds
+  // that are shared platform-wide. Not per-subject; an agent the subject authored is
+  // disclosed through their own Agent row, along with its sharing state.
+  projects: 'global sharing registry keyed by project name, not by subject',
+  knauf_file_indexing_locks: 'distributed reconciler lease (ownerId = host/pid), no subject data',
+  knauf_file_indexing_locks_test: 'test fixture for the lease above',
+  __transaction_test__: 'transaction-support probe; never written to',
   knauf_file_assets: 'collected as the KnaufFileAsset model sink (user + agent scope)',
   knauf_audit_retention_checkpoints: 'retention bookkeeping (hash chain), no subject data',
   knauf_audit_retention_leases: 'distributed lock documents, no subject data',
@@ -184,6 +216,17 @@ const EXTERNAL_SINKS = [
     label: 'Server logs / APM export',
     resultFile: 'results/log-platform.json',
     runbook: '§1.10 — owner-approved bounded export, or a recorded limitation',
+  },
+  // Self-review: when USE_REDIS is on, the keyv namespaces this collector dismissed as
+  // Mongo collections actually live in Redis, alongside resumable-stream job state and
+  // abuse/violation counters keyed by user id. The script has no Redis client and must
+  // not pretend otherwise — so it is a tracked external sink that starts pending, and a
+  // deployment that does not use Redis clears it with `not-applicable` + a note.
+  {
+    key: 'redis',
+    label: 'Redis — stream jobs, violation counters, sessions',
+    resultFile: 'results/redis.json',
+    runbook: '§1.11 — scan by subject id, or record not-applicable when USE_REDIS is off',
   },
 ];
 
@@ -667,8 +710,25 @@ function derivedExpectedTotals(manifest) {
   const sinks = manifest?.sinks ?? {};
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const vectors = sinks.vectorStores ?? {};
+  // Self-review: deriving Meilisearch from the RAW Message/Conversation counts was
+  // wrong and would have REJECTED a correct export. `mongoMeili.isIndexableDocument`
+  // deliberately keeps temporary/expiring chats out of the index
+  // (`isTemporary === false && hasActiveExpiration`), so the replica is legitimately
+  // SMALLER than Mongo whenever the subject used Temporary Chat — which is on by
+  // default. A gate that fails valid work is worse than no gate: the operator could
+  // never clear the sink and the bundle would be permanently unreleasable.
+  //
+  // Phase one now counts the indexable subset separately (`*Indexable`) using the same
+  // predicate the indexer uses, and that is what Meilisearch is measured against.
+  // Older bundles without those counts get `undefined` — no derived expectation, so the
+  // sink falls back to self-reported rather than being rejected on a stale number.
+  const indexable =
+    sinks.MessageIndexable === undefined && sinks.ConversationIndexable === undefined
+      ? undefined
+      : num(sinks.MessageIndexable) + num(sinks.ConversationIndexable);
   return {
-    meilisearch: num(sinks.Message) + num(sinks.Conversation),
+    meilisearch: indexable,
+    // Blob covers File rows, FileAsset blobs AND avatars (which have no File row).
     blob: num(sinks.blob?.objects),
     ragVectors: num(vectors.pgvector) + num(vectors.azureAiSearch),
   };
@@ -871,8 +931,23 @@ function verifyBundleArtifact(artifact, bundleDir) {
   if (resolved !== bundleDir && !resolved.startsWith(bundleDir + path.sep)) {
     throw new Error(`artifact escapes the bundle: ${artifact}`);
   }
-  if (fs.lstatSync(resolved).isSymbolicLink()) {
-    throw new Error(`artifact is a symlink: ${artifact}`);
+  // Self-review: checking only the leaf was not enough. `path.resolve` collapses `..`
+  // but does NOT resolve symlinks, so `results/linkdir/x.jsonl` where `linkdir` points
+  // at /etc passes the prefix test and the leaf lstat sees an ordinary file — hashing
+  // something outside the bundle. Walk every component below the bundle root, the same
+  // way `assertSecureExistingDir` does for the bundle itself.
+  const rel = path.relative(bundleDir, resolved);
+  let cursor = bundleDir;
+  for (const part of rel.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(
+        `artifact path passes through a symlink: ${path.relative(bundleDir, cursor)}`,
+      );
+    }
+  }
+  if (!fs.statSync(resolved).isFile()) {
+    throw new Error(`artifact is not a regular file: ${artifact}`);
   }
   return crypto.createHash('sha256').update(fs.readFileSync(resolved)).digest('hex');
 }
@@ -1002,6 +1077,14 @@ function sinkFilter(sink, subject) {
   if (sink.membership) {
     return { [sink.field]: { $in: groupMembershipKeys(subject) } };
   }
+  if (sink.emailField) {
+    // The only sink keyed by email rather than an id. Match the app's own
+    // normalisation (`lowercase: true, trim: true` on the schema).
+    const email = String(subject.email ?? '')
+      .trim()
+      .toLowerCase();
+    return email ? { [sink.field]: email } : { [sink.field]: { $in: [] } };
+  }
   if (sink.model === 'KnaufFileAsset') {
     // The asset ledger is scoped by (scope_type, scope_id), but SCOPE IS THE WRONG
     // OWNERSHIP TEST for a DSAR (PR #349 review, round 3).
@@ -1117,6 +1200,28 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   };
   manifest.sinks.ownedAssetIds = subjectView._dsarAssetIds.length;
 
+  // Meilisearch indexes only NON-temporary, unexpired documents
+  // (`mongoMeili.buildIndexableQuery` -> `buildRetentionVisibilityFilter`). Count that
+  // subset with the same predicate so the derived expectation measures the replica
+  // against what is actually indexable, not against every row in Mongo.
+  const indexableFilter = {
+    $or: [
+      { isTemporary: false, expiredAt: null },
+      { isTemporary: false, expiredAt: { $gt: new Date() } },
+      { isTemporary: null, expiredAt: null },
+    ],
+  };
+  for (const [model, field] of [
+    ['Message', 'user'],
+    ['Conversation', 'user'],
+  ]) {
+    if (!models[model]) continue;
+    manifest.sinks[`${model}Indexable`] = await models[model].countDocuments({
+      [field]: { $in: [id, String(id)] },
+      ...indexableFilter,
+    });
+  }
+
   // every subject-scoped Mongo store
   let files = [];
   let assets = [];
@@ -1184,28 +1289,41 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   write('vector-stores.json', vectors);
   write('vector-inventory-request.json', buildVectorInventoryRequest(id, tenantId, vectors));
 
+  // Self-review: avatars are written straight to `images/<userId>/avatar-<ts>.<ext>` by
+  // `Azure/images.js` / `Local/images.js` with NO `createFile` call, so they have no
+  // File row and no FileAsset — a bundle built only from those two missed the subject's
+  // own photograph. The stored URL is on the user document.
+  const avatarObjects = subject.avatar
+    ? [{ source: 'users.avatar', key: String(subject.avatar).split('?')[0], filename: 'avatar' }]
+    : [];
+  const fileObjects = files
+    .map((f) => ({
+      source: 'File',
+      file_id: f.file_id,
+      filename: f.filename,
+      key: f.filepath || f.storageKey,
+    }))
+    .filter((o) => o.key);
+  const assetObjects = assets
+    .map((a) => ({
+      source: 'KnaufFileAsset',
+      asset_id: a.asset_id,
+      filename: a.blob?.filename,
+      key: a.blob?.path,
+    }))
+    .filter((o) => o.key);
+  const blobObjects = [...fileObjects, ...assetObjects, ...avatarObjects];
   manifest.sinks.blob = {
     container: process.env.AZURE_CONTAINER_NAME || 'files',
-    objects: files.map((f) => f.filepath || f.storageKey).filter(Boolean).length,
-    assetBlobs: assets.map((a) => a.blob?.path).filter(Boolean).length,
+    // The derived expectation is measured against THIS total, so it must count every
+    // object the operator is told to pull — avatars included.
+    objects: blobObjects.length,
+    fromFileRows: fileObjects.length,
+    fromAssets: assetObjects.length,
+    avatars: avatarObjects.length,
+    avatarPrefix: `images/${String(id)}/`,
   };
-  write(
-    'blob-objects.json',
-    [
-      ...files.map((f) => ({
-        source: 'File',
-        file_id: f.file_id,
-        filename: f.filename,
-        key: f.filepath || f.storageKey,
-      })),
-      ...assets.map((a) => ({
-        source: 'KnaufFileAsset',
-        asset_id: a.asset_id,
-        filename: a.blob?.filename,
-        key: a.blob?.path,
-      })),
-    ].filter((o) => o.key),
-  );
+  write('blob-objects.json', blobObjects);
 
   if (out) {
     // 0600, not 0755: this is the subject's personal-data corpus, and the script
@@ -1235,19 +1353,37 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
     const dir =
       logDir || process.env.LIBRECHAT_LOG_DIR || path.resolve(__dirname, '..', '..', 'api', 'logs');
     const hits = [];
+    let unreadable = 0;
     if (fs.existsSync(dir)) {
-      for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.log'))) {
-        const lines = fs
-          .readFileSync(path.join(dir, f), 'utf8')
-          .split('\n')
-          .filter((l) => l.includes(String(id)));
+      // Self-review: filtering on `.log` read ONLY today's file. Winston rotates with
+      // `zippedArchive: true`, so the other 13 days of the retention window are
+      // `*.log.gz` — they were skipped silently while the manifest claimed 14 days.
+      const zlib = require('node:zlib');
+      const names = fs.readdirSync(dir).filter((n) => n.endsWith('.log') || n.endsWith('.log.gz'));
+      for (const f of names) {
+        let text;
+        try {
+          const raw = fs.readFileSync(path.join(dir, f));
+          text = f.endsWith('.gz') ? zlib.gunzipSync(raw).toString('utf8') : raw.toString('utf8');
+        } catch (err) {
+          unreadable += 1;
+          warn(
+            `winstonLogs: could not read ${f} (${err.message}) — lines from it are NOT included`,
+          );
+          continue;
+        }
+        const lines = text.split('\n').filter((l) => l.includes(String(id)));
         hits.push(...lines.map((l) => ({ file: f, line: l })));
       }
     }
     manifest.sinks.winstonLogs = {
       dir,
       matchingLines: hits.length,
-      window: '14-day rotation',
+      filesScanned: fs.existsSync(dir)
+        ? fs.readdirSync(dir).filter((n) => n.endsWith('.log') || n.endsWith('.log.gz')).length
+        : 0,
+      unreadableFiles: unreadable,
+      window: '14-day rotation (includes rotated *.log.gz)',
       fileLoggingEnabled: !fileLoggingOff,
     };
     if (fileLoggingOff || !fs.existsSync(dir)) {
@@ -1427,6 +1563,7 @@ module.exports = {
   prepareOutputDir,
   writeBundleFile,
   buildResultsReadme,
+  collect,
   sinkFilter,
   shapeRows,
   resolveSubject,

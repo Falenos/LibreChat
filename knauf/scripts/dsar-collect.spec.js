@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const {
+  collect,
   MONGO_SINKS,
   NOT_SUBJECT_SCOPED,
   NOT_SUBJECT_SCOPED_RAW,
@@ -569,7 +570,11 @@ describe('dynamically registered raw collections are inventoried', () => {
         }
         if (!/\.(js|ts)$/.test(e.name) || /\.(spec|test)\./.test(e.name)) continue;
         const src = fs.readFileSync(full, 'utf8');
+        // Self-review: matching only `collection: '<name>'` schema options made this
+        // control weaker than advertised — nearly every raw collection here is reached
+        // via `db.collection('<name>')`, which that pattern cannot see. Match both.
         for (const m of src.matchAll(/collection:\s*'([a-z0-9_]+)'/g)) found.add(m[1]);
+        for (const m of src.matchAll(/\.collection\(\s*'([a-z0-9_]+)'\s*\)/g)) found.add(m[1]);
       }
     };
     roots.forEach(walk);
@@ -739,15 +744,59 @@ describe('external sinks are pending until verified', () => {
       sinks: {
         Message: 1200,
         Conversation: 40,
+        MessageIndexable: 1170,
+        ConversationIndexable: 38,
         blob: { objects: 7 },
         vectorStores: { pgvector: 3, azureAiSearch: 2 },
       },
     });
-    assert.equal(d.meilisearch, 1240);
     assert.equal(d.blob, 7);
     assert.equal(d.ragVectors, 5);
     assert.equal(d.langfuse, undefined, 'Langfuse is not derived from Mongo');
     assert.equal(d.logPlatform, undefined, 'the log platform is not derived from Mongo');
+  });
+
+  test('Meilisearch is measured against the INDEXABLE subset, not every Mongo row', () => {
+    // mongoMeili keeps temporary/expiring chats out of the index, so the replica is
+    // legitimately smaller than Mongo. Deriving from raw counts REJECTED correct exports.
+    const d = derivedExpectedTotals({
+      sinks: {
+        Message: 1200,
+        Conversation: 40,
+        MessageIndexable: 1170,
+        ConversationIndexable: 38,
+      },
+    });
+    assert.equal(d.meilisearch, 1208, '1170 + 38 indexable, not 1200 + 40');
+    assert.notEqual(d.meilisearch, 1240, 'the raw total would fail a correct export');
+  });
+
+  test('a correct export of a subject with temporary chats is ACCEPTED', () => {
+    const manifest = {
+      sinks: { Message: 1200, Conversation: 40, MessageIndexable: 1170, ConversationIndexable: 38 },
+      externalSinks: initialExternalSinkState(),
+      completeness: { ok: false, warnings: [] },
+    };
+    const r = reconcileExternalResult(
+      'meilisearch',
+      { status: 'complete', collected: 1208, artifact: 'results/m.jsonl', checksum: 'abc' },
+      { derivedExpected: derivedExpectedTotals(manifest).meilisearch, verifyArtifact: () => 'abc' },
+    );
+    assert.equal(r.status, 'complete', r.reason);
+  });
+
+  test('a bundle with no indexable counts falls back to self-reported, not rejection', () => {
+    // Older bundles predate the *Indexable counts; they must not be failed on a
+    // number we can no longer derive.
+    const d = derivedExpectedTotals({ sinks: { Message: 10, Conversation: 2 } });
+    assert.equal(d.meilisearch, undefined);
+    const r = reconcileExternalResult(
+      'meilisearch',
+      { status: 'complete', collected: 12, expected: 12, artifact: 'a', checksum: 'x' },
+      { derivedExpected: d.meilisearch, verifyArtifact: () => 'x' },
+    );
+    assert.equal(r.status, 'complete');
+    assert.match(r.expectationSource, /self-reported/);
   });
 });
 
@@ -836,6 +885,8 @@ describe('collect -> results -> finalize round-trip', () => {
       sinks: {
         Message: 10,
         Conversation: 2,
+        MessageIndexable: 10,
+        ConversationIndexable: 2,
         blob: { objects: 3 },
         vectorStores: { pgvector: 1, azureAiSearch: 1 },
         ...(overrides.sinks ?? {}),
@@ -880,6 +931,11 @@ describe('collect -> results -> finalize round-trip', () => {
       'results/log-platform.json',
       JSON.stringify({ status: 'not-applicable', note: 'platform cannot query by userId' }),
     );
+    writeBundleFile(
+      dir,
+      'results/redis.json',
+      JSON.stringify({ status: 'not-applicable', note: 'USE_REDIS is off in this environment' }),
+    );
   }
 
   test('finalize does NOT collide with the phase-one bundle (the round-2 bug)', () => {
@@ -909,6 +965,11 @@ describe('collect -> results -> finalize round-trip', () => {
       dir,
       'results/log-platform.json',
       JSON.stringify({ status: 'not-applicable', note: 'platform cannot query by userId' }),
+    );
+    writeBundleFile(
+      dir,
+      'results/redis.json',
+      JSON.stringify({ status: 'not-applicable', note: 'USE_REDIS is off' }),
     );
     // Meilisearch self-reports a consistent 11/11, but phase one counted
     // 10 messages + 2 convos = 12. Our number wins.
@@ -1023,6 +1084,160 @@ describe('collect -> results -> finalize round-trip', () => {
     assert.equal(verifyBundleArtifact('results/real.bin', dir), sha(body));
     fs.symlinkSync(path.join(dir, 'results/real.bin'), path.join(dir, 'results/link.bin'));
     assert.throws(() => verifyBundleArtifact('results/link.bin', dir), /symlink/);
+  });
+});
+
+/* ------------------------------ collect() itself (self-review: it was untested) */
+
+describe('collect() derives asset ownership from the subject\u2019s own File rows', () => {
+  // Self-review blocker: the ownership fix lived entirely in collect(), which was
+  // unexported and unreachable from the suite. sinkFilter() tests passed a hand-written
+  // _dsarAssetIds, so the code that DERIVES it — the part the reviewer rejected twice —
+  // had no coverage and could be regressed to the exact behaviour they rejected.
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dsar-collect-'));
+
+  /** Minimal model doubles that record the filters collect() actually issues. */
+  function makeModels({ files = [], assets = [], seen = {} } = {}) {
+    const model = (name, rows) => ({
+      find: (filter) => {
+        (seen[name] ??= []).push(filter);
+        return { lean: async () => rows };
+      },
+      countDocuments: async (filter) => {
+        (seen[`${name}:count`] ??= []).push(filter);
+        return rows.length;
+      },
+    });
+    const models = { File: model('File', files), KnaufFileAsset: model('KnaufFileAsset', assets) };
+    for (const sink of MONGO_SINKS) {
+      models[sink.model] ??= model(sink.model, []);
+    }
+    return models;
+  }
+
+  const mongooseDouble = {
+    connection: {
+      db: {
+        collection: () => ({
+          find: () => ({ toArray: async () => [], sort: () => ({ toArray: async () => [] }) }),
+          countDocuments: async () => 0,
+        }),
+      },
+    },
+  };
+
+  async function run({ files = [], assets = [], subject = {} } = {}) {
+    const seen = {};
+    const out = prepareOutputDir(path.join(tmp(), 'b'));
+    const manifest = await collect({
+      models: makeModels({ files, assets, seen }),
+      mongoose: mongooseDouble,
+      subject: { _id: 'u1', email: 'a@b.c', ...subject },
+      tenantId: 't1',
+      out,
+      includeLogs: false,
+      log: () => {},
+    });
+    return { manifest, seen, out };
+  }
+
+  test('asset ids come from the subject\u2019s File rows, not from agent authorship', async () => {
+    const { seen, manifest } = await run({
+      files: [
+        { file_id: 'f1', knauf_asset_id: 'asset-1' },
+        { file_id: 'f2', knauf_asset_id: 'asset-2' },
+        { file_id: 'f3' }, // no physical asset
+      ],
+    });
+    assert.equal(manifest.sinks.ownedAssetIds, 2);
+    const assetFilter = seen.KnaufFileAsset.at(-1);
+    const byAsset = assetFilter.$or.find((c) => c.asset_id);
+    assert.deepEqual(byAsset.asset_id.$in, ['asset-1', 'asset-2']);
+  });
+
+  test('the asset query never selects an agent scope', async () => {
+    const { seen } = await run({ files: [{ file_id: 'f1', knauf_asset_id: 'a1' }] });
+    const json = JSON.stringify(seen.KnaufFileAsset.at(-1));
+    assert.ok(!json.includes('"agent"'), 'regression: agent-scope selection is back');
+  });
+
+  test('duplicate knauf_asset_id values are de-duplicated', async () => {
+    const { manifest } = await run({
+      files: [
+        { file_id: 'f1', knauf_asset_id: 'shared' },
+        { file_id: 'f2', knauf_asset_id: 'shared' },
+      ],
+    });
+    assert.equal(manifest.sinks.ownedAssetIds, 1);
+  });
+
+  test('a subject with no files produces a user-scope-only asset query', async () => {
+    const { seen, manifest } = await run({ files: [] });
+    assert.equal(manifest.sinks.ownedAssetIds, 0);
+    assert.equal(seen.KnaufFileAsset.at(-1).$or, undefined);
+    assert.equal(seen.KnaufFileAsset.at(-1).scope_type, 'user');
+  });
+
+  test('the File sink is read once and reused, not queried twice', async () => {
+    const { seen } = await run({ files: [{ file_id: 'f1' }] });
+    assert.equal(seen.File.length, 1, 'File must not be queried again inside the sink loop');
+  });
+
+  test('the avatar is enumerated even though it has no File row', async () => {
+    const { manifest, out } = await run({
+      subject: { avatar: 'https://blob/images/u1/avatar-123.png?sig=redacted' },
+    });
+    assert.equal(manifest.sinks.blob.avatars, 1);
+    const objects = JSON.parse(fs.readFileSync(path.join(out, 'blob-objects.json'), 'utf8'));
+    const avatar = objects.find((o) => o.source === 'users.avatar');
+    assert.ok(avatar, 'the avatar must appear in blob-objects.json');
+    assert.ok(!avatar.key.includes('sig='), 'the SAS signature must be stripped');
+  });
+
+  test('blob.objects counts every object the operator is told to pull', async () => {
+    const { manifest } = await run({
+      files: [{ file_id: 'f1', filepath: 'files/u1/a.pdf' }],
+      assets: [{ asset_id: 'a1', blob: { path: 'files/u1/b.pdf' } }],
+      subject: { avatar: 'https://blob/images/u1/avatar-1.png' },
+    });
+    // The derived blob expectation is measured against this, so it must include avatars.
+    assert.equal(manifest.sinks.blob.objects, 3);
+    assert.equal(manifest.sinks.blob.avatars, 1);
+  });
+
+  test('every external sink — Redis included — starts pending and blocks completeness', async () => {
+    const { manifest } = await run({});
+    assert.equal(manifest.completeness.ok, false);
+    for (const sink of EXTERNAL_SINKS) {
+      assert.equal(manifest.externalSinks[sink.key].status, 'pending', sink.key);
+    }
+    assert.ok(manifest.externalSinks.redis, 'Redis must be tracked');
+  });
+
+  test('the traversal helper never leaks into users.json', async () => {
+    const { out } = await run({ files: [{ file_id: 'f1', knauf_asset_id: 'a1' }] });
+    const user = JSON.parse(fs.readFileSync(path.join(out, 'users.json'), 'utf8'));
+    assert.equal(user._dsarAssetIds, undefined);
+    assert.equal(user._dsarAgentIds, undefined);
+  });
+
+  test('the email-keyed sink is filtered by the subject\u2019s normalised email', async () => {
+    const { seen } = await run({ subject: { email: '  Ali@Knauf.COM ' } });
+    assert.deepEqual(seen.MigrationAllowlist.at(-1), { emailNormalized: 'ali@knauf.com' });
+  });
+
+  test('a subject with no email cannot match every allowlist row', async () => {
+    const { seen } = await run({ subject: { email: undefined } });
+    assert.deepEqual(seen.MigrationAllowlist.at(-1), { emailNormalized: { $in: [] } });
+  });
+
+  test('Meilisearch indexable counts are recorded for the derived expectation', async () => {
+    const { manifest, seen } = await run({});
+    assert.equal(typeof manifest.sinks.MessageIndexable, 'number');
+    assert.equal(typeof manifest.sinks.ConversationIndexable, 'number');
+    const countFilter = seen['Message:count'].at(-1);
+    assert.ok(countFilter.$or, 'must use the mongoMeili visibility predicate');
+    assert.ok(countFilter.$or.some((c) => c.isTemporary === false));
   });
 });
 // End [knauf]
