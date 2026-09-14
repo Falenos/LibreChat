@@ -527,33 +527,51 @@ function buildResultsReadme() {
   return `# External sink results — REQUIRED before this bundle is releasable
 
 The collector cannot execute these sinks itself, so it records them as **pending** and
-refuses to report a complete bundle until each one has a verified result here.
+refuses to report a complete bundle until each has a VERIFIED result here.
 
 | Key | Sink | Drop the result at | Runbook |
 |---|---|---|---|
 ${rows}
 
-Each file is JSON:
+Each file is JSON and must name the artifact it produced:
 
 \`\`\`json
-{ "status": "complete", "collected": 1234, "expected": 1234, "checksum": "<sha256>" }
+{
+  "status": "complete",
+  "collected": 2500,
+  "artifact": "results/langfuse-traces.jsonl",
+  "checksum": "<sha256 of that file>"
+}
 \`\`\`
 
-- \`status: "complete"\` also requires \`collected === expected\`. If they differ the sink
-  is recorded as **failed** — a truncated extract is not a completed step.
-- \`status: "not-applicable"\` is allowed but **requires a \`note\`** stating why (e.g. the
-  log platform cannot query by \`userId\`). The note goes into the Art. 15 response as a
-  stated limitation.
-- Anything else — missing file, unreadable JSON, \`status: "failed"\` — keeps the bundle
-  incomplete.
+**Two independent checks run, and both must pass.**
 
-Then re-run:
+1. **The artifact is hashed.** \`artifact\` must be a real file inside this bundle (no
+   symlinks, no paths escaping it) and its sha256 must equal \`checksum\`. A number with
+   no file behind it is not evidence. Generate it with:
+   \`sha256sum results/<file>\`
+
+2. **The count is checked against OUR number, not yours.** For \`meilisearch\`, \`blob\` and
+   \`ragVectors\` the collector derives the expected total from phase one's own counts
+   (Mongo messages+convos, enumerated blob keys, emitted vector ids) and **ignores any
+   \`expected\` you supply** — \`collected\` must match what the collector computed.
+   \`langfuse\` and \`logPlatform\` are not derived from Mongo, so they have no such
+   expectation; they stay self-reported and the manifest records
+   \`expectationSource: "self-reported"\` so nobody mistakes it for a verified number.
+
+\`status: "not-applicable"\` is allowed but **requires a \`note\`** stating why (e.g. the
+log platform cannot query by \`userId\`). The note goes into the Art. 15 response as a
+stated limitation. Anything else — missing file, unreadable JSON, checksum mismatch,
+count mismatch — keeps the bundle incomplete.
+
+Then reconcile (no database needed):
 
 \`\`\`bash
-node knauf/scripts/dsar-collect.js --user <id> --out <this-dir> --finalize
+node knauf/scripts/dsar-collect.js --out <this-bundle-dir> --finalize
 \`\`\`
 
-Only that run can set \`manifest.completeness.ok = true\`.
+That is the only run that can set \`manifest.completeness.ok = true\`. It rewrites
+\`manifest.json\` atomically and touches nothing else.
 `;
 }
 
@@ -628,18 +646,47 @@ function initialExternalSinkState() {
 }
 
 /**
- * Ingest one external sink's machine-readable result and decide whether it counts as
- * executed AND reconciled. A result is only `complete` when it says so explicitly and
- * its own numbers agree — `collected === expected`. Anything else is `failed`, which
- * keeps `completeness.ok` false.
+ * Totals the collector derives ITSELF from phase one, per sink.
  *
- * Shape (written by the operator or the emitted scripts):
- *   { "status": "complete" | "not-applicable" | "failed",
- *     "collected": <n>, "expected": <n>, "checksum": "<sha256>", "note": "..." }
+ * PR #349 review (round 3): `collected` and `expected` both came out of the same
+ * operator-written JSON, so `1 === 1` proved only that someone typed two equal numbers.
+ * Where a sink is a DERIVED COPY of something already counted in Mongo, the expectation
+ * is ours to compute and the operator's number must match OURS:
+ *
+ *  - Meilisearch indexes `messages` + `convos`, so it mirrors those Mongo counts;
+ *  - Blob holds one object per file key phase one enumerated;
+ *  - the RAG inventory is exactly the physical vector ids phase one emitted.
+ *
+ * Langfuse and the log platform are NOT derived from Mongo — they have their own
+ * retention regimes, so no honest expectation can be computed for them. Those stay
+ * self-reported and the manifest SAYS SO (`expectationSource`), rather than implying a
+ * verification that did not happen. They must still ship a checksummed artifact, so the
+ * number is at least bound to a real file.
  */
-function reconcileExternalResult(sinkKey, raw) {
+function derivedExpectedTotals(manifest) {
+  const sinks = manifest?.sinks ?? {};
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const vectors = sinks.vectorStores ?? {};
+  return {
+    meilisearch: num(sinks.Message) + num(sinks.Conversation),
+    blob: num(sinks.blob?.objects),
+    ragVectors: num(vectors.pgvector) + num(vectors.azureAiSearch),
+  };
+}
+
+/**
+ * Decide whether one external sink counts as executed AND reconciled.
+ *
+ * A result must (a) name an artifact whose sha256 matches its declared checksum, and
+ * (b) report a `collected` total equal to the collector's own derived expectation where
+ * one exists. An operator-supplied `expected` is IGNORED whenever we can compute it.
+ */
+function reconcileExternalResult(sinkKey, raw, opts = {}) {
+  const { derivedExpected, verifyArtifact, bundleDir } = opts;
   const sink = EXTERNAL_SINKS.find((e) => e.key === sinkKey);
-  const base = { label: sink?.label ?? sinkKey, expects: sink?.resultFile };
+  const base = { label: sink?.label ?? sinkKey, expects: sink?.resultFile, runbook: sink?.runbook };
+  const hasDerived = Number.isFinite(derivedExpected);
+
   if (raw == null) {
     return { ...base, status: 'pending', reason: 'no result file found' };
   }
@@ -652,24 +699,85 @@ function reconcileExternalResult(sinkKey, raw) {
   if (raw.status !== 'complete') {
     return { ...base, status: 'failed', reason: raw.reason ?? `status=${raw.status ?? 'missing'}` };
   }
-  const collected = Number(raw.collected);
-  const expected = Number(raw.expected);
-  if (!Number.isFinite(collected) || !Number.isFinite(expected)) {
-    return { ...base, status: 'failed', reason: 'collected/expected must both be numbers' };
-  }
-  if (collected !== expected) {
+
+  // (a) the artifact must exist and hash to what the result claims.
+  if (!raw.artifact || !raw.checksum) {
     return {
       ...base,
       status: 'failed',
-      reason: `collected ${collected} but expected ${expected} — truncated`,
+      reason: 'complete requires `artifact` (path within the bundle) and `checksum` (sha256)',
     };
   }
-  return { ...base, status: 'complete', collected, expected, checksum: raw.checksum ?? null };
+  if (typeof verifyArtifact === 'function') {
+    let actual;
+    try {
+      actual = verifyArtifact(raw.artifact, bundleDir);
+    } catch (err) {
+      return { ...base, status: 'failed', reason: `artifact unreadable: ${err.message}` };
+    }
+    if (actual !== raw.checksum) {
+      return {
+        ...base,
+        status: 'failed',
+        reason: `checksum mismatch for ${raw.artifact}: declared ${raw.checksum}, actual ${actual}`,
+      };
+    }
+  }
+
+  // (b) the count must match OUR number wherever we have one.
+  const collected = Number(raw.collected);
+  if (!Number.isFinite(collected)) {
+    return { ...base, status: 'failed', reason: '`collected` must be a number' };
+  }
+  if (hasDerived) {
+    if (collected !== derivedExpected) {
+      return {
+        ...base,
+        status: 'failed',
+        reason:
+          `collected ${collected} but phase one derived ${derivedExpected} — ` +
+          'the extraction is short, or the bundle and the export disagree',
+      };
+    }
+    return {
+      ...base,
+      status: 'complete',
+      collected,
+      expected: derivedExpected,
+      expectationSource: 'derived-from-phase-one',
+      artifact: raw.artifact,
+      checksum: raw.checksum,
+    };
+  }
+
+  const selfExpected = Number(raw.expected);
+  if (!Number.isFinite(selfExpected) || collected !== selfExpected) {
+    return {
+      ...base,
+      status: 'failed',
+      reason: `self-reported collected ${raw.collected} vs expected ${raw.expected}`,
+    };
+  }
+  return {
+    ...base,
+    status: 'complete',
+    collected,
+    expected: selfExpected,
+    // Stated plainly: nothing here was cross-checked against a number we own.
+    expectationSource: 'self-reported (no Mongo-derived expectation exists for this sink)',
+    artifact: raw.artifact,
+    checksum: raw.checksum,
+  };
 }
 
-/** Read `<out>/results/*.json` and fold them into the manifest's external-sink state. */
-function finalizeManifest(manifest, out, readJson) {
+/**
+ * Fold external-sink results into an EXISTING phase-one manifest. Expectations come
+ * from that manifest's own counts, so finalization measures the export against what
+ * phase one actually found — not against a number living in the same file as the claim.
+ */
+function finalizeManifest(manifest, out, readJson, opts = {}) {
   const external = manifest.externalSinks ?? initialExternalSinkState();
+  const derived = derivedExpectedTotals(manifest);
   for (const sink of EXTERNAL_SINKS) {
     let raw = null;
     try {
@@ -678,14 +786,20 @@ function finalizeManifest(manifest, out, readJson) {
       external[sink.key] = {
         label: sink.label,
         expects: sink.resultFile,
+        runbook: sink.runbook,
         status: 'failed',
         reason: `unreadable result file: ${err.message}`,
       };
       continue;
     }
-    external[sink.key] = reconcileExternalResult(sink.key, raw);
+    external[sink.key] = reconcileExternalResult(sink.key, raw, {
+      derivedExpected: derived[sink.key],
+      verifyArtifact: opts.verifyArtifact,
+      bundleDir: out,
+    });
   }
   manifest.externalSinks = external;
+  manifest.derivedExpectations = derived;
 
   const unresolved = Object.entries(external).filter(
     ([, v]) => v.status !== 'complete' && v.status !== 'not-applicable',
@@ -700,6 +814,110 @@ function finalizeManifest(manifest, out, readJson) {
   }
   manifest.completeness.ok = manifest.completeness.warnings.length === 0;
   manifest.finalizedAt = new Date().toISOString();
+  return manifest;
+}
+
+/**
+ * Validate an EXISTING bundle directory before finalization reads or writes anything.
+ *
+ * PR #349 review (round 3): `--finalize` skipped `prepareOutputDir()` and applied only
+ * `path.resolve()`, so a symlinked bundle path was accepted — and no ANCESTOR was
+ * checked either, so a symlinked parent could redirect both the results read and the
+ * manifest written. Every component from the filesystem root down is lstat-ed.
+ */
+function assertSecureExistingDir(out) {
+  const resolved = path.resolve(out);
+  const { root } = path.parse(resolved);
+  const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  let cursor = root;
+  for (const part of parts) {
+    cursor = path.join(cursor, part);
+    let st;
+    try {
+      st = fs.lstatSync(cursor);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        throw new Error(`Bundle path does not exist: ${cursor}`);
+      }
+      throw err;
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `Refusing to finalize through a symlink: ${cursor}. A linked component can ` +
+          'redirect both the results we read and the manifest we write.',
+      );
+    }
+  }
+  if (!fs.statSync(resolved).isDirectory()) {
+    throw new Error(`--out is not a directory: ${resolved}`);
+  }
+  if (!fs.existsSync(path.join(resolved, 'manifest.json'))) {
+    throw new Error(
+      `No manifest.json in ${resolved}. --finalize reconciles an existing phase-one ` +
+        'bundle; run the collect phase first.',
+    );
+  }
+  fs.chmodSync(resolved, 0o700);
+  return resolved;
+}
+
+/**
+ * Hash an artifact that must live INSIDE the validated bundle. Rejects traversal and
+ * symlinks so a result file cannot point the checksum at something else on disk.
+ */
+function verifyBundleArtifact(artifact, bundleDir) {
+  const crypto = require('node:crypto');
+  const resolved = path.resolve(bundleDir, artifact);
+  if (resolved !== bundleDir && !resolved.startsWith(bundleDir + path.sep)) {
+    throw new Error(`artifact escapes the bundle: ${artifact}`);
+  }
+  if (fs.lstatSync(resolved).isSymbolicLink()) {
+    throw new Error(`artifact is a symlink: ${artifact}`);
+  }
+  return crypto.createHash('sha256').update(fs.readFileSync(resolved)).digest('hex');
+}
+
+/**
+ * Replace manifest.json atomically, in place, 0600 — temp file in the SAME validated
+ * directory then rename, so a crash mid-write can never leave a half-written manifest
+ * that still reads as authoritative.
+ */
+function replaceManifestAtomically(dir, manifest) {
+  const target = path.join(dir, 'manifest.json');
+  const tmp = path.join(dir, `.manifest.${process.pid}.tmp`);
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2), { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, target);
+  fs.chmodSync(target, 0o600);
+  return target;
+}
+
+/**
+ * The `--finalize` phase end to end. Deliberately takes NO database: it reconciles the
+ * immutable phase-one bundle against the external results and rewrites exactly one file.
+ *
+ * Round 2 re-ran `collect()` here, which hit EEXIST on the first exclusive write
+ * (`users.json`) before any result was read — the documented flow could not run at all,
+ * and helper-level tests never executed it. This path is now covered end to end.
+ */
+function runFinalize(out, log = console.log) {
+  const dir = assertSecureExistingDir(out);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  finalizeManifest(
+    manifest,
+    dir,
+    (f) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null),
+    { verifyArtifact: verifyBundleArtifact },
+  );
+  replaceManifestAtomically(dir, manifest);
+  log(
+    JSON.stringify(
+      { externalSinks: manifest.externalSinks, completeness: manifest.completeness },
+      null,
+      2,
+    ),
+  );
   return manifest;
 }
 
@@ -785,22 +1003,26 @@ function sinkFilter(sink, subject) {
     return { [sink.field]: { $in: groupMembershipKeys(subject) } };
   }
   if (sink.model === 'KnaufFileAsset') {
-    // The asset ledger is scoped by (scope_type, scope_id).
+    // The asset ledger is scoped by (scope_type, scope_id), but SCOPE IS THE WRONG
+    // OWNERSHIP TEST for a DSAR (PR #349 review, round 3).
     //
-    // PR #349 review (round 2): the previous filter pinned `scope_type: 'user'` and a
-    // comment claimed agent-scoped rows were "reached via the subject's Agent rows" —
-    // but nothing implemented that traversal, so every Agent Knowledge upload the
-    // subject made was silently missing. `fileSearchAssetLifecycle.js` writes
-    // `scope_type: 'agent'` with `scope_id: String(entityId ?? userId)`, i.e. the AGENT
-    // id. The caller resolves the subject's authored agent ids and passes them in; a
-    // resolution failure marks the sink incomplete rather than quietly under-reporting.
-    const scopeIds = [id, String(id), ...(subject._dsarAgentIds ?? [])];
-    return {
-      $or: [
-        { scope_type: 'user', scope_id: { $in: scopeIds } },
-        { scope_type: 'agent', scope_id: { $in: scopeIds } },
-      ],
-    };
+    // Round 2 selected every asset under an agent the subject authored. Wrong in both
+    // directions: an agent's scope holds uploads from every EDIT-authorized
+    // collaborator (disclosing their files to this subject), while the subject's own
+    // uploads to somebody else's agent fell outside it entirely.
+    //
+    // Ownership lives on the LOGICAL row. `process.js` writes
+    // `createFile({ user: req.user.id, knauf_asset_id })`, so the uploader owns the
+    // File row no matter who authored the agent. Resolving physical assets through the
+    // subject's own File rows' `knauf_asset_id` values is therefore exact both ways.
+    // The user-scope branch stays because a `scope_type: 'user'` asset carrying the
+    // subject's id is theirs by construction and can never be another person's.
+    const assetIds = subject._dsarAssetIds ?? [];
+    const branches = [{ scope_type: 'user', scope_id: { $in: [id, String(id)] } }];
+    if (assetIds.length) {
+      branches.push({ asset_id: { $in: assetIds } });
+    }
+    return branches.length === 1 ? branches[0] : { $or: branches };
   }
   const filter = { [sink.field]: { $in: [id, String(id)] } };
   if (sink.principalType) {
@@ -831,17 +1053,7 @@ function shapeRows(sink, rows, subject) {
   return rows;
 }
 
-async function collect({
-  models,
-  mongoose,
-  subject,
-  tenantId,
-  agentIdError,
-  out,
-  includeLogs,
-  logDir,
-  log,
-}) {
+async function collect({ models, mongoose, subject, tenantId, out, includeLogs, logDir, log }) {
   const id = subject._id;
   const manifest = {
     generatedAt: new Date().toISOString(),
@@ -880,18 +1092,30 @@ async function collect({
     writeBundleFile(out, name, JSON.stringify(data, null, 2));
   };
 
-  if (agentIdError) {
-    warn(
-      `KnaufFileAsset: could not resolve the subject's agent ids (${agentIdError}) — ` +
-        'agent-scope assets are NOT in this bundle. Re-run once the lookup works.',
-    );
-  }
-  manifest.sinks.agentScopeIds = (subject._dsarAgentIds ?? []).length;
-
-  // users — the subject document itself, minus the traversal helper we attached.
-  const { _dsarAgentIds: _agentIds, ...subjectDoc } = subject;
+  // users — the subject document itself, minus any traversal helper we attached.
+  const { _dsarAgentIds: _a, _dsarAssetIds: _b, ...subjectDoc } = subject;
   write('users.json', redactUserDocument(subjectDoc));
   manifest.sinks.users = 1;
+
+  // Physical assets resolve through the subject's OWN File rows, so the File sink must
+  // be read before the asset sink regardless of MONGO_SINKS ordering — relying on array
+  // position here would be a silent trap for the next editor.
+  const fileSink = MONGO_SINKS.find((k) => k.model === 'File');
+  const subjectFiles = models.File
+    ? await models.File.find(sinkFilter(fileSink, subject)).lean()
+    : [];
+  const subjectView = {
+    ...subject,
+    _dsarAssetIds: [
+      ...new Set(
+        subjectFiles
+          .map((f) => f.knauf_asset_id)
+          .filter(Boolean)
+          .map(String),
+      ),
+    ],
+  };
+  manifest.sinks.ownedAssetIds = subjectView._dsarAssetIds.length;
 
   // every subject-scoped Mongo store
   let files = [];
@@ -903,11 +1127,12 @@ async function collect({
       warn(`${sink.model}: model not registered — sink not collected`);
       continue;
     }
-    const rows = await Model.find(sinkFilter(sink, subject)).lean();
+    const rows =
+      sink.model === 'File' ? subjectFiles : await Model.find(sinkFilter(sink, subjectView)).lean();
     manifest.sinks[sink.model] = rows.length;
     if (sink.model === 'File') files = rows;
     if (sink.model === 'KnaufFileAsset') assets = rows;
-    write(`${sink.model}.json`, shapeRows(sink, rows, subject));
+    write(`${sink.model}.json`, shapeRows(sink, rows, subjectView));
   }
 
   // knauf scheduler collections (raw)
@@ -1050,13 +1275,41 @@ async function collect({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help || !args.user) {
+  if (args.help || (!args.user && !args.finalize)) {
     console.log(
       'usage: node knauf/scripts/dsar-collect.js --user <mongo-id|email> [--out DIR] [--tenant ID] [--include-logs] [--log-dir DIR]\n' +
-        '       ... --out DIR --finalize   # after running the external sinks, ingest results/ and verify totals',
+        '       node knauf/scripts/dsar-collect.js --out DIR --finalize   # reconcile an existing bundle; no database needed',
     );
     process.exit(args.help ? 0 : 1);
   }
+
+  // --- phase two ------------------------------------------------------------------
+  // Finalization reconciles the IMMUTABLE phase-one bundle. It opens no database and
+  // rewrites exactly one file, so it cannot re-collect, cannot collide with phase one's
+  // exclusive writes, and cannot drift from what was actually disclosed.
+  if (args.finalize) {
+    if (!args.out) {
+      console.error('--finalize needs --out <existing bundle dir>.');
+      process.exit(1);
+    }
+    let finalManifest;
+    try {
+      finalManifest = runFinalize(args.out, console.log);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(5);
+    }
+    if (!finalManifest.completeness.ok) {
+      console.error(
+        '\nIncomplete: external sinks are still unresolved (see manifest.externalSinks). ' +
+          'This bundle is NOT releasable.',
+      );
+      process.exit(4);
+    }
+    console.log('\nComplete: every external sink is reconciled. Bundle is releasable.');
+    return;
+  }
+
   // Same bootstrap as config/migrate-orphaned-agent-files.js.
   require('module-alias')({ base: path.resolve(__dirname, '..', '..', 'api') });
   const connect = require('../../config/connect');
@@ -1065,12 +1318,9 @@ async function main() {
   await connect();
   const models = require('~/db/models');
 
-  // `--finalize` re-reads an existing bundle; every other run demands a fresh,
-  // private directory it created itself.
-  if (args.out && !args.finalize) {
+  // The collect phase always demands a fresh, private directory it created itself.
+  if (args.out) {
     args.out = prepareOutputDir(args.out);
-  } else if (args.out) {
-    args.out = path.resolve(args.out);
   }
 
   // Resolution runs as system on purpose: the operator may not know the tenant yet,
@@ -1102,37 +1352,21 @@ async function main() {
     process.exit(3);
   }
 
-  // Agent Knowledge assets are stored under `scope_type: 'agent'` with the AGENT id as
-  // `scope_id`, so the subject's own uploads are unreachable without this traversal
-  // (PR #349 review round 2). A failure here marks the sink incomplete rather than
-  // silently under-reporting: an empty agent list and a broken lookup must not look alike.
-  const resolveAgentIds = async () => {
-    const rows = await models.Agent.find({ author: { $in: [subject._id, String(subject._id)] } })
-      .select('id')
-      .lean();
-    return rows.map((r) => r.id).filter(Boolean);
-  };
-
-  const run = async () => {
-    let agentIds = [];
-    let agentIdError = null;
-    try {
-      agentIds = await resolveAgentIds();
-    } catch (err) {
-      agentIdError = err.message;
-    }
-    return collect({
+  // Ownership of a physical asset is decided by the subject's own File rows
+  // (`knauf_asset_id`), resolved inside collect(). Agent authorship is deliberately NOT
+  // used: an agent's scope mixes every collaborator's uploads, and the subject's uploads
+  // to other people's agents live outside it (PR #349 review round 3).
+  const run = () =>
+    collect({
       models,
       mongoose,
-      subject: { ...subject, _dsarAgentIds: agentIds },
+      subject,
       tenantId: subjectTenant,
-      agentIdError,
       out: args.out,
       includeLogs: args.includeLogs,
       logDir: args.logDir,
       log: console.log,
     });
-  };
 
   // Pin every read to the subject's own tenant when they have one; only a genuinely
   // tenant-less (single-tenant) deployment falls back to system scope.
@@ -1144,16 +1378,12 @@ async function main() {
   await mongoose.disconnect();
 
   if (args.out) {
-    // Fold in whatever the external sinks have actually produced. Without this step
-    // every external sink stays pending and the bundle stays incomplete — which is
-    // the point: a fresh collect run can never be "complete" on its own.
-    finalizeManifest(manifest, args.out, (f) =>
-      fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null,
+    // Phase one NEVER finalizes. It cannot: no external sink has run yet, so any
+    // "complete" it produced would be a claim about work that had not happened.
+    console.log(
+      `\nPhase one complete. ${EXTERNAL_SINKS.length} external sinks are PENDING — see ` +
+        `${path.join(args.out, 'results', 'README.md')}, then re-run with --finalize.`,
     );
-    const manifestPath = path.join(args.out, 'manifest.json');
-    fs.rmSync(manifestPath, { force: true });
-    writeBundleFile(args.out, 'manifest.json', JSON.stringify(manifest, null, 2));
-    console.log(JSON.stringify(manifest.externalSinks, null, 2));
   }
 
   if (!manifest.completeness.ok) {
@@ -1188,7 +1418,12 @@ module.exports = {
   AUDIT_CONTEXT_REDACTED,
   initialExternalSinkState,
   reconcileExternalResult,
+  derivedExpectedTotals,
   finalizeManifest,
+  assertSecureExistingDir,
+  replaceManifestAtomically,
+  verifyBundleArtifact,
+  runFinalize,
   prepareOutputDir,
   writeBundleFile,
   buildResultsReadme,

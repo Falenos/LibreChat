@@ -66,7 +66,7 @@ check: erasure must never reach a store disclosure does not.
 | `aclentries` | `principalId` | What the subject has been granted access to | Yes |
 | `chatprojects` | `user` | KK20-248 project workspaces — **`instructions` is subject-authored free text** | Yes, in full |
 | `chatprojectsources` | `user` | Project source associations, ingest status and error text | Yes |
-| `knauf_file_assets` | `scope_type:'user'` + `scope_id` | **KK20-195 physical ledger** — authoritative for blob path, `vector_backend`, `active_generation`, `stale_generations`, indexing errors. See §1.3/1.4 | Yes |
+| `knauf_file_assets` | the subject's File rows' `knauf_asset_id`, plus `scope_type:'user'` | **KK20-195 physical ledger** — authoritative for blob path, `vector_backend`, `active_generation`, `stale_generations`, indexing errors. Resolved by **ownership**, not agent scope — see §1.3/1.4 | Yes |
 | `skillfiles` | `author` | Skill file content the subject authored | Yes |
 | `skillsyncstatuses` | `owner` | Skill sync state | Yes |
 | `configs` | `principalId` | Per-principal config overrides | Yes |
@@ -122,12 +122,17 @@ Both hold **embedded chunks of the subject's uploaded files**.
 - **`active_generation`** decides which vectors are live, and **`stale_generations`** is cleanup
   debt — generations whose RAG delete failed and which may still hold embeddings.
 
-**Agent Knowledge uploads are agent-scoped.** `fileSearchAssetLifecycle.js` writes them with
-`scope_type: 'agent'` and the **agent id** as `scope_id`, so a user-scope-only query misses
-every file the subject uploaded to their own agents. The collector resolves the subject's
-authored agent ids (`Agent.author`) and queries both scopes. If that lookup fails it raises a
-completeness warning rather than returning a short list — an empty agent list and a broken
-lookup must never look the same.
+**Ownership is decided by the File row, not by agent scope.** Agent Knowledge uploads are
+written with `scope_type: 'agent'` and the **agent id** as `scope_id`, so scope says *which
+agent* a file serves — never *whose* it is. Selecting a whole agent scope fails in both
+directions: it discloses uploads made by any other EDIT-authorized collaborator on the
+subject's agent, and it misses the subject's own uploads to agents somebody else authored.
+
+`process.js` writes `createFile({ user: req.user.id, knauf_asset_id })`, so the **uploader owns
+the logical File row** whoever authored the agent. The collector therefore resolves physical
+assets through the subject's own File rows' `knauf_asset_id` values — exact in both directions —
+plus any `scope_type: 'user'` asset carrying the subject's id, which is theirs by construction.
+`manifest.sinks.ownedAssetIds` records how many were resolved.
 
 So the collector **joins `files` to `knauf_file_assets`** and reports the asset's own state. A file
 with no asset row (pre-KK20-195 legacy) falls back to the old heuristic and is flagged
@@ -314,8 +319,9 @@ node knauf/scripts/dsar-collect.js --user <mongo-id-or-email>
 #    existing non-empty path or a symlink)
 node knauf/scripts/dsar-collect.js --user <mongo-id-or-email> --out ./dsar-<ticket>/ --include-logs
 
-# 3. Run the external sinks (see results/README.md in the bundle), then:
-node knauf/scripts/dsar-collect.js --user <mongo-id-or-email> --out ./dsar-<ticket>/ --finalize
+# 3. Run the external sinks (see results/README.md in the bundle), then reconcile.
+#    No --user, no database: it only reads the bundle and rewrites manifest.json.
+node knauf/scripts/dsar-collect.js --out ./dsar-<ticket>/ --finalize
 ```
 
 **Step 2 always exits 4.** That is by design. The collector can read Mongo itself, but
@@ -336,22 +342,50 @@ The bundle is one JSON file per sink plus:
 
 ### 2.1 Finalization — what clears a pending sink
 
-Each external sink writes one JSON file into `results/`:
+`--finalize` **opens no database**. It reconciles the immutable phase-one bundle against the
+external results and rewrites exactly one file (`manifest.json`, atomically, 0600). It cannot
+re-collect, so it can never drift from what was actually disclosed.
+
+Each external sink writes one JSON file into `results/`, **naming the artifact it produced**:
 
 ```json
-{ "status": "complete", "collected": 2500, "expected": 2500, "checksum": "<sha256>" }
+{
+  "status": "complete",
+  "collected": 2500,
+  "artifact": "results/langfuse-traces.jsonl",
+  "checksum": "<sha256 of that file>"
+}
 ```
 
-`--finalize` ingests them and applies these rules:
+**Two independent checks run, and both must pass.**
+
+1. **The artifact is hashed.** `artifact` must be a real file inside the bundle — no symlinks,
+   no paths escaping it — and its sha256 must equal `checksum`. A number with no file behind it
+   is not evidence of an extraction. Generate with `sha256sum results/<file>`.
+2. **The count is checked against *our* number, not the operator's.** Meilisearch, Blob and the
+   RAG inventory are **derived copies** of things phase one already counted, so the collector
+   computes the expectation itself and **ignores any `expected` in the result file**:
+
+| Sink | Expectation derived from |
+|---|---|
+| `meilisearch` | `sinks.Message` + `sinks.Conversation` — the replica must mirror Mongo |
+| `blob` | `sinks.blob.objects` — one object per enumerated file key |
+| `ragVectors` | `vectorStores.pgvector` + `.azureAiSearch` — the ids we emitted |
+
+`langfuse` and `logPlatform` are **not** derived from Mongo (they have their own retention), so
+no honest expectation can be computed. They stay self-reported, still require a checksummed
+artifact, and the manifest records `expectationSource: "self-reported"` so nobody reads them as
+verified. That distinction is written into every bundle rather than left to memory.
 
 | Result | Outcome |
 |---|---|
-| `status: "complete"` **and** `collected === expected` | **complete** |
-| `status: "complete"` but the totals differ | **failed** — a truncated extract is not a completed step |
-| `collected`/`expected` not numeric | **failed** |
-| `status: "not-applicable"` **with** a `note` | **not-applicable**, and the note goes into the Art. 15 response as a stated limitation |
-| `status: "not-applicable"` without a note | **failed** — "doesn't apply" is a claim that needs a reason |
-| missing file / unreadable JSON / anything else | **pending** or **failed** |
+| `complete`, artifact hashes, count matches the derived expectation | **complete** |
+| `complete` but the count differs from **our** number | **failed** — the extraction is short, or bundle and export disagree |
+| `complete` with no `artifact`/`checksum` | **failed** |
+| checksum mismatch, unreadable artifact, or a path escaping the bundle | **failed** |
+| `not-applicable` **with** a `note` | **not-applicable**, and the note goes into the response as a stated limitation |
+| `not-applicable` without a note | **failed** — "doesn't apply" is a claim that needs a reason |
+| missing file / unreadable JSON | **pending** |
 
 `manifest.completeness.ok` becomes `true` only when every sink is `complete` or
 `not-applicable` **and** no other warning is open.
@@ -360,10 +394,11 @@ Each external sink writes one JSON file into `results/`:
 
 | Code | Meaning |
 |---|---|
-| `0` | Complete. Only reachable via `--finalize` with every external sink resolved |
+| `0` | Complete. Only reachable from a `--finalize` run with every external sink resolved |
 | `2` | No user matches the reference |
 | `3` | **Ambiguous or contradicted subject** — the email matched in more than one tenant, or `--tenant` disagreed. Re-run with the right `--tenant`; do **not** guess |
-| `4` | Collected, with open completeness warnings. Read `manifest.completeness.warnings` |
+| `4` | Open completeness warnings. Read `manifest.completeness.warnings` |
+| `5` | **The bundle directory is unsafe or not a bundle** — a symlink (direct or any ancestor), not a directory, missing, or has no phase-one `manifest.json` |
 
 ### 2.3 The bundle is evidence — handle it as such
 
@@ -410,13 +445,17 @@ with `--finalize`.
       `logPlatform`), and each `not-applicable` carries a note that appears in the response.
 - [ ] **Audit context redacted** — target-only rows show no `context.ip`, `context.userAgent`,
       `context.sessionId` or `context.requestId`. Grep the bundle for the admin's IP.
-- [ ] **Agent knowledge included** — `manifest.sinks.agentScopeIds` matches the number of
-      agents the subject authored, and no warning about agent-id resolution is open.
+- [ ] **File ownership, not agent scope** — `manifest.sinks.ownedAssetIds` matches the number
+      of the subject's File rows carrying a `knauf_asset_id`. Spot-check that no asset in
+      `KnaufFileAsset.json` belongs to a file another user uploaded to a shared agent.
 - [ ] **Bundle permissions** — directory `0700`, every file `0600`, on encrypted storage.
 - [ ] **Tenant recorded** — `manifest.tenant.resolved` matches the tenant on the register row.
-- [ ] **External sinks proved complete** — `langfuse.sh` printed `OK:` for both resources, the
-      Meilisearch counts reconcile against `totalHits`, and the RAG service confirmed the vector
-      inventory. A step that was not run is not a step that found nothing.
+- [ ] **External sinks proved complete** — `manifest.externalSinks` shows `complete` or
+      `not-applicable` for all five, each `complete` naming a checksummed artifact. A step that
+      was not run is not a step that found nothing.
+- [ ] **Self-reported sinks flagged in the response** — any sink whose `expectationSource` says
+      `self-reported` (Langfuse, the log platform) was not cross-checked against a number we own;
+      do not describe it as verified.
 - [ ] **Translation jobs reviewed** — `knauf_translation_jobs.json` filenames and `report`
       belong to the subject; operational fields are redacted.
 - [ ] **Exclusions stated** — browser analytics (§1.9), with the reason, and **not** conflated with

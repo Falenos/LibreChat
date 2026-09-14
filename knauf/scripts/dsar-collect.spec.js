@@ -13,9 +13,15 @@ const {
   AUDIT_ACTOR_CONTEXT_FIELDS,
   initialExternalSinkState,
   reconcileExternalResult,
+  derivedExpectedTotals,
   finalizeManifest,
+  assertSecureExistingDir,
+  replaceManifestAtomically,
+  verifyBundleArtifact,
+  runFinalize,
   prepareOutputDir,
   writeBundleFile,
+  buildResultsReadme,
   RAW_COLLECTIONS,
   GROUP_SUBJECT_FIELDS,
   AmbiguousSubjectError,
@@ -394,19 +400,56 @@ describe('vector identity follows the FileAsset ledger (PR #349 review)', () => 
   });
 });
 
-describe('KnaufFileAsset is queried by its own scope shape', () => {
-  test('asset lookup uses scope_type/scope_id, never a plain user field', () => {
-    const sink = MONGO_SINKS.find((s) => s.model === 'KnaufFileAsset');
-    const filter = sinkFilter(sink, { _id: 'u1' });
-    assert.equal(filter.user, undefined);
-    assert.equal(filter.scope_id, undefined, 'scope is expressed per-branch under $or');
-    assert.ok(filter.$or.every((c) => c.scope_type && c.scope_id));
+describe('physical assets resolve by OWNERSHIP, not agent scope', () => {
+  // process.js writes createFile({ user: req.user.id, knauf_asset_id }), so the File
+  // row's owner is the uploader regardless of who authored the agent. Selecting a whole
+  // agent scope both over-discloses (a collaborator's uploads to the subject's agent)
+  // and under-collects (the subject's uploads to someone else's agent).
+  const sink = () => MONGO_SINKS.find((k) => k.model === 'KnaufFileAsset');
+
+  test('never selects an entire agent scope', () => {
+    const filter = sinkFilter(sink(), { _id: 'u1', _dsarAssetIds: ['asset-a'] });
+    const json = JSON.stringify(filter);
+    assert.ok(!json.includes("'agent'"), 'must not select by agent scope');
+    assert.ok(!json.includes('"agent"'), 'must not select by agent scope');
+  });
+
+  test('includes assets the subject uploaded to ANOTHER user\u2019s agent', () => {
+    // The subject's File row carries knauf_asset_id even though the agent is not theirs.
+    const filter = sinkFilter(sink(), { _id: 'u1', _dsarAssetIds: ['asset-on-foreign-agent'] });
+    const byAsset = filter.$or.find((c) => c.asset_id);
+    assert.ok(byAsset, 'must query by owned asset ids');
+    assert.ok(byAsset.asset_id.$in.includes('asset-on-foreign-agent'));
+  });
+
+  test('excludes a collaborator\u2019s uploads to an agent the subject authored', () => {
+    // Only ids drawn from the SUBJECT's File rows are queried; a collaborator's asset
+    // never enters the list, so authoring the agent does not disclose their upload.
+    const filter = sinkFilter(sink(), { _id: 'u1', _dsarAssetIds: ['mine-1'] });
+    const byAsset = filter.$or.find((c) => c.asset_id);
+    assert.deepEqual(byAsset.asset_id.$in, ['mine-1']);
+    assert.ok(!JSON.stringify(filter).includes('collaborator'));
+  });
+
+  test('user-scope assets are still included', () => {
+    const filter = sinkFilter(sink(), { _id: 'u1', _dsarAssetIds: ['a'] });
+    const byScope = filter.$or.find((c) => c.scope_type === 'user');
+    assert.ok(byScope.scope_id.$in.includes('u1'));
+  });
+
+  test('no owned assets collapses to the user-scope query alone', () => {
+    const filter = sinkFilter(sink(), { _id: 'u1' });
+    assert.equal(filter.$or, undefined);
+    assert.equal(filter.scope_type, 'user');
   });
 });
 
 describe('third-party field redaction', () => {
+  // Restored in round 3: this suite was lost while reworking the external-sink tests.
+  // It guards the round-1 finding that the manifest CLAIMED grantedBy was redacted
+  // while nothing redacted it.
   test('SystemGrant.grantedBy is replaced, not merely documented', () => {
-    const sink = MONGO_SINKS.find((s) => s.model === 'SystemGrant');
+    const sink = MONGO_SINKS.find((k) => k.model === 'SystemGrant');
     assert.deepEqual(sink.redactFields, ['grantedBy']);
     const [row] = shapeRows(
       sink,
@@ -423,28 +466,66 @@ describe('third-party field redaction', () => {
     assert.equal('grantedBy' in out, false);
     assert.equal(out.a, 1);
   });
+
+  test('translation-job operational fields are redacted, subject content is not', () => {
+    const raw = RAW_COLLECTIONS.find((r) => r.collection === 'knauf_translation_jobs');
+    const out = redactFields(
+      {
+        user: 'u1',
+        input_files: [{ filename: 'contract.docx' }],
+        preserve_terms: ['Knauf'],
+        lease_owner: 'worker-3',
+        execution_token: 'tok-secret',
+      },
+      raw.redactFields,
+    );
+    assert.match(out.lease_owner, /redacted/);
+    assert.match(out.execution_token, /redacted/);
+    assert.ok(!JSON.stringify(out).includes('tok-secret'));
+    assert.equal(out.input_files[0].filename, 'contract.docx', 'the subject keeps their filenames');
+    assert.deepEqual(out.preserve_terms, ['Knauf']);
+  });
 });
 
-describe('principal-scoped sinks pin the principal type', () => {
-  // principalId is Mixed and shared by user/group/role principals; without the
-  // type pin a group's id could resolve as the subject's.
-  test('Config and SystemGrant filter on principalType user', () => {
-    for (const model of ['Config', 'SystemGrant']) {
-      const filter = sinkFilter(
-        MONGO_SINKS.find((s) => s.model === model),
-        { _id: 'u1' },
-      );
-      assert.equal(filter.principalType, 'user', model);
-      assert.deepEqual(filter.principalId, { $in: ['u1', 'u1'] }, model);
-    }
+describe('manifest replacement is crash-safe', () => {
+  const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dsar-mf-'));
+
+  test('replaceManifestAtomically leaves 0600 and no temp file behind', () => {
+    const dir = prepareOutputDir(path.join(tmpdir(), 'b'));
+    writeBundleFile(dir, 'manifest.json', '{"v":1}');
+    replaceManifestAtomically(dir, { v: 2 });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).v, 2);
+    assert.equal(fs.statSync(path.join(dir, 'manifest.json')).mode & 0o777, 0o600);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((f) => f.startsWith('.manifest')),
+      [],
+    );
   });
 
-  test('sinks without a principalType are left unconstrained', () => {
-    const filter = sinkFilter(
-      MONGO_SINKS.find((s) => s.model === 'Message'),
-      { _id: 'u1' },
+  test('a stale temp file from a crashed run does not block the next one', () => {
+    const dir = prepareOutputDir(path.join(tmpdir(), 'b'));
+    writeBundleFile(dir, 'manifest.json', '{"v":1}');
+    fs.writeFileSync(path.join(dir, `.manifest.${process.pid}.tmp`), 'garbage', { mode: 0o600 });
+    replaceManifestAtomically(dir, { v: 3 });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).v, 3);
+  });
+
+  test('finalizeManifest clears stale externalSinks warnings instead of duplicating them', () => {
+    const manifest = {
+      sinks: {},
+      externalSinks: initialExternalSinkState(),
+      completeness: {
+        ok: false,
+        warnings: ['externalSinks: langfuse is pending — x', 'other: keep me'],
+      },
+    };
+    finalizeManifest(manifest, '/tmp/nowhere', () => null);
+    const langfuseWarnings = manifest.completeness.warnings.filter((w) => w.includes('langfuse'));
+    assert.equal(langfuseWarnings.length, 1, 'must not accumulate duplicates across runs');
+    assert.ok(
+      manifest.completeness.warnings.includes('other: keep me'),
+      'unrelated warnings survive',
     );
-    assert.equal(filter.principalType, undefined);
   });
 });
 
@@ -506,29 +587,6 @@ describe('dynamically registered raw collections are inventoried', () => {
   });
 });
 
-describe('agent-scope FileAsset rows are reachable', () => {
-  // Agent Knowledge uploads are written with scope_type 'agent' and the AGENT id as
-  // scope_id (fileSearchAssetLifecycle.js), so a user-scope-only filter misses them.
-  test('the filter covers user scope AND the subject’s authored agent ids', () => {
-    const sink = MONGO_SINKS.find((s) => s.model === 'KnaufFileAsset');
-    const filter = sinkFilter(sink, { _id: 'u1', _dsarAgentIds: ['agent-a', 'agent-b'] });
-    assert.ok(Array.isArray(filter.$or), 'must query both scopes');
-    const agentClause = filter.$or.find((c) => c.scope_type === 'agent');
-    const userClause = filter.$or.find((c) => c.scope_type === 'user');
-    assert.ok(agentClause, 'agent scope must be queried');
-    assert.ok(agentClause.scope_id.$in.includes('agent-a'));
-    assert.ok(agentClause.scope_id.$in.includes('agent-b'));
-    assert.ok(userClause.scope_id.$in.includes('u1'));
-  });
-
-  test('no agents resolves to a user-only query, not a broken one', () => {
-    const sink = MONGO_SINKS.find((s) => s.model === 'KnaufFileAsset');
-    const filter = sinkFilter(sink, { _id: 'u1' });
-    assert.ok(filter.$or.every((c) => Array.isArray(c.scope_id.$in)));
-    assert.deepEqual(filter.$or.find((c) => c.scope_type === 'agent').scope_id.$in, ['u1', 'u1']);
-  });
-});
-
 describe('audit rows leak no third-party request context', () => {
   // `buildAuditContext(req)` records the ACTING ADMIN's ip/userAgent/requestId, so
   // blanking actor.name while shipping context.ip still identifies them.
@@ -581,12 +639,21 @@ describe('audit rows leak no third-party request context', () => {
 });
 
 describe('external sinks are pending until verified', () => {
+  const ok = {
+    status: 'complete',
+    collected: 5,
+    expected: 5,
+    artifact: 'results/a.jsonl',
+    checksum: 'abc',
+  };
+  const pass = () => 'abc';
+
   test('every external sink starts pending', () => {
     const state = initialExternalSinkState();
     assert.equal(Object.keys(state).length, EXTERNAL_SINKS.length);
     for (const [, v] of Object.entries(state)) assert.equal(v.status, 'pending');
     for (const k of ['langfuse', 'meilisearch', 'blob', 'ragVectors', 'logPlatform']) {
-      assert.ok(state[k], `${k} must be a tracked external sink`);
+      assert.ok(state[k], `${k} must be tracked`);
     }
   });
 
@@ -594,23 +661,64 @@ describe('external sinks are pending until verified', () => {
     assert.equal(reconcileExternalResult('langfuse', null).status, 'pending');
   });
 
-  test('complete requires collected === expected', () => {
-    assert.equal(
-      reconcileExternalResult('langfuse', { status: 'complete', collected: 10, expected: 10 })
-        .status,
-      'complete',
-    );
-    const short = reconcileExternalResult('langfuse', {
+  test('complete REQUIRES an artifact and a checksum', () => {
+    const r = reconcileExternalResult('langfuse', {
       status: 'complete',
-      collected: 9,
-      expected: 10,
+      collected: 5,
+      expected: 5,
     });
-    assert.equal(short.status, 'failed');
-    assert.match(short.reason, /truncated/);
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /artifact.*checksum/);
   });
 
-  test('non-numeric totals are a failure, not a pass', () => {
-    const r = reconcileExternalResult('blob', { status: 'complete', collected: 'all' });
+  test('a checksum that does not match the artifact fails', () => {
+    const r = reconcileExternalResult('langfuse', ok, { verifyArtifact: () => 'DIFFERENT' });
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /checksum mismatch/);
+  });
+
+  test('an unreadable artifact fails rather than being skipped', () => {
+    const r = reconcileExternalResult('langfuse', ok, {
+      verifyArtifact: () => {
+        throw new Error('ENOENT');
+      },
+    });
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /artifact unreadable/);
+  });
+
+  test('a DERIVED sink is measured against our number, and ignores the operator\u2019s', () => {
+    // expected: 999 is a lie; the collector derived 5 from phase one.
+    const good = reconcileExternalResult(
+      'meilisearch',
+      { ...ok, collected: 5, expected: 999 },
+      { derivedExpected: 5, verifyArtifact: pass },
+    );
+    assert.equal(good.status, 'complete');
+    assert.equal(good.expected, 5);
+    assert.equal(good.expectationSource, 'derived-from-phase-one');
+
+    const short = reconcileExternalResult(
+      'meilisearch',
+      { ...ok, collected: 5, expected: 5 },
+      { derivedExpected: 2500, verifyArtifact: pass },
+    );
+    assert.equal(short.status, 'failed', 'self-consistent numbers must not pass a derived sink');
+    assert.match(short.reason, /phase one derived 2500/);
+  });
+
+  test('a sink with no derivable expectation is marked self-reported, not verified', () => {
+    const r = reconcileExternalResult('langfuse', ok, { verifyArtifact: pass });
+    assert.equal(r.status, 'complete');
+    assert.match(r.expectationSource, /self-reported/);
+  });
+
+  test('non-numeric collected is a failure', () => {
+    const r = reconcileExternalResult(
+      'blob',
+      { ...ok, collected: 'all' },
+      { verifyArtifact: pass },
+    );
     assert.equal(r.status, 'failed');
   });
 
@@ -620,53 +728,26 @@ describe('external sinks are pending until verified', () => {
       'failed',
     );
     assert.equal(
-      reconcileExternalResult('logPlatform', {
-        status: 'not-applicable',
-        note: 'platform cannot query by userId',
-      }).status,
+      reconcileExternalResult('logPlatform', { status: 'not-applicable', note: 'no userId' })
+        .status,
       'not-applicable',
     );
   });
 
-  test('finalize only sets ok when every sink resolves, and reports which did not', () => {
-    const manifest = {
-      externalSinks: initialExternalSinkState(),
-      completeness: { ok: true, warnings: [] },
-    };
-    const results = {
-      'results/langfuse.json': { status: 'complete', collected: 5, expected: 5 },
-      'results/meilisearch.json': { status: 'complete', collected: 2, expected: 2 },
-      'results/blob.json': { status: 'complete', collected: 1, expected: 1 },
-      'results/rag-vectors.json': { status: 'complete', collected: 3, expected: 3 },
-    };
-    const read = (f) => results[f.split(/[\\/]/).slice(-2).join('/')] ?? null;
-
-    finalizeManifest(manifest, '/tmp/bundle', read);
-    assert.equal(manifest.completeness.ok, false, 'logPlatform is still pending');
-    assert.ok(manifest.completeness.warnings.some((w) => w.includes('logPlatform')));
-
-    results['results/log-platform.json'] = {
-      status: 'not-applicable',
-      note: 'cannot query by userId',
-    };
-    finalizeManifest(manifest, '/tmp/bundle', read);
-    assert.equal(manifest.completeness.ok, true);
-    assert.deepEqual(manifest.completeness.warnings, []);
-    assert.ok(manifest.finalizedAt);
-  });
-
-  test('a truncated external result keeps the bundle incomplete', () => {
-    const manifest = {
-      externalSinks: initialExternalSinkState(),
-      completeness: { ok: true, warnings: [] },
-    };
-    const read = (f) =>
-      f.includes('langfuse')
-        ? { status: 'complete', collected: 1000, expected: 2500 }
-        : { status: 'complete', collected: 1, expected: 1 };
-    finalizeManifest(manifest, '/tmp/bundle', read);
-    assert.equal(manifest.completeness.ok, false);
-    assert.ok(manifest.completeness.warnings.some((w) => /langfuse.*truncated|langfuse/.test(w)));
+  test('derived expectations come from phase one\u2019s own counts', () => {
+    const d = derivedExpectedTotals({
+      sinks: {
+        Message: 1200,
+        Conversation: 40,
+        blob: { objects: 7 },
+        vectorStores: { pgvector: 3, azureAiSearch: 2 },
+      },
+    });
+    assert.equal(d.meilisearch, 1240);
+    assert.equal(d.blob, 7);
+    assert.equal(d.ragVectors, 5);
+    assert.equal(d.langfuse, undefined, 'Langfuse is not derived from Mongo');
+    assert.equal(d.logPlatform, undefined, 'the log platform is not derived from Mongo');
   });
 });
 
@@ -732,6 +813,216 @@ describe('the bundle directory refuses unsafe destinations', () => {
     const mode = fs.statSync(f).mode & 0o777;
     assert.equal(mode, 0o600);
     assert.equal(mode & 0o111, 0, 'must not be executable — run it with `bash langfuse.sh`');
+  });
+});
+
+/* ------------------------------------------- two-phase CLI integration (round 3) */
+
+describe('collect -> results -> finalize round-trip', () => {
+  // The round-2 helper tests passed while the DOCUMENTED flow was broken: --finalize
+  // re-ran collect(), which threw EEXIST on users.json before reading any result. These
+  // exercise the real artifacts on a real filesystem, which is what catches that class.
+  const crypto = require('node:crypto');
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dsar-e2e-'));
+  const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+  /** Build a phase-one-shaped bundle without a database. */
+  function seedBundle(overrides = {}) {
+    const dir = prepareOutputDir(path.join(tmp(), 'bundle'));
+    const manifest = {
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      subject: { _id: 'u1' },
+      tenant: { resolved: 't1' },
+      sinks: {
+        Message: 10,
+        Conversation: 2,
+        blob: { objects: 3 },
+        vectorStores: { pgvector: 1, azureAiSearch: 1 },
+        ...(overrides.sinks ?? {}),
+      },
+      externalSinks: initialExternalSinkState(),
+      completeness: {
+        ok: false,
+        warnings: EXTERNAL_SINKS.map((e) => `externalSinks: ${e.key} is pending — ${e.runbook}`),
+      },
+    };
+    writeBundleFile(dir, 'manifest.json', JSON.stringify(manifest, null, 2));
+    writeBundleFile(dir, 'users.json', JSON.stringify({ _id: 'u1' }));
+    writeBundleFile(dir, 'results/README.md', buildResultsReadme());
+    return dir;
+  }
+
+  /** Drop a verified result, hashing a real artifact on disk. */
+  function putResult(dir, file, artifactName, collected, extra = {}) {
+    const body = Buffer.from(`artifact for ${artifactName}\n`);
+    writeBundleFile(dir, `results/${artifactName}`, body);
+    writeBundleFile(
+      dir,
+      `results/${file}`,
+      JSON.stringify({
+        status: 'complete',
+        collected,
+        expected: collected,
+        artifact: `results/${artifactName}`,
+        checksum: sha(body),
+        ...extra,
+      }),
+    );
+  }
+
+  function seedAllResults(dir) {
+    putResult(dir, 'langfuse.json', 'langfuse.jsonl', 42);
+    putResult(dir, 'meilisearch.json', 'meili.jsonl', 12); // derived: 10 + 2
+    putResult(dir, 'blob.json', 'blob.jsonl', 3);
+    putResult(dir, 'rag-vectors.json', 'rag.jsonl', 2);
+    writeBundleFile(
+      dir,
+      'results/log-platform.json',
+      JSON.stringify({ status: 'not-applicable', note: 'platform cannot query by userId' }),
+    );
+  }
+
+  test('finalize does NOT collide with the phase-one bundle (the round-2 bug)', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    // The whole point: this must not throw EEXIST on users.json.
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.completeness.ok, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'))._id, 'u1');
+  });
+
+  test('a pending sink keeps the bundle incomplete and names what is missing', () => {
+    const dir = seedBundle();
+    putResult(dir, 'langfuse.json', 'langfuse.jsonl', 42);
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.completeness.ok, false);
+    assert.ok(m.completeness.warnings.some((w) => w.includes('meilisearch')));
+    assert.ok(m.completeness.warnings.some((w) => w.includes('logPlatform')));
+  });
+
+  test('a DERIVED sink whose count disagrees with phase one fails', () => {
+    const dir = seedBundle();
+    putResult(dir, 'langfuse.json', 'langfuse.jsonl', 42);
+    putResult(dir, 'blob.json', 'blob.jsonl', 3);
+    putResult(dir, 'rag-vectors.json', 'rag.jsonl', 2);
+    writeBundleFile(
+      dir,
+      'results/log-platform.json',
+      JSON.stringify({ status: 'not-applicable', note: 'platform cannot query by userId' }),
+    );
+    // Meilisearch self-reports a consistent 11/11, but phase one counted
+    // 10 messages + 2 convos = 12. Our number wins.
+    putResult(dir, 'meilisearch.json', 'meili.jsonl', 11);
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.completeness.ok, false);
+    assert.equal(m.externalSinks.meilisearch.status, 'failed');
+    assert.match(m.externalSinks.meilisearch.reason, /phase one derived 12/);
+  });
+
+  test('a tampered artifact fails the checksum', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    fs.writeFileSync(path.join(dir, 'results/blob.jsonl'), 'TAMPERED', { mode: 0o600 });
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.externalSinks.blob.status, 'failed');
+    assert.match(m.externalSinks.blob.reason, /checksum mismatch/);
+    assert.equal(m.completeness.ok, false);
+  });
+
+  test('a partial artifact (truncated export) fails', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const f = path.join(dir, 'results/rag.jsonl');
+    fs.writeFileSync(f, fs.readFileSync(f).subarray(0, 4), { mode: 0o600 });
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.externalSinks.ragVectors.status, 'failed');
+  });
+
+  test('an artifact pointing outside the bundle is refused', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    fs.rmSync(path.join(dir, 'results/blob.json'));
+    writeBundleFile(
+      dir,
+      'results/blob.json',
+      JSON.stringify({
+        status: 'complete',
+        collected: 3,
+        artifact: '../../../etc/hostname',
+        checksum: 'whatever',
+      }),
+    );
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.externalSinks.blob.status, 'failed');
+    assert.match(m.externalSinks.blob.reason, /escapes the bundle/);
+  });
+
+  test('the manifest is replaced atomically, stays 0600, and leaves no temp file', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    runFinalize(dir, () => {});
+    const mp = path.join(dir, 'manifest.json');
+    assert.equal(fs.statSync(mp).mode & 0o777, 0o600);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((f) => f.startsWith('.manifest')),
+      [],
+      'no temp file may survive',
+    );
+    assert.ok(JSON.parse(fs.readFileSync(mp, 'utf8')).finalizedAt);
+  });
+
+  test('finalize is idempotent — running twice does not corrupt the manifest', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const first = runFinalize(dir, () => {});
+    const second = runFinalize(dir, () => {});
+    assert.equal(second.completeness.ok, true);
+    assert.deepEqual(second.completeness.warnings, []);
+    assert.equal(second.subject._id, first.subject._id);
+  });
+
+  test('finalize refuses a symlinked bundle directory', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const link = path.join(path.dirname(dir), 'linked');
+    fs.symlinkSync(dir, link);
+    assert.throws(() => runFinalize(link, () => {}), /symlink/i);
+  });
+
+  test('finalize refuses a bundle reached through a symlinked ANCESTOR', () => {
+    const base = tmp();
+    const real = path.join(base, 'real');
+    fs.mkdirSync(real);
+    const dir = seedBundle();
+    fs.cpSync(dir, path.join(real, 'bundle'), { recursive: true });
+    const linkedParent = path.join(base, 'parent-link');
+    fs.symlinkSync(real, linkedParent);
+    assert.throws(() => runFinalize(path.join(linkedParent, 'bundle'), () => {}), /symlink/i);
+  });
+
+  test('finalize refuses a directory with no phase-one manifest', () => {
+    const dir = prepareOutputDir(path.join(tmp(), 'empty-bundle'));
+    assert.throws(() => runFinalize(dir, () => {}), /No manifest\.json/);
+  });
+
+  test('finalize refuses a path that does not exist', () => {
+    assert.throws(() => runFinalize(path.join(tmp(), 'nope'), () => {}), /does not exist/);
+  });
+
+  test('assertSecureExistingDir tightens the bundle to 0700', () => {
+    const dir = seedBundle();
+    fs.chmodSync(dir, 0o755);
+    assertSecureExistingDir(dir);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  });
+
+  test('verifyBundleArtifact hashes the real file and rejects symlinked artifacts', () => {
+    const dir = seedBundle();
+    const body = Buffer.from('hello\n');
+    writeBundleFile(dir, 'results/real.bin', body);
+    assert.equal(verifyBundleArtifact('results/real.bin', dir), sha(body));
+    fs.symlinkSync(path.join(dir, 'results/real.bin'), path.join(dir, 'results/link.bin'));
+    assert.throws(() => verifyBundleArtifact('results/link.bin', dir), /symlink/);
   });
 });
 // End [knauf]
