@@ -1,7 +1,7 @@
 // [knauf] NO-TICKET — runtime edit_artifact availability for default chats and
 // Agent Builder agents; the internal tool is never persisted in builder config.
 import type { Agent } from 'librechat-data-provider';
-import { loadAgent, loadEphemeralAgent } from './load';
+import { loadAgent, loadEphemeralAgent, filterSkillPrimedRequestScopedTools } from './load';
 import type { LoadAgentDeps } from './load';
 
 const deps = (agent: Partial<Agent> | null): LoadAgentDeps => ({
@@ -254,6 +254,38 @@ describe('[knauf] artifact edit tool availability', () => {
     expect(result?.tools).not.toEqual(
       expect.arrayContaining(['translate_file', 'translation_status', 'edit_idml']),
     );
+  });
+});
+// End [knauf]
+
+// [knauf] KK20-297 — a skill's `allowed-tools` frontmatter (e.g.
+// `karl-file-translation/SKILL.md` declaring `translate_file`) must not bypass
+// the per-request grant computed by `getRequestScopedFileTools`.
+describe('[knauf] filterSkillPrimedRequestScopedTools', () => {
+  it('drops a skill-primed request-scoped tool that was not granted for this request', () => {
+    const result = filterSkillPrimedRequestScopedTools(['translate_file'], []);
+    expect(result).toEqual([]);
+  });
+
+  it('keeps a skill-primed request-scoped tool that was granted for this request', () => {
+    const result = filterSkillPrimedRequestScopedTools(
+      ['translate_file'],
+      ['translate_file', 'translation_status'],
+    );
+    expect(result).toEqual(['translate_file']);
+  });
+
+  it('leaves non-request-scoped tools untouched regardless of grants', () => {
+    const result = filterSkillPrimedRequestScopedTools(['execute_code', 'read_file'], []);
+    expect(result).toEqual(['execute_code', 'read_file']);
+  });
+
+  it('filters a mixed list, keeping ordinary tools and only granted request-scoped tools', () => {
+    const result = filterSkillPrimedRequestScopedTools(
+      ['execute_code', 'translate_file', 'edit_idml', 'read_file'],
+      ['edit_idml'],
+    );
+    expect(result).toEqual(['execute_code', 'edit_idml', 'read_file']);
   });
 });
 // End [knauf]

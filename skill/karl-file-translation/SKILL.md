@@ -3,6 +3,8 @@ name: karl-file-translation
 description: >-
   Translate attached IDML, document, structured-text, or image files with
   KARL's deterministic Azure Translator workflow and return downloadable files.
+allowed-tools:
+  - translate_file
 ---
 
 # File translation

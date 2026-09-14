@@ -33,6 +33,8 @@ describe('knauf costs', () => {
     ['gpt-54', 'gpt-5.4'],
     ['gpt-55-2026-04-24', 'gpt-5.5'],
     ['azure/gpt-5.6-sol-2026-07-09', 'gpt-5.6-sol'],
+    ['model-routergpt-5.6-terra-2026-07-09', 'gpt-5.6-terra'],
+    ['azure/gpt-56-luna-2026-07-09', 'gpt-5.6-luna'],
     ['model-router-chat', 'model-router'],
     ['gpt-image-2-2026-04-21', 'gpt-image-2'],
   ])('normalizes %s to %s', (input, expected) => {
@@ -48,12 +50,24 @@ describe('knauf costs', () => {
     expect(resolveModelPricing(model)).toMatchObject({ pricingMatch, isEstimated });
   });
 
+  it('uses the conservative router rate for a routed model whose price is not registered yet', () => {
+    expect(resolveModelPricing('future-router-model', 'model-router-chat')).toMatchObject({
+      normalizedModel: 'future-router-model',
+      rate: EUR_RATES['model-router'],
+      pricingMatch: 'router-fallback',
+      isEstimated: true,
+      estimateReason: 'router-model-rate-pending',
+    });
+  });
+
   it.each([
     ['gpt-5.4-nano', 0.1755, 1.097],
     ['gpt-5.4-mini', 0.6582, 3.9491],
     ['gpt-5.4', 2.1939, 13.1637],
     ['gpt-5.5', 4.3879, 26.3273],
     ['gpt-5.6-sol', 4.3879, 26.3273],
+    ['gpt-5.6-terra', 1.7173, 10.304],
+    ['gpt-5.6-luna', 0.1717, 1.0304],
   ])('calculates %s input and output prices', (model, inputPrice, outputPrice) => {
     const input = calculateTransactionCost({
       model,
@@ -71,7 +85,7 @@ describe('knauf costs', () => {
   });
 
   it('stores effective model versions with the static retail rates', () => {
-    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-2026-07-21');
+    expect(RATE_SOURCE).toBe('azure-retail-eur-swedencentral-global-2026-09-11');
     expect(EUR_RATES['gpt-5.5']).toMatchObject({
       modelVersion: '2026-04-24',
       effectiveFrom: '2026-05-01',
@@ -79,9 +93,21 @@ describe('knauf costs', () => {
     expect(EUR_RATES['gpt-5.6-sol']).toMatchObject({
       modelVersion: '2026-07-09',
       effectiveFrom: '2026-07-01',
-      pricingBasis: 'Azure Retail Prices API, Global Standard',
+      pricingBasis: 'Conservative retained rate above the current Azure Global Standard meter',
       inputPerMillion: 4.3879,
       outputPerMillion: 26.3273,
+    });
+    expect(EUR_RATES['gpt-5.6-terra']).toMatchObject({
+      modelVersion: '2026-07-09',
+      effectiveFrom: '2026-08-01',
+      inputPerMillion: 1.7173,
+      outputPerMillion: 10.304,
+    });
+    expect(EUR_RATES['gpt-5.6-luna']).toMatchObject({
+      modelVersion: '2026-07-09',
+      effectiveFrom: '2026-08-01',
+      inputPerMillion: 0.1717,
+      outputPerMillion: 1.0304,
     });
   });
 
@@ -117,6 +143,16 @@ describe('knauf costs', () => {
     expect(input.isEstimated).toBe(false);
   });
 
+  it('retains the Model Router input fee when only the returned-model prefix records routing', () => {
+    const transaction = {
+      model: 'model-routergpt-5.6-luna-2026-07-09',
+      tokenType: 'prompt',
+      rawAmount: -100_000,
+    };
+
+    expect(calculateTransactionCost(transaction).cost).toBeCloseTo(0.01717 + 0.01229);
+  });
+
   it('does not add the Model Router fee to a direct model call', () => {
     const input = calculateTransactionCost({
       model: 'gpt-5.4-mini-2026-03-17',
@@ -132,6 +168,8 @@ describe('knauf costs', () => {
     ['gpt-5.4', 4.3879, 19.7455],
     ['gpt-5.5', 8.7758, 39.491],
     ['gpt-5.6-sol', 8.7758, 39.491],
+    ['gpt-5.6-terra', 3.4347, 15.456],
+    ['gpt-5.6-luna', 0.3435, 1.5456],
   ])('uses %s long-context rates above 272k input tokens', (model, inputPrice, outputPrice) => {
     const input = calculateTransactionCost({
       model,
@@ -179,12 +217,72 @@ describe('knauf costs', () => {
       rawAmount: -1_000_000,
     });
 
-    expect(input.cost).toBeCloseTo(8.7758 + 0.1229);
-    expect(output.cost).toBeCloseTo(EUR_RATES['gpt-5.5'].outputPerMillion);
+    expect(input.cost).toBeCloseTo(EUR_RATES['model-router'].longContext.inputPerMillion + 0.1229);
+    expect(output.cost).toBeCloseTo(EUR_RATES['model-router'].outputPerMillion);
     expect(input).toMatchObject({
       isEstimated: true,
       estimateReason: 'router-model-not-reported',
     });
+  });
+
+  it('uses the conservative fallback for a future routed model but not a direct unknown model', () => {
+    const routed = calculateTransactionCost({
+      model: 'future-router-model',
+      knauf_requestedModel: 'model-router-chat',
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+    });
+    const direct = calculateTransactionCost({
+      model: 'future-router-model',
+      knauf_requestedModel: 'future-router-model',
+      tokenType: 'prompt',
+      rawAmount: -1_000_000,
+    });
+
+    expect(routed.cost).toBeCloseTo(EUR_RATES['model-router'].longContext.inputPerMillion + 0.1229);
+    expect(routed).toMatchObject({
+      hasUnsupported: false,
+      isEstimated: true,
+      estimateReason: 'router-model-rate-pending',
+    });
+    expect(direct).toMatchObject({
+      cost: 0,
+      unsupportedTokens: 1_000_000,
+      hasUnsupported: true,
+      isEstimated: false,
+    });
+  });
+
+  it('prices the Luna and Terra traffic shape from the ticket screenshot', () => {
+    const result = aggregateConversationCosts([
+      {
+        model: 'gpt-5.6-luna-2026-07-09',
+        knauf_requestedModel: 'model-router',
+        tokenType: 'prompt',
+        rawAmount: -100_609,
+        messageId: 'm1',
+      },
+      {
+        model: 'gpt-5.6-terra-2026-07-09',
+        knauf_requestedModel: 'model-router',
+        tokenType: 'completion',
+        rawAmount: -3_966,
+        messageId: 'm1',
+      },
+    ]);
+
+    expect(result.conversation.cost).toBeGreaterThan(0);
+    expect(result.conversation).toMatchObject({
+      inputTokens: 100_609,
+      outputTokens: 3_966,
+      unsupportedTokens: 0,
+      hasUnsupported: false,
+      isEstimated: false,
+    });
+    expect(result.conversation.models).toEqual([
+      expect.objectContaining({ pricingModel: 'gpt-5.6-terra' }),
+      expect.objectContaining({ pricingModel: 'gpt-5.6-luna' }),
+    ]);
   });
 
   it('keeps unknown model tokens explicit', () => {
@@ -400,6 +498,51 @@ describe('knauf costs', () => {
               $set: {
                 knauf_costEstimated: true,
                 knauf_costEstimateReason: 'router-model-not-reported',
+                knauf_costRateSource: RATE_SOURCE,
+                knauf_pricingMatch: 'router-fallback',
+              },
+            },
+          },
+        },
+      ],
+      { ordered: false, timestamps: false },
+    );
+  });
+
+  it('persists estimated provenance for a routed model whose rate is pending', async () => {
+    const bulkWrite = jest.fn().mockResolvedValue(undefined);
+    const Transaction = {
+      bulkWrite,
+      findOne: jest.fn(() => chain({ _id: 'tx-future', updatedAt: new Date(0) })),
+      find: jest.fn(() =>
+        chain([
+          {
+            _id: 'tx-future',
+            model: 'future-router-model',
+            knauf_requestedModel: 'model-router-chat',
+            tokenType: 'prompt',
+            rawAmount: -100,
+          },
+        ]),
+      ),
+    };
+
+    await getConversationCosts({
+      userId: 'user-1',
+      conversationId: 'conversation-1',
+      Transaction,
+      cache: createCache(null),
+    });
+
+    expect(bulkWrite).toHaveBeenCalledWith(
+      [
+        {
+          updateOne: {
+            filter: { _id: 'tx-future' },
+            update: {
+              $set: {
+                knauf_costEstimated: true,
+                knauf_costEstimateReason: 'router-model-rate-pending',
                 knauf_costRateSource: RATE_SOURCE,
                 knauf_pricingMatch: 'router-fallback',
               },

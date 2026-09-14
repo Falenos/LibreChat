@@ -1,6 +1,73 @@
 {
   "groups": [
     {
+      "id": "2026-09-14",
+      "date": {
+        "en": "September 14, 2026",
+        "de": "14. September 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-323-2026-09-07-1",
+          "ticket": "KK20-323",
+          "date": "2026-09-07",
+          "en": "Conversation-history search no longer restarts a full rebuild because of brief harmless index-count differences.",
+          "de": "Die Suche im Unterhaltungsverlauf startet bei kurzen harmlosen Unterschieden der Indexzahlen keinen vollständigen Neuaufbau mehr."
+        },
+        {
+          "id": "kk20-323-2026-09-07-2",
+          "ticket": "KK20-323",
+          "date": "2026-09-07",
+          "en": "Conversation-history search can recover faster while database updates remain safely bounded.",
+          "de": "Die Suche im Unterhaltungsverlauf kann schneller wiederhergestellt werden, während Datenbankaktualisierungen sicher begrenzt bleiben."
+        },
+        {
+          "id": "kk20-279-2026-09-11-3",
+          "ticket": "KK20-279",
+          "date": "2026-09-11",
+          "en": "The token-to-euro counter now prices conversations routed through GPT-5.6 Luna or Terra instead of showing a misleading €0.00 total.",
+          "de": "Der Token-zu-Euro-Zähler berechnet jetzt auch Unterhaltungen, die über GPT-5.6 Luna oder Terra geroutet wurden, statt irreführend 0,00 € anzuzeigen."
+        }
+      ]
+    },
+    {
+      "id": "2026-09-07",
+      "date": {
+        "en": "September 7, 2026",
+        "de": "7. September 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-250-2026-09-03-1",
+          "ticket": "KK20-250",
+          "date": "2026-09-03",
+          "en": "The KARL help dialog now follows the light or dark theme selected in the app.",
+          "de": "Der KARL-Hilfedialog übernimmt jetzt das in der App ausgewählte helle oder dunkle Design."
+        },
+        {
+          "id": "kk20-330-2026-09-03-2",
+          "ticket": "KK20-330",
+          "date": "2026-09-03",
+          "en": "Users can keep explicitly named product, brand, and technical terms unchanged during file translation.",
+          "de": "Nutzer können ausdrücklich benannte Produkt-, Marken- und Fachbegriffe bei Dateiübersetzungen unverändert lassen."
+        },
+        {
+          "id": "kk20-323-2026-09-04-3",
+          "ticket": "KK20-323",
+          "date": "2026-09-04",
+          "en": "Conversation history search now stabilizes after synchronization instead of repeatedly rebuilding the search index for legacy records.",
+          "de": "Die Suche im Unterhaltungsverlauf stabilisiert sich jetzt nach der Synchronisierung, statt den Suchindex für ältere Einträge wiederholt neu aufzubauen."
+        },
+        {
+          "id": "kk20-323-2026-09-04-4",
+          "ticket": "KK20-323",
+          "date": "2026-09-04",
+          "en": "Conversation-history search recovery can scan the index faster without increasing write pressure on the main database.",
+          "de": "Die Wiederherstellung der Suche im Unterhaltungsverlauf kann den Index schneller prüfen, ohne den Schreibdruck auf die Hauptdatenbank zu erhöhen."
+        }
+      ]
+    },
+    {
       "id": "2026-09-03",
       "date": {
         "en": "September 1–3, 2026",

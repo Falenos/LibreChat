@@ -12,8 +12,11 @@ import { registerCodeExecutionTools } from './tools';
 // user message; see the two call sites below.
 import { prepareSkillBodyForInjection } from '~/knauf/skills/skillPrimeBody';
 // End [knauf]
-// [knauf] KK20-257 — capability-dependent skills disappear when their environment is off.
-import { isSkillAvailableForCodeEnvironment } from '~/knauf/skills/capabilityRequirements';
+// [knauf] KK20-257 / KK20-297 — capability-dependent skills disappear when their environment is off.
+import {
+  isSkillAvailableForCodeEnvironment,
+  isSkillAvailableForFileTranslation,
+} from '~/knauf/skills/capabilityRequirements';
 // End [knauf]
 import { logAxiosError } from '~/utils';
 
@@ -147,8 +150,9 @@ export interface ResolveModelSpecSkillIdsParams {
   accessibleSkillIds: Types.ObjectId[];
   /** DB lookup: name → skill doc constrained to the user's accessible IDs. */
   getSkillByName?: InitializeAgentDbMethods['getSkillByName'];
-  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  // [knauf] KK20-257 / KK20-297 — effective environment availability for capability dependencies.
   codeEnvAvailable?: boolean;
+  fileTranslationAvailable?: boolean;
   // End [knauf]
 }
 
@@ -163,6 +167,7 @@ export async function resolveModelSpecSkillIds({
   accessibleSkillIds,
   getSkillByName,
   codeEnvAvailable,
+  fileTranslationAvailable,
 }: ResolveModelSpecSkillIdsParams): Promise<Types.ObjectId[]> {
   if (!names.length || accessibleSkillIds.length === 0 || !getSkillByName) {
     return [];
@@ -203,10 +208,17 @@ export async function resolveModelSpecSkillIds({
         resolved.push(null);
         continue;
       }
-      // [knauf] KK20-257 — configured model specs cannot bypass the environment gate.
+      // [knauf] KK20-257 / KK20-297 — configured model specs cannot bypass the environment gate.
       if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
         logger.warn(
           `[resolveModelSpecSkillIds] Skill "${name}" requires unavailable Code Execution`,
+        );
+        resolved.push(null);
+        continue;
+      }
+      if (!isSkillAvailableForFileTranslation(skill, fileTranslationAvailable)) {
+        logger.warn(
+          `[resolveModelSpecSkillIds] Skill "${name}" requires unavailable File Translation`,
         );
         resolved.push(null);
         continue;
@@ -340,6 +352,8 @@ export interface InjectSkillCatalogParams {
   listSkillsByAccess: InitializeAgentDbMethods['listSkillsByAccess'];
   /** When true, registers bash_tool alongside skill + read_file. */
   codeEnvAvailable?: boolean;
+  /** [knauf] KK20-297 — when false, hides File-Translation-dependent skills from the catalog. */
+  fileTranslationAvailable?: boolean;
   /** Current user ID — used to determine skill ownership for active-state resolution. */
   userId?: string;
   /** Per-user skill overrides: `{ [skillId]: boolean }`. Missing entries use the default. */
@@ -396,6 +410,7 @@ export async function injectSkillCatalog(
     contextWindowTokens,
     listSkillsByAccess,
     codeEnvAvailable,
+    fileTranslationAvailable,
     userId,
     skillStates,
     defaultActiveOnShare = false,
@@ -416,9 +431,10 @@ export async function injectSkillCatalog(
 
   const isActive = (s: SkillSummary): boolean =>
     resolveSkillActive({ skill: s, skillStates, userId, defaultActiveOnShare });
-  // [knauf] KK20-257 — catalog ACL also enforces environment-backed skill dependencies.
+  // [knauf] KK20-257 / KK20-297 — catalog ACL also enforces environment-backed skill dependencies.
   const isEnvironmentAvailable = (s: SkillSummary): boolean =>
-    isSkillAvailableForCodeEnvironment(s, codeEnvAvailable);
+    isSkillAvailableForCodeEnvironment(s, codeEnvAvailable) &&
+    isSkillAvailableForFileTranslation(s, fileTranslationAvailable);
   // End [knauf]
 
   const activeSkills: SkillSummary[] = [];
@@ -675,8 +691,9 @@ export interface ResolveManualSkillsParams {
   skillStates?: Record<string, boolean>;
   /** Admin-configured default for shared skills. */
   defaultActiveOnShare?: boolean;
-  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  // [knauf] KK20-257 / KK20-297 — effective environment availability for capability dependencies.
   codeEnvAvailable?: boolean;
+  fileTranslationAvailable?: boolean;
   // End [knauf]
 }
 
@@ -755,6 +772,7 @@ export async function resolveManualSkills(
     skillStates,
     defaultActiveOnShare,
     codeEnvAvailable,
+    fileTranslationAvailable,
   } = params;
 
   if (!names.length || accessibleSkillIds.length === 0) {
@@ -810,10 +828,16 @@ export async function resolveManualSkills(
           logger.warn(`[resolveManualSkills] Skill "${name}" not found or not accessible`);
           return null;
         }
-        // [knauf] KK20-257 — crafted manualSkills payloads cannot invoke hidden code skills.
+        // [knauf] KK20-257 / KK20-297 — crafted manualSkills payloads cannot invoke hidden capability skills.
         if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
           logger.warn(
             `[resolveManualSkills] Skill "${name}" requires unavailable Code Execution — skipping`,
+          );
+          return null;
+        }
+        if (!isSkillAvailableForFileTranslation(skill, fileTranslationAvailable)) {
+          logger.warn(
+            `[resolveManualSkills] Skill "${name}" requires unavailable File Translation — skipping`,
           );
           return null;
         }
@@ -906,8 +930,9 @@ export interface ResolveAlwaysApplySkillsParams {
   defaultActiveOnShare?: boolean;
   /** Override cap on the number of always-apply primes to resolve. Defaults to `MAX_ALWAYS_APPLY_SKILLS`. */
   maxAlwaysApplySkills?: number;
-  // [knauf] KK20-257 — effective environment availability for capability dependencies.
+  // [knauf] KK20-257 / KK20-297 — effective environment availability for capability dependencies.
   codeEnvAvailable?: boolean;
+  fileTranslationAvailable?: boolean;
   // End [knauf]
 }
 
@@ -955,6 +980,7 @@ export async function resolveAlwaysApplySkills(
     defaultActiveOnShare,
     maxAlwaysApplySkills = MAX_ALWAYS_APPLY_SKILLS,
     codeEnvAvailable,
+    fileTranslationAvailable,
   } = params;
 
   if (accessibleSkillIds.length === 0 || maxAlwaysApplySkills <= 0) {
@@ -989,8 +1015,11 @@ export async function resolveAlwaysApplySkills(
       if (resolved.length >= maxAlwaysApplySkills) {
         break;
       }
-      // [knauf] KK20-257 — always-apply cannot prime a skill whose sandbox is disabled.
+      // [knauf] KK20-257 / KK20-297 — always-apply cannot prime a skill whose environment is disabled.
       if (!isSkillAvailableForCodeEnvironment(skill, codeEnvAvailable)) {
+        continue;
+      }
+      if (!isSkillAvailableForFileTranslation(skill, fileTranslationAvailable)) {
         continue;
       }
       // End [knauf]

@@ -59,7 +59,7 @@ import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
 // [knauf] KK20-297 — classify request-scoped file tools only after attachment
 // ownership and stored metadata have been resolved.
-import { filterRequestScopedFileToolNames, getRequestScopedFileTools } from './load';
+import { filterRequestScopedFileToolNames, filterSkillPrimedRequestScopedTools, getRequestScopedFileTools } from './load';
 // End [knauf]
 
 /**
@@ -397,6 +397,13 @@ export interface InitializeAgentParams {
   skillAuthoringAvailable?: boolean;
   /** Whether the code execution environment is available (execute_code capability enabled) */
   codeEnvAvailable?: boolean;
+  /**
+   * [knauf] KK20-297 — canonical operator decision for File Translation
+   * (`isKnaufFileTranslationEnabled()`), forwarded so `karl-file-translation`
+   * never resolves/primes (model spec, manual `$`, always-apply, or catalog)
+   * when the feature is disabled.
+   */
+  fileTranslationAvailable?: boolean;
   /** Per-user skill active/inactive overrides for filtering the skill catalog. */
   skillStates?: Record<string, boolean>;
   /** Admin-configured default for shared skills (`true` = shared skills auto-activate). */
@@ -477,6 +484,16 @@ export interface InitializeAgentDbMethods extends EndpointDbMethods {
       userInvocable?: boolean;
       /** True for deployment-directory skills that are loaded in memory. */
       deployment?: boolean;
+      /**
+       * Skill-declared tool allowlist (`allowed-tools` frontmatter). Actually
+       * projected by `listSkillsByAccess` (see
+       * `packages/data-schemas/src/methods/skill.ts`'s `.select(...)`); this
+       * declaration was just missing the field, which meant
+       * `isSkillAvailableForCodeEnvironment`/`isSkillAvailableForFileTranslation`
+       * type-checked against a shape with no properties in common with
+       * `SkillCapabilityRequirements` even though the runtime gate worked.
+       */
+      allowedTools?: string[];
     }>;
     has_more?: boolean;
     after?: string | null;
@@ -817,8 +834,9 @@ export async function initializeAgent(
             userId: req.user?.id,
             skillStates: params.skillStates,
             defaultActiveOnShare: params.defaultActiveOnShare,
-            // [knauf] KK20-257 — manual invocation shares the environment gate.
+            // [knauf] KK20-257 / KK20-297 — manual invocation shares the environment gates.
             codeEnvAvailable: params.codeEnvAvailable,
+            fileTranslationAvailable: params.fileTranslationAvailable,
             // End [knauf]
           })
         : Promise.resolve<ResolvedManualSkill[] | undefined>(undefined),
@@ -829,8 +847,9 @@ export async function initializeAgent(
             userId: req.user?.id,
             skillStates: params.skillStates,
             defaultActiveOnShare: params.defaultActiveOnShare,
-            // [knauf] KK20-257 — always-apply shares the environment gate.
+            // [knauf] KK20-257 / KK20-297 — always-apply shares the environment gates.
             codeEnvAvailable: params.codeEnvAvailable,
+            fileTranslationAvailable: params.fileTranslationAvailable,
             // End [knauf]
           })
         : Promise.resolve<ResolvedAlwaysApplySkill[] | undefined>(undefined),
@@ -914,6 +933,29 @@ export async function initializeAgent(
   // Reconcile against authorized, server-resolved request attachments before
   // loading tools so picker, drag/drop, retry, and direct API uploads agree.
   const requestScopedFileTools = getRequestScopedFileTools(resolvedRequestFiles, req.originalUrl);
+  // End [knauf]
+  // [knauf] KK20-297 — a skill's `allowed-tools` declaration (e.g.
+  // `karl-file-translation/SKILL.md` → `translate_file`) is skill-visibility
+  // metadata, not a request-scoped grant. Intersect skill-primed extras
+  // against what `getRequestScopedFileTools` actually authorized for THIS
+  // request — otherwise priming the skill would hand the model
+  // `translate_file` even when translation is disabled, or on a request
+  // with no translatable attachment for it to act on.
+  const grantedExtraToolNames = filterSkillPrimedRequestScopedTools(
+    extraAllowedToolNames,
+    requestScopedFileTools,
+  );
+  if (grantedExtraToolNames.length !== extraAllowedToolNames.length) {
+    const ungranted = extraAllowedToolNames.filter((name) => !grantedExtraToolNames.includes(name));
+    logger.debug(
+      `[allowedTools] Dropping skill-primed request-scoped tool(s) [${ungranted.join(', ')}] — not granted for this request by getRequestScopedFileTools.`,
+    );
+    extraAllowedToolNames = grantedExtraToolNames;
+  }
+  // End [knauf]
+  // [knauf] KK20-297 — the early agent loader may see only client file IDs.
+  // Reconcile against authorized, server-resolved request attachments before
+  // loading tools so picker, drag/drop, retry, and direct API uploads agree.
   const baseToolNames = [
     ...new Set([
       ...persistedToolNames,
@@ -1302,6 +1344,10 @@ export async function initializeAgent(
       contextWindowTokens: Number(agentMaxContextTokens) || 200_000,
       listSkillsByAccess: db?.listSkillsByAccess,
       codeEnvAvailable: effectiveCodeEnvAvailable,
+      // [knauf] KK20-297 — catalog gate; not per-agent narrowed (translation
+      // isn't tied to an agent.tools entry like execute_code is).
+      fileTranslationAvailable: params.fileTranslationAvailable,
+      // End [knauf]
       userId: req.user?.id,
       skillStates: params.skillStates,
       defaultActiveOnShare: params.defaultActiveOnShare,

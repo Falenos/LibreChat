@@ -49,6 +49,9 @@ const {
   // [knauf] KK20-257 — canonical operator + controlled-URL Code Execution gate.
   isKnaufCodeExecutionEnabled,
   // End [knauf]
+  // [knauf] KK20-297 — canonical operator decision for File Translation availability.
+  isKnaufFileTranslationEnabled,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   createResponsesToolEndCallback,
@@ -399,6 +402,9 @@ const createResponse = async (req, res) => {
     // [knauf] KK20-257 — keep Responses primary and connected Agents fail closed.
     const codeEnvAvailable = isKnaufCodeExecutionEnabled(enabledCapabilities);
     // End [knauf]
+    // [knauf] KK20-297 — same fail-closed contract for File Translation.
+    const fileTranslationAvailable = isKnaufFileTranslationEnabled();
+    // End [knauf]
     const skillsCapabilityEnabled = enabledCapabilities.has(AgentCapabilities.skills);
     const ephemeralSkillsToggle = req.body?.ephemeralAgent?.skills === true;
     const accessibleSkillIds = skillsCapabilityEnabled
@@ -467,6 +473,9 @@ const createResponse = async (req, res) => {
         }),
         // [knauf] KK20-257 — primary Agent uses the canonical environment decision.
         codeEnvAvailable,
+        // End [knauf]
+        // [knauf] KK20-297 — primary Agent uses the canonical File Translation decision.
+        fileTranslationAvailable,
         // End [knauf]
         skillStates,
         defaultActiveOnShare,
@@ -546,6 +555,9 @@ const createResponse = async (req, res) => {
           /** @see DiscoverConnectedAgentsParams.codeEnvAvailable */
           // [knauf] KK20-257 — connected Agents use the same environment decision.
           codeEnvAvailable,
+          // End [knauf]
+          // [knauf] KK20-297 — connected Agents use the same File Translation decision.
+          fileTranslationAvailable,
           // End [knauf]
         },
         {
