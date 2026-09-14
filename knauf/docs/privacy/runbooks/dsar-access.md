@@ -63,7 +63,8 @@ check: erasure must never reach a store disclosure does not.
 | `agents`, `prompts` + `promptgroups`, `skills`, `mcpservers` | `author` | Things the subject authored | Yes |
 | `agentapikeys`, `pluginauths`, `keys`, `tokens`, `sessions` | `userId` / `user` | **Credentials and session material** | **Existence + provider + timestamps only.** Never the values — they are encrypted secrets to third-party services and session tokens; disclosing them is a security incident, not compliance |
 | `groups` | `memberIds` ∋ **`idOnTheSource \|\| _id`** | Group memberships (incl. Entra/Okta-synced). `userGroup.js` writes `user.idOnTheSource \|\| userId.toString()`, so an OIDC-sourced subject is a member under their **external** id — querying `_id` alone returns zero groups for exactly the users who have them | Yes, **projected**: name/description/source only. `memberIds` is **withheld** — it is every other member's identifier (Art. 15(4)) |
-| `aclentries` | `principalId` | What the subject has been granted access to | Yes |
+| `aclentries` | `principalId` | What the subject has been granted access to | Yes — **redact `grantedBy`** (the colleague who shared it is a third party, same rule as `systemgrants`) |
+| `migrationallowlists` | `emailNormalized` | Whether the subject may log in at all, and **when access was granted** (`createdAt`). The only email-keyed store | Yes |
 | `chatprojects` | `user` | KK20-248 project workspaces — **`instructions` is subject-authored free text** | Yes, in full |
 | `chatprojectsources` | `user` | Project source associations, ingest status and error text | Yes |
 | `knauf_file_assets` | the subject's File rows' `knauf_asset_id`, plus `scope_type:'user'` | **KK20-195 physical ledger** — authoritative for blob path, `vector_backend`, `active_generation`, `stale_generations`, indexing errors. Resolved by **ownership**, not agent scope — see §1.3/1.4 | Yes |
@@ -228,7 +229,7 @@ is not always `api/logs/`:
 
 | `LOG_TO_FILE` | Where server logs go | How to collect |
 |---|---|---|
-| `true` (the `.env.example` default; typical local/dev) | `error-%DATE%.log` / `debug-%DATE%.log` under `LIBRECHAT_LOG_DIR`, **14-day** rotation | the commands below, or `--include-logs` |
+| `true` (the `.env.example` default; typical local/dev) | `error-%DATE%.log` / `debug-%DATE%.log` under `LIBRECHAT_LOG_DIR`, **14-day** rotation. Rotation uses `zippedArchive: true`, so every day except today is **`*.log.gz`** — `--include-logs` decompresses them; a plain `grep *.log` reads only today | the commands below, or `--include-logs` |
 | `false` | **No files are written at all.** Only the console transport runs — and it carries the same `userId`/`tenantId`/`requestId` via `appendRequestContext`. Container stdout is then collected by whatever ships logs in that environment | **§1.10.** The file path finds nothing, and its silence is not evidence of absence |
 
 **Check the deployed value before trusting this step.** `LOG_TO_FILE` is set by GitOps, not by this
@@ -238,8 +239,9 @@ when file logging is off or the directory is missing, precisely so an empty `log
 mistaken for "no server logs exist".
 
 ```bash
-grep -l "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log
-grep -h "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log > logs.jsonl
+# *.log is TODAY only — the rest of the window is gzipped.
+grep -h    "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log     >  logs.jsonl
+zgrep -h   "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log.gz  >> logs.jsonl
 ```
 
 **Disclose:** error events tied to the user within the retention window are personal data. Include
@@ -268,6 +270,16 @@ the response.** Two caveats to keep honest: (1) `forwardConsoleLogs: ['error']` 
 `forwardErrorsToLogs: true` mean browser `console.error` payloads are forwarded and are
 **unreviewed** (workstream P1-2) — until that review lands, say "we have no means to attribute, and
 we are reviewing the payloads"; (2) platform-side retention and region are P1-2's open questions.
+
+### 1.9a Redis — **in scope when `USE_REDIS` is on**
+
+When Redis is enabled it holds resumable-stream job state, abuse/violation counters keyed
+by user id, and session material — the same keyv namespaces §1.1 lists as Mongo collections
+move there. **The collector has no Redis client and does not pretend to have one**: `redis`
+is a tracked external sink that starts `pending`, so a bundle cannot be completed while it is
+unanswered. Either scan by subject id and record the result, or record
+`{"status":"not-applicable","note":"USE_REDIS is off in this environment"}` — the note goes
+into the response.
 
 ### 1.10 Server logs and APM in the log platform — **attributable, so in scope**
 
@@ -368,8 +380,8 @@ Each external sink writes one JSON file into `results/`, **naming the artifact i
 
 | Sink | Expectation derived from |
 |---|---|
-| `meilisearch` | `sinks.Message` + `sinks.Conversation` — the replica must mirror Mongo |
-| `blob` | `sinks.blob.objects` — one object per enumerated file key |
+| `meilisearch` | `sinks.MessageIndexable` + `sinks.ConversationIndexable` — **not** the raw counts. `mongoMeili` deliberately keeps temporary/expiring chats out of the index, so the replica is legitimately smaller than Mongo. Deriving from raw totals rejected correct exports |
+| `blob` | `sinks.blob.objects` — File rows + FileAsset blobs + **avatars**. Avatars have no `File` row at all (written straight to `images/<userId>/`), so they were previously invisible to the bundle *and* would have failed the count |
 | `ragVectors` | `vectorStores.pgvector` + `.azureAiSearch` — the ids we emitted |
 
 `langfuse` and `logPlatform` are **not** derived from Mongo (they have their own retention), so
