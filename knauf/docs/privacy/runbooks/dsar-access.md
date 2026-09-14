@@ -72,6 +72,7 @@ check: erasure must never reach a store disclosure does not.
 | `configs` | `principalId` | Per-principal config overrides | Yes |
 | `systemgrants` | `principalId` | Capabilities the subject holds | Yes — **redact `grantedBy`** (the granting admin is a third party) |
 | `skillsynccredentials` | `createdBy` | Sync credentials | **Existence only** |
+| `knauf_translation_jobs` | `user` (+ `tenantId`) | KK20-297 File Translation: **filenames**, source/target locale, `preserve_terms`, job `report`, `last_error_detail`, conversation id | Yes — redact `lease_owner`, `execution_token`, `idempotency_key`, `request_key` (operational, not about the person) |
 | `knauf_agent_schedules` (`user`), `knauf_scheduled_agent_runs` (`ownerId`) | — | Scheduled-agent definitions and run history (Knauf-only) | Yes |
 | `auditlogs` | `actor.id` **and** `target.id` | See §1.7 — needs Art. 15(4) handling | Yes, redacted |
 
@@ -120,6 +121,13 @@ Both hold **embedded chunks of the subject's uploaded files**.
   attests Azure for files that are actually in pgvector.
 - **`active_generation`** decides which vectors are live, and **`stale_generations`** is cleanup
   debt — generations whose RAG delete failed and which may still hold embeddings.
+
+**Agent Knowledge uploads are agent-scoped.** `fileSearchAssetLifecycle.js` writes them with
+`scope_type: 'agent'` and the **agent id** as `scope_id`, so a user-scope-only query misses
+every file the subject uploaded to their own agents. The collector resolves the subject's
+authored agent ids (`Agent.author`) and queries both scopes. If that lookup fails it raises a
+completeness warning rather than returning a short list — an empty agent list and a broken
+lookup must never look the same.
 
 So the collector **joins `files` to `knauf_file_assets`** and reports the asset's own state. A file
 with no asset row (pre-KK20-195 legacy) falls back to the old heuristic and is flagged
@@ -196,6 +204,14 @@ The subject appears two ways:
 **Finding:** the admin list API (`listAuditLogPage`) filters only by actor/target **name
 substring**, not id — it cannot do a reliable by-subject lookup, and name matching would miss
 renames and leak lookalikes. The collector reads the collection directly, read-only.
+
+**The actor's request context goes too.** `buildAuditContext(req)` records the **acting
+admin's** `ip`, `userAgent`, `sessionId` and `requestId` on the row. Blanking `actor.name`
+while shipping `context.ip` still identifies and correlates that third party, so on
+target-only rows the whole `context` object is replaced with a redaction marker — kept as a
+marker, not deleted, so the subject can see forensic context exists and was withheld rather
+than believing none was recorded. On rows where the subject is the **actor**, the context is
+their own and is disclosed in full.
 
 **What exists is bounded** by the 12-month retention (KK20-328) once enabled; say so.
 
@@ -288,40 +304,90 @@ answered and recorded, treat this section as **open**, not as satisfied.
 
 ---
 
-## 2. Collect
+## 2. Collect — two phases, and the first one can never be "complete"
 
 ```bash
 # 1. Summary first — read-only, prints per-sink counts
 node knauf/scripts/dsar-collect.js --user <mongo-id-or-email>
 
-# 2. Full bundle
+# 2. Collect into a FRESH directory (the collector creates it 0700; it refuses an
+#    existing non-empty path or a symlink)
 node knauf/scripts/dsar-collect.js --user <mongo-id-or-email> --out ./dsar-<ticket>/ --include-logs
+
+# 3. Run the external sinks (see results/README.md in the bundle), then:
+node knauf/scripts/dsar-collect.js --user <mongo-id-or-email> --out ./dsar-<ticket>/ --finalize
 ```
+
+**Step 2 always exits 4.** That is by design. The collector can read Mongo itself, but
+Langfuse, Meilisearch, Blob, the RAG vector confirmation and the log-platform export all
+happen elsewhere — so each is recorded **`pending`** and the bundle is incomplete until a
+verified result exists. A run that "succeeded" without those steps having happened would be
+exactly the false assurance this runbook exists to prevent.
 
 The bundle is one JSON file per sink plus:
 
 | File | What it is |
 |---|---|
-| `manifest.json` | Counts, timestamps, the **resolved tenant**, redactions applied, exclusions and their reasons, and a **`completeness`** block listing anything that could not be established |
-| `langfuse.sh` | Executable. Pages to exhaustion, reconciles against `meta.totalItems`, exits non-zero if short (§1.6) |
-| `meilisearch.md` | The `page`/`hitsPerPage` recipe, with a scripted version that fails on a count mismatch (§1.2) |
-| `vector-inventory-request.json` | Exact **physical** vector ids per backend, for the RAG service to confirm (§1.3/1.4) |
+| `manifest.json` | Counts, timestamps, the **resolved tenant**, redactions applied, exclusions, the **`externalSinks`** state and a **`completeness`** block |
+| `results/README.md` | What each external sink must drop into `results/`, and in what shape |
+| `langfuse.sh` | Pages to exhaustion, reconciles against `meta.totalItems`, exits non-zero if short (§1.6). Mode **0600** — run it as `bash langfuse.sh` |
+| `meilisearch.md` | The `page`/`hitsPerPage` recipe that fails on a count mismatch (§1.2) |
+| `vector-inventory-request.json` | Exact **physical** vector ids per backend for the RAG service to confirm (§1.3/1.4) |
 
-The collector **never writes to Mongo** — it uses `.find().lean()` only, and the spec pins the
-redactions and the inventory.
+### 2.1 Finalization — what clears a pending sink
 
-**Exit codes — a non-zero exit means the bundle is not releasable:**
+Each external sink writes one JSON file into `results/`:
+
+```json
+{ "status": "complete", "collected": 2500, "expected": 2500, "checksum": "<sha256>" }
+```
+
+`--finalize` ingests them and applies these rules:
+
+| Result | Outcome |
+|---|---|
+| `status: "complete"` **and** `collected === expected` | **complete** |
+| `status: "complete"` but the totals differ | **failed** — a truncated extract is not a completed step |
+| `collected`/`expected` not numeric | **failed** |
+| `status: "not-applicable"` **with** a `note` | **not-applicable**, and the note goes into the Art. 15 response as a stated limitation |
+| `status: "not-applicable"` without a note | **failed** — "doesn't apply" is a claim that needs a reason |
+| missing file / unreadable JSON / anything else | **pending** or **failed** |
+
+`manifest.completeness.ok` becomes `true` only when every sink is `complete` or
+`not-applicable` **and** no other warning is open.
+
+### 2.2 Exit codes — non-zero means not releasable
 
 | Code | Meaning |
 |---|---|
-| `0` | Complete. `manifest.completeness.ok` is `true` |
+| `0` | Complete. Only reachable via `--finalize` with every external sink resolved |
 | `2` | No user matches the reference |
-| `3` | **Ambiguous or contradicted subject** — the email matched in more than one tenant, or `--tenant` disagreed with the resolved subject. Re-run with the right `--tenant`; do **not** guess |
-| `4` | Collected, but with open completeness warnings (unverified vector backends, logs not collected, a sink whose model is not registered). Read `manifest.completeness.warnings` and resolve each before release |
+| `3` | **Ambiguous or contradicted subject** — the email matched in more than one tenant, or `--tenant` disagreed. Re-run with the right `--tenant`; do **not** guess |
+| `4` | Collected, with open completeness warnings. Read `manifest.completeness.warnings` |
+
+### 2.3 The bundle is evidence — handle it as such
+
+The bundle is the subject's entire personal-data corpus in one directory.
+
+- The collector **creates** the directory `0700` and every file `0600`, exclusively (`wx`)
+  so nothing is silently overwritten. It **refuses** a symlink, a non-empty directory, or a
+  path that is already a file — stale output from an earlier run must never be
+  indistinguishable from this one's.
+- **Write it to encrypted storage.** Full-disk encryption on the operator's machine is the
+  minimum; a shared drive must be the approved encrypted location, never a personal folder.
+- **Never email it or put it in a ticket attachment.** Deliver per §4.
+- **Retention: delete within 30 days of delivery**, or when the request closes, whichever is
+  sooner. Record the deletion date on the register row (§6).
+- **Verify the cleanup.** `shred -u` the files (or the platform's secure-delete), then
+  confirm the directory is gone and record who confirmed it. An unverified delete is not a
+  delete.
+- Keep **only** the manifest (counts, exclusions, redactions, tenant, finalization state) as
+  the durable record that the request was fulfilled. It carries no message content.
 
 Then run `langfuse.sh` and the Meilisearch recipe from a host with the credentials, send
-`vector-inventory-request.json` to the RAG service, pull the Blob objects for the `files` list, and
-complete §1.10 with the platform team. Add their outputs to the bundle.
+`vector-inventory-request.json` to the RAG service, pull the Blob objects for the `files`
+list, complete §1.10 with the platform team, write each result into `results/`, and re-run
+with `--finalize`.
 
 ---
 
@@ -336,12 +402,23 @@ complete §1.10 with the platform team. Add their outputs to the bundle.
       retention, not as new categories.
 - [ ] **Group memberships projected** — `groups.json` names the groups but **not** `memberIds`;
       confirm no other member's identifier appears anywhere in the bundle (Art. 15(4)).
-- [ ] **Completeness clean** — the collector exited `0` and `manifest.completeness.warnings` is
-      empty. If it exited `4`, every warning is resolved and recorded on the register row.
+- [ ] **Completeness clean** — the collector exited `0` **from a `--finalize` run** and
+      `manifest.completeness.warnings` is empty. A step-2 bundle always exits `4`; releasing
+      one is releasing an unverified bundle.
+- [ ] **Every external sink resolved** — `manifest.externalSinks` shows `complete` or
+      `not-applicable` for all five (`langfuse`, `meilisearch`, `blob`, `ragVectors`,
+      `logPlatform`), and each `not-applicable` carries a note that appears in the response.
+- [ ] **Audit context redacted** — target-only rows show no `context.ip`, `context.userAgent`,
+      `context.sessionId` or `context.requestId`. Grep the bundle for the admin's IP.
+- [ ] **Agent knowledge included** — `manifest.sinks.agentScopeIds` matches the number of
+      agents the subject authored, and no warning about agent-id resolution is open.
+- [ ] **Bundle permissions** — directory `0700`, every file `0600`, on encrypted storage.
 - [ ] **Tenant recorded** — `manifest.tenant.resolved` matches the tenant on the register row.
 - [ ] **External sinks proved complete** — `langfuse.sh` printed `OK:` for both resources, the
       Meilisearch counts reconcile against `totalHits`, and the RAG service confirmed the vector
       inventory. A step that was not run is not a step that found nothing.
+- [ ] **Translation jobs reviewed** — `knauf_translation_jobs.json` filenames and `report`
+      belong to the subject; operational fields are redacted.
 - [ ] **Exclusions stated** — browser analytics (§1.9), with the reason, and **not** conflated with
       server logs; vector stores attested by **physical** id and confirmed by the RAG service
       (§1.3/1.4).

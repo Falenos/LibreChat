@@ -103,10 +103,88 @@ const NOT_SUBJECT_SCOPED = {
   KnaufAuditRetentionLease: 'distributed lock document, carries no subject data',
 };
 
-/** Knauf scheduler collections, purged per user by api/knauf/scheduler/userLifecycle.js. */
+/**
+ * Collections registered OUTSIDE `createModels()` — the registry sweep above cannot
+ * see these, so they are enumerated by hand and pinned by their own spec check.
+ *
+ * PR #349 review (round 2): `knauf_translation_jobs` is registered lazily inside
+ * `api/server/services/Files/knauf/translation/jobs.js`, never through `createModels`,
+ * so the registry test reported full coverage while a store holding the subject's
+ * filenames, locales, protected terms, job reports and error detail went uncollected.
+ * A "complete" inventory that can only see one registration mechanism is not complete;
+ * the spec now greps the tree for `collection: '<name>'` declarations and fails on any
+ * that appear in neither MONGO_SINKS, RAW_COLLECTIONS nor NOT_SUBJECT_SCOPED_RAW.
+ */
 const RAW_COLLECTIONS = [
+  // Purged per user by api/knauf/scheduler/userLifecycle.js.
   { collection: 'knauf_agent_schedules', field: 'user' },
   { collection: 'knauf_scheduled_agent_runs', field: 'ownerId' },
+  // KK20-297 File Translation. Tenant-scoped; redactions reviewed below.
+  {
+    collection: 'knauf_translation_jobs',
+    field: 'user',
+    tenantField: 'tenantId',
+    redactFields: ['lease_owner', 'execution_token', 'idempotency_key', 'request_key'],
+    note: 'filenames, locales, preserve_terms, report, last_error_detail — all subject data',
+  },
+];
+
+/**
+ * Raw collections that hold nothing about a subject, with the reason. Same contract as
+ * NOT_SUBJECT_SCOPED but for hand-registered / non-`createModels` collections.
+ */
+const NOT_SUBJECT_SCOPED_RAW = {
+  // keyv cache namespaces (packages/api/src/cache/keyvMongo.ts). Opaque cache keys with
+  // TTL expiry and no subject-scoped field, so they cannot be queried per subject.
+  // Transient and derived: anything user-linked here also exists in a primary store
+  // that IS collected. Say so if asked; do not claim the cache holds nothing.
+  keyv: 'keyv cache namespace — opaque keys, TTL-bounded, no subject field to filter on',
+  logs: 'keyv cache namespace (the instantiated store) — same as `keyv`',
+  knauf_file_assets: 'collected as the KnaufFileAsset model sink (user + agent scope)',
+  knauf_audit_retention_checkpoints: 'retention bookkeeping (hash chain), no subject data',
+  knauf_audit_retention_leases: 'distributed lock documents, no subject data',
+  auditlogs: 'collected separately with Art. 15(4) actor + context redaction',
+};
+
+/**
+ * Every external sink that must be executed and reconciled before a bundle is
+ * releasable. PR #349 review (round 2): the collector emitted Langfuse/Meilisearch
+ * recipes and left Blob, RAG and the log platform to the runbook, then exited 0 —
+ * so "the script succeeded" said nothing about whether those sinks had run. Each is
+ * now PENDING by construction and only `--finalize` can clear it, by ingesting a
+ * machine-readable result and verifying its totals.
+ */
+const EXTERNAL_SINKS = [
+  {
+    key: 'langfuse',
+    label: 'Langfuse traces + scores',
+    resultFile: 'results/langfuse.json',
+    runbook: '§1.6 — run langfuse.sh where the CLI has credentials',
+  },
+  {
+    key: 'meilisearch',
+    label: 'Meilisearch messages + convos',
+    resultFile: 'results/meilisearch.json',
+    runbook: '§1.2 — run the paged recipe in meilisearch.md',
+  },
+  {
+    key: 'blob',
+    label: 'Azure Blob objects',
+    resultFile: 'results/blob.json',
+    runbook: '§1.5 — pull the objects listed in blob-objects.json',
+  },
+  {
+    key: 'ragVectors',
+    label: 'RAG vector inventory confirmation',
+    resultFile: 'results/rag-vectors.json',
+    runbook: '§1.3/1.4 — send vector-inventory-request.json to the RAG service',
+  },
+  {
+    key: 'logPlatform',
+    label: 'Server logs / APM export',
+    resultFile: 'results/log-platform.json',
+    runbook: '§1.10 — owner-approved bounded export, or a recorded limitation',
+  },
 ];
 
 /** Never disclose these from the user document — security artefacts, not information
@@ -140,6 +218,15 @@ const GROUP_SUBJECT_FIELDS = [
   'createdAt',
   'updatedAt',
 ];
+
+/**
+ * Actor-side forensic fields on an audit row (`buildAuditContext`). Every one of them
+ * describes the ADMIN who acted, not the subject, so none may survive on a target-only
+ * row. Listed explicitly so the spec can assert each is absent from the serialized bundle.
+ */
+const AUDIT_ACTOR_CONTEXT_FIELDS = ['ip', 'userAgent', 'sessionId', 'requestId'];
+
+const AUDIT_CONTEXT_REDACTED = '[redacted — third-party request context, Art. 15(4)]';
 
 /* ------------------------------------------------------------------ pure helpers */
 
@@ -197,11 +284,21 @@ function redactAuditRows(rows, subjectId) {
   return rows.map((row) => {
     const isActor = String(row.actor?.id ?? '') === id;
     if (isActor) return { ...row, _dsarRole: 'actor' };
-    return {
+    const out = {
       ...row,
       _dsarRole: 'target',
       actor: { type: row.actor?.type, name: '[redacted — third party, Art. 15(4)]' },
     };
+    // PR #349 review (round 2): `context` is built by `buildAuditContext(req)` from
+    // the ACTING ADMIN's request — their IP, user agent, session and correlation id.
+    // Blanking `actor.name` while shipping `context.ip` still identifies and
+    // correlates the third party, so the whole context goes on target-only rows.
+    // Kept as an explicit marker rather than deleted, so the subject can see that
+    // forensic context exists and was withheld, not that none was recorded.
+    if (row.context !== undefined) {
+      out.context = AUDIT_CONTEXT_REDACTED;
+    }
+    return out;
   });
 }
 
@@ -422,6 +519,190 @@ function buildVectorInventoryRequest(subjectId, tenantId, vectors) {
   };
 }
 
+/** Tells the operator exactly what each external sink must drop into results/. */
+function buildResultsReadme() {
+  const rows = EXTERNAL_SINKS.map(
+    (e) => `| \`${e.key}\` | ${e.label} | \`${e.resultFile}\` | ${e.runbook} |`,
+  ).join('\n');
+  return `# External sink results — REQUIRED before this bundle is releasable
+
+The collector cannot execute these sinks itself, so it records them as **pending** and
+refuses to report a complete bundle until each one has a verified result here.
+
+| Key | Sink | Drop the result at | Runbook |
+|---|---|---|---|
+${rows}
+
+Each file is JSON:
+
+\`\`\`json
+{ "status": "complete", "collected": 1234, "expected": 1234, "checksum": "<sha256>" }
+\`\`\`
+
+- \`status: "complete"\` also requires \`collected === expected\`. If they differ the sink
+  is recorded as **failed** — a truncated extract is not a completed step.
+- \`status: "not-applicable"\` is allowed but **requires a \`note\`** stating why (e.g. the
+  log platform cannot query by \`userId\`). The note goes into the Art. 15 response as a
+  stated limitation.
+- Anything else — missing file, unreadable JSON, \`status: "failed"\` — keeps the bundle
+  incomplete.
+
+Then re-run:
+
+\`\`\`bash
+node knauf/scripts/dsar-collect.js --user <id> --out <this-dir> --finalize
+\`\`\`
+
+Only that run can set \`manifest.completeness.ok = true\`.
+`;
+}
+
+/* --------------------------------------------------------------- safe output dir */
+
+/**
+ * PR #349 review (round 2): the bundle is the subject's entire personal-data corpus,
+ * and the old code did `fs.mkdirSync(out, { recursive: true })` — which accepts an
+ * existing directory or a symlink, leaves unrelated files in place, writes predictable
+ * filenames under the ambient umask, and made `langfuse.sh` world-readable at 0755.
+ *
+ * Now: refuse a symlink, refuse a non-empty destination, create fresh at 0700, and
+ * write every file 0600 with `wx` (exclusive) so nothing is silently overwritten.
+ */
+function prepareOutputDir(out) {
+  const resolved = path.resolve(out);
+  let st = null;
+  try {
+    st = fs.lstatSync(resolved);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (st) {
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `Refusing to write a DSAR bundle into a symlink: ${resolved}. ` +
+          "The link target is not under this script's control.",
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`--out exists and is not a directory: ${resolved}`);
+    }
+    if (fs.readdirSync(resolved).length > 0) {
+      throw new Error(
+        `Refusing to write into a non-empty directory: ${resolved}. ` +
+          "Stale files from an earlier run would be indistinguishable from this one's " +
+          'output. Use a fresh path.',
+      );
+    }
+    fs.chmodSync(resolved, 0o700);
+    return resolved;
+  }
+  fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  // mkdir honours the umask, so set the mode explicitly afterwards.
+  fs.chmodSync(resolved, 0o700);
+  return resolved;
+}
+
+/** Write one bundle file 0600, exclusively — never clobber, never inherit the umask. */
+function writeBundleFile(dir, name, contents) {
+  const target = path.join(dir, name);
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, contents, { mode: 0o600, flag: 'wx' });
+  fs.chmodSync(target, 0o600);
+  return target;
+}
+
+/* ------------------------------------------------------- external-sink finalization */
+
+/** Every external sink starts PENDING; nothing but a verified result clears it. */
+function initialExternalSinkState() {
+  const state = {};
+  for (const sink of EXTERNAL_SINKS) {
+    state[sink.key] = {
+      status: 'pending',
+      label: sink.label,
+      expects: sink.resultFile,
+      runbook: sink.runbook,
+    };
+  }
+  return state;
+}
+
+/**
+ * Ingest one external sink's machine-readable result and decide whether it counts as
+ * executed AND reconciled. A result is only `complete` when it says so explicitly and
+ * its own numbers agree — `collected === expected`. Anything else is `failed`, which
+ * keeps `completeness.ok` false.
+ *
+ * Shape (written by the operator or the emitted scripts):
+ *   { "status": "complete" | "not-applicable" | "failed",
+ *     "collected": <n>, "expected": <n>, "checksum": "<sha256>", "note": "..." }
+ */
+function reconcileExternalResult(sinkKey, raw) {
+  const sink = EXTERNAL_SINKS.find((e) => e.key === sinkKey);
+  const base = { label: sink?.label ?? sinkKey, expects: sink?.resultFile };
+  if (raw == null) {
+    return { ...base, status: 'pending', reason: 'no result file found' };
+  }
+  if (raw.status === 'not-applicable') {
+    if (!raw.note) {
+      return { ...base, status: 'failed', reason: 'not-applicable requires a written note' };
+    }
+    return { ...base, status: 'not-applicable', note: raw.note };
+  }
+  if (raw.status !== 'complete') {
+    return { ...base, status: 'failed', reason: raw.reason ?? `status=${raw.status ?? 'missing'}` };
+  }
+  const collected = Number(raw.collected);
+  const expected = Number(raw.expected);
+  if (!Number.isFinite(collected) || !Number.isFinite(expected)) {
+    return { ...base, status: 'failed', reason: 'collected/expected must both be numbers' };
+  }
+  if (collected !== expected) {
+    return {
+      ...base,
+      status: 'failed',
+      reason: `collected ${collected} but expected ${expected} — truncated`,
+    };
+  }
+  return { ...base, status: 'complete', collected, expected, checksum: raw.checksum ?? null };
+}
+
+/** Read `<out>/results/*.json` and fold them into the manifest's external-sink state. */
+function finalizeManifest(manifest, out, readJson) {
+  const external = manifest.externalSinks ?? initialExternalSinkState();
+  for (const sink of EXTERNAL_SINKS) {
+    let raw = null;
+    try {
+      raw = readJson(path.join(out, sink.resultFile));
+    } catch (err) {
+      external[sink.key] = {
+        label: sink.label,
+        expects: sink.resultFile,
+        status: 'failed',
+        reason: `unreadable result file: ${err.message}`,
+      };
+      continue;
+    }
+    external[sink.key] = reconcileExternalResult(sink.key, raw);
+  }
+  manifest.externalSinks = external;
+
+  const unresolved = Object.entries(external).filter(
+    ([, v]) => v.status !== 'complete' && v.status !== 'not-applicable',
+  );
+  manifest.completeness.warnings = manifest.completeness.warnings.filter(
+    (w) => !w.startsWith('externalSinks:'),
+  );
+  for (const [key, v] of unresolved) {
+    manifest.completeness.warnings.push(
+      `externalSinks: ${key} is ${v.status}${v.reason ? ` (${v.reason})` : ''} — ${v.runbook ?? v.expects}`,
+    );
+  }
+  manifest.completeness.ok = manifest.completeness.warnings.length === 0;
+  manifest.finalizedAt = new Date().toISOString();
+  return manifest;
+}
+
 function parseArgs(argv) {
   const args = { includeLogs: false };
   for (let i = 0; i < argv.length; i++) {
@@ -431,6 +712,7 @@ function parseArgs(argv) {
     else if (a === '--tenant') args.tenant = argv[++i];
     else if (a === '--log-dir') args.logDir = argv[++i];
     else if (a === '--include-logs') args.includeLogs = true;
+    else if (a === '--finalize') args.finalize = true;
     else if (a === '--help' || a === '-h') args.help = true;
   }
   return args;
@@ -503,9 +785,22 @@ function sinkFilter(sink, subject) {
     return { [sink.field]: { $in: groupMembershipKeys(subject) } };
   }
   if (sink.model === 'KnaufFileAsset') {
-    // The asset ledger is scoped by (scope_type, scope_id); the user's own assets are
-    // scope_type 'user'. Agent-scoped assets are reached via the subject's Agent rows.
-    return { scope_type: 'user', scope_id: { $in: [id, String(id)] } };
+    // The asset ledger is scoped by (scope_type, scope_id).
+    //
+    // PR #349 review (round 2): the previous filter pinned `scope_type: 'user'` and a
+    // comment claimed agent-scoped rows were "reached via the subject's Agent rows" —
+    // but nothing implemented that traversal, so every Agent Knowledge upload the
+    // subject made was silently missing. `fileSearchAssetLifecycle.js` writes
+    // `scope_type: 'agent'` with `scope_id: String(entityId ?? userId)`, i.e. the AGENT
+    // id. The caller resolves the subject's authored agent ids and passes them in; a
+    // resolution failure marks the sink incomplete rather than quietly under-reporting.
+    const scopeIds = [id, String(id), ...(subject._dsarAgentIds ?? [])];
+    return {
+      $or: [
+        { scope_type: 'user', scope_id: { $in: scopeIds } },
+        { scope_type: 'agent', scope_id: { $in: scopeIds } },
+      ],
+    };
   }
   const filter = { [sink.field]: { $in: [id, String(id)] } };
   if (sink.principalType) {
@@ -536,7 +831,17 @@ function shapeRows(sink, rows, subject) {
   return rows;
 }
 
-async function collect({ models, mongoose, subject, tenantId, out, includeLogs, logDir, log }) {
+async function collect({
+  models,
+  mongoose,
+  subject,
+  tenantId,
+  agentIdError,
+  out,
+  includeLogs,
+  logDir,
+  log,
+}) {
   const id = subject._id;
   const manifest = {
     generatedAt: new Date().toISOString(),
@@ -562,6 +867,8 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
       ),
     ],
     exclusions: [],
+    // Every external sink is PENDING until `--finalize` ingests a verified result.
+    externalSinks: initialExternalSinkState(),
     completeness: { ok: true, warnings: [] },
   };
   const warn = (msg) => {
@@ -570,11 +877,20 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   };
   const write = (name, data) => {
     if (!out) return;
-    fs.writeFileSync(path.join(out, name), JSON.stringify(data, null, 2));
+    writeBundleFile(out, name, JSON.stringify(data, null, 2));
   };
 
-  // users
-  write('users.json', redactUserDocument(subject));
+  if (agentIdError) {
+    warn(
+      `KnaufFileAsset: could not resolve the subject's agent ids (${agentIdError}) — ` +
+        'agent-scope assets are NOT in this bundle. Re-run once the lookup works.',
+    );
+  }
+  manifest.sinks.agentScopeIds = (subject._dsarAgentIds ?? []).length;
+
+  // users — the subject document itself, minus the traversal helper we attached.
+  const { _dsarAgentIds: _agentIds, ...subjectDoc } = subject;
+  write('users.json', redactUserDocument(subjectDoc));
   manifest.sinks.users = 1;
 
   // every subject-scoped Mongo store
@@ -597,12 +913,19 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   // knauf scheduler collections (raw)
   const db = mongoose.connection.db;
   for (const raw of RAW_COLLECTIONS) {
-    const rows = await db
-      .collection(raw.collection)
-      .find({ [raw.field]: { $in: [id, String(id)] } })
-      .toArray();
+    // Raw driver reads bypass `applyTenantIsolation` (it is a mongoose plugin), so a
+    // tenant-scoped raw collection must be filtered explicitly — the ALS context does
+    // not reach `db.collection(...)`.
+    const filter = { [raw.field]: { $in: [id, String(id)] } };
+    if (raw.tenantField && tenantId) {
+      filter[raw.tenantField] = tenantId;
+    }
+    const rows = await db.collection(raw.collection).find(filter).toArray();
     manifest.sinks[raw.collection] = rows.length;
-    write(`${raw.collection}.json`, rows);
+    write(
+      `${raw.collection}.json`,
+      raw.redactFields ? rows.map((r) => redactFields(r, raw.redactFields)) : rows,
+    );
   }
 
   // audit log — read the collection: the admin API filters by name substring only
@@ -660,11 +983,14 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   );
 
   if (out) {
-    fs.writeFileSync(path.join(out, 'langfuse.sh'), buildLangfuseCommands(id), { mode: 0o755 });
-    fs.writeFileSync(path.join(out, 'meilisearch.md'), buildMeilisearchQueries(id));
+    // 0600, not 0755: this is the subject's personal-data corpus, and the script
+    // carries their id. Run it with `bash langfuse.sh`, not `./langfuse.sh`.
+    writeBundleFile(out, 'langfuse.sh', buildLangfuseCommands(id));
+    writeBundleFile(out, 'meilisearch.md', buildMeilisearchQueries(id));
+    writeBundleFile(out, 'results/README.md', buildResultsReadme());
   }
-  manifest.sinks.langfuse = 'run langfuse.sh — pages to exhaustion, exits non-zero if short';
-  manifest.sinks.meilisearch = 'run the recipe in meilisearch.md — pages to exhaustion';
+  manifest.sinks.langfuse = 'PENDING — run langfuse.sh, then re-run with --finalize';
+  manifest.sinks.meilisearch = 'PENDING — run the meilisearch.md recipe, then --finalize';
   manifest.exclusions.push(
     'pgvector / Azure AI Search: no by-subject read-back endpoint. The bundle lists exact ' +
       'physical vector ids (vector-inventory-request.json) for the RAG service to confirm; ' +
@@ -711,6 +1037,10 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
     warn('winstonLogs: not collected. Runbook §1.8/§1.10 must be completed by the platform team.');
   }
 
+  for (const sink of EXTERNAL_SINKS) {
+    warn(`externalSinks: ${sink.key} is pending — ${sink.runbook}`);
+  }
+
   write('manifest.json', manifest);
   log(JSON.stringify(manifest, null, 2));
   return manifest;
@@ -722,7 +1052,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.user) {
     console.log(
-      'usage: node knauf/scripts/dsar-collect.js --user <mongo-id|email> [--out DIR] [--tenant ID] [--include-logs] [--log-dir DIR]',
+      'usage: node knauf/scripts/dsar-collect.js --user <mongo-id|email> [--out DIR] [--tenant ID] [--include-logs] [--log-dir DIR]\n' +
+        '       ... --out DIR --finalize   # after running the external sinks, ingest results/ and verify totals',
     );
     process.exit(args.help ? 0 : 1);
   }
@@ -734,7 +1065,13 @@ async function main() {
   await connect();
   const models = require('~/db/models');
 
-  if (args.out) fs.mkdirSync(args.out, { recursive: true });
+  // `--finalize` re-reads an existing bundle; every other run demands a fresh,
+  // private directory it created itself.
+  if (args.out && !args.finalize) {
+    args.out = prepareOutputDir(args.out);
+  } else if (args.out) {
+    args.out = path.resolve(args.out);
+  }
 
   // Resolution runs as system on purpose: the operator may not know the tenant yet,
   // and a cross-tenant lookup is how we DETECT ambiguity rather than silently
@@ -765,17 +1102,37 @@ async function main() {
     process.exit(3);
   }
 
-  const run = () =>
-    collect({
+  // Agent Knowledge assets are stored under `scope_type: 'agent'` with the AGENT id as
+  // `scope_id`, so the subject's own uploads are unreachable without this traversal
+  // (PR #349 review round 2). A failure here marks the sink incomplete rather than
+  // silently under-reporting: an empty agent list and a broken lookup must not look alike.
+  const resolveAgentIds = async () => {
+    const rows = await models.Agent.find({ author: { $in: [subject._id, String(subject._id)] } })
+      .select('id')
+      .lean();
+    return rows.map((r) => r.id).filter(Boolean);
+  };
+
+  const run = async () => {
+    let agentIds = [];
+    let agentIdError = null;
+    try {
+      agentIds = await resolveAgentIds();
+    } catch (err) {
+      agentIdError = err.message;
+    }
+    return collect({
       models,
       mongoose,
-      subject,
+      subject: { ...subject, _dsarAgentIds: agentIds },
       tenantId: subjectTenant,
+      agentIdError,
       out: args.out,
       includeLogs: args.includeLogs,
       logDir: args.logDir,
       log: console.log,
     });
+  };
 
   // Pin every read to the subject's own tenant when they have one; only a genuinely
   // tenant-less (single-tenant) deployment falls back to system scope.
@@ -785,6 +1142,19 @@ async function main() {
       : await runAsSystem(run);
 
   await mongoose.disconnect();
+
+  if (args.out) {
+    // Fold in whatever the external sinks have actually produced. Without this step
+    // every external sink stays pending and the bundle stays incomplete — which is
+    // the point: a fresh collect run can never be "complete" on its own.
+    finalizeManifest(manifest, args.out, (f) =>
+      fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null,
+    );
+    const manifestPath = path.join(args.out, 'manifest.json');
+    fs.rmSync(manifestPath, { force: true });
+    writeBundleFile(args.out, 'manifest.json', JSON.stringify(manifest, null, 2));
+    console.log(JSON.stringify(manifest.externalSinks, null, 2));
+  }
 
   if (!manifest.completeness.ok) {
     console.error(
@@ -812,6 +1182,16 @@ module.exports = {
   buildMeilisearchQueries,
   classifyVectorStores,
   buildVectorInventoryRequest,
+  NOT_SUBJECT_SCOPED_RAW,
+  EXTERNAL_SINKS,
+  AUDIT_ACTOR_CONTEXT_FIELDS,
+  AUDIT_CONTEXT_REDACTED,
+  initialExternalSinkState,
+  reconcileExternalResult,
+  finalizeManifest,
+  prepareOutputDir,
+  writeBundleFile,
+  buildResultsReadme,
   sinkFilter,
   shapeRows,
   resolveSubject,
