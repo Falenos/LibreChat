@@ -357,6 +357,14 @@
         <p>Available user-facing release notes appear here, with the newest entry first.</p>
         <!-- release-notes:en:begin -->
         <article class="release-group">
+          <h3>September 14, 2026</h3>
+          <ul>
+            <li>Conversation-history search no longer restarts a full rebuild because of brief harmless index-count differences.</li>
+            <li>Conversation-history search can recover faster while database updates remain safely bounded.</li>
+            <li>The token-to-euro counter now prices conversations routed through GPT-5.6 Luna or Terra instead of showing a misleading €0.00 total.</li>
+          </ul>
+        </article>
+        <article class="release-group">
           <h3>September 7, 2026</h3>
           <ul>
             <li>The KARL help dialog now follows the light or dark theme selected in the app.</li>
@@ -437,16 +445,21 @@
             <li>KARL can open and use information from links supplied by the user through a bounded, security-checked tool.</li>
           </ul>
         </article>
-        <article class="release-group">
-          <h3>May 2026</h3>
-          <ul>
-            <li>The Agent Marketplace moved into the main sidebar for faster, more discoverable access.</li>
-            <li>Administrators can switch between the detailed Agent Builder and the simplified view used by regular users.</li>
-            <li>Agents gained Fast Mode, optional reasoning-step display, and a simpler agent-first selector and tools experience.</li>
-            <li>Private files moved to Azure Blob Storage with expiring signed links and automatic link refresh.</li>
-            <li>Persistent-Agent chats can enable image generation per conversation from a dedicated composer control.</li>
-          </ul>
-        </article>
+        <details class="release-archive">
+          <summary>Earlier releases</summary>
+          <div class="release-archive-content">
+            <article class="release-group">
+              <h3>May 2026</h3>
+              <ul>
+                <li>The Agent Marketplace moved into the main sidebar for faster, more discoverable access.</li>
+                <li>Administrators can switch between the detailed Agent Builder and the simplified view used by regular users.</li>
+                <li>Agents gained Fast Mode, optional reasoning-step display, and a simpler agent-first selector and tools experience.</li>
+                <li>Private files moved to Azure Blob Storage with expiring signed links and automatic link refresh.</li>
+                <li>Persistent-Agent chats can enable image generation per conversation from a dedicated composer control.</li>
+              </ul>
+            </article>
+          </div>
+        </details>
         <!-- release-notes:en:end -->
       </section>
 
@@ -584,6 +597,14 @@
         <p>Verfügbare nutzerbezogene Versionshinweise stehen hier, neueste zuerst.</p>
         <!-- release-notes:de:begin -->
         <article class="release-group">
+          <h3>14. September 2026</h3>
+          <ul>
+            <li>Die Suche im Unterhaltungsverlauf startet bei kurzen harmlosen Unterschieden der Indexzahlen keinen vollständigen Neuaufbau mehr.</li>
+            <li>Die Suche im Unterhaltungsverlauf kann schneller wiederhergestellt werden, während Datenbankaktualisierungen sicher begrenzt bleiben.</li>
+            <li>Der Token-zu-Euro-Zähler berechnet jetzt auch Unterhaltungen, die über GPT-5.6 Luna oder Terra geroutet wurden, statt irreführend 0,00 € anzuzeigen.</li>
+          </ul>
+        </article>
+        <article class="release-group">
           <h3>7. September 2026</h3>
           <ul>
             <li>Der KARL-Hilfedialog übernimmt jetzt das in der App ausgewählte helle oder dunkle Design.</li>
@@ -664,16 +685,21 @@
             <li>KARL kann Informationen aus vom Nutzer bereitgestellten Links über ein begrenztes und sicherheitsgeprüftes Werkzeug öffnen und verwenden.</li>
           </ul>
         </article>
-        <article class="release-group">
-          <h3>Mai 2026</h3>
-          <ul>
-            <li>Der Agent Marketplace wurde für einen schnelleren und leichter auffindbaren Zugriff in die Hauptseitenleiste verschoben.</li>
-            <li>Administratoren können zwischen dem detaillierten Agent Builder und der vereinfachten Ansicht für reguläre Nutzer wechseln.</li>
-            <li>Agenten erhielten einen Schnellmodus, eine optionale Anzeige von Denkschritten sowie eine einfachere agentenzentrierte Auswahl und Werkzeugbedienung.</li>
-            <li>Private Dateien wurden in Azure Blob Storage mit ablaufenden signierten Links und automatischer Link-Erneuerung verlagert.</li>
-            <li>Chats mit persistenten Agenten können die Bilderstellung pro Unterhaltung über ein eigenes Eingabeelement aktivieren.</li>
-          </ul>
-        </article>
+        <details class="release-archive">
+          <summary>Frühere Versionen</summary>
+          <div class="release-archive-content">
+            <article class="release-group">
+              <h3>Mai 2026</h3>
+              <ul>
+                <li>Der Agent Marketplace wurde für einen schnelleren und leichter auffindbaren Zugriff in die Hauptseitenleiste verschoben.</li>
+                <li>Administratoren können zwischen dem detaillierten Agent Builder und der vereinfachten Ansicht für reguläre Nutzer wechseln.</li>
+                <li>Agenten erhielten einen Schnellmodus, eine optionale Anzeige von Denkschritten sowie eine einfachere agentenzentrierte Auswahl und Werkzeugbedienung.</li>
+                <li>Private Dateien wurden in Azure Blob Storage mit ablaufenden signierten Links und automatischer Link-Erneuerung verlagert.</li>
+                <li>Chats mit persistenten Agenten können die Bilderstellung pro Unterhaltung über ein eigenes Eingabeelement aktivieren.</li>
+              </ul>
+            </article>
+          </div>
+        </details>
         <!-- release-notes:de:end -->
       </section>
     </main>
