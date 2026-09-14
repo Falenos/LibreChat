@@ -2,17 +2,17 @@ import { logger } from '@librechat/data-schemas';
 import { ResourceType, PermissionBits, EModelEndpoint } from 'librechat-data-provider';
 import type { Agent, GraphEdge, TModelsConfig, TEndpointOption } from 'librechat-data-provider';
 import type { Response as ServerResponse } from 'express';
-import type { ServerRequest } from '~/types';
 import type {
   InitializedAgent,
   InitializeAgentParams,
   InitializeAgentDbMethods,
 } from './initialize';
 import type { ValidateAgentModelParams } from './validation';
-import { createEdgeCollector, filterOrphanedEdges } from './edges';
-import { createSequentialChainEdges } from './chain';
+import type { ServerRequest } from '~/types';
 import { validateAgentModel as defaultValidateAgentModel } from './validation';
 import { initializeAgent as defaultInitializeAgent } from './initialize';
+import { createEdgeCollector, filterOrphanedEdges } from './edges';
+import { createSequentialChainEdges } from './chain';
 
 /**
  * Callback invoked after a sub-agent is successfully initialized.
@@ -88,6 +88,17 @@ export interface DiscoverConnectedAgentsParams {
    * code-execution tooling even though their parent had it.
    */
   codeEnvAvailable?: InitializeAgentParams['codeEnvAvailable'];
+  // [knauf] KK20-297 — File Translation must gate handoff sub-agents the same
+  // way it gates the primary agent, or a disabled environment could still
+  // resolve/prime karl-file-translation for a connected sub-agent.
+  /**
+   * Whether File Translation (`translate_file`/`translation_status`) is
+   * available for the run. Forwarded verbatim to each handoff sub-agent so
+   * `karl-file-translation` never resolves/primes for a sub-agent when the
+   * feature is disabled, mirroring `codeEnvAvailable` above.
+   */
+  fileTranslationAvailable?: InitializeAgentParams['fileTranslationAvailable'];
+  // End [knauf]
 }
 
 export interface DiscoverConnectedAgentsDeps {
@@ -157,6 +168,9 @@ export async function discoverConnectedAgents(
     skillStates,
     defaultActiveOnShare,
     codeEnvAvailable,
+    // [knauf] KK20-297 — forward File Translation availability to sub-agents.
+    fileTranslationAvailable,
+    // End [knauf]
   } = params;
 
   const {
@@ -260,6 +274,10 @@ export async function discoverConnectedAgents(
         skillStates,
         defaultActiveOnShare,
         codeEnvAvailable,
+        // [knauf] KK20-297 — thread File Translation availability into the
+        // sub-agent's own initializeAgent call.
+        fileTranslationAvailable,
+        // End [knauf]
       },
       db,
     );

@@ -202,8 +202,77 @@ describe('performSync() - syncThreshold logic', () => {
     expect(mockBatchResetMeiliFlags).not.toHaveBeenCalledWith(Conversation.collection);
     expect(Message.syncWithMeili).toHaveBeenCalledTimes(1);
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      '[indexSync] Messages index has 0 documents but Mongo marks 100 indexed. Forcing full re-sync.',
+      '[indexSync] Messages index is empty or missing while Mongo marks 100 indexed. Forcing full re-sync.',
     );
+  });
+
+  test('preserves Mongo flags for a small non-zero cross-store count difference', async () => {
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 114747,
+      totalDocuments: 114747,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats
+      .mockResolvedValueOnce({ numberOfDocuments: 114743 })
+      .mockResolvedValueOnce({ numberOfDocuments: 50 });
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalled();
+    expect(Message.syncWithMeili).not.toHaveBeenCalled();
+    expect(Conversation.syncWithMeili).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      '[indexSync] Messages index has 114743 documents while Mongo marks 114747 indexed. Preserving Mongo flags because cross-store counts are not transactional.',
+    );
+  });
+
+  test('forces a full message sync when an existing index is empty', async () => {
+    Message.getSyncProgress
+      .mockResolvedValueOnce({ totalProcessed: 100, totalDocuments: 100, isComplete: true })
+      .mockResolvedValueOnce({ totalProcessed: 0, totalDocuments: 100, isComplete: false });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats
+      .mockResolvedValueOnce({ numberOfDocuments: 0 })
+      .mockResolvedValueOnce({ numberOfDocuments: 50 });
+    Message.syncWithMeili.mockResolvedValue(undefined);
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockBatchResetMeiliFlags).toHaveBeenCalledWith(Message.collection);
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalledWith(Conversation.collection);
+    expect(Message.syncWithMeili).toHaveBeenCalledTimes(1);
+  });
+
+  test('propagates non-provider index-stat failures without resetting flags', async () => {
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 100,
+      totalDocuments: 100,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats.mockRejectedValueOnce(new Error('stats unavailable'));
+
+    const indexSync = require('./indexSync');
+    await expect(indexSync()).rejects.toThrow('stats unavailable');
+
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalled();
+    expect(Message.syncWithMeili).not.toHaveBeenCalled();
+    expect(Conversation.syncWithMeili).not.toHaveBeenCalled();
   });
 
   test('periodic reconciliation stays silent while counts agree', async () => {
@@ -231,6 +300,34 @@ describe('performSync() - syncThreshold logic', () => {
     expect(mockLogger.info).not.toHaveBeenCalledWith(
       '[indexSync] Starting index synchronization check...',
     );
+    jest.useRealTimers();
+  });
+
+  test('periodic reconciliation ignores a small non-zero count difference', async () => {
+    jest.useFakeTimers();
+    Message.getSyncProgress.mockResolvedValue({
+      totalProcessed: 114747,
+      totalDocuments: 114747,
+      isComplete: true,
+    });
+    Conversation.getSyncProgress.mockResolvedValue({
+      totalProcessed: 50,
+      totalDocuments: 50,
+      isComplete: true,
+    });
+    mockMeiliGetStats
+      .mockResolvedValueOnce({ numberOfDocuments: 114743 })
+      .mockResolvedValueOnce({ numberOfDocuments: 50 });
+
+    const indexSync = require('./indexSync');
+    indexSync.startReconciliation();
+    await jest.advanceTimersByTimeAsync(15 * 60 * 1000);
+    indexSync.stopReconciliation();
+
+    expect(mockMeiliHealth).not.toHaveBeenCalled();
+    expect(mockBatchResetMeiliFlags).not.toHaveBeenCalled();
+    expect(Message.syncWithMeili).not.toHaveBeenCalled();
+    expect(Conversation.syncWithMeili).not.toHaveBeenCalled();
     jest.useRealTimers();
   });
 

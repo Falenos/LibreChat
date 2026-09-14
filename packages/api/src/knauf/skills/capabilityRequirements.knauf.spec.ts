@@ -1,5 +1,6 @@
 import {
   isSkillAvailableForCodeEnvironment,
+  isSkillAvailableForFileTranslation,
   listSkillsAvailableForCodeEnvironment,
 } from './capabilityRequirements';
 
@@ -89,5 +90,69 @@ describe('[knauf] code-dependent skill availability', () => {
         codeEnvAvailable: false,
       }),
     ).rejects.toThrow('Skills pagination cursor did not advance');
+  });
+});
+
+// [knauf] KK20-297 — same fail-closed contract as Code Execution, applied to the
+// deployment-baked `karl-file-translation` skill so the `$` popover never advertises
+// it while `KNAUF_FILE_TRANSLATION_ENABLED`/Azure credentials are not fully configured.
+describe('[knauf] file-translation-dependent skill availability', () => {
+  it('keeps ordinary skills available when File Translation is disabled', () => {
+    expect(isSkillAvailableForFileTranslation({ allowedTools: ['read_file'] }, false)).toBe(true);
+  });
+
+  it('hides translate_file skills unless the effective environment is enabled', () => {
+    const skill = { allowedTools: ['translate_file'] };
+
+    expect(isSkillAvailableForFileTranslation(skill, undefined)).toBe(false);
+    expect(isSkillAvailableForFileTranslation(skill, false)).toBe(false);
+    expect(isSkillAvailableForFileTranslation(skill, true)).toBe(true);
+  });
+
+  it('composes with the Code Execution gate so either disabled dependency hides a skill', async () => {
+    const listPage = jest.fn().mockResolvedValue({
+      skills: [
+        { allowedTools: ['translate_file'], name: 'karl-file-translation' },
+        { allowedTools: ['execute_code'], name: 'karl-data-analysis' },
+        { allowedTools: ['read_file'], name: 'visible' },
+      ],
+      has_more: false,
+      after: null,
+    });
+
+    await expect(
+      listSkillsAvailableForCodeEnvironment({
+        listPage,
+        limit: 3,
+        cursor: null,
+        codeEnvAvailable: true,
+        fileTranslationAvailable: false,
+      }),
+    ).resolves.toEqual({
+      skills: [
+        { allowedTools: ['execute_code'], name: 'karl-data-analysis' },
+        { allowedTools: ['read_file'], name: 'visible' },
+      ],
+      has_more: false,
+      after: null,
+    });
+
+    await expect(
+      listSkillsAvailableForCodeEnvironment({
+        listPage,
+        limit: 3,
+        cursor: null,
+        codeEnvAvailable: true,
+        fileTranslationAvailable: true,
+      }),
+    ).resolves.toEqual({
+      skills: [
+        { allowedTools: ['translate_file'], name: 'karl-file-translation' },
+        { allowedTools: ['execute_code'], name: 'karl-data-analysis' },
+        { allowedTools: ['read_file'], name: 'visible' },
+      ],
+      has_more: false,
+      after: null,
+    });
   });
 });

@@ -54,6 +54,10 @@ const loadAddedAgent = (params) =>
  * @param {boolean} [params.codeEnvAvailable] - `execute_code` capability flag;
  *   forwarded verbatim to the added agent's `initializeAgent`. @see
  *   InitializeAgentParams.codeEnvAvailable for full semantics.
+ * @param {boolean} [params.fileTranslationAvailable] - File Translation
+ *   availability flag (`isKnaufFileTranslationEnabled()`), forwarded verbatim
+ *   to the added agent's `initializeAgent` and its model-spec skill
+ *   resolution. @see InitializeAgentParams.fileTranslationAvailable.
  * @returns {Promise<{userMCPAuthMap: Object|undefined}>} The updated userMCPAuthMap
  */
 const processAddedConvo = async ({
@@ -79,6 +83,7 @@ const processAddedConvo = async ({
   skillStates,
   defaultActiveOnShare,
   codeEnvAvailable,
+  fileTranslationAvailable,
 }) => {
   const addedConvo = endpointOption.addedConvo;
   if (addedConvo == null) {
@@ -134,8 +139,9 @@ const processAddedConvo = async ({
           names: selectedModelSpec.skills,
           accessibleSkillIds,
           getSkillByName: db.getSkillByName,
-          // [knauf] KK20-257 — connected model specs share the primary environment gate.
+          // [knauf] KK20-257 / KK20-297 — connected model specs share the primary environment gates.
           codeEnvAvailable,
+          fileTranslationAvailable,
           // End [knauf]
         });
         addedAgent.skills_enabled = true;
@@ -176,6 +182,7 @@ const processAddedConvo = async ({
           ephemeralSkillsToggle,
         }),
         codeEnvAvailable,
+        fileTranslationAvailable,
         skillStates,
         defaultActiveOnShare,
       },

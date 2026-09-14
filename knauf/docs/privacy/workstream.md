@@ -999,17 +999,24 @@ half, this is the access half.
 
 **AC:**
 - [x] **P2-6a — written (KK20-331):** [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) plus the
-      read-only collector `knauf/scripts/dsar-collect.js`, covering **all nine sinks in §1** — Art. 15 is a live obligation with an Art. 12(3) clock (one month,
+      read-only collector `knauf/scripts/dsar-collect.js`, covering **every §1 sink** (the runbook
+      splits the last one: §1.9 browser analytics, excluded; §1.10 server logs, in scope) — Art. 15
+      is a live obligation with an Art. 12(3) clock (one month,
       extendable by two more for complex requests if the subject is told within the first), and
       "manual archaeology" is not a compliant fulfilment path until it is written down and rehearsed
       once. **Any pending or incoming DSAR promotes this item to immediate.**
-- [x] The access scope enumerates every §1 sink, not the obvious seven (pinned: the collector's
-      inventory is asserted against the deletion cascade by `dsar-collect.spec.js`): Mongo, Meilisearch,
+- [x] The access scope enumerates every §1 sink, not the obvious seven (pinned: `dsar-collect.spec.js`
+      enumerates the **live model registry** and fails unless every registered model is collected or
+      carries a written exclusion reason — 41 models, 32 collected, 9 excluded. The deletion-cascade
+      pin is kept as a secondary check only; PR #349 review established that comparing the collector
+      to the cascade cannot prove completeness, since neither is an independent inventory): Mongo, Meilisearch,
       pgvector, Azure AI Search, Blob, **Langfuse traces** (addressable: tenant tags,
       `librechat.source.message.id` metadata), the subject's **auditLog entries**, **winston logs**
-      (error logs carry `userId`/`requestId`, 14-day rotation — searched or excluded, with the
-      reason written down) and **Datadog** (pseudonymous session id only — document the exclusion
-      rather than silently omit it). Access mirrors erasure: every sink P2-5 verifies, this discloses.
+      (`requestContextFormat` attaches `userId`/`tenantId`/`requestId` to **both** the file and
+      console transports, so with `LOG_TO_FILE=false` the attributable records are in the log
+      platform, not `api/logs/` — runbook §1.10) and **browser analytics** (Datadog RUM/Logs, Adobe,
+      OneTrust — pseudonymous session id only, no `setUser`: document the exclusion rather than
+      silently omit it). Access mirrors erasure: every sink P2-5 verifies, this discloses.
 - [x] **Art. 15(4) — third-party data:** a subject's auditLog entries name the *admin* who acted
       on them (`actor.name`). Redacted by the collector when the requester is the target, kept when
       they are the actor. **Finding:** the admin list API filters by name *substring* only — no
@@ -1017,9 +1024,11 @@ half, this is the access half.
 - [ ] **Rehearsal — the remaining P2-6a AC:** run the runbook §0–§4 against a test subject in dev,
       record elapsed time per section against the Art. 12(3) clock. Not yet done.
 - [ ] **Finding to carry into P2-6 (the endpoint):** `rag_api` has no read-back-by-subject
-      endpoint (`/documents` is delete-only), so vectors are attested by `file_id` and disclosed via
-      the source file; and Datadog is *excluded* by design (random session id, no identity) — the
-      endpoint must state both, not silently omit them.
+      endpoint (`/documents` is delete-only), so vectors are attested by their **physical** id
+      (`knauf_asset_id ?? file_id`, backend from `KnaufFileAsset.vector_backend`) for the RAG service
+      to confirm, and disclosed via the source file; **browser analytics** is *excluded* by design
+      (random session id, no `setUser`) while **server logs/APM** are in scope — the endpoint must
+      state all three, not silently omit them or collapse the last two into one exclusion.
 - [ ] Then the self-service endpoint: a user can export conversations, messages, memories, file
       metadata and feedback · machine-readable format · fulfilment time measured.
 
@@ -1354,8 +1363,8 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`api/knauf/audit/retention.js`](../../../api/knauf/audit/retention.js) · [`api/knauf/audit/sweepOnce.js`](../../../api/knauf/audit/sweepOnce.js) | KK20-328 — dependency binding (indexed `chainKey` enumeration, lease owner, HMAC key) and the one-shot CronJob entrypoint |
 | [`api/server/index.js`](../../../api/server/index.js) · [`api/server/experimental.js`](../../../api/server/experimental.js) | Both entrypoints start the sweep — `index.js` is what the container runs |
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
-| [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) | KK20-331 — the Art. 15 procedure across all nine sinks; Art. 15(4) and 12(3) encoded |
-| [`knauf/scripts/dsar-collect.js`](../../scripts/dsar-collect.js) | KK20-331 — read-only collector: 25 Mongo stores + scheduler + auditLog (redacted) + Langfuse/Meili commands + Blob/vector attestations. Inventory pinned to the deletion cascade by its spec |
+| [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) | KK20-331 — the Art. 15 procedure across every §1 sink; Art. 15(4) and 12(3) encoded; §1.9/§1.10 split browser analytics (excluded) from server logs (in scope) |
+| [`knauf/scripts/dsar-collect.js`](../../scripts/dsar-collect.js) | KK20-331 — read-only collector: 32 Mongo stores + scheduler + auditLog (redacted) + paged Langfuse/Meili scripts + Blob/physical-vector inventory. Inventory pinned to the live model registry by its spec; fails closed (exit 2/3/4) rather than emitting an incomplete bundle |
 | [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) | P2-5 (KK20-TBD) — the Art. 17 verification procedure: real product deletion paths, the Langfuse public-API leg, the retained-by-design table, and why `config/delete-user.js` is not an erasure path |
 | [`knauf/scripts/erasure-verify.js`](../../scripts/erasure-verify.js) | P2-5 (KK20-TBD) — `before`/`langfuse-delete`/`after` verifier over all nine sinks; reuses the KK20-331 inventory; exit 3 on residuals; Langfuse `DELETE /api/public/traces` batches are its only write |
 | [`api/server/controllers/UserController.js`](../../../api/server/controllers/UserController.js) · [`config/delete-user.js`](../../../config/delete-user.js) | The erasure-complete cascade vs the ops script that is not — pinned by `erasure-verify.spec.js` |
@@ -1389,9 +1398,11 @@ cd packages/api && npx jest src/knauf/audit             # 33 — sweep (24: call
 **P2-6a — DSAR collector (KK20-331).** Read-only by construction. Against dev with a test user:
 `node knauf/scripts/dsar-collect.js --user <email>` prints per-sink counts; add `--out ./dsar-test/`
 for the bundle. Then check `users.json` has **no** `totpSecret`/`backupCodes`/`refreshToken`; that
-`auditlogs.json` rows with `_dsarRole: "target"` show a redacted actor; and that `manifest.json`
-lists the Datadog and vector-store exclusions with reasons. `npm run test:dsar` runs the spec that
-pins the inventory to the deletion cascade.
+`auditlogs.json` rows with `_dsarRole: "target"` show a redacted actor; that `groups.json` carries
+**no** `memberIds`; and that `manifest.json` records the resolved tenant, lists the browser-analytics
+and vector-store exclusions with reasons, and reports `completeness.ok`. A non-zero exit (2/3/4)
+means the bundle is not releasable. `npm run test:dsar` runs the spec that pins the inventory to the
+live model registry.
 
 ```bash
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'

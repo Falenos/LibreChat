@@ -37,6 +37,9 @@ import { isBinaryBuffer } from './binary';
 // [knauf] KK20-257 — Skills API visibility follows the effective Code Execution gate.
 import { isKnaufCodeExecutionEnabled } from '~/knauf/code/codeEnvGuard';
 import { listSkillsAvailableForCodeEnvironment } from '~/knauf/skills/capabilityRequirements';
+// [knauf] KK20-297 — same fail-closed pattern as Code Execution, applied to File Translation.
+import { isKnaufFileTranslationEnabled } from '~/knauf/translation/translationEnvGuard';
+// End [knauf]
 // End [knauf]
 
 /** Thin error shape the skill methods throw on validation failure. */
@@ -348,11 +351,14 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
 
       const publicSet = new Set(publicIds.map((id) => id.toString()));
       // [knauf] KK20-257 — fill API pages after removing unavailable code-dependent skills.
+      // [knauf] KK20-297 — and skills that depend on a disabled File Translation environment.
       const codeEnvAvailable = isKnaufCodeExecutionEnabled(
         req.config?.endpoints?.[EModelEndpoint.agents]?.capabilities,
       );
+      const fileTranslationAvailable = isKnaufFileTranslationEnabled();
       const result = await listSkillsAvailableForCodeEnvironment({
         codeEnvAvailable,
+        fileTranslationAvailable,
         limit: parsedLimit,
         cursor: typeof cursor === 'string' && cursor.length > 0 ? cursor : null,
         listPage: ({ limit: pageLimit, cursor: pageCursor }) =>

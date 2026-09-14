@@ -7,8 +7,9 @@ const COST_LOOKUP_INDEX_NAME = 'knauf_cost_user_conversation_updatedAt_id';
 const TRANSACTION_COST_FIELDS =
   '_id model context tokenType rawAmount inputTokens inputTokenCount writeTokens readTokens messageId updatedAt knauf_requestedModel knauf_costEstimated knauf_costEstimateReason knauf_costRateSource knauf_pricingMatch';
 
-const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-07-21';
-const RATE_SOURCE_LABEL = 'Azure Retail Prices API · Global Standard · EUR · 2026-07-21';
+const RATE_SOURCE = 'azure-retail-eur-swedencentral-global-2026-09-11';
+const RATE_SOURCE_LABEL =
+  'Azure Retail Prices API · Global Standard · EUR · 2026-09-11 · conservative router fallback';
 const LONG_CONTEXT_THRESHOLD = 272_000;
 const MODEL_ROUTER_INPUT_PER_MILLION = 0.1229;
 const EUR_RATES = {
@@ -53,7 +54,7 @@ const EUR_RATES = {
   'gpt-5.6-sol': {
     modelVersion: '2026-07-09',
     effectiveFrom: '2026-07-01',
-    pricingBasis: 'Azure Retail Prices API, Global Standard',
+    pricingBasis: 'Conservative retained rate above the current Azure Global Standard meter',
     inputPerMillion: 4.3879,
     cacheWritePerMillion: 5.4849,
     cachedInputPerMillion: 0.4388,
@@ -65,10 +66,40 @@ const EUR_RATES = {
       outputPerMillion: 39.491,
     },
   },
+  'gpt-5.6-terra': {
+    modelVersion: '2026-07-09',
+    effectiveFrom: '2026-08-01',
+    pricingBasis: 'Azure Retail Prices API, Global Standard',
+    inputPerMillion: 1.7173,
+    cacheWritePerMillion: 2.1467,
+    cachedInputPerMillion: 0.1717,
+    outputPerMillion: 10.304,
+    longContext: {
+      inputPerMillion: 3.4347,
+      cacheWritePerMillion: 4.2933,
+      cachedInputPerMillion: 0.3435,
+      outputPerMillion: 15.456,
+    },
+  },
+  'gpt-5.6-luna': {
+    modelVersion: '2026-07-09',
+    effectiveFrom: '2026-08-01',
+    pricingBasis: 'Azure Retail Prices API, Global Standard',
+    inputPerMillion: 0.1717,
+    cacheWritePerMillion: 0.2147,
+    cachedInputPerMillion: 0.0172,
+    outputPerMillion: 1.0304,
+    longContext: {
+      inputPerMillion: 0.3435,
+      cacheWritePerMillion: 0.4293,
+      cachedInputPerMillion: 0.0343,
+      outputPerMillion: 1.5456,
+    },
+  },
   'model-router': {
     modelVersion: 'router-fallback',
     effectiveFrom: '2026-07-17',
-    pricingBasis: 'Conservative fallback at the highest allowed router-pool rate',
+    pricingBasis: 'Conservative fallback above the highest configured router-pool rate',
     inputPerMillion: 4.3879,
     cacheWritePerMillion: 5.4849,
     cachedInputPerMillion: 0.4388,
@@ -104,9 +135,6 @@ function absNumber(value) {
 
 function normalizeModel(model) {
   const value = String(model || '').toLowerCase();
-  if (value.includes('model-router')) {
-    return 'model-router';
-  }
   if (value.includes('gpt-5.4-nano') || value.includes('gpt-54-nano')) {
     return 'gpt-5.4-nano';
   }
@@ -115,6 +143,12 @@ function normalizeModel(model) {
   }
   if (value.includes('gpt-5.6-sol') || value.includes('gpt-56-sol')) {
     return 'gpt-5.6-sol';
+  }
+  if (value.includes('gpt-5.6-terra') || value.includes('gpt-56-terra')) {
+    return 'gpt-5.6-terra';
+  }
+  if (value.includes('gpt-5.6-luna') || value.includes('gpt-56-luna')) {
+    return 'gpt-5.6-luna';
   }
   if (value.includes('gpt-5.5') || value.includes('gpt-55')) {
     return 'gpt-5.5';
@@ -128,13 +162,35 @@ function normalizeModel(model) {
   if (value.includes('gpt-image-1')) {
     return 'gpt-image-1';
   }
+  if (value.includes('model-router')) {
+    return 'model-router';
+  }
   return value || 'unknown';
 }
 
-function resolveModelPricing(model) {
+function isModelRouterRequest(transaction) {
+  const requestedModel = transaction.knauf_requestedModel;
+  if (requestedModel) {
+    return String(requestedModel).toLowerCase().includes('model-router');
+  }
+  return String(transaction.model || '')
+    .toLowerCase()
+    .includes('model-router');
+}
+
+function resolveModelPricing(model, requestedModel) {
   const normalizedModel = normalizeModel(model);
   const rate = EUR_RATES[normalizedModel];
   if (!rate) {
+    if (normalizeModel(requestedModel) === 'model-router') {
+      return {
+        normalizedModel,
+        rate: EUR_RATES['model-router'],
+        pricingMatch: 'router-fallback',
+        isEstimated: true,
+        estimateReason: 'router-model-rate-pending',
+      };
+    }
     return {
       normalizedModel,
       rate: null,
@@ -218,7 +274,7 @@ function addModelSummary(target, transaction, entry) {
 }
 
 function calculateTransactionCost(transaction) {
-  const pricing = resolveModelPricing(transaction.model);
+  const pricing = resolveModelPricing(transaction.model, transaction.knauf_requestedModel);
   const rawAmount = absNumber(transaction.rawAmount);
   const inputTokens = absNumber(transaction.inputTokens);
   const writeTokens = absNumber(transaction.writeTokens);
@@ -268,8 +324,7 @@ function calculateTransactionCost(transaction) {
       (base.cachedInputTokens / EUR_PER_MILLION_TOKENS) *
         (rate.cachedInputPerMillion ?? rate.inputPerMillion) +
       (base.outputTokens / EUR_PER_MILLION_TOKENS) * rate.outputPerMillion;
-    const requestedModel = transaction.knauf_requestedModel || transaction.model;
-    if (transaction.tokenType === 'prompt' && normalizeModel(requestedModel) === 'model-router') {
+    if (transaction.tokenType === 'prompt' && isModelRouterRequest(transaction)) {
       base.cost +=
         ((base.inputTokens + base.cachedInputTokens) / EUR_PER_MILLION_TOKENS) *
         MODEL_ROUTER_INPUT_PER_MILLION;
@@ -376,7 +431,7 @@ async function persistTransactionCostProvenance(Transaction, transactions) {
     if (!transaction?._id) {
       return [];
     }
-    const pricing = resolveModelPricing(transaction.model);
+    const pricing = resolveModelPricing(transaction.model, transaction.knauf_requestedModel);
     const provenance = {
       knauf_costEstimated: pricing.isEstimated,
       knauf_costEstimateReason: pricing.estimateReason,
