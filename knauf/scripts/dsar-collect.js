@@ -4,7 +4,7 @@
 // READ-ONLY. It uses `.find().lean()` and `countDocuments` only, never a write. It
 // exists because Art. 15 is a live obligation and the self-service export endpoint
 // (P2-6) does not exist yet; without a scripted collector, an access request means
-// hand-querying 25 Mongo stores plus Meilisearch, Langfuse, Blob and the logs, and
+// hand-querying ~30 Mongo stores plus Meilisearch, Langfuse, Blob and the logs, and
 // forgetting one is the failure mode.
 //
 // Usage:
@@ -19,16 +19,21 @@ const fs = require('node:fs');
 /* ------------------------------------------------------------------ inventory */
 
 /**
- * Every store the account-deletion cascade (UserController.deleteUserController)
- * reaches, keyed the same way. Access mirrors erasure: if deletion has to reach it,
- * disclosure has to reach it. The spec pins this list against the cascade so a new
- * store cannot be added to one without the other.
+ * Every Mongo store that holds data about a subject.
+ *
+ * PR #349 review: this list used to be justified solely by pinning it against
+ * `deleteUserController`. That cannot prove completeness — the cascade is not an
+ * independent schema inventory, and anything the cascade itself forgets is invisible
+ * to a test that only compares the two. The spec now enumerates the live model
+ * registry instead and forces every registered model into exactly one of:
+ * collected here, or listed in NOT_SUBJECT_SCOPED with a reason. The cascade pin is
+ * kept as a second, weaker check (erasure must not reach a store disclosure does not).
  */
 const MONGO_SINKS = [
   { model: 'Message', field: 'user', note: 'incl. content[] think parts and feedback.text' },
   { model: 'Conversation', field: 'user' },
   { model: 'MemoryEntry', field: 'userId', note: 'profiling-grade' },
-  { model: 'File', field: 'user', note: 'metadata; bytes are in Blob' },
+  { model: 'File', field: 'user', note: 'logical row; bytes are in Blob, vectors keyed by asset' },
   { model: 'SharedLink', field: 'user' },
   { model: 'Transaction', field: 'user', note: 'per-user cost records' },
   { model: 'Balance', field: 'user' },
@@ -42,14 +47,61 @@ const MONGO_SINKS = [
   { model: 'PromptGroup', field: 'author' },
   { model: 'Skill', field: 'author' },
   { model: 'MCPServer', field: 'author' },
+  // KK20-248 project workspace — `instructions` is subject-authored free text.
+  { model: 'ChatProject', field: 'user', note: 'project-level instructions (free text)' },
+  { model: 'ChatProjectSource', field: 'user', note: 'project source associations + errors' },
+  // KK20-195 physical ledger — authoritative for blob/vector identity and state.
+  {
+    model: 'KnaufFileAsset',
+    field: 'scope_id',
+    note: 'physical blob/vector identity, generations, indexing errors',
+  },
+  { model: 'SkillFile', field: 'author', note: 'subject-authored skill file content' },
+  { model: 'SkillSyncStatus', field: 'owner' },
+  // `principalId` is Mixed and shared by user/group/role principals, so both of
+  // these pin `principalType: 'user'` — a group's id must never resolve as the
+  // subject's.
+  {
+    model: 'Config',
+    field: 'principalId',
+    principalType: 'user',
+    note: 'per-principal config overrides',
+  },
+  {
+    model: 'SystemGrant',
+    field: 'principalId',
+    principalType: 'user',
+    // The subject may see which capabilities they hold; the admin who granted
+    // them is a third party (Art. 15(4)).
+    redactFields: ['grantedBy'],
+    note: 'capabilities held; grantedBy redacted as a third party',
+  },
   { model: 'AgentApiKey', field: 'userId', existenceOnly: true },
   { model: 'PluginAuth', field: 'userId', existenceOnly: true },
   { model: 'Key', field: 'userId', existenceOnly: true },
   { model: 'Token', field: 'userId', existenceOnly: true },
   { model: 'Session', field: 'user', existenceOnly: true },
-  { model: 'Group', field: 'memberIds', operator: 'in' },
+  { model: 'SkillSyncCredential', field: 'createdBy', existenceOnly: true },
+  { model: 'Group', field: 'memberIds', membership: true },
   { model: 'AclEntry', field: 'principalId' },
 ];
+
+/**
+ * Registered models that hold nothing about a subject, each with the reason it is
+ * not collected. The spec asserts MONGO_SINKS ∪ NOT_SUBJECT_SCOPED covers the whole
+ * live registry, so a new model cannot be added without a disclosure decision.
+ */
+const NOT_SUBJECT_SCOPED = {
+  User: 'collected separately as users.json (the subject document itself)',
+  AuditLog: 'collected separately with Art. 15(4) actor redaction (see auditlogs.json)',
+  Role: 'role definitions — reference data, not per-subject',
+  AccessRole: 'ACL role definitions — reference data, not per-subject',
+  AgentCategory: 'marketplace taxonomy — reference data, not per-subject',
+  Banner: 'global announcements — no subject scope',
+  MigrationAllowlist: 'operational allowlist keyed by file/collection, not by subject',
+  KnaufAuditRetentionCheckpoint: 'retention bookkeeping (hash chain), carries no subject data',
+  KnaufAuditRetentionLease: 'distributed lock document, carries no subject data',
+};
 
 /** Knauf scheduler collections, purged per user by api/knauf/scheduler/userLifecycle.js. */
 const RAW_COLLECTIONS = [
@@ -73,6 +125,22 @@ const EXISTENCE_FIELDS = [
   'type',
 ];
 
+/**
+ * Group fields safe to disclose. `memberIds` is deliberately absent: it is the list of
+ * every OTHER member's identifier, and Art. 15(4) bars disclosing it to satisfy this
+ * subject's request (PR #349 review).
+ */
+const GROUP_SUBJECT_FIELDS = [
+  '_id',
+  'name',
+  'description',
+  'source',
+  'idOnTheSource',
+  'tenantId',
+  'createdAt',
+  'updatedAt',
+];
+
 /* ------------------------------------------------------------------ pure helpers */
 
 function redactUserDocument(user) {
@@ -86,6 +154,35 @@ function redactUserDocument(user) {
 function toExistenceOnly(row) {
   const out = {};
   for (const k of EXISTENCE_FIELDS) if (row[k] !== undefined) out[k] = row[k];
+  return out;
+}
+
+/**
+ * The identifier the application actually stores in `Group.memberIds`.
+ * `userGroup.js` writes `user.idOnTheSource || userId.toString()`, so an
+ * OIDC/Entra-sourced subject is a member under their external id, never their Mongo
+ * `_id`. Querying by `_id` alone silently returns zero groups for exactly the users
+ * who have them (PR #349 review).
+ */
+function groupMembershipKeys(subject) {
+  const keys = [String(subject._id)];
+  if (subject.idOnTheSource && !keys.includes(subject.idOnTheSource)) {
+    keys.unshift(subject.idOnTheSource);
+  }
+  return keys;
+}
+
+/**
+ * Art. 15(4): the subject may learn which groups they belong to, not who else is in
+ * them. Project to non-identifying group metadata and record which key matched.
+ */
+function toSubjectGroupView(group, membershipKeys) {
+  const out = {};
+  for (const k of GROUP_SUBJECT_FIELDS) if (group[k] !== undefined) out[k] = group[k];
+  const members = Array.isArray(group.memberIds) ? group.memberIds.map(String) : [];
+  out._dsarMembershipKey = membershipKeys.find((k) => members.includes(k)) ?? null;
+  out._dsarMemberCount = members.length;
+  out._dsarNote = 'memberIds withheld — other members are third parties (Art. 15(4))';
   return out;
 }
 
@@ -108,36 +205,220 @@ function redactAuditRows(rows, subjectId) {
   });
 }
 
-/** Langfuse userId IS the Mongo user id (pinned by KK20-327's identity assertion). */
+/* ------------------------------------------------------ external-sink commands */
+
+const LANGFUSE_PAGE_SIZE = 100;
+/** Refuse to loop forever if the API keeps reporting more pages. */
+const MAX_PAGES = 10000;
+
+/**
+ * Langfuse userId IS the Mongo user id (pinned by KK20-327's identity assertion).
+ *
+ * PR #349 review: the previous version emitted `for p in 1..10`, which silently
+ * stopped at 1,000 traces / 500 scores — a large account would export a truncated
+ * bundle and the script would still exit 0. The Langfuse API returns
+ * `meta.totalItems` / `meta.totalPages` on every paginated response, so the emitted
+ * script now pages until the API reports exhaustion, reconciles the number of rows it
+ * actually wrote against `totalItems`, and **exits non-zero** when they disagree.
+ * A DSAR bundle must never be silently short.
+ */
 function buildLangfuseCommands(subjectId) {
   const id = String(subjectId);
-  return [
-    '#!/usr/bin/env bash',
-    '# Run where the Langfuse CLI has credentials (see package.json langfuse:* scripts).',
-    '# Page until a call returns an empty data array.',
-    `for p in 1 2 3 4 5 6 7 8 9 10; do npx langfuse api traces list --user-id ${id} --fields core,io,observations --limit 100 --page $p --json > langfuse-traces-p$p.json; done`,
-    `for p in 1 2 3 4 5; do npx langfuse api scores list --user-id ${id} --fields score,trace --limit 100 --page $p --json > langfuse-scores-p$p.json; done`,
-    '# Scores created before KK20-327 may carry free-text comments — review before release.',
-  ].join('\n');
+  return `#!/usr/bin/env bash
+# [knauf] KK20-331 — Langfuse collection for DSAR subject ${id}.
+# Run where the Langfuse CLI has credentials (see package.json langfuse:* scripts).
+# Exits non-zero if completeness cannot be established — do not release a bundle
+# produced by a failed run.
+set -euo pipefail
+
+SUBJECT="${id}"
+LIMIT=${LANGFUSE_PAGE_SIZE}
+MAX_PAGES=${MAX_PAGES}
+RETRIES="\${LANGFUSE_RETRIES:-3}"
+TIMEOUT="\${LANGFUSE_TIMEOUT:-120}"
+
+# One bounded, retried CLI call. Fails the script when every attempt fails.
+lf() {
+  local out="$1"; shift
+  local attempt=1
+  until timeout "$TIMEOUT" npx langfuse "$@" --json > "$out"; do
+    if [ "$attempt" -ge "$RETRIES" ]; then
+      echo "FAIL: langfuse $* did not succeed after $RETRIES attempts" >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep $((attempt * 2))
+  done
 }
 
+# Pages <resource> until meta.totalPages is reached, then reconciles the row count
+# against meta.totalItems. Any mismatch is a hard failure.
+collect() {
+  local resource="$1"; shift
+  local page=1 total_pages=1 total_items=0 seen=0
+
+  while [ "$page" -le "$total_pages" ] && [ "$page" -le "$MAX_PAGES" ]; do
+    lf "langfuse-\${resource}-p\${page}.json" api "$@" \\
+      --user-id "$SUBJECT" --limit "$LIMIT" --page "$page"
+
+    # The ? guards matter: a jq ERROR (indexing an array with a string) is not
+    # caught by the // operator, and the CLI may return the API body bare or
+    # wrapped in {ok,status,data}. Both shapes must parse, or the loop dies
+    # mid-collection and the run reports nothing rather than failing loudly.
+    total_pages=$(jq -r '(.data.meta? // .meta? // {}) | .totalPages // 1' "langfuse-\${resource}-p\${page}.json")
+    total_items=$(jq -r '(.data.meta? // .meta? // {}) | .totalItems // 0' "langfuse-\${resource}-p\${page}.json")
+    seen=$((seen + $(jq -r '(.data.data? // .data? // []) | length' "langfuse-\${resource}-p\${page}.json")))
+    page=$((page + 1))
+  done
+
+  if [ "$page" -gt "$MAX_PAGES" ]; then
+    echo "FAIL: \${resource} exceeded MAX_PAGES=\${MAX_PAGES}; completeness not established" >&2
+    return 1
+  fi
+  if [ "$seen" -ne "$total_items" ]; then
+    echo "FAIL: \${resource} collected $seen rows but API reports $total_items" >&2
+    return 1
+  fi
+  echo "OK: \${resource} — $seen/$total_items rows across $((page - 1)) page(s)"
+}
+
+# Traces carry prompts, completions, reasoning and tool outputs (in observations).
+collect traces traces list --fields core,io,observations
+# Feedback scores. Scores created before KK20-327 may carry free-text comments —
+# review before release.
+collect scores scores list --fields score,trace
+
+echo "Langfuse collection complete for \${SUBJECT}."
+`;
+}
+
+/**
+ * PR #349 review: `{"limit": 1000}` returns one page and Meilisearch reports only
+ * `estimatedTotalHits` for offset/limit queries. Using `page`/`hitsPerPage` instead
+ * returns an exact `totalHits` and `totalPages`, so the emitted recipe can page to
+ * exhaustion and prove it collected everything.
+ *
+ * `user` is the only filterable attribute on both indexes (api/db/indexSync.js), which
+ * is exactly what a DSAR needs.
+ */
 function buildMeilisearchQueries(subjectId) {
   const id = String(subjectId);
-  return [
-    '# Meilisearch — the only filterable attribute is `user`, which is exactly what a DSAR needs.',
-    '# These are DERIVED copies of Mongo messages/conversations: attest counts, do not double-disclose.',
-    '',
-    `POST /indexes/messages/search   {"filter": "user = ${id}", "limit": 1000}`,
-    `POST /indexes/convos/search     {"filter": "user = ${id}", "limit": 1000}`,
-  ].join('\n');
+  return `# [knauf] KK20-331 — Meilisearch collection for DSAR subject ${id}.
+#
+# These are DERIVED copies of Mongo messages/conversations: attest counts, do not
+# double-disclose. \`user\` is the only filterable attribute on either index.
+#
+# Use page/hitsPerPage (NOT offset/limit): it returns an exact \`totalHits\` and
+# \`totalPages\`, so completeness is provable. offset/limit only ever reports
+# \`estimatedTotalHits\`, and a single 1,000-hit page silently truncates a heavy user.
+
+POST /indexes/messages/search  {"filter": "user = ${id}", "hitsPerPage": 1000, "page": 1}
+POST /indexes/convos/search    {"filter": "user = ${id}", "hitsPerPage": 1000, "page": 1}
+
+# Page until \`page\` > \`totalPages\`, then check the rows you wrote against
+# \`totalHits\`. Scripted equivalent (jq + curl), fails closed on any mismatch:
+
+    set -euo pipefail
+    collect() {  # collect <index> <outfile-prefix>
+      local idx="$1" out="$2" page=1 total_pages=1 total_hits=0 seen=0
+      while [ "$page" -le "$total_pages" ]; do
+        curl -fsS --max-time 120 -X POST "\${MEILI_HOST}/indexes/\${idx}/search" \\
+          -H "Authorization: Bearer \${MEILI_MASTER_KEY}" -H 'Content-Type: application/json' \\
+          -d "{\\"filter\\":\\"user = ${id}\\",\\"hitsPerPage\\":1000,\\"page\\":\${page}}" \\
+          > "\${out}-p\${page}.json"
+        total_pages=$(jq -r '.totalPages' "\${out}-p\${page}.json")
+        total_hits=$(jq -r '.totalHits' "\${out}-p\${page}.json")
+        seen=$((seen + $(jq -r '.hits | length' "\${out}-p\${page}.json")))
+        page=$((page + 1))
+      done
+      [ "$seen" -eq "$total_hits" ] || { echo "FAIL: \${idx} $seen != $total_hits" >&2; return 1; }
+      echo "OK: \${idx} — $seen/$total_hits"
+    }
+    collect messages meili-messages
+    collect convos   meili-convos
+`;
 }
 
-/** Split embedded files by vector sink the way VectorDB/crud.js routes them. */
-function classifyVectorStores(files) {
-  const embedded = files.filter((f) => f.embedded === true);
+/* ------------------------------------------------------------- vector identity */
+
+/**
+ * Physical vector state for the subject's files.
+ *
+ * PR #349 review: the previous version split files by `context === 'agents'` and
+ * reported the logical `file_id`. Both are wrong as of KK20-195/KK20-204:
+ *
+ *  - the physical vector id is `knauf_asset_id ?? file_id` — see
+ *    `VectorDB/crud.js` (`deleteVectorsForFiles`, `deleteVectors`), which routes on
+ *    exactly that value. A deduplicated or re-indexed file's vectors do not live
+ *    under its logical `file_id` at all;
+ *  - the backend is recorded on the asset as `vector_backend`, not inferred from
+ *    `context`. The context heuristic also ignores `isAzureSearchEnabledForAgents()`,
+ *    so with Azure Search disabled it attests Azure for files that are in pgvector;
+ *  - `active_generation` / `stale_generations` decide which vectors are actually
+ *    live, and stale generations are cleanup debt that may still hold embeddings.
+ *
+ * So: join File rows to their KnaufFileAsset and report the asset's own state.
+ * Files with no asset row (pre-KK20-195 legacy) fall back to the old heuristic and
+ * are marked `unverified: true` so the reviewer can see the attestation is weaker
+ * for them rather than being told a guess is a fact.
+ */
+function classifyVectorStores(files, assets = []) {
+  const byAssetId = new Map(assets.map((a) => [String(a.asset_id), a]));
+  const entries = files
+    .filter((f) => f.embedded === true || f.knauf_asset_id)
+    .map((f) => {
+      const asset = f.knauf_asset_id ? byAssetId.get(String(f.knauf_asset_id)) : undefined;
+      const vectorId = f.knauf_asset_id ?? f.file_id;
+      if (!asset) {
+        return {
+          file_id: f.file_id,
+          vectorId,
+          backend: f.context === 'agents' ? 'azure_search' : 'pgvector',
+          unverified: true,
+          note: 'no FileAsset row — backend inferred from context; confirm with the RAG service',
+        };
+      }
+      return {
+        file_id: f.file_id,
+        vectorId,
+        backend: asset.vector_backend,
+        status: asset.status,
+        activeGeneration: asset.active_generation ?? null,
+        staleGenerations: asset.stale_generations ?? [],
+        lastErrorCode: asset.last_error_code ?? null,
+        unverified: false,
+      };
+    });
+
+  const byBackend = (name) => entries.filter((e) => e.backend === name);
   return {
-    azureAiSearch: embedded.filter((f) => f.context === 'agents').map((f) => f.file_id),
-    pgvector: embedded.filter((f) => f.context !== 'agents').map((f) => f.file_id),
+    entries,
+    azureAiSearch: byBackend('azure_search').map((e) => e.vectorId),
+    pgvector: byBackend('pgvector').map((e) => e.vectorId),
+    unverified: entries.filter((e) => e.unverified).map((e) => e.vectorId),
+    staleGenerationDebt: entries
+      .filter((e) => (e.staleGenerations ?? []).length > 0)
+      .map((e) => ({ vectorId: e.vectorId, staleGenerations: e.staleGenerations })),
+  };
+}
+
+/**
+ * Neither pgvector nor Azure AI Search exposes a by-subject read-back path, so the
+ * bundle cannot enumerate stored chunks itself. It can, however, hand the RAG service
+ * an exact, tenant-scoped list of physical ids to confirm against — which is what
+ * Art. 15 needs and what an attestation built on the wrong id could not give.
+ */
+function buildVectorInventoryRequest(subjectId, tenantId, vectors) {
+  return {
+    subject: String(subjectId),
+    tenantId: tenantId ?? null,
+    askTheRagService:
+      'Confirm, per id below, which chunks exist under this tenant and return their count. ' +
+      'Ids are physical vector ids (knauf_asset_id where present, else the legacy file_id).',
+    pgvector: vectors.pgvector,
+    azureAiSearch: vectors.azureAiSearch,
+    unverifiedBackend: vectors.unverified,
+    staleGenerationDebt: vectors.staleGenerationDebt,
   };
 }
 
@@ -157,11 +438,46 @@ function parseArgs(argv) {
 
 /* ------------------------------------------------------------------ collection */
 
-async function resolveSubject(models, userRef) {
+class AmbiguousSubjectError extends Error {
+  constructor(userRef, tenantIds) {
+    super(
+      `"${userRef}" matches ${tenantIds.length} users across tenants [${tenantIds.join(', ')}]. ` +
+        'Re-run with --tenant <id> to name the one the request is about. ' +
+        'Refusing to guess: exporting the wrong person is a personal-data breach.',
+    );
+    this.name = 'AmbiguousSubjectError';
+    this.tenantIds = tenantIds;
+  }
+}
+
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
+
+/**
+ * Resolve the subject, tenant-safely.
+ *
+ * PR #349 review: `email` is unique only within `(email, tenantId)` —
+ * `userSchema.index({ email: 1, tenantId: 1 }, { unique: true })` — and this script
+ * runs under `runAsSystem`, which sets SYSTEM_TENANT_ID and makes `applyTenantIsolation`
+ * skip tenant injection entirely. `findOne({ email })` therefore searched every tenant
+ * and returned an arbitrary match: a DSAR could export the wrong person.
+ *
+ * Now: a non-ObjectId reference must resolve to exactly one user. Zero → not found;
+ * more than one → refuse and name the tenants so the operator can disambiguate.
+ * `--tenant` narrows the lookup up front, and a subject found by `_id` is still
+ * checked against it.
+ */
+async function resolveSubject(models, userRef, tenantId) {
   const { User } = models;
-  const byId = /^[a-f0-9]{24}$/i.test(userRef) ? await User.findById(userRef).lean() : null;
-  if (byId) return byId;
-  return User.findOne({
+  const scope = tenantId ? { tenantId } : {};
+
+  if (OBJECT_ID_RE.test(userRef)) {
+    const byId = await User.findOne({ _id: userRef, ...scope }).lean();
+    if (byId) return byId;
+    // Fall through: the reference may be a 24-hex external id, not a Mongo _id.
+  }
+
+  const matches = await User.find({
+    ...scope,
     $or: [
       { email: userRef },
       { username: userRef },
@@ -169,24 +485,88 @@ async function resolveSubject(models, userRef) {
       { idOnTheSource: userRef },
     ],
   }).lean();
+
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new AmbiguousSubjectError(
+      userRef,
+      matches.map((m) => m.tenantId ?? '(none)'),
+    );
+  }
+  return matches[0];
 }
 
-async function collect({ models, mongoose, subject, out, includeLogs, logDir, log }) {
+/** Build the Mongo filter for one sink. */
+function sinkFilter(sink, subject) {
+  const id = subject._id;
+  if (sink.membership) {
+    return { [sink.field]: { $in: groupMembershipKeys(subject) } };
+  }
+  if (sink.model === 'KnaufFileAsset') {
+    // The asset ledger is scoped by (scope_type, scope_id); the user's own assets are
+    // scope_type 'user'. Agent-scoped assets are reached via the subject's Agent rows.
+    return { scope_type: 'user', scope_id: { $in: [id, String(id)] } };
+  }
+  const filter = { [sink.field]: { $in: [id, String(id)] } };
+  if (sink.principalType) {
+    filter.principalType = sink.principalType;
+  }
+  return filter;
+}
+
+/** Drop named third-party fields from a row, replacing them with a stated reason. */
+function redactFields(row, fields) {
+  const out = { ...row };
+  for (const f of fields) {
+    if (out[f] !== undefined) {
+      out[f] = '[redacted — third party, Art. 15(4)]';
+    }
+  }
+  return out;
+}
+
+/** Per-sink row shaping, so the projection rule lives next to the sink definition. */
+function shapeRows(sink, rows, subject) {
+  if (sink.existenceOnly) return rows.map(toExistenceOnly);
+  if (sink.membership) {
+    const keys = groupMembershipKeys(subject);
+    return rows.map((r) => toSubjectGroupView(r, keys));
+  }
+  if (sink.redactFields) return rows.map((r) => redactFields(r, sink.redactFields));
+  return rows;
+}
+
+async function collect({ models, mongoose, subject, tenantId, out, includeLogs, logDir, log }) {
   const id = subject._id;
   const manifest = {
     generatedAt: new Date().toISOString(),
     subject: { _id: String(id), email: subject.email },
+    // Recorded and verified: everything below was read inside this tenant's context.
+    tenant: {
+      resolved: tenantId ?? null,
+      note: tenantId
+        ? 'collection ran inside tenantStorage.run({ tenantId })'
+        : 'subject carries no tenantId (single-tenant deployment) — ran as system',
+    },
     readOnly: true,
     sinks: {},
     redactions: [
       `users: ${USER_SECRET_FIELDS.filter((f) => f !== '__v').join(', ')} stripped`,
       'auditlogs: actor redacted on rows where the subject is the target (Art. 15(4))',
       'credential/session stores: existence-level fields only',
+      'groups: memberIds withheld — other members are third parties (Art. 15(4))',
+      // Derived from the sink definitions, never restated by hand: a redaction the
+      // manifest claims is always one the code actually performs.
+      ...MONGO_SINKS.filter((s) => s.redactFields).map(
+        (s) => `${s.model}: ${s.redactFields.join(', ')} redacted (Art. 15(4))`,
+      ),
     ],
-    exclusions: [
-      'Datadog: random per-session id, no user identity attached — not attributable to a subject (runbook §1.9)',
-      'pgvector / Azure AI Search: no read-back endpoint — attested by file_id; content is the source file in Blob (runbook §1.3/1.4)',
-    ],
+    exclusions: [],
+    completeness: { ok: true, warnings: [] },
+  };
+  const warn = (msg) => {
+    manifest.completeness.ok = false;
+    manifest.completeness.warnings.push(msg);
   };
   const write = (name, data) => {
     if (!out) return;
@@ -197,22 +577,21 @@ async function collect({ models, mongoose, subject, out, includeLogs, logDir, lo
   write('users.json', redactUserDocument(subject));
   manifest.sinks.users = 1;
 
-  // the 25 stores
+  // every subject-scoped Mongo store
   let files = [];
+  let assets = [];
   for (const sink of MONGO_SINKS) {
     const Model = models[sink.model];
     if (!Model) {
       manifest.sinks[sink.model] = 'model not registered';
+      warn(`${sink.model}: model not registered — sink not collected`);
       continue;
     }
-    const filter =
-      sink.operator === 'in'
-        ? { [sink.field]: { $in: [id, String(id)] } }
-        : { [sink.field]: { $in: [id, String(id)] } };
-    const rows = await Model.find(filter).lean();
+    const rows = await Model.find(sinkFilter(sink, subject)).lean();
     manifest.sinks[sink.model] = rows.length;
     if (sink.model === 'File') files = rows;
-    write(`${sink.model}.json`, sink.existenceOnly ? rows.map(toExistenceOnly) : rows);
+    if (sink.model === 'KnaufFileAsset') assets = rows;
+    write(`${sink.model}.json`, shapeRows(sink, rows, subject));
   }
 
   // knauf scheduler collections (raw)
@@ -240,33 +619,67 @@ async function collect({ models, mongoose, subject, out, includeLogs, logDir, lo
   };
   write('auditlogs.json', redactedAudit);
 
-  // derived / external sinks — commands + attestations
-  const vectors = classifyVectorStores(files);
+  // physical vector + blob identity, from the FileAsset ledger
+  const vectors = classifyVectorStores(files, assets);
   manifest.sinks.vectorStores = {
-    pgvectorFileIds: vectors.pgvector.length,
-    azureAiSearchFileIds: vectors.azureAiSearch.length,
+    pgvector: vectors.pgvector.length,
+    azureAiSearch: vectors.azureAiSearch.length,
+    unverifiedBackend: vectors.unverified.length,
+    staleGenerationDebt: vectors.staleGenerationDebt.length,
   };
+  if (vectors.unverified.length) {
+    warn(
+      `vectorStores: ${vectors.unverified.length} file(s) have no FileAsset row — ` +
+        'backend inferred from context; confirm with the RAG service before release',
+    );
+  }
   write('vector-stores.json', vectors);
+  write('vector-inventory-request.json', buildVectorInventoryRequest(id, tenantId, vectors));
+
   manifest.sinks.blob = {
     container: process.env.AZURE_CONTAINER_NAME || 'files',
     objects: files.map((f) => f.filepath || f.storageKey).filter(Boolean).length,
+    assetBlobs: assets.map((a) => a.blob?.path).filter(Boolean).length,
   };
   write(
     'blob-objects.json',
-    files.map((f) => ({
-      file_id: f.file_id,
-      filename: f.filename,
-      key: f.filepath || f.storageKey,
-    })),
+    [
+      ...files.map((f) => ({
+        source: 'File',
+        file_id: f.file_id,
+        filename: f.filename,
+        key: f.filepath || f.storageKey,
+      })),
+      ...assets.map((a) => ({
+        source: 'KnaufFileAsset',
+        asset_id: a.asset_id,
+        filename: a.blob?.filename,
+        key: a.blob?.path,
+      })),
+    ].filter((o) => o.key),
   );
+
   if (out) {
-    fs.writeFileSync(path.join(out, 'langfuse.sh'), buildLangfuseCommands(id));
+    fs.writeFileSync(path.join(out, 'langfuse.sh'), buildLangfuseCommands(id), { mode: 0o755 });
     fs.writeFileSync(path.join(out, 'meilisearch.md'), buildMeilisearchQueries(id));
   }
-  manifest.sinks.langfuse = 'see langfuse.sh (userId = Mongo id)';
-  manifest.sinks.meilisearch = 'see meilisearch.md (filter user = id)';
+  manifest.sinks.langfuse = 'run langfuse.sh — pages to exhaustion, exits non-zero if short';
+  manifest.sinks.meilisearch = 'run the recipe in meilisearch.md — pages to exhaustion';
+  manifest.exclusions.push(
+    'pgvector / Azure AI Search: no by-subject read-back endpoint. The bundle lists exact ' +
+      'physical vector ids (vector-inventory-request.json) for the RAG service to confirm; ' +
+      'the content itself is the source file in Blob (runbook §1.3/1.4)',
+    'Datadog browser RUM / Adobe Analytics: random per-session id, no setUser, ' +
+      'defaultPrivacyLevel mask-user-input — not attributable to a named subject (runbook §1.9). ' +
+      'Server-side logs and APM in Datadog ARE attributable and are handled in runbook §1.10',
+  );
 
-  // logs — 14-day window, error-*.log carry userId via requestContextFormat
+  // logs — see runbook §1.8. When LOG_TO_FILE=false (the deployed setting in any
+  // environment that ships stdout to a log platform) there are no files to read here
+  // and this sink is NOT the whole story: server logs carry userId/tenantId/requestId
+  // through requestContextFormat on the console transport too. Runbook §1.10 covers
+  // the platform-side export.
+  const fileLoggingOff = String(process.env.LOG_TO_FILE ?? '').toLowerCase() === 'false';
   if (includeLogs) {
     const dir =
       logDir || process.env.LIBRECHAT_LOG_DIR || path.resolve(__dirname, '..', '..', 'api', 'logs');
@@ -280,10 +693,22 @@ async function collect({ models, mongoose, subject, out, includeLogs, logDir, lo
         hits.push(...lines.map((l) => ({ file: f, line: l })));
       }
     }
-    manifest.sinks.winstonLogs = { dir, matchingLines: hits.length, window: '14-day rotation' };
+    manifest.sinks.winstonLogs = {
+      dir,
+      matchingLines: hits.length,
+      window: '14-day rotation',
+      fileLoggingEnabled: !fileLoggingOff,
+    };
+    if (fileLoggingOff || !fs.existsSync(dir)) {
+      warn(
+        'winstonLogs: LOG_TO_FILE=false or no log directory — this host writes server logs to ' +
+          'stdout only. Attributable server logs live in the log platform; run runbook §1.10.',
+      );
+    }
     write('logs.json', hits);
   } else {
     manifest.sinks.winstonLogs = 'skipped — pass --include-logs (platform team on prod)';
+    warn('winstonLogs: not collected. Runbook §1.8/§1.10 must be completed by the platform team.');
   }
 
   write('manifest.json', manifest);
@@ -311,43 +736,85 @@ async function main() {
 
   if (args.out) fs.mkdirSync(args.out, { recursive: true });
 
-  const run = async () => {
-    const subject = await resolveSubject(models, args.user);
-    if (!subject) {
-      console.error(
-        `No user matches "${args.user}" (tried _id, email, username, openidId, idOnTheSource).`,
-      );
-      process.exit(2);
-    }
-    await collect({
+  // Resolution runs as system on purpose: the operator may not know the tenant yet,
+  // and a cross-tenant lookup is how we DETECT ambiguity rather than silently
+  // resolving it. Collection then runs pinned to the tenant we resolved.
+  const subject = await runAsSystem(() =>
+    resolveSubject(models, args.user, args.tenant).catch((err) => {
+      if (err instanceof AmbiguousSubjectError) {
+        console.error(err.message);
+        process.exit(3);
+      }
+      throw err;
+    }),
+  );
+
+  if (!subject) {
+    console.error(
+      `No user matches "${args.user}"${args.tenant ? ` in tenant ${args.tenant}` : ''} ` +
+        '(tried _id, email, username, openidId, idOnTheSource).',
+    );
+    process.exit(2);
+  }
+
+  const subjectTenant = subject.tenantId ?? null;
+  if (args.tenant && subjectTenant && String(subjectTenant) !== String(args.tenant)) {
+    console.error(
+      `Subject resolved into tenant "${subjectTenant}" but --tenant said "${args.tenant}". Refusing.`,
+    );
+    process.exit(3);
+  }
+
+  const run = () =>
+    collect({
       models,
       mongoose,
       subject,
+      tenantId: subjectTenant,
       out: args.out,
       includeLogs: args.includeLogs,
       logDir: args.logDir,
       log: console.log,
     });
-  };
 
-  if (args.tenant && tenantStorage?.run) {
-    await tenantStorage.run({ tenantId: args.tenant }, run);
-  } else {
-    await runAsSystem(run);
-  }
+  // Pin every read to the subject's own tenant when they have one; only a genuinely
+  // tenant-less (single-tenant) deployment falls back to system scope.
+  const manifest =
+    subjectTenant && tenantStorage?.run
+      ? await tenantStorage.run({ tenantId: subjectTenant }, run)
+      : await runAsSystem(run);
+
   await mongoose.disconnect();
+
+  if (!manifest.completeness.ok) {
+    console.error(
+      '\nIncomplete: the bundle has open completeness warnings (see manifest.completeness). ' +
+        'Resolve them before releasing it to the subject.',
+    );
+    process.exit(4);
+  }
 }
 
 module.exports = {
   MONGO_SINKS,
+  NOT_SUBJECT_SCOPED,
   RAW_COLLECTIONS,
   USER_SECRET_FIELDS,
+  GROUP_SUBJECT_FIELDS,
+  AmbiguousSubjectError,
   redactUserDocument,
   toExistenceOnly,
+  groupMembershipKeys,
+  toSubjectGroupView,
   redactAuditRows,
+  redactFields,
   buildLangfuseCommands,
   buildMeilisearchQueries,
   classifyVectorStores,
+  buildVectorInventoryRequest,
+  sinkFilter,
+  shapeRows,
+  resolveSubject,
   parseArgs,
 };
 
