@@ -31,6 +31,16 @@ export {
   // [knauf] KK20-195 WP3b — FileAsset methods factory for api-side specs.
   createFileAssetMethods,
   // End [knauf]
+  // [knauf] KK20-328 — audit-retention ledger helpers for @librechat/api (verifyTrust)
+  // and api/ routes. `verifyAuditCheckpointSignature` MUST be here: the verify handler
+  // imports it from the package root.
+  auditRetentionScopeKey,
+  AUDIT_RETENTION_SWEEP_LEASE,
+  signAuditCheckpoint,
+  signAuditIntent,
+  verifyAuditCheckpointSignature,
+  verifyAuditIntentSignature,
+  // End [knauf]
 } from './methods';
 export type * from './types';
 export type * from './methods';

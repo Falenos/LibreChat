@@ -23,6 +23,12 @@ import type {
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 
+// [knauf] KK20-328 — retention-trust policy lives in ~/knauf/audit/verifyTrust; the
+// handler only wires it in (see the verify handler).
+import { resolveAuditRetentionTrust } from '~/knauf/audit/verifyTrust';
+import type { AuditRetentionCheckpointState, AuditSigningKeys } from '@librechat/data-schemas';
+// End [knauf]
+
 const FORMULA_PREFIX = /^[=+\-@\t\r]/;
 /** UTF-8 BOM, written first so Excel recognizes the encoding on import. Spelled
  * as a Unicode escape so readers can see the constant in editors that hide the
@@ -62,8 +68,22 @@ export interface AdminAuditLogDeps {
   ) => Promise<{ count: number; truncated: boolean }>;
   verifyAuditChain: (
     tenantId: string | undefined,
-    options?: { isCancelled?: () => boolean; maxRows?: number },
+    options?: {
+      isCancelled?: () => boolean;
+      maxRows?: number;
+      // [knauf] KK20-328 — trust boundary minted by the retention purge.
+      trustedCheckpoint?: { throughSeq: number; prevHash: string };
+      // End [knauf]
+    },
   ) => Promise<AuditChainVerification>;
+  /* [knauf] KK20-328 — reads the boundary the retention sweep persisted, and the key
+   * ring that signs it. Optional so callers that never purge (and existing tests) need
+   * not supply them; absent ⇒ the response is upstream's, byte for byte. */
+  getAuditRetentionCheckpoint?: (
+    scopeKey: string,
+  ) => Promise<AuditRetentionCheckpointState | undefined>;
+  getAuditCheckpointSigningKeys?: () => AuditSigningKeys;
+  // End [knauf]
 }
 
 interface CallerContext {
@@ -276,7 +296,16 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
   verifyAuditLog: (req: ServerRequest, res: Response) => Promise<Response>;
   exportAuditLogCsv: (req: ServerRequest, res: Response) => Promise<Response | void>;
 } {
-  const { listAuditLogPage, findAuditLogEntry, streamAuditLogEntries, verifyAuditChain } = deps;
+  const {
+    listAuditLogPage,
+    findAuditLogEntry,
+    streamAuditLogEntries,
+    verifyAuditChain,
+    // [knauf] KK20-328 — retention checkpoint lookup.
+    getAuditRetentionCheckpoint,
+    getAuditCheckpointSigningKeys,
+    // End [knauf]
+  } = deps;
 
   async function listAuditLogHandler(req: ServerRequest, res: Response) {
     try {
@@ -340,13 +369,42 @@ export function createAdminAuditLogHandlers(deps: AdminAuditLogDeps): {
       req.once('aborted', markAborted);
 
       try {
-        const result = await verifyAuditChain(caller.tenantId, {
-          isCancelled: () => clientAborted,
-          maxRows: MAX_AUDIT_VERIFY_ROWS,
-        });
-
+        /* [knauf] KK20-328 — once retention has purged a prefix the chain no longer
+         * starts at genesis, and upstream's verify reports that as tampering unless a
+         * trusted checkpoint is supplied. The trust policy (signature, activation,
+         * pending intents) lives in ~/knauf/audit/verifyTrust; absent deps ⇒ upstream
+         * behaviour unchanged. */
+        const trust = getAuditRetentionCheckpoint
+          ? await resolveAuditRetentionTrust({
+              tenantId: caller.tenantId,
+              getAuditRetentionCheckpoint,
+              signingKeys: getAuditCheckpointSigningKeys?.(),
+            })
+          : undefined;
+        const verifyWith = (trustedCheckpoint?: { throughSeq: number; prevHash: string }) =>
+          verifyAuditChain(caller.tenantId, {
+            isCancelled: () => clientAborted,
+            maxRows: MAX_AUDIT_VERIFY_ROWS,
+            ...(trustedCheckpoint ? { trustedCheckpoint } : {}),
+          });
+        let result = await verifyWith(trust?.trustedCheckpoint);
+        let retention = trust?.retention;
+        /* A purge caught between its delete and its commit leaves the chain ahead of
+         * the committed boundary for up to one sweep interval. The announced (signed)
+         * intent is then the right witness — try it before calling it tampering. */
+        if (!result.ok && !clientAborted && trust?.pendingCheckpoint) {
+          const viaPending = await verifyWith(trust.pendingCheckpoint);
+          if (viaPending.ok) {
+            result = viaPending;
+            retention = { ...trust.retention, state: 'recovery-pending' };
+          }
+        }
         if (clientAborted) return res;
-        return res.status(200).json(result);
+        if (!trust) {
+          return res.status(200).json(result);
+        }
+        return res.status(200).json({ ...result, retention });
+        // End [knauf]
       } finally {
         res.removeListener('close', markAborted);
         req.removeListener('aborted', markAborted);

@@ -35,6 +35,12 @@ import { createMigrationAllowlistModel } from './migrationAllowlist';
 // [knauf] KK20-195 WP2 — physical FileAsset aggregate model.
 import { createFileAssetModel } from './fileAsset';
 // End [knauf]
+// [knauf] KK20-328 — audit-retention ledger models (implementation in ~/knauf/audit).
+import {
+  createAuditRetentionCheckpointModel,
+  createAuditRetentionLeaseModel,
+} from '~/knauf/audit/model';
+// End [knauf]
 import { createTokenModel } from './token';
 import { createAgentModel } from './agent';
 import { createSkillModel } from './skill';
@@ -92,6 +98,10 @@ export function createModels(mongoose: typeof import('mongoose')): {
   // --isolatedDeclarations rejects inferred types on this exported annotation.)
   KnaufFileAsset: ReturnType<typeof createFileAssetModel>;
   // End [knauf]
+  // [knauf] KK20-328 — audit-retention ledger models.
+  KnaufAuditRetentionCheckpoint: ReturnType<typeof createAuditRetentionCheckpointModel>;
+  KnaufAuditRetentionLease: ReturnType<typeof createAuditRetentionLeaseModel>;
+  // End [knauf]
 } {
   return {
     User: createUserModel(mongoose),
@@ -138,6 +148,10 @@ export function createModels(mongoose: typeof import('mongoose')): {
     // End [knauf]
     // [knauf] KK20-195 WP2 — physical FileAsset aggregate.
     KnaufFileAsset: createFileAssetModel(mongoose),
+    // End [knauf]
+    // [knauf] KK20-328 — audit-retention ledger models.
+    KnaufAuditRetentionCheckpoint: createAuditRetentionCheckpointModel(mongoose),
+    KnaufAuditRetentionLease: createAuditRetentionLeaseModel(mongoose),
     // End [knauf]
   };
 }

@@ -50,3 +50,13 @@ export * from './migrationAllowlist';
 // [knauf] KK20-195 WP2 — physical FileAsset aggregate types.
 export * from './fileAsset';
 // End [knauf]
+// [knauf] KK20-328 — audit-retention ledger types.
+export * from '../knauf/audit/types';
+export type {
+  AuditCheckpointSignatureStatus,
+  AuditSigningKeyInput,
+  AuditSigningKeys,
+  SignableAuditCheckpoint,
+  SignableAuditIntent,
+} from '../knauf/audit/signature';
+// End [knauf]

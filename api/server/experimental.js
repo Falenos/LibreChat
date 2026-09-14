@@ -28,6 +28,9 @@ const initializeOAuthReconnectManager = require('./services/initializeOAuthRecon
 const { capabilityContextMiddleware } = require('./middleware/roles/capabilities');
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
+// [knauf] KK20-328 — audit-log retention sweep, started on the retention worker.
+const { startKnaufAuditRetentionSweep } = require('~/knauf/audit/retention');
+// End [knauf]
 const { initializeGitHubSkillSync } = require('./services/Skills/sync');
 const { jwtLogin, ldapLogin, passportLogin } = require('~/strategies');
 const { updateInterfacePermissions: updateInterfacePerms } = require('@librechat/api');
@@ -258,6 +261,15 @@ if (cluster.isMaster) {
 
     expiredFileSweepStarted = true;
     startExpiredFileSweep(expiredFileSweepOptions);
+    /* [knauf] KK20-328 — the audit-retention purge rides the SAME designated
+     * worker rather than starting on every worker. That is not tidiness: two
+     * workers purging one audit chain concurrently could interleave deletes and
+     * checkpoint writes, and a checkpoint that moves backwards stops legitimizing
+     * an already-purged prefix, which makes `verifyAuditChain` report tampering.
+     * One retention worker, one purge. No-op unless KNAUF_AUDIT_RETENTION_DAYS is
+     * set — see knauf/docs/privacy/workstream.md §3.4. */
+    startKnaufAuditRetentionSweep();
+    // End [knauf]
   };
 
   /** Handle inter-process messages from master */

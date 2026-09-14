@@ -5,6 +5,12 @@ import { createFileMethods, type FileMethods, type FileOwnerScope } from './file
 // [knauf] KK20-195 WP2 — FileAsset state-machine methods.
 import { createFileAssetMethods, type FileAssetMethods } from './fileAsset';
 // End [knauf]
+// [knauf] KK20-328 — audit-retention ledger methods (implementation in ~/knauf/audit).
+import {
+  createAuditRetentionCheckpointMethods,
+  type AuditRetentionCheckpointMethods,
+} from '~/knauf/audit/methods';
+// End [knauf]
 import { createTokenMethods, type TokenMethods } from './token';
 import { createRoleMethods, RoleConflictError } from './role';
 import { createKeyMethods, type KeyMethods } from './key';
@@ -113,6 +119,17 @@ export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY
 // real FileAsset state machine against mongodb-memory-server.
 export { createFileAssetMethods };
 // End [knauf]
+// [knauf] KK20-328 — ledger helpers consumed by @librechat/api (verifyTrust) and api/.
+export { auditRetentionScopeKey, AUDIT_RETENTION_SWEEP_LEASE } from '~/knauf/audit/methods';
+export {
+  signAuditCheckpoint,
+  signAuditIntent,
+  verifyAuditCheckpointSignature,
+  verifyAuditIntentSignature,
+  canonicalAuditCheckpoint,
+  canonicalAuditIntent,
+} from '~/knauf/audit/signature';
+// End [knauf]
 export { tokenValues, cacheTokenValues, premiumTokenValues, defaultRate, createTxMethods };
 export { permissionBitSupersets };
 export {
@@ -135,6 +152,9 @@ export type AllMethods = UserMethods &
   FileMethods &
   // [knauf] KK20-195 WP2 — FileAsset state machine.
   FileAssetMethods &
+  // End [knauf]
+  // [knauf] KK20-328 — audit-retention ledger methods.
+  AuditRetentionCheckpointMethods &
   // End [knauf]
   MemoryMethods &
   AgentCategoryMethods &
@@ -268,6 +288,9 @@ export function createMethods(
     ...createFileMethods(mongoose),
     // [knauf] KK20-195 WP2 — FileAsset state machine.
     ...createFileAssetMethods(mongoose),
+    // End [knauf]
+    // [knauf] KK20-328 — audit-retention ledger methods.
+    ...createAuditRetentionCheckpointMethods(mongoose),
     // End [knauf]
     ...createMemoryMethods(mongoose),
     ...createAgentCategoryMethods(mongoose),
