@@ -7,6 +7,16 @@ RUN apk upgrade --no-cache
 # [knauf] Headless Chromium renders artifact PNG/PDF downloads. (NO-TICKET)
 RUN apk add --no-cache jemalloc chromium
 # End [knauf]
+# [knauf] Ghostscript recompresses translated PDFs (Azure Document Translation
+# re-embeds fonts/re-encodes images, multiplying output size). (KK20-297)
+# This adds a historically CVE-prone C parser fed with content derived from
+# user uploads; -dSAFER (default since gs 9.50) bounds its file-access
+# surface, but interpreter RCEs have shipped in gs before. Image rebuild
+# cadence — i.e. picking up the Alpine `ghostscript` package's own security
+# updates — is the patch mechanism for future gs CVEs, so it isn't optional
+# once this line ships.
+RUN apk add --no-cache ghostscript
+# End [knauf]
 RUN apk add --no-cache python3 py3-pip uv
 
 # Set environment variable to use jemalloc

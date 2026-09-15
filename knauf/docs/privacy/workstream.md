@@ -57,6 +57,17 @@ Three properties drive every decision below:
    5(1)(e) actually bite. None of that is fixed by an LLM gateway.
 3. **Erasure must reach every sink.** The account-deletion cascade covers ~25 stores; it does
    **not** cover Langfuse, and `auditLog` is append-only by design.
+4. **In-flight temp files are a sink too, just not a durable one.** KK20-297's PDF recompression
+   (`translation/pdfCompression.js`) writes the full translated document to a `mkdtemp` (0700)
+   directory under `os.tmpdir()` for the few seconds Ghostscript needs it, then removes it in a
+   `finally`. The write happens only once the module's own Ghostscript concurrency slot has been
+   acquired — a call waiting behind other in-flight compressions never holds the plaintext temp
+   file on disk for the duration of that wait, only for the run itself — which is what keeps this
+   claim accurate under the module's `KNAUF_TRANSLATION_PDF_COMPRESSION_MAX_CONCURRENT` queueing.
+   That covers normal and error paths; it does **not** cover SIGKILL/OOM/container stop between
+   the write and the cleanup, and it assumes the deployed runtime's `/tmp` is ephemeral (tmpfs or
+   wiped on restart) rather than a persistent volume — worth confirming once per environment
+   rather than per PR.
 
 ---
 
@@ -1276,6 +1287,7 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`api/server/index.js`](../../../api/server/index.js) · [`api/server/experimental.js`](../../../api/server/experimental.js) | Both entrypoints start the sweep — `index.js` is what the container runs |
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
+| [`api/server/services/Files/knauf/translation/pdfCompression.js`](../../../api/server/services/Files/knauf/translation/pdfCompression.js) | KK20-297 — writes the translated PDF to a `mkdtemp` temp dir for Ghostscript recompression; see §1 point 4 for the retention caveat |
 
 ---
 

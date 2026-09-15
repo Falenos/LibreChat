@@ -39,6 +39,7 @@ const {
   maskRegionForTranslation,
   restoreProtectedRegion,
 } = require('./logoProtection');
+const { compressTranslatedPdf } = require('./pdfCompression');
 const { getRetentionExpiry } = require('../../retention');
 const { getStrategyFunctions } = require('../../strategies');
 const {
@@ -1283,6 +1284,13 @@ async function translateOneFile({
           message: error?.message,
         });
       }
+    }
+    // [knauf] Azure Document Translation rebuilds PDFs from scratch (full font
+    // embedding, re-encoded images), which can multiply file size several
+    // times over. Recompress before persisting; best-effort, never fails the
+    // translation.
+    if (format.mime === 'application/pdf') {
+      output = await compressTranslatedPdf(output, { log: logger, signal });
     }
   }
 
