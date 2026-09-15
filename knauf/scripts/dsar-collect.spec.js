@@ -644,20 +644,24 @@ describe('audit rows leak no third-party request context', () => {
 });
 
 describe('external sinks are pending until verified', () => {
-  const ok = {
-    status: 'complete',
-    collected: 5,
-    expected: 5,
-    artifact: 'results/a.jsonl',
-    checksum: 'abc',
+  // Round-4 contract: evidence is bound to the run, the count is PARSED from the
+  // artifact, and not-applicable only holds where the collector can check it.
+  const MF = {
+    runId: 'run-1',
+    subject: { _id: 'u1' },
+    tenant: { resolved: 't1' },
+    environment: { redisEnabled: false, searchEnabled: true, langfuseEnabled: true },
+    sinks: { Message: 10, Conversation: 2, MessageIndexable: 10, ConversationIndexable: 2 },
   };
-  const pass = () => 'abc';
+  const bind = { runId: 'run-1', sink: 'langfuse', subject: 'u1', tenant: 't1' };
+  const ok = { ...bind, status: 'complete', artifact: 'results/a.jsonl', checksum: 'abc' };
+  const probe = (records) => () => ({ checksum: 'abc', records, bytes: 1, tightenedFrom: null });
 
   test('every external sink starts pending', () => {
     const state = initialExternalSinkState();
     assert.equal(Object.keys(state).length, EXTERNAL_SINKS.length);
     for (const [, v] of Object.entries(state)) assert.equal(v.status, 'pending');
-    for (const k of ['langfuse', 'meilisearch', 'blob', 'ragVectors', 'logPlatform']) {
+    for (const k of ['langfuse', 'meilisearch', 'blob', 'ragVectors', 'logPlatform', 'redis']) {
       assert.ok(state[k], `${k} must be tracked`);
     }
   });
@@ -666,77 +670,179 @@ describe('external sinks are pending until verified', () => {
     assert.equal(reconcileExternalResult('langfuse', null).status, 'pending');
   });
 
+  test('a result from another run is refused', () => {
+    const r = reconcileExternalResult(
+      'langfuse',
+      { ...ok, runId: 'run-OTHER' },
+      {
+        manifest: MF,
+        verifyArtifact: probe(5),
+      },
+    );
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /binding mismatch on `runId`/);
+  });
+
+  test('a result for another subject or tenant is refused', () => {
+    for (const [field, bad] of [
+      ['subject', 'u2'],
+      ['tenant', 't2'],
+    ]) {
+      const r = reconcileExternalResult(
+        'langfuse',
+        { ...ok, [field]: bad },
+        {
+          manifest: MF,
+          verifyArtifact: probe(5),
+        },
+      );
+      assert.equal(r.status, 'failed', field);
+      assert.match(r.reason, new RegExp(`binding mismatch on \`${field}\``));
+    }
+  });
+
+  test('a result filed under the wrong sink is refused', () => {
+    const r = reconcileExternalResult(
+      'blob',
+      { ...ok },
+      { manifest: MF, verifyArtifact: probe(5) },
+    );
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /binding mismatch on `sink`/);
+  });
+
   test('complete REQUIRES an artifact and a checksum', () => {
-    const r = reconcileExternalResult('langfuse', {
-      status: 'complete',
-      collected: 5,
-      expected: 5,
-    });
+    const r = reconcileExternalResult(
+      'langfuse',
+      { ...bind, status: 'complete' },
+      { manifest: MF },
+    );
     assert.equal(r.status, 'failed');
     assert.match(r.reason, /artifact.*checksum/);
   });
 
+  test('the count is PARSED from the artifact, not taken from the result', () => {
+    // The operator claims 999; the artifact holds 5. The artifact wins and it fails.
+    const r = reconcileExternalResult(
+      'langfuse',
+      { ...ok, collected: 999 },
+      {
+        manifest: MF,
+        verifyArtifact: probe(5),
+      },
+    );
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /declares 999 records but .* contains 5/);
+  });
+
+  test('an unparseable artifact fails rather than being trusted', () => {
+    const r = reconcileExternalResult('langfuse', ok, {
+      manifest: MF,
+      verifyArtifact: () => ({ checksum: 'abc', records: null, bytes: 1, tightenedFrom: null }),
+    });
+    assert.equal(r.status, 'failed');
+    assert.match(r.reason, /cannot derive a record count/);
+  });
+
   test('a checksum that does not match the artifact fails', () => {
-    const r = reconcileExternalResult('langfuse', ok, { verifyArtifact: () => 'DIFFERENT' });
+    const r = reconcileExternalResult('langfuse', ok, {
+      manifest: MF,
+      verifyArtifact: () => ({ checksum: 'DIFFERENT', records: 5 }),
+    });
     assert.equal(r.status, 'failed');
     assert.match(r.reason, /checksum mismatch/);
   });
 
-  test('an unreadable artifact fails rather than being skipped', () => {
-    const r = reconcileExternalResult('langfuse', ok, {
-      verifyArtifact: () => {
-        throw new Error('ENOENT');
-      },
-    });
-    assert.equal(r.status, 'failed');
-    assert.match(r.reason, /artifact unreadable/);
-  });
-
-  test('a DERIVED sink is measured against our number, and ignores the operator\u2019s', () => {
-    // expected: 999 is a lie; the collector derived 5 from phase one.
+  test('a DERIVED sink is measured against our parsed number', () => {
+    const mb = { ...bind, sink: 'meilisearch' };
     const good = reconcileExternalResult(
       'meilisearch',
-      { ...ok, collected: 5, expected: 999 },
-      { derivedExpected: 5, verifyArtifact: pass },
+      { ...ok, ...mb, collected: 999 },
+      { manifest: MF, derivedExpected: 12, verifyArtifact: probe(12) },
     );
-    assert.equal(good.status, 'complete');
-    assert.equal(good.expected, 5);
-    assert.equal(good.expectationSource, 'derived-from-phase-one');
+    assert.equal(good.status, 'failed', 'declared 999 vs parsed 12 must fail first');
+
+    const right = reconcileExternalResult(
+      'meilisearch',
+      { ...ok, ...mb },
+      { manifest: MF, derivedExpected: 12, verifyArtifact: probe(12) },
+    );
+    assert.equal(right.status, 'complete');
+    assert.equal(right.countSource, 'parsed-from-artifact');
+    assert.equal(right.expectationSource, 'derived-from-phase-one');
 
     const short = reconcileExternalResult(
       'meilisearch',
-      { ...ok, collected: 5, expected: 5 },
-      { derivedExpected: 2500, verifyArtifact: pass },
+      { ...ok, ...mb },
+      { manifest: MF, derivedExpected: 2500, verifyArtifact: probe(12) },
     );
-    assert.equal(short.status, 'failed', 'self-consistent numbers must not pass a derived sink');
+    assert.equal(short.status, 'failed');
     assert.match(short.reason, /phase one derived 2500/);
   });
 
-  test('a sink with no derivable expectation is marked self-reported, not verified', () => {
-    const r = reconcileExternalResult('langfuse', ok, { verifyArtifact: pass });
+  test('a sink with no derivable expectation says its total is unverified', () => {
+    const r = reconcileExternalResult('langfuse', ok, { manifest: MF, verifyArtifact: probe(42) });
     assert.equal(r.status, 'complete');
-    assert.match(r.expectationSource, /self-reported/);
+    assert.equal(r.collected, 42);
+    assert.match(r.expectationSource, /total unverified/);
   });
 
-  test('non-numeric collected is a failure', () => {
+  test('not-applicable is REFUSED where the collector cannot check it', () => {
+    // logPlatform has no machine-checkable condition: an inaccessible sink stays incomplete.
     const r = reconcileExternalResult(
-      'blob',
-      { ...ok, collected: 'all' },
-      { verifyArtifact: pass },
+      'logPlatform',
+      { ...bind, sink: 'logPlatform', status: 'not-applicable', note: 'cannot query by userId' },
+      { manifest: MF },
     );
-    assert.equal(r.status, 'failed');
+    assert.equal(r.status, 'limitation', 'must not become not-applicable on an unverifiable claim');
+    assert.match(r.reason, /not independently verifiable/);
   });
 
-  test('not-applicable demands a written reason', () => {
-    assert.equal(
-      reconcileExternalResult('logPlatform', { status: 'not-applicable' }).status,
-      'failed',
+  test('not-applicable is accepted where the condition IS checkable', () => {
+    const r = reconcileExternalResult(
+      'redis',
+      { ...bind, sink: 'redis', status: 'not-applicable', note: 'USE_REDIS off' },
+      { manifest: MF }, // environment.redisEnabled === false
     );
-    assert.equal(
-      reconcileExternalResult('logPlatform', { status: 'not-applicable', note: 'no userId' })
-        .status,
-      'not-applicable',
+    assert.equal(r.status, 'not-applicable');
+    assert.match(r.verifiedCondition, /USE_REDIS is off/);
+  });
+
+  test('a checkable condition that does NOT hold is downgraded to limitation', () => {
+    const r = reconcileExternalResult(
+      'redis',
+      { ...bind, sink: 'redis', status: 'not-applicable', note: 'trust me' },
+      { manifest: { ...MF, environment: { ...MF.environment, redisEnabled: true } } },
     );
+    assert.equal(r.status, 'limitation');
+  });
+
+  test('not-applicable and limitation both demand a written note', () => {
+    for (const status of ['not-applicable', 'limitation']) {
+      const r = reconcileExternalResult(
+        'redis',
+        { ...bind, sink: 'redis', status },
+        { manifest: MF },
+      );
+      assert.equal(r.status, 'failed', status);
+      assert.match(r.reason, /requires a written note/);
+    }
+  });
+
+  test('a limitation keeps the bundle INCOMPLETE', () => {
+    const manifest = {
+      ...MF,
+      externalSinks: initialExternalSinkState(),
+      completeness: { ok: true, warnings: [] },
+    };
+    finalizeManifest(manifest, '/tmp/x', (f) =>
+      f.includes('log-platform')
+        ? { ...bind, sink: 'logPlatform', status: 'limitation', note: 'no userId support' }
+        : null,
+    );
+    assert.equal(manifest.externalSinks.logPlatform.status, 'limitation');
+    assert.equal(manifest.completeness.ok, false, 'an inaccessible sink is an unanswered sink');
+    assert.ok(manifest.completeness.warnings.some((w) => w.includes('logPlatform')));
   });
 
   test('derived expectations come from phase one\u2019s own counts', () => {
@@ -752,51 +858,23 @@ describe('external sinks are pending until verified', () => {
     });
     assert.equal(d.blob, 7);
     assert.equal(d.ragVectors, 5);
-    assert.equal(d.langfuse, undefined, 'Langfuse is not derived from Mongo');
-    assert.equal(d.logPlatform, undefined, 'the log platform is not derived from Mongo');
+    assert.equal(d.langfuse, undefined);
+    assert.equal(d.logPlatform, undefined);
   });
 
   test('Meilisearch is measured against the INDEXABLE subset, not every Mongo row', () => {
-    // mongoMeili keeps temporary/expiring chats out of the index, so the replica is
-    // legitimately smaller than Mongo. Deriving from raw counts REJECTED correct exports.
     const d = derivedExpectedTotals({
-      sinks: {
-        Message: 1200,
-        Conversation: 40,
-        MessageIndexable: 1170,
-        ConversationIndexable: 38,
-      },
+      sinks: { Message: 1200, Conversation: 40, MessageIndexable: 1170, ConversationIndexable: 38 },
     });
-    assert.equal(d.meilisearch, 1208, '1170 + 38 indexable, not 1200 + 40');
+    assert.equal(d.meilisearch, 1208);
     assert.notEqual(d.meilisearch, 1240, 'the raw total would fail a correct export');
   });
 
-  test('a correct export of a subject with temporary chats is ACCEPTED', () => {
-    const manifest = {
-      sinks: { Message: 1200, Conversation: 40, MessageIndexable: 1170, ConversationIndexable: 38 },
-      externalSinks: initialExternalSinkState(),
-      completeness: { ok: false, warnings: [] },
-    };
-    const r = reconcileExternalResult(
-      'meilisearch',
-      { status: 'complete', collected: 1208, artifact: 'results/m.jsonl', checksum: 'abc' },
-      { derivedExpected: derivedExpectedTotals(manifest).meilisearch, verifyArtifact: () => 'abc' },
+  test('a bundle with no indexable counts has no derived Meili expectation', () => {
+    assert.equal(
+      derivedExpectedTotals({ sinks: { Message: 10, Conversation: 2 } }).meilisearch,
+      undefined,
     );
-    assert.equal(r.status, 'complete', r.reason);
-  });
-
-  test('a bundle with no indexable counts falls back to self-reported, not rejection', () => {
-    // Older bundles predate the *Indexable counts; they must not be failed on a
-    // number we can no longer derive.
-    const d = derivedExpectedTotals({ sinks: { Message: 10, Conversation: 2 } });
-    assert.equal(d.meilisearch, undefined);
-    const r = reconcileExternalResult(
-      'meilisearch',
-      { status: 'complete', collected: 12, expected: 12, artifact: 'a', checksum: 'x' },
-      { derivedExpected: d.meilisearch, verifyArtifact: () => 'x' },
-    );
-    assert.equal(r.status, 'complete');
-    assert.match(r.expectationSource, /self-reported/);
   });
 });
 
@@ -816,6 +894,28 @@ describe('the bundle directory refuses unsafe destinations', () => {
     const link = path.join(base, 'link');
     fs.symlinkSync(real, link);
     assert.throws(() => prepareOutputDir(link), /symlink/i);
+  });
+
+  test('refuses a SYMLINKED PARENT even when the leaf does not exist', () => {
+    // Round-4 review, reproduced before fixing: prepareOutputDir checked only the final
+    // component, so `mkdirSync({recursive:true})` followed a symlinked parent and wrote
+    // the subject's entire corpus into the linked location.
+    const base = tmp();
+    const real = path.join(base, 'real');
+    fs.mkdirSync(real);
+    const parent = path.join(base, 'parent');
+    fs.mkdirSync(parent);
+    fs.symlinkSync(real, path.join(parent, 'link'));
+    assert.throws(() => prepareOutputDir(path.join(parent, 'link', 'bundle')), /symlink/i);
+    assert.deepEqual(fs.readdirSync(real), [], 'nothing may be written through the link');
+  });
+
+  test('refuses a symlink several levels up the ancestry', () => {
+    const base = tmp();
+    const real = path.join(base, 'real');
+    fs.mkdirSync(path.join(real, 'a', 'b'), { recursive: true });
+    fs.symlinkSync(real, path.join(base, 'link'));
+    assert.throws(() => prepareOutputDir(path.join(base, 'link', 'a', 'b', 'out')), /symlink/i);
   });
 
   test('refuses a non-empty directory', () => {
@@ -880,6 +980,8 @@ describe('collect -> results -> finalize round-trip', () => {
     const dir = prepareOutputDir(path.join(tmp(), 'bundle'));
     const manifest = {
       generatedAt: '2026-01-01T00:00:00.000Z',
+      runId: 'run-fixture-1',
+      environment: { redisEnabled: false, searchEnabled: true, langfuseEnabled: true },
       subject: { _id: 'u1' },
       tenant: { resolved: 't1' },
       sinks: {
@@ -903,17 +1005,29 @@ describe('collect -> results -> finalize round-trip', () => {
     return dir;
   }
 
-  /** Drop a verified result, hashing a real artifact on disk. */
-  function putResult(dir, file, artifactName, collected, extra = {}) {
-    const body = Buffer.from(`artifact for ${artifactName}\n`);
+  /**
+   * Drop a verified result: a REAL JSONL artifact with exactly `records` lines, hashed,
+   * and bound to the fixture bundle. The collector parses the line count itself, so the
+   * artifact — not the number — is what the assertion rests on.
+   */
+  function putResult(dir, file, artifactName, records, extra = {}) {
+    const body = Buffer.from(
+      Array.from({ length: records }, (_, i) => JSON.stringify({ i })).join('\n') +
+        (records ? '\n' : ''),
+    );
     writeBundleFile(dir, `results/${artifactName}`, body);
     writeBundleFile(
       dir,
       `results/${file}`,
       JSON.stringify({
+        runId: 'run-fixture-1',
+        sink: file
+          .replace('.json', '')
+          .replace('rag-vectors', 'ragVectors')
+          .replace('log-platform', 'logPlatform'),
+        subject: 'u1',
+        tenant: 't1',
         status: 'complete',
-        collected,
-        expected: collected,
         artifact: `results/${artifactName}`,
         checksum: sha(body),
         ...extra,
@@ -921,21 +1035,32 @@ describe('collect -> results -> finalize round-trip', () => {
     );
   }
 
+  /** A sink the collector can independently confirm is not applicable. */
+  function putNotApplicable(dir, file, sink, note) {
+    writeBundleFile(
+      dir,
+      `results/${file}`,
+      JSON.stringify({
+        runId: 'run-fixture-1',
+        sink,
+        subject: 'u1',
+        tenant: 't1',
+        status: 'not-applicable',
+        note,
+      }),
+    );
+  }
+
   function seedAllResults(dir) {
     putResult(dir, 'langfuse.json', 'langfuse.jsonl', 42);
-    putResult(dir, 'meilisearch.json', 'meili.jsonl', 12); // derived: 10 + 2
+    putResult(dir, 'meilisearch.json', 'meili.jsonl', 12); // derived: 10 + 2 indexable
     putResult(dir, 'blob.json', 'blob.jsonl', 3);
     putResult(dir, 'rag-vectors.json', 'rag.jsonl', 2);
-    writeBundleFile(
-      dir,
-      'results/log-platform.json',
-      JSON.stringify({ status: 'not-applicable', note: 'platform cannot query by userId' }),
-    );
-    writeBundleFile(
-      dir,
-      'results/redis.json',
-      JSON.stringify({ status: 'not-applicable', note: 'USE_REDIS is off in this environment' }),
-    );
+    // Redis is independently confirmable (environment.redisEnabled === false).
+    putNotApplicable(dir, 'redis.json', 'redis', 'USE_REDIS is off in this environment');
+    // logPlatform has NO checkable condition, so a complete bundle must actually answer
+    // it. The fixture supplies a real export.
+    putResult(dir, 'log-platform.json', 'logs.jsonl', 7);
   }
 
   test('finalize does NOT collide with the phase-one bundle (the round-2 bug)', () => {
@@ -1007,8 +1132,11 @@ describe('collect -> results -> finalize round-trip', () => {
       dir,
       'results/blob.json',
       JSON.stringify({
+        runId: 'run-fixture-1',
+        sink: 'blob',
+        subject: 'u1',
+        tenant: 't1',
         status: 'complete',
-        collected: 3,
         artifact: '../../../etc/hostname',
         checksum: 'whatever',
       }),
@@ -1077,13 +1205,53 @@ describe('collect -> results -> finalize round-trip', () => {
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
   });
 
-  test('verifyBundleArtifact hashes the real file and rejects symlinked artifacts', () => {
+  test('verifyBundleArtifact hashes the real file, counts its records, and refuses symlinks', () => {
     const dir = seedBundle();
-    const body = Buffer.from('hello\n');
-    writeBundleFile(dir, 'results/real.bin', body);
-    assert.equal(verifyBundleArtifact('results/real.bin', dir), sha(body));
-    fs.symlinkSync(path.join(dir, 'results/real.bin'), path.join(dir, 'results/link.bin'));
-    assert.throws(() => verifyBundleArtifact('results/link.bin', dir), /symlink/);
+    const body = Buffer.from('{"a":1}\n{"a":2}\n');
+    writeBundleFile(dir, 'results/real.jsonl', body);
+    const probe = verifyBundleArtifact('results/real.jsonl', dir);
+    assert.equal(probe.checksum, sha(body));
+    assert.equal(probe.records, 2, 'the count must come from the bytes');
+    fs.symlinkSync(path.join(dir, 'results/real.jsonl'), path.join(dir, 'results/link.jsonl'));
+    assert.throws(() => verifyBundleArtifact('results/link.jsonl', dir), /symlink/);
+  });
+
+  test('verifyBundleArtifact tightens a world-readable artifact before accepting it', () => {
+    const dir = seedBundle();
+    const f = path.join(dir, 'results', 'loose.jsonl');
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(f, '{"a":1}\n', { mode: 0o644 });
+    fs.chmodSync(f, 0o644);
+    const probe = verifyBundleArtifact('results/loose.jsonl', dir);
+    assert.equal(probe.tightenedFrom, '644');
+    assert.equal(fs.statSync(f).mode & 0o777, 0o600, 'must be tightened before use');
+  });
+
+  test('finalize refuses a symlinked manifest.json inside a valid directory', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const real = path.join(path.dirname(dir), 'elsewhere.json');
+    fs.writeFileSync(real, fs.readFileSync(path.join(dir, 'manifest.json')), { mode: 0o600 });
+    fs.rmSync(path.join(dir, 'manifest.json'));
+    fs.symlinkSync(real, path.join(dir, 'manifest.json'));
+    assert.throws(() => runFinalize(dir, () => {}), /symlink/i);
+  });
+
+  test('a symlinked RESULT file fails its sink and blocks completeness', () => {
+    // Recorded as a failed sink rather than thrown: one poisoned result must not abort
+    // reconciliation of the others, but it must still stop the bundle being released.
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const outside = path.join(path.dirname(dir), 'evil.json');
+    fs.writeFileSync(outside, '{"status":"complete"}', { mode: 0o600 });
+    fs.rmSync(path.join(dir, 'results/redis.json'));
+    fs.symlinkSync(outside, path.join(dir, 'results/redis.json'));
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.externalSinks.redis.status, 'failed');
+    assert.match(m.externalSinks.redis.reason, /symlink/i);
+    assert.equal(m.completeness.ok, false);
+    // the other sinks still reconciled
+    assert.equal(m.externalSinks.blob.status, 'complete');
   });
 });
 

@@ -192,26 +192,46 @@ const EXTERNAL_SINKS = [
     label: 'Langfuse traces + scores',
     resultFile: 'results/langfuse.json',
     runbook: '§1.6 — run langfuse.sh where the CLI has credentials',
+    notApplicableWhen: (m) =>
+      m.environment?.langfuseEnabled === false ? 'Langfuse is not configured' : null,
   },
   {
     key: 'meilisearch',
     label: 'Meilisearch messages + convos',
     resultFile: 'results/meilisearch.json',
     runbook: '§1.2 — run the paged recipe in meilisearch.md',
+    // Machine-checkable: no search backend configured, or nothing indexable to find.
+    notApplicableWhen: (m) => {
+      if (m.environment?.searchEnabled === false) {
+        return 'no search backend configured (MEILI_HOST unset)';
+      }
+      if (derivedExpectedTotals(m).meilisearch === 0) {
+        return 'phase one found no indexable messages or conversations';
+      }
+      return null;
+    },
   },
   {
     key: 'blob',
     label: 'Azure Blob objects',
     resultFile: 'results/blob.json',
     runbook: '§1.5 — pull the objects listed in blob-objects.json',
+    notApplicableWhen: (m) =>
+      derivedExpectedTotals(m).blob === 0 ? 'phase one enumerated no blob objects' : null,
   },
   {
     key: 'ragVectors',
     label: 'RAG vector inventory confirmation',
     resultFile: 'results/rag-vectors.json',
     runbook: '§1.3/1.4 — send vector-inventory-request.json to the RAG service',
+    notApplicableWhen: (m) =>
+      derivedExpectedTotals(m).ragVectors === 0 ? 'phase one emitted no vector ids' : null,
   },
   {
+    // No machine-checkable not-applicable condition exists: "the platform cannot query
+    // by userId" is a human claim about an external system. Round-4 review: an
+    // INACCESSIBLE sink must stay incomplete, so this one can only reach `limitation`,
+    // which is recorded, distinguishable from `pending`, and still blocks completeness.
     key: 'logPlatform',
     label: 'Server logs / APM export',
     resultFile: 'results/log-platform.json',
@@ -227,6 +247,8 @@ const EXTERNAL_SINKS = [
     label: 'Redis — stream jobs, violation counters, sessions',
     resultFile: 'results/redis.json',
     runbook: '§1.11 — scan by subject id, or record not-applicable when USE_REDIS is off',
+    notApplicableWhen: (m) =>
+      m.environment?.redisEnabled === false ? 'USE_REDIS is off in this environment' : null,
   },
 ];
 
@@ -563,7 +585,10 @@ function buildVectorInventoryRequest(subjectId, tenantId, vectors) {
 }
 
 /** Tells the operator exactly what each external sink must drop into results/. */
-function buildResultsReadme() {
+function buildResultsReadme(binding = {}) {
+  const RUN_ID = binding.runId ?? '<runId from manifest.json>';
+  const SUBJECT_ID = binding.subject ?? '<subject._id from manifest.json>';
+  const TENANT_JSON = JSON.stringify(binding.tenant ?? null);
   const rows = EXTERNAL_SINKS.map(
     (e) => `| \`${e.key}\` | ${e.label} | \`${e.resultFile}\` | ${e.runbook} |`,
   ).join('\n');
@@ -576,16 +601,23 @@ refuses to report a complete bundle until each has a VERIFIED result here.
 |---|---|---|---|
 ${rows}
 
-Each file is JSON and must name the artifact it produced:
+Each file is JSON, **bound to this bundle**, and must name the artifact it produced:
 
 \`\`\`json
 {
+  "runId": "${RUN_ID}",
+  "sink": "langfuse",
+  "subject": "${SUBJECT_ID}",
+  "tenant": ${TENANT_JSON},
   "status": "complete",
-  "collected": 2500,
   "artifact": "results/langfuse-traces.jsonl",
   "checksum": "<sha256 of that file>"
 }
 \`\`\`
+
+\`runId\`, \`sink\`, \`subject\` and \`tenant\` must match this bundle exactly — that is what
+stops a result being copied from another bundle or replayed from an earlier run against a
+stale inventory. The values above are already filled in for you.
 
 **Two independent checks run, and both must pass.**
 
@@ -602,10 +634,21 @@ Each file is JSON and must name the artifact it produced:
    expectation; they stay self-reported and the manifest records
    \`expectationSource: "self-reported"\` so nobody mistakes it for a verified number.
 
-\`status: "not-applicable"\` is allowed but **requires a \`note\`** stating why (e.g. the
-log platform cannot query by \`userId\`). The note goes into the Art. 15 response as a
-stated limitation. Anything else — missing file, unreadable JSON, checksum mismatch,
-count mismatch — keeps the bundle incomplete.
+**The count comes from the artifact, not from you.** The collector parses the file
+(JSONL, a JSON array, or an envelope with \`data\`/\`hits\`/\`results\`/\`items\`) and counts the
+records itself. If you also send \`collected\` it must agree, and if the file is in neither
+shape the sink **fails** — export in one of them so the count is evidence rather than a claim.
+
+\`status: "not-applicable"\` is accepted **only where the collector can check the condition
+itself** — Redis off, no search backend, Langfuse unconfigured, or phase one having found
+nothing to export. Anywhere else it is downgraded to \`limitation\`.
+
+\`status: "limitation"\` records a sink that could not be answered (e.g. the log platform
+cannot query by \`userId\`). It **keeps the bundle incomplete** — an inaccessible sink is an
+unanswered sink — and the note must appear in the Art. 15 response.
+
+Anything else — missing file, unreadable JSON, a symlinked or foreign-owned file, checksum
+mismatch, count mismatch, binding mismatch — keeps the bundle incomplete.
 
 Then reconcile (no database needed):
 
@@ -621,16 +664,111 @@ That is the only run that can set \`manifest.completeness.ok = true\`. It rewrit
 /* --------------------------------------------------------------- safe output dir */
 
 /**
+ * Refuse a symlink anywhere in `target`'s path, from `stopAt` (exclusive) downwards —
+ * or from the filesystem root when `stopAt` is omitted.
+ *
+ * PR #349 review (round 4): this walk existed in `assertSecureExistingDir`, was added to
+ * `verifyBundleArtifact` during self-review, and was STILL missing from
+ * `prepareOutputDir` — the one that writes the entire corpus. Three hand-written copies
+ * of the same check, two of them right. It is one function now, because the recurrence
+ * was the real defect.
+ *
+ * Note the limit: this is lstat-then-use, so it is not TOCTOU-proof against an attacker
+ * who can race the filesystem. The bundle must live where only the operator can write.
+ */
+function assertNoSymlinkInPath(target, stopAt) {
+  const resolved = path.resolve(target);
+  let cursor;
+  let rest;
+  if (stopAt) {
+    cursor = path.resolve(stopAt);
+    rest = path.relative(cursor, resolved);
+    if (rest.startsWith('..')) {
+      throw new Error(`Path escapes its root: ${target}`);
+    }
+  } else {
+    cursor = path.parse(resolved).root;
+    rest = resolved.slice(cursor.length);
+  }
+  for (const part of rest.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    let st;
+    try {
+      st = fs.lstatSync(cursor);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        // Everything below here does not exist yet; nothing left to follow.
+        return resolved;
+      }
+      throw err;
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error(`Refusing to use a path that passes through a symlink: ${cursor}`);
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Read a JSON file the bundle depends on, with no-follow semantics and an ownership /
+ * permission check.
+ *
+ * PR #349 review (round 4): finalization opened `manifest.json` and every result file by
+ * pathname, so a symlinked FILE inside an otherwise-validated directory was followed, and
+ * a result written by shell redirection stayed world-readable at 0644 while the bundle was
+ * declared releasable. Every consumed file is now checked before it can influence
+ * completeness.
+ */
+function readSecureJson(file, { bundleDir, required = false } = {}) {
+  assertNoSymlinkInPath(file, bundleDir);
+  let st;
+  try {
+    st = fs.lstatSync(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      if (required) throw new Error(`Required bundle file is missing: ${file}`);
+      return null;
+    }
+    throw err;
+  }
+  if (st.isSymbolicLink()) {
+    throw new Error(`Refusing to read a symlinked bundle file: ${file}`);
+  }
+  if (!st.isFile()) {
+    throw new Error(`Bundle file is not a regular file: ${file}`);
+  }
+  if (st.uid !== process.getuid?.()) {
+    throw new Error(
+      `Bundle file is not owned by the operator running this script: ${file} ` +
+        `(owner uid ${st.uid}, expected ${process.getuid?.()})`,
+    );
+  }
+  // Tighten rather than reject: a result produced by `… > results/x.json` inherits the
+  // umask, and failing the whole run for that would push operators toward workarounds.
+  // Recorded on the manifest so the tightening is visible, not silent.
+  const mode = st.mode & 0o777;
+  if (mode !== 0o600) {
+    fs.chmodSync(file, 0o600);
+  }
+  return {
+    data: JSON.parse(fs.readFileSync(file, 'utf8')),
+    tightenedFrom: mode === 0o600 ? null : mode,
+  };
+}
+
+/**
  * PR #349 review (round 2): the bundle is the subject's entire personal-data corpus,
  * and the old code did `fs.mkdirSync(out, { recursive: true })` — which accepts an
  * existing directory or a symlink, leaves unrelated files in place, writes predictable
  * filenames under the ambient umask, and made `langfuse.sh` world-readable at 0755.
  *
- * Now: refuse a symlink, refuse a non-empty destination, create fresh at 0700, and
- * write every file 0600 with `wx` (exclusive) so nothing is silently overwritten.
+ * Round 4: it also checked only the FINAL component, so with a symlinked parent and a
+ * non-existent leaf, `mkdirSync({recursive:true})` followed the link and wrote the whole
+ * corpus into the linked location. Reproduced before fixing. Now the full ancestry is
+ * validated first.
  */
 function prepareOutputDir(out) {
-  const resolved = path.resolve(out);
+  const resolved = assertNoSymlinkInPath(out);
   let st = null;
   try {
     st = fs.lstatSync(resolved);
@@ -742,7 +880,7 @@ function derivedExpectedTotals(manifest) {
  * one exists. An operator-supplied `expected` is IGNORED whenever we can compute it.
  */
 function reconcileExternalResult(sinkKey, raw, opts = {}) {
-  const { derivedExpected, verifyArtifact, bundleDir } = opts;
+  const { derivedExpected, verifyArtifact, bundleDir, manifest } = opts;
   const sink = EXTERNAL_SINKS.find((e) => e.key === sinkKey);
   const base = { label: sink?.label ?? sinkKey, expects: sink?.resultFile, runbook: sink?.runbook };
   const hasDerived = Number.isFinite(derivedExpected);
@@ -750,17 +888,66 @@ function reconcileExternalResult(sinkKey, raw, opts = {}) {
   if (raw == null) {
     return { ...base, status: 'pending', reason: 'no result file found' };
   }
+
+  // --- binding: this evidence must belong to THIS run, sink, subject and tenant -------
+  // Round-4 review: without it a result file could be copied between bundles, reused
+  // from an earlier run against a stale inventory, or filed under the wrong sink.
+  if (manifest) {
+    const expectBinding = {
+      runId: manifest.runId,
+      sink: sinkKey,
+      subject: manifest.subject?._id,
+      tenant: manifest.tenant?.resolved ?? null,
+    };
+    for (const [field, expected] of Object.entries(expectBinding)) {
+      if (expected === undefined) continue;
+      const actual = raw[field] ?? null;
+      if (String(actual) !== String(expected)) {
+        return {
+          ...base,
+          status: 'failed',
+          reason: `binding mismatch on \`${field}\`: result says ${JSON.stringify(actual)}, this bundle is ${JSON.stringify(expected)}`,
+        };
+      }
+    }
+  }
+
+  // --- not-applicable: only where the condition is machine-checkable -----------------
   if (raw.status === 'not-applicable') {
     if (!raw.note) {
       return { ...base, status: 'failed', reason: 'not-applicable requires a written note' };
     }
-    return { ...base, status: 'not-applicable', note: raw.note };
+    const condition = sink?.notApplicableWhen?.(manifest ?? {}) ?? null;
+    if (!condition) {
+      return {
+        ...base,
+        status: 'limitation',
+        note: raw.note,
+        reason:
+          'not-applicable is not independently verifiable for this sink — recorded as a ' +
+          'LIMITATION. The bundle stays incomplete and the note must appear in the Art. 15 response.',
+      };
+    }
+    return { ...base, status: 'not-applicable', note: raw.note, verifiedCondition: condition };
   }
+
+  if (raw.status === 'limitation') {
+    if (!raw.note) {
+      return { ...base, status: 'failed', reason: 'limitation requires a written note' };
+    }
+    return {
+      ...base,
+      status: 'limitation',
+      note: raw.note,
+      reason: 'recorded limitation — the bundle is incomplete and the response must say so',
+    };
+  }
+
   if (raw.status !== 'complete') {
     return { ...base, status: 'failed', reason: raw.reason ?? `status=${raw.status ?? 'missing'}` };
   }
 
-  // (a) the artifact must exist and hash to what the result claims.
+  // --- the artifact must exist, hash as declared, and be PARSED for its own count ----
   if (!raw.artifact || !raw.checksum) {
     return {
       ...base,
@@ -768,65 +955,80 @@ function reconcileExternalResult(sinkKey, raw, opts = {}) {
       reason: 'complete requires `artifact` (path within the bundle) and `checksum` (sha256)',
     };
   }
+  let probe;
   if (typeof verifyArtifact === 'function') {
-    let actual;
     try {
-      actual = verifyArtifact(raw.artifact, bundleDir);
+      probe = verifyArtifact(raw.artifact, bundleDir);
     } catch (err) {
       return { ...base, status: 'failed', reason: `artifact unreadable: ${err.message}` };
     }
-    if (actual !== raw.checksum) {
+    if (probe.checksum !== raw.checksum) {
       return {
         ...base,
         status: 'failed',
-        reason: `checksum mismatch for ${raw.artifact}: declared ${raw.checksum}, actual ${actual}`,
+        reason: `checksum mismatch for ${raw.artifact}: declared ${raw.checksum}, actual ${probe.checksum}`,
       };
     }
-  }
-
-  // (b) the count must match OUR number wherever we have one.
-  const collected = Number(raw.collected);
-  if (!Number.isFinite(collected)) {
-    return { ...base, status: 'failed', reason: '`collected` must be a number' };
-  }
-  if (hasDerived) {
-    if (collected !== derivedExpected) {
+    if (probe.records === null) {
       return {
         ...base,
         status: 'failed',
         reason:
-          `collected ${collected} but phase one derived ${derivedExpected} — ` +
+          `cannot derive a record count from ${raw.artifact} — it is neither JSONL nor a ` +
+          'JSON array/envelope. Export in one of those so the count is evidence, not a claim.',
+      };
+    }
+  }
+
+  // The count that matters is the one WE parsed out of the bytes.
+  const observed = probe ? probe.records : Number(raw.collected);
+  if (!Number.isFinite(observed)) {
+    return { ...base, status: 'failed', reason: 'could not establish a record count' };
+  }
+  if (raw.collected !== undefined && Number(raw.collected) !== observed) {
+    return {
+      ...base,
+      status: 'failed',
+      reason: `result declares ${raw.collected} records but ${raw.artifact} contains ${observed}`,
+    };
+  }
+
+  const shared = {
+    ...base,
+    collected: observed,
+    countSource: probe ? 'parsed-from-artifact' : 'declared',
+    artifact: raw.artifact,
+    checksum: raw.checksum,
+    ...(probe?.tightenedFrom ? { permissionsTightenedFrom: probe.tightenedFrom } : {}),
+  };
+
+  if (hasDerived) {
+    if (observed !== derivedExpected) {
+      return {
+        ...shared,
+        status: 'failed',
+        reason:
+          `artifact contains ${observed} records but phase one derived ${derivedExpected} — ` +
           'the extraction is short, or the bundle and the export disagree',
       };
     }
     return {
-      ...base,
+      ...shared,
       status: 'complete',
-      collected,
       expected: derivedExpected,
       expectationSource: 'derived-from-phase-one',
-      artifact: raw.artifact,
-      checksum: raw.checksum,
     };
   }
 
-  const selfExpected = Number(raw.expected);
-  if (!Number.isFinite(selfExpected) || collected !== selfExpected) {
-    return {
-      ...base,
-      status: 'failed',
-      reason: `self-reported collected ${raw.collected} vs expected ${raw.expected}`,
-    };
-  }
+  // No Mongo-derived expectation exists for this sink. The count is now at least parsed
+  // out of a hashed artifact bound to this run, but nothing independent corroborates the
+  // TOTAL — say so, rather than letting it read like the verified sinks.
   return {
-    ...base,
+    ...shared,
     status: 'complete',
-    collected,
-    expected: selfExpected,
-    // Stated plainly: nothing here was cross-checked against a number we own.
-    expectationSource: 'self-reported (no Mongo-derived expectation exists for this sink)',
-    artifact: raw.artifact,
-    checksum: raw.checksum,
+    expected: observed,
+    expectationSource:
+      'artifact-parsed, total unverified (no independent expectation exists for this sink)',
   };
 }
 
@@ -856,11 +1058,15 @@ function finalizeManifest(manifest, out, readJson, opts = {}) {
       derivedExpected: derived[sink.key],
       verifyArtifact: opts.verifyArtifact,
       bundleDir: out,
+      manifest,
     });
   }
   manifest.externalSinks = external;
   manifest.derivedExpectations = derived;
 
+  // `limitation` is deliberately NOT releasable: an inaccessible sink is an unanswered
+  // sink, however well documented (round-4 review). It is distinguished from `pending`
+  // so the operator can see it was addressed and could not be satisfied.
   const unresolved = Object.entries(external).filter(
     ([, v]) => v.status !== 'complete' && v.status !== 'not-applicable',
   );
@@ -886,27 +1092,9 @@ function finalizeManifest(manifest, out, readJson, opts = {}) {
  * manifest written. Every component from the filesystem root down is lstat-ed.
  */
 function assertSecureExistingDir(out) {
-  const resolved = path.resolve(out);
-  const { root } = path.parse(resolved);
-  const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
-  let cursor = root;
-  for (const part of parts) {
-    cursor = path.join(cursor, part);
-    let st;
-    try {
-      st = fs.lstatSync(cursor);
-    } catch (err) {
-      if (err.code === 'ENOENT') {
-        throw new Error(`Bundle path does not exist: ${cursor}`);
-      }
-      throw err;
-    }
-    if (st.isSymbolicLink()) {
-      throw new Error(
-        `Refusing to finalize through a symlink: ${cursor}. A linked component can ` +
-          'redirect both the results we read and the manifest we write.',
-      );
-    }
+  const resolved = assertNoSymlinkInPath(out);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Bundle path does not exist: ${resolved}`);
   }
   if (!fs.statSync(resolved).isDirectory()) {
     throw new Error(`--out is not a directory: ${resolved}`);
@@ -931,25 +1119,64 @@ function verifyBundleArtifact(artifact, bundleDir) {
   if (resolved !== bundleDir && !resolved.startsWith(bundleDir + path.sep)) {
     throw new Error(`artifact escapes the bundle: ${artifact}`);
   }
-  // Self-review: checking only the leaf was not enough. `path.resolve` collapses `..`
-  // but does NOT resolve symlinks, so `results/linkdir/x.jsonl` where `linkdir` points
-  // at /etc passes the prefix test and the leaf lstat sees an ordinary file — hashing
-  // something outside the bundle. Walk every component below the bundle root, the same
-  // way `assertSecureExistingDir` does for the bundle itself.
-  const rel = path.relative(bundleDir, resolved);
-  let cursor = bundleDir;
-  for (const part of rel.split(path.sep).filter(Boolean)) {
-    cursor = path.join(cursor, part);
-    if (fs.lstatSync(cursor).isSymbolicLink()) {
-      throw new Error(
-        `artifact path passes through a symlink: ${path.relative(bundleDir, cursor)}`,
-      );
-    }
-  }
-  if (!fs.statSync(resolved).isFile()) {
+  assertNoSymlinkInPath(resolved, bundleDir);
+  const st = fs.lstatSync(resolved);
+  if (!st.isFile()) {
     throw new Error(`artifact is not a regular file: ${artifact}`);
   }
-  return crypto.createHash('sha256').update(fs.readFileSync(resolved)).digest('hex');
+  if (st.uid !== process.getuid?.()) {
+    throw new Error(`artifact is not owned by the operator: ${artifact} (uid ${st.uid})`);
+  }
+  const mode = st.mode & 0o777;
+  if (mode !== 0o600) {
+    // Externally produced artifacts arrive with the ambient umask; tighten before the
+    // bundle can be called releasable (round-4 review).
+    fs.chmodSync(resolved, 0o600);
+  }
+  const buf = fs.readFileSync(resolved);
+  return {
+    checksum: crypto.createHash('sha256').update(buf).digest('hex'),
+    records: countArtifactRecords(buf, artifact),
+    bytes: buf.length,
+    tightenedFrom: mode === 0o600 ? null : mode.toString(8),
+  };
+}
+
+/**
+ * Derive an artifact's record count from its BYTES, not from the operator's number.
+ *
+ * PR #349 review (round 4): a checksum proves only that the named bytes exist — it says
+ * nothing about how many records they contain, so `collected` was still an assertion.
+ * JSONL (one record per line) and a top-level JSON array both parse deterministically;
+ * anything else returns null and the sink falls back to declaring itself unverifiable
+ * rather than silently passing.
+ */
+function countArtifactRecords(buf, artifactName) {
+  const text = buf.toString('utf8').trim();
+  if (!text) return 0;
+  if (/\.jsonl$/i.test(artifactName) || (!text.startsWith('[') && !text.startsWith('{'))) {
+    const lines = text.split('\n').filter((l) => l.trim());
+    for (const l of lines) {
+      try {
+        JSON.parse(l);
+      } catch {
+        return null; // not JSONL after all — refuse to guess
+      }
+    }
+    return lines.length;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(parsed)) return parsed.length;
+  // A single object wrapping the rows, e.g. { data: [...] } or { hits: [...] }.
+  for (const key of ['data', 'hits', 'results', 'items', 'objects', 'records']) {
+    if (Array.isArray(parsed[key])) return parsed[key].length;
+  }
+  return null;
 }
 
 /**
@@ -978,13 +1205,17 @@ function replaceManifestAtomically(dir, manifest) {
  */
 function runFinalize(out, log = console.log) {
   const dir = assertSecureExistingDir(out);
-  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
-  finalizeManifest(
-    manifest,
-    dir,
-    (f) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null),
-    { verifyArtifact: verifyBundleArtifact },
-  );
+  // Every consumed file goes through the no-follow / type / owner / mode check — the
+  // manifest included, since a symlinked manifest.json inside a validated directory was
+  // still followed before (round-4 review).
+  const manifestRead = readSecureJson(path.join(dir, 'manifest.json'), {
+    bundleDir: dir,
+    required: true,
+  });
+  const manifest = manifestRead.data;
+  finalizeManifest(manifest, dir, (f) => readSecureJson(f, { bundleDir: dir })?.data ?? null, {
+    verifyArtifact: verifyBundleArtifact,
+  });
   replaceManifestAtomically(dir, manifest);
   log(
     JSON.stringify(
@@ -1140,6 +1371,20 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
   const id = subject._id;
   const manifest = {
     generatedAt: new Date().toISOString(),
+    // Immutable identity for THIS collection. Every external result must carry it, so a
+    // result cannot be copied from another bundle or replayed from an earlier run
+    // against a stale inventory (round-4 review).
+    runId: require('node:crypto').randomUUID(),
+    // Recorded so `not-applicable` claims can be checked against the environment phase
+    // one actually ran in, instead of being taken on trust.
+    environment: {
+      redisEnabled: String(process.env.USE_REDIS ?? '').toLowerCase() === 'true',
+      searchEnabled:
+        Boolean(process.env.MEILI_HOST) &&
+        String(process.env.SEARCH ?? 'true').toLowerCase() !== 'false',
+      langfuseEnabled: Boolean(process.env.LANGFUSE_HOST || process.env.LANGFUSE_PUBLIC_KEY),
+      logToFile: String(process.env.LOG_TO_FILE ?? '').toLowerCase() !== 'false',
+    },
     subject: { _id: String(id), email: subject.email },
     // Recorded and verified: everything below was read inside this tenant's context.
     tenant: {
@@ -1330,7 +1575,15 @@ async function collect({ models, mongoose, subject, tenantId, out, includeLogs, 
     // carries their id. Run it with `bash langfuse.sh`, not `./langfuse.sh`.
     writeBundleFile(out, 'langfuse.sh', buildLangfuseCommands(id));
     writeBundleFile(out, 'meilisearch.md', buildMeilisearchQueries(id));
-    writeBundleFile(out, 'results/README.md', buildResultsReadme());
+    writeBundleFile(
+      out,
+      'results/README.md',
+      buildResultsReadme({
+        runId: manifest.runId,
+        subject: manifest.subject._id,
+        tenant: manifest.tenant.resolved,
+      }),
+    );
   }
   manifest.sinks.langfuse = 'PENDING — run langfuse.sh, then re-run with --finalize';
   manifest.sinks.meilisearch = 'PENDING — run the meilisearch.md recipe, then --finalize';
