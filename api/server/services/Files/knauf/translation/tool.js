@@ -34,6 +34,11 @@ const {
   translateDocumentWithAzure,
   translateWithAzure,
 } = require('./providers/azure');
+const {
+  detectProtectedLogo,
+  maskRegionForTranslation,
+  restoreProtectedRegion,
+} = require('./logoProtection');
 const { getRetentionExpiry } = require('../../retention');
 const { getStrategyFunctions } = require('../../strategies');
 const {
@@ -1189,9 +1194,70 @@ async function translateOneFile({
         'invalid_size',
       );
     }
+    // [knauf] Protect known brand marks (e.g. the Knauf wordmark) from being
+    // OCR'd and redrawn by Azure's image translation. Detection failures are
+    // swallowed: an undetected logo just behaves as it did before this change.
+    let protectedLogoRegions = [];
+    let translationInput = input;
+    if (isImage) {
+      try {
+        protectedLogoRegions = await detectProtectedLogo(input, { signal });
+        if (protectedLogoRegions.length) {
+          let masked = await maskRegionForTranslation(input, protectedLogoRegions);
+          // Masking re-encodes the whole image and can grow it enough to
+          // blow past the size check we already passed above (measured up
+          // to ~1.3x at the default quality; more for an originally
+          // low-quality/high-compression source, since re-encoding at a
+          // flat high quality can nearly double it). Before giving up on
+          // protection outright, retry once at a lower re-encode quality —
+          // still comfortably above what Azure's OCR needs to key on, and
+          // far better than shipping the mark unprotected.
+          if (masked.length > limit) {
+            const retryQuality = 80;
+            const retried = await maskRegionForTranslation(input, protectedLogoRegions, {
+              quality: retryQuality,
+            });
+            if (retried.length <= limit) {
+              logger.warn(
+                '[translate_file] masked image exceeded Azure batch size limit; retried at lower quality',
+                { firstAttemptBytes: masked.length, retryQuality, retryBytes: retried.length, limit },
+              );
+              masked = retried;
+            } else {
+              logger.warn(
+                '[translate_file] masked image exceeds Azure batch size limit even at reduced quality; translating unprotected',
+                { firstAttemptBytes: masked.length, retryBytes: retried.length, limit },
+              );
+              protectedLogoRegions = [];
+            }
+          }
+          if (protectedLogoRegions.length) {
+            translationInput = masked;
+            logger.info('[translate_file] masking protected logo region(s) before translation', {
+              regions: protectedLogoRegions.map((region) => ({
+                name: region.name,
+                confidence: Number(region.confidence.toFixed(3)),
+              })),
+            });
+          }
+        }
+      } catch (error) {
+        // A cancelled translation must propagate as a cancellation, not be
+        // reinterpreted as "detection merely failed" and silently continue
+        // translating unprotected.
+        if (signal?.aborted) {
+          throw error;
+        }
+        logger.warn('[translate_file] logo protection detection failed; continuing unprotected', {
+          message: error?.message,
+        });
+        protectedLogoRegions = [];
+        translationInput = input;
+      }
+    }
     const translateDocument = (requestGlossary) =>
       (mustBatch ? translateBatchWithAzure : translateDocumentWithAzure)({
-        buffer: input,
+        buffer: translationInput,
         filename: file.filename,
         mimeType: format.mime,
         sourceLocale,
@@ -1209,6 +1275,15 @@ async function translateOneFile({
       maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES,
     }));
     output = result.buffer;
+    if (isImage && protectedLogoRegions.length) {
+      try {
+        output = await restoreProtectedRegion(output, input, protectedLogoRegions);
+      } catch (error) {
+        logger.warn('[translate_file] logo restoration failed; output keeps Azure result', {
+          message: error?.message,
+        });
+      }
+    }
   }
 
   throwIfAborted(signal);

@@ -20,6 +20,9 @@ const mockRequestTranslationCancellation = jest.fn();
 const mockRecordFileTranslationOutcome = jest.fn();
 const mockGetCloudFrontConfig = jest.fn();
 const mockGetRetentionExpiry = jest.fn();
+const mockDetectProtectedLogo = jest.fn();
+const mockMaskRegionForTranslation = jest.fn();
+const mockRestoreProtectedRegion = jest.fn();
 
 jest.mock('../../strategies', () => ({
   getStrategyFunctions: () => ({
@@ -44,6 +47,12 @@ jest.mock('./jobs', () => ({
 }));
 jest.mock('../../retention', () => ({
   getRetentionExpiry: (...args) => mockGetRetentionExpiry(...args),
+}));
+jest.mock('./logoProtection', () => ({
+  ...jest.requireActual('./logoProtection'),
+  detectProtectedLogo: (...args) => mockDetectProtectedLogo(...args),
+  maskRegionForTranslation: (...args) => mockMaskRegionForTranslation(...args),
+  restoreProtectedRegion: (...args) => mockRestoreProtectedRegion(...args),
 }));
 jest.mock('~/models', () => ({
   getFiles: (...args) => mockGetFiles(...args),
@@ -106,6 +115,9 @@ describe('[knauf] file translation lifecycle', () => {
     });
     mockMergePreservedTerms.mockImplementation((glossary) => glossary);
     mockGetRetentionExpiry.mockResolvedValue({});
+    mockDetectProtectedLogo.mockResolvedValue([]);
+    mockMaskRegionForTranslation.mockResolvedValue(Buffer.from('masked'));
+    mockRestoreProtectedRegion.mockImplementation(async (buffer) => buffer);
     process.env.KNAUF_TRANSLATION_FILE_CONCURRENCY = '1';
     delete process.env.KNAUF_TRANSLATION_STORAGE_WRITE_TIMEOUT_MS;
   });
@@ -517,6 +529,90 @@ describe('[knauf] file translation lifecycle', () => {
 
     expect(mockTranslateBatchWithAzure).toHaveBeenCalledTimes(1);
     expect(mockTranslateDocumentWithAzure).not.toHaveBeenCalled();
+  });
+
+  it('retries logo masking at a lower quality when the default-quality mask exceeds the Azure batch limit', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'letterhead.png',
+      type: 'image/png',
+      source: 'local',
+      filepath: '/uploads/letterhead.png',
+    };
+    const input = Buffer.from('source-image');
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockImplementation(() => Readable.from([input]));
+    mockDetectProtectedLogo.mockResolvedValue([
+      { name: 'knauf-wordmark', confidence: 0.95, x: 0, y: 0, width: 10, height: 10 },
+    ]);
+    const oversizedMask = Buffer.alloc(6 * 1024 * 1024, 1); // over the 5 MB image batch limit
+    const acceptableMask = Buffer.alloc(2 * 1024 * 1024, 2); // within the limit at reduced quality
+    mockMaskRegionForTranslation.mockImplementation(async (_buffer, _regions, options) =>
+      options?.quality === 80 ? acceptableMask : oversizedMask,
+    );
+    mockTranslateBatchWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { source_locale: 'en', target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({ report: { status: 'completed' } });
+
+    expect(mockMaskRegionForTranslation).toHaveBeenCalledTimes(2);
+    expect(mockMaskRegionForTranslation).toHaveBeenNthCalledWith(1, input, expect.any(Array));
+    expect(mockMaskRegionForTranslation).toHaveBeenNthCalledWith(
+      2,
+      input,
+      expect.any(Array),
+      expect.objectContaining({ quality: 80 }),
+    );
+    // The retried (still-masked) buffer must reach Azure, not the raw input.
+    expect(mockTranslateBatchWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({ buffer: acceptableMask }),
+    );
+    expect(mockRestoreProtectedRegion).toHaveBeenCalled();
+  });
+
+  it('gives up on logo protection when the mask still exceeds the Azure batch limit at reduced quality', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'letterhead.png',
+      type: 'image/png',
+      source: 'local',
+      filepath: '/uploads/letterhead.png',
+    };
+    const input = Buffer.from('source-image');
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockImplementation(() => Readable.from([input]));
+    mockDetectProtectedLogo.mockResolvedValue([
+      { name: 'knauf-wordmark', confidence: 0.95, x: 0, y: 0, width: 10, height: 10 },
+    ]);
+    const oversizedMask = Buffer.alloc(6 * 1024 * 1024, 1);
+    mockMaskRegionForTranslation.mockResolvedValue(oversizedMask);
+    mockTranslateBatchWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { source_locale: 'en', target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({ report: { status: 'completed' } });
+
+    expect(mockMaskRegionForTranslation).toHaveBeenCalledTimes(2);
+    // Both attempts exceeded the limit, so the unmasked original input is
+    // translated instead of shipping an over-limit buffer or crashing.
+    expect(mockTranslateBatchWithAzure).toHaveBeenCalledWith(expect.objectContaining({ buffer: input }));
+    // Nothing was masked, so there is nothing to restore afterwards.
+    expect(mockRestoreProtectedRegion).not.toHaveBeenCalled();
   });
 
   it('merges explicit preserved terms before translating a native document', async () => {
