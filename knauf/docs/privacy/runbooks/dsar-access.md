@@ -369,13 +369,23 @@ Each external sink writes one JSON file into `results/`, **naming the artifact i
 }
 ```
 
-**Two independent checks run, and both must pass.**
+**The evidence is bound to this bundle.** Every result must carry the `runId`, `sink`,
+`subject` and `tenant` printed in `results/README.md` and matching `manifest.json`. A mismatch
+fails the sink — that is what stops a result being copied from another bundle or replayed from
+an earlier run against a stale inventory.
+
+**Three checks run, and all must pass.**
 
 1. **The artifact is hashed.** `artifact` must be a real file inside the bundle — no symlinks,
    no paths escaping it — and its sha256 must equal `checksum`. A number with no file behind it
    is not evidence of an extraction. Generate with `sha256sum results/<file>`.
-2. **The count is checked against *our* number, not the operator's.** Meilisearch, Blob and the
-   RAG inventory are **derived copies** of things phase one already counted, so the collector
+2. **The count is parsed out of the artifact, not read from the result.** The collector counts
+   the records itself (JSONL, a JSON array, or an envelope with `data`/`hits`/`results`/`items`).
+   If the result also declares `collected` it must agree; if the file is in none of those shapes
+   the sink **fails** — a checksum proves only that named bytes exist, never how many records
+   they hold.
+3. **That parsed count is checked against *our* number.** Meilisearch, Blob and the RAG
+   inventory are **derived copies** of things phase one already counted, so the collector
    computes the expectation itself and **ignores any `expected` in the result file**:
 
 | Sink | Expectation derived from |
@@ -385,9 +395,27 @@ Each external sink writes one JSON file into `results/`, **naming the artifact i
 | `ragVectors` | `vectorStores.pgvector` + `.azureAiSearch` — the ids we emitted |
 
 `langfuse` and `logPlatform` are **not** derived from Mongo (they have their own retention), so
-no honest expectation can be computed. They stay self-reported, still require a checksummed
-artifact, and the manifest records `expectationSource: "self-reported"` so nobody reads them as
-verified. That distinction is written into every bundle rather than left to memory.
+no honest expectation can be computed for the TOTAL. Their counts are still parsed from a hashed,
+run-bound artifact, but nothing independent corroborates that the export was exhaustive — the
+manifest records `expectationSource: "artifact-parsed, total unverified"` so nobody reads them as
+verified. That distinction ships in every bundle rather than living in memory.
+
+#### `not-applicable` is only accepted where it can be checked
+
+A sink may be skipped **only when the collector can confirm the condition itself**, against the
+environment snapshot phase one recorded:
+
+| Sink | Accepted only when |
+|---|---|
+| `redis` | `USE_REDIS` was off |
+| `meilisearch` | no search backend configured, or phase one found nothing indexable |
+| `langfuse` | Langfuse not configured |
+| `blob` / `ragVectors` | phase one enumerated no objects / emitted no vector ids |
+| `logPlatform` | **never** — "the platform cannot query by `userId`" is a claim about an external system |
+
+Anywhere else, `not-applicable` is **downgraded to `limitation`**: recorded, distinguishable from
+`pending`, and it **keeps the bundle incomplete**. An inaccessible sink is an unanswered sink,
+however well documented. Say so in the Art. 15 response; do not let the collector certify it.
 
 | Result | Outcome |
 |---|---|
@@ -416,10 +444,16 @@ verified. That distinction is written into every bundle rather than left to memo
 
 The bundle is the subject's entire personal-data corpus in one directory.
 
-- The collector **creates** the directory `0700` and every file `0600`, exclusively (`wx`)
-  so nothing is silently overwritten. It **refuses** a symlink, a non-empty directory, or a
-  path that is already a file — stale output from an earlier run must never be
-  indistinguishable from this one's.
+- The collector **creates** the directory `0700` and every file `0600`, exclusively (`wx`) so
+  nothing is silently overwritten. It **refuses** a non-empty directory, a path that is already a
+  file, and **a symlink anywhere in the path** — not just the final component. A symlinked parent
+  with a non-existent leaf previously let `mkdir -p` follow the link and write the whole corpus
+  into the linked location.
+- **Every file finalization consumes is re-checked** — `manifest.json`, each `results/*.json`,
+  each artifact: no-follow, must be a regular file, must be owned by the operator running the
+  script, and is tightened to `0600` before it can influence completeness. An artifact produced by
+  shell redirection arrives at `0644`; the tightening is recorded on the manifest, not done
+  silently.
 - **Write it to encrypted storage.** Full-disk encryption on the operator's machine is the
   minimum; a shared drive must be the approved encrypted location, never a personal folder.
 - **Never email it or put it in a ticket attachment.** Deliver per §4.
