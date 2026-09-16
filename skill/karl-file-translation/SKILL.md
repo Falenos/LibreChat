@@ -39,5 +39,9 @@ succeeded. Do not manually translate file contents or simulate a file round trip
 when `translate_file` is unavailable.
 
 Source-code files are excluded; use Code Interpreter for code changes. Final
-layout, OCR, fonts, glyphs, RTL behavior, and InDesign overset require human
-review. Translation does not perform visual approval or automatic layout repair.
+layout, OCR, glyph coverage, RTL behavior, and InDesign overset require human
+review. IDML results report `fontValidation: preserved` only after KARL verifies
+that source font and style references survived the rebuild. Other formats do not
+yet guarantee source-font retention; never claim that they do unless the tool
+reports verified preservation. Translation does not perform visual approval or
+automatic layout repair.

@@ -610,7 +610,9 @@ describe('[knauf] file translation lifecycle', () => {
     expect(mockMaskRegionForTranslation).toHaveBeenCalledTimes(2);
     // Both attempts exceeded the limit, so the unmasked original input is
     // translated instead of shipping an over-limit buffer or crashing.
-    expect(mockTranslateBatchWithAzure).toHaveBeenCalledWith(expect.objectContaining({ buffer: input }));
+    expect(mockTranslateBatchWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({ buffer: input }),
+    );
     // Nothing was masked, so there is nothing to restore afterwards.
     expect(mockRestoreProtectedRegion).not.toHaveBeenCalled();
   });
@@ -696,7 +698,7 @@ describe('[knauf] file translation lifecycle', () => {
     ).resolves.toMatchObject({
       report: {
         status: 'completed',
-        files: [{ glossary: { preservedApplied: 1 } }],
+        files: [{ glossary: { preservedApplied: 1 }, fontValidation: 'preserved' }],
       },
     });
 
