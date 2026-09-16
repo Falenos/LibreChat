@@ -40,6 +40,7 @@ const {
   shapeRows,
   resolveSubject,
   parseArgs,
+  summarizeExternalSinks,
 } = require('./dsar-collect');
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -780,11 +781,56 @@ describe('external sinks are pending until verified', () => {
     assert.match(short.reason, /phase one derived 2500/);
   });
 
-  test('a sink with no derivable expectation says its total is unverified', () => {
-    const r = reconcileExternalResult('langfuse', ok, { manifest: MF, verifyArtifact: probe(42) });
-    assert.equal(r.status, 'complete');
-    assert.equal(r.collected, 42);
-    assert.match(r.expectationSource, /total unverified/);
+  test('a sink with no derivable expectation stops at manual-verification-required', () => {
+    // Round-5 review: an uncorroborated total must not become `complete` — that is the
+    // status that lets the bundle print "releasable". The evidence is kept for the reviewer.
+    for (const sinkKey of ['langfuse', 'logPlatform', 'redis']) {
+      const r = reconcileExternalResult(
+        sinkKey,
+        { ...ok, sink: sinkKey },
+        { manifest: MF, verifyArtifact: probe(42) },
+      );
+      assert.equal(r.status, 'manual-verification-required', sinkKey);
+      assert.equal(r.collected, 42);
+      assert.equal(r.countSource, 'parsed-from-artifact');
+      assert.equal(r.checksum, 'abc');
+      assert.equal(r.expected, null, 'no expectation may be invented from the observed count');
+      assert.match(r.expectationSource, /total unverified/);
+      assert.match(r.reason, /adapter or an approved attestation/);
+    }
+  });
+
+  test('a derived sink whose bundle lacks the derived counts is not promoted either', () => {
+    // An older bundle without `MessageIndexable` yields no Meilisearch expectation; that
+    // is a missing corroboration, not a licence to trust the export.
+    const r = reconcileExternalResult(
+      'meilisearch',
+      { ...ok, sink: 'meilisearch' },
+      {
+        manifest: { ...MF, sinks: { Message: 10, Conversation: 2 } },
+        derivedExpected: undefined,
+        verifyArtifact: probe(12),
+      },
+    );
+    assert.equal(r.status, 'manual-verification-required');
+  });
+
+  test('manual-verification-required keeps the bundle INCOMPLETE', () => {
+    const manifest = {
+      ...MF,
+      externalSinks: initialExternalSinkState(),
+      completeness: { ok: true, warnings: [] },
+    };
+    finalizeManifest(manifest, '/tmp/x', (f) => (f.includes('langfuse') ? { ...ok } : null), {
+      verifyArtifact: probe(42),
+    });
+    assert.equal(manifest.externalSinks.langfuse.status, 'manual-verification-required');
+    assert.equal(manifest.completeness.ok, false, 'an uncorroborated total is not a verified sink');
+    assert.ok(
+      manifest.completeness.warnings.some((w) =>
+        w.includes('langfuse is manual-verification-required'),
+      ),
+    );
   });
 
   test('not-applicable is REFUSED where the collector cannot check it', () => {
@@ -1068,7 +1114,17 @@ describe('collect -> results -> finalize round-trip', () => {
     seedAllResults(dir);
     // The whole point: this must not throw EEXIST on users.json.
     const m = runFinalize(dir, () => {});
-    assert.equal(m.completeness.ok, true);
+    // Round 5: with Langfuse and the log platform in scope the bundle is honestly NOT
+    // releasable — their totals have no independent corroboration. What this pins is that
+    // finalize ran over the existing bundle and reconciled every sink to its best status.
+    assert.equal(m.completeness.ok, false);
+    for (const k of ['meilisearch', 'blob', 'ragVectors']) {
+      assert.equal(m.externalSinks[k].status, 'complete', k);
+    }
+    assert.equal(m.externalSinks.redis.status, 'not-applicable');
+    for (const k of ['langfuse', 'logPlatform']) {
+      assert.equal(m.externalSinks[k].status, 'manual-verification-required', k);
+    }
     assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'users.json'), 'utf8'))._id, 'u1');
   });
 
@@ -1165,9 +1221,41 @@ describe('collect -> results -> finalize round-trip', () => {
     seedAllResults(dir);
     const first = runFinalize(dir, () => {});
     const second = runFinalize(dir, () => {});
-    assert.equal(second.completeness.ok, true);
-    assert.deepEqual(second.completeness.warnings, []);
+    assert.equal(second.completeness.ok, false, 'unverifiable sinks keep it unreleasable');
+    assert.deepEqual(second.externalSinks, first.externalSinks);
+    assert.deepEqual(second.completeness.warnings, first.completeness.warnings);
+    assert.equal(
+      second.completeness.warnings.filter((w) => w.includes('langfuse')).length,
+      1,
+      'warnings must not accumulate across runs',
+    );
     assert.equal(second.subject._id, first.subject._id);
+  });
+
+  test('the finalize summary tells the operator what this tool cannot promote', () => {
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const m = runFinalize(dir, () => {});
+    const text = summarizeExternalSinks(m.externalSinks);
+    assert.match(text, /complete: meilisearch, blob, ragVectors/);
+    assert.match(text, /not-applicable: redis/);
+    assert.match(text, /manual-verification-required: langfuse, logPlatform/);
+    assert.match(text, /adapter or an approved attestation/);
+  });
+
+  test('exit 0 is unreachable while the log platform is in scope — by design', () => {
+    // The best a bundle can do today: every derived sink verified, Redis machine-confirmed
+    // off, Langfuse and the log platform exported and hashed. It still is not releasable,
+    // and the only warnings left name the sinks this tool cannot verify.
+    const dir = seedBundle();
+    seedAllResults(dir);
+    const m = runFinalize(dir, () => {});
+    assert.equal(m.completeness.ok, false);
+    assert.deepEqual(m.completeness.warnings.map((w) => w.split(' is ')[0]).sort(), [
+      'externalSinks: langfuse',
+      'externalSinks: logPlatform',
+    ]);
+    assert.ok(m.completeness.warnings.every((w) => w.includes('manual-verification-required')));
   });
 
   test('finalize refuses a symlinked bundle directory', () => {

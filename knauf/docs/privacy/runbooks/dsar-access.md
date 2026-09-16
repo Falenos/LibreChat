@@ -394,11 +394,17 @@ an earlier run against a stale inventory.
 | `blob` | `sinks.blob.objects` — File rows + FileAsset blobs + **avatars**. Avatars have no `File` row at all (written straight to `images/<userId>/`), so they were previously invisible to the bundle *and* would have failed the count |
 | `ragVectors` | `vectorStores.pgvector` + `.azureAiSearch` — the ids we emitted |
 
-`langfuse` and `logPlatform` are **not** derived from Mongo (they have their own retention), so
-no honest expectation can be computed for the TOTAL. Their counts are still parsed from a hashed,
-run-bound artifact, but nothing independent corroborates that the export was exhaustive — the
-manifest records `expectationSource: "artifact-parsed, total unverified"` so nobody reads them as
-verified. That distinction ships in every bundle rather than living in memory.
+`langfuse`, `logPlatform` and `redis` are **not** derived from Mongo (they have their own
+retention), so no honest expectation can be computed for the TOTAL. Their counts are still parsed
+from a hashed, run-bound artifact, but nothing independent corroborates that the export was
+exhaustive — so a `complete` result for them is recorded as **`manual-verification-required`**,
+never `complete`, with `expectationSource: "artifact-parsed, total unverified"`. That status
+**keeps the bundle incomplete** (review round 5): the evidence stays in the manifest for the
+reviewer, but this tool cannot promote it. Promotion needs one of two things that are deliberately
+*not* in this PR — a service-specific adapter that derives the expectation from the service
+itself, or an approved attestation recorded on the register row (§6). Until one exists, a bundle
+with the log platform in scope **always finishes with exit `4`**, preceded by a per-status summary
+of what remains.
 
 #### `not-applicable` is only accepted where it can be checked
 
@@ -420,6 +426,7 @@ however well documented. Say so in the Art. 15 response; do not let the collecto
 | Result | Outcome |
 |---|---|
 | `complete`, artifact hashes, count matches the derived expectation | **complete** |
+| `complete`, artifact hashes and parses, but **no derived expectation exists** (`langfuse`, `logPlatform`, `redis`) | **manual-verification-required** — evidence kept; the bundle stays incomplete until an adapter or an approved attestation promotes it |
 | `complete` but the count differs from **our** number | **failed** — the extraction is short, or bundle and export disagree |
 | `complete` with no `artifact`/`checksum` | **failed** |
 | checksum mismatch, unreadable artifact, or a path escaping the bundle | **failed** |
@@ -428,16 +435,18 @@ however well documented. Say so in the Art. 15 response; do not let the collecto
 | missing file / unreadable JSON | **pending** |
 
 `manifest.completeness.ok` becomes `true` only when every sink is `complete` or
-`not-applicable` **and** no other warning is open.
+`not-applicable` **and** no other warning is open. `limitation` and
+`manual-verification-required` both block it — so in this version `ok: true` is reachable only
+when every unverifiable sink is machine-confirmed not applicable, which the log platform never is.
 
 ### 2.2 Exit codes — non-zero means not releasable
 
 | Code | Meaning |
 |---|---|
-| `0` | Complete. Only reachable from a `--finalize` run with every external sink resolved |
+| `0` | Complete. Only reachable from a `--finalize` run with every external sink `complete` or `not-applicable`. **Not reachable today while the log platform is in scope** (§2.1) — do not wait for it |
 | `2` | No user matches the reference |
 | `3` | **Ambiguous or contradicted subject** — the email matched in more than one tenant, or `--tenant` disagreed. Re-run with the right `--tenant`; do **not** guess |
-| `4` | Open completeness warnings. Read `manifest.completeness.warnings` |
+| `4` | Open completeness warnings — unfinished work (`pending`/`failed`), **or** sinks this tool cannot verify (`manual-verification-required`, `limitation`). The per-status summary printed above the message says which; read `manifest.completeness.warnings` |
 | `5` | **The bundle directory is unsafe or not a bundle** — a symlink (direct or any ancestor), not a directory, missing, or has no phase-one `manifest.json` |
 
 ### 2.3 The bundle is evidence — handle it as such
@@ -483,12 +492,15 @@ with `--finalize`.
       retention, not as new categories.
 - [ ] **Group memberships projected** — `groups.json` names the groups but **not** `memberIds`;
       confirm no other member's identifier appears anywhere in the bundle (Art. 15(4)).
-- [ ] **Completeness clean** — the collector exited `0` **from a `--finalize` run** and
-      `manifest.completeness.warnings` is empty. A step-2 bundle always exits `4`; releasing
-      one is releasing an unverified bundle.
-- [ ] **Every external sink resolved** — `manifest.externalSinks` shows `complete` or
-      `not-applicable` for all five (`langfuse`, `meilisearch`, `blob`, `ragVectors`,
-      `logPlatform`), and each `not-applicable` carries a note that appears in the response.
+- [ ] **Completeness reconciled** — a `--finalize` run was executed and `manifest.finalizedAt`
+      is set. A step-2 bundle (never finalized) must not be released. Exit `0` is not reachable
+      while the log platform is in scope (§2.2); the only warnings allowed to remain name
+      `manual-verification-required` sinks or recorded `limitation`s — anything `pending` or
+      `failed` is unfinished work.
+- [ ] **Every external sink resolved** — `manifest.externalSinks` shows one of `complete`,
+      `not-applicable`, `manual-verification-required` or `limitation` for all six (`langfuse`,
+      `meilisearch`, `blob`, `ragVectors`, `logPlatform`, `redis`); nothing is `pending` or
+      `failed`. Each `not-applicable` / `limitation` carries a note that appears in the response.
 - [ ] **Audit context redacted** — target-only rows show no `context.ip`, `context.userAgent`,
       `context.sessionId` or `context.requestId`. Grep the bundle for the admin's IP.
 - [ ] **File ownership, not agent scope** — `manifest.sinks.ownedAssetIds` matches the number
@@ -496,12 +508,14 @@ with `--finalize`.
       `KnaufFileAsset.json` belongs to a file another user uploaded to a shared agent.
 - [ ] **Bundle permissions** — directory `0700`, every file `0600`, on encrypted storage.
 - [ ] **Tenant recorded** — `manifest.tenant.resolved` matches the tenant on the register row.
-- [ ] **External sinks proved complete** — `manifest.externalSinks` shows `complete` or
-      `not-applicable` for all five, each `complete` naming a checksummed artifact. A step that
-      was not run is not a step that found nothing.
-- [ ] **Self-reported sinks flagged in the response** — any sink whose `expectationSource` says
-      `self-reported` (Langfuse, the log platform) was not cross-checked against a number we own;
-      do not describe it as verified.
+- [ ] **Derived sinks proved complete** — `meilisearch`, `blob` and `ragVectors` are `complete`,
+      each naming a checksummed artifact whose parsed count matched phase one. A step that was
+      not run is not a step that found nothing.
+- [ ] **Manual-verification sinks attested and flagged** — for each `manual-verification-required`
+      sink (Langfuse, the log platform, Redis when on) a named person has checked the artifact
+      against the service itself and recorded that attestation on the register row (§6); the
+      response describes those categories as exported but **not independently verified**. The
+      collector cannot make this call and does not pretend to.
 - [ ] **Translation jobs reviewed** — `knauf_translation_jobs.json` filenames and `report`
       belong to the subject; operational fields are redacted.
 - [ ] **Exclusions stated** — browser analytics (§1.9), with the reason, and **not** conflated with
@@ -527,8 +541,10 @@ Stop — that is the erasure recipe (P2-5, ticket 8), which this bundle is the "
 
 A private record (not in this repo) with: receipt date, requester, identity-check method, scope,
 extension used (Y/N, reason, date notified), collector run id, redactions applied, exclusions
-stated, delivery date and channel, elapsed days. This is the Art. 5(2) evidence that Art. 15 is
-answerable. Keep it where the DPO can see it.
+stated, **attestations for `manual-verification-required` sinks** (who checked which artifact
+against which service, and when — §3; the collector records the evidence, a named person records
+the judgement), delivery date and channel, elapsed days. This is the Art. 5(2) evidence that
+Art. 15 is answerable. Keep it where the DPO can see it.
 
 ---
 

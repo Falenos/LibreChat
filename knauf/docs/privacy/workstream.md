@@ -1327,8 +1327,11 @@ cd packages/api && npx jest src/knauf/audit             # 33 — sweep (24: call
 for the bundle. Then check `users.json` has **no** `totpSecret`/`backupCodes`/`refreshToken`; that
 `auditlogs.json` rows with `_dsarRole: "target"` show a redacted actor; that `groups.json` carries
 **no** `memberIds`; and that `manifest.json` records the resolved tenant, lists the browser-analytics
-and vector-store exclusions with reasons, and reports `completeness.ok`. A non-zero exit (2/3/4)
-means the bundle is not releasable. `npm run test:dsar` runs the spec that pins the inventory to the
+and vector-store exclusions with reasons, and reports `completeness.ok`. A non-zero exit (2/3/4/5)
+means the bundle is not releasable — and exit `4` is the *expected* end state today: Langfuse and the
+log platform have no independently derivable total, so `--finalize` records them as
+`manual-verification-required` and never prints "releasable" (review round 5); promotion needs a
+service adapter or an approved attestation, both rollout work. `npm run test:dsar` runs the spec that pins the inventory to the
 live model registry.
 
 ```bash
