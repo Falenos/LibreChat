@@ -1,0 +1,555 @@
+# DSAR runbook — Art. 15 access request for an Agentic Karl user
+
+**Ticket:** KK20-331 (workstream item **P2-6a**) · **Owner:** Eng + DPO · **Status:** written
+2026-09-03, **not yet rehearsed** — the first rehearsal against a test subject, with elapsed time
+recorded, is this ticket's remaining acceptance criterion.
+
+This is the manual path. It exists because Art. 15 is a live obligation today and the self-service
+export endpoint (P2-6) does not exist yet. A manual path *can* satisfy Art. 15 — but only once it is
+written down, covers every copy, and has been run once. That is what this document is for.
+
+> **The clock.** Art. 12(3): respond **within one month of receipt**. Extendable by **two further
+> months** where necessary given complexity or volume — but the subject must be told of the
+> extension, and why, **within the first month**. Log the receipt date the day it arrives.
+
+---
+
+## 0. Before collecting anything
+
+| Step | What | Basis |
+|---|---|---|
+| **Receipt** | Record date received, channel, and the requester's stated identity in the DSAR register (§6) | Art. 12(3) clock starts here |
+| **Identity** | Confirm the requester is the data subject. Reasonable doubt ⇒ ask for what is needed to confirm, no more. For a KARL employee, an Okta-authenticated request from their own account is sufficient | Art. 12(6) |
+| **Scope** | Default is *all* personal data. If the subject narrows it ("just my conversations"), record that in writing | Art. 15(1) |
+| **Resolve the subject** | You need the Mongo `users._id`. Resolve from email / `username` / `openidId` via `users`. **Every other sink is keyed by this id** — Langfuse `userId`, Meilisearch `user`, the audit log's `actor.id`/`target.id`, all Mongo `user`/`userId`/`author` fields | — |
+| **Pin the tenant** | `email` is unique **only within `(email, tenantId)`** — `userSchema.index({ email: 1, tenantId: 1 }, { unique: true })`. Two tenants can hold the same address. The collector refuses to guess: an email matching more than once exits **3** and names the tenants; re-run with `--tenant <id>`. Record the resolved tenant on the DSAR register row | Art. 5(1)(f) — exporting the wrong person is a breach |
+
+Run the collector in **summary mode** first — it is read-only and prints per-sink counts, which tells
+you the size of the job before you commit to it:
+
+```bash
+node knauf/scripts/dsar-collect.js --user <mongo-id-or-email>
+```
+
+---
+
+## 1. The sinks, and what each one actually holds
+
+The workstream's §1 model has nine places personal data lives; this runbook splits the last of them
+in two, because browser telemetry and server logs are one platform but not one legal answer (§1.9 vs
+§1.10). A DSAR that covers seven is not compliant; it is a partial answer with a compliance label on
+it. For each sink: **what**, **how to get it**, **what to redact**, and the **honest limitation**.
+
+### 1.1 MongoDB — the primary copy (32 stores)
+
+**How this list is kept complete.** It is *not* derived from the account-deletion cascade. The
+cascade is not an independent schema inventory — anything it forgets is invisible to a check that
+only compares the two. Instead `dsar-collect.spec.js` enumerates the **live model registry**
+(`packages/data-schemas/src/models/index.ts`) and fails unless every registered model is either
+collected or listed in `NOT_SUBJECT_SCOPED` with a written reason, so a new model cannot land
+without someone making a disclosure decision about it. The cascade pin is kept as a second, weaker
+check: erasure must never reach a store disclosure does not.
+
+| Collection | Owner field | Contains | Disclose? |
+|---|---|---|---|
+| `users` | `_id` | Identity record: email, name, username, `openidId`, `idOnTheSource`, avatar, role, provider, terms acceptance, personalization flags | **Yes — redact** `password`, `totpSecret`, `backupCodes`, `refreshToken` (security artefacts, not information about the person) |
+| `messages` | `user` | Every prompt and response, incl. **`content[]` think parts** (model reasoning restates the prompt) and **`feedback.text`** (free-text comments) | Yes, in full |
+| `conversations` | `user` | Titles (derived from content), model, settings | Yes |
+| `memoryentries` | `userId` | LLM-written facts about the user — **profiling-grade**; the most sensitive store here | Yes, in full. Expect the subject to be surprised by it |
+| `files` | `user` | Upload metadata: filename, type, size, `filepath`/`storageKey`, `embedded`, `context` | Yes; the **bytes** are in Blob (§1.5) |
+| `sharedlinks` | `user` | Public snapshots the subject created | Yes |
+| `transactions`, `balances` | `user` | **Per-user cost/usage records** — EUR-priced per message | Yes. Note: these are the Annex III.4 drift-trigger data; their existence is itself something the subject is entitled to know |
+| `presets`, `conversationtags`, `toolcalls`, `assistants`, `actions` | `user` | Settings, tags, tool invocations and their arguments/outputs, assistant configs, action configs | Yes (`toolcalls` can carry content — read before releasing) |
+| `agents`, `prompts` + `promptgroups`, `skills`, `mcpservers` | `author` | Things the subject authored | Yes |
+| `agentapikeys`, `pluginauths`, `keys`, `tokens`, `sessions` | `userId` / `user` | **Credentials and session material** | **Existence + provider + timestamps only.** Never the values — they are encrypted secrets to third-party services and session tokens; disclosing them is a security incident, not compliance |
+| `groups` | `memberIds` ∋ **`idOnTheSource \|\| _id`** | Group memberships (incl. Entra/Okta-synced). `userGroup.js` writes `user.idOnTheSource \|\| userId.toString()`, so an OIDC-sourced subject is a member under their **external** id — querying `_id` alone returns zero groups for exactly the users who have them | Yes, **projected**: name/description/source only. `memberIds` is **withheld** — it is every other member's identifier (Art. 15(4)) |
+| `aclentries` | `principalId` | What the subject has been granted access to | Yes — **redact `grantedBy`** (the colleague who shared it is a third party, same rule as `systemgrants`) |
+| `migrationallowlists` | `emailNormalized` | Whether the subject may log in at all, and **when access was granted** (`createdAt`). The only email-keyed store | Yes |
+| `chatprojects` | `user` | KK20-248 project workspaces — **`instructions` is subject-authored free text** | Yes, in full |
+| `chatprojectsources` | `user` | Project source associations, ingest status and error text | Yes |
+| `knauf_file_assets` | the subject's File rows' `knauf_asset_id`, plus `scope_type:'user'` | **KK20-195 physical ledger** — authoritative for blob path, `vector_backend`, `active_generation`, `stale_generations`, indexing errors. Resolved by **ownership**, not agent scope — see §1.3/1.4 | Yes |
+| `skillfiles` | `author` | Skill file content the subject authored | Yes |
+| `skillsyncstatuses` | `owner` | Skill sync state | Yes |
+| `configs` | `principalId` | Per-principal config overrides | Yes |
+| `systemgrants` | `principalId` | Capabilities the subject holds | Yes — **redact `grantedBy`** (the granting admin is a third party) |
+| `skillsynccredentials` | `createdBy` | Sync credentials | **Existence only** |
+| `knauf_translation_jobs` | `user` (+ `tenantId`) | KK20-297 File Translation: **filenames**, source/target locale, `preserve_terms`, job `report`, `last_error_detail`, conversation id | Yes — redact `lease_owner`, `execution_token`, `idempotency_key`, `request_key` (operational, not about the person) |
+| `knauf_agent_schedules` (`user`), `knauf_scheduled_agent_runs` (`ownerId`) | — | Scheduled-agent definitions and run history (Knauf-only) | Yes |
+| `auditlogs` | `actor.id` **and** `target.id` | See §1.7 — needs Art. 15(4) handling | Yes, redacted |
+
+**Tenant scoping.** Every model is tenant-isolated, and `runAsSystem` sets `SYSTEM_TENANT_ID`, which
+makes `applyTenantIsolation` **skip tenant injection entirely** — a system-scoped query sees every
+tenant. The collector uses that deliberately, but only for *resolution*, and only to **detect**
+ambiguity: it looks across tenants precisely so that an email matching twice is caught rather than
+silently resolved to whichever row Mongo happened to return first. Once the subject is resolved, the
+whole collection re-runs inside `tenantStorage.run({ tenantId })` pinned to **that subject's own
+tenant**, and `manifest.tenant.resolved` records which one. If `--tenant` is passed and disagrees
+with the resolved subject, the collector exits **3** rather than proceeding.
+
+### 1.2 Meilisearch — full-text replica
+
+Indexes `messages` and `convos` hold a copy of message text and titles. The **only filterable
+attribute is `user`** (`mongoMeili.ts`), which is exactly what a DSAR needs:
+
+```
+POST /indexes/messages/search  { "filter": "user = <mongo-id>", "hitsPerPage": 1000, "page": 1 }
+POST /indexes/convos/search    { "filter": "user = <mongo-id>", "hitsPerPage": 1000, "page": 1 }
+```
+
+**Page to exhaustion — do not use `offset`/`limit`.** A single `{"limit": 1000}` call returns one
+page, and offset/limit queries report only `estimatedTotalHits`, so a heavy user is silently
+truncated and the step still looks like it succeeded. `page`/`hitsPerPage` returns an exact
+`totalHits` and `totalPages`: loop until `page > totalPages`, then reconcile the rows you wrote
+against `totalHits` and **fail the collection if they disagree**. `meilisearch.md` in the bundle
+carries a ready scripted version that does exactly this and exits non-zero on a mismatch.
+
+**What to disclose:** this is a *derived copy* of §1.1 content — disclose that the replica exists and
+attest that its counts match Mongo. Do not hand over the same text twice as if it were different
+data. **Limitation:** think parts are indexed too (workstream P1-5), so the replica may hold
+reasoning text; it is still the same category.
+
+### 1.3 pgvector and 1.4 Azure AI Search — vector stores (via `rag_api`)
+
+Both hold **embedded chunks of the subject's uploaded files**.
+
+**The logical `file_id` is not the physical key, and `context` is not the backend.** Precisely:
+
+- The id vectors are stored under is **`knauf_asset_id ?? file_id`** — `VectorDB/crud.js` routes on
+  exactly that value in both `deleteVectors` and `deleteVectorsForFiles`. After KK20-204 dedup or a
+  KK20-195 re-index, a file's vectors do **not** live under its logical `file_id`.
+- The backend is recorded on the asset as **`KnaufFileAsset.vector_backend`**. Inferring it from
+  `context === 'agents'` also ignores `isAzureSearchEnabledForAgents()`, so with Azure Search off it
+  attests Azure for files that are actually in pgvector.
+- **`active_generation`** decides which vectors are live, and **`stale_generations`** is cleanup
+  debt — generations whose RAG delete failed and which may still hold embeddings.
+
+**Ownership is decided by the File row, not by agent scope.** Agent Knowledge uploads are
+written with `scope_type: 'agent'` and the **agent id** as `scope_id`, so scope says *which
+agent* a file serves — never *whose* it is. Selecting a whole agent scope fails in both
+directions: it discloses uploads made by any other EDIT-authorized collaborator on the
+subject's agent, and it misses the subject's own uploads to agents somebody else authored.
+
+`process.js` writes `createFile({ user: req.user.id, knauf_asset_id })`, so the **uploader owns
+the logical File row** whoever authored the agent. The collector therefore resolves physical
+assets through the subject's own File rows' `knauf_asset_id` values — exact in both directions —
+plus any `scope_type: 'user'` asset carrying the subject's id, which is theirs by construction.
+`manifest.sinks.ownedAssetIds` records how many were resolved.
+
+So the collector **joins `files` to `knauf_file_assets`** and reports the asset's own state. A file
+with no asset row (pre-KK20-195 legacy) falls back to the old heuristic and is flagged
+`unverified: true` rather than asserted as fact; those appear in `manifest.completeness.warnings`
+and the collector exits **4**.
+
+**Limitation, stated plainly:** `rag_api` exposes **no read-back-by-subject endpoint**. `/documents`
+and `/agent/documents/{file_id}` are *delete* paths; `/query*` needs a query string. You cannot dump
+"all vectors for user X" yourself. What you can — and must — do:
+
+1. Take `vector-inventory-request.json` from the bundle: an exact, tenant-scoped list of **physical**
+   vector ids per backend, plus the unverified ones and any stale-generation debt.
+2. **Ask the RAG service to confirm it** — which ids exist under this tenant, and their chunk counts.
+   That is the step that turns an assertion into an attestation; a count derived from the wrong
+   identifier would have been neither.
+3. Disclose that embeddings of those files exist in those stores, with the confirmed list.
+4. The **content** they were computed from is the source file in Blob (§1.5) — disclose that.
+
+Embeddings of personal data are personal data (workstream A8); the subject is entitled to know
+they exist. They are not entitled to a vector dump nobody can read, and the source file is the
+faithful copy.
+
+### 1.5 Azure Blob — the file bytes
+
+Container `AZURE_CONTAINER_NAME` (default `files`); key is `files.filepath` / `storageKey`. The
+subject's uploads and avatar. **Disclose by providing the files**, via short-TTL SAS URLs from the
+existing signer (`api/server/services/Files/Azure/crud.js`) or a bundled download — never by making
+the container public.
+
+### 1.6 Langfuse — traces, scores
+
+Self-hosted; traces carry prompts, completions, tool outputs, reasoning, and feedback scores.
+`userId` in Langfuse **is the Mongo user id**; `sessionId` is the conversation id; traces carry a
+`tenant:<id>` tag and `librechat.source.message.id` metadata (verified by the KK20-327 identity
+assertion). The collector emits these commands into `langfuse.sh`:
+
+```bash
+# traces incl. input/output payloads and observations (tool outputs, reasoning live in observations)
+npx langfuse api traces list --user-id <mongo-id> --fields core,io,observations --limit 100 --page N --json
+# feedback scores (tag only since KK20-327; older scores may carry free text)
+npx langfuse api scores list --user-id <mongo-id> --fields score,trace --limit 100 --page N --json
+```
+
+**Page until the API says it is exhausted — not for a fixed number of pages.** A fixed
+`for p in 1 2 3 … 10` loop caps at 1,000 traces and 500 scores and still exits 0, so a heavy account
+produces a short bundle that looks successful. Every paginated Langfuse response carries
+`meta.totalItems` and `meta.totalPages`, so the generated `langfuse.sh`:
+
+- pages while `page <= meta.totalPages`, under a `MAX_PAGES` circuit-breaker;
+- wraps each call in `timeout` with bounded retries and backoff (`LANGFUSE_TIMEOUT`,
+  `LANGFUSE_RETRIES`);
+- **reconciles** the rows it wrote against `meta.totalItems` and **exits non-zero** on any mismatch,
+  on retry exhaustion, or on hitting `MAX_PAGES`.
+
+It runs under `set -euo pipefail`, so a partial run stops rather than continuing past a hole. **A
+bundle from a failed run must not be released.**
+
+**Disclose:** trace payloads are the same conversation content as §1.1, held under
+a separate retention regime — say so, and state that regime (ticket 4). **Limitation:** scores
+created *before* KK20-327 may carry the subject's free-text comment verbatim; the collector flags
+any score whose `comment` is not a bare reason key.
+
+### 1.7 `auditlogs` — and the Art. 15(4) rule
+
+The subject appears two ways:
+
+- **As `target.id`** — an admin did something *to* them (a grant assigned/revoked). The row names
+  the admin in `actor.name`/`actor.id`. **That admin is a third party.** Art. 15(4): the right to a
+  copy "shall not adversely affect the rights and freedoms of others" — **redact the actor** from
+  target-rows. The collector does this by default.
+- **As `actor.id`** — the subject acted as an admin. They are the actor; disclose in full,
+  including the target (their own conduct).
+
+**Finding:** the admin list API (`listAuditLogPage`) filters only by actor/target **name
+substring**, not id — it cannot do a reliable by-subject lookup, and name matching would miss
+renames and leak lookalikes. The collector reads the collection directly, read-only.
+
+**The actor's request context goes too.** `buildAuditContext(req)` records the **acting
+admin's** `ip`, `userAgent`, `sessionId` and `requestId` on the row. Blanking `actor.name`
+while shipping `context.ip` still identifies and correlates that third party, so on
+target-only rows the whole `context` object is replaced with a redaction marker — kept as a
+marker, not deleted, so the subject can see forensic context exists and was withheld rather
+than believing none was recorded. On rows where the subject is the **actor**, the context is
+their own and is disclosed in full.
+
+**What exists is bounded** by the 12-month retention (KK20-328) once enabled; say so.
+
+### 1.8 winston server logs — files **only if** `LOG_TO_FILE` is on
+
+`requestContextFormat` attaches **`userId`, `tenantId` and `requestId`** to log records. Those records
+are attributable to a named subject — which makes *where they land* the question that matters, and it
+is not always `api/logs/`:
+
+| `LOG_TO_FILE` | Where server logs go | How to collect |
+|---|---|---|
+| `true` (the `.env.example` default; typical local/dev) | `error-%DATE%.log` / `debug-%DATE%.log` under `LIBRECHAT_LOG_DIR`, **14-day** rotation. Rotation uses `zippedArchive: true`, so every day except today is **`*.log.gz`** — `--include-logs` decompresses them; a plain `grep *.log` reads only today | the commands below, or `--include-logs` |
+| `false` | **No files are written at all.** Only the console transport runs — and it carries the same `userId`/`tenantId`/`requestId` via `appendRequestContext`. Container stdout is then collected by whatever ships logs in that environment | **§1.10.** The file path finds nothing, and its silence is not evidence of absence |
+
+**Check the deployed value before trusting this step.** `LOG_TO_FILE` is set by GitOps, not by this
+repo, so read it from the running environment rather than from `.env.example`. The collector records
+`sinks.winstonLogs.fileLoggingEnabled` in the manifest and raises a completeness warning (exit **4**)
+when file logging is off or the directory is missing, precisely so an empty `logs.json` is never
+mistaken for "no server logs exist".
+
+```bash
+# *.log is TODAY only — the rest of the window is gzipped.
+grep -h    "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log     >  logs.jsonl
+zgrep -h   "<mongo-id>" ${LIBRECHAT_LOG_DIR:-api/logs}/*.log.gz  >> logs.jsonl
+```
+
+**Disclose:** error events tied to the user within the retention window are personal data. Include
+them. If prod log access is restricted (it should be — workstream P0-5), the platform team runs this
+step.
+
+### 1.9 Browser analytics — **excluded, with the reason written down**
+
+This covers **client-side** telemetry only: Datadog Browser RUM + Logs
+(`client/src/knauf/analytics/datadog/`), Adobe Analytics (`analytics/adobe.ts`), and the OneTrust
+consent gate (`analytics/consent.ts`) that fronts both.
+
+The exclusion holds. The specific basis, rather than an assertion:
+
+- **No user identity is ever attached.** `getRumConfig()` / `getLogsConfig()` never call
+  `datadogRum.setUser()` — there is no `setUser` call anywhere in the module.
+- `defaultPrivacyLevel: 'mask-user-input'`, `sessionReplaySampleRate: 0`, and
+  `trackingConsent: 'not-granted'` until OneTrust grants it.
+- Adobe's only identifier is `user_session_id`: a **random per-session id** in `sessionStorage`
+  (`adobe.ts` → `createSessionId`). It is not derived from the account and does not survive the
+  session.
+
+So there is no key by which this data can be attributed to a named subject — it is not retrievable
+*for this subject*, and that is what the exclusion rests on. **State the exclusion and its reason in
+the response.** Two caveats to keep honest: (1) `forwardConsoleLogs: ['error']` and
+`forwardErrorsToLogs: true` mean browser `console.error` payloads are forwarded and are
+**unreviewed** (workstream P1-2) — until that review lands, say "we have no means to attribute, and
+we are reviewing the payloads"; (2) platform-side retention and region are P1-2's open questions.
+
+### 1.9a Redis — **in scope when `USE_REDIS` is on**
+
+When Redis is enabled it holds resumable-stream job state, abuse/violation counters keyed
+by user id, and session material — the same keyv namespaces §1.1 lists as Mongo collections
+move there. **The collector has no Redis client and does not pretend to have one**: `redis`
+is a tracked external sink that starts `pending`, so a bundle cannot be completed while it is
+unanswered. Either scan by subject id and record the result, or record
+`{"status":"not-applicable","note":"USE_REDIS is off in this environment"}` — the note goes
+into the response.
+
+### 1.10 Server logs and APM in the log platform — **attributable, so in scope**
+
+This is the sink §1.9 must not be allowed to absorb. Browser RUM being anonymous says nothing about
+server-side records, and putting both under one "Datadog — excluded" heading reads as a blanket
+exclusion the evidence does not support.
+
+Server logs carry `userId`, `tenantId` and `requestId` on **both** transports (§1.8). Wherever
+container stdout is shipped, that destination holds **attributable** server logs about the subject,
+and they are in scope for Art. 15.
+
+**Before the first rehearsal, the platform team must confirm and record in §6:**
+
+| Question | Why it matters |
+|---|---|
+| Is `LOG_TO_FILE=false` in each deployed environment? | Decides whether §1.8 or this section is the real path |
+| Which platform receives container stdout, in which region, under which account? | Recipients + transfers, Art. 15(1)(c)/(f) |
+| What is the retention period there? | Art. 15(1)(d) |
+| Is APM/trace data enabled, and does it carry `userId`/`tenantId` tags? | A second attributable store |
+| Who owns and approves an export? | The procedure below needs a named approver |
+
+**Bounded export procedure** — owner-approved, minimised, and logged:
+
+1. **Get written approval** from the log-platform owner, naming the subject, the window and the
+   requester. Record it on the DSAR register row.
+2. Query by the **`userId` attribute**, not free text — a substring search over log bodies both
+   misses records and returns other people's.
+3. **Bound the window** to the platform's retention period, and state that period in the response.
+4. **Page to exhaustion** and reconcile against the reported total, the same rule as §1.2/§1.6. Fail
+   the step rather than release a truncated extract.
+5. **Review before release.** Server logs routinely contain other subjects' identifiers in the same
+   file, and stack traces that are system information rather than information about the person —
+   redact third-party ids (Art. 15(4)) and drop non-personal noise.
+6. If the platform cannot answer by `userId`, **say so in the response** as a stated limitation. Do
+   not substitute the anonymous-RUM exclusion for an answer about server logs.
+
+**Not verifiable from this repo.** The deployment questions above live in GitOps. Until they are
+answered and recorded, treat this section as **open**, not as satisfied.
+
+---
+
+## 2. Collect — two phases, and the first one can never be "complete"
+
+```bash
+# 1. Summary first — read-only, prints per-sink counts
+node knauf/scripts/dsar-collect.js --user <mongo-id-or-email>
+
+# 2. Collect into a FRESH directory (the collector creates it 0700; it refuses an
+#    existing non-empty path or a symlink)
+node knauf/scripts/dsar-collect.js --user <mongo-id-or-email> --out ./dsar-<ticket>/ --include-logs
+
+# 3. Run the external sinks (see results/README.md in the bundle), then reconcile.
+#    No --user, no database: it only reads the bundle and rewrites manifest.json.
+node knauf/scripts/dsar-collect.js --out ./dsar-<ticket>/ --finalize
+```
+
+**Step 2 always exits 4.** That is by design. The collector can read Mongo itself, but
+Langfuse, Meilisearch, Blob, the RAG vector confirmation and the log-platform export all
+happen elsewhere — so each is recorded **`pending`** and the bundle is incomplete until a
+verified result exists. A run that "succeeded" without those steps having happened would be
+exactly the false assurance this runbook exists to prevent.
+
+The bundle is one JSON file per sink plus:
+
+| File | What it is |
+|---|---|
+| `manifest.json` | Counts, timestamps, the **resolved tenant**, redactions applied, exclusions, the **`externalSinks`** state and a **`completeness`** block |
+| `results/README.md` | What each external sink must drop into `results/`, and in what shape |
+| `langfuse.sh` | Pages to exhaustion, reconciles against `meta.totalItems`, exits non-zero if short (§1.6). Mode **0600** — run it as `bash langfuse.sh` |
+| `meilisearch.md` | The `page`/`hitsPerPage` recipe that fails on a count mismatch (§1.2) |
+| `vector-inventory-request.json` | Exact **physical** vector ids per backend for the RAG service to confirm (§1.3/1.4) |
+
+### 2.1 Finalization — what clears a pending sink
+
+`--finalize` **opens no database**. It reconciles the immutable phase-one bundle against the
+external results and rewrites exactly one file (`manifest.json`, atomically, 0600). It cannot
+re-collect, so it can never drift from what was actually disclosed.
+
+Each external sink writes one JSON file into `results/`, **naming the artifact it produced**:
+
+```json
+{
+  "status": "complete",
+  "collected": 2500,
+  "artifact": "results/langfuse-traces.jsonl",
+  "checksum": "<sha256 of that file>"
+}
+```
+
+**The evidence is bound to this bundle.** Every result must carry the `runId`, `sink`,
+`subject` and `tenant` printed in `results/README.md` and matching `manifest.json`. A mismatch
+fails the sink — that is what stops a result being copied from another bundle or replayed from
+an earlier run against a stale inventory.
+
+**Three checks run, and all must pass.**
+
+1. **The artifact is hashed.** `artifact` must be a real file inside the bundle — no symlinks,
+   no paths escaping it — and its sha256 must equal `checksum`. A number with no file behind it
+   is not evidence of an extraction. Generate with `sha256sum results/<file>`.
+2. **The count is parsed out of the artifact, not read from the result.** The collector counts
+   the records itself (JSONL, a JSON array, or an envelope with `data`/`hits`/`results`/`items`).
+   If the result also declares `collected` it must agree; if the file is in none of those shapes
+   the sink **fails** — a checksum proves only that named bytes exist, never how many records
+   they hold.
+3. **That parsed count is checked against *our* number.** Meilisearch, Blob and the RAG
+   inventory are **derived copies** of things phase one already counted, so the collector
+   computes the expectation itself and **ignores any `expected` in the result file**:
+
+| Sink | Expectation derived from |
+|---|---|
+| `meilisearch` | `sinks.MessageIndexable` + `sinks.ConversationIndexable` — **not** the raw counts. `mongoMeili` deliberately keeps temporary/expiring chats out of the index, so the replica is legitimately smaller than Mongo. Deriving from raw totals rejected correct exports |
+| `blob` | `sinks.blob.objects` — File rows + FileAsset blobs + **avatars**. Avatars have no `File` row at all (written straight to `images/<userId>/`), so they were previously invisible to the bundle *and* would have failed the count |
+| `ragVectors` | `vectorStores.pgvector` + `.azureAiSearch` — the ids we emitted |
+
+`langfuse`, `logPlatform` and `redis` are **not** derived from Mongo (they have their own
+retention), so no honest expectation can be computed for the TOTAL. Their counts are still parsed
+from a hashed, run-bound artifact, but nothing independent corroborates that the export was
+exhaustive — so a `complete` result for them is recorded as **`manual-verification-required`**,
+never `complete`, with `expectationSource: "artifact-parsed, total unverified"`. That status
+**keeps the bundle incomplete** (review round 5): the evidence stays in the manifest for the
+reviewer, but this tool cannot promote it. Promotion needs one of two things that are deliberately
+*not* in this PR — a service-specific adapter that derives the expectation from the service
+itself, or an approved attestation recorded on the register row (§6). Until one exists, a bundle
+with the log platform in scope **always finishes with exit `4`**, preceded by a per-status summary
+of what remains.
+
+#### `not-applicable` is only accepted where it can be checked
+
+A sink may be skipped **only when the collector can confirm the condition itself**, against the
+environment snapshot phase one recorded:
+
+| Sink | Accepted only when |
+|---|---|
+| `redis` | `USE_REDIS` was off |
+| `meilisearch` | no search backend configured, or phase one found nothing indexable |
+| `langfuse` | Langfuse not configured |
+| `blob` / `ragVectors` | phase one enumerated no objects / emitted no vector ids |
+| `logPlatform` | **never** — "the platform cannot query by `userId`" is a claim about an external system |
+
+Anywhere else, `not-applicable` is **downgraded to `limitation`**: recorded, distinguishable from
+`pending`, and it **keeps the bundle incomplete**. An inaccessible sink is an unanswered sink,
+however well documented. Say so in the Art. 15 response; do not let the collector certify it.
+
+| Result | Outcome |
+|---|---|
+| `complete`, artifact hashes, count matches the derived expectation | **complete** |
+| `complete`, artifact hashes and parses, but **no derived expectation exists** (`langfuse`, `logPlatform`, `redis`) | **manual-verification-required** — evidence kept; the bundle stays incomplete until an adapter or an approved attestation promotes it |
+| `complete` but the count differs from **our** number | **failed** — the extraction is short, or bundle and export disagree |
+| `complete` with no `artifact`/`checksum` | **failed** |
+| checksum mismatch, unreadable artifact, or a path escaping the bundle | **failed** |
+| `not-applicable` **with** a `note` | **not-applicable**, and the note goes into the response as a stated limitation |
+| `not-applicable` without a note | **failed** — "doesn't apply" is a claim that needs a reason |
+| missing file / unreadable JSON | **pending** |
+
+`manifest.completeness.ok` becomes `true` only when every sink is `complete` or
+`not-applicable` **and** no other warning is open. `limitation` and
+`manual-verification-required` both block it — so in this version `ok: true` is reachable only
+when every unverifiable sink is machine-confirmed not applicable, which the log platform never is.
+
+### 2.2 Exit codes — non-zero means not releasable
+
+| Code | Meaning |
+|---|---|
+| `0` | Complete. Only reachable from a `--finalize` run with every external sink `complete` or `not-applicable`. **Not reachable today while the log platform is in scope** (§2.1) — do not wait for it |
+| `2` | No user matches the reference |
+| `3` | **Ambiguous or contradicted subject** — the email matched in more than one tenant, or `--tenant` disagreed. Re-run with the right `--tenant`; do **not** guess |
+| `4` | Open completeness warnings — unfinished work (`pending`/`failed`), **or** sinks this tool cannot verify (`manual-verification-required`, `limitation`). The per-status summary printed above the message says which; read `manifest.completeness.warnings` |
+| `5` | **The bundle directory is unsafe or not a bundle** — a symlink (direct or any ancestor), not a directory, missing, or has no phase-one `manifest.json` |
+
+### 2.3 The bundle is evidence — handle it as such
+
+The bundle is the subject's entire personal-data corpus in one directory.
+
+- The collector **creates** the directory `0700` and every file `0600`, exclusively (`wx`) so
+  nothing is silently overwritten. It **refuses** a non-empty directory, a path that is already a
+  file, and **a symlink anywhere in the path** — not just the final component. A symlinked parent
+  with a non-existent leaf previously let `mkdir -p` follow the link and write the whole corpus
+  into the linked location.
+- **Every file finalization consumes is re-checked** — `manifest.json`, each `results/*.json`,
+  each artifact: no-follow, must be a regular file, must be owned by the operator running the
+  script, and is tightened to `0600` before it can influence completeness. An artifact produced by
+  shell redirection arrives at `0644`; the tightening is recorded on the manifest, not done
+  silently.
+- **Write it to encrypted storage.** Full-disk encryption on the operator's machine is the
+  minimum; a shared drive must be the approved encrypted location, never a personal folder.
+- **Never email it or put it in a ticket attachment.** Deliver per §4.
+- **Retention: delete within 30 days of delivery**, or when the request closes, whichever is
+  sooner. Record the deletion date on the register row (§6).
+- **Verify the cleanup.** `shred -u` the files (or the platform's secure-delete), then
+  confirm the directory is gone and record who confirmed it. An unverified delete is not a
+  delete.
+- Keep **only** the manifest (counts, exclusions, redactions, tenant, finalization state) as
+  the durable record that the request was fulfilled. It carries no message content.
+
+Then run `langfuse.sh` and the Meilisearch recipe from a host with the credentials, send
+`vector-inventory-request.json` to the RAG service, pull the Blob objects for the `files`
+list, complete §1.10 with the platform team, write each result into `results/`, and re-run
+with `--finalize`.
+
+---
+
+## 3. Review before release
+
+- [ ] **Third-party data** (Art. 15(4)): actor identities redacted on target-rows (§1.7); any other
+      person's data inside the subject's messages (colleagues named in prompts) — the subject wrote
+      it, it is theirs to receive; do not over-redact the subject's own content.
+- [ ] **Secrets stripped** — spot-check `users.json` for `totpSecret`/`backupCodes`/`refreshToken`;
+      `keys`/`pluginauths`/`tokens`/`sessions` show existence only.
+- [ ] **Derived copies labelled** — Meilisearch and Langfuse presented as copies with their own
+      retention, not as new categories.
+- [ ] **Group memberships projected** — `groups.json` names the groups but **not** `memberIds`;
+      confirm no other member's identifier appears anywhere in the bundle (Art. 15(4)).
+- [ ] **Completeness reconciled** — a `--finalize` run was executed and `manifest.finalizedAt`
+      is set. A step-2 bundle (never finalized) must not be released. Exit `0` is not reachable
+      while the log platform is in scope (§2.2); the only warnings allowed to remain name
+      `manual-verification-required` sinks or recorded `limitation`s — anything `pending` or
+      `failed` is unfinished work.
+- [ ] **Every external sink resolved** — `manifest.externalSinks` shows one of `complete`,
+      `not-applicable`, `manual-verification-required` or `limitation` for all six (`langfuse`,
+      `meilisearch`, `blob`, `ragVectors`, `logPlatform`, `redis`); nothing is `pending` or
+      `failed`. Each `not-applicable` / `limitation` carries a note that appears in the response.
+- [ ] **Audit context redacted** — target-only rows show no `context.ip`, `context.userAgent`,
+      `context.sessionId` or `context.requestId`. Grep the bundle for the admin's IP.
+- [ ] **File ownership, not agent scope** — `manifest.sinks.ownedAssetIds` matches the number
+      of the subject's File rows carrying a `knauf_asset_id`. Spot-check that no asset in
+      `KnaufFileAsset.json` belongs to a file another user uploaded to a shared agent.
+- [ ] **Bundle permissions** — directory `0700`, every file `0600`, on encrypted storage.
+- [ ] **Tenant recorded** — `manifest.tenant.resolved` matches the tenant on the register row.
+- [ ] **Derived sinks proved complete** — `meilisearch`, `blob` and `ragVectors` are `complete`,
+      each naming a checksummed artifact whose parsed count matched phase one. A step that was
+      not run is not a step that found nothing.
+- [ ] **Manual-verification sinks attested and flagged** — for each `manual-verification-required`
+      sink (Langfuse, the log platform, Redis when on) a named person has checked the artifact
+      against the service itself and recorded that attestation on the register row (§6); the
+      response describes those categories as exported but **not independently verified**. The
+      collector cannot make this call and does not pretend to.
+- [ ] **Translation jobs reviewed** — `knauf_translation_jobs.json` filenames and `report`
+      belong to the subject; operational fields are redacted.
+- [ ] **Exclusions stated** — browser analytics (§1.9), with the reason, and **not** conflated with
+      server logs; vector stores attested by **physical** id and confirmed by the RAG service
+      (§1.3/1.4).
+- [ ] **Server logs addressed** (§1.10) — either exported under approval, or the limitation stated
+      in the response. Silence from §1.8 is not an answer.
+- [ ] **The Art. 15(1) narrative** written: purposes, categories, recipients (Azure OpenAI, Azure AI
+      Search, the hosted search backend, the log platform), retention periods per category (from the
+      retention matrix; "not yet set" where true), source of the data, and the existence of
+      rights 16–21. Do **not** state "no profiling" — memory is profiling; see G-5.
+
+## 4. Deliver
+
+Art. 15(3): first copy free; electronic if the request was electronic. Use a secure internal
+channel (never email attachments of the bundle). Record delivery date in the register.
+
+## 5. If it is an erasure request too
+
+Stop — that is the erasure recipe (P2-5, ticket 8), which this bundle is the "before" evidence for.
+
+## 6. The DSAR register
+
+A private record (not in this repo) with: receipt date, requester, identity-check method, scope,
+extension used (Y/N, reason, date notified), collector run id, redactions applied, exclusions
+stated, **attestations for `manual-verification-required` sinks** (who checked which artifact
+against which service, and when — §3; the collector records the evidence, a named person records
+the judgement), delivery date and channel, elapsed days. This is the Art. 5(2) evidence that
+Art. 15 is answerable. Keep it where the DPO can see it.
+
+---
+
+## Rehearsal (the remaining AC)
+
+Run §0–§4 end-to-end against a **test subject** in dev. Record elapsed working time per section.
+Anything that took more than an hour is a candidate for the P2-6 endpoint. Record the result in
+the workstream implementation log.

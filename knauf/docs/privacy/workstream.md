@@ -941,20 +941,37 @@ after P2-2.
 half, this is the access half.
 
 **AC:**
-- [ ] **Now, and mandatory (P2-6a):** a documented, *tested* manual DSAR runbook covering **all
-      nine sinks in §1** — Art. 15 is a live obligation with an Art. 12(3) clock (one month,
+- [x] **P2-6a — written (KK20-331):** [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) plus the
+      read-only collector `knauf/scripts/dsar-collect.js`, covering **every §1 sink** (the runbook
+      splits the last one: §1.9 browser analytics, excluded; §1.10 server logs, in scope) — Art. 15
+      is a live obligation with an Art. 12(3) clock (one month,
       extendable by two more for complex requests if the subject is told within the first), and
       "manual archaeology" is not a compliant fulfilment path until it is written down and rehearsed
       once. **Any pending or incoming DSAR promotes this item to immediate.**
-- [ ] The access scope enumerates every §1 sink, not the obvious seven: Mongo, Meilisearch,
+- [x] The access scope enumerates every §1 sink, not the obvious seven (pinned: `dsar-collect.spec.js`
+      enumerates the **live model registry** and fails unless every registered model is collected or
+      carries a written exclusion reason — 41 models, 32 collected, 9 excluded. The deletion-cascade
+      pin is kept as a secondary check only; PR #349 review established that comparing the collector
+      to the cascade cannot prove completeness, since neither is an independent inventory): Mongo, Meilisearch,
       pgvector, Azure AI Search, Blob, **Langfuse traces** (addressable: tenant tags,
       `librechat.source.message.id` metadata), the subject's **auditLog entries**, **winston logs**
-      (error logs carry `userId`/`requestId`, 14-day rotation — searched or excluded, with the
-      reason written down) and **Datadog** (pseudonymous session id only — document the exclusion
-      rather than silently omit it). Access mirrors erasure: every sink P2-5 verifies, this discloses.
-- [ ] **Art. 15(4) — third-party data:** a subject's auditLog entries name the *admin* who acted
-      on them (`actor.name`). Access must not adversely affect others' rights; redact actor identity
-      when the requester is the target, not the actor.
+      (`requestContextFormat` attaches `userId`/`tenantId`/`requestId` to **both** the file and
+      console transports, so with `LOG_TO_FILE=false` the attributable records are in the log
+      platform, not `api/logs/` — runbook §1.10) and **browser analytics** (Datadog RUM/Logs, Adobe,
+      OneTrust — pseudonymous session id only, no `setUser`: document the exclusion rather than
+      silently omit it). Access mirrors erasure: every sink P2-5 verifies, this discloses.
+- [x] **Art. 15(4) — third-party data:** a subject's auditLog entries name the *admin* who acted
+      on them (`actor.name`). Redacted by the collector when the requester is the target, kept when
+      they are the actor. **Finding:** the admin list API filters by name *substring* only — no
+      `actor.id`/`target.id` filter — so a reliable by-subject lookup has to read the collection.
+- [ ] **Rehearsal — the remaining P2-6a AC:** run the runbook §0–§4 against a test subject in dev,
+      record elapsed time per section against the Art. 12(3) clock. Not yet done.
+- [ ] **Finding to carry into P2-6 (the endpoint):** `rag_api` has no read-back-by-subject
+      endpoint (`/documents` is delete-only), so vectors are attested by their **physical** id
+      (`knauf_asset_id ?? file_id`, backend from `KnaufFileAsset.vector_backend`) for the RAG service
+      to confirm, and disclosed via the source file; **browser analytics** is *excluded* by design
+      (random session id, no `setUser`) while **server logs/APM** are in scope — the endpoint must
+      state all three, not silently omit them or collapse the last two into one exclusion.
 - [ ] Then the self-service endpoint: a user can export conversations, messages, memories, file
       metadata and feedback · machine-readable format · fulfilment time measured.
 
@@ -1173,7 +1190,7 @@ and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't h
 | Wave | When | What | Exit review — the wave is done when |
 |---|---|---|---|
 | **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · ✅ **DOC-1's restore step done** (v1.2 back on `main`, so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
-| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · 🔄 **P0-1** (**KK20-327** — built, in PR #340 **awaiting review**, not merged; two ACs still open: memory-agent review, upstream `mask` issue) · 🔄 **P2-7 core** (**KK20-328** — built, in PR #341 **awaiting review**, not merged; purge + checkpoint ledger + both entrypoints wired, inert by default. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0. The write-time IP/metadata decisions and the export-governance tail are the follow-up) · **P2-6a** (the runbook half of P2-6's AC — manual DSAR runbook, tested once; **any pending or incoming DSAR promotes this to immediate**) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
+| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · 🔄 **P0-1** (**KK20-327** — built, in PR #340 **awaiting review**, not merged; two ACs still open: memory-agent review, upstream `mask` issue) · 🔄 **P2-7 core** (**KK20-328** — built, in PR #341 **awaiting review**, not merged; purge + checkpoint ledger + both entrypoints wired, inert by default. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0. The write-time IP/metadata decisions and the export-governance tail are the follow-up) · 🔄 **P2-6a** (**KK20-331** — runbook + read-only collector written; **rehearsal pending**; any pending or incoming DSAR promotes this to immediate) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
 | **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
 | **3 · Retention & rights** | Opens when **P2-1's numbers land** (P2-1 itself started in wave 0; G-2 is what produces it) | **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** (waits deliberately: it needs *a* number, and setting one provisionally only to have P2-1 ratify a different one means bounding the same log twice) · **P2-5 full re-run** (after P2-2, as its AC specifies) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
 | **4 · Engine** *(evidence-gated; start anytime capacity exists)* | Parallel to 2–3 | **P3-1** PoC → gate ENGINE → **P3-2** + **P3-3**. **P3-4** needs no engine — run it alongside wave 3 | Engine decision recorded on measured DE/EN data; the two persistence chokepoints protected with no user-visible utility loss |
@@ -1197,6 +1214,7 @@ this folder's README exists to prevent.
 | 2026-09-04 | **KK20-328** self-review pass before the third push (`/code-review`, 7 angles): root export gap that would have silently disabled the HMAC check in prod, missing `createIndexes`, activation-looks-like-tampering, verify blind to a pending intent, dry run not read-only, CronJob pod never exiting, 1 s lease floor — all fixed; the terminal/generation design replaced by **never emptying a chain** | Reviewing my own change with the same rigour as the human review found a production-disabling bug (root export) that every green test had missed, because the tests imported from the barrel, not the root. The spec now imports through the root |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
+| 2026-09-03 | **KK20-331** (P2-6a) — DSAR runbook + collector written; rehearsal pending | Two things the plan had not seen: the audit admin API cannot filter by subject *id*, and `rag_api` cannot read vectors back per subject. Both would have surfaced mid-DSAR with the clock running |
 
 ### 6.2 The bundles (grouping rationale)
 
@@ -1286,6 +1304,8 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`api/knauf/audit/retention.js`](../../../api/knauf/audit/retention.js) · [`api/knauf/audit/sweepOnce.js`](../../../api/knauf/audit/sweepOnce.js) | KK20-328 — dependency binding (indexed `chainKey` enumeration, lease owner, HMAC key) and the one-shot CronJob entrypoint |
 | [`api/server/index.js`](../../../api/server/index.js) · [`api/server/experimental.js`](../../../api/server/experimental.js) | Both entrypoints start the sweep — `index.js` is what the container runs |
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
+| [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) | KK20-331 — the Art. 15 procedure across every §1 sink; Art. 15(4) and 12(3) encoded; §1.9/§1.10 split browser analytics (excluded) from server logs (in scope) |
+| [`knauf/scripts/dsar-collect.js`](../../scripts/dsar-collect.js) | KK20-331 — read-only collector: 32 Mongo stores + scheduler + auditLog (redacted) + paged Langfuse/Meili scripts + Blob/physical-vector inventory. Inventory pinned to the live model registry by its spec; fails closed (exit 2/3/4) rather than emitting an incomplete bundle |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
 | [`api/server/services/Files/knauf/translation/pdfCompression.js`](../../../api/server/services/Files/knauf/translation/pdfCompression.js) | KK20-297 — writes the translated PDF to a `mkdtemp` temp dir for Ghostscript recompression; see §1 point 4 for the retention caveat |
 
@@ -1313,6 +1333,18 @@ assertion is the checkpoint ledger doing its job.
 cd packages/data-schemas && npx jest src/knauf/audit   # 27 — never-empty boundary, purge→commit→verify, crash recovery, forged intents, fencing, races, lease, signatures
 cd packages/api && npx jest src/knauf/audit             # 33 — sweep (24: call order, fences, lease loss aborts, read-only dry run) + trust policy (9)
 ```
+
+**P2-6a — DSAR collector (KK20-331).** Read-only by construction. Against dev with a test user:
+`node knauf/scripts/dsar-collect.js --user <email>` prints per-sink counts; add `--out ./dsar-test/`
+for the bundle. Then check `users.json` has **no** `totpSecret`/`backupCodes`/`refreshToken`; that
+`auditlogs.json` rows with `_dsarRole: "target"` show a redacted actor; that `groups.json` carries
+**no** `memberIds`; and that `manifest.json` records the resolved tenant, lists the browser-analytics
+and vector-store exclusions with reasons, and reports `completeness.ok`. A non-zero exit (2/3/4/5)
+means the bundle is not releasable — and exit `4` is the *expected* end state today: Langfuse and the
+log platform have no independently derivable total, so `--finalize` records them as
+`manual-verification-required` and never prints "releasable" (review round 5); promotion needs a
+service adapter or an approved attestation, both rollout work. `npm run test:dsar` runs the spec that pins the inventory to the
+live model registry.
 
 ```bash
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'
