@@ -6,6 +6,7 @@ const NETWORK_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 const RETRYABLE_PROVIDER_IDENTIFIERS = new Set(['server_error']);
+const RETRY_DECISIONS = new Set(['retry', 'not_retryable', 'unsafe_after_output', 'cancelled']);
 
 const boundedIdentifier = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
@@ -16,6 +17,11 @@ const boundedParameter = (value) =>
 const getStatus = (error) => {
   const status = error?.status ?? error?.statusCode ?? error?.response?.status;
   return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+};
+
+const getRetryDecision = (error) => {
+  const decision = error?.knaufRetryDecision ?? error?.error?.knauf_retry_decision;
+  return RETRY_DECISIONS.has(decision) ? decision : undefined;
 };
 
 const getProviderRequestId = (value) => {
@@ -31,6 +37,10 @@ const getProviderRequestId = (value) => {
 };
 
 const isRetryableProviderError = (error) => {
+  const retryDecision = getRetryDecision(error);
+  if (retryDecision != null) {
+    return retryDecision === 'retry';
+  }
   const status = getStatus(error);
   if (status != null) {
     return status === 408 || status === 429 || status >= 500;
@@ -53,6 +63,7 @@ const summarizeProviderError = (error, operation) => {
   const errorName =
     (constructorName === 'Object' ? undefined : constructorName) ?? boundedIdentifier(error?.name);
   const requestId = getProviderRequestId(error);
+  const retryDecision = getRetryDecision(error);
 
   return {
     operation,
@@ -63,6 +74,7 @@ const summarizeProviderError = (error, operation) => {
     ...(param != null && { param }),
     ...(errorName != null && { errorName }),
     ...(requestId != null && { requestId }),
+    ...(retryDecision != null && { retryDecision }),
   };
 };
 
@@ -77,6 +89,7 @@ const getPublicGenerationError = (summary) => {
 
 module.exports = {
   getProviderRequestId,
+  getRetryDecision,
   getPublicGenerationError,
   isRetryableProviderError,
   summarizeProviderError,

@@ -162,6 +162,7 @@ describe('[knauf] Model Router telemetry', () => {
     });
     currentTime = 40;
     telemetry.handler.handleLLMEnd(routedResult, 'replacement');
+    telemetry.finalize();
 
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       1,
@@ -170,6 +171,33 @@ describe('[knauf] Model Router telemetry', () => {
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ result: 'success', attempt: '2+' }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        modelRunId: 'first',
+        retryLineage: 'agent-node',
+        attemptNumber: 1,
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        modelRunId: 'replacement',
+        retryLineage: 'agent-node',
+        attemptNumber: 2,
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Retry lineage completed',
+      expect.objectContaining({
+        retryLineage: 'agent-node',
+        outcome: 'recovered',
+        attemptCount: 2,
+        initialResult: 'retry',
+        terminalResult: 'success',
+        retryReason: 'refusal',
+      }),
     );
   });
 
@@ -445,6 +473,49 @@ describe('[knauf] Model Router telemetry', () => {
     const event = logger.info.mock.calls.at(-1)[1];
     expect(JSON.stringify(event)).not.toContain('sensitive provider response');
     expect(JSON.stringify(event)).not.toContain('private prompt');
+  });
+
+  it('records an unsafe post-output failure as not retried', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'unknown',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    const error = {
+      code: 'server_error',
+      error: { knauf_retry_decision: 'unsafe_after_output' },
+    };
+
+    telemetry.handler.handleChatModelStart(
+      null,
+      [[]],
+      'model-run-1',
+      'logical-call-1',
+      undefined,
+      [],
+      { ls_model_name: 'model-router' },
+    );
+    telemetry.handler.handleLLMError(error, 'model-run-1');
+    telemetry.finalize({ failed: true });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        retryLineage: 'logical-call-1',
+        providerRetryable: false,
+        retryDecision: 'unsafe_after_output',
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Retry lineage completed',
+      expect.objectContaining({
+        retryLineage: 'logical-call-1',
+        outcome: 'unsafe_not_retried',
+        attemptCount: 1,
+        initialResult: 'provider_error',
+        terminalResult: 'provider_error',
+      }),
+    );
   });
 
   it('classifies the existing stream idle timeout distinctly', () => {

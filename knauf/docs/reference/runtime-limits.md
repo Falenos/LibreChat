@@ -1,6 +1,6 @@
 # KARL Runtime Limits
 
-Last audited: 2026-08-26
+Last audited: 2026-09-16
 
 This reference inventories operational limits enforced by the `agentic-karl`
 repository: upload ceilings, model and agent budgets, Code Adapter guardrails,
@@ -125,8 +125,8 @@ the current `agk-deployment-configs` values and rendered ArgoCD manifest.
 | KARL context | 256,000 tokens | Committed policy, `librechat.yaml` | Fits every configured Model Router candidate with headroom. |
 | KARL output | 8,192 tokens | Committed policy, `librechat.yaml` | Cost and runaway-output fuse, including reasoning tokens. |
 | Prompt drafting output | 1,500 tokens | Committed policy, `librechat.yaml` | Keeps generated agent instructions concise. |
-| Model Router headers | 60 seconds | Committed policy, `librechat.yaml` | Bounds time to initial provider response. |
-| Model Router retry | 1 | Committed policy, `librechat.yaml` | Allows one transient recovery without multiplying latency. |
+| Model Router request / stream idle | 60 seconds | Committed policy, `librechat.yaml`; `packages/api/src/agents/run.ts` | Bounds time to initial provider response and the idle interval between streamed response chunks. |
+| Model Router retry | 1 logical retry | Committed policy, `librechat.yaml`; `packages/api/src/knauf/agents/modelRouterRetry.ts` | Disables nested SDK retries and uses one observable same-provider fallback. Retry is suppressed after visible output, provider-side tool activity, caller cancellation, or a deterministic failure. |
 | Stored memory context | 2,000 tokens | Committed policy | Prevents memory from consuming the main conversation budget. |
 | Memory message window | 5 messages | Committed policy | Bounds extraction input. |
 | Memory value | 10,000 characters | Committed policy | Bounds one stored memory. |

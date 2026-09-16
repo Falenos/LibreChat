@@ -41,13 +41,21 @@ Search production logs for `FoundryRouterTelemetry`.
 `Model call completed` contains:
 
 - request, conversation, message, and model-run correlation IDs
-- result, returned model, phase, attempt bucket, duration, and optional TTFT
+- retry-lineage ID, exact attempt number, bounded attempt bucket, result,
+  returned model, phase, duration, and optional TTFT
 - optional input/output token counts
 - optional bounded Azure request ID
 - optional retry reason (`refusal`, `output_limit`, `langchain_retry`, or
   `langgraph_retry`)
 - for provider errors only: optional bounded HTTP status, provider code, type,
-  parameter, SDK exception class, and retryability
+  parameter, SDK exception class, retryability, and retry decision
+
+`Retry lineage completed` is emitted once for each failed or retried logical
+call. It records the bounded initial and terminal results, attempt count,
+retry reason, and one outcome: `recovered`, `exhausted`, `not_retryable`,
+`unsafe_not_retried`, `cancelled`, or `retry_not_observed`. Use this event for
+exact recovery-rate dashboards instead of comparing independent aggregate
+attempt counters.
 
 `Generation lifecycle completed` contains:
 
@@ -102,9 +110,9 @@ names:
 - resolve `@langchain/core` from the model stack, run a real retry, and verify
   its generated retry tag crosses the API callback-handler boundary and maps to
   attempt `2+`
-- run a real LangGraph node with a retry policy and verify the stable
-  `langgraph_checkpoint_ns` lineage maps the replacement model call to attempt
-  `2+`
+- run a real LangGraph node with a retry policy and verify the parent model-run
+  lineage (falling back to `langgraph_checkpoint_ns`) maps the replacement call
+  to attempt `2+`
 
 Do not pin an exact dependency version in these contract assertions.
 Compatible upgrades should pass unchanged; a changed SDK error shape, package
@@ -130,9 +138,10 @@ or message IDs as metric labels.
    - TTFT normal and duration high: inspect stream-idle timeouts and output
      tokens for a slow or stalled stream.
 4. Group duration and volume by `returned_model` and `phase`.
-5. Inspect `attempt:2+` and `result:retry` for LangChain, LangGraph, or
-   refusal/output-limit retries. `attempt:unknown` must not be interpreted as a
-   first attempt.
+5. Inspect `Retry lineage completed` for exact recovered, exhausted, and
+   non-retryable rates. Use `attemptNumber` and `retryLineage` to inspect the
+   contributing calls; `attempt:unknown` must not be interpreted as a first
+   attempt.
 6. For `result:provider_error`, group only by the bounded provider status,
    code, type, parameter, retryability, and exception class fields. Correlate
    the provider request ID with Azure diagnostics; do not inspect or export raw
@@ -155,5 +164,7 @@ that have not been reviewed for sensitive content.
 
 The monitors remain drafts until a lower-environment scrape and production
 traffic confirm metric names and at least 500 calls establish a useful
-baseline. Publish thresholds only after that verification; this change does not
-alter router candidates, policy, retries, fallback, or timeouts.
+baseline. Publish thresholds only after that verification. Router candidates
+and timeouts remain unchanged. The configured one-retry budget is enforced as
+one observable same-provider fallback, and unsafe or deterministic failures are
+not replayed.

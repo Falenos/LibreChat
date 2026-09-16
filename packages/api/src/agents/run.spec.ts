@@ -10,8 +10,8 @@ import {
   anyAgentReplaysReasoningContent,
 } from './run';
 
-// [knauf] NO-TICKET — Model Router streams must not outlive the configured
-// timeout when Azure stops emitting chunks after returning response headers.
+// [knauf] NO-TICKET, KK20-339 — Model Router streams must not outlive the configured
+// timeout or retry a failed post-200 stream after visible output or tool activity.
 describe('applyKnaufOpenAIStreamControls', () => {
   it('aborts an idle response body and preserves the configured fetch', async () => {
     const baseFetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -183,6 +183,156 @@ describe('applyKnaufOpenAIStreamControls', () => {
 
     expect(filtered).not.toContain('Unverified draft.');
     expect(filtered).toContain('Verified final answer.');
+  });
+
+  it('surfaces response.failed for a safe fallback before output', async () => {
+    const sse = [
+      { type: 'response.created', response: { id: 'response-1' } },
+      {
+        type: 'response.failed',
+        response: { error: { code: 'server_error', message: 'private provider detail' } },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: {
+        fetch: jest.fn(async () => new Response(sse)),
+      },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(fallbacks).toHaveLength(1);
+    expect(filtered).toContain('"code":"server_error"');
+    expect(filtered).toContain('"knauf_retry_decision":"retry"');
+    expect(filtered).not.toContain('private provider detail');
+  });
+
+  it('keeps fallback eligible when an idle Responses stream times out before output', async () => {
+    const baseFetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), {
+            once: true,
+          });
+        },
+      });
+      return new Response(body);
+    });
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 5,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: { fetch: baseFetch },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+
+    await expect(response.text()).rejects.toMatchObject({ knaufRetryDecision: 'retry' });
+    expect(fallbacks).toHaveLength(1);
+  });
+
+  it('blocks fallback when response.failed follows visible output', async () => {
+    const sse = [
+      { type: 'response.output_text.delta', output_index: 0, delta: 'Visible answer' },
+      {
+        type: 'response.failed',
+        response: { error: { code: 'server_error', message: 'private provider detail' } },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: {
+        fetch: jest.fn(async () => new Response(sse)),
+      },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).toContain('Visible answer');
+    expect(filtered).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(fallbacks).toEqual([]);
+  });
+
+  it('does not flush a buffered draft when the stream ends without a terminal event', async () => {
+    const sse = [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        delta: 'Unverified draft.',
+      },
+      'data: [DONE]\n\n',
+    ]
+      .map((event) => (typeof event === 'string' ? event : `data: ${JSON.stringify(event)}\n\n`))
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: { fetch: jest.fn(async () => new Response(sse)) },
+    };
+
+    (
+      applyKnaufOpenAIStreamControls as unknown as (
+        config: Record<string, unknown>,
+        bufferNativeSearchDrafts: boolean,
+      ) => void
+    )(cfg, true);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).not.toContain('Unverified draft.');
+    expect(filtered).toContain('"knauf_retry_decision":"retry"');
+    expect(filtered.indexOf('"knauf_retry_decision":"retry"')).toBeLessThan(
+      filtered.indexOf('[DONE]'),
+    );
+    expect(fallbacks).toHaveLength(1);
+  });
+
+  it('preserves a non-success HTTP response body for SDK error parsing', async () => {
+    const body = JSON.stringify({ error: { code: 'server_error', message: 'provider detail' } });
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: {
+        fetch: jest.fn(async () => new Response(body, { status: 500 })),
+      },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+
+    expect(await response.text()).toBe(body);
+    expect(fallbacks).toHaveLength(1);
   });
 });
 // End [knauf]
