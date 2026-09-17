@@ -19,6 +19,10 @@ no DTD/entities, and bounded story/segment counts.
 - XML-special characters are escaped during rebuild.
 - Export verifies every non-story entry against its source hash and parses every
   rebuilt story XML file before returning the result.
+- Translation compares source and rebuilt font/style manifests. The manifest
+  covers `Resources/Fonts.xml`, `Resources/Styles.xml`, and Story attributes whose
+  names reference fonts or styles. A mismatch fails with `font_fidelity_failed`;
+  successful translation reports `fontValidation: preserved`.
 
 ## Human acceptance
 
@@ -26,7 +30,8 @@ Open each output in Adobe InDesign and confirm:
 
 1. The IDML opens without a repair warning.
 2. Requested text is correct and no unintended occurrence changed.
-3. Fonts and styles resolve as expected.
+3. Fonts and styles resolve as expected. Structural references are verified by
+   KARL, but the workstation must still have the fonts and target glyphs available.
 4. No text frame shows overset text.
 5. Tables, callouts, anchored objects, links, and page breaks remain acceptable.
 6. Save an INDD copy only after the review passes.

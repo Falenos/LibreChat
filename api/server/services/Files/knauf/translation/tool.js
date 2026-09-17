@@ -104,6 +104,7 @@ const MIME_FORMATS = new Map(
 MIME_FORMATS.set('application/csv', { ...FORMATS.csv, extension: 'csv' });
 MIME_FORMATS.set('text/xml', { ...FORMATS.xml, extension: 'xml' });
 MIME_FORMATS.set('image/svg', { ...FORMATS.svg, extension: 'svg' });
+const FONT_VALIDATION_NOT_APPLICABLE = new Set(['csv', 'txt', 'md', 'markdown', 'json', 'xml']);
 
 function formatForFile(file) {
   const filename = file?.filename ?? file?.name ?? '';
@@ -117,6 +118,9 @@ function formatForFile(file) {
 }
 
 const isTranslatableFile = (file) => formatForFile(file) != null;
+
+const fontValidationForFormat = (format) =>
+  FONT_VALIDATION_NOT_APPLICABLE.has(format.extension) ? 'not_applicable' : 'human_required';
 
 const isFileTranslationConfigured = () =>
   process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
@@ -997,13 +1001,7 @@ function dictionaryEntryCount(glossary) {
   );
 }
 
-function protectedOnlyGlossary({
-  baseStats,
-  preserveTerms,
-  segments,
-  filterToDocument,
-  maxBytes,
-}) {
+function protectedOnlyGlossary({ baseStats, preserveTerms, segments, filterToDocument, maxBytes }) {
   return mergePreservedTerms(
     { entries: [], stats: { ...baseStats, applied: 0, bytes: 0 } },
     preserveTerms,
@@ -1090,6 +1088,7 @@ async function translateOneFile({
   let segments = [];
   let glossary;
   let layoutValidation = 'human_required';
+  let fontValidation = fontValidationForFormat(format);
 
   if (format.mode === 'idml') {
     if (input.length > MAX_SEGMENTED_BYTES) {
@@ -1121,7 +1120,9 @@ async function translateOneFile({
     } else {
       result = { translations: new Map(), providerLocale: targetLocale, batches: 0 };
     }
-    output = (await buildIdml(parsed, result.translations)).buffer;
+    const built = await buildIdml(parsed, result.translations);
+    output = built.buffer;
+    fontValidation = built.fontValidation;
   } else if (['json', 'markdown', 'xml', 'svg'].includes(format.mode)) {
     if (input.length > MAX_SEGMENTED_BYTES) {
       throw new IdmlError(
@@ -1221,7 +1222,12 @@ async function translateOneFile({
             if (retried.length <= limit) {
               logger.warn(
                 '[translate_file] masked image exceeded Azure batch size limit; retried at lower quality',
-                { firstAttemptBytes: masked.length, retryQuality, retryBytes: retried.length, limit },
+                {
+                  firstAttemptBytes: masked.length,
+                  retryQuality,
+                  retryBytes: retried.length,
+                  limit,
+                },
               );
               masked = retried;
             } else {
@@ -1316,6 +1322,7 @@ async function translateOneFile({
       segments: segments.length,
       glossary: glossary.stats,
       layoutValidation,
+      fontValidation,
     },
   };
 }
