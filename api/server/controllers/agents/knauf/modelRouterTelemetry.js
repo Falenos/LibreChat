@@ -55,6 +55,16 @@ const getRetryLineage = (metadata, parentRunId) => {
     : undefined;
 };
 
+const getAttemptNumber = (tags, retryReason) => {
+  if (Array.isArray(tags)) {
+    const retryTag = tags.find((tag) => typeof tag === 'string' && /^retry:attempt:\d+$/.test(tag));
+    if (retryTag != null) {
+      return Number(retryTag.slice(retryTag.lastIndexOf(':') + 1));
+    }
+  }
+  return retryReason == null ? 1 : 2;
+};
+
 const getGenerationMessage = (result) => result?.generations?.at(-1)?.at(-1)?.message;
 
 const getUsage = (result) => {
@@ -154,7 +164,7 @@ function createModelRouterTelemetry({
       error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
       error == null ? getSuccessRequestId(output) : providerError?.requestId;
-    if (result === 'provider_error' && providerError?.retryable === true) {
+    if (providerError?.retryable === true) {
       queuePendingRetry(call.retryLineage, 'langgraph_retry');
     }
 
@@ -174,12 +184,17 @@ function createModelRouterTelemetry({
       returnedModel,
       phase: call.phase,
       attempt: call.attempt,
+      attemptNumber: call.attemptNumber,
+      retryLineage: call.retryLineage ?? runId,
       durationMs,
       ...(ttftMs != null && { ttftMs }),
       ...(call.retryReason != null && { retryReason: call.retryReason }),
       ...(Number.isFinite(usage.inputTokens) && { inputTokens: usage.inputTokens }),
       ...(Number.isFinite(usage.outputTokens) && { outputTokens: usage.outputTokens }),
       ...(providerError != null && { providerRetryable: providerError.retryable }),
+      ...(providerError?.retryDecision != null && {
+        retryDecision: providerError.retryDecision,
+      }),
       ...(providerError?.providerStatus != null && {
         providerStatus: providerError.providerStatus,
       }),
@@ -213,6 +228,7 @@ function createModelRouterTelemetry({
         retryLineage,
         phase: getPhase(messages, runtimeMetadata),
         attempt,
+        attemptNumber: getAttemptNumber(tags, retryReason),
         retryReason,
       });
     },
@@ -250,6 +266,41 @@ function createModelRouterTelemetry({
     if (completedCalls.length === 0 && calls.size === 0) return;
     const completedAtMs = now();
     const modelWaitMs = completedCalls.reduce((total, call) => total + call.durationMs, 0);
+    const callsByLineage = new Map();
+    for (const call of completedCalls) {
+      const lineageCalls = callsByLineage.get(call.retryLineage) ?? [];
+      lineageCalls.push(call);
+      callsByLineage.set(call.retryLineage, lineageCalls);
+    }
+    for (const [retryLineage, lineageCalls] of callsByLineage) {
+      const orderedCalls = lineageCalls.toSorted((a, b) => a.attemptNumber - b.attemptNumber);
+      const initial = orderedCalls[0];
+      const terminal = orderedCalls.at(-1);
+      if (initial == null || terminal == null || initial.result === 'success') {
+        continue;
+      }
+      let outcome = 'retry_not_observed';
+      if (orderedCalls.length > 1) {
+        outcome = terminal.result === 'success' ? 'recovered' : 'exhausted';
+      } else if (initial.retryDecision === 'unsafe_after_output') {
+        outcome = 'unsafe_not_retried';
+      } else if (initial.result === 'cancelled') {
+        outcome = 'cancelled';
+      } else if (initial.retryDecision === 'not_retryable' || initial.providerRetryable === false) {
+        outcome = 'not_retryable';
+      }
+      logTelemetry('[FoundryRouterTelemetry] Retry lineage completed', {
+        ...correlation,
+        retryLineage,
+        outcome,
+        attemptCount: orderedCalls.length,
+        initialResult: initial.result,
+        terminalResult: terminal.result,
+        ...(initial.providerStatus != null && { initialProviderStatus: initial.providerStatus }),
+        ...(initial.providerCode != null && { initialProviderCode: initial.providerCode }),
+        ...(terminal.retryReason != null && { retryReason: terminal.retryReason }),
+      });
+    }
     let terminalResult = 'success';
     if (cancelled) {
       terminalResult = 'cancelled';

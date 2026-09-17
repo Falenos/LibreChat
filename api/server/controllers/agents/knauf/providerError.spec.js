@@ -2,6 +2,7 @@ const { createRequire } = require('node:module');
 const {
   getProviderRequestId,
   getPublicGenerationError,
+  getRetryDecision,
   isRetryableProviderError,
   summarizeProviderError,
 } = require('./providerError');
@@ -137,6 +138,22 @@ describe('[knauf] provider error safety', () => {
       requestId: 'azure-stream-request',
     });
     expect(JSON.stringify(summary)).not.toContain('private streamed provider detail');
+  });
+
+  it('honors the bounded stream retry decision over a retryable provider code', () => {
+    const error = {
+      code: 'server_error',
+      error: { knauf_retry_decision: 'unsafe_after_output' },
+    };
+
+    expect(getRetryDecision(error)).toBe('unsafe_after_output');
+    expect(isRetryableProviderError(error)).toBe(false);
+    expect(summarizeProviderError(error, 'model_router_call')).toEqual({
+      operation: 'model_router_call',
+      retryable: false,
+      code: 'server_error',
+      retryDecision: 'unsafe_after_output',
+    });
   });
 
   it('extracts a bounded provider request ID from response headers', () => {
