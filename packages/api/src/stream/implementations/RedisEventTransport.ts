@@ -8,6 +8,8 @@ import type { GenerationRef, IEventTransport } from '~/stream/interfaces/IJobSto
 const CHANNELS = {
   /** Main event channel: stream:{streamId}:events (hash tag for cluster compatibility) */
   events: (streamId: string) => `stream:{${streamId}}:events`,
+  /** Shared heartbeat channel exercises the actual dedicated Pub/Sub socket. */
+  keepalive: 'stream:subscriber:keepalive',
 };
 
 /**
@@ -115,6 +117,10 @@ export class RedisEventTransport implements IEventTransport {
   // End [knauf]
   /** Track channel subscription state: resolved promise = active, pending = in-flight */
   private channelSubscriptions = new Map<string, Promise<void>>();
+  // [knauf] KK20-338 — heartbeat traffic must traverse the Pub/Sub socket.
+  private keepaliveInterval: NodeJS.Timeout | null = null;
+  private destroyed = false;
+  // End [knauf]
   /** Counter for generating unique subscriber IDs */
   private subscriberIdCounter = 0;
 
@@ -124,7 +130,11 @@ export class RedisEventTransport implements IEventTransport {
    * @param publisher - Redis client for publishing (can be shared)
    * @param subscriber - Redis client for subscribing (must be dedicated)
    */
-  constructor(publisher: Redis | Cluster, subscriber: Redis | Cluster) {
+  constructor(
+    publisher: Redis | Cluster,
+    subscriber: Redis | Cluster,
+    options?: { keepaliveIntervalSeconds?: number },
+  ) {
     this.publisher = publisher;
     this.subscriber = subscriber;
 
@@ -132,6 +142,27 @@ export class RedisEventTransport implements IEventTransport {
     this.subscriber.on('message', (channel: string, message: string) => {
       this.handleMessage(channel, message);
     });
+
+    const keepaliveIntervalSeconds = options?.keepaliveIntervalSeconds ?? 0;
+    if (keepaliveIntervalSeconds > 0) {
+      this.subscriber
+        .subscribe(CHANNELS.keepalive)
+        .then(() => {
+          if (this.destroyed) {
+            this.subscriber.unsubscribe(CHANNELS.keepalive).catch(() => {});
+            return;
+          }
+          this.keepaliveInterval = setInterval(() => {
+            this.publisher.publish(CHANNELS.keepalive, '1').catch((error) => {
+              logger.error('[RedisEventTransport] Subscriber heartbeat failed:', error);
+            });
+          }, keepaliveIntervalSeconds * 1000);
+          this.keepaliveInterval.unref?.();
+        })
+        .catch((error) => {
+          logger.error('[RedisEventTransport] Failed to subscribe to heartbeat channel:', error);
+        });
+    }
   }
 
   // [knauf] Allocate a sequence and its safety TTL in one Redis operation so a disconnect
@@ -348,6 +379,9 @@ return value
    * Handle incoming pub/sub message with reordering support for Redis Cluster
    */
   private handleMessage(channel: string, message: string): void {
+    if (channel === CHANNELS.keepalive) {
+      return;
+    }
     const match = channel.match(/^stream:\{([^}]+)\}:events$/);
     if (!match) {
       return;
@@ -726,13 +760,16 @@ return value
    * the generating Replica A receives the signal and stops.
    */
   // [knauf] Abort only the generation named on the shared Redis channel.
-  emitAbort(streamId: string, generationId?: string): void {
+  async emitAbort(streamId: string, generationId?: string): Promise<void> {
     const channel = CHANNELS.events(streamId);
     const message: PubSubMessage = { type: EventTypes.ABORT, generationId };
 
-    this.publisher.publish(channel, JSON.stringify(message)).catch((err) => {
+    try {
+      await this.publisher.publish(channel, JSON.stringify(message));
+    } catch (err) {
       logger.error(`[RedisEventTransport] Failed to publish abort:`, err);
-    });
+      throw err;
+    }
   }
 
   /**
@@ -787,6 +824,13 @@ return value
    * Destroy all resources.
    */
   destroy(): void {
+    this.destroyed = true;
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
+    this.subscriber.unsubscribe(CHANNELS.keepalive).catch(() => {});
+
     // Clear all flush timeouts and buffered messages.
     // Sequence keys are NOT deleted here — they are shared across replicas and
     // generation-scoped counters expire via their 24h safety-net TTL.

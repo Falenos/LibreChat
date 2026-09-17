@@ -371,6 +371,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // End [knauf]
     jobGenerationId = job.generationId;
     req._resumableStreamId = streamId;
+    // KK20-338 — the immutable owner token for this turn; propagated to Model
+    // Router telemetry so provider-call logs join to the same logical generation as
+    // GenerationJobManager's and the SSE stream's terminal-cause logs, instead of only
+    // sharing a reused streamId (== conversationId) or the inbound HTTP request ID.
+    req._resumableGenerationId = jobGenerationId;
     getMCPRequestContext(req, undefined, { cleanupOnResponse: false });
 
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
@@ -487,6 +492,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         'Request aborted during initialization',
         jobGenerationId,
       );
+      await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
       await finishResumableRequest(req, userId);
       return;
     }
@@ -671,6 +677,40 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           delete userMessage.image_urls;
         }
 
+        // [knauf] KK20-338 — Redis status is the durable cancellation fence. A
+        // missed pub/sub abort must not let the owner save or finalize after a
+        // remote abort (notably while account deletion is purging user data).
+        const currentJob = await GenerationJobManager.getJob(streamId);
+        const jobNoLongerRunning =
+          !currentJob ||
+          currentJob.generationId !== jobGenerationId ||
+          currentJob.status !== 'running';
+
+        if (jobNoLongerRunning) {
+          logger.debug(`[ResumableAgentController] Skipping save/final emit - job no longer runs`, {
+            streamId,
+            originalGenerationId: jobGenerationId,
+            currentGenerationId: currentJob?.generationId,
+            currentStatus: currentJob?.status,
+          });
+          job.abortController.abort();
+          titleAbortController.abort();
+          titleDiscardController.abort();
+          job.abortController.signal.removeEventListener('abort', abortTitleOnJobAbort);
+          acceptsTitleEvents = false;
+          resolveConvoReady();
+          await immediateTitlePromise;
+          if (currentJob?.generationId === jobGenerationId && currentJob.status !== 'running') {
+            await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
+          }
+          await finishResumableRequest(req, userId);
+          if (client) {
+            disposeClient(client);
+          }
+          return;
+        }
+        // End [knauf]
+
         // Check abort state BEFORE calling completeJob (which triggers abort signal for cleanup)
         const wasAbortedBeforeComplete = job.abortController.signal.aborted;
         const shouldGenerateTitle =
@@ -702,39 +742,6 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             { ...response, user: userId, unfinished: wasAbortedBeforeComplete },
             { context: 'api/server/controllers/agents/request.js - resumable response end' },
           );
-        }
-
-        // Check if our job was replaced by a new request before emitting
-        // This prevents stale requests from emitting events to newer jobs
-        const currentJob = await GenerationJobManager.getJob(streamId);
-        const jobWasReplaced = !currentJob || currentJob.generationId !== jobGenerationId;
-
-        if (jobWasReplaced) {
-          logger.debug(`[ResumableAgentController] Skipping FINAL emit - job was replaced`, {
-            streamId,
-            originalGenerationId: jobGenerationId,
-            currentGenerationId: currentJob?.generationId,
-          });
-          // Discard the stale title from this replaced stream: cancel it and
-          // unblock its persistence wait without letting it save (the newer job
-          // owns the conversation now).
-          titleAbortController.abort();
-          titleDiscardController.abort();
-          job.abortController.signal.removeEventListener('abort', abortTitleOnJobAbort);
-          acceptsTitleEvents = false;
-          resolveConvoReady();
-          // Still decrement pending request since we incremented at start
-          await finishResumableRequest(req, userId);
-          if (immediateTitlePromise) {
-            immediateTitlePromise.finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-          } else if (client) {
-            disposeClient(client);
-          }
-          return;
         }
 
         // If the user stopped this turn, cancel the title BEFORE unblocking its
@@ -802,32 +809,20 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           // aborted it before `resolveConvoReady`. Defer disposal until it settles
           // so the run/req aren't torn down mid-generation.
           if (immediateTitlePromise) {
-            immediateTitlePromise.finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-          } else if (client) {
-            disposeClient(client);
+            await immediateTitlePromise;
           }
         } else if (shouldGenerateTitle) {
-          addTitle(req, {
+          await addTitle(req, {
             text,
             response: { ...response },
             client,
-          })
-            .catch((err) => {
-              logger.error('[ResumableAgentController] Error in title generation', err);
-            })
-            .finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-        } else {
-          if (client) {
-            disposeClient(client);
-          }
+          }).catch((err) => {
+            logger.error('[ResumableAgentController] Error in title generation', err);
+          });
+        }
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
+        if (client) {
+          disposeClient(client);
         }
       } catch (error) {
         // Any failure (user Stop, or a preflight/quota failure before the run is
@@ -859,16 +854,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         }
 
+        await immediateTitlePromise;
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
         await finishResumableRequest(req, userId);
 
-        // Defer disposal until any immediate title settles (it holds the run/req).
-        if (immediateTitlePromise) {
-          immediateTitlePromise.finally(() => {
-            if (client) {
-              disposeClient(client);
-            }
-          });
-        } else if (client) {
+        if (client) {
           disposeClient(client);
         }
 
@@ -886,6 +876,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         const publicError = errorSummary.code ?? 'provider_request_failed';
         logger.error('[ResumableAgentController] Background generation failed', errorSummary);
         await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
         await finishResumableRequest(req, userId);
       }),
     );
@@ -910,6 +901,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     }
     if (jobGenerationId) {
       await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
+      await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
     }
     await finishResumableRequest(req, userId);
     if (client) {
@@ -1075,6 +1067,10 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
     // [knauf] Account deletion can now safely enumerate and abort this admitted scheduler job.
     await releaseSchedulerAdmission(req);
+    // End [knauf]
+    // [knauf] KK20-338 — see the resumable controller's identical assignment above;
+    // this legacy path's client.chatCompletion() reads the same req field.
+    req._resumableGenerationId = job.generationId;
     // End [knauf]
 
     // Store endpoint metadata for abort handling

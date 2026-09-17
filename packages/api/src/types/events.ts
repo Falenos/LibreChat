@@ -44,6 +44,11 @@ export type FinalEvent = {
   title?: string;
   aborted?: boolean;
   earlyAbort?: boolean;
+  /** [knauf] KK20-338 — who triggered an aborted final event ('user' Stop button vs.
+   *  'system' lifecycle cleanup), so SSE-route telemetry can record system_abort vs
+   *  user_abort instead of always assuming user_abort. Only meaningful when aborted
+   *  is true; internal-only field, safe for the client to ignore. */
+  initiatedBy?: 'user' | 'system';
   runMessages?: FinalMessageFields[];
   /** Top-level event error (abort-during-completion edge case) */
   error?: { message: string };

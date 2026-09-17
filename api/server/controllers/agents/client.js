@@ -1242,6 +1242,13 @@ class AgentClient extends BaseClient {
         ...(this.options.req?._resumableStreamId && {
           streamId: this.options.req._resumableStreamId,
         }),
+        // KK20-338 — the immutable per-turn owner token (distinct from streamId,
+        // which === conversationId and is reused across every turn). Joins this call's
+        // log to the same logical generation as GenerationJobManager's and the SSE
+        // stream's terminal-cause logs, independent of any inbound HTTP request ID.
+        ...(this.options.req?._resumableGenerationId && {
+          generationId: this.options.req._resumableGenerationId,
+        }),
       },
       isCancelled: () => abortController?.signal?.aborted === true,
     });

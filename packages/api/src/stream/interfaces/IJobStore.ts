@@ -5,6 +5,7 @@ import type { Agents } from 'librechat-data-provider';
  * Job status enum
  */
 export type JobStatus = 'running' | 'complete' | 'error' | 'aborted';
+export type TerminalJobStatus = Exclude<JobStatus, 'running'>;
 
 // [knauf] Generation ownership prevents stale pods from mutating a later turn.
 export interface GenerationRef {
@@ -39,6 +40,10 @@ export interface SerializableJobData {
   completedAt?: number;
   conversationId?: string;
   error?: string;
+  /** Unique token for the caller that atomically committed the terminal state. */
+  terminalId?: string;
+  /** Set by the owning worker after it observes a durable terminal transition. */
+  terminalAcknowledged?: boolean;
 
   /** User message metadata */
   userMessage?: {
@@ -230,6 +235,37 @@ export interface IJobStore {
     generationId?: string,
   ): Promise<void>;
 
+  /**
+   * Atomically changes the owning generation from `running` to one terminal state.
+   * The status, terminal payload and caller token are committed together, so there
+   * is no claim-before-persist crash window and terminal states cannot overwrite
+   * each other.
+   */
+  // [knauf] KK20-338 — one durable CAS owns every terminal transition.
+  transitionToTerminal?(
+    streamId: string,
+    updates: Partial<SerializableJobData> & {
+      status: TerminalJobStatus;
+      completedAt: number;
+      terminalId: string;
+    },
+    generationId?: string,
+  ): Promise<boolean>;
+
+  /**
+   * Claims post-transition metrics/cleanup for the exact committed terminal token.
+   * A lost claim cannot strand the job because terminal state is already durable.
+   */
+  claimTerminalEffects?(
+    streamId: string,
+    terminalId: string,
+    generationId?: string,
+  ): Promise<boolean>;
+
+  /** Record that the owning worker observed the durable terminal state and stopped. */
+  acknowledgeTerminal?(streamId: string, generationId?: string): Promise<void>;
+  // End [knauf]
+
   /** Delete a job */
   deleteJob(streamId: string, generationId?: string): Promise<void>;
 
@@ -341,7 +377,7 @@ export interface IJobStore {
    * @param streamId - The stream identifier
    * @param event - The SSE event to append
    */
-  appendChunk(streamId: string, event: unknown, generationId?: string): Promise<void>;
+  appendChunk(streamId: string, event: unknown, generationId?: string): Promise<void | boolean>;
 
   /**
    * Clear all content state for a job.
@@ -410,7 +446,7 @@ export interface IEventTransport {
    * generating Replica A receives signal and stops.
    * Optional - only implemented in Redis transport.
    */
-  emitAbort?(streamId: string, generationId?: string): void;
+  emitAbort?(streamId: string, generationId?: string): void | Promise<void>;
 
   /**
    * Register callback for abort signals from any replica (Redis mode).

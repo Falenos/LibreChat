@@ -13,6 +13,7 @@ import {
   type UsageMetadata,
   type IJobStore,
   type JobStatus,
+  type TerminalJobStatus,
 } from '~/stream/interfaces/IJobStore';
 
 /**
@@ -64,11 +65,68 @@ end
 if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
   return 0
 end
-redis.call('HSET', KEYS[1], unpack(ARGV, 4))
-local terminal_ttl = tonumber(ARGV[3])
-if terminal_ttl >= 0 then
-  redis.call('EXPIRE', KEYS[1], terminal_ttl)
+if redis.call('HGET', KEYS[1], 'status') ~= 'running' then
+  return 0
 end
+redis.call('HSET', KEYS[1], unpack(ARGV, 4))
+return 1
+`;
+
+// KK20-338 — status, payload and winner token commit in one running-to-terminal CAS.
+const TERMINAL_TRANSITION_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+if redis.call('HGET', KEYS[1], 'status') ~= 'running' then
+  return 0
+end
+redis.call('HSET', KEYS[1], unpack(ARGV, 4))
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+local chunks_ttl = tonumber(ARGV[4])
+if chunks_ttl == 0 then
+  redis.call('DEL', KEYS[2])
+else
+  redis.call('EXPIRE', KEYS[2], chunks_ttl)
+end
+local runsteps_ttl = tonumber(ARGV[5])
+if runsteps_ttl == 0 then
+  redis.call('DEL', KEYS[3])
+else
+  redis.call('EXPIRE', KEYS[3], runsteps_ttl)
+end
+return 1
+`;
+
+const CLAIM_TERMINAL_EFFECTS_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+if (redis.call('HGET', KEYS[1], 'terminalId') or '') ~= ARGV[3] then
+  return 0
+end
+if redis.call('HGET', KEYS[1], 'status') == 'running' then
+  return 0
+end
+return redis.call('HSETNX', KEYS[1], 'terminalEffectsRecorded', '1')
+`;
+
+const ACKNOWLEDGE_TERMINAL_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  return 0
+end
+if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+if redis.call('HGET', KEYS[1], 'status') == 'running' then
+  return 0
+end
+redis.call('HSET', KEYS[1], 'terminalAcknowledged', '1')
 return 1
 `;
 
@@ -90,6 +148,9 @@ end
 if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
   return 0
 end
+if redis.call('HGET', KEYS[1], 'status') ~= 'running' then
+  return 0
+end
 redis.call('XADD', KEYS[2], '*', 'event', ARGV[4])
 redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
 return 1
@@ -100,6 +161,9 @@ if redis.call('EXISTS', KEYS[1]) == 0 then
   return 0
 end
 if ARGV[1] == '1' and (redis.call('HGET', KEYS[1], 'generationId') or '') ~= ARGV[2] then
+  return 0
+end
+if redis.call('HGET', KEYS[1], 'status') ~= 'running' then
   return 0
 end
 redis.call('SET', KEYS[2], ARGV[4], 'EX', tonumber(ARGV[3]))
@@ -372,21 +436,32 @@ export class RedisJobStore implements IJobStore {
 
     const safeUpdates = { ...updates };
     delete safeUpdates.generationId;
+    if (safeUpdates.status && safeUpdates.status !== 'running') {
+      await this.transitionToTerminal(
+        streamId,
+        {
+          ...safeUpdates,
+          status: safeUpdates.status,
+          completedAt: safeUpdates.completedAt ?? Date.now(),
+          terminalId: safeUpdates.terminalId ?? randomUUID(),
+        },
+        generationId,
+      );
+      return;
+    }
     const serialized = this.serializeJob(safeUpdates as SerializableJobData);
     if (Object.keys(serialized).length === 0) {
       return;
     }
 
     const fields = Object.entries(serialized).flat();
-    const terminal =
-      safeUpdates.status != null && ['complete', 'error', 'aborted'].includes(safeUpdates.status);
     const updated = await this.redis.eval(
       UPDATE_JOB_SCRIPT,
       1,
       key,
       '1',
       resolvedGenerationId ?? '',
-      terminal ? String(this.ttl.completed) : '-1',
+      '-1',
       ...fields,
     );
 
@@ -394,56 +469,112 @@ export class RedisJobStore implements IJobStore {
       return;
     }
 
-    if (terminal) {
-      const userJobsKey = job?.userId ? KEYS.userJobs(job.userId, job.tenantId) : null;
-      const trackingMember = generationKey(streamId, resolvedGenerationId);
-      const chunksKey = KEYS.chunks(streamId, resolvedGenerationId);
-      const runStepsKey = KEYS.runSteps(streamId, resolvedGenerationId);
-      this.localGraphCache.delete(trackingMember);
-      this.localCollectedUsageCache.delete(trackingMember);
-
-      if (this.isCluster) {
-        await this.redis.srem(KEYS.runningJobs, trackingMember);
-
-        if (this.ttl.chunksAfterComplete === 0) {
-          await this.redis.del(chunksKey);
-        } else {
-          await this.redis.expire(chunksKey, this.ttl.chunksAfterComplete);
-        }
-
-        if (this.ttl.runStepsAfterComplete === 0) {
-          await this.redis.del(runStepsKey);
-        } else {
-          await this.redis.expire(runStepsKey, this.ttl.runStepsAfterComplete);
-        }
-
-        if (userJobsKey) {
-          await this.redis.srem(userJobsKey, trackingMember);
-        }
-      } else {
-        const pipeline = this.redis.pipeline();
-        pipeline.srem(KEYS.runningJobs, trackingMember);
-
-        if (this.ttl.chunksAfterComplete === 0) {
-          pipeline.del(chunksKey);
-        } else {
-          pipeline.expire(chunksKey, this.ttl.chunksAfterComplete);
-        }
-
-        if (this.ttl.runStepsAfterComplete === 0) {
-          pipeline.del(runStepsKey);
-        } else {
-          pipeline.expire(runStepsKey, this.ttl.runStepsAfterComplete);
-        }
-
-        if (userJobsKey) {
-          pipeline.srem(userJobsKey, trackingMember);
-        }
-
-        await pipeline.exec();
-      }
-    }
     // End [knauf]
+  }
+
+  // [knauf] KK20-338 — atomically commit one terminal owner and payload.
+  async transitionToTerminal(
+    streamId: string,
+    updates: Partial<SerializableJobData> & {
+      status: TerminalJobStatus;
+      completedAt: number;
+      terminalId: string;
+    },
+    generationId?: string,
+  ): Promise<boolean> {
+    const job = await this.getJob(streamId);
+    if (
+      !job ||
+      (generationId != null && job.generationId !== generationId) ||
+      job.status !== 'running'
+    ) {
+      return false;
+    }
+    const safeUpdates = { ...updates };
+    delete safeUpdates.generationId;
+    const serialized = this.serializeJob(safeUpdates as SerializableJobData);
+    const fields = Object.entries(serialized).flat();
+    const transitioned = await this.redis.eval(
+      TERMINAL_TRANSITION_SCRIPT,
+      3,
+      KEYS.job(streamId),
+      KEYS.chunks(streamId, job.generationId),
+      KEYS.runSteps(streamId, job.generationId),
+      '1',
+      job.generationId ?? '',
+      String(this.ttl.completed),
+      String(this.ttl.chunksAfterComplete),
+      String(this.ttl.runStepsAfterComplete),
+      ...fields,
+    );
+    if (Number(transitioned) !== 1) {
+      return false;
+    }
+
+    await this.cleanupTerminalTracking(job).catch((error) => {
+      logger.warn(`[RedisJobStore] Terminal tracking cleanup failed for ${streamId}:`, error);
+    });
+    return true;
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — dedupe terminal metrics after the durable transition.
+  async claimTerminalEffects(
+    streamId: string,
+    terminalId: string,
+    generationId?: string,
+  ): Promise<boolean> {
+    const claimed = await this.redis.eval(
+      CLAIM_TERMINAL_EFFECTS_SCRIPT,
+      1,
+      KEYS.job(streamId),
+      generationId != null ? '1' : '0',
+      generationId ?? '',
+      terminalId,
+    );
+    return Number(claimed) === 1;
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — acknowledge that the owner observed durable cancellation.
+  async acknowledgeTerminal(streamId: string, generationId?: string): Promise<void> {
+    const job = await this.getJob(streamId);
+    if (!job || (generationId != null && job.generationId !== generationId)) {
+      return;
+    }
+    const acknowledged = await this.redis.eval(
+      ACKNOWLEDGE_TERMINAL_SCRIPT,
+      1,
+      KEYS.job(streamId),
+      generationId != null ? '1' : '0',
+      generationId ?? '',
+    );
+    if (Number(acknowledged) === 1 && job.userId) {
+      await this.redis.srem(
+        KEYS.userJobs(job.userId, job.tenantId),
+        generationKey(streamId, job.generationId),
+      );
+    }
+  }
+  // End [knauf]
+
+  private async cleanupTerminalTracking(job: SerializableJobData): Promise<void> {
+    const { streamId, generationId } = job;
+    const trackingMember = generationKey(streamId, generationId);
+    this.localGraphCache.delete(trackingMember);
+    this.localCollectedUsageCache.delete(trackingMember);
+
+    if (this.isCluster) {
+      await this.redis.srem(KEYS.runningJobs, trackingMember);
+      return;
+    }
+
+    const pipeline = this.redis.pipeline();
+    pipeline.srem(KEYS.runningJobs, trackingMember);
+    const results = await pipeline.exec();
+    if (results?.some(([error]) => error != null)) {
+      throw new Error(`Failed to remove terminal job ${streamId} from running tracking`);
+    }
   }
 
   async deleteJob(streamId: string, generationId?: string): Promise<void> {
@@ -636,8 +767,12 @@ export class RedisJobStore implements IJobStore {
     for (const trackedId of trackedIds) {
       const ref = parseGenerationKey(trackedId);
       const job = await this.getJob(ref.streamId);
-      // Only include if job exists AND is still running
-      if (exactlyOwnsGeneration(job, ref.generationId) && job.status === 'running') {
+      // Include running and terminal-but-unacknowledged owners so destructive
+      // lifecycle cleanup cannot race a request that still has write-capable work.
+      if (
+        exactlyOwnsGeneration(job, ref.generationId) &&
+        (job.status === 'running' || !job.terminalAcknowledged)
+      ) {
         activeIds.add(ref.streamId);
       } else {
         // Self-healing: job completed/deleted but mapping wasn't cleaned - mark for removal
@@ -902,14 +1037,14 @@ export class RedisJobStore implements IJobStore {
    * Uses XADD for efficient append-only storage.
    * Sets TTL on first chunk to ensure cleanup if job crashes.
    */
-  async appendChunk(streamId: string, event: unknown, generationId?: string): Promise<void> {
+  async appendChunk(streamId: string, event: unknown, generationId?: string): Promise<boolean> {
     // [knauf] Append and refresh TTL atomically only while this generation owns the job.
     const job = await this.getJob(streamId);
     if (!job || (generationId != null && job.generationId !== generationId)) {
-      return;
+      return false;
     }
     const resolvedGenerationId = job.generationId;
-    await this.redis.eval(
+    const appended = await this.redis.eval(
       APPEND_CHUNK_SCRIPT,
       2,
       KEYS.job(streamId),
@@ -919,6 +1054,7 @@ export class RedisJobStore implements IJobStore {
       String(this.ttl.running),
       JSON.stringify(event),
     );
+    return Number(appended) === 1;
     // End [knauf]
   }
 
@@ -1220,6 +1356,8 @@ export class RedisJobStore implements IJobStore {
       completedAt: data.completedAt ? parseInt(data.completedAt, 10) : undefined,
       conversationId: data.conversationId || undefined,
       error: data.error || undefined,
+      terminalId: data.terminalId || undefined,
+      terminalAcknowledged: data.terminalAcknowledged === '1',
       userMessage: data.userMessage ? JSON.parse(data.userMessage) : undefined,
       responseMessageId: data.responseMessageId || undefined,
       createdEventEmitted: data.createdEventEmitted === '1',

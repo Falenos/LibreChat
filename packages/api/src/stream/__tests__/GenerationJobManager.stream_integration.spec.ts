@@ -1,5 +1,6 @@
 /* eslint jest/no-standalone-expect: ["error", { "additionalTestBlockFunctions": ["testRedis"] }] */
 import type { Redis, Cluster } from 'ioredis';
+import { logger } from '@librechat/data-schemas';
 import type { ServerSentEvent, StreamEvent, CreatedEvent } from '~/types';
 import {
   ioredisClient as staticRedisClient,
@@ -903,6 +904,51 @@ describe('GenerationJobManager Integration Tests', () => {
       await GenerationJobManager.destroy();
       await replicaAJobStore.destroy();
     });
+
+    // [knauf] KK20-338 — the terminal CAS must dedupe the terminal-cause
+    // log across replicas, not just within one process. Replica B has no local runtime
+    // for this generation (mirrors the k8s scenario where the Stop request lands on a
+    // different pod than the one running the generation), yet must still lose the race
+    // to Replica A's already-persisted claim.
+    test('logs the terminal cause exactly once when two replicas race to abort the same generation', async () => {
+      const replicaA = new GenerationJobManagerClass();
+      replicaA.configure(
+        createStreamServices({ useRedis: true, redisClient: ioredisClient as never }),
+      );
+      replicaA.initialize();
+
+      const replicaB = new GenerationJobManagerClass();
+      replicaB.configure(
+        createStreamServices({ useRedis: true, redisClient: ioredisClient as never }),
+      );
+      replicaB.initialize();
+
+      const streamId = `cross-replica-duplicate-abort-${Date.now()}`;
+      await replicaA.createJob(streamId, 'user-1');
+
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      // Both replicas race to abort the same generation (e.g. a double-clicked Stop
+      // button whose second request is load-balanced onto a different pod).
+      const [resultA, resultB] = await Promise.all([
+        replicaA.abortJob(streamId),
+        replicaB.abortJob(streamId),
+      ]);
+
+      const successes = [resultA.success, resultB.success].filter(Boolean);
+      expect(successes).toHaveLength(1);
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({ streamId, cause: 'user_abort' });
+
+      await replicaA.destroy();
+      await replicaB.destroy();
+    });
+    // End [knauf]
   });
 
   describeRedis('Sequential Event Ordering (Redis)', () => {
@@ -1830,7 +1876,7 @@ describe('GenerationJobManager Integration Tests', () => {
     // converge on terminal completion concurrently; only one path may persist it.
     test('records concurrent error completion once', async () => {
       const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
-      const updateJob = jest.spyOn(jobStore, 'updateJob');
+      const transitionToTerminal = jest.spyOn(jobStore, 'transitionToTerminal');
       GenerationJobManager.configure({
         jobStore,
         eventTransport: new InMemoryEventTransport(),
@@ -1841,15 +1887,442 @@ describe('GenerationJobManager Integration Tests', () => {
 
       const streamId = `error-idempotent-${Date.now()}`;
       await GenerationJobManager.createJob(streamId, 'user-1');
-      updateJob.mockClear();
+      transitionToTerminal.mockClear();
 
       await Promise.all([
         GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
         GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
       ]);
 
-      expect(updateJob).toHaveBeenCalledTimes(1);
+      expect(transitionToTerminal).toHaveBeenCalledTimes(2);
+      expect(
+        (await Promise.all(transitionToTerminal.mock.results.map((result) => result.value))).filter(
+          Boolean,
+        ),
+      ).toHaveLength(1);
       expect((await GenerationJobManager.getJob(streamId))?.status).toBe('error');
+      await GenerationJobManager.destroy();
+    });
+    // End [knauf]
+
+    // [knauf] KK20-338 — KK20-324 dashboards need exactly one terminal-cause log
+    // per logical call; concurrent terminal paths must not double-emit it.
+    test('logs the terminal cause exactly once for concurrent error completion', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: true,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-cause-idempotent-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      await Promise.all([
+        GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
+        GenerationJobManager.completeJob(streamId, 'provider_request_failed'),
+      ]);
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({
+        streamId,
+        generationId: job.generationId,
+        store: 'memory',
+        cause: 'provider_request_failed',
+      });
+      await GenerationJobManager.destroy();
+    });
+
+    test('logs a completed terminal cause on normal completion', async () => {
+      GenerationJobManager.configure({
+        jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: true,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-cause-completed-${Date.now()}`;
+      await GenerationJobManager.createJob(streamId, 'user-1');
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      await GenerationJobManager.completeJob(streamId);
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({ streamId, cause: 'completed' });
+      await GenerationJobManager.destroy();
+    });
+
+    test('distinguishes a user abort from a system-initiated abort in the terminal cause log', async () => {
+      GenerationJobManager.configure({
+        jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: true,
+      });
+      GenerationJobManager.initialize();
+
+      const userAbortStreamId = `terminal-cause-user-abort-${Date.now()}`;
+      const systemAbortStreamId = `terminal-cause-system-abort-${Date.now()}`;
+      await GenerationJobManager.createJob(userAbortStreamId, 'user-1');
+      await GenerationJobManager.createJob(systemAbortStreamId, 'user-1');
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      await GenerationJobManager.abortJob(userAbortStreamId);
+      await GenerationJobManager.abortJob(systemAbortStreamId, { initiatedBy: 'system' });
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toContainEqual([
+        '[GenerationJobManager] Generation terminal',
+        expect.objectContaining({ streamId: userAbortStreamId, cause: 'user_abort' }),
+      ]);
+      expect(terminalLogs).toContainEqual([
+        '[GenerationJobManager] Generation terminal',
+        expect.objectContaining({ streamId: systemAbortStreamId, cause: 'system_abort' }),
+      ]);
+      await GenerationJobManager.destroy();
+    });
+
+    // [knauf] KK20-338 — Falenos 2nd-round review: the SSE route has no visibility
+    // into GenerationJobManager's `initiatedBy` option other than the final event it
+    // receives, so recordSystemAbort() vs recordUserAbort() in route telemetry
+    // depends entirely on this field being threaded through onto the abort event.
+    test('threads initiatedBy onto the abort final event so route telemetry can distinguish system_abort', async () => {
+      GenerationJobManager.configure({
+        jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: true,
+      });
+      GenerationJobManager.initialize();
+
+      const userAbortStreamId = `abort-final-event-initiated-by-user-${Date.now()}`;
+      const systemAbortStreamId = `abort-final-event-initiated-by-system-${Date.now()}`;
+      await GenerationJobManager.createJob(userAbortStreamId, 'user-1');
+      await GenerationJobManager.createJob(systemAbortStreamId, 'user-1');
+
+      const userResult = await GenerationJobManager.abortJob(userAbortStreamId);
+      const systemResult = await GenerationJobManager.abortJob(systemAbortStreamId, {
+        initiatedBy: 'system',
+      });
+
+      expect(userResult.finalEvent).toMatchObject({ aborted: true, initiatedBy: 'user' });
+      expect(systemResult.finalEvent).toMatchObject({ aborted: true, initiatedBy: 'system' });
+      await GenerationJobManager.destroy();
+    });
+    // End [knauf]
+
+    // [knauf] KK20-338 — Falenos review: a repeated/retried abort request (e.g. a
+    // double-clicked Stop button, or a client retry) for the same generation must
+    // not re-run terminal side effects or double-count in KK20-324 dashboards.
+    test('logs the terminal cause exactly once when abortJob is called twice for the same generation', async () => {
+      GenerationJobManager.configure({
+        jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        // [knauf] cleanupOnComplete: false keeps the job record around after the first
+        // abort so the second call reaches the terminal-state check instead of short
+        // circuiting on a pre-existing "job not found" path.
+        cleanupOnComplete: false,
+        // End [knauf]
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-cause-duplicate-abort-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      const first = await GenerationJobManager.abortJob(streamId);
+      const second = await GenerationJobManager.abortJob(streamId);
+
+      expect(first.success).toBe(true);
+      // [knauf] Idempotent no-op: the second call lost the terminal transition, so it must
+      // not report a second successful abort (which would let a caller double-spend
+      // tokens or re-save the response).
+      expect(second.success).toBe(false);
+      // End [knauf]
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({
+        streamId,
+        generationId: job.generationId,
+        cause: 'user_abort',
+      });
+      await GenerationJobManager.destroy();
+    });
+
+    // [knauf] KK20-338 — Falenos review: completeJob() racing/following an abortJob()
+    // for the same generation must not double-log the terminal cause either.
+    test('logs the terminal cause exactly once when completeJob follows an abortJob for the same generation', async () => {
+      GenerationJobManager.configure({
+        jobStore: new InMemoryJobStore({ ttlAfterComplete: 60000 }),
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        // [knauf] See note above: keep the job around so completeJob() reaches the
+        // terminal-state check instead of a pre-existing "job not found" short circuit.
+        cleanupOnComplete: false,
+        // End [knauf]
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-cause-abort-then-complete-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+
+      await GenerationJobManager.abortJob(streamId);
+      // A late onEnd callback from the aborted generation still fires completeJob().
+      await GenerationJobManager.completeJob(streamId, undefined, job.generationId);
+
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({ streamId, cause: 'user_abort' });
+      await GenerationJobManager.destroy();
+    });
+    // End [knauf]
+    // End [knauf]
+
+    // [knauf] KK20-338 — the real emitDone -> completeJob sequence must race an
+    // abort as one atomic terminal transition, not publish contradictory finals.
+    test('publishes only the terminal winner when emitDone races abortJob', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const eventTransport = new InMemoryEventTransport();
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport,
+        isRedis: false,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-emit-abort-race-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const doneEvents: unknown[] = [];
+      await GenerationJobManager.subscribe(
+        streamId,
+        () => undefined,
+        (event) => doneEvents.push(event),
+      );
+      const normalFinal = { final: true, responseMessage: { text: 'normal' } } as never;
+
+      const [, abortResult] = await Promise.all([
+        GenerationJobManager.emitDone(streamId, normalFinal, job.generationId),
+        GenerationJobManager.abortJob(streamId),
+      ]);
+      await GenerationJobManager.completeJob(streamId, undefined, job.generationId);
+
+      const persisted = await jobStore.getJob(streamId);
+      expect(doneEvents).toHaveLength(1);
+      expect(persisted?.status).toBe(abortResult.success ? 'aborted' : 'complete');
+      expect(JSON.parse(persisted?.finalEvent ?? '{}')).toEqual(doneEvents[0]);
+      await GenerationJobManager.destroy();
+    });
+
+    test('stops publishing when durable terminal state exists but pubsub abort was missed', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const eventTransport = new InMemoryEventTransport();
+      const emitChunk = jest.spyOn(eventTransport, 'emitChunk');
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport,
+        isRedis: true,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-durable-abort-fence-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      expect(
+        await jobStore.transitionToTerminal(
+          streamId,
+          { status: 'aborted', completedAt: Date.now(), terminalId: 'remote-abort' },
+          job.generationId,
+        ),
+      ).toBe(true);
+
+      await GenerationJobManager.emitChunk(
+        streamId,
+        { created: true, message: { text: 'must not publish' }, streamId } as never,
+        job.generationId,
+      );
+
+      expect(emitChunk).not.toHaveBeenCalled();
+      expect(job.abortController.signal.aborted).toBe(true);
+      await GenerationJobManager.destroy();
+    });
+
+    test('propagates an append transport failure while durable state is still running', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const eventTransport = new InMemoryEventTransport();
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport,
+        isRedis: true,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-append-failure-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      jest
+        .spyOn(jobStore, 'appendChunk')
+        .mockRejectedValueOnce(new Error('simulated Redis timeout'));
+
+      await expect(
+        GenerationJobManager.emitChunk(
+          streamId,
+          { event: 'on_message_delta', data: { text: 'uncertain append' } },
+          job.generationId,
+        ),
+      ).rejects.toThrow('simulated Redis timeout');
+
+      expect(job.abortController.signal.aborted).toBe(false);
+      expect((await jobStore.getJob(streamId))?.status).toBe('running');
+      await GenerationJobManager.destroy();
+    });
+
+    test('waits for the owner acknowledgement when destructive cleanup requests it', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-owner-ack-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const abortPromise = GenerationJobManager.abortJob(streamId, {
+        initiatedBy: 'system',
+        waitForAcknowledgement: true,
+      });
+
+      while ((await jobStore.getJob(streamId))?.status === 'running') {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      await GenerationJobManager.acknowledgeTerminal(streamId, job.generationId);
+
+      await expect(abortPromise).resolves.toMatchObject({ success: true });
+      expect((await jobStore.getJob(streamId))?.terminalAcknowledged).toBe(true);
+      await GenerationJobManager.destroy();
+    });
+    // End [knauf]
+
+    // [knauf] KK20-338 — a failed CAS before commit remains safely retryable.
+    test('retries completeJob after a terminal transition fails before commit', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-transition-retry-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+
+      const transitionSpy = jest
+        .spyOn(jobStore, 'transitionToTerminal')
+        .mockRejectedValueOnce(new Error('simulated transient store failure'));
+
+      await expect(GenerationJobManager.completeJob(streamId)).rejects.toThrow(
+        'simulated transient store failure',
+      );
+
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+      await GenerationJobManager.completeJob(streamId);
+
+      expect(transitionSpy).toHaveBeenCalledTimes(2);
+      expect((await jobStore.getJob(streamId))?.status).toBe('complete');
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({ streamId, generationId: job.generationId });
+      await GenerationJobManager.destroy();
+    });
+
+    test('recognizes an ambiguous Redis-style reply failure after the terminal commit', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport: new InMemoryEventTransport(),
+        isRedis: false,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-transition-ambiguous-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      const transition = jobStore.transitionToTerminal.bind(jobStore);
+      jest.spyOn(jobStore, 'transitionToTerminal').mockImplementationOnce(async (...args) => {
+        await transition(...args);
+        throw new Error('simulated lost Redis reply');
+      });
+
+      const infoSpy = jest.spyOn(logger, 'info');
+      infoSpy.mockClear();
+      await expect(GenerationJobManager.completeJob(streamId)).resolves.toBeUndefined();
+
+      expect((await jobStore.getJob(streamId))?.status).toBe('complete');
+      const terminalLogs = infoSpy.mock.calls.filter(
+        ([message]) => message === '[GenerationJobManager] Generation terminal',
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0][1]).toMatchObject({ streamId, generationId: job.generationId });
+      await GenerationJobManager.destroy();
+    });
+
+    test('keeps an abort committed and returns partial content when terminal publish fails', async () => {
+      const jobStore = new InMemoryJobStore({ ttlAfterComplete: 60000 });
+      const eventTransport = new InMemoryEventTransport();
+      GenerationJobManager.configure({
+        jobStore,
+        eventTransport,
+        isRedis: false,
+        cleanupOnComplete: false,
+      });
+      GenerationJobManager.initialize();
+
+      const streamId = `terminal-abort-publish-failure-${Date.now()}`;
+      const job = await GenerationJobManager.createJob(streamId, 'user-1');
+      jobStore.setContentParts(
+        streamId,
+        [{ type: 'text', text: 'partial answer' }],
+        job.generationId,
+      );
+      jest.spyOn(eventTransport, 'emitDone').mockImplementationOnce(() => {
+        throw new Error('simulated publish failure');
+      });
+
+      const result = await GenerationJobManager.abortJob(streamId);
+
+      expect(result.success).toBe(true);
+      expect(result.text).toBe('partial answer');
+      expect((await jobStore.getJob(streamId))?.status).toBe('aborted');
       await GenerationJobManager.destroy();
     });
     // End [knauf]

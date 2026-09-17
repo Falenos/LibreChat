@@ -163,7 +163,17 @@ async function prepareSchedulerUserDeletion(
     String(userId),
     user.tenantId,
   );
-  await Promise.all(activeJobIds.map((streamId) => generationJobManager.abortJob(streamId)));
+  // [knauf] KK20-338 — tag as a system-initiated abort so terminal-cause telemetry
+  // doesn't attribute this bulk lifecycle cleanup to an explicit user Stop click.
+  await Promise.all(
+    activeJobIds.map((streamId) =>
+      generationJobManager.abortJob(streamId, {
+        initiatedBy: 'system',
+        waitForAcknowledgement: true,
+      }),
+    ),
+  );
+  // End [knauf]
   await purgeSchedulerDataForUser(userId, { database });
 }
 

@@ -24,6 +24,7 @@ import type {
   AbortResult,
   IJobStore,
   GenerationRef,
+  TerminalJobStatus,
 } from './interfaces/IJobStore';
 // [knauf] NO-TICKET — bounded generation metric failure classes.
 import type { GenerationJobReason, GenerationJobStore } from '~/app/metrics';
@@ -53,6 +54,27 @@ function getGenerationJobFailureReason(error: string): GenerationJobReason {
     return error;
   }
   return error === REAPED_JOB_ERROR ? 'generation_timeout' : 'unknown';
+}
+// End [knauf]
+
+// [knauf] KK20-338 — one privacy-safe, deduplicated terminal-cause log per logical
+// call so KK20-324 dashboards can map an HTTP 408/499 to a supported initiating
+// layer instead of raw, possibly-duplicated cancellation callbacks. Only bounded
+// IDs and enum-like reasons are logged, never message content or provider payloads.
+type GenerationTerminalCause = 'completed' | 'user_abort' | 'system_abort' | GenerationJobReason;
+
+function logGenerationTerminalCause(
+  store: GenerationJobStore,
+  streamId: string,
+  generationId: string | undefined,
+  cause: GenerationTerminalCause,
+): void {
+  logger.info('[GenerationJobManager] Generation terminal', {
+    streamId,
+    generationId,
+    store,
+    cause,
+  });
 }
 // End [knauf]
 
@@ -165,6 +187,7 @@ interface RuntimeJobState {
   generationId?: string;
   terminal: boolean;
   completionRecorded: boolean;
+  terminalTransition?: { status: TerminalJobStatus; terminalId: string };
   // End [knauf]
   abortController: AbortController;
   readyPromise: Promise<void>;
@@ -339,6 +362,117 @@ class GenerationJobManagerClass {
 
   private generationKey(streamId: string, generationId?: string): string {
     return generationId == null ? streamId : `${streamId}:${generationId}`;
+  }
+
+  // [knauf] KK20-338 — commit ownership, status and payload together. The caller
+  // token resolves the only ambiguous Redis case: the script committed but the
+  // connection dropped before its reply reached this process.
+  private async transitionToTerminal(
+    streamId: string,
+    status: TerminalJobStatus,
+    updates: Partial<SerializableJobData>,
+    generationId?: string,
+  ): Promise<{ won: boolean; terminalId: string }> {
+    const terminalId = randomUUID();
+    if (!this.jobStore.transitionToTerminal) {
+      const current = await this.jobStore.getJob(streamId);
+      if (!current || current.generationId !== generationId || current.status !== 'running') {
+        return { won: false, terminalId };
+      }
+      await this.jobStore.updateJob(
+        streamId,
+        { ...updates, status, completedAt: Date.now(), terminalId },
+        generationId,
+      );
+      const persisted = await this.jobStore.getJob(streamId);
+      return { won: persisted?.terminalId === terminalId, terminalId };
+    }
+    try {
+      const won = await this.jobStore.transitionToTerminal(
+        streamId,
+        { ...updates, status, completedAt: Date.now(), terminalId },
+        generationId,
+      );
+      return { won, terminalId };
+    } catch (transitionError) {
+      let persisted: SerializableJobData | null;
+      try {
+        persisted = await this.jobStore.getJob(streamId);
+      } catch {
+        throw transitionError;
+      }
+      if (
+        persisted != null &&
+        persisted.generationId === generationId &&
+        persisted.terminalId === terminalId
+      ) {
+        return { won: true, terminalId };
+      }
+      if (!persisted) {
+        return { won: false, terminalId };
+      }
+      if (persisted.generationId !== generationId || persisted.status !== 'running') {
+        return { won: false, terminalId };
+      }
+      throw transitionError;
+    }
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — post-commit telemetry failure must never turn a durable
+  // terminal result back into an application error or a retryable transition.
+  private async claimTerminalEffectsOnce(
+    streamId: string,
+    terminalId: string,
+    generationId?: string,
+  ): Promise<boolean> {
+    if (!this.jobStore.claimTerminalEffects) {
+      return true;
+    }
+    try {
+      return await this.jobStore.claimTerminalEffects(streamId, terminalId, generationId);
+    } catch (error) {
+      logger.error('[GenerationJobManager] Terminal state committed but effects claim failed', {
+        streamId,
+        generationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — acknowledge durable cancellation only after this worker
+  // has stopped its local generation path.
+  async acknowledgeTerminal(streamId: string, generationId?: string): Promise<void> {
+    if (!this.jobStore.acknowledgeTerminal) {
+      return;
+    }
+    await this.jobStore.acknowledgeTerminal(streamId, generationId);
+  }
+
+  private async waitForTerminalAcknowledgement(
+    streamId: string,
+    generationId?: string,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    if (!this.jobStore.acknowledgeTerminal) {
+      return;
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const job = await this.jobStore.getJob(streamId);
+      if (
+        job != null &&
+        job.generationId === generationId &&
+        job.status !== 'running' &&
+        job.terminalAcknowledged
+      ) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Timed out waiting for generation ${generationId ?? streamId} to stop`);
   }
   // End [knauf]
 
@@ -781,17 +915,76 @@ class GenerationJobManagerClass {
     // End [knauf]
 
     // [knauf] Capture ownership before awaiting; a later turn may claim the conversation.
-    const ownerGenerationId = this.resolveGenerationId(streamId, generationId);
+    let ownerGenerationId = this.resolveGenerationId(streamId, generationId);
+    if (ownerGenerationId == null) {
+      ownerGenerationId = (await this.jobStore.getJob(streamId))?.generationId;
+    }
     const runtime = this.getRuntimeState(streamId, ownerGenerationId);
     const ownerKey = this.generationKey(streamId, ownerGenerationId);
+    const terminalStatus: TerminalJobStatus = error ? 'error' : 'complete';
     if (runtime) {
-      // Concurrent terminal paths share this synchronous claim so persistence,
-      // logs, and generation result metrics are emitted once.
       if (runtime.completionRecorded) {
         return;
       }
-      runtime.completionRecorded = true;
       runtime.terminal = true;
+    }
+    // End [knauf]
+
+    // [knauf] emitDone()/emitError() may already have committed the transition on
+    // this runtime. Otherwise completeJob performs the same atomic CAS itself.
+    let terminalId =
+      runtime?.terminalTransition?.status === terminalStatus
+        ? runtime.terminalTransition.terminalId
+        : undefined;
+    let transitionedNow = false;
+    if (!terminalId) {
+      const transition = await this.transitionToTerminal(
+        streamId,
+        terminalStatus,
+        error ? { error } : {},
+        ownerGenerationId,
+      );
+      if (runtime && transition.won) {
+        runtime.terminalTransition = {
+          status: terminalStatus,
+          terminalId: transition.terminalId,
+        };
+      }
+      if (transition.won) {
+        terminalId = transition.terminalId;
+        transitionedNow = true;
+      } else {
+        const persisted = await this.jobStore.getJob(streamId);
+        if (
+          persisted != null &&
+          persisted.generationId === ownerGenerationId &&
+          persisted.status === terminalStatus
+        ) {
+          terminalId = persisted.terminalId;
+        }
+      }
+    }
+    if (!terminalId) {
+      return;
+    }
+    if (error && transitionedNow) {
+      try {
+        await this.eventTransport.emitError(streamId, error, ownerGenerationId);
+      } catch (publishError) {
+        logger.error('[GenerationJobManager] Error state committed but publish failed', {
+          streamId,
+          generationId: ownerGenerationId,
+          error: publishError instanceof Error ? publishError.message : String(publishError),
+        });
+      }
+    }
+    const ownsTerminalEffects = await this.claimTerminalEffectsOnce(
+      streamId,
+      terminalId,
+      ownerGenerationId,
+    );
+    if (runtime) {
+      runtime.completionRecorded = true;
     }
     // End [knauf]
 
@@ -817,15 +1010,6 @@ class GenerationJobManagerClass {
     // meaning cleanup on next interval). This gives clients ~60s to connect and
     // receive the error before the job is removed.
     if (error) {
-      await this.jobStore.updateJob(
-        streamId,
-        {
-          status: 'error',
-          completedAt: Date.now(),
-          error,
-        },
-        ownerGenerationId,
-      );
       // [knauf] Redis late replay needs the hash, not five minutes of local runtime/listeners.
       if (this.runtimeState.get(streamId) === runtime) {
         this.runningJobs.delete(streamId);
@@ -842,7 +1026,15 @@ class GenerationJobManagerClass {
       // End [knauf]
       this.syncRunningJobMetrics();
       // [knauf] NO-TICKET — emit only the allow-listed failure class.
-      recordGenerationJob(this.storeLabel, 'error', getGenerationJobFailureReason(error));
+      const failureReason = getGenerationJobFailureReason(error);
+      if (ownsTerminalEffects) {
+        recordGenerationJob(this.storeLabel, 'error', failureReason);
+      }
+      // End [knauf]
+      // [knauf] KK20-338 — single deduplicated terminal-cause log for dashboards.
+      if (ownsTerminalEffects) {
+        logGenerationTerminalCause(this.storeLabel, streamId, ownerGenerationId, failureReason);
+      }
       // End [knauf]
       logger.debug(
         `[GenerationJobManager] Job completed with error (persisted for late subscribers): ${streamId}`,
@@ -860,15 +1052,7 @@ class GenerationJobManagerClass {
       // EventTransport will be cleaned up when subscribers disconnect or by periodic cleanup.
       await this.jobStore.deleteJob(streamId, ownerGenerationId);
     } else {
-      // Only update status if keeping the job around
-      await this.jobStore.updateJob(
-        streamId,
-        {
-          status: 'complete',
-          completedAt: Date.now(),
-        },
-        ownerGenerationId,
-      );
+      // Redis terminal metadata was already committed by the atomic transition.
     }
     if (this._isRedis && this.runtimeState.get(streamId) === runtime) {
       this.runtimeState.delete(streamId);
@@ -885,19 +1069,38 @@ class GenerationJobManagerClass {
       this.runningJobs.delete(streamId);
     }
     this.syncRunningJobMetrics();
-    recordGenerationJob(this.storeLabel, 'completed');
+    if (ownsTerminalEffects) {
+      recordGenerationJob(this.storeLabel, 'completed');
+    }
+    // [knauf] KK20-338 — single deduplicated terminal-cause log for dashboards.
+    if (ownsTerminalEffects) {
+      logGenerationTerminalCause(this.storeLabel, streamId, ownerGenerationId, 'completed');
+    }
+    // End [knauf]
     logger.debug(`[GenerationJobManager] Job completed: ${streamId}`);
   }
 
   /**
-   * Abort a job (user-initiated).
+   * Abort a job (user-initiated by default).
    * Returns all data needed for token spending and message saving.
    *
    * Cross-replica support (Redis mode):
    * - Emits abort signal via Redis pub/sub
    * - The replica running generation receives signal and aborts its AbortController
+   *
+   * @param streamId - The job/stream to abort.
+   * @param options.initiatedBy - [knauf] KK20-338 — who triggered the abort, so the
+   *   terminal-cause log can distinguish an explicit user Stop from a system-initiated
+   *   cleanup (e.g. account deactivation). Defaults to 'user' to preserve existing
+   *   call-site behavior.
+   * @param options.waitForAcknowledgement - Wait until the owning request confirms it
+   *   has stopped writing. Used before destructive account-data cleanup.
    */
-  async abortJob(streamId: string): Promise<AbortResult> {
+  async abortJob(
+    streamId: string,
+    options?: { initiatedBy?: 'user' | 'system'; waitForAcknowledgement?: boolean },
+  ): Promise<AbortResult> {
+    const initiatedBy = options?.initiatedBy ?? 'user';
     const jobData = await this.jobStore.getJob(streamId);
 
     if (!jobData) {
@@ -917,22 +1120,7 @@ class GenerationJobManagerClass {
     const generationId = jobData.generationId;
     const runtime = this.getRuntimeState(streamId, generationId);
     const ownerKey = this.generationKey(streamId, generationId);
-    if (runtime) {
-      runtime.terminal = true;
-      runtime.completionRecorded = true;
-    }
     // End [knauf]
-
-    // Emit abort signal for cross-replica support (Redis mode)
-    // This ensures the generating replica receives the abort signal
-    if (this.eventTransport.emitAbort) {
-      this.eventTransport.emitAbort(streamId, generationId);
-    }
-
-    // Also abort local controller if we have it (same-replica abort)
-    if (runtime) {
-      runtime.abortController.abort();
-    }
 
     /** Content before clearing state */
     const result = await this.jobStore.getContentParts(streamId, generationId);
@@ -949,7 +1137,7 @@ class GenerationJobManagerClass {
       : '';
 
     /** Detect "early abort" - aborted before any generation happened (e.g., during tool loading)
-    In this case, no messages were saved to DB, so frontend shouldn't navigate to conversation */
+      In this case, no messages were saved to DB, so frontend shouldn't navigate to conversation */
     const isEarlyAbort = !shouldPersistAbortContent && jobData.createdEventEmitted !== true;
 
     /** Final event for abort */
@@ -988,19 +1176,71 @@ class GenerationJobManagerClass {
       aborted: true,
       // Flag for early abort - no messages saved, frontend should go to new chat
       earlyAbort: isEarlyAbort,
+      // [knauf] KK20-338 — lets the SSE route (which has no other visibility into
+      // GenerationJobManager's initiatedBy option) record system_abort vs user_abort
+      // in its own independent stream telemetry instead of always assuming user_abort.
+      initiatedBy,
+      // End [knauf]
     } satisfies t.FinalEvent as t.ServerSentEvent;
+
+    // [knauf] Only the atomic running-to-aborted winner may publish or clean up.
+    const transition = await this.transitionToTerminal(
+      streamId,
+      'aborted',
+      { finalEvent: JSON.stringify(abortFinalEvent) },
+      generationId,
+    );
+    if (!transition.won) {
+      if (options?.waitForAcknowledgement) {
+        await this.waitForTerminalAcknowledgement(streamId, generationId);
+      }
+      recordGenerationJob(this.storeLabel, 'abort_failed');
+      return {
+        text: '',
+        content: [],
+        jobData,
+        success: false,
+        finalEvent: null,
+        collectedUsage: [],
+      };
+    }
+    const ownsTerminalEffects = await this.claimTerminalEffectsOnce(
+      streamId,
+      transition.terminalId,
+      generationId,
+    );
 
     if (runtime) {
       runtime.finalEvent = abortFinalEvent;
+      runtime.terminal = true;
+      runtime.completionRecorded = true;
+      runtime.terminalTransition = { status: 'aborted', terminalId: transition.terminalId };
+      runtime.abortController.abort();
     }
 
-    // [knauf] Release the persisted running claim before the terminal event reaches the client.
-    await this.jobStore.updateJob(
-      streamId,
-      { status: 'aborted', completedAt: Date.now(), finalEvent: JSON.stringify(abortFinalEvent) },
-      generationId,
-    );
-    await this.eventTransport.emitDone(streamId, abortFinalEvent, generationId);
+    if (this.eventTransport.emitAbort) {
+      try {
+        await this.eventTransport.emitAbort(streamId, generationId);
+      } catch (publishError) {
+        logger.error('[GenerationJobManager] Abort committed but abort signal publish failed', {
+          streamId,
+          generationId,
+          error: publishError instanceof Error ? publishError.message : String(publishError),
+        });
+      }
+      if (options?.waitForAcknowledgement) {
+        await this.waitForTerminalAcknowledgement(streamId, generationId);
+      }
+    }
+    try {
+      await this.eventTransport.emitDone(streamId, abortFinalEvent, generationId);
+    } catch (publishError) {
+      logger.error('[GenerationJobManager] Aborted state committed but publish failed', {
+        streamId,
+        generationId,
+        error: publishError instanceof Error ? publishError.message : String(publishError),
+      });
+    }
     // End [knauf]
     this.jobStore.clearContentState(streamId, generationId);
     this.runStepBuffers?.delete(ownerKey);
@@ -1015,15 +1255,7 @@ class GenerationJobManagerClass {
       // Don't cleanup eventTransport here - let the abort event fully transmit first.
       await this.jobStore.deleteJob(streamId, generationId);
     } else {
-      // Only update status if keeping the job around
-      await this.jobStore.updateJob(
-        streamId,
-        {
-          status: 'aborted',
-          completedAt: Date.now(),
-        },
-        generationId,
-      );
+      // Redis terminal metadata was already committed by the atomic transition.
     }
     if (this._isRedis && this.runtimeState.get(streamId) === runtime) {
       this.runtimeState.delete(streamId);
@@ -1037,7 +1269,17 @@ class GenerationJobManagerClass {
       this.runningJobs.delete(streamId);
     }
     this.syncRunningJobMetrics();
-    recordGenerationJob(this.storeLabel, 'aborted');
+    if (ownsTerminalEffects) {
+      recordGenerationJob(this.storeLabel, 'aborted');
+      // [knauf] KK20-338 — single deduplicated terminal-cause log for dashboards.
+      logGenerationTerminalCause(
+        this.storeLabel,
+        streamId,
+        generationId,
+        initiatedBy === 'system' ? 'system_abort' : 'user_abort',
+      );
+      // End [knauf]
+    }
     logger.debug(`[GenerationJobManager] Job aborted: ${streamId}`);
 
     return {
@@ -1102,18 +1344,12 @@ class GenerationJobManagerClass {
       if (!terminalDelivered) {
         terminalDelivered = true;
         onDone?.(event);
-        if (this.runtimeState.get(streamId) === runtime) {
-          this.runtimeState.delete(streamId);
-        }
       }
     };
     const deliverError = (error: string) => {
       if (!terminalDelivered) {
         terminalDelivered = true;
         onError?.(error);
-        if (this.runtimeState.get(streamId) === runtime) {
-          this.runtimeState.delete(streamId);
-        }
       }
     };
     const replayTerminal = (terminalJob: SerializableJobData) => {
@@ -1361,6 +1597,22 @@ class GenerationJobManagerClass {
       return;
     }
 
+    // [knauf] Redis status is authoritative for every SSE envelope, including
+    // created/title events that are not appended to the resumable chunk stream.
+    if (this._isRedis) {
+      const durableJob = await this.jobStore.getJob(streamId);
+      if (
+        !durableJob ||
+        durableJob.generationId !== ownerGenerationId ||
+        durableJob.status !== 'running'
+      ) {
+        runtime.abortController.abort();
+        runtime.terminal = true;
+        return;
+      }
+    }
+    // End [knauf]
+
     // Refresh job activity so the store's stale-job failsafe reaps on inactivity
     // (a hung generation), not on age (a long but live stream). Parity with
     // RedisJobStore refreshing the running TTL on each appendChunk.
@@ -1386,11 +1638,31 @@ class GenerationJobManagerClass {
 
       if (eventType && eventData !== undefined) {
         // Store in format expected by aggregateContent: { event, data }
-        this.jobStore
-          .appendChunk(streamId, { event: eventType, data: eventData }, ownerGenerationId)
-          .catch((err) => {
-            logger.error(`[GenerationJobManager] Failed to append chunk:`, err);
-          });
+        let appended: void | boolean;
+        try {
+          appended = await this.jobStore.appendChunk(
+            streamId,
+            { event: eventType, data: eventData },
+            ownerGenerationId,
+          );
+        } catch (appendError) {
+          const durableJob = await this.jobStore.getJob(streamId);
+          if (
+            durableJob != null &&
+            durableJob.generationId === ownerGenerationId &&
+            durableJob.status === 'running'
+          ) {
+            throw appendError;
+          }
+          runtime.abortController.abort();
+          runtime.terminal = true;
+          return;
+        }
+        if (appended === false) {
+          runtime.abortController.abort();
+          runtime.terminal = true;
+          return;
+        }
 
         // For run step events, also save to run steps key for quick retrieval
         if (eventType === 'on_run_step' || eventType === 'on_run_step_completed') {
@@ -1918,20 +2190,33 @@ class GenerationJobManagerClass {
     const ownerGenerationId = this.resolveGenerationId(streamId, generationId);
     const runtime = this.getRuntimeState(streamId, ownerGenerationId);
     if (runtime) {
-      runtime.finalEvent = event;
       runtime.terminal = true;
     }
-    // Persist finalEvent to Redis for cross-replica consistency
-    await this.jobStore.updateJob(
+    const transition = await this.transitionToTerminal(
       streamId,
-      {
-        finalEvent: JSON.stringify(event),
-        status: 'complete',
-        completedAt: Date.now(),
-      },
+      'complete',
+      { finalEvent: JSON.stringify(event) },
       ownerGenerationId,
     );
-    await this.eventTransport.emitDone(streamId, event, ownerGenerationId);
+    if (!transition.won) {
+      return;
+    }
+    if (runtime) {
+      runtime.finalEvent = event;
+      runtime.terminalTransition = {
+        status: 'complete',
+        terminalId: transition.terminalId,
+      };
+    }
+    try {
+      await this.eventTransport.emitDone(streamId, event, ownerGenerationId);
+    } catch (publishError) {
+      logger.error('[GenerationJobManager] Completed state committed but publish failed', {
+        streamId,
+        generationId: ownerGenerationId,
+        error: publishError instanceof Error ? publishError.message : String(publishError),
+      });
+    }
     // End [knauf]
   }
 
@@ -1945,16 +2230,30 @@ class GenerationJobManagerClass {
     const ownerGenerationId = this.resolveGenerationId(streamId, generationId);
     const runtime = this.getRuntimeState(streamId, ownerGenerationId);
     if (runtime) {
-      runtime.errorEvent = error;
       runtime.terminal = true;
     }
-    // Persist error to job store for cross-replica consistency
-    await this.jobStore.updateJob(
+    const transition = await this.transitionToTerminal(
       streamId,
-      { error, status: 'error', completedAt: Date.now() },
+      'error',
+      { error },
       ownerGenerationId,
     );
-    await this.eventTransport.emitError(streamId, error, ownerGenerationId);
+    if (!transition.won) {
+      return;
+    }
+    if (runtime) {
+      runtime.errorEvent = error;
+      runtime.terminalTransition = { status: 'error', terminalId: transition.terminalId };
+    }
+    try {
+      await this.eventTransport.emitError(streamId, error, ownerGenerationId);
+    } catch (publishError) {
+      logger.error('[GenerationJobManager] Error state committed but publish failed', {
+        streamId,
+        generationId: ownerGenerationId,
+        error: publishError instanceof Error ? publishError.message : String(publishError),
+      });
+    }
     // End [knauf]
   }
 

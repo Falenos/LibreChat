@@ -35,6 +35,71 @@ describe('RedisEventTransport Integration Tests', () => {
     ioredisClient = client;
   });
 
+  // [knauf] KK20-338 — a channel heartbeat must exercise the dedicated subscriber
+  // socket; Cluster.ping() would only use the ordinary command connection pool.
+  describe('RedisEventTransport subscriber heartbeat', () => {
+    test('subscribes and publishes on the heartbeat channel at the configured cadence', async () => {
+      jest.useFakeTimers();
+      const { RedisEventTransport } = await import('../implementations/RedisEventTransport');
+      const publisher = {
+        publish: jest.fn().mockResolvedValue(1),
+      };
+      const subscriber = {
+        on: jest.fn(),
+        subscribe: jest.fn().mockResolvedValue(1),
+        unsubscribe: jest.fn().mockResolvedValue(1),
+        disconnect: jest.fn(),
+      };
+
+      const transport = new RedisEventTransport(publisher as never, subscriber as never, {
+        keepaliveIntervalSeconds: 30,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      jest.advanceTimersByTime(30_000);
+      await Promise.resolve();
+
+      expect(subscriber.subscribe).toHaveBeenCalledWith('stream:subscriber:keepalive');
+      expect(publisher.publish).toHaveBeenCalledWith('stream:subscriber:keepalive', '1');
+
+      transport.destroy();
+      jest.useRealTimers();
+    });
+
+    test('does not install the heartbeat timer when destroyed during subscription setup', async () => {
+      jest.useFakeTimers();
+      const { RedisEventTransport } = await import('../implementations/RedisEventTransport');
+      let resolveSubscribe!: () => void;
+      const publisher = {
+        publish: jest.fn().mockResolvedValue(1),
+      };
+      const subscriber = {
+        on: jest.fn(),
+        subscribe: jest.fn(
+          () =>
+            new Promise<number>((resolve) => {
+              resolveSubscribe = () => resolve(1);
+            }),
+        ),
+        unsubscribe: jest.fn().mockResolvedValue(1),
+        disconnect: jest.fn(),
+      };
+
+      const transport = new RedisEventTransport(publisher as never, subscriber as never, {
+        keepaliveIntervalSeconds: 30,
+      });
+      transport.destroy();
+      resolveSubscribe();
+      await Promise.resolve();
+      await Promise.resolve();
+      jest.advanceTimersByTime(60_000);
+
+      expect(publisher.publish).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+  });
+  // End [knauf]
+
   afterAll(async () => {
     if (ioredisClient) {
       try {

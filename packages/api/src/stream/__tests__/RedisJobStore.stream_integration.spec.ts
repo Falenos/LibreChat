@@ -171,6 +171,146 @@ describe('RedisJobStore Integration Tests', () => {
 
       await store.destroy();
     });
+
+    // [knauf] KK20-338 — terminal ownership and payload are one running-to-terminal CAS.
+    describe('transitionToTerminal', () => {
+      test('commits exactly one terminal state and payload', async () => {
+        if (!ioredisClient) {
+          return;
+        }
+
+        const { RedisJobStore } = await import('../implementations/RedisJobStore');
+        const store = new RedisJobStore(ioredisClient);
+        await store.initialize();
+
+        const streamId = `test-terminal-transition-${Date.now()}`;
+        const job = await store.createJob(streamId, 'user-1', streamId);
+
+        const [completeWon, abortWon] = await Promise.all([
+          store.transitionToTerminal(
+            streamId,
+            {
+              status: 'complete',
+              completedAt: 100,
+              terminalId: 'complete-winner',
+              finalEvent: JSON.stringify({ final: true }),
+            },
+            job.generationId,
+          ),
+          store.transitionToTerminal(
+            streamId,
+            {
+              status: 'aborted',
+              completedAt: 200,
+              terminalId: 'abort-winner',
+              finalEvent: JSON.stringify({ final: true, aborted: true }),
+            },
+            job.generationId,
+          ),
+        ]);
+
+        expect([completeWon, abortWon].filter(Boolean)).toHaveLength(1);
+        const persisted = await store.getJob(streamId);
+        expect(persisted?.terminalId).toBe(completeWon ? 'complete-winner' : 'abort-winner');
+        expect(persisted?.status).toBe(completeWon ? 'complete' : 'aborted');
+        const terminalId = persisted?.terminalId ?? '';
+        expect(await store.claimTerminalEffects(streamId, terminalId, job.generationId)).toBe(true);
+        expect(await store.claimTerminalEffects(streamId, terminalId, job.generationId)).toBe(
+          false,
+        );
+        expect(await store.claimTerminalEffects(streamId, 'wrong-token', job.generationId)).toBe(
+          false,
+        );
+
+        await store.destroy();
+      });
+
+      test('allows a new generation after the previous terminal generation', async () => {
+        if (!ioredisClient) {
+          return;
+        }
+
+        const { RedisJobStore } = await import('../implementations/RedisJobStore');
+        const store = new RedisJobStore(ioredisClient);
+        await store.initialize();
+
+        const streamId = `test-terminal-multi-gen-${Date.now()}`;
+        const jobOne = await store.createJob(streamId, 'user-1', streamId);
+        expect(
+          await store.transitionToTerminal(
+            streamId,
+            { status: 'complete', completedAt: 100, terminalId: 'generation-one' },
+            jobOne.generationId,
+          ),
+        ).toBe(true);
+
+        const jobTwo = await store.createJob(streamId, 'user-1', streamId);
+        expect(jobTwo.generationId).not.toBe(jobOne.generationId);
+        expect(
+          await store.transitionToTerminal(
+            streamId,
+            { status: 'complete', completedAt: 200, terminalId: 'generation-two' },
+            jobTwo.generationId,
+          ),
+        ).toBe(true);
+
+        await store.destroy();
+      });
+
+      test('rejects missing and stale generations', async () => {
+        if (!ioredisClient) {
+          return;
+        }
+
+        const { RedisJobStore } = await import('../implementations/RedisJobStore');
+        const store = new RedisJobStore(ioredisClient);
+        await store.initialize();
+
+        const streamId = `test-terminal-stale-gen-${Date.now()}`;
+        expect(
+          await store.transitionToTerminal(
+            streamId,
+            { status: 'complete', completedAt: 100, terminalId: 'missing' },
+            'some-generation-id',
+          ),
+        ).toBe(false);
+        await store.createJob(streamId, 'user-1', streamId);
+        expect(
+          await store.transitionToTerminal(
+            streamId,
+            { status: 'complete', completedAt: 100, terminalId: 'stale' },
+            'stale-generation-id',
+          ),
+        ).toBe(false);
+
+        await store.destroy();
+      });
+
+      test('rejects chunks after the terminal transition', async () => {
+        if (!ioredisClient) {
+          return;
+        }
+
+        const { RedisJobStore } = await import('../implementations/RedisJobStore');
+        const store = new RedisJobStore(ioredisClient);
+        await store.initialize();
+        const streamId = `test-terminal-chunk-fence-${Date.now()}`;
+        const job = await store.createJob(streamId, 'user-1', streamId);
+
+        expect(await store.appendChunk(streamId, { data: 'before' }, job.generationId)).toBe(true);
+        expect(
+          await store.transitionToTerminal(
+            streamId,
+            { status: 'aborted', completedAt: 100, terminalId: 'abort' },
+            job.generationId,
+          ),
+        ).toBe(true);
+        expect(await store.appendChunk(streamId, { data: 'after' }, job.generationId)).toBe(false);
+
+        await store.destroy();
+      });
+    });
+    // End [knauf]
   });
 
   describe('Horizontal Scaling - Multi-Instance Simulation', () => {
@@ -702,6 +842,7 @@ describe('RedisJobStore Integration Tests', () => {
 
       // Complete one job
       await store.updateJob(streamId1, { status: 'complete', completedAt: Date.now() });
+      await store.acknowledgeTerminal(streamId1);
 
       // Get active jobs - should only return the running one
       const activeJobs = await store.getActiveJobIdsByUser(userId);
@@ -728,6 +869,7 @@ describe('RedisJobStore Integration Tests', () => {
       // Create a job and abort it
       await store.createJob(streamId, userId, streamId);
       await store.updateJob(streamId, { status: 'aborted', completedAt: Date.now() });
+      await store.acknowledgeTerminal(streamId);
 
       // Get active jobs - should be empty
       const activeJobs = await store.getActiveJobIdsByUser(userId);
@@ -756,6 +898,7 @@ describe('RedisJobStore Integration Tests', () => {
         error: 'Test error',
         completedAt: Date.now(),
       });
+      await store.acknowledgeTerminal(streamId);
 
       // Get active jobs - should be empty
       const activeJobs = await store.getActiveJobIdsByUser(userId);
@@ -866,6 +1009,7 @@ describe('RedisJobStore Integration Tests', () => {
 
       // Instance 1 completes the job
       await instance1.updateJob(streamId, { status: 'complete', completedAt: Date.now() });
+      await instance1.acknowledgeTerminal(streamId);
 
       // Instance 2 should no longer see the job as active
       const activeJobsAfter = await instance2.getActiveJobIdsByUser(userId);
@@ -1008,7 +1152,7 @@ describe('RedisJobStore Integration Tests', () => {
       await store.destroy();
     });
 
-    test('should proactively SREM from user jobs set on updateJob to terminal status', async () => {
+    test('should proactively SREM from user jobs set after terminal acknowledgement', async () => {
       if (!ioredisClient) {
         return;
       }
@@ -1030,6 +1174,7 @@ describe('RedisJobStore Integration Tests', () => {
       expect(members).toContain(member);
 
       await store.updateJob(streamId, { status: 'complete', completedAt: Date.now() });
+      await store.acknowledgeTerminal(streamId, job.generationId);
 
       // Directly check the Redis set — without calling getActiveJobIdsByUser (which self-heals)
       members = await ioredisClient.smembers(userKey);
@@ -1058,6 +1203,7 @@ describe('RedisJobStore Integration Tests', () => {
       expect(members).toContain(member);
 
       await store.updateJob(streamId, { status: 'aborted', completedAt: Date.now() });
+      await store.acknowledgeTerminal(streamId, job.generationId);
 
       members = await ioredisClient.smembers(userKey);
       expect(members).not.toContain(member);
@@ -1089,6 +1235,7 @@ describe('RedisJobStore Integration Tests', () => {
         error: 'Test error',
         completedAt: Date.now(),
       });
+      await store.acknowledgeTerminal(streamId, job.generationId);
 
       members = await ioredisClient.smembers(userKey);
       expect(members).not.toContain(member);

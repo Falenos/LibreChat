@@ -616,6 +616,11 @@ describe('ResumableAgentController resume metadata', () => {
     expect(mockGenerationJobManager.updateMetadata.mock.invocationCallOrder[0]).toBeLessThan(
       initializeClient.mock.invocationCallOrder[0],
     );
+    // [knauf] KK20-338 — client.js's chatCompletion() reads this to join Model Router
+    // telemetry to the same logical generation as GenerationJobManager/SSE telemetry.
+    expect(req._resumableStreamId).toBe(conversationId);
+    expect(req._resumableGenerationId).toBe('generation-1');
+    // End [knauf]
   });
 
   // [knauf] A rejected overlapping request must not terminate the existing owner.
