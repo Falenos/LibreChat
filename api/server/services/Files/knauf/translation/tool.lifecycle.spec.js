@@ -531,6 +531,66 @@ describe('[knauf] file translation lifecycle', () => {
     expect(mockTranslateDocumentWithAzure).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['notes.txt', 'text/plain'],
+    ['data.csv', 'text/csv'],
+  ])('reports font validation as not applicable for %s', async (filename, type) => {
+    const file = {
+      file_id: 'file-1',
+      filename,
+      type,
+      source: 'local',
+      filepath: `/uploads/${filename}`,
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockTranslateDocumentWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { source_locale: 'en', target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        files: [{ fontValidation: 'not_applicable' }],
+      },
+    });
+  });
+
+  it('reports font validation as not applicable for Markdown', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'notes.md',
+      type: 'text/markdown',
+      source: 'local',
+      filepath: '/uploads/notes.md',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockGetDownloadStream.mockReturnValueOnce(Readable.from([Buffer.from('# Hello')]));
+    mockTranslateWithAzure.mockImplementationOnce(async ({ segments }) => ({
+      translations: new Map(segments.map((segment) => [segment.id, segment.source])),
+      providerLocale: 'de',
+      batches: 1,
+    }));
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { source_locale: 'en', target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        files: [{ fontValidation: 'not_applicable' }],
+      },
+    });
+  });
+
   it('retries logo masking at a lower quality when the default-quality mask exceeds the Azure batch limit', async () => {
     const file = {
       file_id: 'file-1',

@@ -104,6 +104,7 @@ const MIME_FORMATS = new Map(
 MIME_FORMATS.set('application/csv', { ...FORMATS.csv, extension: 'csv' });
 MIME_FORMATS.set('text/xml', { ...FORMATS.xml, extension: 'xml' });
 MIME_FORMATS.set('image/svg', { ...FORMATS.svg, extension: 'svg' });
+const FONT_VALIDATION_NOT_APPLICABLE = new Set(['csv', 'txt', 'md', 'markdown', 'json', 'xml']);
 
 function formatForFile(file) {
   const filename = file?.filename ?? file?.name ?? '';
@@ -117,6 +118,9 @@ function formatForFile(file) {
 }
 
 const isTranslatableFile = (file) => formatForFile(file) != null;
+
+const fontValidationForFormat = (format) =>
+  FONT_VALIDATION_NOT_APPLICABLE.has(format.extension) ? 'not_applicable' : 'human_required';
 
 const isFileTranslationConfigured = () =>
   process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
@@ -1084,7 +1088,7 @@ async function translateOneFile({
   let segments = [];
   let glossary;
   let layoutValidation = 'human_required';
-  let fontValidation = 'human_required';
+  let fontValidation = fontValidationForFormat(format);
 
   if (format.mode === 'idml') {
     if (input.length > MAX_SEGMENTED_BYTES) {
@@ -1163,7 +1167,6 @@ async function translateOneFile({
     }
     output = adapter.build(result.translations);
     layoutValidation = ['json', 'xml'].includes(format.mode) ? 'not_applicable' : 'human_required';
-    fontValidation = ['json', 'xml'].includes(format.mode) ? 'not_applicable' : 'human_required';
   } else {
     const isImage = format.mode === 'image';
     const translateTextWithinImage = ['docx', 'pptx'].includes(
