@@ -191,6 +191,60 @@ const isRetryableTransportError = (error: unknown): boolean => {
   );
 };
 
+type StreamGuardState = {
+  buffer: string;
+  terminalSeen: boolean;
+  finalResponseSeen: boolean;
+  unsafe: boolean;
+  deferredDone?: string;
+};
+
+type StreamReadResult = {
+  done: boolean;
+  frames: string[];
+};
+
+const readStreamFrames = async (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  state: StreamGuardState,
+): Promise<StreamReadResult> => {
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) {
+      state.buffer += decoder.decode();
+      const frames = state.buffer === '' ? [] : [state.buffer];
+      state.buffer = '';
+      return { done: true, frames };
+    }
+
+    state.buffer += decoder.decode(chunk.value, { stream: true });
+    const frames = state.buffer.split(/\r?\n\r?\n/);
+    state.buffer = frames.pop() ?? '';
+    if (frames.length > 0) {
+      return { done: false, frames };
+    }
+  }
+};
+
+const getTransportDecision = (
+  error: unknown,
+  state: StreamGuardState,
+  isCallerAborted: () => boolean,
+  isTransportTimedOut: () => boolean,
+): RetryDecision => {
+  if (isCallerAborted()) {
+    return 'cancelled';
+  }
+  if (state.unsafe) {
+    return 'unsafe_after_output';
+  }
+  if (isTransportTimedOut() || isRetryableTransportError(error)) {
+    return 'retry';
+  }
+  return 'not_retryable';
+};
+
 export function guardModelRouterResponsesStream(
   body: ReadableStream<Uint8Array>,
   {
@@ -206,10 +260,12 @@ export function guardModelRouterResponsesStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let buffer = '';
-  let terminalSeen = false;
-  let unsafe = false;
-  let deferredDone: string | undefined;
+  const state: StreamGuardState = {
+    buffer: '',
+    terminalSeen: false,
+    finalResponseSeen: false,
+    unsafe: false,
+  };
 
   const emitFrame = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -217,7 +273,7 @@ export function guardModelRouterResponsesStream(
   ): void => {
     const data = getData(frame);
     if (data === '[DONE]') {
-      deferredDone ??= frame;
+      state.deferredDone ??= frame;
       return;
     }
     if (data == null) {
@@ -227,13 +283,14 @@ export function guardModelRouterResponsesStream(
 
     try {
       const event = JSON.parse(data) as StreamEvent;
-      unsafe ||= isUnsafeEvent(event);
+      state.unsafe ||= isUnsafeEvent(event);
       if (event.type === 'response.completed' || event.type === 'response.incomplete') {
-        terminalSeen = true;
+        state.terminalSeen = true;
+        state.finalResponseSeen = true;
       } else if (event.type === 'response.failed' || event.type === 'error') {
-        terminalSeen = true;
+        state.terminalSeen = true;
         const failure = getFailure(event);
-        const decision = getDecision(failure, unsafe);
+        const decision = getDecision(failure, state.unsafe);
         if (decision !== 'retry') {
           disableRetry();
         }
@@ -246,53 +303,39 @@ export function guardModelRouterResponsesStream(
     controller.enqueue(encoder.encode(`${frame}\n\n`));
   };
 
+  const finishStream = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    if (!state.terminalSeen) {
+      const decision = state.unsafe ? 'unsafe_after_output' : 'retry';
+      if (decision !== 'retry') {
+        disableRetry();
+      }
+      controller.enqueue(
+        errorFrame(encoder, { code: 'stream_terminated', type: 'server_error' }, decision),
+      );
+    }
+    if (state.deferredDone != null) {
+      controller.enqueue(encoder.encode(`${state.deferredDone}\n\n`));
+    }
+    controller.close();
+  };
+
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            buffer += decoder.decode();
-            if (buffer !== '') {
-              emitFrame(controller, buffer);
-              buffer = '';
-            }
-            if (!terminalSeen) {
-              const decision = unsafe ? 'unsafe_after_output' : 'retry';
-              if (decision !== 'retry') {
-                disableRetry();
-              }
-              controller.enqueue(
-                errorFrame(encoder, { code: 'stream_terminated', type: 'server_error' }, decision),
-              );
-            }
-            if (deferredDone != null) {
-              controller.enqueue(encoder.encode(`${deferredDone}\n\n`));
-            }
-            controller.close();
-            return;
-          }
-
-          buffer += decoder.decode(chunk.value, { stream: true });
-          const frames = buffer.split(/\r?\n\r?\n/);
-          buffer = frames.pop() ?? '';
-          if (frames.length === 0) {
-            continue;
-          }
-          for (const frame of frames) {
-            emitFrame(controller, frame);
-          }
-          return;
+        const result = await readStreamFrames(reader, decoder, state);
+        for (const frame of result.frames) {
+          emitFrame(controller, frame);
+        }
+        if (result.done) {
+          finishStream(controller);
         }
       } catch (error) {
-        let decision: RetryDecision = 'not_retryable';
-        if (isCallerAborted()) {
-          decision = 'cancelled';
-        } else if (unsafe) {
-          decision = 'unsafe_after_output';
-        } else if (isTransportTimedOut() || isRetryableTransportError(error)) {
-          decision = 'retry';
+        if (state.finalResponseSeen) {
+          disableRetry();
+          controller.close();
+          return;
         }
+        const decision = getTransportDecision(error, state, isCallerAborted, isTransportTimedOut);
         if (decision !== 'retry') {
           disableRetry();
         }

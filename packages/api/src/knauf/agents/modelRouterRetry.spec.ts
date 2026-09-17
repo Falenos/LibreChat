@@ -229,6 +229,36 @@ describe('Model Router bounded retry', () => {
     expect(output).not.toContain('"error"');
   });
 
+  it('does not replay a completed response after a trailing transport failure', async () => {
+    const disconnect = Object.assign(new Error('private socket detail'), { code: 'ECONNRESET' });
+    let pullCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pullCount === 0) {
+          pullCount += 1;
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                type: 'response.completed',
+                response: { id: 'response-1' },
+              })}\n\n`,
+            ),
+          );
+          return;
+        }
+        controller.error(disconnect);
+      },
+    });
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(body, { disableRetry }),
+    ).text();
+
+    expect(output).toContain('response.completed');
+    expect(output).not.toContain('"error"');
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks retry when the connection terminates after visible output', async () => {
     const disconnect = Object.assign(new Error('private socket detail'), { code: 'ECONNRESET' });
     let pullCount = 0;
