@@ -473,8 +473,11 @@ function stripLiterals(source: string): string {
  * more than it opens reads negative. Tags are counted alongside brackets because an
  * `image/svg+xml` or `text/html` file may contain no braces at all.
  *
- * Still a heuristic, not a parser — a regex literal containing an unmatched brace would
- * miscount. That is why the caller never relies on this alone: see `findSpliceCandidate`.
+ * Still a heuristic, not a parser. A regex literal containing an unmatched brace miscounts,
+ * and an apostrophe in JSX text reads as opening a string, which swallows the delimiters
+ * after it. Both push a chunk towards looking balanced, so the splice declines rather than
+ * corrupts — a missed repair, never a lost example. That is also why the caller never relies
+ * on this alone: see `spliceEvidence`.
  */
 function countDelimiters(source: string): { unclosed: number; balance: number } {
   const stripped = stripLiterals(source);

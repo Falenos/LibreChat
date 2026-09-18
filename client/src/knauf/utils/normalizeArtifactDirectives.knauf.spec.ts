@@ -349,6 +349,44 @@ describe('[knauf] normalizeArtifactDirectives — container closed before the fi
       expect(normalizeArtifactDirectives(selfContained)).toBe(selfContained);
     });
 
+    /* A known limitation, pinned so it stays deliberate. `stripLiterals` treats an
+     * apostrophe in JSX text as opening a string, which swallows the delimiters after it and
+     * makes a genuine spill read as balanced. It therefore refuses to repair — the safe
+     * direction, and the reason this is a missed repair rather than a corrupted one. If the
+     * stripper is ever taught about apostrophes, this expectation flips and should be
+     * updated deliberately rather than by accident. */
+    it('declines to repair a genuine spill whose source contains an apostrophe', () => {
+      const withApostrophe = [
+        OPEN,
+        '```tsx',
+        'export default function App() {',
+        "  const label = <p>don't stop</p>;",
+        '```',
+        CLOSE,
+        '```tsx',
+        '  return <div>{label}</div>;',
+        '}',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(withApostrophe)).toBe(withApostrophe);
+    });
+
+    it('never absorbs valid content when apostrophes appear on both sides', () => {
+      const valid = [
+        OPEN,
+        '```tsx',
+        "export default function App() { return <p>don't stop</p>; }",
+        '```',
+        CLOSE,
+        '```tsx',
+        "render(<App />); // it's fine",
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(valid)).toBe(valid);
+    });
+
     it('leaves a code block introduced by prose in the chat', () => {
       const explained = [OPEN, ...HEAD, CLOSE, '', 'And a separate helper:', '', ...TAIL].join(
         '\n',
