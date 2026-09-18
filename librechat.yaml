@@ -846,7 +846,7 @@ modelSpecs:
 
           What never belongs inside the fence, in any type and whether or not it compiles, is anything addressed to the person you are replying to: no note about sample data, placeholders, simplification or what is left to do, no justification of your own choices, no account of what you did or did not use — not as rendered text, not in the title, not in a string, not in a comment. Ordinary code comments are welcome and expected: a comment that explains the code to whoever opens the file next is part of a good file. The test is the audience, not the syntax — a comment about how the code works stays, a comment about how you built it goes.
 
-          When you assemble the file from blocks you were told to copy, the fences around those blocks are packaging, not content: drop every one of them and emit the joined code inside a single fence of your own. Nothing at all follows the last line of the file except the closing fence and the closing `:::`. Everything you want to say about the artifact belongs in the chat, after the closing `:::`, in one short line.
+          When you assemble the file from blocks you were told to copy, the fences around those blocks are packaging, not content: drop every one of them and emit the joined code inside a single fence of your own. Nothing at all follows the last line of the file except the closing fence and the closing `:::`. The closing `:::` is also the one thing you cannot write early: it ends the artifact wherever it appears, so if you close and then continue the same file in a second fence, everything after that point is torn out of the preview and printed into the chat as loose source. Write the file to its end, then close once. Everything you want to say about the artifact belongs in the chat, after the closing `:::`, in one short line.
 
           A placeholder image is never the Knauf mark. The mark needs no network and is already available to you — an importable component in a React artifact, inline SVG in your working material for every other type — so go and get it before you emit. A placeholder is for genuinely decorative imagery only, never for the mark and never for the content the deliverable is about. And where other artifact instructions in your context invite self-deprecating commentary about your own visual output, that does not apply here: do not apologise for the artifact and do not rate your own ability at it. If something really is provisional, say so once in the one short line in the chat, never inside the artifact. The other artifact instructions in your context give the allowed types, the MIME values and the available libraries — follow them for all of that. Where they disagree with this section about WHEN to build an artifact, or about what you say around it, this section wins.
 
@@ -918,6 +918,21 @@ modelSpecs:
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
         maxContextTokens: 256000
+        # [knauf] KK20-365 — pin the output ceiling.
+        #
+        # Only the `karl` spec declared `maxTokens`. Without it here the ceiling was
+        # whatever the Azure Model Router candidate happened to default to, so it could
+        # differ between turns — which is how an artifact gets cut off mid-file for one
+        # user and not the next, with nothing in the config to point at. The defect is
+        # the absence, not the number: this is the spec users actually pick, and it runs
+        # `reasoning_effort: high`, whose tokens count against this same ceiling under
+        # `useResponsesApi: true`.
+        #
+        # Matches `karl` deliberately. KK20-194 chose 8192 as a cost fuse; every artifact
+        # truncation measured while diagnosing KK20-365 predates the output-limit retry
+        # that landed 2026-08-11, so there is no current evidence for moving it. Raise it
+        # on a measurement, not on this comment.
+        maxTokens: 8192
         reasoning_effort: high
         useResponsesApi: true
         web_search: true
@@ -942,6 +957,21 @@ modelSpecs:
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
         maxContextTokens: 256000
+        # [knauf] KK20-365 — pin the output ceiling.
+        #
+        # Only the `karl` spec declared `maxTokens`. Without it here the ceiling was
+        # whatever the Azure Model Router candidate happened to default to, so it could
+        # differ between turns — which is how an artifact gets cut off mid-file for one
+        # user and not the next, with nothing in the config to point at. The defect is
+        # the absence, not the number: this is the spec users actually pick, and it runs
+        # `reasoning_effort: medium`, whose tokens count against this same ceiling under
+        # `useResponsesApi: true`.
+        #
+        # Matches `karl` deliberately. KK20-194 chose 8192 as a cost fuse; every artifact
+        # truncation measured while diagnosing KK20-365 predates the output-limit retry
+        # that landed 2026-08-11, so there is no current evidence for moving it. Raise it
+        # on a measurement, not on this comment.
+        maxTokens: 8192
         reasoning_effort: medium
         useResponsesApi: true
         web_search: true
@@ -966,6 +996,21 @@ modelSpecs:
         # floor has to hold for whatever that deployment becomes, not for the
         # model it happens to be today.
         maxContextTokens: 256000
+        # [knauf] KK20-365 — pin the output ceiling.
+        #
+        # Only the `karl` spec declared `maxTokens`. Without it here the ceiling was
+        # whatever the Azure Model Router candidate happened to default to, so it could
+        # differ between turns — which is how an artifact gets cut off mid-file for one
+        # user and not the next, with nothing in the config to point at. The defect is
+        # the absence, not the number: this is the spec users actually pick, and it runs
+        # `reasoning_effort: low`, whose tokens count against this same ceiling under
+        # `useResponsesApi: true`.
+        #
+        # Matches `karl` deliberately. KK20-194 chose 8192 as a cost fuse; every artifact
+        # truncation measured while diagnosing KK20-365 predates the output-limit retry
+        # that landed 2026-08-11, so there is no current evidence for moving it. Raise it
+        # on a measurement, not on this comment.
+        maxTokens: 8192
         reasoning_effort: low
         useResponsesApi: true
         web_search: true
