@@ -50,7 +50,7 @@
  *     stopping at a fence or body boundary, and only when the closing brace is actually
  *     found. A partial join is discarded rather than committed.
  *   - **An early close is only spliced with positive evidence the first file was
- *     incomplete** — see `looksIncomplete`. An intentional code block after a complete
+ *     incomplete** — see `spliceEvidence`. An intentional code block after a complete
  *     artifact is left in the chat where the model put it.
  *   - Every rewrite waits for a complete `:::artifact` or `<artifact` token, so a completed
  *     streaming prefix never changes shape again and the per-block memoization in
@@ -413,32 +413,89 @@ function dedentBlock(lines: string[], from: number, to: number, shared: number):
   return changed;
 }
 
-/**
- * Delimiters left open in a source chunk.
- *
- * Counts characters without lexing strings or comments, so it is crude by construction and
- * is only ever read as *evidence that a chunk was cut off* — never as a syntax check. Tags
- * are counted alongside brackets because an `image/svg+xml` or `text/html` file may contain
- * no braces at all. Over-counting is harmless: the caller also requires that joining the
- * next chunk strictly reduces the number, which a self-contained block never does.
- */
-function unclosedDelimiters(source: string): number {
-  const pairs: Array<[string, string]> = [
-    ['{', '}'],
-    ['(', ')'],
-    ['[', ']'],
-  ];
-  let total = 0;
-  for (const [open, close] of pairs) {
-    const opened = source.split(open).length - 1;
-    const closed = source.split(close).length - 1;
-    total += Math.max(0, opened - closed);
+const BRACKET_PAIRS: Array<[string, string]> = [
+  ['{', '}'],
+  ['(', ')'],
+  ['[', ']'],
+];
+const QUOTES = new Set(['"', "'", '`']);
+
+/** Index just past the run beginning at `start` and ending with `terminator`. */
+function endOfRun(source: string, start: number, terminator: string): number {
+  const at = source.indexOf(terminator, start);
+  return at === -1 ? source.length : at + terminator.length;
+}
+
+/** Index just past a quoted run starting at `start`, honouring backslash escapes. */
+function endOfQuoted(source: string, start: number): number {
+  const quote = source[start];
+  let index = start + 1;
+  while (index < source.length && source[index] !== quote) {
+    index += source[index] === '\\' ? 2 : 1;
   }
-  const openTags = (source.match(/<[A-Za-z][^>]*>/g) ?? []).filter(
+  return index + 1;
+}
+
+/**
+ * Drop string literals, template literals and comments, so a delimiter written *about* code
+ * is not mistaken for one written *in* it.
+ *
+ * Without this, a complete file containing `return <pre>{"{"}</pre>;` reads as having an
+ * unclosed brace, and a separate complete block containing `console.log("}");` reads as
+ * closing it — so two valid, unrelated chunks look exactly like one file cut in half. A
+ * template literal is dropped whole, interpolations included, which keeps `${…}` from
+ * contributing a brace at either end.
+ */
+function stripLiterals(source: string): string {
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith('//', index)) {
+      index = endOfRun(source, index, '\n');
+    } else if (source.startsWith('/*', index)) {
+      index = endOfRun(source, index + 2, '*/');
+    } else if (source.startsWith('<!--', index)) {
+      index = endOfRun(source, index + 4, '-->');
+    } else if (QUOTES.has(source[index])) {
+      index = endOfQuoted(source, index);
+    } else {
+      out += source[index];
+      index += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * How a source chunk sits with respect to its delimiters, ignoring literals and comments.
+ *
+ * `unclosed` counts delimiters left open; `balance` is signed, so a fragment that closes
+ * more than it opens reads negative. Tags are counted alongside brackets because an
+ * `image/svg+xml` or `text/html` file may contain no braces at all.
+ *
+ * Still a heuristic, not a parser — a regex literal containing an unmatched brace would
+ * miscount. That is why the caller never relies on this alone: see `findSpliceCandidate`.
+ */
+function countDelimiters(source: string): { unclosed: number; balance: number } {
+  const stripped = stripLiterals(source);
+  let unclosed = 0;
+  let balance = 0;
+
+  for (const [open, close] of BRACKET_PAIRS) {
+    const opened = stripped.split(open).length - 1;
+    const closed = stripped.split(close).length - 1;
+    unclosed += Math.max(0, opened - closed);
+    balance += opened - closed;
+  }
+
+  const openTags = (stripped.match(/<[A-Za-z][^>]*>/g) ?? []).filter(
     (tag) => !tag.endsWith('/>'),
   ).length;
-  const closeTags = (source.match(/<\/[A-Za-z][^>]*>/g) ?? []).length;
-  return total + Math.max(0, openTags - closeTags);
+  const closeTags = (stripped.match(/<\/[A-Za-z][^>]*>/g) ?? []).length;
+  unclosed += Math.max(0, openTags - closeTags);
+  balance += openTags - closeTags;
+
+  return { unclosed, balance };
 }
 
 /** The source a fence holds, between its delimiters. */
@@ -526,16 +583,48 @@ function findSpliceCandidate(lines: string[], index: number): SpliceCandidate | 
   if (!spillFence || spillFence.lang !== fence.lang) {
     return null;
   }
-  /* The evidence. An artifact that was finished has balanced delimiters, so a deliberate
-   * example block after it is never absorbed; and a chunk that genuinely continues the file
-   * closes what the first one left open. Anything that does not satisfy both is preserved. */
-  const head = fenceBody(lines, bodyFence, bodyClose);
-  const headUnclosed = unclosedDelimiters(head);
-  if (headUnclosed === 0) {
+  return spliceEvidence(lines, { bodyFence, bodyClose, spill, fence });
+}
+
+/**
+ * Decide whether these two chunks are one file cut in half, and refuse anything short of it.
+ *
+ * Three independent things must hold, because no single one of them is safe on its own:
+ *
+ *  1. **The first chunk must be unfinished.** A completed artifact has its delimiters
+ *     closed, so a deliberate example block after it is never a candidate.
+ *  2. **The remainder must be a fragment, not a unit.** A continuation closes more than it
+ *     opens, so its balance is negative. A self-contained block is balanced or positive,
+ *     whatever its contents — which is what makes this hold even when (1) miscounts.
+ *  3. **Joining must strictly help.** The rejoined file must have fewer delimiters left
+ *     open than the first chunk did.
+ *
+ * (2) is what closes the gap literal-stripping alone would leave. `countDelimiters` is a
+ * heuristic and can still be fooled — by a regex literal carrying an unmatched brace, say —
+ * so the shape is only repaired when the second chunk independently reads as a continuation.
+ * Ambiguity is resolved by leaving the message exactly as the model wrote it.
+ */
+function spliceEvidence(
+  lines: string[],
+  found: {
+    bodyFence: number;
+    bodyClose: number;
+    spill: number;
+    fence: { marker: string; lang: string };
+  },
+): SpliceCandidate | null {
+  const { bodyFence, bodyClose, spill, fence } = found;
+
+  const head = countDelimiters(fenceBody(lines, bodyFence, bodyClose));
+  if (head.unclosed === 0) {
     return null;
   }
   const remainder = remainderBody(lines, spill, fence.lang);
-  if (unclosedDelimiters(`${head}\n${remainder}`) >= headUnclosed) {
+  if (countDelimiters(remainder).balance >= 0) {
+    return null;
+  }
+  const rejoined = countDelimiters(`${fenceBody(lines, bodyFence, bodyClose)}\n${remainder}`);
+  if (rejoined.unclosed >= head.unclosed) {
     return null;
   }
   return { bodyClose, spill, marker: fence.marker };

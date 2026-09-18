@@ -294,6 +294,61 @@ describe('[knauf] normalizeArtifactDirectives — container closed before the fi
       expect(normalizeArtifactDirectives(usage)).toBe(usage);
     });
 
+    /* Review case, reproduced verbatim. Both chunks are syntactically complete and valid;
+     * they only look like one severed file if a brace inside a string literal is counted.
+     * The head's `{"{"}` used to read as an unclosed brace and the example's `"}"` as the
+     * thing that closed it, so the example was absorbed into the artifact. */
+    it('leaves a balanced artifact and example alone when braces sit inside string literals', () => {
+      const literalBraces = [
+        OPEN,
+        '```tsx',
+        'export default function App() {',
+        '  return <pre>{"{"}</pre>;',
+        '}',
+        '```',
+        CLOSE,
+        '```tsx',
+        'console.log("}");',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(literalBraces)).toBe(literalBraces);
+      expect(chatCodeBlocks(literalBraces)).toBe(1);
+      expect(chatCodeBlocks(normalizeArtifactDirectives(literalBraces))).toBe(1);
+    });
+
+    it('ignores delimiters inside comments when weighing the evidence', () => {
+      const commented = [
+        OPEN,
+        '```tsx',
+        'export default function App() { return null; } // trailing {',
+        '```',
+        CLOSE,
+        '```tsx',
+        '/* } */ render(<App />);',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(commented)).toBe(commented);
+    });
+
+    it('refuses a self-contained second block even when the first looks unfinished', () => {
+      /* The second gate on its own: whatever the first chunk's count says, a block that
+       * closes nothing it did not open is a unit of its own, not a continuation. */
+      const selfContained = [
+        OPEN,
+        '```tsx',
+        'export default function App() {',
+        '```',
+        CLOSE,
+        '```tsx',
+        'const helper = () => null;',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(selfContained)).toBe(selfContained);
+    });
+
     it('leaves a code block introduced by prose in the chat', () => {
       const explained = [OPEN, ...HEAD, CLOSE, '', 'And a separate helper:', '', ...TAIL].join(
         '\n',
