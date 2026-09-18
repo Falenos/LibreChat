@@ -14,6 +14,10 @@ const FileContainer = ({
   containerClassName,
   onDelete,
   onClick,
+  // [knauf] KK20-366 — generated download cards need an in-flight lockout.
+  disabled = false,
+  busy = false,
+  // End [knauf]
   // [knauf] KK20-297 — explicit affordance for actionable file cards.
   action,
   // End [knauf]
@@ -39,6 +43,10 @@ const FileContainer = ({
   containerClassName?: string;
   onDelete?: () => void;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  // [knauf] KK20-366 — keep the card's native control inaccessible while download resolution runs.
+  disabled?: boolean;
+  busy?: boolean;
+  // End [knauf]
   // [knauf] KK20-297 — upload and preview-only chips omit this.
   action?: Readonly<{ icon: ReactNode; label: string }>;
   // End [knauf]
@@ -53,6 +61,8 @@ const FileContainer = ({
       <button
         type="button"
         onClick={onClick}
+        disabled={disabled}
+        aria-busy={busy || undefined}
         aria-label={
           // [knauf] KK20-297 — action cards get a descriptive localized label.
           action?.label ?? visibleName
