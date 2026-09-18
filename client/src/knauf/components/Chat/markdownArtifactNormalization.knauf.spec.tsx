@@ -129,7 +129,17 @@ describe('[knauf] Markdown — artifact directive normalization is mounted', () 
 
   it('rejoins an artifact whose container closed before the file ended', async () => {
     renderMarkdown(
-      [OPEN, '```tsx', 'const a = 1;', '```', ':::', '```tsx', 'const b = 2;', '```'].join('\n'),
+      [
+        OPEN,
+        '```tsx',
+        'export default function App() {',
+        '```',
+        ':::',
+        '```tsx',
+        '  return <div />;',
+        '}',
+        '```',
+      ].join('\n'),
     );
 
     expect(await screen.findByTestId('art')).toHaveAttribute('data-id', 'demo');
@@ -143,20 +153,57 @@ describe('[knauf] Markdown — artifact directive normalization is mounted', () 
       [
         OPEN,
         '```tsx',
-        'const a = 1;',
+        'export default function App() {',
         '```',
         ':::',
         '',
         'And a helper:',
         '',
         '```tsx',
-        'const b = 2;',
+        '  return <div />;',
+        '}',
         '```',
       ].join('\n'),
     );
 
     expect(await screen.findByTestId('art')).toHaveAttribute('data-id', 'demo');
     expect(await screen.findByTestId('cb')).toHaveAttribute('data-lang', 'tsx');
+  });
+
+  it('still shows an intentional example block after a complete artifact', async () => {
+    renderMarkdown(
+      [
+        OPEN,
+        '```tsx',
+        'export default function App() { return null; }',
+        '```',
+        ':::',
+        '```tsx',
+        '<App />',
+        '```',
+      ].join('\n'),
+    );
+
+    expect(await screen.findByTestId('art')).toHaveAttribute('data-id', 'demo');
+    expect(await screen.findByTestId('cb')).toHaveAttribute('data-lang', 'tsx');
+  });
+
+  it('leaves an <artifact> element in the artifact source untouched', async () => {
+    renderMarkdown(
+      [
+        OPEN,
+        '```tsx',
+        'export default function App() {',
+        '  return <artifact data-kind="card">Knauf</artifact>;',
+        '}',
+        '```',
+        ':::',
+      ].join('\n'),
+    );
+
+    const rendered = await screen.findAllByTestId('art');
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]).toHaveAttribute('data-type', 'application/vnd.react');
   });
 
   it('does not mount an artifact for a differently-named container directive', () => {

@@ -212,36 +212,56 @@ describe('[knauf] normalizeArtifactDirectives — content fidelity', () => {
 });
 
 describe('[knauf] normalizeArtifactDirectives — container closed before the file ended', () => {
-  const HEAD = ['```tsx', 'const a = 1;', '```'];
-  const TAIL = ['```tsx', 'const b = 2;', '```'];
+  /* Realistic halves: the first chunk leaves the component open, the second closes it. That
+   * is the evidence the splice requires — see the guards below for why adjacency alone is
+   * deliberately not enough. */
+  const HEAD = ['```tsx', 'export default function App() {', '  const rows = [1, 2, 3];', '```'];
+  const TAIL = ['```tsx', '  return <div>{rows.length}</div>;', '}', '```'];
   const SPLIT = [OPEN, ...HEAD, CLOSE, ...TAIL].join('\n');
 
   it('loses the tail to the chat before repair', () => {
     expect(hasArtifact(SPLIT)).toBe(true);
-    expect(artifactFences(SPLIT)).toEqual(['const a = 1;']);
+    expect(artifactFences(SPLIT)).toEqual([
+      'export default function App() {\n  const rows = [1, 2, 3];',
+    ]);
     expect(chatCodeBlocks(SPLIT)).toBe(1);
   });
 
   it('rejoins the halves into one fenced body', () => {
     const repaired = normalizeArtifactDirectives(SPLIT);
 
-    expect(artifactFences(repaired)).toEqual(['const a = 1;\nconst b = 2;']);
+    expect(artifactFences(repaired)).toEqual([
+      'export default function App() {\n  const rows = [1, 2, 3];\n  return <div>{rows.length}</div>;\n}',
+    ]);
     expect(chatCodeBlocks(repaired)).toBe(0);
   });
 
   it('rejoins a file broken into three pieces', () => {
-    const thrice = [OPEN, ...HEAD, CLOSE, ...TAIL, CLOSE, '```tsx', 'const c = 3;', '```'].join(
-      '\n',
-    );
+    const thrice = [
+      OPEN,
+      '```tsx',
+      'export default function App() {',
+      '```',
+      CLOSE,
+      '```tsx',
+      '  const rows = [1, 2, 3];',
+      '```',
+      CLOSE,
+      '```tsx',
+      '  return <div>{rows.length}</div>;',
+      '}',
+      '```',
+    ].join('\n');
+    const repaired = normalizeArtifactDirectives(thrice);
 
-    expect(artifactFences(normalizeArtifactDirectives(thrice))).toEqual([
-      'const a = 1;\nconst b = 2;\nconst c = 3;',
+    expect(artifactFences(repaired)).toEqual([
+      'export default function App() {\n  const rows = [1, 2, 3];\n  return <div>{rows.length}</div>;\n}',
     ]);
-    expect(chatCodeBlocks(normalizeArtifactDirectives(thrice))).toBe(0);
+    expect(chatCodeBlocks(repaired)).toBe(0);
   });
 
   it('leaves the container open when the spilled half was truncated', () => {
-    const truncated = [OPEN, ...HEAD, CLOSE, '```tsx', 'const b = 2;'].join('\n');
+    const truncated = [OPEN, ...HEAD, CLOSE, '```tsx', '  return <div />;', '}'].join('\n');
     const repaired = normalizeArtifactDirectives(truncated);
 
     expect(hasArtifact(repaired)).toBe(true);
@@ -249,6 +269,31 @@ describe('[knauf] normalizeArtifactDirectives — container closed before the fi
   });
 
   describe('guards', () => {
+    /* The review case: a complete artifact followed immediately by a deliberate example in
+     * the same language is indistinguishable from a spill by adjacency alone. A finished
+     * file has balanced delimiters, which is what tells the two apart. */
+    it('leaves an intentional adjacent same-language block in the chat', () => {
+      const example = [
+        OPEN,
+        '```tsx',
+        'export default function App() { return null; }',
+        '```',
+        CLOSE,
+        '```tsx',
+        '<App />',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(example)).toBe(example);
+      expect(chatCodeBlocks(example)).toBe(1);
+    });
+
+    it('leaves an adjacent block alone even when the artifact itself was complete', () => {
+      const usage = [OPEN, ...BODY, CLOSE, '```tsx', 'render(<App />);', '```'].join('\n');
+
+      expect(normalizeArtifactDirectives(usage)).toBe(usage);
+    });
+
     it('leaves a code block introduced by prose in the chat', () => {
       const explained = [OPEN, ...HEAD, CLOSE, '', 'And a separate helper:', '', ...TAIL].join(
         '\n',
@@ -295,6 +340,117 @@ describe('[knauf] normalizeArtifactDirectives — container closed before the fi
       ].join('\n');
 
       expect(normalizeArtifactDirectives(two)).toBe(two);
+    });
+  });
+});
+
+describe("[knauf] normalizeArtifactDirectives — never rewrites an artifact's own source", () => {
+  /* The review case: XML conversion used to be context-blind, so a valid React or HTML file
+   * containing an `<artifact>` element on its own line was rewritten into nested directive
+   * text — corrupting a file that had rendered correctly. */
+  it('leaves an <artifact> element inside a compiled artifact byte-identical', () => {
+    const withElement = [
+      OPEN,
+      '```tsx',
+      'export default function App() {',
+      '  return (',
+      '    <artifact data-kind="card">',
+      '      <span>Knauf</span>',
+      '    </artifact>',
+      '  );',
+      '}',
+      '```',
+      CLOSE,
+    ].join('\n');
+
+    expect(normalizeArtifactDirectives(withElement)).toBe(withElement);
+    expect(artifactFences(withElement)).toHaveLength(1);
+    expect(artifactFences(normalizeArtifactDirectives(withElement))).toHaveLength(1);
+  });
+
+  it('leaves an <artifact> element carrying wrapper-like attributes alone inside a fence', () => {
+    const quoted = [
+      OPEN,
+      '```tsx',
+      'const sample = `<artifact identifier="x" type="text/html" title="X">`;',
+      '```',
+      CLOSE,
+    ].join('\n');
+
+    expect(normalizeArtifactDirectives(quoted)).toBe(quoted);
+  });
+
+  it('leaves a fenced XML example in the chat alone', () => {
+    const documented = [
+      'The shape the panel does not accept:',
+      '',
+      '```xml',
+      '<artifact identifier="x" type="text/html" title="X">',
+      '</artifact>',
+      '```',
+    ].join('\n');
+
+    expect(normalizeArtifactDirectives(documented)).toBe(documented);
+  });
+
+  it('still converts a real XML wrapper at the top level', () => {
+    const wrapper = [
+      '<artifact identifier="demo" type="application/vnd.react" title="Demo">',
+      ...BODY,
+      '</artifact>',
+    ].join('\n');
+
+    expect(hasArtifact(normalizeArtifactDirectives(wrapper))).toBe(true);
+  });
+
+  it('does not convert a custom element that merely shares the name', () => {
+    const custom = ['<artifact data-kind="card">', 'content', '</artifact>'].join('\n');
+
+    expect(normalizeArtifactDirectives(custom)).toBe(custom);
+  });
+});
+
+describe('[knauf] normalizeArtifactDirectives — opening line missing its closing brace', () => {
+  /* The review case: joining any line containing `}` swallowed the fence and the first
+   * source line into the opening line when the model simply omitted the brace. */
+  const MISSING_BRACE = [
+    ':::artifact{identifier="demo" type="application/vnd.react"',
+    '```tsx',
+    'export default function App() {}',
+    '```',
+    CLOSE,
+  ].join('\n');
+
+  it('leaves the fence and the source line intact', () => {
+    const result = normalizeArtifactDirectives(MISSING_BRACE);
+
+    expect(result).toBe(MISSING_BRACE);
+    expect(result.split('\n')).toContain('```tsx');
+    expect(result.split('\n')).toContain('export default function App() {}');
+  });
+
+  it('never merges the fence into the opening line at any streaming prefix', () => {
+    for (let end = 1; end <= MISSING_BRACE.length; end += 1) {
+      const normalized = normalizeArtifactDirectives(MISSING_BRACE.slice(0, end));
+      const openingLine = normalized.split('\n')[0];
+
+      expect(openingLine).not.toContain('```');
+      expect(openingLine).not.toContain('export default');
+    }
+  });
+
+  it('still joins a genuine attribute continuation', () => {
+    const split = [
+      ':::artifact{identifier="demo" type="application/vnd.react"',
+      'title="Demo"}',
+      ...BODY,
+      CLOSE,
+    ].join('\n');
+
+    expect(attributesOf(normalizeArtifactDirectives(split))).toEqual({
+      identifier: 'demo',
+      type: 'application/vnd.react',
+      title: 'Demo',
     });
   });
 });
