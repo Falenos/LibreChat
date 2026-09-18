@@ -127,6 +127,38 @@ describe('[knauf] Markdown — artifact directive normalization is mounted', () 
     expect(screen.queryByTestId('art')).not.toBeInTheDocument();
   });
 
+  it('rejoins an artifact whose container closed before the file ended', async () => {
+    renderMarkdown(
+      [OPEN, '```tsx', 'const a = 1;', '```', ':::', '```tsx', 'const b = 2;', '```'].join('\n'),
+    );
+
+    expect(await screen.findByTestId('art')).toHaveAttribute('data-id', 'demo');
+    /* The tail used to render here as a chat code block, which is what the user sees as
+     * "the panel fills partway and the rest continues in the conversation". */
+    expect(screen.queryByTestId('cb')).not.toBeInTheDocument();
+  });
+
+  it('still shows a code block the model introduced with prose', async () => {
+    renderMarkdown(
+      [
+        OPEN,
+        '```tsx',
+        'const a = 1;',
+        '```',
+        ':::',
+        '',
+        'And a helper:',
+        '',
+        '```tsx',
+        'const b = 2;',
+        '```',
+      ].join('\n'),
+    );
+
+    expect(await screen.findByTestId('art')).toHaveAttribute('data-id', 'demo');
+    expect(await screen.findByTestId('cb')).toHaveAttribute('data-lang', 'tsx');
+  });
+
   it('does not mount an artifact for a differently-named container directive', () => {
     renderMarkdown([':::note{title="Heads up"}', 'Not an artifact.', ':::'].join('\n'));
 

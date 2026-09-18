@@ -18,7 +18,13 @@ import { directive } from 'micromark-extension-directive';
 import { directiveFromMarkdown } from 'mdast-util-directive';
 import { normalizeArtifactDirectives } from './normalizeArtifactDirectives';
 
-type Node = { type: string; name?: string; attributes?: Record<string, string>; children?: Node[] };
+type Node = {
+  type: string;
+  name?: string;
+  value?: string;
+  attributes?: Record<string, string>;
+  children?: Node[];
+};
 
 const parse = (source: string): Node =>
   fromMarkdown(source, {
@@ -34,6 +40,16 @@ const findArtifact = (node: Node): Node | undefined =>
 
 const hasArtifact = (source: string): boolean => findArtifact(parse(source)) != null;
 const attributesOf = (source: string) => findArtifact(parse(source))?.attributes;
+
+/** Fenced blocks rendered into the chat — siblings of the artifact, not its children. */
+const chatCodeBlocks = (source: string): number =>
+  (parse(source).children ?? []).filter((node) => node.type === 'code').length;
+
+/** The fenced blocks the artifact actually holds, in order. */
+const artifactFences = (source: string): string[] =>
+  (findArtifact(parse(source))?.children ?? [])
+    .filter((node) => node.type === 'code')
+    .map((node) => node.value ?? '');
 
 const OPEN = ':::artifact{identifier="demo" type="application/vnd.react" title="Demo"}';
 const BODY = [
@@ -192,6 +208,94 @@ describe('[knauf] normalizeArtifactDirectives — content fidelity', () => {
   it('leaves a lone closing XML tag alone when no open tag preceded it', () => {
     const stray = 'We discussed </artifact> as a syntax the panel does not accept.';
     expect(normalizeArtifactDirectives(stray)).toBe(stray);
+  });
+});
+
+describe('[knauf] normalizeArtifactDirectives — container closed before the file ended', () => {
+  const HEAD = ['```tsx', 'const a = 1;', '```'];
+  const TAIL = ['```tsx', 'const b = 2;', '```'];
+  const SPLIT = [OPEN, ...HEAD, CLOSE, ...TAIL].join('\n');
+
+  it('loses the tail to the chat before repair', () => {
+    expect(hasArtifact(SPLIT)).toBe(true);
+    expect(artifactFences(SPLIT)).toEqual(['const a = 1;']);
+    expect(chatCodeBlocks(SPLIT)).toBe(1);
+  });
+
+  it('rejoins the halves into one fenced body', () => {
+    const repaired = normalizeArtifactDirectives(SPLIT);
+
+    expect(artifactFences(repaired)).toEqual(['const a = 1;\nconst b = 2;']);
+    expect(chatCodeBlocks(repaired)).toBe(0);
+  });
+
+  it('rejoins a file broken into three pieces', () => {
+    const thrice = [OPEN, ...HEAD, CLOSE, ...TAIL, CLOSE, '```tsx', 'const c = 3;', '```'].join(
+      '\n',
+    );
+
+    expect(artifactFences(normalizeArtifactDirectives(thrice))).toEqual([
+      'const a = 1;\nconst b = 2;\nconst c = 3;',
+    ]);
+    expect(chatCodeBlocks(normalizeArtifactDirectives(thrice))).toBe(0);
+  });
+
+  it('leaves the container open when the spilled half was truncated', () => {
+    const truncated = [OPEN, ...HEAD, CLOSE, '```tsx', 'const b = 2;'].join('\n');
+    const repaired = normalizeArtifactDirectives(truncated);
+
+    expect(hasArtifact(repaired)).toBe(true);
+    expect(chatCodeBlocks(repaired)).toBe(0);
+  });
+
+  describe('guards', () => {
+    it('leaves a code block introduced by prose in the chat', () => {
+      const explained = [OPEN, ...HEAD, CLOSE, '', 'And a separate helper:', '', ...TAIL].join(
+        '\n',
+      );
+
+      expect(normalizeArtifactDirectives(explained)).toBe(explained);
+      expect(chatCodeBlocks(explained)).toBe(1);
+    });
+
+    it('leaves a code block in another language alone', () => {
+      const other = [OPEN, ...HEAD, CLOSE, '```css', '.a { color: red; }', '```'].join('\n');
+
+      expect(normalizeArtifactDirectives(other)).toBe(other);
+    });
+
+    it('leaves a markdown artifact alone, where a following fence is real content', () => {
+      const markdown = [
+        ':::artifact{identifier="doc" type="text/markdown" title="Doc"}',
+        '```markdown',
+        '# Title',
+        '```',
+        CLOSE,
+        '```markdown',
+        '## Appendix',
+        '```',
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(markdown)).toBe(markdown);
+    });
+
+    it('leaves a well-formed artifact followed by nothing untouched', () => {
+      expect(normalizeArtifactDirectives(WELL_FORMED)).toBe(WELL_FORMED);
+    });
+
+    it('leaves a second, complete artifact alone', () => {
+      const two = [
+        OPEN,
+        ...HEAD,
+        CLOSE,
+        '',
+        ':::artifact{identifier="second" type="application/vnd.react" title="Second"}',
+        ...TAIL,
+        CLOSE,
+      ].join('\n');
+
+      expect(normalizeArtifactDirectives(two)).toBe(two);
+    });
   });
 });
 

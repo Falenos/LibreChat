@@ -46,6 +46,8 @@
  * through untouched: rendering what upstream would have rendered is always recoverable.
  */
 
+import { SINGLE_FILE_ARTIFACT_TYPES } from './artifactTypes';
+
 /** Spaces, tabs, and the invisible characters models occasionally emit before a directive. */
 const NOISE_CLASS = ' \\t\\u00A0\\u2000-\\u200D\\uFEFF';
 
@@ -55,6 +57,10 @@ const OPENING_LINE = new RegExp(`^([${NOISE_CLASS}]*)(:{3,})[ \\t]*artifact\\b(.
 const CLOSING_LINE = new RegExp(`^[${NOISE_CLASS}]*:{3,}[ \\t]*\\r?$`);
 /** A fenced code block delimiter, with an optional info string. */
 const FENCE_LINE = /^[ \t]*(`{3,}|~{3,})[^\r\n`~]*\r?$/;
+/** The same, capturing the delimiter run and the first word of the info string. */
+const FENCE_PARTS = /^[ \t]*(`{3,}|~{3,})[ \t]*([^\s`~]*)/;
+/** The `type` attribute of an artifact opening line, quoted or bare. */
+const TYPE_ATTRIBUTE = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s}]+))/;
 const BLANK_LINE = /^[ \t]*\r?$/;
 const XML_OPEN = /^[ \t]*<artifact\b([^>]*?)\/?>[ \t]*\r?$/;
 const XML_CLOSE = /^[ \t]*<\/artifact[ \t]*>[ \t]*\r?$/;
@@ -263,15 +269,133 @@ function normalizeBlocks(lines: string[]): string[] {
   return changed ? result : lines;
 }
 
+/** The delimiter run and language of a fence line, or null when the line is not a fence. */
+function fenceParts(line: string): { marker: string; lang: string } | null {
+  const match = FENCE_PARTS.exec(line);
+  return match ? { marker: match[1], lang: match[2] } : null;
+}
+
+/** The `type` attribute of an artifact opening line, or an empty string. */
+function artifactType(line: string): string {
+  const match = TYPE_ATTRIBUTE.exec(line);
+  return match ? (match[1] ?? match[2] ?? match[3] ?? '') : '';
+}
+
+/** Index of the fence that closes the fence opened at `openIndex`, or -1. */
+function fenceCloseIndex(lines: string[], openIndex: number, marker: string): number {
+  for (let index = openIndex + 1; index < lines.length; index += 1) {
+    const fence = fenceParts(lines[index]);
+    if (
+      fence &&
+      fence.lang === '' &&
+      fence.marker[0] === marker[0] &&
+      fence.marker.length >= marker.length
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /**
- * Repair the emission shapes that stop an artifact directive from tokenizing. Returns the
- * input unchanged when there is nothing to repair.
+ * Rejoin an artifact whose container was closed before the file was finished.
+ *
+ * The model closes its fence and writes `:::`, then carries on with the rest of the same
+ * file in a second fence. The tokenizer does exactly as it is told: the container ends at
+ * that `:::`, the artifact keeps only the first chunk, and everything after it becomes a
+ * sibling code block rendered into the chat. This is the shape behind "the panel fills
+ * partway and the rest continues in the conversation", and it survives a page reload
+ * because the defect is in the stored text, not in how it is assembled while streaming.
+ *
+ * The repair drops the premature `:::` together with the fence boundary around it, which
+ * joins the two halves into one continuous fence, and closes the container after the last
+ * absorbed block. One fence rather than two matters: `extractArtifactBody` keeps the first
+ * fenced block of a compiled artifact, so a repair that left two would still drop the tail.
+ *
+ * Three guards keep it off legitimate messages, each verified against the parser:
+ *
+ *  - **Prose between the two blocks stops it.** An explanation before the next fence means
+ *    the model moved on deliberately, so the code block belongs in the chat.
+ *  - **The languages must match.** A `css` block after a `tsx` artifact is a second sample.
+ *  - **Compiled types only.** In a `text/markdown` artifact a following fence is ordinary
+ *    document content.
+ */
+function spliceEarlyClose(lines: string[]): string[] {
+  let result = lines;
+  /* Each pass absorbs one spilled block; a file broken into three comes back whole on the
+   * second. Bounded by the line count, which shrinks with every splice. */
+  for (let pass = 0; pass < result.length; pass += 1) {
+    const spliced = spliceOnce(result);
+    if (spliced === result) {
+      return result;
+    }
+    result = spliced;
+  }
+  return result;
+}
+
+function spliceOnce(lines: string[]): string[] {
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = OPENING_LINE.exec(lines[index]);
+    if (!opening || !SINGLE_FILE_ARTIFACT_TYPES.has(artifactType(lines[index]))) {
+      continue;
+    }
+
+    const bodyFence = nextContentLine(lines, index + 1);
+    const fence = bodyFence === -1 ? null : fenceParts(lines[bodyFence]);
+    if (!fence || fence.lang === '') {
+      continue;
+    }
+    const bodyClose = fenceCloseIndex(lines, bodyFence, fence.marker);
+    if (bodyClose === -1) {
+      continue;
+    }
+
+    /* The container close has to sit immediately after the fence close for this to be the
+     * early-close shape; anything else between them is a different message entirely. */
+    const containerClose = nextContentLine(lines, bodyClose + 1);
+    if (containerClose === -1 || !CLOSING_LINE.test(lines[containerClose])) {
+      continue;
+    }
+
+    const spill = nextContentLine(lines, containerClose + 1);
+    const spillFence = spill === -1 ? null : fenceParts(lines[spill]);
+    if (!spillFence || spillFence.lang !== fence.lang) {
+      continue;
+    }
+
+    /* Drop everything from the first fence's close through the spilled fence's open: the two
+     * code bodies become one, and the container is left open for the close added below. */
+    const result = [...lines.slice(0, bodyClose), ...lines.slice(spill + 1)];
+    const rejoinedClose = fenceCloseIndex(result, bodyClose - 1, fence.marker);
+    if (rejoinedClose === -1) {
+      /* The spilled block never closed — truncated mid-file. Leaving the container open is
+       * what the tokenizer already handles gracefully, so stop here rather than guess. */
+      return result;
+    }
+
+    /* A file broken into three pieces already has a `:::` after the second one. Reusing it
+     * rather than adding another matters: two consecutive closes would leave the second
+     * sitting where the next pass looks for the spilled fence, stopping the repair halfway. */
+    const following = nextContentLine(result, rejoinedClose + 1);
+    if (following !== -1 && CLOSING_LINE.test(result[following])) {
+      return result;
+    }
+    return [...result.slice(0, rejoinedClose + 1), ':::', ...result.slice(rejoinedClose + 1)];
+  }
+  return lines;
+}
+
+/**
+ * Repair the emission shapes that stop an artifact directive from tokenizing, and rejoin an
+ * artifact whose container was closed before the file was finished. Returns the input
+ * unchanged when there is nothing to repair.
  */
 export function normalizeArtifactDirectives(text: string): string {
   if (!text || !text.includes('artifact')) {
     return text;
   }
   const lines = text.split('\n');
-  const normalized = normalizeBlocks(unwrapFenceWrapper(convertXmlTags(lines)));
+  const normalized = spliceEarlyClose(normalizeBlocks(unwrapFenceWrapper(convertXmlTags(lines))));
   return normalized === lines ? text : normalized.join('\n');
 }
