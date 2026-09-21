@@ -7,6 +7,7 @@ const mockShowToast = jest.fn();
 const mockDownloadFromApi = jest.fn();
 const mockDownloadFromUrl = jest.fn();
 const mockTriggerDownload = jest.fn();
+const mockUseFileDownload = jest.fn();
 let mockShareContext: { shareId?: string } = {};
 
 jest.mock('@librechat/client', () => ({
@@ -14,12 +15,20 @@ jest.mock('@librechat/client', () => ({
 }));
 
 jest.mock('~/data-provider', () => ({
-  useFileDownload: () => ({ refetch: mockDownloadFromApi }),
+  useFileDownload: (...args: unknown[]) => {
+    mockUseFileDownload(...args);
+    return { refetch: mockDownloadFromApi };
+  },
   useCodeOutputDownload: () => ({ refetch: mockDownloadFromUrl }),
 }));
 
 jest.mock('~/Providers', () => ({
   useShareContext: () => mockShareContext,
+}));
+
+jest.mock('~/hooks', () => ({
+  AuthContext: require('react').createContext({ user: { id: 'current-user' } }),
+  useLocalize: () => (key: string) => (key === 'com_ui_download_error' ? 'Download failed' : key),
 }));
 
 jest.mock('~/utils', () => ({
@@ -82,6 +91,73 @@ describe('LogLink download routing', () => {
     expect(mockDownloadFromUrl).not.toHaveBeenCalled();
   });
 
+  // [knauf] KK20-366 — tool-result links share the hook-level guard while signed URLs resolve.
+  it('ignores a second click while an authenticated download is pending', async () => {
+    let resolveDownload: (value: { data: string }) => void;
+    mockDownloadFromApi.mockImplementation(
+      () =>
+        new Promise<{ data: string }>((resolve) => {
+          resolveDownload = resolve;
+        }),
+    );
+
+    render(
+      <LogLink
+        user="user-1"
+        file_id="file-1"
+        filename="file.pdf"
+        source={FileSources.cloudfront}
+        href="https://cdn.example.com/uploads/file.pdf"
+      >
+        file.pdf
+      </LogLink>,
+    );
+
+    const link = screen.getByRole('link', { name: 'file.pdf' });
+    fireEvent.click(link);
+    fireEvent.click(link);
+
+    expect(mockDownloadFromApi).toHaveBeenCalledTimes(1);
+    expect(link).toHaveAttribute('aria-busy', 'true');
+
+    resolveDownload!({ data: 'https://cdn.example.com/signed/file.pdf' });
+
+    await waitFor(() => {
+      expect(link).toHaveAttribute('aria-busy', 'false');
+    });
+    expect(mockTriggerDownload).toHaveBeenCalledTimes(1);
+  });
+
+  // [knauf] KK20-366 — translated attachments can be streamed before their file.user metadata.
+  it('uses the authenticated user for a newly streamed stored file without attachment metadata', async () => {
+    mockDownloadFromApi.mockResolvedValue({ data: 'https://cdn.example.com/signed/file.pdf' });
+
+    render(
+      <LogLink
+        file_id="file-1"
+        filename="file.pdf"
+        source={FileSources.cloudfront}
+        href="https://cdn.example.com/uploads/file.pdf"
+      >
+        file.pdf
+      </LogLink>,
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: 'file.pdf' }));
+
+    await waitFor(() => {
+      expect(mockUseFileDownload).toHaveBeenCalledWith(
+        'current-user',
+        'file-1',
+        expect.objectContaining({ source: FileSources.cloudfront }),
+      );
+      expect(mockTriggerDownload).toHaveBeenCalledWith(
+        'https://cdn.example.com/signed/file.pdf',
+        'file.pdf',
+      );
+    });
+  });
+
   it('routes downloads through the share-scoped route in a shared view', async () => {
     mockShareContext = { shareId: 'share-9' };
     const filename = 'file.pdf';
@@ -128,5 +204,32 @@ describe('LogLink download routing', () => {
     });
     expect(mockDownloadFromUrl).toHaveBeenCalledTimes(1);
     expect(mockDownloadFromApi).not.toHaveBeenCalled();
+  });
+
+  // [knauf] KK20-366 — failures must be visible and leave the caller free to retry.
+  it('shows a localized error when the authenticated download request fails', async () => {
+    mockDownloadFromApi.mockRejectedValue(new Error('temporary storage failure'));
+
+    render(
+      <LogLink
+        user="user-1"
+        file_id="file-1"
+        filename="file.pdf"
+        source={FileSources.cloudfront}
+        href="https://cdn.example.com/uploads/file.pdf"
+      >
+        file.pdf
+      </LogLink>,
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: 'file.pdf' }));
+
+    await waitFor(() => {
+      expect(mockShowToast).toHaveBeenCalledWith({
+        status: 'error',
+        message: 'Download failed',
+      });
+    });
+    expect(mockTriggerDownload).not.toHaveBeenCalled();
   });
 });

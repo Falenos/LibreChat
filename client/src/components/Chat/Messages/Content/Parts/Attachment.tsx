@@ -123,13 +123,14 @@ const PreviewPlaceholderCard = memo(
 PreviewPlaceholderCard.displayName = 'PreviewPlaceholderCard';
 
 const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> }) => {
-  // [knauf] KK20-297 — generated/downloadable files need an explicit action label and icon.
+  // [knauf] KK20-297, KK20-366 — generated/downloadable files need an explicit action label and
+  // an in-flight state so slow signed-URL resolution cannot trigger duplicate downloads.
   const localize = useLocalize();
   const visibleFilename = displayFilename(attachment.filename);
   // End [knauf]
   const [isVisible, setIsVisible] = useState(false);
   const file = attachment as TFile & TAttachmentMetadata;
-  const { handleDownload } = useAttachmentLink({
+  const { handleDownload, isDownloading } = useAttachmentLink({
     href: attachment.filepath ?? '',
     filename: attachment.filename ?? '',
     file_id: file.file_id,
@@ -199,12 +200,30 @@ const FileAttachment = memo(({ attachment }: { attachment: Partial<TAttachment> 
         overrideType={extension}
         displayName={visibleFilename}
         containerClassName="max-w-fit"
-        buttonClassName="bg-surface-secondary hover:cursor-pointer hover:bg-surface-hover active:bg-surface-secondary focus:bg-surface-hover hover:border-border-heavy active:border-border-heavy"
-        /* [knauf] KK20-297 — keep the whole card clickable, visibly identify the action. */
+        buttonClassName="bg-surface-secondary hover:cursor-pointer hover:bg-surface-hover active:bg-surface-secondary focus:bg-surface-hover hover:border-border-heavy active:border-border-heavy disabled:cursor-wait disabled:opacity-70"
+        // [knauf] KK20-366 — disable the native button and expose the active request to assistive tech.
+        disabled={isDownloading}
+        busy={isDownloading}
+        // End [knauf]
+        /* [knauf] KK20-297, KK20-366 — identify the action and its in-flight state. */
         action={{
-          icon: <Download className="size-4" aria-hidden="true" />,
-          label: `${localize('com_ui_download')} ${visibleFilename}`,
+          icon: isDownloading ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Download className="size-4" aria-hidden="true" />
+          ),
+          label: `${localize(
+            isDownloading ? 'com_files_downloading' : 'com_ui_download',
+          )} ${visibleFilename}`,
         }}
+        subtitle={
+          isDownloading ? (
+            <div className="flex items-center gap-1.5 text-text-secondary">
+              <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+              <span>{localize('com_files_downloading')}</span>
+            </div>
+          ) : undefined
+        }
         /* End [knauf] */
       />
     </div>

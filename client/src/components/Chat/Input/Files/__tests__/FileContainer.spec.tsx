@@ -67,4 +67,21 @@ describe('FileContainer chip label', () => {
     expect(screen.getByTestId('download-icon')).toBeInTheDocument();
   });
   // End [knauf]
+
+  // [knauf] KK20-366 — download cards must become a real disabled control while resolving.
+  it('exposes busy state and prevents interaction when disabled', () => {
+    render(
+      <FileContainer
+        file={baseFile()}
+        disabled
+        busy
+        action={{ icon: <span />, label: 'Downloading Files report.pdf' }}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Downloading Files report.pdf' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+  });
+  // End [knauf]
 });
