@@ -1,12 +1,12 @@
-import type { Redis, Cluster } from 'ioredis';
 import { logger } from '@librechat/data-schemas';
+import type { Redis, Cluster } from 'ioredis';
 import type { IJobStore, IEventTransport } from './interfaces/IJobStore';
-import { InMemoryJobStore } from './implementations/InMemoryJobStore';
 import { InMemoryEventTransport } from './implementations/InMemoryEventTransport';
-import { RedisJobStore } from './implementations/RedisJobStore';
 import { RedisEventTransport } from './implementations/RedisEventTransport';
-import { cacheConfig } from '~/cache/cacheConfig';
+import { InMemoryJobStore } from './implementations/InMemoryJobStore';
+import { RedisJobStore } from './implementations/RedisJobStore';
 import { ioredisClient } from '~/cache/redisClients';
+import { cacheConfig } from '~/cache/cacheConfig';
 
 /**
  * Configuration for stream services (optional overrides)
@@ -100,6 +100,11 @@ export function createStreamServices(config: StreamServicesConfig = {}): StreamS
           cacheConfig.REDIS_PING_INTERVAL > 0
             ? cacheConfig.REDIS_PING_INTERVAL
             : cacheConfig.REDIS_STREAM_PING_INTERVAL,
+        leaseTtlMs: cacheConfig.REDIS_STREAM_LEASE_TTL_MS,
+        // 0 means "derive from the TTL"; leave the key out rather than pass undefined.
+        ...(cacheConfig.REDIS_STREAM_LEASE_SWEEP_MS > 0
+          ? { leaseSweepMs: cacheConfig.REDIS_STREAM_LEASE_SWEEP_MS }
+          : {}),
       });
       // End [knauf]
 

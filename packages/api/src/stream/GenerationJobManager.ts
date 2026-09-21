@@ -564,6 +564,12 @@ class GenerationJobManagerClass {
      * 1. Resets syncSent so reconnecting clients get sync event (persisted to Redis)
      * 2. Calls any registered allSubscribersLeft handlers (e.g., to save partial responses)
      */
+    // [knauf] These are two signals, not one. The reconnect reset is per-replica and must fire
+    // the instant THIS replica's last viewer leaves — a browser reconnects faster than a Redis
+    // round-trip, and a late reset skips syncReorderBuffer and loses chunks. The partial save must
+    // wait until NO replica has a viewer, or a second tab elsewhere gets a premature snapshot,
+    // and it must run HERE because the handlers live in this process. So: local signal for the
+    // reset, verified global signal for the save.
     this.eventTransport.onAllSubscribersLeft(
       streamId,
       () => {
@@ -577,34 +583,51 @@ class GenerationJobManagerClass {
             .catch((err) => {
               logger.error(`[GenerationJobManager] Failed to persist syncSent=false:`, err);
             });
-          // Call registered handlers (from job.emitter.on('allSubscribersLeft', ...))
-          if (currentRuntime.allSubscribersLeftHandlers) {
-            this.jobStore
-              .getContentParts(streamId, jobData.generationId)
-              .then((result) => {
-                const parts = result?.content ?? [];
-                for (const handler of currentRuntime.allSubscribersLeftHandlers ?? []) {
-                  try {
-                    handler(parts);
-                  } catch (err) {
-                    logger.error(
-                      `[GenerationJobManager] Error in allSubscribersLeft handler:`,
-                      err,
-                    );
-                  }
-                }
-              })
-              .catch((err) => {
-                logger.error(
-                  `[GenerationJobManager] Failed to get content parts for allSubscribersLeft handlers:`,
-                  err,
-                );
-              });
-          }
         }
       },
       jobData.generationId,
     );
+
+    const runDepartureHandlers = () => {
+      const currentRuntime = this.getRuntimeState(streamId, jobData.generationId);
+      if (!currentRuntime?.allSubscribersLeftHandlers) {
+        return;
+      }
+      // A departure that lands after completeJob finds nothing here: cleanup() has removed these
+      // callbacks and clearContentState() the parts. So this cannot cover a provider failure that
+      // wins the race with a remote viewer's departure; the controller persists the error-path
+      // partial itself, before completeJob, through the same exactly-once latch. Ordering against
+      // a completed response is safe either way: saveMessage refuses to let an unfinished write
+      // replace a finished row.
+      this.jobStore
+        .getContentParts(streamId, jobData.generationId)
+        .then((result) => {
+          const parts = result?.content ?? [];
+          for (const handler of currentRuntime.allSubscribersLeftHandlers ?? []) {
+            try {
+              handler(parts);
+            } catch (err) {
+              logger.error(`[GenerationJobManager] Error in allSubscribersLeft handler:`, err);
+            }
+          }
+        })
+        .catch((err) => {
+          logger.error(
+            `[GenerationJobManager] Failed to get content parts for allSubscribersLeft handlers:`,
+            err,
+          );
+        });
+    };
+    if (this.eventTransport.onGlobalDeparture) {
+      this.eventTransport.onGlobalDeparture(streamId, runDepartureHandlers, jobData.generationId);
+    } else {
+      this.eventTransport.onAllSubscribersLeft(
+        streamId,
+        runDepartureHandlers,
+        jobData.generationId,
+      );
+    }
+    // End [knauf]
 
     /**
      * Set up cross-replica abort listener (Redis mode only).
@@ -797,6 +820,9 @@ class GenerationJobManagerClass {
     this.runtimeState.set(streamId, runtime);
 
     // Set up all-subscribers-left callback for this replica
+    // [knauf] Local reconnect reset only. This runtime was built for a generation another replica
+    // owns, so it never has save handlers; registering the save here would only add an observer
+    // that can never do anything. The owner registers the verified global signal in createJob.
     this.eventTransport.onAllSubscribersLeft(
       streamId,
       () => {
@@ -810,34 +836,11 @@ class GenerationJobManagerClass {
             .catch((err) => {
               logger.error(`[GenerationJobManager] Failed to persist syncSent=false:`, err);
             });
-          // Call registered handlers
-          if (currentRuntime.allSubscribersLeftHandlers) {
-            this.jobStore
-              .getContentParts(streamId, jobData.generationId)
-              .then((result) => {
-                const parts = result?.content ?? [];
-                for (const handler of currentRuntime.allSubscribersLeftHandlers ?? []) {
-                  try {
-                    handler(parts);
-                  } catch (err) {
-                    logger.error(
-                      `[GenerationJobManager] Error in allSubscribersLeft handler:`,
-                      err,
-                    );
-                  }
-                }
-              })
-              .catch((err) => {
-                logger.error(
-                  `[GenerationJobManager] Failed to get content parts for allSubscribersLeft handlers:`,
-                  err,
-                );
-              });
-          }
         }
       },
       jobData.generationId,
     );
+    // End [knauf]
 
     // Set up cross-replica abort listener (Redis mode only)
     // This ensures lazily-initialized jobs can receive abort signals

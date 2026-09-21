@@ -464,6 +464,17 @@ export interface IEventTransport {
   /** Listen for all subscribers leaving */
   onAllSubscribersLeft(streamId: string, callback: () => void, generationId?: string): void;
 
+  // [knauf] Cross-replica departure, distinct from the process-local signal above.
+  /**
+   * Register a callback for when NO replica has a subscriber left for this generation,
+   * verified against shared state. Distinct from onAllSubscribersLeft, which is local to this
+   * process: the generating replica registers here so the partial-response save runs where the
+   * handlers live, even when the SSE was served elsewhere. Transports without cross-replica
+   * visibility may omit it; in a single process the two signals coincide.
+   */
+  onGlobalDeparture?(streamId: string, callback: () => void, generationId?: string): void;
+  // End [knauf]
+
   /**
    * Advance subscriber reorder buffer to match publisher sequence (cross-replica safe).
    * @param earlyReplayCount - Number of events replayed from earlyEventBuffer (same-replica).

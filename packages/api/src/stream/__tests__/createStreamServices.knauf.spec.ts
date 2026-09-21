@@ -82,6 +82,7 @@ describe('[knauf] createStreamServices Redis subscriber keepalive', () => {
 
     expect(mockRedisEventTransport).toHaveBeenCalledWith(redisClient, redisSubscriber, {
       keepaliveIntervalSeconds: 0,
+      leaseTtlMs: 30000,
     });
   });
 
@@ -101,6 +102,7 @@ describe('[knauf] createStreamServices Redis subscriber keepalive', () => {
 
     expect(mockRedisEventTransport).toHaveBeenCalledWith(redisClient, redisSubscriber, {
       keepaliveIntervalSeconds: 30,
+      leaseTtlMs: 30000,
     });
   });
 
@@ -120,6 +122,7 @@ describe('[knauf] createStreamServices Redis subscriber keepalive', () => {
 
     expect(mockRedisEventTransport).toHaveBeenCalledWith(redisClient, redisSubscriber, {
       keepaliveIntervalSeconds: 120,
+      leaseTtlMs: 30000,
     });
   });
   // End [knauf]

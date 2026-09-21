@@ -797,6 +797,107 @@ describe('ResumableAgentController resume metadata', () => {
     );
   });
 
+  // [knauf] Partial-response persistence. The cross-replica transport test proves the departure
+  // notification reaches the generating replica; these prove what that notification is worth,
+  // and that a provider failure can no longer win the race against it. The provider fails inside
+  // the running generation, never at initialization, because the generation catch is the path
+  // that clears the job's content.
+
+  /**
+   * A generation that is really running: initializeClient resolves a client whose sendMessage
+   * stays pending until the test fails it, so the failure takes the provider-error path inside
+   * the generation. The captured departure handler is what the transport delivers to the
+   * generating replica, whichever replica served the SSE.
+   */
+  function armRunningGeneration() {
+    const captured = {};
+    mockGenerationJobManager.createJob.mockResolvedValue({
+      generationId: 'generation-1',
+      createdAt: 1000,
+      readyPromise: Promise.resolve(),
+      abortController: new AbortController(),
+      emitter: {
+        on: jest.fn((event, handler) => {
+          if (event === 'allSubscribersLeft') {
+            captured.allSubscribersLeftHandler = handler;
+          }
+        }),
+      },
+    });
+    let failProvider;
+    const providerGate = new Promise((_resolve, reject) => {
+      failProvider = reject;
+    });
+    const client = { sender: 'AI', options: {}, sendMessage: jest.fn(() => providerGate) };
+    const initializeClient = jest.fn().mockResolvedValue({ client });
+    return { captured, client, failProvider, initializeClient };
+  }
+
+  function buildGenerationRequest(conversationId, text) {
+    return {
+      user: { id: 'user-123' },
+      body: {
+        text,
+        messageId: 'user-message',
+        parentMessageId: 'parent-message',
+        conversationId,
+        endpointOption: { endpoint: 'agents', modelOptions: { model: 'gpt-4.1' } },
+      },
+      config: {},
+    };
+  }
+
+  function buildSentResponse() {
+    const res = {
+      headersSent: true,
+      json: jest.fn(() => {
+        res.headersSent = true;
+      }),
+      status: jest.fn(() => res),
+    };
+    return res;
+  }
+
+  function resumeStateFor(conversationId, text, aggregatedContent) {
+    return {
+      conversationId,
+      responseMessageId: 'response-message',
+      model: 'gpt-4.1',
+      aggregatedContent,
+      userMessage: {
+        messageId: 'user-message',
+        parentMessageId: 'parent-message',
+        conversationId,
+        text,
+      },
+    };
+  }
+
+  async function waitFor(condition, description) {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (condition()) {
+        return;
+      }
+      await nextTick();
+    }
+    throw new Error(`Timed out waiting for ${description}`);
+  }
+
+  function partialSavesSince(savesBefore) {
+    return mockSaveMessage.mock.calls
+      .slice(savesBefore)
+      .filter(([, payload]) => payload?.messageId === 'response-message');
+  }
+
+  /** invocationCallOrder of the one partial save, for ordering against completeJob. */
+  function partialSaveOrder() {
+    const index = mockSaveMessage.mock.calls.findIndex(
+      ([, payload]) => payload?.messageId === 'response-message',
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    return mockSaveMessage.mock.invocationCallOrder[index];
+  }
+
   it('filters OAuth prompts before saving partial responses on disconnect', async () => {
     const conversationId = 'conversation-123';
     let allSubscribersLeftHandler;
@@ -876,6 +977,53 @@ describe('ResumableAgentController resume metadata', () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it('persists the partial response exactly once when the generation fails after a disconnect', async () => {
+    const conversationId = 'conversation-456';
+    const { captured, client, failProvider, initializeClient } = armRunningGeneration();
+    const textPart = { type: 'text', text: 'Partial answer the user watched stream in.' };
+    mockGenerationJobManager.getResumeState.mockResolvedValue(
+      resumeStateFor(conversationId, 'Summarise this', [textPart]),
+    );
+
+    await AgentController(
+      buildGenerationRequest(conversationId, 'Summarise this'),
+      buildSentResponse(),
+      jest.fn(),
+      initializeClient,
+      null,
+    );
+    await waitFor(() => client.sendMessage.mock.calls.length === 1, 'the provider call');
+    expect(captured.allSubscribersLeftHandler).toEqual(expect.any(Function));
+    const savesBefore = mockSaveMessage.mock.calls.length;
+
+    // 1. The last viewer leaves mid-generation and the departure is fully verified and saved.
+    await captured.allSubscribersLeftHandler([textPart]);
+    expect(partialSavesSince(savesBefore)).toHaveLength(1);
+
+    // 2. Only now does the provider fail. The error path finds the row written and writes nothing.
+    failProvider(new Error('provider unavailable'));
+    await waitFor(
+      () => mockGenerationJobManager.completeJob.mock.calls.length === 1,
+      'completeJob after the provider failure',
+    );
+
+    const partialSaves = partialSavesSince(savesBefore);
+    expect(partialSaves).toHaveLength(1);
+    expect(partialSaves[0][1]).toEqual(
+      expect.objectContaining({
+        content: [textPart],
+        messageId: 'response-message',
+        parentMessageId: 'user-message',
+        conversationId,
+        unfinished: true,
+      }),
+    );
+
+    // A second notification (a retry, or a duplicate departure) must not write again.
+    await captured.allSubscribersLeftHandler([textPart]);
+    expect(partialSavesSince(savesBefore)).toHaveLength(1);
   });
 
   it('uses model spec and agent fallbacks when saving partial responses on disconnect', async () => {
@@ -960,4 +1108,114 @@ describe('ResumableAgentController resume metadata', () => {
       expect.any(Object),
     );
   });
+  it('persists exactly once when the provider fails while a remote departure is still verifying', async () => {
+    const conversationId = 'conversation-789';
+    const { captured, client, failProvider, initializeClient } = armRunningGeneration();
+    const textPart = { type: 'text', text: 'Partial answer the user watched stream in.' };
+    const resumeState = resumeStateFor(conversationId, 'Summarise this', [textPart]);
+
+    // The departure's lookup is held open: it stands for the Redis verification a remote
+    // unsubscribe starts (LEAVE, the hint, the owner's CHECK) while the provider is still running.
+    let releaseDeparture;
+    const heldLookup = new Promise((resolve) => {
+      releaseDeparture = () => resolve(resumeState);
+    });
+    mockGenerationJobManager.getResumeState
+      .mockImplementationOnce(() => heldLookup)
+      .mockResolvedValue(resumeState);
+
+    await AgentController(
+      buildGenerationRequest(conversationId, 'Summarise this'),
+      buildSentResponse(),
+      jest.fn(),
+      initializeClient,
+      null,
+    );
+    await waitFor(() => client.sendMessage.mock.calls.length === 1, 'the provider call');
+    const savesBefore = mockSaveMessage.mock.calls.length;
+
+    // 1. The remote viewer leaves. The owner's departure handler starts and parks on its lookup.
+    const departure = captured.allSubscribersLeftHandler([textPart]);
+    await waitFor(
+      () => mockGenerationJobManager.getResumeState.mock.calls.length === 1,
+      'the departure lookup',
+    );
+
+    // 2. The provider fails while that verification is still in flight. The error path must not
+    //    complete the job, which clears the content, while a save attempt is unresolved.
+    failProvider(new Error('provider unavailable'));
+    for (let tick = 0; tick < 5; tick += 1) {
+      await nextTick();
+    }
+    expect(mockGenerationJobManager.completeJob).not.toHaveBeenCalled();
+    expect(partialSavesSince(savesBefore)).toHaveLength(0);
+
+    // 3. The departure's verification resolves. One write, then the job completes.
+    releaseDeparture();
+    await departure;
+    await waitFor(
+      () => mockGenerationJobManager.completeJob.mock.calls.length === 1,
+      'completeJob after the release',
+    );
+
+    const partialSaves = partialSavesSince(savesBefore);
+    expect(partialSaves).toHaveLength(1);
+    expect(partialSaves[0][1]).toEqual(
+      expect.objectContaining({ content: [textPart], unfinished: true }),
+    );
+    expect(partialSaveOrder()).toBeLessThan(
+      mockGenerationJobManager.completeJob.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('persists the error-path partial before completing the job, and a late departure does not write again', async () => {
+    const conversationId = 'conversation-987';
+    const { captured, client, failProvider, initializeClient } = armRunningGeneration();
+    const jobPart = { type: 'text', text: 'Everything streamed before the provider failed.' };
+    mockGenerationJobManager.getResumeState.mockResolvedValue(
+      resumeStateFor(conversationId, 'Summarise this', [jobPart]),
+    );
+
+    await AgentController(
+      buildGenerationRequest(conversationId, 'Summarise this'),
+      buildSentResponse(),
+      jest.fn(),
+      initializeClient,
+      null,
+    );
+    await waitFor(() => client.sendMessage.mock.calls.length === 1, 'the provider call');
+    const savesBefore = mockSaveMessage.mock.calls.length;
+
+    // The viewer is still attached when the provider fails: no departure has happened at all.
+    failProvider(new Error('provider unavailable'));
+    await waitFor(
+      () => mockGenerationJobManager.completeJob.mock.calls.length === 1,
+      'completeJob after the provider failure',
+    );
+
+    // The error path itself wrote the job's current parts, before completeJob cleared them.
+    const partialSaves = partialSavesSince(savesBefore);
+    expect(partialSaves).toHaveLength(1);
+    expect(partialSaves[0][1]).toEqual(
+      expect.objectContaining({
+        content: [jobPart],
+        messageId: 'response-message',
+        parentMessageId: 'user-message',
+        conversationId,
+        unfinished: true,
+        error: false,
+      }),
+    );
+    expect(partialSaves[0][2]).toEqual(
+      expect.objectContaining({ context: expect.stringContaining('provider error') }),
+    );
+    expect(partialSaveOrder()).toBeLessThan(
+      mockGenerationJobManager.completeJob.mock.invocationCallOrder[0],
+    );
+
+    // A departure hint that lands after completion must not write again.
+    await captured.allSubscribersLeftHandler([jobPart]);
+    expect(partialSavesSince(savesBefore)).toHaveLength(1);
+  });
+  // End [knauf]
 });

@@ -408,36 +408,52 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // Track if partial response was already saved to avoid duplicates
     let partialResponseSaved = false;
 
+    // [knauf] One partial-response writer per generation. Two paths ask for it: the cross-replica
+    // departure signal below, and a terminal provider failure, which saved nothing of its own and
+    // then clears the streamed content from Redis. Attempts are serialised and each re-checks the
+    // latch first, so a departure parked on its Redis lookup and an error path racing it write
+    // exactly once between them, while a failed attempt leaves the latch open for the next caller.
+    let partialSaveChain = Promise.resolve(false);
+
     /**
-     * Listen for all subscribers leaving to save partial response.
-     * This ensures the response is saved to DB even if all clients disconnect
-     * while generation continues.
-     *
-     * Note: The messageId used here falls back to `${userMessage.messageId}_` if the
-     * actual response messageId isn't available yet. The final response save will
-     * overwrite this with the complete response using the same messageId pattern.
+     * Save the partial response once. The departure signal passes the parts it observed; the
+     * error path passes nothing and the job's current parts are read instead.
+     * @param {unknown[] | undefined} aggregatedContent
+     * @param {string} reason - names the caller in the log line and the save context
+     * @returns {Promise<boolean>} whether this call wrote the row
      */
-    job.emitter.on('allSubscribersLeft', async (aggregatedContent) => {
-      if (partialResponseSaved || !aggregatedContent || aggregatedContent.length === 0) {
-        return;
-      }
-
-      const persistableContent = filterPersistableAbortContent(aggregatedContent);
-      if (persistableContent.length === 0) {
-        logger.debug('[ResumableAgentController] No persistable content to save partial response');
-        return;
-      }
-
-      const resumeState = await GenerationJobManager.getResumeState(streamId, jobGenerationId);
-      if (!resumeState?.userMessage) {
-        logger.debug('[ResumableAgentController] No user message to save partial response for');
-        return;
-      }
-
-      partialResponseSaved = true;
-      const responseConversationId = resumeState.conversationId || conversationId;
-
+    const savePartialResponseOnce = async (aggregatedContent, reason) => {
       try {
+        if (partialResponseSaved) {
+          return false;
+        }
+        let persistableContent = null;
+        if (aggregatedContent != null) {
+          persistableContent = filterPersistableAbortContent(aggregatedContent);
+          if (persistableContent.length === 0) {
+            logger.debug(
+              '[ResumableAgentController] No persistable content to save partial response',
+            );
+            return false;
+          }
+        }
+
+        const resumeState = await GenerationJobManager.getResumeState(streamId, jobGenerationId);
+        if (persistableContent == null) {
+          persistableContent = filterPersistableAbortContent(resumeState?.aggregatedContent ?? []);
+          if (persistableContent.length === 0) {
+            logger.debug(
+              '[ResumableAgentController] No persistable content to save partial response',
+            );
+            return false;
+          }
+        }
+        if (!resumeState?.userMessage) {
+          logger.debug('[ResumableAgentController] No user message to save partial response for');
+          return false;
+        }
+
+        const responseConversationId = resumeState.conversationId || conversationId;
         const partialMessage = {
           messageId: resumeState.responseMessageId || `${resumeState.userMessage.messageId}_`,
           conversationId: responseConversationId,
@@ -464,18 +480,43 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             interfaceConfig: req?.config?.interfaceConfig,
           },
           partialMessage,
-          { context: 'api/server/controllers/agents/request.js - partial response on disconnect' },
+          { context: `api/server/controllers/agents/request.js - partial response on ${reason}` },
         );
+        partialResponseSaved = true;
 
         logger.debug(
-          `[ResumableAgentController] Saved partial response for ${streamId}, content parts: ${persistableContent.length}`,
+          `[ResumableAgentController] Saved partial response for ${streamId} on ${reason}, content parts: ${persistableContent.length}`,
         );
+        return true;
       } catch (error) {
         logger.error('[ResumableAgentController] Error saving partial response:', error);
-        // Reset flag so we can try again if subscribers reconnect and leave again
-        partialResponseSaved = false;
+        // The latch stays open so a later departure, or the error path, can try again
+        return false;
       }
-    });
+    };
+
+    /** Queue one attempt behind any attempt already in flight. Never rejects. */
+    const persistPartialResponse = (aggregatedContent, reason) => {
+      const attempt = partialSaveChain.then(() =>
+        savePartialResponseOnce(aggregatedContent, reason),
+      );
+      partialSaveChain = attempt;
+      return attempt;
+    };
+    // End [knauf]
+
+    /**
+     * Listen for all subscribers leaving to save partial response.
+     * This ensures the response is saved to DB even if all clients disconnect
+     * while generation continues.
+     *
+     * Note: The messageId used here falls back to `${userMessage.messageId}_` if the
+     * actual response messageId isn't available yet. The final response save will
+     * overwrite this with the complete response using the same messageId pattern.
+     */
+    job.emitter.on('allSubscribersLeft', (aggregatedContent) =>
+      persistPartialResponse(aggregatedContent, 'disconnect'),
+    );
 
     /** @type {{ client: TAgentClient; userMCPAuthMap?: Record<string, Record<string, string>> }} */
     const result = await initializeClient({
@@ -850,6 +891,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           const publicError = getPublicGenerationError(errorSummary);
           // End [knauf]
           logger.error('[ResumableAgentController] Generation failed', errorSummary);
+          // [knauf] Persist what the user watched stream in before completeJob clears it from
+          // Redis. This path saved nothing of its own, and a remote viewer's departure whose
+          // Redis verification is still in flight lands on nothing once completeJob has run,
+          // so the save happens here, through the same latch as the departure path.
+          await persistPartialResponse(undefined, 'provider error');
+          // End [knauf]
           await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
           await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         }
@@ -875,6 +922,9 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         const errorSummary = summarizeProviderError(err, 'agent_generation_background');
         const publicError = errorSummary.code ?? 'provider_request_failed';
         logger.error('[ResumableAgentController] Background generation failed', errorSummary);
+        // [knauf] Same partial-before-completeJob rule as the generation catch above.
+        await persistPartialResponse(undefined, 'background failure');
+        // End [knauf]
         await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
         await finishResumableRequest(req, userId);

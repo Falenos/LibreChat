@@ -143,6 +143,12 @@ export class InMemoryEventTransport implements IEventTransport {
     this.getOrCreateStream(streamId, generationId).allSubscribersLeftCallbacks.push(callback);
   }
 
+  // [knauf] One process: "no local viewer left" and "no viewer left anywhere" are the same event.
+  onGlobalDeparture(streamId: string, callback: () => void, generationId?: string): void {
+    this.onAllSubscribersLeft(streamId, callback, generationId);
+  }
+  // End [knauf]
+
   /**
    * Check if this is the first subscriber (for ready signaling)
    */
