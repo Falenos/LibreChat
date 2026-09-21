@@ -6,6 +6,9 @@ const { getProviderRequestId, summarizeProviderError } = require('./providerErro
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
 const MAX_RETRY_LINEAGE_LENGTH = 512;
+const CLIENT_SURFACES = new Set(['none', 'generic_error', 'incomplete_response']);
+const OUTPUT_STATES = new Set(['none', 'answer_text', 'activity_only']);
+const INCOMPLETE_REASONS = new Set(['max_output_tokens', 'content_filter', 'other']);
 
 const logTelemetry = (message, event) => tenantStorage.run({}, () => logger.info(message, event));
 
@@ -97,6 +100,14 @@ const getSuccessRequestId = (result) => {
   );
 };
 
+const getResultIncompleteReason = (result) => {
+  const reason = getGenerationMessage(result)?.response_metadata?.incomplete_details?.reason;
+  if (reason === 'max_output_tokens' || reason === 'content_filter') {
+    return reason;
+  }
+  return reason == null ? undefined : 'other';
+};
+
 const classifyError = (error, cancelled) => {
   if (cancelled || error?.name === 'AbortError') return 'cancelled';
   if (error?.name === 'TimeoutError' && error?.message === STREAM_IDLE_MESSAGE) {
@@ -164,6 +175,8 @@ function createModelRouterTelemetry({
       error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
       error == null ? getSuccessRequestId(output) : providerError?.requestId;
+    const incompleteReason =
+      error == null ? getResultIncompleteReason(output) : providerError?.incompleteReason;
     if (providerError?.retryable === true) {
       queuePendingRetry(call.retryLineage, 'langgraph_retry');
     }
@@ -195,6 +208,8 @@ function createModelRouterTelemetry({
       ...(providerError?.retryDecision != null && {
         retryDecision: providerError.retryDecision,
       }),
+      ...(providerError?.outputState != null && { outputState: providerError.outputState }),
+      ...(incompleteReason != null && { incompleteReason }),
       ...(providerError?.providerStatus != null && {
         providerStatus: providerError.providerStatus,
       }),
@@ -260,7 +275,13 @@ function createModelRouterTelemetry({
     finishCall(runId, 'retry', output);
   };
 
-  const finalize = ({ cancelled = false, failed = false } = {}) => {
+  const finalize = ({
+    cancelled = false,
+    failed = false,
+    clientSurface = 'none',
+    clientOutputState = 'none',
+    clientIncompleteReason,
+  } = {}) => {
     if (finalized) return;
     finalized = true;
     if (completedCalls.length === 0 && calls.size === 0) return;
@@ -298,6 +319,10 @@ function createModelRouterTelemetry({
         terminalResult: terminal.result,
         ...(initial.providerStatus != null && { initialProviderStatus: initial.providerStatus }),
         ...(initial.providerCode != null && { initialProviderCode: initial.providerCode }),
+        ...(initial.outputState != null && { initialOutputState: initial.outputState }),
+        ...(initial.incompleteReason != null && {
+          initialIncompleteReason: initial.incompleteReason,
+        }),
         ...(terminal.retryReason != null && { retryReason: terminal.retryReason }),
       });
     }
@@ -310,6 +335,9 @@ function createModelRouterTelemetry({
     logTelemetry('[FoundryRouterTelemetry] Generation lifecycle completed', {
       ...correlation,
       result: terminalResult,
+      clientSurface: CLIENT_SURFACES.has(clientSurface) ? clientSurface : 'none',
+      clientOutputState: OUTPUT_STATES.has(clientOutputState) ? clientOutputState : 'none',
+      ...(INCOMPLETE_REASONS.has(clientIncompleteReason) && { clientIncompleteReason }),
       durationMs: Math.max(0, completedAtMs - startedAtMs),
       ...(firstModelContentAtMs != null && {
         timeToFirstModelContentMs: Math.max(0, firstModelContentAtMs - startedAtMs),

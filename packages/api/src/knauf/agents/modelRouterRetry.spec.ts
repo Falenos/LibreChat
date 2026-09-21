@@ -92,6 +92,7 @@ describe('Model Router bounded retry', () => {
     expect(disableRetry).not.toHaveBeenCalled();
     expect(output).toContain('"code":"server_error"');
     expect(output).toContain('"knauf_retry_decision":"retry"');
+    expect(output).toContain('"knauf_output_state":"none"');
     expect(output).not.toContain('private provider detail');
   });
 
@@ -119,7 +120,7 @@ describe('Model Router bounded retry', () => {
     await expect(consume()).rejects.toMatchObject({
       code: 'server_error',
       requestID: 'azure-request-1',
-      error: { knauf_retry_decision: 'retry' },
+      error: { knauf_retry_decision: 'retry', knauf_output_state: 'none' },
     });
     expect(disableRetry).not.toHaveBeenCalled();
   });
@@ -141,6 +142,7 @@ describe('Model Router bounded retry', () => {
 
     expect(disableRetry).toHaveBeenCalledTimes(1);
     expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"answer_text"');
   });
 
   it('blocks retry for deterministic streamed failures', async () => {
@@ -159,6 +161,7 @@ describe('Model Router bounded retry', () => {
 
     expect(disableRetry).toHaveBeenCalledTimes(1);
     expect(output).toContain('"knauf_retry_decision":"not_retryable"');
+    expect(output).toContain('"knauf_output_state":"none"');
   });
 
   it('fails closed when a streamed failure has no allow-listed class', async () => {
@@ -198,6 +201,7 @@ describe('Model Router bounded retry', () => {
     expect(disableRetry).not.toHaveBeenCalled();
     expect(output).toContain('"code":"server_error"');
     expect(output).toContain('"knauf_retry_decision":"retry"');
+    expect(output).toContain('"knauf_output_state":"none"');
     expect(output).not.toContain('private provider detail');
   });
 
@@ -213,6 +217,7 @@ describe('Model Router bounded retry', () => {
     expect(disableRetry).not.toHaveBeenCalled();
     expect(output).toContain('"code":"stream_terminated"');
     expect(output).toContain('"knauf_retry_decision":"retry"');
+    expect(output).toContain('"knauf_output_state":"none"');
   });
 
   it('preserves a completed stream without adding an error', async () => {
@@ -256,7 +261,37 @@ describe('Model Router bounded retry', () => {
 
     expect(output).toContain('response.completed');
     expect(output).not.toContain('"error"');
-    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(disableRetry).not.toHaveBeenCalled();
+  });
+
+  it('preserves max-output retry after a trailing transport failure', async () => {
+    const disconnect = Object.assign(new Error('private socket detail'), { code: 'ECONNRESET' });
+    let pullCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pullCount === 0) {
+          pullCount += 1;
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                type: 'response.incomplete',
+                response: { incomplete_details: { reason: 'max_output_tokens' } },
+              })}\n\n`,
+            ),
+          );
+          return;
+        }
+        controller.error(disconnect);
+      },
+    });
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(body, { disableRetry }),
+    ).text();
+
+    expect(output).toContain('"type":"response.incomplete"');
+    expect(output).not.toContain('"knauf_retry_decision"');
+    expect(disableRetry).not.toHaveBeenCalled();
   });
 
   it('blocks retry when the connection terminates after visible output', async () => {
@@ -285,6 +320,46 @@ describe('Model Router bounded retry', () => {
     await expect(new Response(guarded).text()).rejects.toMatchObject({
       code: 'ECONNRESET',
       knaufRetryDecision: 'unsafe_after_output',
+      knaufOutputState: 'answer_text',
+    });
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves transport output state through the installed OpenAI stream parser', async () => {
+    const disconnect = Object.assign(new Error('private socket detail'), { code: 'ECONNRESET' });
+    let pullCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pullCount === 0) {
+          pullCount += 1;
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                type: 'response.output_text.delta',
+                delta: 'Visible answer',
+              })}\n\n`,
+            ),
+          );
+          return;
+        }
+        controller.error(disconnect);
+      },
+    });
+    const disableRetry = jest.fn();
+    const stream = Stream.fromSSEResponse(
+      new Response(guardModelRouterResponsesStream(body, { disableRetry })),
+      new AbortController(),
+    );
+    const consume = async () => {
+      for await (const _event of stream) {
+        // The transport failure must keep the guard's bounded state.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({
+      code: 'ECONNRESET',
+      knaufRetryDecision: 'unsafe_after_output',
+      knaufOutputState: 'answer_text',
     });
     expect(disableRetry).toHaveBeenCalledTimes(1);
   });
@@ -359,9 +434,10 @@ describe('Model Router bounded retry', () => {
 
     expect(disableRetry).toHaveBeenCalledTimes(1);
     expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"activity_only"');
   });
 
-  it('blocks retry when only the visible-output done event carries text', async () => {
+  it('keeps done-only text replay-unsafe without calling it persisted answer text', async () => {
     const disableRetry = jest.fn();
     const output = await new Response(
       guardModelRouterResponsesStream(
@@ -378,5 +454,204 @@ describe('Model Router bounded retry', () => {
 
     expect(disableRetry).toHaveBeenCalledTimes(1);
     expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"activity_only"');
+  });
+
+  it('keeps terminal message text replay-unsafe unless a delta was persisted', async () => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          {
+            type: 'response.output_item.done',
+            item: { type: 'message', content: [{ type: 'output_text', text: 'Visible answer' }] },
+          },
+          {
+            type: 'response.failed',
+            response: { error: { code: 'server_error', message: 'private provider detail' } },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"activity_only"');
+  });
+
+  it.each([
+    {
+      label: 'reasoning only',
+      event: { type: 'response.reasoning_summary.delta', delta: 'Internal reasoning' },
+    },
+    {
+      label: 'reasoning content',
+      event: { type: 'response.reasoning.delta', delta: 'Encrypted reasoning' },
+    },
+    {
+      label: 'reasoning summary part',
+      event: {
+        type: 'response.reasoning_summary_part.added',
+        part: { type: 'summary_text', text: 'Reasoning summary' },
+      },
+    },
+    {
+      label: 'content part added',
+      event: {
+        type: 'response.content_part.added',
+        part: { type: 'output_text', text: '' },
+      },
+    },
+    {
+      label: 'content part done',
+      event: {
+        type: 'response.content_part.done',
+        part: { type: 'output_text', text: 'Terminal answer text' },
+      },
+    },
+    {
+      label: 'reasoning output item',
+      event: { type: 'response.output_item.added', item: { type: 'reasoning' } },
+    },
+    {
+      label: 'refusal only',
+      event: { type: 'response.refusal.delta', delta: 'I cannot help with that.' },
+    },
+    {
+      label: 'malformed answer delta',
+      event: { type: 'response.output_text.delta', delta: { unexpected: true } },
+    },
+    {
+      label: 'terminal refusal item',
+      event: {
+        type: 'response.output_item.done',
+        item: { type: 'message', content: [{ type: 'refusal', refusal: 'Cannot answer' }] },
+      },
+    },
+    {
+      label: 'custom tool input',
+      event: { type: 'response.custom_tool_call_input.delta', delta: '{"query":"bounded"}' },
+    },
+  ])('keeps $label non-replayable without classifying answer text', async ({ event }) => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          event,
+          {
+            type: 'response.failed',
+            response: { error: { code: 'server_error', message: 'private provider detail' } },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"activity_only"');
+  });
+
+  it('does not treat whitespace-only answer events as visible output', async () => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          { type: 'response.output_text.delta', delta: '   ' },
+          {
+            type: 'response.failed',
+            response: { error: { code: 'server_error', message: 'private provider detail' } },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).not.toHaveBeenCalled();
+    expect(output).toContain('"knauf_retry_decision":"retry"');
+    expect(output).toContain('"knauf_output_state":"none"');
+  });
+
+  it('keeps a clean EOF after tool activity non-replayable', async () => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([{ type: 'response.output_item.added', item: { type: 'web_search_call' } }]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"activity_only"');
+  });
+
+  it('turns content-filter incomplete output into a bounded terminal failure', async () => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          { type: 'response.output_text.delta', delta: 'Visible answer' },
+          {
+            type: 'response.incomplete',
+            response: { incomplete_details: { reason: 'content_filter' } },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(output).not.toContain('"type":"response.incomplete"');
+    expect(output).toContain('"code":"response_incomplete"');
+    expect(output).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(output).toContain('"knauf_output_state":"answer_text"');
+    expect(output).toContain('"knauf_incomplete_reason":"content_filter"');
+  });
+
+  it('keeps content-filter incomplete without answer text on the generic-error path', async () => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          {
+            type: 'response.incomplete',
+            response: { incomplete_details: { reason: 'content_filter' } },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).toHaveBeenCalledTimes(1);
+    expect(output).toContain('"knauf_retry_decision":"not_retryable"');
+    expect(output).toContain('"knauf_output_state":"none"');
+    expect(output).toContain('"knauf_incomplete_reason":"content_filter"');
+  });
+
+  it.each([
+    { label: 'max output', reason: 'max_output_tokens' },
+    { label: 'unknown', reason: 'provider_extension' },
+    { label: 'absent', reason: undefined },
+  ])('preserves $label incomplete events for downstream handling', async ({ reason }) => {
+    const disableRetry = jest.fn();
+    const output = await new Response(
+      guardModelRouterResponsesStream(
+        streamOf([
+          {
+            type: 'response.incomplete',
+            response: {
+              incomplete_details: reason == null ? null : { reason },
+            },
+          },
+        ]),
+        { disableRetry },
+      ),
+    ).text();
+
+    expect(disableRetry).not.toHaveBeenCalled();
+    expect(output).toContain('"type":"response.incomplete"');
+    expect(output).not.toContain('"knauf_retry_decision"');
   });
 });

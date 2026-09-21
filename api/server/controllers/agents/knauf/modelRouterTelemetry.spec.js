@@ -104,6 +104,8 @@ describe('[knauf] Model Router telemetry', () => {
       '[FoundryRouterTelemetry] Generation lifecycle completed',
       expect.objectContaining({
         streamId: 'stream-1',
+        clientSurface: 'none',
+        clientOutputState: 'none',
         durationMs: 1_200,
         timeToFirstModelContentMs: 350,
         modelTelemetryScope: 'parent_graph',
@@ -483,7 +485,11 @@ describe('[knauf] Model Router telemetry', () => {
     });
     const error = {
       code: 'server_error',
-      error: { knauf_retry_decision: 'unsafe_after_output' },
+      error: {
+        knauf_retry_decision: 'unsafe_after_output',
+        knauf_output_state: 'answer_text',
+        knauf_incomplete_reason: 'content_filter',
+      },
     };
 
     telemetry.handler.handleChatModelStart(
@@ -496,7 +502,12 @@ describe('[knauf] Model Router telemetry', () => {
       { ls_model_name: 'model-router' },
     );
     telemetry.handler.handleLLMError(error, 'model-run-1');
-    telemetry.finalize({ failed: true });
+    telemetry.finalize({
+      failed: true,
+      clientSurface: 'incomplete_response',
+      clientOutputState: 'answer_text',
+      clientIncompleteReason: 'content_filter',
+    });
 
     expect(logger.info).toHaveBeenCalledWith(
       '[FoundryRouterTelemetry] Model call completed',
@@ -504,6 +515,8 @@ describe('[knauf] Model Router telemetry', () => {
         retryLineage: 'logical-call-1',
         providerRetryable: false,
         retryDecision: 'unsafe_after_output',
+        outputState: 'answer_text',
+        incompleteReason: 'content_filter',
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(
@@ -513,8 +526,78 @@ describe('[knauf] Model Router telemetry', () => {
         outcome: 'unsafe_not_retried',
         attemptCount: 1,
         initialResult: 'provider_error',
+        initialOutputState: 'answer_text',
+        initialIncompleteReason: 'content_filter',
         terminalResult: 'provider_error',
       }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
+      expect.objectContaining({
+        result: 'error',
+        clientSurface: 'incomplete_response',
+        clientOutputState: 'answer_text',
+        clientIncompleteReason: 'content_filter',
+      }),
+    );
+  });
+
+  it('bounds unknown client surfaces on the lifecycle event', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'unknown',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    telemetry.handler.handleLLMEnd(routedResult, 'model-run-1');
+
+    telemetry.finalize({
+      clientSurface: 'private-user-data',
+      clientOutputState: 'private-user-data',
+      clientIncompleteReason: 'private-user-data',
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
+      expect.objectContaining({
+        clientSurface: 'none',
+        clientOutputState: 'none',
+      }),
+    );
+    const event = logger.info.mock.calls.at(-1)[1];
+    expect(event).not.toHaveProperty('clientIncompleteReason');
+  });
+
+  it('bounds incomplete reasons on model-call telemetry', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'model-router',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    const incompleteResult = {
+      generations: [
+        [
+          {
+            message: {
+              response_metadata: {
+                model: 'model-router',
+                incomplete_details: { reason: 'provider_extension' },
+              },
+            },
+          },
+        ],
+      ],
+    };
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    telemetry.handler.handleLLMEnd(incompleteResult, 'model-run-1');
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({ incompleteReason: 'other' }),
     );
   });
 

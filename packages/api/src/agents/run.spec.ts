@@ -10,7 +10,7 @@ import {
   anyAgentReplaysReasoningContent,
 } from './run';
 
-// [knauf] NO-TICKET, KK20-339 — Model Router streams must not outlive the configured
+// [knauf] NO-TICKET, KK20-339, KK20-353 — Model Router streams must not outlive the configured
 // timeout or retry a failed post-200 stream after visible output or tool activity.
 describe('applyKnaufOpenAIStreamControls', () => {
   it('aborts an idle response body and preserves the configured fetch', async () => {
@@ -270,7 +270,112 @@ describe('applyKnaufOpenAIStreamControls', () => {
 
     expect(filtered).toContain('Visible answer');
     expect(filtered).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(filtered).toContain('"knauf_output_state":"answer_text"');
     expect(fallbacks).toEqual([]);
+  });
+
+  it('blocks fallback and surfaces bounded content-filter incomplete output', async () => {
+    const sse = [
+      { type: 'response.output_text.delta', output_index: 0, delta: 'Visible answer' },
+      {
+        type: 'response.incomplete',
+        response: { incomplete_details: { reason: 'content_filter' } },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: { fetch: jest.fn(async () => new Response(sse)) },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).toContain('"code":"response_incomplete"');
+    expect(filtered).toContain('"knauf_output_state":"answer_text"');
+    expect(filtered).toContain('"knauf_incomplete_reason":"content_filter"');
+    expect(fallbacks).toEqual([]);
+  });
+
+  it('does not classify a discarded native-search draft as answer text', async () => {
+    const sse = [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message' },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        delta: 'Unverified draft.',
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 1,
+        item: { type: 'web_search_call' },
+      },
+      {
+        type: 'response.failed',
+        response: { error: { code: 'server_error', message: 'private provider detail' } },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: { fetch: jest.fn(async () => new Response(sse)) },
+    };
+
+    (
+      applyKnaufOpenAIStreamControls as unknown as (
+        config: Record<string, unknown>,
+        bufferNativeSearchDrafts: boolean,
+      ) => void
+    )(cfg, true);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).not.toContain('Unverified draft.');
+    expect(filtered).toContain('"knauf_retry_decision":"unsafe_after_output"');
+    expect(filtered).toContain('"knauf_output_state":"activity_only"');
+    expect(fallbacks).toEqual([]);
+  });
+
+  it('preserves max-output incomplete events for the existing retry handler', async () => {
+    const sse = [
+      {
+        type: 'response.incomplete',
+        response: { incomplete_details: { reason: 'max_output_tokens' } },
+      },
+    ]
+      .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+      .join('');
+    const fallbacks = [{ provider: Providers.OPENAI }];
+    const cfg = {
+      model: 'model-router',
+      timeout: 60_000,
+      useResponsesApi: true,
+      fallbacks,
+      configuration: { fetch: jest.fn(async () => new Response(sse)) },
+    };
+
+    applyKnaufOpenAIStreamControls(cfg);
+    const response = await cfg.configuration.fetch('https://example.test');
+    const filtered = await response.text();
+
+    expect(filtered).toContain('"type":"response.incomplete"');
+    expect(filtered).not.toContain('"knauf_retry_decision"');
+    expect(fallbacks).toHaveLength(1);
   });
 
   it('does not flush a buffered draft when the stream ends without a terminal event', async () => {

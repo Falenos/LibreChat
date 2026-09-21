@@ -1,5 +1,8 @@
 const { createRequire } = require('node:module');
 const {
+  getIncompleteReason,
+  getOutputState,
+  getPersistedGenerationError,
   getProviderRequestId,
   getPublicGenerationError,
   getRetryDecision,
@@ -143,16 +146,128 @@ describe('[knauf] provider error safety', () => {
   it('honors the bounded stream retry decision over a retryable provider code', () => {
     const error = {
       code: 'server_error',
-      error: { knauf_retry_decision: 'unsafe_after_output' },
+      error: {
+        knauf_retry_decision: 'unsafe_after_output',
+        knauf_output_state: 'answer_text',
+      },
     };
 
     expect(getRetryDecision(error)).toBe('unsafe_after_output');
+    expect(getOutputState(error)).toBe('answer_text');
     expect(isRetryableProviderError(error)).toBe(false);
     expect(summarizeProviderError(error, 'model_router_call')).toEqual({
       operation: 'model_router_call',
       retryable: false,
       code: 'server_error',
       retryDecision: 'unsafe_after_output',
+      outputState: 'answer_text',
+    });
+  });
+
+  it('persists only the incomplete-response class after visible streamed text', () => {
+    const persisted = getPersistedGenerationError(
+      {
+        retryDecision: 'unsafe_after_output',
+        outputState: 'answer_text',
+        code: 'private_provider_code',
+        message: 'private provider response',
+      },
+      [{ type: 'text', text: 'Partial answer' }],
+    );
+
+    expect(persisted).toEqual({
+      content: '{"type":"incomplete_response"}',
+      surface: 'incomplete_response',
+    });
+    expect(JSON.stringify(persisted)).not.toMatch(
+      /private_provider_code|private provider response/,
+    );
+  });
+
+  it.each([
+    { outputState: 'answer_text', contentParts: [], label: 'no content' },
+    {
+      outputState: 'answer_text',
+      contentParts: [{ type: 'text', text: '   ' }],
+      label: 'blank text',
+    },
+    {
+      outputState: 'activity_only',
+      contentParts: [{ type: 'tool_call', tool_call: { name: 'external_side_effect' } }],
+      label: 'tool activity',
+    },
+    {
+      outputState: 'activity_only',
+      contentParts: [{ type: 'text', text: 'Answer from an earlier model phase' }],
+      label: 'earlier-phase text',
+    },
+    {
+      outputState: 'none',
+      contentParts: [{ type: 'text', text: 'Answer from an earlier model phase' }],
+      label: 'pre-answer failure after earlier-phase text',
+    },
+  ])('keeps the generic error for unsafe failures with $label', ({ outputState, contentParts }) => {
+    expect(
+      getPersistedGenerationError(
+        { retryDecision: 'unsafe_after_output', outputState },
+        contentParts,
+      ),
+    ).toEqual({
+      content: 'An error occurred while processing the request',
+      surface: 'generic_error',
+    });
+  });
+
+  it('silences a cancellation even when the outer abort signal has not propagated', () => {
+    expect(
+      getPersistedGenerationError({ retryDecision: 'cancelled', outputState: 'activity_only' }, [
+        { type: 'text', text: 'Earlier text' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('accepts only bounded output state and incomplete reason fields', () => {
+    const wrapped = {
+      error: {
+        knauf_output_state: 'activity_only',
+        knauf_incomplete_reason: 'content_filter',
+      },
+    };
+    expect(getOutputState(wrapped)).toBe('activity_only');
+    expect(getIncompleteReason(wrapped)).toBe('content_filter');
+    expect(getOutputState({ knaufOutputState: 'answer_text' })).toBe('answer_text');
+    expect(getOutputState({ knaufOutputState: 'private text' })).toBeUndefined();
+    expect(
+      getIncompleteReason({ error: { knauf_incomplete_reason: 'private text' } }),
+    ).toBeUndefined();
+  });
+
+  it('projects output state from the installed OpenAI stream error shape', () => {
+    const openAIRequire = createRequire(require.resolve('@langchain/openai'));
+    const { APIError } = openAIRequire('openai');
+    const error = new APIError(
+      undefined,
+      {
+        message: 'private streamed provider detail',
+        code: 'response_incomplete',
+        type: 'content_filter',
+        knauf_retry_decision: 'unsafe_after_output',
+        knauf_output_state: 'answer_text',
+        knauf_incomplete_reason: 'content_filter',
+      },
+      undefined,
+      new Headers(),
+    );
+
+    expect(summarizeProviderError(error, 'model_router_call')).toEqual({
+      operation: 'model_router_call',
+      retryable: false,
+      code: 'response_incomplete',
+      type: 'content_filter',
+      errorName: 'APIError',
+      retryDecision: 'unsafe_after_output',
+      outputState: 'answer_text',
+      incompleteReason: 'content_filter',
     });
   });
 

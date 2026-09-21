@@ -37,6 +37,11 @@ import ArtifactEditCall, {
   parseArtifactEditResult,
 } from '~/knauf/components/Artifacts/ArtifactEditCall';
 // End [knauf]
+// [knauf] KK20-353 — render a bounded post-output failure as a warning.
+import IncompleteResponseWarning, {
+  isIncompleteResponseError,
+} from '~/knauf/components/Messages/IncompleteResponseWarning';
+// End [knauf]
 
 type PartProps = {
   part?: TMessageContentParts;
@@ -64,18 +69,17 @@ const Part = memo(function Part({
   }
 
   if (part.type === ContentTypes.ERROR) {
-    return (
-      <ErrorMessage
-        text={
-          part[ContentTypes.ERROR] ??
-          (typeof part[ContentTypes.TEXT] === 'string'
-            ? part[ContentTypes.TEXT]
-            : part.text?.value) ??
-          ''
-        }
-        className="my-2"
-      />
-    );
+    // [knauf] KK20-353 — partial streamed output remains useful and must not
+    // be presented as a fatal provider error.
+    const errorText =
+      part[ContentTypes.ERROR] ??
+      (typeof part[ContentTypes.TEXT] === 'string' ? part[ContentTypes.TEXT] : part.text?.value) ??
+      '';
+    if (isIncompleteResponseError(errorText)) {
+      return <IncompleteResponseWarning />;
+    }
+    return <ErrorMessage text={errorText} className="my-2" />;
+    // End [knauf]
   } else if (part.type === ContentTypes.AGENT_UPDATE) {
     return (
       <>

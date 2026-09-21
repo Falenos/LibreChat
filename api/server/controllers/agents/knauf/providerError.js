@@ -7,6 +7,8 @@ const NETWORK_ERROR_CODES = new Set([
 ]);
 const RETRYABLE_PROVIDER_IDENTIFIERS = new Set(['server_error']);
 const RETRY_DECISIONS = new Set(['retry', 'not_retryable', 'unsafe_after_output', 'cancelled']);
+const OUTPUT_STATES = new Set(['none', 'answer_text', 'activity_only']);
+const INCOMPLETE_REASONS = new Set(['max_output_tokens', 'content_filter', 'other']);
 
 const boundedIdentifier = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
@@ -22,6 +24,16 @@ const getStatus = (error) => {
 const getRetryDecision = (error) => {
   const decision = error?.knaufRetryDecision ?? error?.error?.knauf_retry_decision;
   return RETRY_DECISIONS.has(decision) ? decision : undefined;
+};
+
+const getOutputState = (error) => {
+  const state = error?.knaufOutputState ?? error?.error?.knauf_output_state;
+  return OUTPUT_STATES.has(state) ? state : undefined;
+};
+
+const getIncompleteReason = (error) => {
+  const reason = error?.knaufIncompleteReason ?? error?.error?.knauf_incomplete_reason;
+  return INCOMPLETE_REASONS.has(reason) ? reason : undefined;
 };
 
 const getProviderRequestId = (value) => {
@@ -64,6 +76,8 @@ const summarizeProviderError = (error, operation) => {
     (constructorName === 'Object' ? undefined : constructorName) ?? boundedIdentifier(error?.name);
   const requestId = getProviderRequestId(error);
   const retryDecision = getRetryDecision(error);
+  const outputState = getOutputState(error);
+  const incompleteReason = getIncompleteReason(error);
 
   return {
     operation,
@@ -75,6 +89,8 @@ const summarizeProviderError = (error, operation) => {
     ...(errorName != null && { errorName }),
     ...(requestId != null && { requestId }),
     ...(retryDecision != null && { retryDecision }),
+    ...(outputState != null && { outputState }),
+    ...(incompleteReason != null && { incompleteReason }),
   };
 };
 
@@ -87,7 +103,39 @@ const getPublicGenerationError = (summary) => {
 };
 // End [knauf]
 
+const GENERIC_GENERATION_ERROR = 'An error occurred while processing the request';
+const INCOMPLETE_RESPONSE_ERROR = JSON.stringify({ type: 'incomplete_response' });
+
+const hasVisibleText = (contentParts) =>
+  Array.isArray(contentParts) &&
+  contentParts.some((part) => {
+    if (part?.type !== 'text') {
+      return false;
+    }
+    const text = part.text;
+    return typeof text === 'string'
+      ? text.trim().length > 0
+      : typeof text?.value === 'string' && text.value.trim().length > 0;
+  });
+
+const getPersistedGenerationError = (summary, contentParts) => {
+  if (summary?.retryDecision === 'cancelled') {
+    return null;
+  }
+  if (
+    summary?.retryDecision === 'unsafe_after_output' &&
+    summary?.outputState === 'answer_text' &&
+    hasVisibleText(contentParts)
+  ) {
+    return { content: INCOMPLETE_RESPONSE_ERROR, surface: 'incomplete_response' };
+  }
+  return { content: GENERIC_GENERATION_ERROR, surface: 'generic_error' };
+};
+
 module.exports = {
+  getIncompleteReason,
+  getOutputState,
+  getPersistedGenerationError,
   getProviderRequestId,
   getRetryDecision,
   getPublicGenerationError,
