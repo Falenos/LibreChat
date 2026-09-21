@@ -61,6 +61,12 @@ type FileDownloadOptions = {
   // End [knauf]
 };
 
+// [knauf] KK20-366 — Azure Blob can briefly return 404 after a translated output is published.
+const retryTransientFileDownload = (failureCount: number, error: unknown): boolean =>
+  failureCount < 1 &&
+  (error as { response?: { status?: unknown } } | undefined)?.response?.status === 404;
+// End [knauf]
+
 export const isDirectDownloadSource = (source?: string | null): boolean =>
   source === FileSources.s3 || source === FileSources.cloudfront;
 
@@ -78,7 +84,13 @@ export const useFileDownload = (
 ): QueryObserverResult<string> => {
   const queryClient = useQueryClient();
   return useQuery(
-    [QueryKeys.fileDownload, file_id, options.source ?? '', options.direct ?? true, options.projectId ?? ''],
+    [
+      QueryKeys.fileDownload,
+      file_id,
+      options.source ?? '',
+      options.direct ?? true,
+      options.projectId ?? '',
+    ],
     async ({ signal }) => {
       if (!file_id || (!userId && !options.projectId)) {
         console.warn('No user ID or project ID provided for file download');
@@ -86,7 +98,11 @@ export const useFileDownload = (
       }
       // [knauf] KK20-248 — project knowledge download goes through a project-scoped route.
       if (options.projectId) {
-        const response = await dataService.getProjectFileDownload(options.projectId, file_id, signal);
+        const response = await dataService.getProjectFileDownload(
+          options.projectId,
+          file_id,
+          signal,
+        );
         const blob = response.data;
         return window.URL.createObjectURL(blob);
       }
@@ -128,7 +144,11 @@ export const useFileDownload = (
     },
     {
       enabled: false,
-      retry: false,
+      // [knauf] KK20-366 — retry one transient storage miss so the first click downloads a
+      // newly published translation instead of requiring the user to click again.
+      retry: retryTransientFileDownload,
+      retryDelay: 500,
+      // End [knauf]
     },
   );
 };

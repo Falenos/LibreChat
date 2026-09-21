@@ -437,7 +437,7 @@ export const editArtifactSchema: ExtendedJsonSchema = {
 };
 // End [knauf]
 
-// [knauf] KK20-297 — translate supported current-message attachments.
+// [knauf] KK20-297, KK20-367 — translate supported current-message attachments.
 export const translateFileSchema: ExtendedJsonSchema = {
   type: 'object',
   properties: {
@@ -460,7 +460,7 @@ export const translateFileSchema: ExtendedJsonSchema = {
       uniqueItems: true,
       items: { type: 'string', minLength: 1, maxLength: 255 },
       description:
-        'Exact available filenames to translate. Required when multiple files are available unless the user explicitly requested all files.',
+        'Exact available filenames to translate. Required for ambiguous requests; omit it to translate exactly one current-message file.',
     },
     preserve_terms: {
       type: 'array',

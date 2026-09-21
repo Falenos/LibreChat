@@ -5,6 +5,7 @@ const {
   formatForFile,
   jsonAdapter,
   markdownAdapter,
+  selectTranslationFiles,
   sourceLocaleRequired,
   svgAdapter,
   xmlAdapter,
@@ -47,6 +48,75 @@ describe('[knauf] file translation formats', () => {
     if (revision == null) delete process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION;
     else process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = revision;
   });
+
+  // [knauf] KK20-367 — implicit translation scope must prefer exactly one current attachment.
+  it('selects the only current-message file without including historical files', () => {
+    const current = { file_id: 'current', filename: 'new.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(selectTranslationFiles([current, historical], {}, [current.file_id])).toEqual([current]);
+  });
+
+  it('requires a named choice when multiple current-message files are available', () => {
+    const first = { file_id: 'current-1', filename: 'first.pdf' };
+    const second = { file_id: 'current-2', filename: 'second.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() =>
+      selectTranslationFiles([first, second, historical], {}, [first.file_id, second.file_id]),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('first.pdf, second.pdf'),
+      }),
+    );
+  });
+
+  it('requires a named choice for an ambiguous historical follow-up', () => {
+    const first = { file_id: 'historical-1', filename: 'first.pdf' };
+    const second = { file_id: 'historical-2', filename: 'second.pdf' };
+
+    expect(() => selectTranslationFiles([first, second])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('first.pdf, second.pdf'),
+      }),
+    );
+  });
+
+  it('requires an explicit filename for a historical-only follow-up', () => {
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() => selectTranslationFiles([historical])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('older.pdf'),
+      }),
+    );
+  });
+
+  it('does not fall back to a historical file when the current message has no supported file', () => {
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() => selectTranslationFiles([historical], {}, ['current-typescript'])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('No supported file is attached to the current message'),
+      }),
+    );
+  });
+
+  it('keeps explicit historical-file and translate-all selections available', () => {
+    const current = { file_id: 'current', filename: 'new.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+    const files = [current, historical];
+
+    expect(selectTranslationFiles(files, { filenames: ['older.pdf'] }, [current.file_id])).toEqual([
+      historical,
+    ]);
+    expect(selectTranslationFiles(files, { all_files: true }, [current.file_id])).toEqual(files);
+  });
+  // End [knauf]
 
   it('translates JSON values while preserving keys and formatting', () => {
     const source = '{\n  "title": "Hello",\n  "items": ["Wall", 7],\n  "enabled": true\n}\n';

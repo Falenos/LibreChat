@@ -541,6 +541,7 @@ describe('primeResources', () => {
           usage: 0,
         },
       ];
+      requestFileSet = new Set(mockAttachmentFiles.map((file) => file.file_id));
 
       mockGetFiles.mockResolvedValue(mockOcrFiles);
       const attachments = Promise.resolve(mockAttachmentFiles);

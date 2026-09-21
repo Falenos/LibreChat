@@ -191,7 +191,7 @@ async function resolveInputFileResults(req, predicate = isTranslatableFile) {
   );
 }
 
-function selectTranslationFiles(files, args = {}) {
+function selectTranslationFiles(files, args = {}, currentMessageFileIds = []) {
   const filenames = args?.filenames;
   const allFiles = args?.all_files;
   if (
@@ -230,7 +230,12 @@ function selectTranslationFiles(files, args = {}) {
       return matches[0];
     });
   }
-  if (files.length > 1 && allFiles !== true) {
+  if (allFiles === true) {
+    return files;
+  }
+  const currentFileIdSet = new Set(currentMessageFileIds);
+  const currentCandidates = files.filter((file) => currentFileIdSet.has(file.file_id));
+  if (currentFileIdSet.size === 0) {
     throw new IdmlError(
       `Choose filenames or set all_files=true. Available files: ${files
         .map((file) => file.filename ?? file.name ?? 'attached file')
@@ -239,7 +244,31 @@ function selectTranslationFiles(files, args = {}) {
       409,
     );
   }
-  return files;
+  if (currentCandidates.length === 0) {
+    throw new IdmlError(
+      'No supported file is attached to the current message. Choose an explicit filename or attach a supported file.',
+      'translation_file_selection_required',
+      409,
+    );
+  }
+  const implicitCandidates = currentCandidates;
+  if (implicitCandidates.length > 1) {
+    throw new IdmlError(
+      `Choose filenames or set all_files=true. Available files: ${implicitCandidates
+        .map((file) => file.filename ?? file.name ?? 'attached file')
+        .join(', ')}`,
+      'translation_file_selection_required',
+      409,
+    );
+  }
+  return implicitCandidates;
+}
+
+function currentMessageTranslationFiles(req, files) {
+  const currentFileIds = Array.isArray(req?.knaufCurrentMessageFileIds)
+    ? req.knaufCurrentMessageFileIds
+    : [];
+  return files.filter((file) => currentFileIds.includes(file.file_id));
 }
 
 const cancellationError = () =>
@@ -1556,7 +1585,12 @@ async function enqueueTranslationFiles({ req, args, signal }) {
     ? normalizeLocale(args.source_locale, 'source_locale')
     : null;
   const preserveTerms = normalizePreserveTerms(args?.preserve_terms);
-  const files = selectTranslationFiles(await resolveInputFiles(req), args);
+  const availableFiles = await resolveInputFiles(req);
+  const files = selectTranslationFiles(
+    availableFiles,
+    args,
+    currentMessageTranslationFiles(req, availableFiles).map((file) => file.file_id),
+  );
   if (sourceLocaleRequired(files, preserveTerms) && !sourceLocale) {
     throw new IdmlError(
       'source_locale is required for structured text or glossary-backed translation',
@@ -1623,9 +1657,21 @@ function buildFileToolContext(req) {
     return '';
   }
   const names = files.map((file) => file.filename ?? file.name ?? 'attached file');
+  const currentFiles = currentMessageTranslationFiles(req, files);
+  const selectionInstruction =
+    currentFiles.length === 1
+      ? `The current-message file ${currentFiles[0].filename ?? currentFiles[0].name ?? 'attached file'} is the default; omit filenames for a request to translate this file.`
+      : currentFiles.length > 1
+        ? `Do not call translate_file for an ambiguous request. Ask the user to choose the exact current-message filename from: ${currentFiles
+            .map((file) => file.filename ?? file.name ?? 'attached file')
+            .join(', ')}.`
+        : Array.isArray(req?.knaufCurrentMessageFileIds) &&
+            req.knaufCurrentMessageFileIds.length > 0
+          ? `No supported file is attached to the current message. Ask the user to attach a supported file or choose an exact historical filename from: ${names.join(', ')}.`
+          : `Do not call translate_file without an explicit filename. Ask the user to choose from the available historical files: ${names.join(', ')}.`;
   return [
     `File translation is available for: ${names.join(', ')}.`,
-    'Call translate_file with a BCP-47 target_locale. If multiple files are available, pass the exact requested filenames, or all_files=true only when the user explicitly requests every file. A single available file needs no selection. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.',
+    `${selectionInstruction} Explicitly named files may include historical files. Use all_files=true only when the user explicitly requests every available file. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.`,
     'The call may finish inline or return a durable job_id. Use translation_status later to check or cancel that job.',
     'Azure Translator returns each completed downloadable file in its original format.',
     'Tell the user that final layout, overflow, and OCR acceptance remains a human review.',

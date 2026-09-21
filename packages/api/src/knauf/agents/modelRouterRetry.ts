@@ -30,26 +30,13 @@ type RetryDecision = 'retry' | 'not_retryable' | 'unsafe_after_output' | 'cancel
 type OutputState = 'none' | 'answer_text' | 'activity_only';
 
 const MODEL_ROUTER = 'model-router';
+const MODEL_ROUTER_RETRY_ATTEMPTS = 2;
 const SAFE_FAILURE_MESSAGE = 'Responses API stream failed';
 const RETRYABLE_STREAM_CODES = new Set([
   'rate_limit_exceeded',
   'server_error',
+  'stream_terminated',
   'vector_store_timeout',
-]);
-const RETRYABLE_TRANSPORT_CODES = new Set([
-  'ECONNRESET',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ETIMEDOUT',
-  'UND_ERR_BODY_TIMEOUT',
-  'UND_ERR_CONNECT_TIMEOUT',
-  'UND_ERR_HEADERS_TIMEOUT',
-  'UND_ERR_SOCKET',
-]);
-const RETRYABLE_TRANSPORT_NAMES = new Set([
-  'APIConnectionError',
-  'APIConnectionTimeoutError',
-  'TimeoutError',
 ]);
 const SIDE_EFFECT_EVENT_PATTERN =
   /^response\.(?:code_interpreter|custom_tool_call|file_search|function_call|image_generation|local_shell|mcp|shell|tool_search|web_search)_/;
@@ -88,16 +75,18 @@ export function applyKnaufRetryFallback(config: RetryConfig, provider: unknown):
   }
 
   const modelRouter = isModelRouter(config);
-  if (modelRouter && (typeof config.maxRetries !== 'number' || config.maxRetries <= 0)) {
-    return;
-  }
 
   const { provider: _provider, fallbacks: _fallbacks, ...retryClientOptions } = config;
   if (modelRouter) {
     config.maxRetries = 0;
     retryClientOptions.maxRetries = 0;
   }
-  config.fallbacks = [{ provider, clientOptions: retryClientOptions }];
+  config.fallbacks = modelRouter
+    ? Array.from({ length: MODEL_ROUTER_RETRY_ATTEMPTS }, () => ({
+        provider,
+        clientOptions: retryClientOptions,
+      }))
+    : [{ provider, clientOptions: retryClientOptions }];
 }
 
 export function disableKnaufRetryFallback(config: RetryConfig): void {
@@ -263,26 +252,6 @@ const markRetryDecision = (
   });
 };
 
-const getTransportCode = (error: unknown): string | undefined => {
-  if (error == null || typeof error !== 'object') {
-    return undefined;
-  }
-  const value = error as { code?: unknown; cause?: unknown };
-  return boundedIdentifier(value.code) ?? getTransportCode(value.cause);
-};
-
-const isRetryableTransportError = (error: unknown): boolean => {
-  if (error == null || typeof error !== 'object') {
-    return false;
-  }
-  const name = boundedIdentifier((error as { name?: unknown }).name);
-  const code = getTransportCode(error);
-  return (
-    (name != null && RETRYABLE_TRANSPORT_NAMES.has(name)) ||
-    (code != null && RETRYABLE_TRANSPORT_CODES.has(code))
-  );
-};
-
 type StreamGuardState = {
   buffer: string;
   terminalSeen: boolean;
@@ -321,10 +290,8 @@ const readStreamFrames = async (
 };
 
 const getTransportDecision = (
-  error: unknown,
   state: StreamGuardState,
   isCallerAborted: () => boolean,
-  isTransportTimedOut: () => boolean,
 ): RetryDecision => {
   if (isCallerAborted()) {
     return 'cancelled';
@@ -332,10 +299,11 @@ const getTransportDecision = (
   if (state.replayUnsafe) {
     return 'unsafe_after_output';
   }
-  if (isTransportTimedOut() || isRetryableTransportError(error)) {
-    return 'retry';
-  }
-  return 'not_retryable';
+  // A body-read failure before any visible output or provider-side activity is
+  // replay-safe even when the runtime wraps the socket error in an unfamiliar
+  // shape. Deterministic provider failures arrive as HTTP/error SSE responses
+  // and are classified separately above.
+  return 'retry';
 };
 
 export function guardModelRouterResponsesStream(
@@ -343,9 +311,8 @@ export function guardModelRouterResponsesStream(
   {
     disableRetry,
     isCallerAborted = () => false,
-    isTransportTimedOut = () => false,
   }: {
-    disableRetry: () => void;
+    disableRetry: (decision: Exclude<RetryDecision, 'retry'>) => void;
     isCallerAborted?: () => boolean;
     isTransportTimedOut?: () => boolean;
   },
@@ -389,7 +356,7 @@ export function guardModelRouterResponsesStream(
         if (incompleteReason === 'content_filter') {
           state.finalResponseSeen = true;
           const decision = state.replayUnsafe ? 'unsafe_after_output' : 'not_retryable';
-          disableRetry();
+          disableRetry(decision);
           controller.enqueue(
             errorFrame(
               encoder,
@@ -407,7 +374,7 @@ export function guardModelRouterResponsesStream(
         const failure = getFailure(event);
         const decision = getDecision(failure, state.replayUnsafe);
         if (decision !== 'retry') {
-          disableRetry();
+          disableRetry(decision);
         }
         controller.enqueue(errorFrame(encoder, failure, decision, state.outputState));
         return;
@@ -422,7 +389,7 @@ export function guardModelRouterResponsesStream(
     if (!state.terminalSeen) {
       const decision = state.replayUnsafe ? 'unsafe_after_output' : 'retry';
       if (decision !== 'retry') {
-        disableRetry();
+        disableRetry(decision);
       }
       controller.enqueue(
         errorFrame(
@@ -454,9 +421,9 @@ export function guardModelRouterResponsesStream(
           controller.close();
           return;
         }
-        const decision = getTransportDecision(error, state, isCallerAborted, isTransportTimedOut);
+        const decision = getTransportDecision(state, isCallerAborted);
         if (decision !== 'retry') {
-          disableRetry();
+          disableRetry(decision);
         }
         controller.error(markRetryDecision(error, decision, state.outputState));
       }

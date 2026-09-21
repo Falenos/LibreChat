@@ -48,7 +48,7 @@ import { useAuthContext } from '~/hooks';
 import { dispatchAdobeAppInteraction } from '~/knauf/analytics/adobe';
 // End [knauf]
 // [knauf] KK20-195 WP5a — submit-map filter for non-ready indexing (plan §6.5).
-import { filterIndexReadyFiles } from '~/knauf/common/fileIndexing';
+import { filterIndexReadyFiles, hasPendingIndexing } from '~/knauf/common/fileIndexing';
 // End [knauf]
 
 const logChatRequest = (request: Record<string, unknown>) => {
@@ -298,6 +298,22 @@ export default function useChatFunctions({
     if (!!isSubmitting || text === '') {
       return;
     }
+    // [knauf] KK20-195 — the disabled send button is not a complete guard:
+    // Enter, audio, and other programmatic submit paths call `ask` directly.
+    // Never clear the composer and persist a text-only message while its file
+    // is still queued/processing.
+    if (
+      files != null &&
+      hasPendingIndexing(files) &&
+      !isRegenerate &&
+      !isContinued &&
+      !isEdited &&
+      overrideFiles == null
+    ) {
+      logger.warn('[useChatFunctions] Refusing to submit while attachments are indexing');
+      return false;
+    }
+    // End [knauf]
 
     const conversation = cloneDeep(immutableConversation);
 

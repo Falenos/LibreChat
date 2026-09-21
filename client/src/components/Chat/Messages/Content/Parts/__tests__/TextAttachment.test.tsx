@@ -32,6 +32,7 @@ jest.mock('../LogLink', () => ({
     const downloadingRef = useRef(false);
     return {
       isDownloading,
+      isDownloadDisabled: isDownloading,
       handleDownload: async (...args: unknown[]) => {
         if (downloadingRef.current) {
           return;

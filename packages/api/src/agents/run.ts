@@ -1093,6 +1093,7 @@ export function applyKnaufOpenAIStreamControls(
 
   const sourceConfiguration = (cfg.configuration ?? {}) as Record<string, unknown>;
   const configuration = { ...sourceConfiguration };
+  let modelRouterHttpAttempt = 0;
   const baseFetch =
     typeof sourceConfiguration.fetch === 'function'
       ? (sourceConfiguration.fetch as typeof fetch)
@@ -1100,6 +1101,12 @@ export function applyKnaufOpenAIStreamControls(
 
   configuration.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
     const [input, init] = args;
+    if (isModelRouter) {
+      modelRouterHttpAttempt += 1;
+      logger.debug('[knauf:model-router-retry] HTTP attempt started', {
+        attempt: modelRouterHttpAttempt,
+      });
+    }
     const idleController = new AbortController();
     const signal = init?.signal
       ? AbortSignal.any([init.signal, idleController.signal])
@@ -1152,7 +1159,12 @@ export function applyKnaufOpenAIStreamControls(
     const responseBody =
       guardStreamingFailures && response.ok
         ? guardModelRouterResponsesStream(filteredBody, {
-            disableRetry: () => disableKnaufRetryFallback(cfg),
+            disableRetry: (decision) => {
+              logger.debug(
+                `[knauf:model-router-retry] fallback disabled: decision=${decision}, attempt=${modelRouterHttpAttempt}`,
+              );
+              disableKnaufRetryFallback(cfg);
+            },
             isCallerAborted: () => init?.signal?.aborted === true,
             isTransportTimedOut: () =>
               idleController.signal.aborted === true && init?.signal?.aborted !== true,
@@ -1345,6 +1357,12 @@ export async function createRun({
     // [knauf] KK20-194, KK20-339 — retain the same-provider fallback while
     // making it the sole Model Router retry so every attempt is observable.
     applyKnaufRetryFallback(llmConfig as Record<string, unknown>, provider);
+    logger.debug(
+      `[knauf:model-router-retry] fallback configured: enabled=${
+        typeof llmConfig.model === 'string' &&
+        llmConfig.model.toLowerCase().includes('model-router')
+      }, fallbackCount=${Array.isArray(llmConfig.fallbacks) ? llmConfig.fallbacks.length : 0}, provider=${provider}`,
+    );
     // End [knauf]
 
     /**

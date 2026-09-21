@@ -3,7 +3,7 @@ import { useToastContext } from '@librechat/client';
 import { FileSources, sharedFileDownload } from 'librechat-data-provider';
 import { useCodeOutputDownload, useFileDownload } from '~/data-provider';
 import { isHttpDownloadTarget, triggerDownload } from '~/utils';
-import { useShareContext } from '~/Providers';
+import { useMessageContext, useMessagesViewContext, useShareContext } from '~/Providers';
 import { AuthContext, useLocalize } from '~/hooks';
 
 interface LogLinkProps {
@@ -50,6 +50,12 @@ export const useAttachmentLink = ({
 }: AttachmentLinkOptions) => {
   const { showToast } = useToastContext();
   const { shareId } = useShareContext();
+  const { isLatestMessage = false, isSubmitting = false } = useMessageContext();
+  const { isSubmitting: isConversationSubmitting } = useMessagesViewContext();
+  // [knauf] KK20-366 — agent handoffs can render an attachment outside the current-message
+  // context while the conversation SSE stream remains active.
+  const isResponseStreaming = isConversationSubmitting || (isLatestMessage && isSubmitting);
+  // End [knauf]
   // [knauf] KK20-366 — freshly streamed translated attachments can precede their user metadata.
   const currentUser = useContext(AuthContext)?.user;
   const downloadUser = user ?? currentUser?.id;
@@ -69,7 +75,7 @@ export const useAttachmentLink = ({
 
   const handleDownload = async (event: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
     event.preventDefault();
-    if (downloadingRef.current) {
+    if (isResponseStreaming || downloadingRef.current) {
       return;
     }
     downloadingRef.current = true;
@@ -115,11 +121,15 @@ export const useAttachmentLink = ({
     }
   };
 
-  return { handleDownload, isDownloading };
+  return {
+    handleDownload,
+    isDownloading,
+    isDownloadDisabled: isResponseStreaming || isDownloading,
+  };
 };
 
 const LogLink: React.FC<LogLinkProps> = ({ href, filename, file_id, user, source, children }) => {
-  const { handleDownload, isDownloading } = useAttachmentLink({
+  const { handleDownload, isDownloading, isDownloadDisabled } = useAttachmentLink({
     href,
     filename,
     file_id,
@@ -133,7 +143,7 @@ const LogLink: React.FC<LogLinkProps> = ({ href, filename, file_id, user, source
       target="_blank"
       rel="noopener noreferrer"
       aria-busy={isDownloading}
-      aria-disabled={isDownloading || undefined}
+      aria-disabled={isDownloadDisabled || undefined}
       className="!text-blue-400 visited:!text-purple-400 hover:underline aria-disabled:pointer-events-none aria-disabled:cursor-wait"
     >
       {children}

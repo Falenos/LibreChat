@@ -18,7 +18,7 @@ const streamOf = (frames: unknown[]): ReadableStream<Uint8Array> => {
 };
 
 describe('Model Router bounded retry', () => {
-  it('uses one graph fallback and disables nested SDK retries', () => {
+  it('uses two graph fallbacks and disables nested SDK retries', () => {
     const configuration = { fetch: jest.fn() };
     const config: Record<string, unknown> = {
       provider: 'openAI',
@@ -30,22 +30,23 @@ describe('Model Router bounded retry', () => {
     applyKnaufRetryFallback(config, 'openAI');
 
     expect(config.maxRetries).toBe(0);
-    expect(config.fallbacks).toEqual([
-      {
+    expect(config.fallbacks).toEqual(
+      Array.from({ length: 2 }, () => ({
         provider: 'openAI',
         clientOptions: expect.objectContaining({
           model: 'model-router',
           maxRetries: 0,
           configuration,
         }),
-      },
-    ]);
+      })),
+    );
   });
 
-  it('honors a disabled retry budget and preserves explicit fallbacks', () => {
+  it('uses graph fallbacks when the SDK retry budget is disabled and preserves explicit fallbacks', () => {
     const disabled = { model: 'model-router', maxRetries: 0 };
     applyKnaufRetryFallback(disabled, 'openAI');
-    expect(disabled).not.toHaveProperty('fallbacks');
+    expect(disabled.maxRetries).toBe(0);
+    expect(disabled.fallbacks).toHaveLength(2);
 
     const fallbacks = [{ provider: 'azureOpenAI' }];
     const explicit = { model: 'model-router', maxRetries: 1, fallbacks };
@@ -93,6 +94,32 @@ describe('Model Router bounded retry', () => {
     expect(output).toContain('"code":"server_error"');
     expect(output).toContain('"knauf_retry_decision":"retry"');
     expect(output).toContain('"knauf_output_state":"none"');
+    expect(output).not.toContain('private provider detail');
+  });
+
+  it('retries an explicit stream_terminated failure before output', async () => {
+    const disableRetry = jest.fn();
+    const stream = guardModelRouterResponsesStream(
+      streamOf([
+        {
+          type: 'response.failed',
+          response: {
+            error: {
+              code: 'stream_terminated',
+              type: 'server_error',
+              message: 'private provider detail',
+            },
+          },
+        },
+      ]),
+      { disableRetry },
+    );
+
+    const output = await new Response(stream).text();
+
+    expect(disableRetry).not.toHaveBeenCalled();
+    expect(output).toContain('"code":"stream_terminated"');
+    expect(output).toContain('"knauf_retry_decision":"retry"');
     expect(output).not.toContain('private provider detail');
   });
 
@@ -381,7 +408,7 @@ describe('Model Router bounded retry', () => {
     expect(disableRetry).not.toHaveBeenCalled();
   });
 
-  it('blocks retry for an unknown transport failure before output', async () => {
+  it('retries an unknown transport failure before output', async () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         controller.error(new SyntaxError('private parse detail'));
@@ -391,8 +418,8 @@ describe('Model Router bounded retry', () => {
 
     await expect(
       new Response(guardModelRouterResponsesStream(body, { disableRetry })).text(),
-    ).rejects.toMatchObject({ knaufRetryDecision: 'not_retryable' });
-    expect(disableRetry).toHaveBeenCalledTimes(1);
+    ).rejects.toMatchObject({ knaufRetryDecision: 'retry' });
+    expect(disableRetry).not.toHaveBeenCalled();
   });
 
   it('does not retry caller cancellation', async () => {

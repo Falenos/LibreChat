@@ -353,6 +353,13 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   const parentMessageId = req.body.parentMessageId;
   /** @type {Array<MongoFile>} */
   let requestFiles = req.body.files ?? [];
+  let modelRequestFiles = requestFiles;
+  // [knauf] KK20-367 — retain current-message attachment identity before
+  // historical and project files are added to request-scoped tool context.
+  req.knaufCurrentMessageFileIds = Array.from(
+    new Set(requestFiles.map((file) => file.file_id).filter(Boolean)),
+  );
+  // End [knauf]
   // [knauf] KK20-297 — follow-up requests do not resend prior attachment metadata.
   // Rehydrate only the active parent chain, owner-scoped, before request-only
   // tools are selected and constructed. This keeps IDML/XML edit and deterministic
@@ -367,7 +374,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       { conversationId },
       'messageId parentMessageId files attachments',
     );
-    const currentFileIds = new Set(requestFiles.map((file) => file.file_id).filter(Boolean));
+    const currentFileIds = new Set(req.knaufCurrentMessageFileIds);
     const historicalFileIds = getThreadData(messages ?? [], parentMessageId).fileIds.filter(
       (fileId) => !currentFileIds.has(fileId),
     );
@@ -394,9 +401,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
           text: 0,
         })) ?? [];
       const seenFileIds = new Set(requestFiles.map((file) => file.file_id));
-      requestFiles = requestFiles.concat(
-        projectFiles.filter((file) => !seenFileIds.has(file.file_id)),
-      );
+      const unseenProjectFiles = projectFiles.filter((file) => !seenFileIds.has(file.file_id));
+      requestFiles = requestFiles.concat(unseenProjectFiles);
+      modelRequestFiles = modelRequestFiles.concat(unseenProjectFiles);
     }
   }
   // End [knauf]
@@ -470,7 +477,8 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       req,
       res,
       loadTools,
-      requestFiles,
+      requestFiles: modelRequestFiles,
+      toolRequestFiles: requestFiles,
       conversationId,
       parentMessageId,
       agent: primaryAgent,

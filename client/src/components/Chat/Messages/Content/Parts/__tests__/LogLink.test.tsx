@@ -9,6 +9,8 @@ const mockDownloadFromUrl = jest.fn();
 const mockTriggerDownload = jest.fn();
 const mockUseFileDownload = jest.fn();
 let mockShareContext: { shareId?: string } = {};
+let mockMessageContext: { isLatestMessage?: boolean; isSubmitting?: boolean } = {};
+let mockConversationSubmitting = false;
 
 jest.mock('@librechat/client', () => ({
   useToastContext: () => ({ showToast: mockShowToast }),
@@ -24,6 +26,8 @@ jest.mock('~/data-provider', () => ({
 
 jest.mock('~/Providers', () => ({
   useShareContext: () => mockShareContext,
+  useMessageContext: () => mockMessageContext,
+  useMessagesViewContext: () => ({ isSubmitting: mockConversationSubmitting }),
 }));
 
 jest.mock('~/hooks', () => ({
@@ -41,6 +45,8 @@ describe('LogLink download routing', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockShareContext = {};
+    mockMessageContext = {};
+    mockConversationSubmitting = false;
   });
 
   it('navigates directly to http URLs when no stored file metadata is available', async () => {
@@ -59,8 +65,26 @@ describe('LogLink download routing', () => {
         'report.pptx',
       );
     });
+
     expect(mockDownloadFromUrl).not.toHaveBeenCalled();
     expect(mockDownloadFromApi).not.toHaveBeenCalled();
+  });
+
+  it('keeps a generated download unavailable until the conversation stream finishes', () => {
+    mockConversationSubmitting = true;
+
+    render(
+      <LogLink href="https://cdn.example.com/uploads/report.pptx" filename="report.pptx">
+        report.pptx
+      </LogLink>,
+    );
+
+    const link = screen.getByRole('link', { name: 'report.pptx' });
+    expect(link).toHaveAttribute('aria-disabled', 'true');
+
+    fireEvent.click(link);
+
+    expect(mockTriggerDownload).not.toHaveBeenCalled();
   });
 
   it('uses the authorized file download route when stored metadata is available', async () => {

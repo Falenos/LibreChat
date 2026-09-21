@@ -13,10 +13,15 @@ Use `translate_file` once for the files the user requested. Pass the requested
 BCP-47 `target_locale` and `source_locale`. Ask for the source language when the
 user did not provide it; do not guess or rely on auto-detection.
 
-When multiple files are available, pass their exact names in `filenames`. Set
-`all_files: true` only when the user explicitly asks to translate every file.
-Never infer all files from singular or ambiguous wording. When exactly one file
-is available, the selection can be omitted.
+Treat files attached to the current user message as the default translation
+scope. When exactly one current-message file is available, its selection can be
+omitted for requests such as "translate this file." When multiple current files
+are available, ask the user to choose their exact names before calling the
+tool. For a follow-up, ask the user to choose an exact historical filename;
+never select a historical file implicitly. Pass exact `filenames` for
+explicitly named historical files. Set `all_files: true` only when the user
+explicitly asks to translate every available file. Never infer all files from
+singular or ambiguous wording.
 
 When the user names product, brand, or technical terms that must not be
 translated, pass those exact strings in `preserve_terms`, including the spelling

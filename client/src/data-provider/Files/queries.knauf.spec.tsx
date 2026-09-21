@@ -75,4 +75,39 @@ describe('[knauf] KK20-221 — useFileDownload AbortSignal', () => {
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(mockGetFileDownload).not.toHaveBeenCalled();
   });
+
+  // [knauf] KK20-366 — recover a just-published translated output that briefly returns 404.
+  it('retries one transient 404 before downloading the file', async () => {
+    const missing = Object.assign(new Error('File not found'), {
+      response: { status: 404 },
+    });
+    mockGetFileDownload
+      .mockRejectedValueOnce(missing)
+      .mockResolvedValueOnce({ data: new Blob(), headers: {} });
+    const { result } = renderHook(() => useFileDownload('user-1', 'file-1', { direct: false }), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(mockGetFileDownload).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry non-404 download failures', async () => {
+    mockGetFileDownload.mockRejectedValueOnce(
+      Object.assign(new Error('Storage unavailable'), { response: { status: 503 } }),
+    );
+    const { result } = renderHook(() => useFileDownload('user-1', 'file-1', { direct: false }), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(mockGetFileDownload).toHaveBeenCalledTimes(1);
+  });
+  // End [knauf]
 });

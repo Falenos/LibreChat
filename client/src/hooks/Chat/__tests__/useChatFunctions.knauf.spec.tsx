@@ -208,6 +208,39 @@ describe('useChatFunctions — Knauf analytics', () => {
       }),
     ]);
   });
+
+  it('preserves the composer when Enter submits while an attachment is still indexing', () => {
+    const setFiles = jest.fn();
+    const setSubmission = jest.fn();
+    const files = new Map([
+      [
+        'document-1',
+        {
+          file_id: 'document-1',
+          filename: 'EN-DE.docx',
+          filepath: '/files/EN-DE.docx',
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          indexing: {
+            status: 'processing' as const,
+            ready: false,
+            retryable: false,
+            error_code: null,
+            queued_at: '2026-09-21T12:00:00.000Z',
+          },
+        },
+      ],
+    ]);
+    const { result } = renderUseChatFunctions({ files, setFiles, setSubmission });
+
+    let submitted: false | void;
+    act(() => {
+      submitted = result.current.ask({ text: 'Translate this file' });
+    });
+
+    expect(submitted).toBe(false);
+    expect(setSubmission).not.toHaveBeenCalled();
+    expect(setFiles).not.toHaveBeenCalled();
+  });
   // End [knauf]
 });
 
