@@ -13,6 +13,8 @@ const mockCreateFile = jest.fn();
 const mockTranslateDocumentWithAzure = jest.fn();
 const mockTranslateBatchWithAzure = jest.fn();
 const mockTranslateWithAzure = jest.fn();
+const mockDetectSourceLanguageWithAzure = jest.fn();
+const mockParseDocument = jest.fn();
 const mockGlossaryForRequest = jest.fn();
 const mockMergePreservedTerms = jest.fn();
 const mockGetOwnedTranslationJob = jest.fn();
@@ -34,6 +36,7 @@ jest.mock('../../strategies', () => ({
 jest.mock('./providers/azure', () => ({
   AZURE_BATCH_GLOSSARY_MAX_BYTES: 9 * 1024 * 1024,
   AZURE_SYNC_GLOSSARY_MAX_BYTES: 900 * 1024,
+  detectSourceLanguageWithAzure: (...args) => mockDetectSourceLanguageWithAzure(...args),
   glossaryForRequest: (...args) => mockGlossaryForRequest(...args),
   mergePreservedTerms: (...args) => mockMergePreservedTerms(...args),
   translateBatchWithAzure: (...args) => mockTranslateBatchWithAzure(...args),
@@ -62,10 +65,12 @@ jest.mock('@librechat/api', () => ({
   ...jest.requireActual('@librechat/api'),
   getCloudFrontConfig: () => mockGetCloudFrontConfig(),
   getStorageMetadata: () => ({}),
+  parseDocument: (...args) => mockParseDocument(...args),
   recordFileTranslationOutcome: (...args) => mockRecordFileTranslationOutcome(...args),
 }));
 
 const {
+  enqueueTranslationFiles,
   persistOutput,
   normalizePreserveTerms,
   resolveInputFileResults,
@@ -109,6 +114,10 @@ describe('[knauf] file translation lifecycle', () => {
     mockCreateFile.mockImplementation(async (metadata) => metadata);
     mockGetFiles.mockResolvedValue([]);
     mockGetCloudFrontConfig.mockReturnValue(null);
+    mockDetectSourceLanguageWithAzure.mockResolvedValue('en');
+    mockParseDocument.mockResolvedValue({
+      text: 'This ceiling system uses an approved acoustic board.',
+    });
     mockGlossaryForRequest.mockResolvedValue({
       entries: [],
       stats: { configured: false, applied: 0, bytes: 0 },
@@ -120,6 +129,10 @@ describe('[knauf] file translation lifecycle', () => {
     mockRestoreProtectedRegion.mockImplementation(async (buffer) => buffer);
     process.env.KNAUF_TRANSLATION_FILE_CONCURRENCY = '1';
     delete process.env.KNAUF_TRANSLATION_STORAGE_WRITE_TIMEOUT_MS;
+    delete process.env.KNAUF_IDML_GLOSSARY_PATH;
+    delete process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB;
+    delete process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED;
+    delete process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION;
   });
 
   it('deletes the saved blob when file metadata cannot be committed', async () => {
@@ -529,6 +542,206 @@ describe('[knauf] file translation lifecycle', () => {
 
     expect(mockTranslateBatchWithAzure).toHaveBeenCalledTimes(1);
     expect(mockTranslateDocumentWithAzure).not.toHaveBeenCalled();
+  });
+
+  it('auto-detects a direct document source language and reports it as auto', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockTranslateDocumentWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        sourceLocale: 'auto',
+      },
+    });
+
+    expect(mockTranslateDocumentWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceLocale: null,
+        targetLocale: 'de',
+      }),
+    );
+    expect(mockDetectSourceLanguageWithAzure).not.toHaveBeenCalled();
+  });
+
+  it('detects the source before applying the production managed glossary', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = 'a'.repeat(64);
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED = 'false';
+    mockGetFiles.mockResolvedValue([file]);
+    mockDetectSourceLanguageWithAzure.mockResolvedValue('en');
+    mockGlossaryForRequest.mockResolvedValue({
+      entries: [{ source: 'acoustic board', target: 'Akustikplatte' }],
+      stats: { configured: true, applied: 1, bytes: 32 },
+    });
+    mockTranslateDocumentWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        sourceLocale: 'auto',
+        files: [
+          {
+            sourceLocale: 'en',
+            glossary: { configured: true, applied: 1 },
+          },
+        ],
+      },
+    });
+
+    expect(mockGetFiles).toHaveBeenCalledWith(expect.any(Object), null, '+text');
+    expect(mockParseDocument).toHaveBeenCalledWith({
+      file: expect.objectContaining({
+        size: Buffer.byteLength('source'),
+        mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        originalname: 'one.docx',
+      }),
+    });
+    expect(mockDetectSourceLanguageWithAzure).toHaveBeenCalledWith(
+      'This ceiling system uses an approved acoustic board.',
+      undefined,
+    );
+    expect(mockGlossaryForRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceLocale: 'en',
+        targetLocale: 'de',
+      }),
+    );
+    expect(mockTranslateDocumentWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceLocale: 'en',
+        glossary: expect.objectContaining({
+          entries: [{ source: 'acoustic board', target: 'Akustikplatte' }],
+        }),
+      }),
+    );
+  });
+
+  it('asks for source_locale when a scanned document has no machine-readable text', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      source: 'local',
+      filepath: '/uploads/one.docx',
+    };
+    process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = 'a'.repeat(64);
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED = 'false';
+    mockGetFiles.mockResolvedValue([file]);
+    mockParseDocument.mockRejectedValue(new Error('No text found in document'));
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'failed',
+        files: [{ code: 'source_locale_detection_failed' }],
+      },
+    });
+
+    expect(mockParseDocument).toHaveBeenCalled();
+    expect(mockDetectSourceLanguageWithAzure).not.toHaveBeenCalled();
+    expect(mockGlossaryForRequest).not.toHaveBeenCalled();
+    expect(mockTranslateDocumentWithAzure).not.toHaveBeenCalled();
+  });
+
+  it('auto-detects an image source language through the Azure batch path', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.png',
+      type: 'image/png',
+      source: 'local',
+      filepath: '/uploads/one.png',
+    };
+    mockGetFiles.mockResolvedValue([file]);
+    mockTranslateBatchWithAzure.mockResolvedValue({
+      buffer: Buffer.from('translated'),
+      providerLocale: 'de',
+      batches: 1,
+    });
+
+    await expect(
+      translateFiles({
+        req: request([file]),
+        args: { target_locale: 'de' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        sourceLocale: 'auto',
+      },
+    });
+
+    expect(mockTranslateBatchWithAzure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceLocale: null,
+        targetLocale: 'de',
+      }),
+    );
+  });
+
+  it('requires source_locale for a normal image upload when the managed glossary is configured', async () => {
+    const file = {
+      file_id: 'file-1',
+      filename: 'one.png',
+      type: 'image/png',
+      source: 'local',
+      filepath: '/uploads/one.png',
+    };
+    process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = 'a'.repeat(64);
+    process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED = 'false';
+    mockGetFiles.mockResolvedValue([file]);
+
+    await expect(
+      enqueueTranslationFiles({
+        req: request([file]),
+        args: { target_locale: 'de', filenames: ['one.png'] },
+      }),
+    ).rejects.toMatchObject({
+      code: 'source_locale_required',
+      status: 400,
+    });
+
+    expect(mockDetectSourceLanguageWithAzure).not.toHaveBeenCalled();
+    expect(mockGlossaryForRequest).not.toHaveBeenCalled();
+    expect(mockTranslateBatchWithAzure).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1140,6 +1353,31 @@ describe('[knauf] file translation lifecycle', () => {
         status: 'failed',
         code: 'translator_rejected',
         protectedTermsRequired: true,
+      },
+    });
+  });
+
+  it('keeps auto as the source locale when a durable report contains null', async () => {
+    mockGetOwnedTranslationJob.mockResolvedValue({
+      job_id: 'job-1',
+      status: 'completed',
+      conversation_id: 'conversation-1',
+      source_locale: null,
+      target_locale: 'de',
+      attempt_count: 1,
+      output_file_ids: [],
+      report: { status: 'completed', sourceLocale: null },
+    });
+
+    await expect(
+      translationJobAction({
+        req: request(),
+        args: { job_id: 'job-1', action: 'status' },
+      }),
+    ).resolves.toMatchObject({
+      report: {
+        status: 'completed',
+        sourceLocale: 'auto',
       },
     });
   });

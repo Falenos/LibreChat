@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs').promises;
+const os = require('os');
 const path = require('path');
 const { v4 } = require('uuid');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
@@ -13,6 +15,7 @@ const {
   getToolDefinition,
   recordFileTranslationOutcome,
   sanitizeFilename,
+  parseDocument,
 } = require('@librechat/api');
 const { Constants, FileSources, isKnaufSourceCodeFile } = require('librechat-data-provider');
 const {
@@ -28,6 +31,7 @@ const {
 const {
   AZURE_BATCH_GLOSSARY_MAX_BYTES,
   AZURE_SYNC_GLOSSARY_MAX_BYTES,
+  detectSourceLanguageWithAzure,
   glossaryForRequest,
   mergePreservedTerms,
   translateBatchWithAzure,
@@ -70,6 +74,7 @@ const MAX_STRUCTURED_SEGMENTS = 10000;
 const MAX_STRUCTURED_CHARACTERS = 500000;
 const MAX_PRESERVE_TERMS = 100;
 const MAX_PRESERVE_TERM_CHARACTERS = 200;
+const LANGUAGE_DETECTION_MAX_CHARACTERS = 50000;
 
 const FORMATS = {
   idml: { mime: IDML_MIME, mode: 'idml' },
@@ -161,7 +166,11 @@ async function resolveInputFiles(req, predicate = isTranslatableFile) {
   return fileIds.map((fileId) => byId.get(fileId));
 }
 
-async function resolveInputFileResults(req, predicate = isTranslatableFile) {
+async function resolveInputFileResults(
+  req,
+  predicate = isTranslatableFile,
+  { includeText = false } = {},
+) {
   const requested = requestToolFiles(req).filter(predicate);
   const fileIds = requestedFileIds(req, predicate);
   if (fileIds.length === 0) {
@@ -171,7 +180,7 @@ async function resolveInputFileResults(req, predicate = isTranslatableFile) {
   if (req.user.tenantId) {
     query.tenantId = req.user.tenantId;
   }
-  const files = await db.getFiles(query);
+  const files = await db.getFiles(query, null, includeText ? '+text' : undefined);
   const byId = new Map(files.filter(predicate).map((file) => [file.file_id, file]));
   const names = new Map(
     requested.map((file) => [file.file_id, file.filename ?? file.name ?? 'attached file']),
@@ -1100,6 +1109,77 @@ async function translateWithOptionalGlossaryFallback({
   }
 }
 
+function managedGlossaryConfigured() {
+  return Boolean(
+    process.env.KNAUF_IDML_GLOSSARY_PATH ||
+      process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB ||
+      process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED === 'true' ||
+      !['', 'none'].includes(process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION ?? 'none'),
+  );
+}
+
+async function sourceLanguageDetectionText(file, input, format, signal) {
+  let text = typeof file.text === 'string' ? file.text : '';
+  if (!text && ['txt', 'csv'].includes(format.extension)) {
+    text = input.toString('utf8');
+  }
+  if (!text && ['pdf', 'docx', 'xlsx'].includes(format.extension)) {
+    throwIfAborted(signal);
+    const temporaryPath = path.join(
+      os.tmpdir(),
+      `karl-source-detection-${v4()}${path.extname(file.filename)}`,
+    );
+    try {
+      await fs.writeFile(temporaryPath, input);
+      const parsed = await parseDocument({
+        file: {
+          path: temporaryPath,
+          size: input.length,
+          mimetype: format.mime,
+          originalname: file.filename,
+        },
+      });
+      text = parsed.text;
+    } catch (error) {
+      logger.warn('[translate_file] source text extraction failed', {
+        filename: file.filename,
+        error: error?.message,
+      });
+      throw new IdmlError(
+        `Source language could not be detected from ${file.filename}; provide source_locale`,
+        'source_locale_detection_failed',
+        400,
+      );
+    } finally {
+      await fs.unlink(temporaryPath).catch(() => undefined);
+    }
+  }
+  if (!text) {
+    throw new IdmlError(
+      `source_locale is required for ${file.filename}; automatic detection is limited to machine-readable PDF, DOCX, XLSX, TXT, and CSV files`,
+      'source_locale_required',
+      400,
+    );
+  }
+  if (file.textFormat === 'html') {
+    text = text
+      .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/giu, ' ')
+      .replace(/<[^>]+>/gu, ' ');
+  }
+  return text.replace(/\s+/gu, ' ').trim().slice(0, LANGUAGE_DETECTION_MAX_CHARACTERS);
+}
+
+async function sourceLocaleForFile({ sourceLocale, file, input, format, signal }) {
+  if (sourceLocale || !managedGlossaryConfigured()) {
+    return sourceLocale;
+  }
+  const detected = await detectSourceLanguageWithAzure(
+    await sourceLanguageDetectionText(file, input, format, signal),
+    signal,
+  );
+  return normalizeLocale(detected, 'detected source locale');
+}
+
 async function translateOneFile({
   req,
   file,
@@ -1111,6 +1191,16 @@ async function translateOneFile({
   throwIfAborted(signal);
   const format = formatForFile(file);
   const input = await readFileBuffer(req, file, signal);
+  const effectiveSourceLocale = await sourceLocaleForFile({
+    sourceLocale,
+    file,
+    input,
+    format,
+    signal,
+  });
+  if (effectiveSourceLocale && targetLocale.toLowerCase() === effectiveSourceLocale.toLowerCase()) {
+    throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
+  }
   const startedAt = Date.now();
   let result;
   let output;
@@ -1126,7 +1216,7 @@ async function translateOneFile({
     const parsed = await parseIdml(input);
     segments = parsed.segments;
     glossary = mergePreservedTerms(
-      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      await glossaryForRequest({ sourceLocale: effectiveSourceLocale, targetLocale, segments }),
       preserveTerms,
       segments,
     );
@@ -1135,7 +1225,7 @@ async function translateOneFile({
         translate: (requestGlossary) =>
           translateWithAzure({
             segments,
-            sourceLocale,
+            sourceLocale: effectiveSourceLocale,
             targetLocale,
             glossary: requestGlossary,
             signal,
@@ -1171,7 +1261,7 @@ async function translateOneFile({
     }
     segments = adapter.segments;
     glossary = mergePreservedTerms(
-      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      await glossaryForRequest({ sourceLocale: effectiveSourceLocale, targetLocale, segments }),
       preserveTerms,
       segments,
     );
@@ -1180,7 +1270,7 @@ async function translateOneFile({
         translate: (requestGlossary) =>
           translateWithAzure({
             segments,
-            sourceLocale,
+            sourceLocale: effectiveSourceLocale,
             targetLocale,
             glossary: requestGlossary,
             signal,
@@ -1203,7 +1293,7 @@ async function translateOneFile({
     );
     glossary = mergePreservedTerms(
       await glossaryForRequest({
-        sourceLocale,
+        sourceLocale: effectiveSourceLocale,
         targetLocale,
         segments: [],
         filterToDocument: false,
@@ -1296,7 +1386,7 @@ async function translateOneFile({
         buffer: translationInput,
         filename: file.filename,
         mimeType: format.mime,
-        sourceLocale,
+        sourceLocale: effectiveSourceLocale,
         targetLocale,
         glossary: requestGlossary,
         translateTextWithinImage,
@@ -1346,6 +1436,7 @@ async function translateOneFile({
       status: 'completed',
       provider: 'azure_translator',
       providerLocale: result.providerLocale,
+      sourceLocale: effectiveSourceLocale ?? 'auto',
       durationMs: Date.now() - startedAt,
       batches: result.batches,
       segments: segments.length,
@@ -1452,7 +1543,9 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
   if (sourceLocale && targetLocale.toLowerCase() === sourceLocale.toLowerCase()) {
     throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
   }
-  const inputFiles = await resolveInputFileResults(req);
+  const inputFiles = await resolveInputFileResults(req, isTranslatableFile, {
+    includeText: !sourceLocale && managedGlossaryConfigured(),
+  });
   let settled;
   try {
     settled = await mapLimited(
@@ -1515,7 +1608,7 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
     files,
     report: {
       status,
-      sourceLocale,
+      sourceLocale: sourceLocale ?? 'auto',
       targetLocale,
       files: reports,
       layoutValidation: 'human_required',
@@ -1539,10 +1632,10 @@ async function jobToolResult(req, job) {
     report: {
       jobId: job.job_id,
       status: job.status,
-      sourceLocale: job.source_locale ?? 'auto',
       targetLocale: job.target_locale,
       attemptCount: job.attempt_count,
       ...(job.report ?? {}),
+      sourceLocale: job.source_locale ?? 'auto',
       ...(job.last_error_code ? { code: job.last_error_code, error: job.last_error_detail } : {}),
       ...(job.protected_terms_required ? { protectedTermsRequired: true } : {}),
       ...(job.cancel_requested_at && job.status === 'processing'
@@ -1566,17 +1659,29 @@ async function waitForTranslationJob({ req, job, signal }) {
   return jobToolResult(req, current ?? job);
 }
 
+function sourceLocaleRequirement(files, preserveTerms = []) {
+  if (preserveTerms.length > 0) {
+    return 'source_locale is required when preserve_terms is used';
+  }
+  const formats = new Set();
+  for (const file of files) {
+    const format = formatForFile(file);
+    const mode = format?.mode;
+    if (['idml', 'json', 'markdown', 'xml', 'svg'].includes(mode)) {
+      formats.add(mode.toUpperCase());
+    }
+    if (managedGlossaryConfigured() && (mode === 'image' || format?.extension === 'pptx')) {
+      formats.add(format.extension.toUpperCase());
+    }
+  }
+  if (formats.size > 0) {
+    return `source_locale is required for ${Array.from(formats).join(', ')} translation`;
+  }
+  return null;
+}
+
 function sourceLocaleRequired(files, preserveTerms = []) {
-  const glossaryConfigured =
-    process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED === 'true' ||
-    !['', 'none'].includes(process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION ?? 'none');
-  return (
-    glossaryConfigured ||
-    preserveTerms.length > 0 ||
-    files.some((file) =>
-      ['idml', 'json', 'markdown', 'xml', 'svg'].includes(formatForFile(file)?.mode),
-    )
-  );
+  return sourceLocaleRequirement(files, preserveTerms) != null;
 }
 
 async function enqueueTranslationFiles({ req, args, signal }) {
@@ -1591,12 +1696,9 @@ async function enqueueTranslationFiles({ req, args, signal }) {
     args,
     currentMessageTranslationFiles(req, availableFiles).map((file) => file.file_id),
   );
-  if (sourceLocaleRequired(files, preserveTerms) && !sourceLocale) {
-    throw new IdmlError(
-      'source_locale is required for structured text or glossary-backed translation',
-      'source_locale_required',
-      400,
-    );
+  const sourceRequirement = sourceLocaleRequirement(files, preserveTerms);
+  if (sourceRequirement && !sourceLocale) {
+    throw new IdmlError(sourceRequirement, 'source_locale_required', 400);
   }
   if (sourceLocale && sourceLocale.toLowerCase() === targetLocale.toLowerCase()) {
     throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
@@ -1671,7 +1773,7 @@ function buildFileToolContext(req) {
           : `Do not call translate_file without an explicit filename. Ask the user to choose from the available historical files: ${names.join(', ')}.`;
   return [
     `File translation is available for: ${names.join(', ')}.`,
-    `${selectionInstruction} Explicitly named files may include historical files. Use all_files=true only when the user explicitly requests every available file. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.`,
+    `${selectionInstruction} Explicitly named files may include historical files. Use all_files=true only when the user explicitly requests every available file. For machine-readable PDF, DOCX, XLSX, TXT, and CSV files, omit source_locale when it is unknown so KARL can detect it before applying the managed glossary. Ask for source_locale before translating scanned PDFs, PPTX, raster images, IDML, JSON, Markdown, XML, or SVG files, or when preserve_terms is requested. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.`,
     'The call may finish inline or return a durable job_id. Use translation_status later to check or cancel that job.',
     'Azure Translator returns each completed downloadable file in its original format.',
     'Tell the user that final layout, overflow, and OCR acceptance remains a human review.',
@@ -1776,6 +1878,7 @@ module.exports = {
   resolveInputFileResults,
   resolveInputFiles,
   selectTranslationFiles,
+  sourceLocaleRequirement,
   sourceLocaleRequired,
   translationJobAction,
   svgAdapter,

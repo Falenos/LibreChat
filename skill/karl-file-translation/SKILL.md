@@ -10,8 +10,14 @@ allowed-tools:
 # File translation
 
 Use `translate_file` once for the files the user requested. Pass the requested
-BCP-47 `target_locale` and `source_locale`. Ask for the source language when the
-user did not provide it; do not guess or rely on auto-detection.
+BCP-47 `target_locale`. Pass `source_locale` when the user provides it. For a
+machine-readable PDF, DOCX, XLSX, TXT, or CSV file, omit `source_locale` when it
+is unknown so KARL can detect the source language before applying the managed
+glossary. Ask for the source language before translating a scanned PDF, PPTX,
+raster image, IDML, JSON, Markdown, XML, or SVG file, or when `preserve_terms`
+is requested. If KARL cannot detect the language confidently from extracted
+text, ask the user to provide it rather than silently translating without
+managed terminology.
 
 Treat files attached to the current user message as the default translation
 scope. When exactly one current-message file is available, its selection can be

@@ -39,6 +39,7 @@ jest.mock('@azure/storage-blob', () => ({
 }));
 
 const {
+  detectSourceLanguageWithAzure,
   glossaryForRequest,
   mergePreservedTerms,
   translateBatchWithAzure,
@@ -117,6 +118,58 @@ describe('[knauf] Azure translation provider', () => {
       'https://storage.example.test/translation-target?sig=target-container-secret',
     );
     mockTargetBlob.downloadToBuffer.mockResolvedValue(Buffer.from('%PDF translated'));
+  });
+
+  it('detects a supported source language from extracted text', async () => {
+    process.env.AZURE_TRANSLATOR_ENDPOINT = 'https://translator.example.test';
+    process.env.AZURE_TRANSLATOR_KEY = 'translator-key';
+    process.env.AZURE_TRANSLATOR_REGION = 'swedencentral';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          language: 'de',
+          score: 0.98,
+          isTranslationSupported: true,
+        },
+      ],
+    });
+
+    await expect(
+      detectSourceLanguageWithAzure('Das ist ein deutscher Beispielsatz.'),
+    ).resolves.toBe('de');
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://translator.example.test/translator/text/v3.0/detect?api-version=3.0',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'Ocp-Apim-Subscription-Region': 'swedencentral',
+        }),
+        body: JSON.stringify([{ Text: 'Das ist ein deutscher Beispielsatz.' }]),
+      }),
+    );
+  });
+
+  it('rejects an unreliable source-language detection', async () => {
+    process.env.AZURE_TRANSLATOR_ENDPOINT = 'https://translator.example.test';
+    process.env.AZURE_TRANSLATOR_KEY = 'translator-key';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          language: 'de',
+          score: 0.2,
+          isTranslationSupported: true,
+        },
+      ],
+    });
+
+    await expect(detectSourceLanguageWithAzure('Kurzer Text')).rejects.toMatchObject({
+      code: 'source_locale_detection_failed',
+      status: 400,
+    });
   });
 
   it('fails closed when the required Knauf glossary is not configured', async () => {
@@ -218,9 +271,7 @@ describe('[knauf] Azure translation provider', () => {
   });
 
   it('uses the source document casing for managed identity terms', async () => {
-    const csv = Buffer.from(
-      'id,a,b,c,eng_GLO,deu_GLO\n1,,,,Heradesign,Heradesign\n',
-    );
+    const csv = Buffer.from('id,a,b,c,eng_GLO,deu_GLO\n1,,,,Heradesign,Heradesign\n');
     process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB = 'global-dictionary.csv';
     process.env.AZURE_STORAGE_CONNECTION_STRING =
       'DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test-key';
@@ -566,6 +617,34 @@ describe('[knauf] Azure translation provider', () => {
       String(requestUrl).includes('/translator/document:translate?'),
     );
     expect(String(url)).toContain('translateTextWithinImage=true');
+  });
+
+  it('omits sourceLanguage so Azure auto-detects direct document input', async () => {
+    process.env.AZURE_TRANSLATOR_ENDPOINT = 'https://translator.example.test';
+    process.env.AZURE_TRANSLATOR_KEY = 'translator-key';
+    global.fetch = jest.fn((url) =>
+      Promise.resolve(
+        String(url).includes('/languages?')
+          ? { ok: true, json: async () => ({ translation: { de: {} } }) }
+          : { ok: true, arrayBuffer: async () => Buffer.from('translated docx') },
+      ),
+    );
+
+    await translateDocumentWithAzure({
+      buffer: Buffer.from('source docx'),
+      filename: 'source.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sourceLocale: null,
+      targetLocale: 'de',
+      glossary: { entries: [] },
+    });
+
+    const [url] = global.fetch.mock.calls.find(([requestUrl]) =>
+      String(requestUrl).includes('/translator/document:translate?'),
+    );
+    const query = new URL(url).searchParams;
+    expect(query.get('targetLanguage')).toBe('de');
+    expect(query.has('sourceLanguage')).toBe(false);
   });
 
   it.each([

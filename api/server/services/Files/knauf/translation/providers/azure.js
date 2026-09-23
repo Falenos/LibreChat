@@ -22,6 +22,8 @@ const AZURE_XLIFF_BATCH_BYTES = 7 * 1024 * 1024;
 const AZURE_SYNC_OUTPUT_MAX_BYTES = 50 * 1024 * 1024;
 const AZURE_BATCH_TIMEOUT_MS = 10 * 60 * 1000;
 const AZURE_CANCEL_TIMEOUT_MS = 30 * 1000;
+const AZURE_LANGUAGE_DETECTION_MAX_CHARACTERS = 50000;
+const AZURE_LANGUAGE_DETECTION_MIN_SCORE = 0.5;
 const GLOSSARY_SOURCE_MAX_BYTES = 20 * 1024 * 1024;
 const MAX_REPORTED_PRESERVED_TERMS = 10;
 const LANGUAGE_2_TO_3 = {
@@ -527,8 +529,7 @@ function mergePreservedTerms(
     const key = term.normalize('NFC');
     if (!protectedKeys.has(key)) {
       preservedOverrides += (managedBySource.get(key) ?? []).filter(
-        (entry) =>
-          (entry.source.normalize('NFC') !== term || entry.target.normalize('NFC') !== term),
+        (entry) => entry.source.normalize('NFC') !== term || entry.target.normalize('NFC') !== term,
       ).length;
     }
     protectedKeys.add(key);
@@ -571,10 +572,7 @@ function mergePreservedTerms(
       preservedApplied,
       preservedMissing,
       preservedMissingTerms,
-      preservedMissingTermsTruncated: Math.max(
-        0,
-        preservedMissing - preservedMissingTerms.length,
-      ),
+      preservedMissingTermsTruncated: Math.max(0, preservedMissing - preservedMissingTerms.length),
       preservedOverrides,
       preservedUnverified: filterToDocument ? 0 : preservedApplied,
       bytes,
@@ -686,6 +684,43 @@ function azureError(response, operation) {
   );
   error.retryAfter = response.headers.get('retry-after');
   return error;
+}
+
+async function detectSourceLanguageWithAzure(text, signal) {
+  const sample =
+    typeof text === 'string' ? text.trim().slice(0, AZURE_LANGUAGE_DETECTION_MAX_CHARACTERS) : '';
+  if (!sample || !/\p{L}/u.test(sample)) {
+    throw new IdmlError(
+      'Source language could not be detected from the extracted file text; provide source_locale',
+      'source_locale_detection_failed',
+      400,
+    );
+  }
+  const config = translatorConfig();
+  const response = await fetch(`${config.endpoint}/translator/text/v3.0/detect?api-version=3.0`, {
+    method: 'POST',
+    headers: translatorHeaders(config, 'application/json'),
+    body: JSON.stringify([{ Text: sample }]),
+    signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(30000)]),
+  });
+  if (!response.ok) {
+    throw azureError(response, 'source language detection');
+  }
+  const [detected] = await response.json();
+  if (
+    typeof detected?.language !== 'string' ||
+    detected.language.length === 0 ||
+    detected.isTranslationSupported === false ||
+    !Number.isFinite(detected.score) ||
+    detected.score < AZURE_LANGUAGE_DETECTION_MIN_SCORE
+  ) {
+    throw new IdmlError(
+      'Source language could not be detected confidently; provide source_locale',
+      'source_locale_detection_failed',
+      400,
+    );
+  }
+  return detected.language;
 }
 
 async function translateDocumentWithAzure({
@@ -1106,6 +1141,7 @@ async function glossaryForRequest({
 module.exports = {
   AZURE_BATCH_GLOSSARY_MAX_BYTES,
   AZURE_SYNC_GLOSSARY_MAX_BYTES,
+  detectSourceLanguageWithAzure,
   glossaryForRequest,
   mergePreservedTerms,
   translateBatchWithAzure,

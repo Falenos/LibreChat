@@ -451,7 +451,8 @@ export const translateFileSchema: ExtendedJsonSchema = {
       type: 'string',
       minLength: 2,
       maxLength: 64,
-      description: 'Required source BCP-47 locale, for example en, de-DE, fr-FR, or ar-SA.',
+      description:
+        'Optional source BCP-47 locale, for example en, de-DE, fr-FR, or ar-SA. Omit it for machine-readable PDF, DOCX, XLSX, TXT, and CSV files so KARL can detect the language before applying the managed glossary. It is required for scanned PDFs, PPTX, raster images, IDML, JSON, Markdown, XML, SVG, and preserve_terms.',
     },
     filenames: {
       type: 'array',
@@ -476,7 +477,7 @@ export const translateFileSchema: ExtendedJsonSchema = {
         'Set true only when the user explicitly requests translation of every available file.',
     },
   },
-  required: ['target_locale', 'source_locale'],
+  required: ['target_locale'],
   additionalProperties: false,
 };
 // End [knauf]
