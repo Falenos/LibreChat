@@ -38,6 +38,9 @@ const routedResult = {
             model_name: 'model-router',
             model: 'model-routergpt-5.5-2026-04-01',
             request_id: 'azure-request-1',
+            headers: {
+              'apim-request-id': 'azure-correlation-1',
+            },
           },
           usage_metadata: { input_tokens: 100, output_tokens: 25 },
         },
@@ -98,6 +101,7 @@ describe('[knauf] Model Router telemetry', () => {
         inputTokens: 100,
         outputTokens: 25,
         providerRequestId: 'azure-request-1',
+        providerCorrelationId: 'azure-correlation-1',
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(
@@ -450,6 +454,11 @@ describe('[knauf] Model Router telemetry', () => {
       type: 'invalid_request_error',
       param: 'text.verbosity',
       requestID: 'azure-request-400',
+      headers: new Headers({
+        'x-request-id': 'azure-request-400',
+        'apim-request-id': 'azure-correlation-400',
+        authorization: 'Bearer provider-secret',
+      }),
       request: { body: { input: 'private prompt' } },
     });
 
@@ -470,11 +479,13 @@ describe('[knauf] Model Router telemetry', () => {
         providerParam: 'text.verbosity',
         errorName: 'Error',
         providerRequestId: 'azure-request-400',
+        providerCorrelationId: 'azure-correlation-400',
       }),
     );
     const event = logger.info.mock.calls.at(-1)[1];
     expect(JSON.stringify(event)).not.toContain('sensitive provider response');
     expect(JSON.stringify(event)).not.toContain('private prompt');
+    expect(JSON.stringify(event)).not.toContain('provider-secret');
   });
 
   it('records an unsafe post-output failure as not retried', () => {
@@ -485,6 +496,10 @@ describe('[knauf] Model Router telemetry', () => {
     });
     const error = {
       code: 'server_error',
+      headers: new Headers({
+        'x-request-id': 'azure-request-unsafe',
+        'apim-request-id': 'azure-correlation-unsafe',
+      }),
       error: {
         knauf_retry_decision: 'unsafe_after_output',
         knauf_output_state: 'answer_text',
@@ -517,6 +532,8 @@ describe('[knauf] Model Router telemetry', () => {
         retryDecision: 'unsafe_after_output',
         outputState: 'answer_text',
         incompleteReason: 'content_filter',
+        providerRequestId: 'azure-request-unsafe',
+        providerCorrelationId: 'azure-correlation-unsafe',
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(
@@ -528,6 +545,8 @@ describe('[knauf] Model Router telemetry', () => {
         initialResult: 'provider_error',
         initialOutputState: 'answer_text',
         initialIncompleteReason: 'content_filter',
+        initialProviderCorrelationId: 'azure-correlation-unsafe',
+        terminalProviderCorrelationId: 'azure-correlation-unsafe',
         terminalResult: 'provider_error',
       }),
     );

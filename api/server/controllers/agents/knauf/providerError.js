@@ -16,6 +16,13 @@ const boundedIdentifier = (value) =>
 const boundedParameter = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_.:[\]-]{1,256}$/.test(value) ? value : undefined;
 
+const getResponseHeaders = (value) => value?.headers ?? value?.response?.headers;
+
+const getResponseHeader = (value, name) => {
+  const headers = getResponseHeaders(value);
+  return headers?.get?.(name) ?? headers?.[name];
+};
+
 const getStatus = (error) => {
   const status = error?.status ?? error?.statusCode ?? error?.response?.status;
   return Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
@@ -37,16 +44,21 @@ const getIncompleteReason = (error) => {
 };
 
 const getProviderRequestId = (value) => {
-  const headers = value?.headers ?? value?.response?.headers;
   return boundedIdentifier(
     value?.request_id ??
       value?.requestId ??
       value?.requestID ??
-      headers?.get?.('x-request-id') ??
-      headers?.['x-request-id'] ??
-      headers?.['apim-request-id'],
+      getResponseHeader(value, 'x-request-id'),
   );
 };
+
+const getProviderCorrelationId = (value) =>
+  boundedIdentifier(
+    value?.apim_request_id ??
+      value?.apimRequestId ??
+      value?.apimRequestID ??
+      getResponseHeader(value, 'apim-request-id'),
+  );
 
 const isRetryableProviderError = (error) => {
   const retryDecision = getRetryDecision(error);
@@ -75,6 +87,7 @@ const summarizeProviderError = (error, operation) => {
   const errorName =
     (constructorName === 'Object' ? undefined : constructorName) ?? boundedIdentifier(error?.name);
   const requestId = getProviderRequestId(error);
+  const correlationId = getProviderCorrelationId(error);
   const retryDecision = getRetryDecision(error);
   const outputState = getOutputState(error);
   const incompleteReason = getIncompleteReason(error);
@@ -88,6 +101,7 @@ const summarizeProviderError = (error, operation) => {
     ...(param != null && { param }),
     ...(errorName != null && { errorName }),
     ...(requestId != null && { requestId }),
+    ...(correlationId != null && { correlationId }),
     ...(retryDecision != null && { retryDecision }),
     ...(outputState != null && { outputState }),
     ...(incompleteReason != null && { incompleteReason }),
@@ -136,6 +150,7 @@ module.exports = {
   getIncompleteReason,
   getOutputState,
   getPersistedGenerationError,
+  getProviderCorrelationId,
   getProviderRequestId,
   getRetryDecision,
   getPublicGenerationError,

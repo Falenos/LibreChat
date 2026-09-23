@@ -44,7 +44,9 @@ Search production logs for `FoundryRouterTelemetry`.
 - retry-lineage ID, exact attempt number, bounded attempt bucket, result,
   returned model, phase, duration, and optional TTFT
 - optional input/output token counts
-- optional bounded Azure request ID
+- optional bounded Azure provider request ID (`providerRequestId`, from
+  `x-request-id`) and diagnostic correlation ID (`providerCorrelationId`, from
+  `apim-request-id`)
 - optional retry reason (`refusal`, `output_limit`, `langchain_retry`, or
   `langgraph_retry`)
 - for provider errors only: optional bounded HTTP status, provider code, type,
@@ -55,7 +57,9 @@ call. It records the bounded initial and terminal results, attempt count,
 retry reason, and one outcome: `recovered`, `exhausted`, `not_retryable`,
 `unsafe_not_retried`, `cancelled`, or `retry_not_observed`. Use this event for
 exact recovery-rate dashboards instead of comparing independent aggregate
-attempt counters.
+attempt counters. When Azure exposes it, the lineage event also carries the
+initial and terminal `providerCorrelationId` values so each physical attempt
+can be joined without treating the logical retry lineage as an Azure request.
 
 `Generation lifecycle completed` contains:
 
@@ -79,10 +83,11 @@ when they match bounded operational formats; unsafe or unbounded values are
 dropped. Telemetry logs run inside an empty nested request context so the
 shared Winston formatter cannot append tenant or user identity.
 
-Conversation, message, model-run, stream, and provider request IDs are
-pseudonymous operational correlation values. Keep them in structured logs
-under the existing Datadog access and retention controls; never promote them to
-Prometheus labels, dashboard group-by dimensions, or monitor tags.
+Conversation, message, model-run, stream, provider request, and provider
+correlation IDs are pseudonymous operational correlation values. Keep them in
+structured logs under the existing Datadog access and retention controls;
+never promote them to Prometheus labels, dashboard group-by dimensions, or
+monitor tags.
 
 The first model content time is the earliest non-empty callback token from any
 observable model call. It is a correlation aid, not a guarantee that the token
@@ -124,6 +129,57 @@ remain bounded to the documented result/model/phase/attempt labels; never add
 provider codes, parameters, exception classes, request IDs, conversation IDs,
 or message IDs as metric labels.
 
+## Azure RequestResponse correlation
+
+Use `providerCorrelationId` to join one application model-call log to Azure
+Foundry `RequestResponse.CorrelationId`. Keep `providerRequestId` for Azure
+provider-support workflows; the two response headers are distinct and must not
+be substituted for each other.
+
+The relationship between Azure's `apim-request-id` response header and
+`AzureDiagnostics.CorrelationId` is provider-controlled and pilot-observed,
+not an application contract. Revalidate it after SDK, API-version, APIM, or
+diagnostic-schema changes.
+
+The 2026-09-23 nonprod canary produced an exact `apim-request-id` match in both
+the project gateway and `create_response` diagnostic rows. The distinct
+`x-request-id`, client request IDs, and W3C trace ID did not match
+`CorrelationId`.
+
+1. Find the bounded application event in Datadog:
+
+   ```text
+   service:agentic-karl env:dev "[FoundryRouterTelemetry] Model call completed" @providerCorrelationId:*
+   ```
+
+2. Copy `providerCorrelationId` into a narrow UTC Log Analytics query:
+
+   ```kusto
+   AzureDiagnostics
+   | where TimeGenerated between (datetime(2026-09-23T12:00:00Z) .. datetime(2026-09-23T13:00:00Z))
+   | where Category == "RequestResponse"
+   | where CorrelationId == "<providerCorrelationId>"
+   | extend properties = parse_json(properties_s)
+   | project TimeGenerated, CorrelationId, OperationName, ResultType,
+       modelDeploymentName = tostring(properties.modelDeploymentName),
+       modelName = tostring(properties.modelName),
+       responseTime = tostring(properties.responseTime)
+   ```
+
+3. Confirm an exact identifier match and compatible timestamp, operation,
+   deployment, and status. Do not join only by timestamp.
+
+Use this Datadog canary to detect a missing APIM identifier on provider-error
+events that still expose `x-request-id`:
+
+```text
+service:agentic-karl env:dev "[FoundryRouterTelemetry] Model call completed" @result:provider_error @providerRequestId:* -@providerCorrelationId:*
+```
+
+Investigate sustained matches as SDK/provider header-shape drift. A single
+missing value can be legitimate when the failure occurs before Azure returns
+HTTP response headers. Never log the full header set to diagnose a miss.
+
 ## Diagnosis workflow
 
 1. Start with per-connection SSE p95, model-call p95, and generation stream
@@ -144,10 +200,11 @@ or message IDs as metric labels.
    attempt.
 6. For `result:provider_error`, group only by the bounded provider status,
    code, type, parameter, retryability, and exception class fields. Correlate
-   the provider request ID with Azure diagnostics; do not inspect or export raw
-   exception content. A streamed `server_error` can legitimately have no HTTP
-   status because the HTTP stream was already established; classify it as
-   retryable from the bounded provider code/type.
+   `providerCorrelationId` with Azure `RequestResponse.CorrelationId`; use
+   `providerRequestId` only for provider-support lookup. Do not inspect or
+   export raw exception content. A streamed `server_error` can legitimately
+   have no HTTP status because the HTTP stream was already established;
+   classify it as retryable from the bounded provider code/type.
 7. Correlate a slow generation log by stream/request/message ID with its
    model-call logs and SSE spans. Multiple model-run IDs indicate multiple
    observable calls; multiple SSE spans alone indicate reconnects, not extra

@@ -1,7 +1,11 @@
 const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { recordFoundryModelCall } = require('@librechat/api');
-const { getProviderRequestId, summarizeProviderError } = require('./providerError');
+const {
+  getProviderCorrelationId,
+  getProviderRequestId,
+  summarizeProviderError,
+} = require('./providerError');
 
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
@@ -100,6 +104,15 @@ const getSuccessRequestId = (result) => {
   );
 };
 
+const getSuccessCorrelationId = (result) => {
+  const responseMetadata = getGenerationMessage(result)?.response_metadata;
+  return (
+    getProviderCorrelationId(responseMetadata) ??
+    getProviderCorrelationId(responseMetadata?.response) ??
+    getProviderCorrelationId(result?.llmOutput)
+  );
+};
+
 const getResultIncompleteReason = (result) => {
   const reason = getGenerationMessage(result)?.response_metadata?.incomplete_details?.reason;
   if (reason === 'max_output_tokens' || reason === 'content_filter') {
@@ -175,6 +188,8 @@ function createModelRouterTelemetry({
       error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
       error == null ? getSuccessRequestId(output) : providerError?.requestId;
+    const providerCorrelationId =
+      error == null ? getSuccessCorrelationId(output) : providerError?.correlationId;
     const incompleteReason =
       error == null ? getResultIncompleteReason(output) : providerError?.incompleteReason;
     if (providerError?.retryable === true) {
@@ -218,6 +233,7 @@ function createModelRouterTelemetry({
       ...(providerError?.param != null && { providerParam: providerError.param }),
       ...(providerError?.errorName != null && { errorName: providerError.errorName }),
       ...(providerRequestId != null && { providerRequestId }),
+      ...(providerCorrelationId != null && { providerCorrelationId }),
     };
     completedCalls.push(event);
     logTelemetry('[FoundryRouterTelemetry] Model call completed', event);
@@ -322,6 +338,12 @@ function createModelRouterTelemetry({
         ...(initial.outputState != null && { initialOutputState: initial.outputState }),
         ...(initial.incompleteReason != null && {
           initialIncompleteReason: initial.incompleteReason,
+        }),
+        ...(initial.providerCorrelationId != null && {
+          initialProviderCorrelationId: initial.providerCorrelationId,
+        }),
+        ...(terminal.providerCorrelationId != null && {
+          terminalProviderCorrelationId: terminal.providerCorrelationId,
         }),
         ...(terminal.retryReason != null && { retryReason: terminal.retryReason }),
       });

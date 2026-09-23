@@ -3,6 +3,7 @@ const {
   getIncompleteReason,
   getOutputState,
   getPersistedGenerationError,
+  getProviderCorrelationId,
   getProviderRequestId,
   getPublicGenerationError,
   getRetryDecision,
@@ -34,6 +35,10 @@ describe('[knauf] provider error safety', () => {
       type: 'invalid_request_error',
       param: 'input[3].content[1].image_url',
       request_id: 'req-safe-123',
+      headers: {
+        'apim-request-id': 'corr-safe-123',
+        authorization: 'Bearer provider-secret',
+      },
       userId: 'user-secret',
       path: '/private/upload.png',
       request: { body: { input: base64 } },
@@ -50,10 +55,12 @@ describe('[knauf] provider error safety', () => {
       param: 'input[3].content[1].image_url',
       errorName: 'Error',
       requestId: 'req-safe-123',
+      correlationId: 'corr-safe-123',
     });
     expect(JSON.stringify(summary)).not.toContain(base64.substring(0, 32));
     expect(JSON.stringify(summary)).not.toContain('user-secret');
     expect(JSON.stringify(summary)).not.toContain('upload.png');
+    expect(JSON.stringify(summary)).not.toContain('provider-secret');
   });
 
   it('drops unsafe and unbounded identifiers', () => {
@@ -64,6 +71,7 @@ describe('[knauf] provider error safety', () => {
         type: 'x'.repeat(200),
         param: 'input /private/upload.png',
         request_id: 'id with spaces',
+        apim_request_id: 'correlation id with spaces',
       },
       'agent_generation',
     );
@@ -99,7 +107,10 @@ describe('[knauf] provider error safety', () => {
         },
       },
       undefined,
-      new Headers({ 'x-request-id': 'azure-request-contract' }),
+      new Headers({
+        'x-request-id': 'azure-request-contract',
+        'apim-request-id': 'azure-correlation-contract',
+      }),
     );
 
     expect(error).toBeInstanceOf(BadRequestError);
@@ -113,6 +124,7 @@ describe('[knauf] provider error safety', () => {
       param: 'text.verbosity',
       errorName: 'BadRequestError',
       requestId: 'azure-request-contract',
+      correlationId: 'azure-correlation-contract',
     });
     expect(JSON.stringify(summary)).not.toContain('private provider detail');
   });
@@ -128,7 +140,10 @@ describe('[knauf] provider error safety', () => {
         type: 'server_error',
       },
       undefined,
-      new Headers({ 'x-request-id': 'azure-stream-request' }),
+      new Headers({
+        'x-request-id': 'azure-stream-request',
+        'apim-request-id': 'azure-stream-correlation',
+      }),
     );
 
     const summary = summarizeProviderError(error, 'model_router_call');
@@ -139,6 +154,7 @@ describe('[knauf] provider error safety', () => {
       type: 'server_error',
       errorName: 'APIError',
       requestId: 'azure-stream-request',
+      correlationId: 'azure-stream-correlation',
     });
     expect(JSON.stringify(summary)).not.toContain('private streamed provider detail');
   });
@@ -271,15 +287,30 @@ describe('[knauf] provider error safety', () => {
     });
   });
 
-  it('extracts a bounded provider request ID from response headers', () => {
-    expect(
-      getProviderRequestId({
-        response: { headers: { 'apim-request-id': 'azure-request-123' } },
-      }),
-    ).toBe('azure-request-123');
+  it('keeps the provider request and Azure diagnostic correlation IDs distinct', () => {
+    const response = {
+      response: {
+        headers: {
+          'x-request-id': 'azure-request-123',
+          'apim-request-id': 'azure-correlation-123',
+        },
+      },
+    };
+
+    expect(getProviderRequestId(response)).toBe('azure-request-123');
+    expect(getProviderCorrelationId(response)).toBe('azure-correlation-123');
     expect(getProviderRequestId({ requestID: 'sdk-request-456' })).toBe('sdk-request-456');
     expect(
+      getProviderRequestId({ headers: { 'apim-request-id': 'correlation-only' } }),
+    ).toBeUndefined();
+    expect(getProviderCorrelationId({ apimRequestID: 'sdk-correlation-456' })).toBe(
+      'sdk-correlation-456',
+    );
+    expect(
       getProviderRequestId({ headers: { 'x-request-id': 'unsafe request id' } }),
+    ).toBeUndefined();
+    expect(
+      getProviderCorrelationId({ headers: { 'apim-request-id': 'unsafe correlation id' } }),
     ).toBeUndefined();
   });
 
