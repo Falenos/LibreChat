@@ -1,18 +1,33 @@
-# Erasure verification — proving an Art. 17 deletion reached every sink
+# Erasure verification — proving an Art. 17 deletion, store by store
 
 **Ticket:** KK20-TBD (workstream item **P2-5**) · **Owner:** Eng + DPO · **Status:** written
-2026-09-04, **not yet run green** — the first staging run against a seeded test subject, with the
-report filed, is this ticket's remaining acceptance criterion.
+2026-09-04; reworked 2026-09-24 after the PR #350 review. **No evidence-grade run is possible yet.**
+The environment manifests still hold proposals and open platform facts (§5), and the RAG
+verification adapter has to be deployed first (§0). Getting both done, and then running the
+first evidence run on staging, is this ticket's remaining acceptance criterion.
 
-The right to erasure is only satisfied if the deletion reaches **every copy**. Agentic Karl holds
-nine (workstream §1), and the product's deletion cascade was written store by store over many
-tickets. Nobody has ever proved, end to end, that one delete click empties all nine. This runbook
-produces that proof, repeatably, and files it as the standing erasure evidence.
+Erasure is satisfied only when every copy is gone, or is lawfully somewhere else with a
+stated basis. This runbook does not claim how many copies Agentic Karl holds. Each
+environment has a **versioned sink manifest**,
+[`knauf/docs/privacy/erasure-sinks/<env>.json`](../erasure-sinks/), and in it every store
+resolves to exactly one disposition:
+
+| Disposition | Meaning | Resolves the store when |
+|---|---|---|
+| `deleted` | The product's deletion must empty it | The verifier measured a positive baseline and an exact zero afterwards |
+| `eventually-deleted` | It expires by itself (backups, processor retention, TTLs) | A `deadline` and a `basis` are recorded **and approved**; a probed store is still checked against the deadline |
+| `retained` | It is kept lawfully (e.g. the audit log, Art. 17(3)) | A `basis` and an `expiry` are recorded **and approved** |
+| `externally-controlled` | Another controller or system holds it | The `controller` and the Art. 19 `notification` duty are recorded **and approved** |
+| `not-probed` | Nobody can show what happens to it yet | **Never.** It blocks every evidence run until a fact replaces it |
+
+`configured: "unknown"` also blocks. So does `configured: false` when the environment says
+otherwise, and so does any probed store the manifest leaves out. The verifier checks the
+manifest's `configured` flags against the same environment variables the app reads, so a live
+store cannot be declared absent.
 
 > **The clock.** Art. 17(1): erase **without undue delay**. Art. 12(3) applies to the response:
 > within one month, extendable by two with notice. Art. 19: tell every recipient the data was
-> disclosed to — for KARL, that is nobody external (Azure processes under the DPA; Datadog holds no
-> identity), so the notification duty is discharged by writing that down.
+> disclosed to. The manifest's `externally-controlled` entries are where that duty is written down.
 
 ---
 
@@ -20,11 +35,13 @@ produces that proof, repeatably, and files it as the standing erasure evidence.
 
 | Precondition | Why |
 |---|---|
-| **Staging**, never prod. A dedicated test account (Okta test user) | The recipe deletes the account under test. Prod runs happen only for a real request, with the same steps |
-| The test subject has data in **every** sink: a chat with a **file attachment** (→ pgvector), an **agent with a knowledge file** (→ Azure AI Search), a **memory** written, a **thumbs-down** given (→ Langfuse score), a **shared link**, a schedule if the scheduler is enabled | A sink that was empty before deletion proves nothing. The `before` snapshot will show which sinks are still `0` — seed them first |
-| `ALLOW_ACCOUNT_DELETION` not set to `false` on the staging API | `canDeleteAccount` gates `DELETE /api/user/delete`; the default is `true` |
-| A shell with the staging `.env` (Mongo, `MEILI_HOST`/`MEILI_MASTER_KEY`, `RAG_API_URL`, `JWT_SECRET`, Azure Blob, `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`) | The verifier probes each sink the way the app does — same JWT for `rag_api`, same Blob client, same Langfuse project keys |
-| The subject's Mongo `users._id` | Every other sink is keyed by it: Langfuse `userId`, Meilisearch `user`, `auditlogs` `actor.id`/`target.id` |
+| **Staging** for rehearsals, and a dedicated test account (Okta test user) | The recipe deletes the account under test. A prod run happens only for a real request, with the same steps |
+| The **manifest for the environment has no preflight blockers** (§5) | An evidence baseline refuses to start otherwise: a run that can never end CLEAN should not cost a deletion first |
+| **RAG verification adapter deployed**: an `agentic-karl-rag-api` image with `POST /verification/vectors` and `RAG_VERIFICATION_ENABLED=true` on the RAG service | Without it both vector stores are **NOT PROBED**, never zero (§4.1) |
+| The test subject has data in **every mandatory store** the manifest lists: a chat with a **file attachment** (→ pgvector, Blob, Meilisearch), an **agent with a knowledge file** (→ Azure AI Search, asset ledger, ACL entries), a **memory**, a **thumbs-down** (→ Langfuse score), a **shared link**, a **bookmark**, a **project**, a **prompt**, a **skill**, a schedule if the scheduler is on | `before` exits **4 NOT READY** and names every store without a positive baseline, unless the manifest records an **approved**, reason-coded exemption (`FEATURE_DISABLED_IN_ENVIRONMENT`, `NOT_CREATABLE_BY_SUBJECT`) |
+| `ALLOW_ACCOUNT_DELETION` not `false` on the API | `canDeleteAccount` gates `DELETE /api/user/delete` |
+| A shell with the environment's configuration: Mongo, `MEILI_HOST`/`MEILI_MASTER_KEY`, `RAG_API_URL` + `JWT_SECRET`, Azure Blob, `USE_REDIS`/`REDIS_URI`, `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`, plus the flags the manifest is checked against (`SEARCH`, `AZURE_SEARCH_ENABLED`, `LOG_TO_FILE`) | The verifier probes each store the way the app reaches it. A missing variable makes that store NOT PROBED, and a flag that contradicts the manifest blocks the run |
+| The subject's **Mongo `users._id` and tenant** (or `none` in a single-tenant deployment) | Evidence runs accept nothing else. Email/OIDC identities are unique only per tenant, and the identity later authorizes the Langfuse deletion |
 
 ---
 
@@ -35,12 +52,13 @@ gets**, so deletion runs through the product:
 
 | Path | What it cascades | Where |
 |---|---|---|
-| **Account:** `DELETE /api/user/delete` (Settings → Delete account) | 25 Mongo stores, sessions, **files via `processDeleteRequest`** (Blob bytes + pgvector `/documents` + Azure AI Search `/agent/documents/{id}`), shared links + ACL grants, scheduler barrier + purge, group membership | `api/server/controllers/UserController.js` `deleteUserController`; route in `api/server/routes/user.js` |
-| **One chat:** `DELETE /api/convos` with `arg.conversationId` (the trash icon) | Conversation + messages, **the chat's files** (`deleteConvosWithCleanup` — blobs, rows, embeddings), tool calls, the chat's shared links | `api/server/routes/convos.js` |
+| **Account:** `DELETE /api/user/delete` (Settings → Delete account) | Mongo stores, sessions, **files via `processDeleteRequest`** (Blob bytes + pgvector `/documents` + Azure AI Search `/agent/documents/{id}`), shared links + ACL grants, scheduler barrier + purge, group membership | `api/server/controllers/UserController.js` `deleteUserController`; route in `api/server/routes/user.js` |
+| **One chat:** `DELETE /api/convos` with `arg.conversationId` (the trash icon) | Conversation + messages, **the chat's files** (`deleteConvosWithCleanup`: blobs, rows, embeddings), tool calls, the chat's shared links | `api/server/routes/convos.js` |
 
 Meilisearch is emptied by both because the `mongoMeili` plugin hooks `deleteMany` on
-`Conversation`/`Message`. **Langfuse is emptied by neither** — no application path deletes traces —
-so §2 step 4 does it through the public API.
+`Conversation`/`Message`. **Langfuse is emptied by neither**, since no application path deletes
+traces, so §2 step 4 does it through the public API. **Redis is not cleared either.** Keys
+expire by TTL, and `redis:keys` shows which namespaces outlive the deletion.
 
 **`config/delete-user.js` is not erasure-complete and must not be used as the Art. 17 path.** It
 raw-`deleteMany`s the Mongo collections and stops. It never calls `processDeleteRequest`, so:
@@ -54,7 +72,7 @@ raw-`deleteMany`s the Mongo collections and stops. It never calls `processDelete
 
 The spec (`knauf/scripts/erasure-verify.spec.js`) pins this: if someone teaches the ops script to
 call the cascade, the test fails and this table must be updated. Until then, an admin-driven
-deletion is **not** an erasure — a follow-up ticket should either route the script through the
+deletion is **not** an erasure. A follow-up ticket should either route the script through the
 controller's cascade or delete it.
 
 ---
@@ -62,9 +80,13 @@ controller's cascade or delete it.
 ## 2. Procedure
 
 ```bash
-# 1. Snapshot every sink while the subject still exists. Captures the file ids, blob paths,
-#    agent ids and Langfuse trace ids the `after` phase needs — the user document will be gone.
-node knauf/scripts/erasure-verify.js --phase before --user <email-or-id> --out ./erasure-<date>/
+# 1. Baseline, while the subject still exists. Refuses unless the manifest resolves every
+#    store (exit 6), and exits 4 NOT READY naming any mandatory store without data.
+#    Writes before.json: the verified identity tuple, the inventory the later phases need
+#    (physical vector ids, asset ids, authored agent ids, every Blob pointer, Langfuse trace
+#    ids), every probe result, the manifest it was taken under and the tool's own sha256.
+node knauf/scripts/erasure-verify.js --phase before --env stage \
+     --user <users._id> --tenant <tenantId|none> --out ./erasure-<date>/
 
 # 2. Delete ONE conversation through the product first (trash icon on a chat that had a file).
 #    Optional but recommended: it exercises the per-chat cascade separately.
@@ -72,65 +94,176 @@ node knauf/scripts/erasure-verify.js --phase before --user <email-or-id> --out .
 # 3. Delete the account through the product: Settings → Data controls → Delete account
 #    (or: curl -X DELETE "$API/api/user/delete" -H "Authorization: Bearer <access token>").
 
-# 4. Langfuse — no product path reaches it. Delete the traces captured in step 1:
-node knauf/scripts/erasure-verify.js --phase langfuse-delete --out ./erasure-<date>/ --confirm
+# 4. Langfuse, which no product path reaches. Re-confirms the identity tuple, refuses a
+#    different Langfuse instance than the baseline probed, re-lists the subject's traces
+#    exactly and deletes those.
+node knauf/scripts/erasure-verify.js --phase langfuse-delete --env stage \
+     --user <users._id> --tenant <tenantId|none> --out ./erasure-<date>/ --confirm
 #    Deletion is ASYNCHRONOUS (Langfuse: "within 15 minutes") and cascades to observations and
-#    scores. Wait, then continue. Do not touch ClickHouse or MinIO directly — that orphans media.
+#    scores. Do not touch ClickHouse or blob storage directly; that orphans media.
 
-# 5. Re-probe every sink with the ids from step 1.
-node knauf/scripts/erasure-verify.js --phase after --out ./erasure-<date>/
-#    Exit code 0 = CLEAN, 3 = residuals. `report.md` is the evidence.
+# 5. Re-probe every store with the identifiers from step 1, at least 15 minutes after step 4
+#    and within 24 hours of step 1 (an older baseline is STALE).
+node knauf/scripts/erasure-verify.js --phase after --env stage --out ./erasure-<date>/
 ```
 
-Flags: `--tenant <id>` runs the Mongo reads in a tenant scope; `--skip meili,rag,blob,langfuse`
-when a sink is not configured in the environment (it is then reported as **NOT PROBED**, never as
-clean); `--rag-query "<text>"` sets the query used to probe the vector stores (default `the`).
+Each phase refuses a directory that is a symlink or passes through one, and it re-checks the
+baseline's environment, mode and identity. Evidence files are written `0600` and exclusively,
+and they are never overwritten: `after-<timestamp>.json`, `report-<timestamp>.md` and
+`langfuse-delete-<timestamp>.json`.
+
+**Rehearsal mode.** Use `--mode rehearsal` to exercise the machinery before the manifest is
+complete. It accepts an email, username or OIDC id in `--user`, and it refuses an ambiguous
+match rather than guessing. It also allows `--skip <mongo,meili,vectors,blob,langfuse,redis,logs>`.
+A skipped store is recorded as `skipped`, never left out, and a rehearsal **never** prints
+CLEAN. `langfuse-delete` refuses a rehearsal identity.
+
+### Exit codes
+
+| Code | Verdict | Meaning |
+|---|---|---|
+| 0 | **CLEAN** | Evidence mode, every store resolved, no residual. The only exit 0 |
+| 3 | RESIDUALS FOUND | Something the product should have deleted survived. **Stop:** file a defect against the owning module and re-run after the fix |
+| 4 | INCOMPLETE / NOT READY | At least one blocker (§3). Nothing is proven either way |
+| 5 | NOT EVIDENCE | Rehearsal mode |
+| 6 | refused | Preflight blockers in evidence mode, identity/tenant/environment mismatch, ambiguous subject, or tampered baseline |
+| 1 / 2 | usage / subject not found | |
 
 ---
 
 ## 3. Reading the report
 
-`report.md` lists every sink with before/after counts and one of four statuses:
+`report-<timestamp>.md` binds itself to the run id, the manifest file + revision + sha256, the
+identity digest and the tool's sha256. It shows the subject's `_id` and tenant but **not** their
+email, which stays in `before.json`. It lists every manifest store:
 
-| Status | Meaning | Action |
+| Status | Meaning | Blocks CLEAN? |
 |---|---|---|
-| `clean` | before > 0, after = 0 | none |
-| `RESIDUAL` | something the cascade should have deleted survived | **Stop.** This is a defect in the deletion path, not in the recipe. File it against the owning module and re-run after the fix |
-| `retained by design — …` | a copy the position in workstream §3.4 / P2-7 says to keep, with the basis printed | verify the basis still holds; no action |
-| `NOT PROBED — …` | the sink could not be reached (env unset, HTTP error, no `entity_id` for Azure) | fix the environment and re-run. A run with unprobed sinks is **not** evidence |
+| `DELETED` | Positive baseline, exact zero after | no |
+| `N/A — <CODE> (approved)` | Zero before and after, with an approved exemption | no |
+| `RETAINED — <basis>; expiry <x>` | Approved retention, count shown | no |
+| `EVENTUALLY DELETED — …` | Approved deadline not yet passed, or approved lifecycle classes such as soft-deleted blobs; listed under *Obligations* | no |
+| `EXTERNALLY CONTROLLED — <controller>` | Approved; the notification duty is listed under *Obligations* | no |
+| `NOT CONFIGURED` | Absent in this environment, and the environment agrees | no |
+| `RESIDUAL` | Data survived where it should not, or survived past its deadline | **yes, exit 3** |
+| `NO BASELINE` | Before count was 0: the probe never showed it can see this data | **yes** |
+| `NOT PROBED — …` | Skipped, absent, unreachable, erroring, inexact, adapter missing, or declared not-probed | **yes** |
+| `PENDING — …` | Langfuse inside its 15-minute settle window; re-run after the time shown | **yes** |
+| `UNKNOWN — …` | Not in the manifest, `configured: "unknown"`, drift, or a disposition still awaiting approval | **yes** |
 
-A sink whose **before** count was already `0` is not evidence either — seed it (§0) and start over.
+Run-level blockers: a baseline older than 24 h, an `after` snapshot from another run, an
+environment flag that changed between phases, a Langfuse deletion record for another run or
+identity, a non-evidence-grade identity. The inventory can also prove a store exists that the
+manifest omits, for example a File row pointing at local disk or at the code-execution
+environment. Each such store needs its own `files:<store>` entry.
 
 ---
 
-## 4. What legitimately survives, and what to do about it
+## 4. How each store is measured
 
-| Copy | Survives? | Basis / action |
+| Store | Probe | Exact because |
 |---|---|---|
-| **`auditlogs`** rows naming the subject as actor or target | Yes, by design | Art. 17(3)(b)/(e) — tamper-evident audit trail, retained under the P2-7 position and purged by the KK20-328 sweep at 12 months. The hash chain forbids row-level deletion; that is the point of it |
-| **winston logs** (`api/logs/`, 14-day rotation) | Yes, for ≤14 days | `deleteUserController` itself logs `User deleted account. Email: <email> ID: <id>` at **info** — prod's `warn` root level suppresses it, dev/stage do not. Check with `grep -r "<id>" api/logs/`. Candidate for P0-4's identity-minimisation pass |
-| **Datadog** browser logs | Not attributable | random per-session id, no user identity — excluded with the reason written down (DSAR runbook §1.9) |
-| **Langfuse** traces/scores | Only until step 4 settles | asynchronous; if `after` still shows traces >15 min later, the delete was rejected — check `langfuse-delete.json` and the Langfuse project keys |
-| **Backups** | Yes, until rotation | Cosmos/Blob/ClickHouse backup retention is a platform fact to record in P0-2/P0-5; erasure from backups is satisfied by rotation plus a documented no-restore-without-re-erasure rule |
+| Mongo, 33 model stores + `users` + 3 raw collections + `auditlogs` | `countDocuments` with the DSAR collector's `sinkFilter` (group membership by `idOnTheSource`, the email-keyed allowlist, `principalType: 'user'`, assets by the subject's own asset ids), pinned to the subject's tenant | the same filters Art. 15 disclosure uses |
+| Meilisearch `messages`, `convos` | `filter user = "<id>"` with `page`/`hitsPerPage` | `totalHits` is exhaustive; `estimatedTotalHits` is refused |
+| pgvector, Azure AI Search | `POST /verification/vectors` on the RAG service (§4.1) | filter-only scans, no ranking |
+| Blob (primary container) | `listBlobsFlat` over every `{images,uploads,avatars,documents,files}/<userId>/` prefix, paged, **including versions, snapshots and soft-deleted objects**, then reconciled against every Mongo pointer | enumerated from storage, so an object no row points at is still found |
+| Langfuse traces, scores | `GET /api/public/{traces,scores}?userId=`, paged to `meta.totalPages` | the collected ids must equal `meta.totalItems` |
+| Redis | `SCAN MATCH *<id>*` (standalone) | exact for keys that embed the id; entries keyed by session/token ids are `redis:opaque` |
+| Log files | grep of `*.log`/`*.log.gz` | only where `LOG_TO_FILE` is on; AGK ships stdout to the log platform instead (`logs:platform`) |
+
+### 4.1 Vectors: why the semantic probe was replaced
+
+The first version asked `/query_multiple` and `/agent/query-multiple`, the **search** routes,
+whether the deleted files still had chunks. A surviving chunk that ranks outside `k`, or beyond
+the distance threshold, comes back as nothing, and nothing read as "erased". The
+`agentic-karl-rag-api` adapter answers the existence question instead. It is read-only and
+returns identifiers and counts only. It is off unless `RAG_VERIFICATION_ENABLED=true`, and a
+request that fails, is disabled or is inexact is **NOT PROBED**.
+
+- **`asset_id`** matches exactly the rows `delete_generation(asset_id, None)` removes: the asset
+  id, or legacy rows with no `asset_id` and `file_id` equal to it. The probe looks exactly where
+  the delete looks.
+- **`user_id`** catches chat-file chunks no File row points at any more.
+- **`entity_id`** (Azure AI Search) covers the subject's authored agents. Agent-knowledge chunks
+  carry the **agent id** in `user_id`/`entity_id`, never the uploader's, so a subject-only scan
+  would miss them.
+- Every page must be exact, the total must not move between pages, and the groups must sum to
+  the total. Vector metadata carries no tenant: the verifier resolves identifiers inside the
+  tenant first, and the ids are globally unique.
+
+### 4.2 Blob lifecycle classes
+
+A current object or a snapshot after deletion is always a **residual**. Soft-deleted copies (and
+old versions, if versioning is on) resolve as `EVENTUALLY DELETED` only under an **approved**
+`eventualClasses` policy on `blob:primary`, and only inside its window. The window is counted
+from the baseline, so the deadline errs early. Any Mongo pointer outside the canonical layout
+makes the store NOT PROBED, because objects under an unknown layout cannot be enumerated.
+Expect the storage-side scan to surface objects the cascade never touched. **Avatars have no
+File row**, so a `images/<userId>/avatar-*` object that outlives the account deletion is a real
+residual.
 
 ---
 
-## 5. Filing the evidence
+## 5. What must be resolved before the first evidence run
 
-1. Attach `report.md`, `before.json`, `after.json` (and `langfuse-delete.json`) to the ticket or,
-   for a real request, to the DSAR register entry (DSAR runbook §6).
-2. Record the elapsed time from the delete click to a CLEAN report — that number is the answer to
+`before --mode evidence` prints this list and refuses while it is non-empty. As shipped
+(revision `2026-09-24.1`) both `stage.json` and `prod.json` carry 24 preflight blockers of four
+kinds:
+
+| Kind | Entries | Who resolves it |
+|---|---|---|
+| Proposed, awaiting approval | `mongo:auditlogs` (retained), `processor:azureOpenAI` (P30D), `processor:documentIntelligence` (P1D), `idp:entra` (externally controlled), `blob:primary` soft-delete window (P7D proposed), and baseline exemptions for `Balance`, `Preset`, `Assistant`, `Config`, `SystemGrant`, `MigrationAllowlist`, `SkillSyncCredential`, `knauf_translation_jobs` | DPO + Eng. Check the stated fact, then fill `approvedBy`/`approvedAt` in a reviewed PR |
+| Langfuse secondary stores | `langfuse:eventStorage` (`events/`), `langfuse:mediaStorage` (`media/`), `langfuse:batchExports` (`exports/`, enabled) | Platform: does trace deletion remove the raw events and media? What is the lifecycle of exports? |
+| Backups | `langfuse:clickhouseBackups`, `backup:mongo`, `backup:blob`, `backup:pgvector`, `backup:meilisearch` | Platform: existence, retention, and a **no-restore-without-re-erasure** rule |
+| Other not-probed stores | `redis:opaque` (TTLs), `logs:platform` (Datadog retention; also carries the erased email, P0-4), `apm:datadog` | Eng / Platform |
+
+When a fact arrives, replace the entry with the matching disposition, cite its source in the
+entry, and bump `revision`. A run is always judged against the manifest embedded in its own
+`before.json`. A later change is noted in the report and never applied retroactively.
+
+---
+
+## 6. Filing the evidence
+
+1. Attach `report-*.md`, `before.json`, `after-*.json` and `langfuse-delete-*.json` to the ticket,
+   or, for a real request, to the DSAR register entry (DSAR runbook §6). `before.json` holds the
+   subject's identifiers. Keep it under the register's access and retention rules, not in a
+   chat thread.
+2. Record the elapsed time from the delete click to a CLEAN report. That number is the answer to
    "how long does erasure take" in the Art. 30 record.
-3. **Re-run after P2-2** (conversation retention) lands, and after any upstream sync that touches
+3. Work through the report's *Obligations* list: externally-controlled hand-offs, and the dates
+   by which eventually-deleted copies must be gone.
+4. **Re-run after P2-2** (conversation retention) lands, and after any upstream sync that touches
    `UserController.js`, `convos.js`, `process.js` or the `mongoMeili` plugin (P1-3 checklist).
 
 ---
 
-## Rehearsal (the remaining AC)
+## 7. Required before production rollout
 
-- [ ] Seeded test subject on staging with data in all nine sinks (`before` shows no zeros except
-      `auditlogs` if the subject never touched admin surfaces)
+Not built in this PR. Recorded so a CLEAN report is not mistaken for an operated compliance
+control:
+
+- Run verification as an **approved, environment-scoped compliance Job** (GitOps owns execution
+  and network placement) with **read-only per-store identities**. Keep the Langfuse deletion
+  under a **separate privileged identity and approval path**. Today one operator shell holds
+  both, and the RAG adapter trusts any holder of `JWT_SECRET`.
+- Each data-owning service exposes an exact, read-only verification adapter. RAG has one now;
+  Langfuse secondary storage, Redis beyond key-addressable entries, and the log platform do not.
+- Infrastructure owns private connectivity, **protected evidence storage** with retention, and
+  **tested backup restore-and-re-erasure** procedures.
+- Bounded **eventual-consistency polling** (Langfuse, Meilisearch) instead of a manual re-run.
+- Evidence manifests signed or stored write-once, carrying component versions and timestamps.
+  Today they carry sha256 digests of the tool and the manifest, not a signature.
+
+---
+
+## Rehearsal and acceptance
+
+- [ ] RAG adapter deployed with `RAG_VERIFICATION_ENABLED=true` on staging
+- [ ] `--mode rehearsal` run on staging end to end (machinery exercised; not evidence)
+- [ ] `stage.json` preflight clean: approvals in, platform facts recorded
+- [ ] Seeded test subject: `before` exits 0 (every mandatory store has a baseline)
 - [ ] One chat deleted via the product; account deleted via the product
-- [ ] Langfuse leg run; `after` re-run after ≥15 min
-- [ ] `report.md` verdict **CLEAN**; elapsed time recorded
-- [ ] Any `RESIDUAL` filed as a defect against the owning module, with this report attached
+- [ ] Langfuse leg run; `after` ≥15 min later, within 24 h of the baseline
+- [ ] Report verdict **CLEAN**; elapsed time recorded; obligations worked through
+- [ ] Any `RESIDUAL` filed as a defect against the owning module, with the report attached

@@ -927,21 +927,32 @@ served a 403 when auto-migration is disabled — an availability, not a confiden
 
 **Type:** Task · **Effort:** M · **Compliance:** **Art. 17 evidence**
 
-**Status:** **built 2026-09-04 (KK20-TBD — ID pending), in PR, awaiting review.** Runbook
-[`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) + verifier `knauf/scripts/erasure-verify.js`
-(`before` / `langfuse-delete` / `after` phases; probes all nine §1 sinks the way the app does —
-same `rag_api` JWT, same Blob client, same Langfuse project keys; "not probed" never counts as
-clean). **The staging run is the open AC.**
+**Status:** **built 2026-09-04 (KK20-TBD — ID pending); reworked 2026-09-24 after the PR #350
+review.** Runbook [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md), verifier
+`knauf/scripts/erasure-verify.js`, and per-environment sink manifests
+[`erasure-sinks/<env>.json`](./erasure-sinks/). The review found paths to a false CLEAN, and each
+now fails closed. Vector counts come from the RAG service's exact, read-only
+`POST /verification/vectors` (agentic-karl-rag-api), replacing the semantic top-k probe. Every
+store is materialised with an explicit status and evaluated from the manifest, not from the
+snapshot. A positive baseline is mandatory, so the before → after transition is what gets
+evaluated. Evidence runs are bound to the canonical `_id` plus the tenant. Blob is enumerated
+from storage, including versions, snapshots and soft-deleted objects. And the "nine copies" claim
+is gone: every store resolves to deleted, eventually-deleted, retained, externally-controlled or
+not-probed. **No evidence run is possible yet.** The RAG adapter has to be deployed, and each
+manifest's 24 preflight blockers resolved: approvals, Langfuse secondary stores, backups, Redis
+TTLs and Datadog (runbook §5).
 
 **AC:** [x] a recipe that deletes an account **and** a conversation through the **real product
-paths** (`DELETE /api/user/delete`, `DELETE /api/convos`) and verifies Mongo, Meilisearch, pgvector,
-Azure AI Search, Blob **and Langfuse** are clean · [x] **a defined Langfuse deletion path for an
-Art. 17 request arriving *inside* the retention window** — `DELETE /api/public/traces` with
-`{ traceIds }` batches against the ids captured before deletion (Langfuse `userId` = Mongo id);
-asynchronous, cascades to observations/scores · [x] the two legitimate residuals (`auditlogs` under
-Art. 17(3)(b)/(e); the deletion `info` log line for ≤14 days) reported **with their basis**, never
-silently ignored · [ ] **run green on staging** with a subject seeded in all nine sinks · [ ] becomes
-the standing DSAR erasure evidence (attached to the DSAR register entry) · [ ] re-run after P2-2.
+paths** (`DELETE /api/user/delete`, `DELETE /api/convos`) · [x] **a defined Langfuse deletion path
+for an Art. 17 request arriving *inside* the retention window**: `DELETE /api/public/traces` with
+`{ traceIds }` for the subject's traces, bound to the verified identity tuple · [x] every store in a
+versioned per-environment manifest with a reviewed disposition; retained copies (`auditlogs` under
+Art. 17(3)(b)/(e)) stated with basis and expiry, never silently ignored · [x] adversarial tests: no
+skipped, absent, inexact, unbaselined, unapproved, stale or drifting case reaches CLEAN or exit 0
+(`npm run test:erasure`) · [ ] RAG verification adapter deployed (agentic-karl-rag-api,
+`RAG_VERIFICATION_ENABLED=true`) · [ ] stage manifest preflight clean (DPO approvals + platform facts)
+· [ ] **evidence run CLEAN on staging** with a seeded subject · [ ] becomes the standing DSAR erasure
+evidence (attached to the DSAR register entry) · [ ] re-run after P2-2.
 
 **Found while building it — two facts the recipe is built on and the spec pins:**
 
@@ -954,6 +965,12 @@ the standing DSAR erasure evidence (attached to the DSAR register entry) · [ ] 
 2. **`deleteUserController` logs the erased subject's email at `info`** after the cascade
    (`User deleted account. Email: … ID: …`). Suppressed in prod by the `warn` root level; present in
    dev/stage for the 14-day rotation. Folded into P0-4's identity-minimisation list.
+3. **Agent-knowledge chunks carry the agent id, not the uploader's.** The RAG service stamps
+   `user_id` = `entity_id` = the agent id on `/agent/embed`, so a subject-scoped vector check must
+   also scan the subject's authored agent ids, as well as their own id and the physical asset ids.
+4. **Avatars have no File row.** `images/<userId>/avatar-*` is written straight to Blob and the
+   account cascade has no avatar cleanup that could be found. A pointer-based probe could never see
+   one; the storage-side scan will, and a surviving avatar is a residual to file.
 
 #### P2-6 · Data-subject access & portability endpoint
 
@@ -1235,6 +1252,7 @@ this folder's README exists to prevent.
 | 2026-09-04 | **KK20-328** third review (Falenos, at `f46d747e9`): terminal-recovery ambiguity, intent as HMAC oracle, lease-loss-only-warns — all addressed (tail-row witness, signed + generation-checked intents, fencing tokens + abort-before-delete) | Each blocker was a gap between what the design *said* (recoverable, signed, single-writer) and what it *enforced*. The fixes make the enforcement mechanical: the chain is the witness, the key is the authorization, the fence is the writer identity |
 | 2026-09-04 | **KK20-328** self-review pass before the third push (`/code-review`, 7 angles): root export gap that would have silently disabled the HMAC check in prod, missing `createIndexes`, activation-looks-like-tampering, verify blind to a pending intent, dry run not read-only, CronJob pod never exiting, 1 s lease floor — all fixed; the terminal/generation design replaced by **never emptying a chain** | Reviewing my own change with the same rigour as the human review found a production-disabling bug (root export) that every green test had missed, because the tests imported from the barrel, not the root. The spec now imports through the root |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
+| 2026-09-24 | **P2-5** reworked after Falenos's review (CHANGES_REQUESTED 2026-09-04). Six false-CLEAN and scope findings addressed; the unrelated P0-2/P1-6 edits moved to #356 | A verifier whose failure modes read as "clean" is worse than none. The fix is structural rather than per probe: the verdict iterates the environment manifest, not the snapshot, so a store resolves only by measurement or by a reviewed, approved disposition. That is also why no evidence run is possible until the manifests' open facts are recorded |
 | 2026-09-04 | **P2-5** (KK20-TBD — ID pending) built: erasure runbook + `erasure-verify.js`; PR open, stacked on #349 | Reading the deletion paths showed `config/delete-user.js` **is not an erasure** (no Blob/vector/grant cleanup) and that the controller logs the erased email at `info`. The recipe tests the product path and pins both facts in its spec |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
 | 2026-09-03 | **KK20-331** (P2-6a) — DSAR runbook + collector written; rehearsal pending | Two things the plan had not seen: the audit admin API cannot filter by subject *id*, and `rag_api` cannot read vectors back per subject. Both would have surfaced mid-DSAR with the clock running |
@@ -1329,8 +1347,9 @@ period silently adopts that as Knauf's corporate retention policy.
 | [`packages/api/src/admin/auditLog.ts`](../../../packages/api/src/admin/auditLog.ts) | Admin verify now feeds the persisted checkpoint into `verifyAuditChain` |
 | [`runbooks/dsar-access.md`](./runbooks/dsar-access.md) | KK20-331 — the Art. 15 procedure across every §1 sink; Art. 15(4) and 12(3) encoded; §1.9/§1.10 split browser analytics (excluded) from server logs (in scope) |
 | [`knauf/scripts/dsar-collect.js`](../../scripts/dsar-collect.js) | KK20-331 — read-only collector: 32 Mongo stores + scheduler + auditLog (redacted) + paged Langfuse/Meili scripts + Blob/physical-vector inventory. Inventory pinned to the live model registry by its spec; fails closed (exit 2/3/4) rather than emitting an incomplete bundle |
-| [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) | P2-5 (KK20-TBD) — the Art. 17 verification procedure: real product deletion paths, the Langfuse public-API leg, the retained-by-design table, and why `config/delete-user.js` is not an erasure path |
-| [`knauf/scripts/erasure-verify.js`](../../scripts/erasure-verify.js) | P2-5 (KK20-TBD) — `before`/`langfuse-delete`/`after` verifier over all nine sinks; reuses the KK20-331 inventory; exit 3 on residuals; Langfuse `DELETE /api/public/traces` batches are its only write |
+| [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md) | P2-5 (KK20-TBD) — the Art. 17 verification procedure: real product deletion paths, the Langfuse public-API leg, the disposition model and exit codes, what blocks the first evidence run, the rollout prerequisites, and why `config/delete-user.js` is not an erasure path |
+| [`knauf/scripts/erasure-verify.js`](../../scripts/erasure-verify.js) | P2-5 (KK20-TBD) — `before`/`langfuse-delete`/`after` verifier that evaluates every store in the environment manifest. Exact probes only: RAG `/verification/vectors`, storage-side Blob listing, Langfuse/Meilisearch totals reconciled. Reuses the KK20-331 inventory and filters; exit 0 only for an evidence-grade CLEAN; Langfuse `DELETE /api/public/traces` is its only write |
+| [`erasure-sinks/`](./erasure-sinks/) (`stage.json`, `prod.json`) | P2-5 — versioned per-environment sink manifests: every store's disposition, approvals and the facts behind them (sourced from `agk-deployment-configs` and `librechat.yaml`) |
 | [`api/server/controllers/UserController.js`](../../../api/server/controllers/UserController.js) · [`config/delete-user.js`](../../../config/delete-user.js) | The erasure-complete cascade vs the ops script that is not — pinned by `erasure-verify.spec.js` |
 | [`knauf/parser-eval/`](../../parser-eval/) · [`knauf/code-adapter/`](../../code-adapter/) | Reusable assets for the P3-1 engine PoC |
 | [`api/server/services/Files/knauf/translation/pdfCompression.js`](../../../api/server/services/Files/knauf/translation/pdfCompression.js) | KK20-297 — writes the translated PDF to a `mkdtemp` temp dir for Ghostscript recompression; see §1 point 4 for the retention caveat |
@@ -1376,15 +1395,15 @@ live model registry.
 cd packages/api && npx jest run-summarization -t 'Langfuse run config'
 ```
 
-**P2-5 — erasure verification (KK20-TBD).** On **staging** with a seeded test subject (file in a
-chat, knowledge file on an agent, a memory, a thumbs-down, a shared link):
-`node knauf/scripts/erasure-verify.js --phase before --user <email> --out ./erasure-test/` — every
-sink should show a non-zero count (a zero proves nothing; seed it). Delete one chat and then the
-account **through the product**, run `--phase langfuse-delete --confirm`, wait 15 minutes, run
-`--phase after`. Expect exit code 0 and `report.md` with **CLEAN**, `auditlogs` marked *retained by
-design — Art. 17(3)*, and no **NOT PROBED** rows. Then `grep -r "<user id>" api/logs/` — the one
-expected hit is the `User deleted account` info line. `npm run test:erasure` runs the spec that pins
-the product path, the ops-script gap and the Langfuse body shape.
+**P2-5 — erasure verification (KK20-TBD).** Unit: `npm run test:erasure` (adversarial verdict
+tests plus the product-path pins). Rehearsal on **staging**, not evidence:
+`node knauf/scripts/erasure-verify.js --phase before --env stage --mode rehearsal --user <_id> --tenant <id|none> --out ./erasure-rehearsal/`.
+Then delete one chat and the account **through the product**, run
+`--phase langfuse-delete --env stage --user <_id> --tenant <id|none> --out ./erasure-rehearsal/ --confirm`,
+wait 15 minutes, and run `--phase after --env stage --mode rehearsal --out ./erasure-rehearsal/`.
+Expect exit 5 NOT EVIDENCE and a report that names every blocker. The Langfuse leg is refused for
+an email-resolved baseline, by design. The evidence run is the same without `--mode`, once runbook
+§5's list is empty; then expect exit 0 and **CLEAN**.
 
 **P0-3 — message filter.** Paste `sk-proj-FAKEKEY123456` into a chat → a readable red bubble, **not**
 `message_filter_pii_block`, and no reconnect loop. Then paste an ordinary message containing an

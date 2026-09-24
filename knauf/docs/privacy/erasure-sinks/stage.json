@@ -1,0 +1,542 @@
+{
+  "manifestVersion": 1,
+  "environment": "stage",
+  "revision": "2026-09-24.1",
+  "owner": "Eng + DPO",
+  "sources": [
+    "agk-deployment-configs agentic-karl/stage/services/*/values.yaml (USE_REDIS, MEILI_HOST, AZURE_SEARCH_ENABLED, LANGFUSE_*, LOG_TO_FILE, AZURE_CONTAINER_NAME, Datadog annotations)",
+    "librechat.yaml (fileStrategy, interface, endpoints)",
+    "knauf/scripts/dsar-collect.js (MONGO_SINKS, RAW_COLLECTIONS)"
+  ],
+  "howToApprove": "An entry resolves only when approvedBy + approvedAt (ISO date) are filled in a reviewed PR. Every not-probed or configured:\"unknown\" entry blocks an evidence run until it is replaced by a recorded fact.",
+  "sinks": [
+    {
+      "key": "mongo:users",
+      "label": "The user document",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Message",
+      "label": "Chat messages (incl. reasoning parts, feedback text)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Conversation",
+      "label": "Conversations",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:MemoryEntry",
+      "label": "Memory entries (profiling-grade)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:File",
+      "label": "File rows (logical)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:SharedLink",
+      "label": "Shared links",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Transaction",
+      "label": "Token/cost transactions",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Balance",
+      "label": "Token balance",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "FEATURE_DISABLED_IN_ENVIRONMENT",
+        "note": "librechat.yaml configures no `balance` block, so no Balance row is written. Confirm, then approve.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:Preset",
+      "label": "Presets",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "FEATURE_DISABLED_IN_ENVIRONMENT",
+        "note": "librechat.yaml sets `interface.presets: false` — users cannot create presets.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:ConversationTag",
+      "label": "Bookmarks (conversation tags)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:ToolCall",
+      "label": "Tool-call records",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Assistant",
+      "label": "Assistants",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "FEATURE_DISABLED_IN_ENVIRONMENT",
+        "note": "librechat.yaml sets `endpoints.azureOpenAI.assistants: false` and has no `endpoints.assistants` block, so no Assistants endpoint is offered.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:Action",
+      "label": "Agent actions (OpenAPI)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Agent",
+      "label": "Agents authored",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Prompt",
+      "label": "Prompts",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:PromptGroup",
+      "label": "Prompt groups",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Skill",
+      "label": "Skills authored",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:MCPServer",
+      "label": "User MCP servers",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:ChatProject",
+      "label": "Chat projects (instructions)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:ChatProjectSource",
+      "label": "Chat project sources",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:KnaufFileAsset",
+      "label": "Physical file assets (KK20-195 ledger)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:SkillFile",
+      "label": "Skill files",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:SkillSyncStatus",
+      "label": "Skill sync status",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Config",
+      "label": "Per-principal config overrides",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "NOT_CREATABLE_BY_SUBJECT",
+        "note": "Per-principal config overrides are written by admins only. Seed one for the test subject if a baseline is wanted instead.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:SystemGrant",
+      "label": "Capability grants",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "NOT_CREATABLE_BY_SUBJECT",
+        "note": "Capability grants are written by admins only. Seed one for the test subject if a baseline is wanted instead.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:AgentApiKey",
+      "label": "Agent API keys",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:PluginAuth",
+      "label": "Plugin credentials",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Key",
+      "label": "User-provided API keys",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Token",
+      "label": "Tokens (verification, MCP OAuth)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:Session",
+      "label": "Sessions",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:SkillSyncCredential",
+      "label": "Skill sync credentials",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "NOT_CREATABLE_BY_SUBJECT",
+        "note": "Skill sync credentials are an admin/integration surface.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:MigrationAllowlist",
+      "label": "Migration allowlist row (access decision)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "NOT_CREATABLE_BY_SUBJECT",
+        "note": "Allowlist rows are provisioned by admins; the test subject has one only if the migration allowlist is in use.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:Group",
+      "label": "Group membership",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "mongo:AclEntry",
+      "label": "ACL entries (resource grants)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "raw:knauf_agent_schedules",
+      "label": "Scheduled agents (raw collection)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "raw:knauf_scheduled_agent_runs",
+      "label": "Scheduled agent runs (raw collection)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "raw:knauf_translation_jobs",
+      "label": "File translation jobs (raw collection)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": {
+        "exempt": "FEATURE_DISABLED_IN_ENVIRONMENT",
+        "note": "KNAUF_FILE_TRANSLATION_ENABLED is not set in this environment's GitOps values, so no translation job can be created. Remove this exemption when translation ships here.",
+        "approvedBy": null,
+        "approvedAt": null
+      }
+    },
+    {
+      "key": "mongo:auditlogs",
+      "label": "Admin audit log rows naming the subject",
+      "configured": true,
+      "disposition": "retained",
+      "basis": "Art. 17(3)(b)/(e) — tamper-evident admin audit trail under the P2-7 position; the hash chain forbids row-level deletion",
+      "expiry": "12 months, purged by the KK20-328 retention sweep once enabled",
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    {
+      "key": "meili:messages",
+      "label": "Meilisearch messages index",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "meili:convos",
+      "label": "Meilisearch conversations index",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "vectors:pgvector",
+      "label": "pgvector chunks (chat files)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "vectors:azureAiSearch",
+      "label": "Azure AI Search chunks (Agent Knowledge)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "blob:primary",
+      "label": "Azure Blob container \"files\" (uploads, images, avatars)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required",
+      "eventualClasses": {
+        "softDeleted": "P7D"
+      },
+      "note": "PROPOSED: soft-deleted copies expire with the storage account's delete-retention window. Platform to confirm the account's actual retention days (and whether blob versioning is on) before approval; current and snapshot copies are always residuals.",
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    {
+      "key": "langfuse:traces",
+      "label": "Langfuse traces (langfuse.agk.stage.knauf.digital)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "langfuse:scores",
+      "label": "Langfuse scores (langfuse.agk.stage.knauf.digital)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required"
+    },
+    {
+      "key": "langfuse:eventStorage",
+      "label": "Langfuse raw ingestion events — Blob agkblobstagewesteu, prefix events/",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Not yet confirmed on this instance that DELETE /api/public/traces removes the raw event objects under events/. Lead: the deployed Langfuse 3.194.1 keeps a blob-storage file log by default (LANGFUSE_ENABLE_BLOB_STORAGE_FILE_LOG is unset), which is what lets trace deletion remove them. Platform to confirm, then record this as eventually-deleted with the deletion queue deadline"
+    },
+    {
+      "key": "langfuse:mediaStorage",
+      "label": "Langfuse media — Blob agkblobstagewesteu, prefix media/",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Media deletion on trace deletion is not verified for this deployment. Platform to confirm and record here"
+    },
+    {
+      "key": "langfuse:batchExports",
+      "label": "Langfuse batch exports — Blob agkblobstagewesteu, prefix exports/ (LANGFUSE_S3_BATCH_EXPORT_ENABLED=true)",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "An export is a copy a user downloaded into storage; trace deletion does not touch it. No lifecycle rule is recorded for exports/"
+    },
+    {
+      "key": "langfuse:clickhouseBackups",
+      "label": "Langfuse ClickHouse / Postgres backups",
+      "configured": "unknown",
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Backup existence, retention and the no-restore-without-re-erasure rule are not recorded (P0-2 part 1)"
+    },
+    {
+      "key": "redis:keys",
+      "label": "Redis keys that embed the subject id (caches, pending requests, MCP tool caches)",
+      "configured": true,
+      "disposition": "deleted",
+      "baseline": "required",
+      "note": "The account cascade does not clear Redis; keys expire by TTL. A residual here names its namespaces — record the TTLs and switch to eventually-deleted if that is the position."
+    },
+    {
+      "key": "redis:opaque",
+      "label": "Redis entries keyed by session/token/stream ids (not addressable by subject)",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Eng",
+      "reason": "Cannot be found by subject id; the TTL of each namespace is not recorded. Record the TTLs and switch to eventually-deleted with the longest one as the deadline"
+    },
+    {
+      "key": "logs:files",
+      "label": "Winston log files on the API pods",
+      "configured": false,
+      "disposition": "deleted",
+      "note": "LOG_TO_FILE=false in GitOps — server logs go to stdout only"
+    },
+    {
+      "key": "logs:platform",
+      "label": "Server logs in the log platform (Datadog, site datadoghq.eu) — carry userId/tenantId/requestId",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Retention period and a per-subject deletion or expiry path are not recorded (DSAR runbook §1.10, P1-2). deleteUserController also logs the erased email at info (P0-4)"
+    },
+    {
+      "key": "apm:datadog",
+      "label": "APM traces/profiles shipped to Datadog (OTLP)",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Whether spans carry user identifiers, and their retention, are not recorded"
+    },
+    {
+      "key": "backup:mongo",
+      "label": "MongoDB/Cosmos backups and point-in-time restore",
+      "configured": "unknown",
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Backup retention and the no-restore-without-re-erasure rule are not recorded (P0-5)"
+    },
+    {
+      "key": "backup:blob",
+      "label": "Blob storage backups / object replication beyond soft delete",
+      "configured": "unknown",
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Whether Azure Backup or object replication holds further copies is not recorded"
+    },
+    {
+      "key": "backup:pgvector",
+      "label": "pgvector (PostgreSQL) backups",
+      "configured": "unknown",
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Backup retention is not recorded"
+    },
+    {
+      "key": "backup:meilisearch",
+      "label": "Meilisearch snapshots/dumps",
+      "configured": "unknown",
+      "disposition": "not-probed",
+      "owner": "Platform",
+      "reason": "Whether snapshots or dumps are scheduled is not recorded"
+    },
+    {
+      "key": "files:local",
+      "label": "Files on the API pod filesystem",
+      "configured": false,
+      "disposition": "not-probed",
+      "reason": "fileStrategy is azure_blob",
+      "note": "Any File row pointing at a local path makes this entry drift and blocks the run"
+    },
+    {
+      "key": "files:execute_code",
+      "label": "Code-execution environment files",
+      "configured": false,
+      "disposition": "not-probed",
+      "reason": "no code-execution service is deployed in this environment"
+    },
+    {
+      "key": "files:openai",
+      "label": "OpenAI/Azure Assistants file storage",
+      "configured": false,
+      "disposition": "not-probed",
+      "reason": "the Assistants endpoint is disabled"
+    },
+    {
+      "key": "translation:scratch",
+      "label": "Azure Translator batch scratch containers",
+      "configured": false,
+      "disposition": "not-probed",
+      "reason": "KNAUF_FILE_TRANSLATION_ENABLED is not set here"
+    },
+    {
+      "key": "processor:azureOpenAI",
+      "label": "Azure OpenAI abuse-monitoring retention (processor)",
+      "configured": true,
+      "disposition": "eventually-deleted",
+      "deadline": "P30D",
+      "basis": "Microsoft retains prompts/completions for up to 30 days for abuse monitoring unless the opt-out is granted (P0-6). Deletion is Microsoft's, by expiry; no per-subject path exists",
+      "owner": "Eng + DPO",
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    {
+      "key": "processor:documentIntelligence",
+      "label": "Azure AI Document Intelligence analysis results (RAG parsing)",
+      "configured": true,
+      "disposition": "eventually-deleted",
+      "deadline": "P1D",
+      "basis": "Analyze results are deleted by the service 24 h after the operation; nothing is stored beyond that",
+      "owner": "Eng",
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    {
+      "key": "idp:entra",
+      "label": "Corporate identity (Entra ID / Okta) the account signs in with",
+      "configured": true,
+      "disposition": "externally-controlled",
+      "controller": "Knauf IAM (same controller, separate system)",
+      "notification": "Not an Art. 19 recipient — KARL receives the identity from it. If the request covers the corporate account itself, route it to IAM and record the hand-off on the DSAR register row",
+      "approvedBy": null,
+      "approvedAt": null
+    }
+  ]
+}
