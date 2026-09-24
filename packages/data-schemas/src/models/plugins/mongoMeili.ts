@@ -1,6 +1,7 @@
 import _ from 'lodash';
 import { parseTextParts } from 'librechat-data-provider';
 import { MeiliSearch, MeiliSearchTimeOutError } from 'meilisearch';
+import type { SearchResponse, SearchParams, Index, MeiliSearchErrorInfo } from 'meilisearch';
 import type {
   CallbackWithoutResultAndOptionalError,
   FilterQuery,
@@ -10,10 +11,9 @@ import type {
   Types,
   Model,
 } from 'mongoose';
-import type { SearchResponse, SearchParams, Index, MeiliSearchErrorInfo } from 'meilisearch';
 import type { IConversation, IMessage } from '~/types';
-import { buildRetentionVisibilityFilter, legacyPermanentExpirationFilter } from '~/utils/retention';
 import logger from '~/config/meiliLogger';
+import { buildRetentionVisibilityFilter, legacyPermanentExpirationFilter } from '~/utils/retention';
 
 interface MongoMeiliOptions {
   host: string;

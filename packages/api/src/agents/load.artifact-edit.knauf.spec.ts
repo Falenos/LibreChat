@@ -1,8 +1,8 @@
 // [knauf] NO-TICKET — runtime edit_artifact availability for default chats and
 // Agent Builder agents; the internal tool is never persisted in builder config.
 import type { Agent } from 'librechat-data-provider';
-import type { LoadAgentDeps } from './load';
 import { loadAgent, loadEphemeralAgent, filterSkillPrimedRequestScopedTools } from './load';
+import type { LoadAgentDeps } from './load';
 
 const deps = (agent: Partial<Agent> | null): LoadAgentDeps => ({
   getAgent: async () => (agent ?? null) as Agent | null,

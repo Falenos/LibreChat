@@ -59,11 +59,7 @@ import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
 // [knauf] KK20-297 — classify request-scoped file tools only after attachment
 // ownership and stored metadata have been resolved.
-import {
-  filterRequestScopedFileToolNames,
-  filterSkillPrimedRequestScopedTools,
-  getRequestScopedFileTools,
-} from './load';
+import { filterRequestScopedFileToolNames, filterSkillPrimedRequestScopedTools, getRequestScopedFileTools } from './load';
 // End [knauf]
 
 /**
