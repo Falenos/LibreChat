@@ -217,7 +217,12 @@ export function createConversationMethods(
       const update: Record<string, unknown> = { ...convo, messages, user: userId };
       const unsetFields: Record<string, number> = { ...(metadata?.unsetFields ?? {}) };
 
-      if (Object.prototype.hasOwnProperty.call(update, 'chatProjectId') && update.chatProjectId) {
+      // [knauf] KK20-385 — keep unassigned chats in one canonical indexed representation.
+      if (
+        Object.prototype.hasOwnProperty.call(update, 'chatProjectId') ||
+        Object.prototype.hasOwnProperty.call(unsetFields, 'chatProjectId')
+      ) {
+        delete unsetFields.chatProjectId;
         const chatProjectId = typeof update.chatProjectId === 'string' ? update.chatProjectId : '';
         let isValidChatProject = isValidObjectIdString(chatProjectId);
 
@@ -230,11 +235,9 @@ export function createConversationMethods(
           isValidChatProject = project != null;
         }
 
-        if (!isValidChatProject) {
-          delete update.chatProjectId;
-          unsetFields.chatProjectId = 1;
-        }
+        update.chatProjectId = isValidChatProject ? chatProjectId : null;
       }
+      // End [knauf]
 
       const mayChangeProjectMembership =
         Object.prototype.hasOwnProperty.call(update, 'chatProjectId') ||
@@ -606,20 +609,34 @@ export function createConversationMethods(
     if (cursor) {
       try {
         const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
-        const { primary, secondary } = decoded;
+        // [knauf] KK20-385 — narrow backport of LibreChat-AI/LibreChat#15842.
+        const { primary, secondary, id } = decoded;
         const primaryValue = finalSortBy === 'title' ? primary : new Date(primary);
         const secondaryValue = new Date(secondary);
         const op = finalSortDirection === 'asc' ? '$gt' : '$lt';
+        const boundaryId =
+          typeof id === 'string' && isValidObjectIdString(id)
+            ? { [op]: new mongoose.Types.ObjectId(id) }
+            : null;
 
         cursorFilter = {
           $or: [
             { [finalSortBy]: { [op]: primaryValue } },
-            {
-              [finalSortBy]: primaryValue,
-              updatedAt: { [op]: secondaryValue },
-            },
+            ...(finalSortBy === 'updatedAt'
+              ? []
+              : [{ [finalSortBy]: primaryValue, updatedAt: { [op]: secondaryValue } }]),
+            ...(boundaryId
+              ? [
+                  {
+                    [finalSortBy]: primaryValue,
+                    ...(finalSortBy === 'updatedAt' ? {} : { updatedAt: secondaryValue }),
+                    _id: boundaryId,
+                  },
+                ]
+              : []),
           ],
         } as FilterQuery<IConversation>;
+        // End [knauf]
       } catch {
         logger.warn('[getConvosByCursor] Invalid cursor format, starting from beginning');
       }
@@ -638,14 +655,38 @@ export function createConversationMethods(
       if (finalSortBy !== 'updatedAt') {
         sortObj.updatedAt = sortOrder;
       }
+      // [knauf] KK20-385 — stable final key for lossless cursor pagination.
+      sortObj._id = sortOrder;
+      // End [knauf]
 
-      const convos = await Conversation.find(query)
-        .select(
-          'conversationId endpoint title createdAt updatedAt user model agent_id assistant_id spec iconURL chatProjectId pinned',
-        )
-        .sort(sortObj)
-        .limit(limit + 1)
-        .lean<IConversation[]>();
+      // [knauf] KK20-385 — bypass the split missing/null project index run and sort globally.
+      const executeFind = (hinted: boolean) => {
+        const find = Conversation.find(query)
+          .select(
+            'conversationId endpoint title createdAt updatedAt user model agent_id assistant_id spec iconURL chatProjectId pinned',
+          )
+          .sort(sortObj)
+          .limit(limit + 1);
+        return (hinted ? find.hint({ user: 1, isTemporary: 1, expiredAt: 1 }) : find).lean<
+          IConversation[]
+        >();
+      };
+      let convos: IConversation[];
+      try {
+        convos = await executeFind(projectId === 'unassigned');
+      } catch (error) {
+        const hintError = (error ?? {}) as { code?: number; codeName?: string; message?: string };
+        const badHint =
+          hintError.code === 27 ||
+          hintError.codeName === 'IndexNotFound' ||
+          (hintError.code === 2 && /\bhint\b/i.test(hintError.message ?? ''));
+        if (projectId !== 'unassigned' || !badHint) {
+          throw error;
+        }
+        logger.error('history_hint_fallback', { code: hintError.code, name: hintError.codeName });
+        convos = await executeFind(false);
+      }
+      // End [knauf]
 
       let nextCursor: string | null = null;
       if (convos.length > limit) {
@@ -660,7 +701,13 @@ export function createConversationMethods(
         const primaryStr =
           finalSortBy === 'title' ? primaryValue : new Date(primaryValue ?? 0).toISOString();
         const secondaryStr = new Date(lastReturned.updatedAt ?? 0).toISOString();
-        const composite = { primary: primaryStr, secondary: secondaryStr };
+        // [knauf] KK20-385 — additive field remains readable by pre-backport pods.
+        const composite = {
+          primary: primaryStr,
+          secondary: secondaryStr,
+          id: String(lastReturned._id),
+        };
+        // End [knauf]
         nextCursor = Buffer.from(JSON.stringify(composite)).toString('base64');
       }
 

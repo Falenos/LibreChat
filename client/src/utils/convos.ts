@@ -121,14 +121,15 @@ export const groupConversationsByDate = (
   const yearMonthGroups = Array.from(groups.keys())
     .filter((group) => !dateGroupsSet.has(group))
     .sort((a, b) => {
-      const [yearA, yearB] = [parseInt(a.trim()), parseInt(b.trim())];
-      if (yearA !== yearB) {
-        return yearB - yearA;
-      }
-      const [monthA, monthB] = [dateKeysReverse[a], dateKeysReverse[b]];
-      const bOrder = monthOrderMap.get(monthB) ?? -1,
-        aOrder = monthOrderMap.get(monthA) ?? -1;
-      return bOrder - aOrder;
+      // [knauf] KK20-385 — narrow backport of LibreChat-AI/LibreChat#15842.
+      const getOrder = (group: string) => {
+        const month = dateKeysReverse[group];
+        return month
+          ? now.getFullYear() * 12 + (monthOrderMap.get(month) ?? 0)
+          : parseInt(group.trim(), 10) * 12;
+      };
+      return getOrder(b) - getOrder(a);
+      // End [knauf]
     });
   yearMonthGroups.forEach((group) => {
     sortedGroups.set(group, groups.get(group));

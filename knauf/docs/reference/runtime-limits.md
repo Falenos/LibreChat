@@ -194,6 +194,28 @@ mean the limiter is active unless its corresponding enable flag is true.
 | Meilisearch persistent data | 20 GiB in dev; stage/prod gated | Deployment override in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-meilisearch` | The initial claim preserves a six-month capacity horizon at the measured September 2026 growth rate. Remeasure allocated size and 30-day growth before promotion; MongoDB remains the source of truth. |
 | Meilisearch termination grace | 120 seconds in dev | Deployment override in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-meilisearch/values.yaml` | Gives the single `Recreate` pod time to stop cleanly before the RWO claim is attached to its replacement. An absent or falsey value omits the field and Kubernetes uses its default; malformed or invalid values fail rendering or deployment validation. |
 
+## Conversation history normalization
+
+The KK20-385 command defaults to dry-run and changes data only with both
+`--apply` and an exact `--expected-count`. GitOps may lower these limits or
+increase the pause, but must not exceed the code ceilings without a reviewed
+code change.
+
+| Limit | Default / allowed | Authority/source | Rationale |
+| --- | ---: | --- | --- |
+| Documents per batch | 25 / 1-100 | Code default, `knauf/scripts/backfill-chat-project-id.js` | Bounds each raw MongoDB read and update while keeping the migration restartable. |
+| Inter-batch pause | 250 ms / 1-10,000 ms | Code default, same source | Reduces database pressure; zero, negative, non-integer, and over-limit values are rejected rather than treated as unlimited. |
+| Maximum matching documents | 1,000 / 1-10,000 | Code default, same source | Apply aborts before writing when the live missing-field count exceeds this ceiling. |
+| Per-operation MongoDB deadline | 30,000 ms / 1-120,000 ms | Code default, same source | Applies `maxTimeMS` to counts, reads, aggregation, and updates; invalid values fail before connecting. |
+| Maintenance Job wall-clock deadline | 900 seconds | Temporary GitOps deployment override, `agentic-karl/<env>/maintenance/kk20-385-chat-project-id-backfill/values.yaml` in `agk-deployment-configs` | Bounds the complete dry-run or apply pod. A deadline failure leaves already-normalized rows safe to rescan; it never authorizes an automatic retry. |
+| Expected document count | Required for apply; zero or greater | Reviewed run input, same source | Must exactly equal the live pre-write count. Zero is valid only for proving an idempotent no-op rerun; it does not disable a safety gate. |
+
+Dry-run reports only aggregate counts, including orphaned project references,
+and performs no writes. Apply preserves conversation timestamps and the
+Meilisearch marker, rechecks the missing-field predicate in every update, fails
+if rows remain, and is safe to rerun. Temporary GitOps values are deployment
+inputs, not repository defaults.
+
 ## File translation
 
 All values below are code defaults unless marked as a provider ceiling. GitOps
