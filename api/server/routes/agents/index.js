@@ -91,7 +91,16 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
+  // [knauf] KK20-338 — thread the generationId through so the terminal-cause log
+  // can be joined to the same logical call as GenerationJobManager's own log.
+  const streamTelemetry = createSseStreamTelemetry({
+    req,
+    res,
+    streamId,
+    isResume,
+    generationId: job.generationId,
+  });
+  // End [knauf]
 
   res.setHeader('Content-Encoding', 'identity');
   res.setHeader('Content-Type', 'text/event-stream');
@@ -119,6 +128,20 @@ router.get('/chat/stream/:streamId', async (req, res) => {
   };
 
   const onDone = (event) => {
+    // [knauf] KK20-338 — mark this connection's close as a user/system abort (not an
+    // unattributed SSE disconnect) before it can race with res.end()'s 'close' event.
+    // event.initiatedBy is set by GenerationJobManager.abortJob() (see FinalEvent
+    // type) so this SSE-local telemetry agrees with GenerationJobManager's own
+    // system_abort/user_abort terminal-cause log instead of always assuming a user
+    // Stop click.
+    if (event?.aborted) {
+      if (event.initiatedBy === 'system') {
+        streamTelemetry.recordSystemAbort();
+      } else {
+        streamTelemetry.recordUserAbort();
+      }
+    }
+    // End [knauf]
     streamTelemetry.recordFinalEventEmitted();
     writeEvent(event, { final: true });
     res.end();

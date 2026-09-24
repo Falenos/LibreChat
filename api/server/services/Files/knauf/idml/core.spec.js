@@ -12,7 +12,7 @@ const {
 } = require('./core');
 
 const storyXml = (content = 'Hello &amp; welcome') =>
-  `<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u1"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]"><Content> ${content} </Content><Content>12345</Content><Content>https://knauf.com</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`;
+  `<?xml version="1.0" encoding="UTF-8"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u1"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange AppliedCharacterStyle="CharacterStyle/$ID/[No character style]" AppliedFont="Knauf Screen" FontStyle="Bold"><Content> ${content} </Content><Content>12345</Content><Content>https://knauf.com</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>`;
 
 async function fixture({ story = storyXml(), mimetype = IDML_MIME } = {}) {
   const zip = new JSZip();
@@ -24,7 +24,11 @@ async function fixture({ story = storyXml(), mimetype = IDML_MIME } = {}) {
   zip.file('Stories/Story_u1.xml', story);
   zip.file(
     'Resources/Styles.xml',
-    '<idPkg:Styles xmlns:idPkg="urn:test"><RootCharacterStyleGroup/></idPkg:Styles>',
+    '<idPkg:Styles xmlns:idPkg="urn:test"><CharacterStyle Self="CharacterStyle/Body" AppliedFont="Knauf Screen" FontStyle="Regular"/></idPkg:Styles>',
+  );
+  zip.file(
+    'Resources/Fonts.xml',
+    '<idPkg:Fonts xmlns:idPkg="urn:test"><FontFamily Name="Knauf Screen"><Font FontStyleName="Regular" PostScriptName="KnaufScreen-Regular"/></FontFamily></idPkg:Fonts>',
   );
   zip.file('Links/logo.bin', Buffer.from([0, 1, 2, 3, 254, 255]));
   return zip.generateAsync({
@@ -43,9 +47,29 @@ describe('[knauf] IDML core', () => {
     expect(parsed.segments).toEqual([
       expect.objectContaining({ id: 's0-c0', source: 'Hello & welcome' }),
     ]);
+    expect(parsed.fontStyleManifest).toMatchObject({
+      resources: [
+        { entryName: 'Resources/Fonts.xml', hash: expect.any(String) },
+        { entryName: 'Resources/Styles.xml', hash: expect.any(String) },
+      ],
+      stories: [
+        {
+          entryName: 'Stories/Story_u1.xml',
+          references: expect.arrayContaining([
+            expect.objectContaining({
+              attribute: 'AppliedParagraphStyle',
+              value: 'ParagraphStyle/Body',
+            }),
+            expect.objectContaining({ attribute: 'AppliedFont', value: 'Knauf Screen' }),
+            expect.objectContaining({ attribute: 'FontStyle', value: 'Bold' }),
+          ]),
+        },
+      ],
+    });
     const built = await buildIdml(parsed, new Map([['s0-c0', 'Hallo & willkommen']]));
     const output = await JSZip.loadAsync(built.buffer, { checkCRC32: true });
 
+    expect(built.fontValidation).toBe('preserved');
     expect(await output.file('Stories/Story_u1.xml').async('string')).toContain(
       '<Content> Hallo &amp; willkommen </Content>',
     );
@@ -53,6 +77,31 @@ describe('[knauf] IDML core', () => {
       parsed.immutableHashes.get('Links/logo.bin'),
     );
     expect(built.buffer.subarray(30, 38).toString('utf8')).toBe('mimetype');
+  });
+
+  it('fails when the rebuilt font/style manifest differs from the source contract', async () => {
+    const parsed = await parseIdml(await fixture());
+    parsed.stories[0].xml = parsed.stories[0].xml.replace(
+      'ParagraphStyle/Body',
+      'ParagraphStyle/Fake',
+    );
+
+    await expect(
+      buildIdml(parsed, new Map([['s0-c0', 'Hallo & willkommen']])),
+    ).rejects.toMatchObject({ code: 'font_fidelity_failed' });
+  });
+
+  it('classifies changed font/style resources as font fidelity failures', async () => {
+    const parsed = await parseIdml(await fixture());
+    const styles = parsed.entries.find((entry) => entry.name === 'Resources/Styles.xml');
+    styles.async = async () =>
+      Buffer.from(
+        '<idPkg:Styles xmlns:idPkg="urn:test"><CharacterStyle Self="CharacterStyle/Body" AppliedFont="Arial" FontStyle="Regular"/></idPkg:Styles>',
+      );
+
+    await expect(
+      buildIdml(parsed, new Map([['s0-c0', 'Hallo & willkommen']])),
+    ).rejects.toMatchObject({ code: 'font_fidelity_failed' });
   });
 
   it('preserves RTL and non-BMP translated text as valid UTF-8 XML', async () => {

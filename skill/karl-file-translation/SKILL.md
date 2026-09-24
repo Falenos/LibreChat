@@ -10,13 +10,24 @@ allowed-tools:
 # File translation
 
 Use `translate_file` once for the files the user requested. Pass the requested
-BCP-47 `target_locale` and `source_locale`. Ask for the source language when the
-user did not provide it; do not guess or rely on auto-detection.
+BCP-47 `target_locale`. Pass `source_locale` when the user provides it. For a
+machine-readable PDF, DOCX, XLSX, TXT, or CSV file, omit `source_locale` when it
+is unknown so KARL can detect the source language before applying the managed
+glossary. Ask for the source language before translating a scanned PDF, PPTX,
+raster image, IDML, JSON, Markdown, XML, or SVG file, or when `preserve_terms`
+is requested. If KARL cannot detect the language confidently from extracted
+text, ask the user to provide it rather than silently translating without
+managed terminology.
 
-When multiple files are available, pass their exact names in `filenames`. Set
-`all_files: true` only when the user explicitly asks to translate every file.
-Never infer all files from singular or ambiguous wording. When exactly one file
-is available, the selection can be omitted.
+Treat files attached to the current user message as the default translation
+scope. When exactly one current-message file is available, its selection can be
+omitted for requests such as "translate this file." When multiple current files
+are available, ask the user to choose their exact names before calling the
+tool. For a follow-up, ask the user to choose an exact historical filename;
+never select a historical file implicitly. Pass exact `filenames` for
+explicitly named historical files. Set `all_files: true` only when the user
+explicitly asks to translate every available file. Never infer all files from
+singular or ambiguous wording.
 
 When the user names product, brand, or technical terms that must not be
 translated, pass those exact strings in `preserve_terms`, including the spelling
@@ -39,5 +50,9 @@ succeeded. Do not manually translate file contents or simulate a file round trip
 when `translate_file` is unavailable.
 
 Source-code files are excluded; use Code Interpreter for code changes. Final
-layout, OCR, fonts, glyphs, RTL behavior, and InDesign overset require human
-review. Translation does not perform visual approval or automatic layout repair.
+layout, OCR, glyph coverage, RTL behavior, and InDesign overset require human
+review. IDML results report `fontValidation: preserved` only after KARL verifies
+that source font and style references survived the rebuild. Plain-text and data
+formats report `fontValidation: not_applicable`; formats with font-bearing visual
+layout still require human review unless the tool reports verified preservation.
+Translation does not perform visual approval or automatic layout repair.

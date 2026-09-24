@@ -221,6 +221,24 @@ describe('cacheConfig', () => {
     });
   });
 
+  // [knauf] KK20-338 — speculative/unconfirmed-in-production mitigation must stay
+  // opt-in: unset must not change default (no keepalive) behavior for anyone.
+  describe('REDIS_STREAM_PING_INTERVAL configuration', () => {
+    test('should default to 0 (disabled) when not set', async () => {
+      delete process.env.REDIS_STREAM_PING_INTERVAL;
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.REDIS_STREAM_PING_INTERVAL).toBe(0);
+    });
+
+    test('should use provided REDIS_STREAM_PING_INTERVAL value', async () => {
+      process.env.REDIS_STREAM_PING_INTERVAL = '30';
+
+      const { cacheConfig } = await import('../cacheConfig');
+      expect(cacheConfig.REDIS_STREAM_PING_INTERVAL).toBe(30);
+    });
+  });
+  // End [knauf]
+
   describe('FORCED_IN_MEMORY_CACHE_NAMESPACES validation', () => {
     test('should parse comma-separated cache keys correctly', async () => {
       process.env.FORCED_IN_MEMORY_CACHE_NAMESPACES = ' ROLES, MESSAGES ';

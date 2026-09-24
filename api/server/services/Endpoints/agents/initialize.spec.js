@@ -200,7 +200,10 @@ describe('initializeClient — processAgent ACL gate', () => {
     });
 
     expect(mockInitializeAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ requestFiles: [historicalFile] }),
+      expect.objectContaining({
+        requestFiles: [],
+        toolRequestFiles: [historicalFile],
+      }),
       expect.any(Object),
     );
     expect(req.body.files).toEqual([]);
@@ -210,6 +213,46 @@ describe('initializeClient — processAgent ACL gate', () => {
       null,
       { text: 0 },
     );
+  });
+  // End [knauf]
+
+  // [knauf] KK20-367 — preserve new-upload scope separately from hydrated history.
+  it('keeps current-message attachment IDs while rehydrating historical tool files', async () => {
+    const req = makeReq();
+    req.body.parentMessageId = 'assistant-1';
+    const currentFile = {
+      file_id: 'current-pdf',
+      filename: 'new.pdf',
+      type: 'application/pdf',
+      user: testUser._id.toString(),
+    };
+    const historicalFile = {
+      file_id: 'historical-pdf',
+      filename: 'older.pdf',
+      type: 'application/pdf',
+      user: testUser._id.toString(),
+    };
+    req.body.files = [currentFile];
+    jest.spyOn(db, 'getMessages').mockResolvedValueOnce([
+      {
+        messageId: 'user-1',
+        parentMessageId: Constants.NO_PARENT,
+        files: [{ file_id: historicalFile.file_id }],
+      },
+      { messageId: 'assistant-1', parentMessageId: 'user-1' },
+    ]);
+    jest.spyOn(db, 'getFiles').mockResolvedValueOnce([historicalFile]);
+    mockInitializeAgent.mockResolvedValue(makePrimaryConfig([]));
+
+    await initializeClient({
+      req,
+      res: {},
+      signal: new AbortController().signal,
+      endpointOption: makeEndpointOption(),
+    });
+
+    expect(req.knaufCurrentMessageFileIds).toEqual([currentFile.file_id]);
+    expect(req.knaufToolFiles).toEqual([currentFile, historicalFile]);
   });
   // End [knauf]
 

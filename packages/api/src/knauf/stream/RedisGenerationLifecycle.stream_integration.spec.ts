@@ -1,9 +1,11 @@
 import { logger } from '@librechat/data-schemas';
 import type { Redis as RedisClient } from 'ioredis';
 import type { ServerSentEvent } from '~/types';
+import { RedisEventTransport } from '~/stream/implementations/RedisEventTransport';
 import { GenerationJobManagerClass } from '~/stream/GenerationJobManager';
-import { createStreamServices } from '~/stream/createStreamServices';
 import { GENERATION_CONFLICT_CODE } from '~/stream/interfaces/IJobStore';
+import { RedisJobStore } from '~/stream/implementations/RedisJobStore';
+import { createStreamServices } from '~/stream/createStreamServices';
 
 logger.silent = true;
 
@@ -25,6 +27,29 @@ describeRedis('Redis generation lifecycle', () => {
     const manager = new GenerationJobManagerClass();
     manager.configure(createStreamServices({ useRedis: true, redisClient: redis }));
     return manager;
+  }
+
+  /**
+   * A replica with its own Redis connections, so a test can sever them to model a pod that dies
+   * without any goodbye, and with lease timings short enough to watch a lease actually expire
+   * inside the 15s test budget. createManager() shares one client and can model neither.
+   */
+  function createReplica(lease: { leaseTtlMs: number; leaseSweepMs: number }) {
+    const pub = redis.duplicate();
+    const sub = redis.duplicate();
+    const transport = new RedisEventTransport(pub, sub, lease);
+    const manager = new GenerationJobManagerClass();
+    manager.configure({
+      jobStore: new RedisJobStore(pub),
+      eventTransport: transport,
+      isRedis: true,
+    });
+    const stop = async () => {
+      await manager.destroy();
+      pub.disconnect();
+      sub.disconnect();
+    };
+    return { manager, transport, pub, sub, stop };
   }
 
   it('delivers the next generation while the previous SSE is still detaching', async () => {
@@ -426,5 +451,325 @@ describeRedis('Redis generation lifecycle', () => {
     await publisher.completeJob(streamId, undefined, nextJob.generationId);
     await publisher.destroy();
     await subscriber.destroy();
+  });
+  /**
+   * The disconnect safety net that persists a partial response is registered as
+   * `job.emitter.on('allSubscribersLeft', ...)` in api/server/controllers/agents/request.js:415.
+   *
+   * `GenerationJobManager` stores those handlers on process-local runtime state, but the
+   * cross-replica runtime built by `getOrCreateRuntimeState` omits `allSubscribersLeftHandlers`
+   * entirely — and then guards the invocation on that always-undefined field. With Redis the job
+   * is shared, so `GET /agents/chat/stream/:streamId` can land on a replica that did not start the
+   * generation. When it does, neither replica fires the handler and the partial response is never
+   * written to Mongo.
+   *
+   * See knauf/docs/operations/chat-history-disappearing-investigation.md.
+   */
+  describe('allSubscribersLeft handlers across replicas', () => {
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+    it('runs the disconnect handler when the SSE lands on the generating replica', async () => {
+      const replicaA = createManager();
+      const streamId = `knauf-subscribers-left-same-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await replicaA.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      // The content aggregator needs the run step before the deltas that reference it.
+      await replicaA.emitChunk(streamId, {
+        event: 'on_run_step',
+        data: { id: 'step-1', runId: 'run-1', index: 0, stepDetails: { type: 'message_creation' } },
+      } as unknown as ServerSentEvent);
+      await replicaA.emitChunk(streamId, {
+        event: 'on_message_delta',
+        data: { id: 'step-1', delta: { content: { type: 'text', text: 'partial answer' } } },
+      } as unknown as ServerSentEvent);
+      // `emitChunk` persists chunks fire-and-forget, so let the XADDs land before reading them back.
+      await settle();
+
+      const subscription = await replicaA.subscribe(
+        streamId,
+        () => undefined,
+        () => undefined,
+      );
+      subscription?.unsubscribe();
+      await settle();
+
+      expect(handlerCalls).toHaveLength(1);
+
+      await replicaA.destroy();
+    });
+
+    it('does not fire while another replica still has a subscriber, then fires exactly once', async () => {
+      const replicaA = createManager();
+      const replicaB = createManager();
+      const replicaC = createManager();
+      const streamId = `knauf-subscribers-left-two-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await replicaA.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await replicaA.emitChunk(streamId, {
+        event: 'on_run_step',
+        data: { id: 'step-1', runId: 'run-1', index: 0, stepDetails: { type: 'message_creation' } },
+      } as unknown as ServerSentEvent);
+      await replicaA.emitChunk(streamId, {
+        event: 'on_message_delta',
+        data: { id: 'step-1', delta: { content: { type: 'text', text: 'partial answer' } } },
+      } as unknown as ServerSentEvent);
+      await settle();
+
+      // Two viewers of the same generation, each served by a different replica.
+      const subB = await replicaB.subscribe(
+        streamId,
+        () => undefined,
+        () => undefined,
+      );
+      const subC = await replicaC.subscribe(
+        streamId,
+        () => undefined,
+        () => undefined,
+      );
+
+      // One tab closes. The other is still streaming, so nothing may be persisted yet.
+      subB?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(0);
+
+      // The last viewer leaves: exactly one notification, not one per replica.
+      subC?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(1);
+
+      await replicaA.destroy();
+      await replicaB.destroy();
+      await replicaC.destroy();
+    });
+
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const noop = () => undefined;
+    const seedContent = async (owner: GenerationJobManagerClass, streamId: string) => {
+      await owner.emitChunk(streamId, {
+        event: 'on_run_step',
+        data: { id: 'step-1', runId: 'run-1', index: 0, stepDetails: { type: 'message_creation' } },
+      } as unknown as ServerSentEvent);
+      await owner.emitChunk(streamId, {
+        event: 'on_message_delta',
+        data: { id: 'step-1', delta: { content: { type: 'text', text: 'partial answer' } } },
+      } as unknown as ServerSentEvent);
+    };
+
+    it('detects the sole remote subscriber whose replica stops without unsubscribing', async () => {
+      const lease = { leaseTtlMs: 600, leaseSweepMs: 150 };
+      const owner = createReplica(lease);
+      const viewer = createReplica(lease);
+      const streamId = `knauf-sole-remote-crash-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await owner.manager.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await seedContent(owner.manager, streamId);
+      await settle();
+
+      // The ONLY viewer anywhere is on a replica that is not the owner.
+      await viewer.manager.subscribe(streamId, noop, noop);
+      await settle();
+      expect(handlerCalls).toHaveLength(0);
+
+      /**
+       * The viewer's pod dies: its Redis connections are severed with no unsubscribe, no destroy,
+       * no goodbye of any kind. Its lease simply stops being refreshed. Nothing else in this test
+       * touches the stream again — no second subscriber, no later unsubscribe to do the pruning.
+       */
+      viewer.pub.disconnect();
+      viewer.sub.disconnect();
+
+      // The owner never had a local viewer. It must notice the lapse on its own sweep.
+      await wait(lease.leaseTtlMs + 4 * lease.leaseSweepMs);
+      expect(handlerCalls).toHaveLength(1);
+
+      // Exactly once: keep watching across several more sweeps.
+      await wait(4 * lease.leaseSweepMs);
+      expect(handlerCalls).toHaveLength(1);
+
+      await owner.stop();
+      await viewer.stop();
+    });
+
+    it('does not fire before any subscriber has ever attached', async () => {
+      const lease = { leaseTtlMs: 300, leaseSweepMs: 60 };
+      const owner = createReplica(lease);
+      const viewer = createReplica(lease);
+      const streamId = `knauf-no-premature-fire-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await owner.manager.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await seedContent(owner.manager, streamId);
+
+      // The observer is armed and sweeping, but an empty world is not a departure.
+      await wait(6 * lease.leaseSweepMs);
+      expect(handlerCalls).toHaveLength(0);
+
+      // Prove it was armed all along: the first real departure is announced.
+      const sub = await viewer.manager.subscribe(streamId, noop, noop);
+      await settle();
+      sub?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(1);
+
+      await owner.stop();
+      await viewer.stop();
+    });
+
+    it('announces a second departure after a reconnect', async () => {
+      const replicaA = createManager();
+      const replicaB = createManager();
+      const streamId = `knauf-departure-reconnect-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await replicaA.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await seedContent(replicaA, streamId);
+      await settle();
+
+      const first = await replicaB.subscribe(streamId, noop, noop);
+      await settle();
+      first?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(1);
+
+      // A reconnect revives membership and starts a new epoch, so leaving again is a new departure.
+      const second = await replicaB.subscribe(streamId, noop, noop);
+      await settle();
+      second?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(2);
+
+      await replicaA.destroy();
+      await replicaB.destroy();
+    });
+
+    it('an owner that also serves a viewer waits for the remote viewer too', async () => {
+      const replicaA = createManager();
+      const replicaB = createManager();
+      const streamId = `knauf-owner-dual-role-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await replicaA.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await seedContent(replicaA, streamId);
+      await settle();
+
+      const local = await replicaA.subscribe(streamId, noop, noop);
+      const remote = await replicaB.subscribe(streamId, noop, noop);
+      await settle();
+
+      // The owner's own viewer leaves. Its local reset fires, but a remote viewer remains.
+      local?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(0);
+
+      remote?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(1);
+
+      await replicaA.destroy();
+      await replicaB.destroy();
+    });
+
+    it("cleanup on one replica leaves other replicas' leases intact", async () => {
+      const lease = { leaseTtlMs: 600, leaseSweepMs: 150 };
+      const owner = createReplica(lease);
+      const viewerB = createReplica(lease);
+      const viewerC = createReplica(lease);
+      const streamId = `knauf-cleanup-peers-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await owner.manager.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      await seedContent(owner.manager, streamId);
+      await settle();
+
+      const subB = await viewerB.manager.subscribe(streamId, noop, noop);
+      await viewerC.manager.subscribe(streamId, noop, noop);
+      await settle();
+
+      const leasesKey = `stream:{${streamId}}:generation:${job.generationId}:leases`;
+      expect(await redis.zcard(leasesKey)).toBe(2);
+
+      // C tears down its own state. It must release only its own lease, never B's.
+      viewerC.transport.cleanup(streamId, job.generationId);
+      await wait(2 * lease.leaseSweepMs);
+      expect(await redis.zcard(leasesKey)).toBe(1);
+      expect(handlerCalls).toHaveLength(0);
+
+      subB?.unsubscribe();
+      await settle();
+      expect(handlerCalls).toHaveLength(1);
+
+      await owner.stop();
+      await viewerB.stop();
+      await viewerC.stop();
+    });
+
+    it('runs the disconnect handler when the SSE lands on another replica', async () => {
+      const replicaA = createManager();
+      const replicaB = createManager();
+      const streamId = `knauf-subscribers-left-cross-${Date.now()}`;
+      const handlerCalls: unknown[][] = [];
+
+      const job = await replicaA.createJob(streamId, 'user-1', streamId);
+      job.emitter.on('allSubscribersLeft', (parts: unknown[]) => {
+        handlerCalls.push(parts);
+      });
+      // The content aggregator needs the run step before the deltas that reference it.
+      await replicaA.emitChunk(streamId, {
+        event: 'on_run_step',
+        data: { id: 'step-1', runId: 'run-1', index: 0, stepDetails: { type: 'message_creation' } },
+      } as unknown as ServerSentEvent);
+      await replicaA.emitChunk(streamId, {
+        event: 'on_message_delta',
+        data: { id: 'step-1', delta: { content: { type: 'text', text: 'partial answer' } } },
+      } as unknown as ServerSentEvent);
+      // `emitChunk` persists chunks fire-and-forget, so let the XADDs land before reading them back.
+      await settle();
+
+      // The job is visible cross-replica, so the gap is handler propagation, not job lookup.
+      await expect(replicaB.getJob(streamId)).resolves.toBeTruthy();
+
+      // What api/server/routes/agents/index.js:74 does, then what req.on('close') does.
+      const subscription = await replicaB.subscribe(
+        streamId,
+        () => undefined,
+        () => undefined,
+      );
+      subscription?.unsubscribe();
+      await settle();
+
+      // The content was recoverable from the Redis chunk stream the whole time — replica B could
+      // have saved it. Nothing asked it to.
+      const parts = await replicaB.getJobStore().getContentParts(streamId, job.generationId);
+      expect(parts?.content?.length ?? 0).toBeGreaterThan(0);
+
+      expect(handlerCalls).toHaveLength(1);
+
+      await replicaA.destroy();
+      await replicaB.destroy();
+    });
   });
 });

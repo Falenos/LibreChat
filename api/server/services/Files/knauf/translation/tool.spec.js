@@ -5,6 +5,8 @@ const {
   formatForFile,
   jsonAdapter,
   markdownAdapter,
+  selectTranslationFiles,
+  sourceLocaleRequirement,
   sourceLocaleRequired,
   svgAdapter,
   xmlAdapter,
@@ -36,17 +38,117 @@ describe('[knauf] file translation formats', () => {
     });
   });
 
-  it('requires a source locale for structured text and configured glossaries', () => {
+  it('requires a source locale when the selected format cannot supply detection text', () => {
     const revision = process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION;
+    const glossaryRequired = process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED;
     delete process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION;
-    expect(sourceLocaleRequired([{ filename: 'sample.idml' }])).toBe(true);
-    expect(sourceLocaleRequired([{ filename: 'sample.docx' }])).toBe(false);
+    delete process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED;
+
+    for (const filename of [
+      'sample.idml',
+      'sample.json',
+      'sample.md',
+      'sample.xml',
+      'sample.svg',
+    ]) {
+      expect(sourceLocaleRequired([{ filename }])).toBe(true);
+    }
+    for (const filename of ['sample.docx', 'sample.pdf', 'sample.png']) {
+      expect(sourceLocaleRequired([{ filename }])).toBe(false);
+    }
+    expect(sourceLocaleRequirement([{ filename: 'sample.docx' }], ['HERADESIGN'])).toBe(
+      'source_locale is required when preserve_terms is used',
+    );
+    expect(sourceLocaleRequirement([{ filename: 'sample.json' }])).toBe(
+      'source_locale is required for JSON translation',
+    );
 
     process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = 'dictionary-sha';
-    expect(sourceLocaleRequired([{ filename: 'sample.docx' }])).toBe(true);
+    expect(sourceLocaleRequired([{ filename: 'sample.docx' }])).toBe(false);
+    expect(sourceLocaleRequirement([{ filename: 'sample.docx' }])).toBeNull();
+    expect(sourceLocaleRequirement([{ filename: 'sample.png' }])).toBe(
+      'source_locale is required for PNG translation',
+    );
+    expect(sourceLocaleRequirement([{ filename: 'sample.pptx' }])).toBe(
+      'source_locale is required for PPTX translation',
+    );
+    expect(sourceLocaleRequirement([{ filename: 'sample.json' }])).toBe(
+      'source_locale is required for JSON translation',
+    );
     if (revision == null) delete process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION;
     else process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION = revision;
+    if (glossaryRequired == null) delete process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED;
+    else process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED = glossaryRequired;
   });
+
+  // [knauf] KK20-367 — implicit translation scope must prefer exactly one current attachment.
+  it('selects the only current-message file without including historical files', () => {
+    const current = { file_id: 'current', filename: 'new.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(selectTranslationFiles([current, historical], {}, [current.file_id])).toEqual([current]);
+  });
+
+  it('requires a named choice when multiple current-message files are available', () => {
+    const first = { file_id: 'current-1', filename: 'first.pdf' };
+    const second = { file_id: 'current-2', filename: 'second.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() =>
+      selectTranslationFiles([first, second, historical], {}, [first.file_id, second.file_id]),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('first.pdf, second.pdf'),
+      }),
+    );
+  });
+
+  it('requires a named choice for an ambiguous historical follow-up', () => {
+    const first = { file_id: 'historical-1', filename: 'first.pdf' };
+    const second = { file_id: 'historical-2', filename: 'second.pdf' };
+
+    expect(() => selectTranslationFiles([first, second])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('first.pdf, second.pdf'),
+      }),
+    );
+  });
+
+  it('requires an explicit filename for a historical-only follow-up', () => {
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() => selectTranslationFiles([historical])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('older.pdf'),
+      }),
+    );
+  });
+
+  it('does not fall back to a historical file when the current message has no supported file', () => {
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+
+    expect(() => selectTranslationFiles([historical], {}, ['current-typescript'])).toThrow(
+      expect.objectContaining({
+        code: 'translation_file_selection_required',
+        message: expect.stringContaining('No supported file is attached to the current message'),
+      }),
+    );
+  });
+
+  it('keeps explicit historical-file and translate-all selections available', () => {
+    const current = { file_id: 'current', filename: 'new.pdf' };
+    const historical = { file_id: 'historical', filename: 'older.pdf' };
+    const files = [current, historical];
+
+    expect(selectTranslationFiles(files, { filenames: ['older.pdf'] }, [current.file_id])).toEqual([
+      historical,
+    ]);
+    expect(selectTranslationFiles(files, { all_files: true }, [current.file_id])).toEqual(files);
+  });
+  // End [knauf]
 
   it('translates JSON values while preserving keys and formatting', () => {
     const source = '{\n  "title": "Hello",\n  "items": ["Wall", 7],\n  "enabled": true\n}\n';

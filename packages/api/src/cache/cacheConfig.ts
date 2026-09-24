@@ -82,6 +82,36 @@ const cacheConfig: {
   GLOBAL_PREFIX_SEPARATOR: string;
   REDIS_MAX_LISTENERS: number;
   REDIS_PING_INTERVAL: number;
+  /**
+   * [knauf] KK20-338 — opt-in keepalive interval (seconds) for the dedicated Redis
+   * pub/sub subscriber used by resumable-stream job storage, applied only when
+   * REDIS_PING_INTERVAL is unset/0. Unlike a general-purpose Redis client, this
+   * subscriber sends no commands while idle (e.g. mid-generation between chunks, or
+   * during a long tool call), so operators who observe or suspect silent idle drops
+   * of that connection (NATs/firewalls/private-endpoint idle timeouts) can enable a
+   * keepalive for it specifically without changing REDIS_PING_INTERVAL's default for
+   * every other Redis client. Defaults to 0 (disabled) — this is speculative,
+   * unconfirmed-in-production mitigation, not an established root cause, so it must
+   * not change default behavior for deployments that haven't opted in.
+   * @default 0
+   */
+  REDIS_STREAM_PING_INTERVAL: number;
+  // [knauf] Viewer-lease timings for resumable streams; see RedisEventTransport's lease section.
+  /**
+   * How long (ms) a replica's viewer lease for a resumable stream survives without a
+   * heartbeat before that replica is treated as dead and its viewers as gone. This is the
+   * detection latency for persisting a partial response after the last viewer's pod vanishes.
+   * @default 30000
+   */
+  REDIS_STREAM_LEASE_TTL_MS: number;
+  /**
+   * Heartbeat and departure-sweep period (ms) for viewer leases. 0 derives a third of
+   * the TTL; anything at or above the TTL is rejected, since a sweep that slow can let a live
+   * lease lapse between ticks.
+   * @default 0
+   */
+  REDIS_STREAM_LEASE_SWEEP_MS: number;
+  // End [knauf]
   /** Max delay between reconnection attempts in ms */
   REDIS_RETRY_MAX_DELAY: number;
   /** Max number of reconnection attempts (0 = infinite) */
@@ -152,6 +182,11 @@ const cacheConfig: {
   GLOBAL_PREFIX_SEPARATOR: '::',
   REDIS_MAX_LISTENERS: math(process.env.REDIS_MAX_LISTENERS, 40),
   REDIS_PING_INTERVAL: math(process.env.REDIS_PING_INTERVAL, 0),
+  // [knauf] KK20-338 — see interface doc comment above.
+  REDIS_STREAM_PING_INTERVAL: math(process.env.REDIS_STREAM_PING_INTERVAL, 0),
+  REDIS_STREAM_LEASE_TTL_MS: math(process.env.REDIS_STREAM_LEASE_TTL_MS, 30000),
+  REDIS_STREAM_LEASE_SWEEP_MS: math(process.env.REDIS_STREAM_LEASE_SWEEP_MS, 0),
+  // End [knauf]
   /** Max delay between reconnection attempts in ms */
   REDIS_RETRY_MAX_DELAY: math(process.env.REDIS_RETRY_MAX_DELAY, 3000),
   /** Max number of reconnection attempts (0 = infinite) */

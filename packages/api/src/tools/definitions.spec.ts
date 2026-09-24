@@ -5,7 +5,9 @@ import type {
   ActionToolDefinition,
 } from './definitions';
 import { toolkitExpansion, toolkitParent } from './toolkits/mapping';
-import { getToolDefinition } from './registry/definitions';
+// [knauf] KK20-368 — pin the optional source-locale translation schema.
+import { getToolDefinition, translateFileSchema } from './registry/definitions';
+// End [knauf]
 import { loadToolDefinitions } from './definitions';
 
 describe('definitions.ts', () => {
@@ -15,6 +17,18 @@ describe('definitions.ts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
+
+  // [knauf] KK20-368 — glossary-aware auto-detection remains available in the model-facing schema.
+  it('allows KARL to detect source locale for eligible file translations', () => {
+    expect(translateFileSchema.required).toEqual(['target_locale']);
+    expect(translateFileSchema.properties?.source_locale?.description).toMatch(
+      /detect the language before applying the managed glossary/i,
+    );
+    expect(translateFileSchema.properties?.source_locale?.description).toMatch(
+      /scanned PDFs, PPTX, raster images/i,
+    );
+  });
+  // End [knauf]
 
   describe('loadToolDefinitions', () => {
     it('should return empty result for empty tools array', async () => {

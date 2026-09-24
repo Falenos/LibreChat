@@ -53,7 +53,10 @@ describe('scheduler user lifecycle', () => {
       String(userId),
       'tenant-1',
     );
-    expect(generationJobManager.abortJob).toHaveBeenCalledWith('stream-1');
+    expect(generationJobManager.abortJob).toHaveBeenCalledWith('stream-1', {
+      initiatedBy: 'system',
+      waitForAcknowledgement: true,
+    });
     expect(await database.collection('knauf_agent_schedules').countDocuments()).toBe(0);
     expect(await database.collection('knauf_scheduled_agent_runs').countDocuments()).toBe(0);
   });
@@ -92,7 +95,28 @@ describe('scheduler user lifecycle', () => {
     await deletion;
 
     expect(generationJobManager.getActiveJobIdsForUser).toHaveBeenCalledTimes(1);
-    expect(generationJobManager.abortJob).toHaveBeenCalledWith('stream-1');
+    expect(generationJobManager.abortJob).toHaveBeenCalledWith('stream-1', {
+      initiatedBy: 'system',
+      waitForAcknowledgement: true,
+    });
+  });
+
+  test('does not purge data when an active generation fails to acknowledge shutdown', async () => {
+    const userId = new ObjectId();
+    await database.collection('knauf_agent_schedules').insertOne({ user: userId });
+    const generationJobManager = {
+      getActiveJobIdsForUser: jest.fn().mockResolvedValue(['stream-1']),
+      abortJob: jest.fn().mockRejectedValue(new Error('generation did not stop')),
+    };
+
+    await expect(
+      prepareSchedulerUserDeletion(
+        { id: String(userId), _id: userId, tenantId: 'tenant-1' },
+        { database, generationJobManager },
+      ),
+    ).rejects.toThrow('generation did not stop');
+
+    expect(await database.collection('knauf_agent_schedules').countDocuments()).toBe(1);
   });
 
   test('rejects new admissions after account deletion starts', async () => {

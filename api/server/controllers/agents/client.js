@@ -72,7 +72,7 @@ const { createModelRouterTelemetry } = require('./knauf/modelRouterTelemetry');
 // End [knauf]
 // [knauf] KK20-199 — provider errors may contain request bodies, image data,
 // signed URLs, and identity fields. Keep only bounded diagnostic attributes.
-const { summarizeProviderError } = require('./knauf/providerError');
+const { getPersistedGenerationError, summarizeProviderError } = require('./knauf/providerError');
 // End [knauf]
 // [knauf] KK20-194 — replace phase-concatenated native-search text before persistence.
 const { replaceLastTextPart } = require('~/server/knauf/nativeWebSearchOutput');
@@ -1229,6 +1229,12 @@ class AgentClient extends BaseClient {
     /** @type {Promise<(TAttachment | null)[] | undefined>} */
     let memoryPromise;
     let modelRouterFailed = false;
+    // [knauf] KK20-353 — retain bounded terminal state for persistence and lifecycle telemetry.
+    let modelRouterCancelled = false;
+    let clientSurface = 'none';
+    let clientOutputState = 'none';
+    let clientIncompleteReason;
+    // End [knauf]
     const appConfig = this.options.req.config;
     const balanceConfig = getBalanceConfig(appConfig);
     const transactionsConfig = getTransactionsConfig(appConfig);
@@ -1241,6 +1247,13 @@ class AgentClient extends BaseClient {
         conversationId: this.conversationId,
         ...(this.options.req?._resumableStreamId && {
           streamId: this.options.req._resumableStreamId,
+        }),
+        // KK20-338 — the immutable per-turn owner token (distinct from streamId,
+        // which === conversationId and is reused across every turn). Joins this call's
+        // log to the same logical generation as GenerationJobManager's and the SSE
+        // stream's terminal-cause logs, independent of any inbound HTTP request ID.
+        ...(this.options.req?._resumableGenerationId && {
+          generationId: this.options.req._resumableGenerationId,
         }),
       },
       isCancelled: () => abortController?.signal?.aborted === true,
@@ -1611,17 +1624,29 @@ class AgentClient extends BaseClient {
     } catch (err) {
       modelRouterFailed = true;
       if (abortController.signal.aborted) {
+        modelRouterCancelled = true;
         logger.debug(
           '[api/server/controllers/agents/client.js #sendCompletion] Operation aborted by user',
           { conversationId: this.conversationId, name: err?.name, code: err?.code },
         );
       } else {
-        // [knauf] KK20-199 — never serialize provider errors into logs or
-        // persisted response content; retain only bounded operational fields.
-        logger.error(
-          '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',
-          summarizeProviderError(err, 'agent_generation'),
-        );
+        // [knauf] KK20-199 / KK20-353 — never serialize provider errors into logs
+        // or persisted response content; retain only bounded operational fields.
+        const errorSummary = summarizeProviderError(err, 'agent_generation');
+        clientOutputState = errorSummary.outputState ?? 'none';
+        clientIncompleteReason = errorSummary.incompleteReason;
+        if (errorSummary.retryDecision === 'cancelled') {
+          modelRouterCancelled = true;
+          logger.debug(
+            '[api/server/controllers/agents/client.js #sendCompletion] Operation cancelled',
+            errorSummary,
+          );
+        } else {
+          logger.error(
+            '[api/server/controllers/agents/client.js #sendCompletion] Generation failed',
+            errorSummary,
+          );
+        }
         // KK20-260 — the image tool can finish and persist its output before
         // the router's redundant follow-up call fails. Keep that successful result.
         const completedImageToolIds = new Set(
@@ -1643,11 +1668,15 @@ class AgentClient extends BaseClient {
               completedImageToolIds.has(result.value?.toolCallId) &&
               result.value?.type?.startsWith('image/'),
           );
-        if (!recoveredRedundantImageFailure) {
+        const persistedError = recoveredRedundantImageFailure
+          ? null
+          : getPersistedGenerationError(errorSummary, this.contentParts);
+        if (persistedError != null) {
           this.contentParts.push({
             type: ContentTypes.ERROR,
-            [ContentTypes.ERROR]: 'An error occurred while processing the request',
+            [ContentTypes.ERROR]: persistedError.content,
           });
+          clientSurface = persistedError.surface;
         }
         // End [knauf]
       }
@@ -1704,10 +1733,13 @@ class AgentClient extends BaseClient {
         this._resolveRun(this.run ?? null);
         this._resolveRun = null;
       }
-      // [knauf] KK20-270 — summarize server generation timing without claiming browser loader time.
+      // [knauf] KK20-270 / KK20-353 — summarize server generation timing and selected error surface.
       modelRouterTelemetry.finalize({
-        cancelled: abortController?.signal?.aborted === true,
+        cancelled: modelRouterCancelled || abortController?.signal?.aborted === true,
         failed: modelRouterFailed,
+        clientSurface,
+        clientOutputState,
+        clientIncompleteReason,
       });
       // End [knauf]
       run = null;

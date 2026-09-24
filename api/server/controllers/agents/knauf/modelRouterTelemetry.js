@@ -1,11 +1,18 @@
 const { BaseCallbackHandler } = require('@langchain/core/callbacks/base');
 const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { recordFoundryModelCall } = require('@librechat/api');
-const { getProviderRequestId, summarizeProviderError } = require('./providerError');
+const {
+  getProviderCorrelationId,
+  getProviderRequestId,
+  summarizeProviderError,
+} = require('./providerError');
 
 const MODEL_ROUTER = 'model-router';
 const STREAM_IDLE_MESSAGE = 'Model Router stream timed out';
 const MAX_RETRY_LINEAGE_LENGTH = 512;
+const CLIENT_SURFACES = new Set(['none', 'generic_error', 'incomplete_response']);
+const OUTPUT_STATES = new Set(['none', 'answer_text', 'activity_only']);
+const INCOMPLETE_REASONS = new Set(['max_output_tokens', 'content_filter', 'other']);
 
 const logTelemetry = (message, event) => tenantStorage.run({}, () => logger.info(message, event));
 
@@ -55,6 +62,16 @@ const getRetryLineage = (metadata, parentRunId) => {
     : undefined;
 };
 
+const getAttemptNumber = (tags, retryReason) => {
+  if (Array.isArray(tags)) {
+    const retryTag = tags.find((tag) => typeof tag === 'string' && /^retry:attempt:\d+$/.test(tag));
+    if (retryTag != null) {
+      return Number(retryTag.slice(retryTag.lastIndexOf(':') + 1));
+    }
+  }
+  return retryReason == null ? 1 : 2;
+};
+
 const getGenerationMessage = (result) => result?.generations?.at(-1)?.at(-1)?.message;
 
 const getUsage = (result) => {
@@ -85,6 +102,23 @@ const getSuccessRequestId = (result) => {
     getProviderRequestId(responseMetadata?.response) ??
     getProviderRequestId(result?.llmOutput)
   );
+};
+
+const getSuccessCorrelationId = (result) => {
+  const responseMetadata = getGenerationMessage(result)?.response_metadata;
+  return (
+    getProviderCorrelationId(responseMetadata) ??
+    getProviderCorrelationId(responseMetadata?.response) ??
+    getProviderCorrelationId(result?.llmOutput)
+  );
+};
+
+const getResultIncompleteReason = (result) => {
+  const reason = getGenerationMessage(result)?.response_metadata?.incomplete_details?.reason;
+  if (reason === 'max_output_tokens' || reason === 'content_filter') {
+    return reason;
+  }
+  return reason == null ? undefined : 'other';
 };
 
 const classifyError = (error, cancelled) => {
@@ -154,7 +188,11 @@ function createModelRouterTelemetry({
       error == null ? undefined : summarizeProviderError(error, 'model_router_call');
     const providerRequestId =
       error == null ? getSuccessRequestId(output) : providerError?.requestId;
-    if (result === 'provider_error' && providerError?.retryable === true) {
+    const providerCorrelationId =
+      error == null ? getSuccessCorrelationId(output) : providerError?.correlationId;
+    const incompleteReason =
+      error == null ? getResultIncompleteReason(output) : providerError?.incompleteReason;
+    if (providerError?.retryable === true) {
       queuePendingRetry(call.retryLineage, 'langgraph_retry');
     }
 
@@ -174,12 +212,19 @@ function createModelRouterTelemetry({
       returnedModel,
       phase: call.phase,
       attempt: call.attempt,
+      attemptNumber: call.attemptNumber,
+      retryLineage: call.retryLineage ?? runId,
       durationMs,
       ...(ttftMs != null && { ttftMs }),
       ...(call.retryReason != null && { retryReason: call.retryReason }),
       ...(Number.isFinite(usage.inputTokens) && { inputTokens: usage.inputTokens }),
       ...(Number.isFinite(usage.outputTokens) && { outputTokens: usage.outputTokens }),
       ...(providerError != null && { providerRetryable: providerError.retryable }),
+      ...(providerError?.retryDecision != null && {
+        retryDecision: providerError.retryDecision,
+      }),
+      ...(providerError?.outputState != null && { outputState: providerError.outputState }),
+      ...(incompleteReason != null && { incompleteReason }),
       ...(providerError?.providerStatus != null && {
         providerStatus: providerError.providerStatus,
       }),
@@ -188,6 +233,7 @@ function createModelRouterTelemetry({
       ...(providerError?.param != null && { providerParam: providerError.param }),
       ...(providerError?.errorName != null && { errorName: providerError.errorName }),
       ...(providerRequestId != null && { providerRequestId }),
+      ...(providerCorrelationId != null && { providerCorrelationId }),
     };
     completedCalls.push(event);
     logTelemetry('[FoundryRouterTelemetry] Model call completed', event);
@@ -213,6 +259,7 @@ function createModelRouterTelemetry({
         retryLineage,
         phase: getPhase(messages, runtimeMetadata),
         attempt,
+        attemptNumber: getAttemptNumber(tags, retryReason),
         retryReason,
       });
     },
@@ -244,12 +291,63 @@ function createModelRouterTelemetry({
     finishCall(runId, 'retry', output);
   };
 
-  const finalize = ({ cancelled = false, failed = false } = {}) => {
+  const finalize = ({
+    cancelled = false,
+    failed = false,
+    clientSurface = 'none',
+    clientOutputState = 'none',
+    clientIncompleteReason,
+  } = {}) => {
     if (finalized) return;
     finalized = true;
     if (completedCalls.length === 0 && calls.size === 0) return;
     const completedAtMs = now();
     const modelWaitMs = completedCalls.reduce((total, call) => total + call.durationMs, 0);
+    const callsByLineage = new Map();
+    for (const call of completedCalls) {
+      const lineageCalls = callsByLineage.get(call.retryLineage) ?? [];
+      lineageCalls.push(call);
+      callsByLineage.set(call.retryLineage, lineageCalls);
+    }
+    for (const [retryLineage, lineageCalls] of callsByLineage) {
+      const orderedCalls = lineageCalls.toSorted((a, b) => a.attemptNumber - b.attemptNumber);
+      const initial = orderedCalls[0];
+      const terminal = orderedCalls.at(-1);
+      if (initial == null || terminal == null || initial.result === 'success') {
+        continue;
+      }
+      let outcome = 'retry_not_observed';
+      if (orderedCalls.length > 1) {
+        outcome = terminal.result === 'success' ? 'recovered' : 'exhausted';
+      } else if (initial.retryDecision === 'unsafe_after_output') {
+        outcome = 'unsafe_not_retried';
+      } else if (initial.result === 'cancelled') {
+        outcome = 'cancelled';
+      } else if (initial.retryDecision === 'not_retryable' || initial.providerRetryable === false) {
+        outcome = 'not_retryable';
+      }
+      logTelemetry('[FoundryRouterTelemetry] Retry lineage completed', {
+        ...correlation,
+        retryLineage,
+        outcome,
+        attemptCount: orderedCalls.length,
+        initialResult: initial.result,
+        terminalResult: terminal.result,
+        ...(initial.providerStatus != null && { initialProviderStatus: initial.providerStatus }),
+        ...(initial.providerCode != null && { initialProviderCode: initial.providerCode }),
+        ...(initial.outputState != null && { initialOutputState: initial.outputState }),
+        ...(initial.incompleteReason != null && {
+          initialIncompleteReason: initial.incompleteReason,
+        }),
+        ...(initial.providerCorrelationId != null && {
+          initialProviderCorrelationId: initial.providerCorrelationId,
+        }),
+        ...(terminal.providerCorrelationId != null && {
+          terminalProviderCorrelationId: terminal.providerCorrelationId,
+        }),
+        ...(terminal.retryReason != null && { retryReason: terminal.retryReason }),
+      });
+    }
     let terminalResult = 'success';
     if (cancelled) {
       terminalResult = 'cancelled';
@@ -259,6 +357,9 @@ function createModelRouterTelemetry({
     logTelemetry('[FoundryRouterTelemetry] Generation lifecycle completed', {
       ...correlation,
       result: terminalResult,
+      clientSurface: CLIENT_SURFACES.has(clientSurface) ? clientSurface : 'none',
+      clientOutputState: OUTPUT_STATES.has(clientOutputState) ? clientOutputState : 'none',
+      ...(INCOMPLETE_REASONS.has(clientIncompleteReason) && { clientIncompleteReason }),
       durationMs: Math.max(0, completedAtMs - startedAtMs),
       ...(firstModelContentAtMs != null && {
         timeToFirstModelContentMs: Math.max(0, firstModelContentAtMs - startedAtMs),

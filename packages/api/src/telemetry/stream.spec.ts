@@ -1,9 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { context, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { logger } from '@librechat/data-schemas';
 import type { Response } from 'express';
 import type { Span, Tracer } from '@opentelemetry/api';
 import type { ServerRequest } from '~/types';
 import { createSseStreamTelemetry } from './stream';
+
+// [knauf] KK20-338 — quiet the structured end-of-stream log; assertions use a spy instead.
+logger.silent = true;
+// End [knauf]
 
 interface MockResponse extends EventEmitter {
   writableEnded: boolean;
@@ -31,10 +36,11 @@ function createSpan(): jest.Mocked<Span> {
   return span;
 }
 
-function createRequest(): ServerRequest {
+function createRequest(headers: Record<string, string> = {}): ServerRequest {
   return {
     method: 'GET',
-  } as ServerRequest;
+    headers,
+  } as unknown as ServerRequest;
 }
 
 function createResponse(): MockResponse {
@@ -107,10 +113,11 @@ describe('createSseStreamTelemetry', () => {
     expect(span.end).toHaveBeenCalledTimes(1);
   });
 
-  it('records client aborts on close before writableEnded', () => {
+  it('records an unattributed SSE disconnect on close before writableEnded', () => {
     const span = createSpan();
     mockTracer(span);
     const res = createResponse();
+    const infoSpy = jest.spyOn(logger, 'info');
     const telemetry = createSseStreamTelemetry({
       isResume: true,
       req: createRequest(),
@@ -121,16 +128,189 @@ describe('createSseStreamTelemetry', () => {
     telemetry.recordWrite('event: message\ndata: {}\n\n');
     res.emit('close');
 
-    expect(span.addEvent).toHaveBeenCalledWith('client_aborted');
+    // [knauf] KK20-338 — no recordUserAbort() call was made, so AGK genuinely
+    // cannot attribute this close to the user; it must not be mislabeled.
+    expect(span.addEvent).toHaveBeenCalledWith('sse_disconnect');
     expect(span.setAttributes).toHaveBeenCalledWith(
       expect.objectContaining({
         'librechat.stream.completed': false,
-        'librechat.stream.end_reason': 'client_aborted',
+        'librechat.stream.end_reason': 'sse_disconnect',
       }),
     );
     expect(span.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.ERROR });
-    expect(span.setAttribute).toHaveBeenCalledWith('error.type', 'client_aborted');
+    expect(span.setAttribute).toHaveBeenCalledWith('error.type', 'sse_disconnect');
     expect(span.end).toHaveBeenCalledTimes(1);
+    expect(infoSpy).toHaveBeenCalledWith(
+      '[SseStreamTelemetry] SSE stream ended',
+      expect.objectContaining({ streamId: 'stream-2', reason: 'sse_disconnect' }),
+    );
+    // End [knauf]
+  });
+
+  it('records a user_abort when recordUserAbort() precedes an unfinished close', () => {
+    const span = createSpan();
+    mockTracer(span);
+    const res = createResponse();
+    const telemetry = createSseStreamTelemetry({
+      isResume: false,
+      req: createRequest(),
+      res: res as Response,
+      streamId: 'stream-2b',
+    });
+
+    // [knauf] KK20-338 — route code observed event.aborted === true on the final
+    // event before the connection tore down (e.g. abort raced the write).
+    telemetry.recordUserAbort();
+    res.emit('close');
+
+    expect(span.addEvent).toHaveBeenCalledWith('user_abort');
+    expect(span.setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({ 'librechat.stream.end_reason': 'user_abort' }),
+    );
+    // End [knauf]
+  });
+
+  it('records user_abort — not done — on the real onDone(aborted) -> res.end() -> finish route', () => {
+    // [knauf] KK20-338 — models api/server/routes/agents/index.js's actual onDone()
+    // handler: recordUserAbort() runs first (event.aborted === true), then
+    // recordFinalEventEmitted() writes the final SSE event, then res.end() is
+    // called, which — like real Express/Node — eventually emits 'finish' once the
+    // response is flushed. Before this fix, recordFinalEventEmitted() unconditionally
+    // reset plannedEndReason to 'done', so this exact sequence mislabeled every
+    // Stop-button/system abort as a normal completion.
+    const span = createSpan();
+    mockTracer(span);
+    const res = createResponse();
+    const infoSpy = jest.spyOn(logger, 'info');
+    const telemetry = createSseStreamTelemetry({
+      isResume: false,
+      req: createRequest(),
+      res: res as Response,
+      streamId: 'stream-2c',
+    });
+
+    telemetry.recordUserAbort();
+    telemetry.recordFinalEventEmitted();
+    telemetry.recordWrite('event: message\ndata: {"final":true,"aborted":true}\n\n', {
+      final: true,
+    });
+    res.writableEnded = true;
+    res.emit('finish');
+
+    expect(span.setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'librechat.stream.completed': false,
+        'librechat.stream.end_reason': 'user_abort',
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      '[SseStreamTelemetry] SSE stream ended',
+      expect.objectContaining({ streamId: 'stream-2c', reason: 'user_abort' }),
+    );
+    // End [knauf]
+  });
+
+  // [knauf] KK20-338 — Falenos 2nd-round review: onDone() must call recordSystemAbort()
+  // (not recordUserAbort()) for a system-initiated abort, or this SSE-local telemetry
+  // permanently disagrees with GenerationJobManager's correctly-labeled terminal-cause
+  // log. Mirrors the user_abort test above for the system_abort path.
+  it('records a system_abort when recordSystemAbort() precedes an unfinished close', () => {
+    const span = createSpan();
+    mockTracer(span);
+    const res = createResponse();
+    const telemetry = createSseStreamTelemetry({
+      isResume: false,
+      req: createRequest(),
+      res: res as Response,
+      streamId: 'stream-2d',
+    });
+
+    telemetry.recordSystemAbort();
+    res.emit('close');
+
+    expect(span.addEvent).toHaveBeenCalledWith('system_abort');
+    expect(span.setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({ 'librechat.stream.end_reason': 'system_abort' }),
+    );
+  });
+
+  it('records system_abort — not done — on the real onDone(aborted) -> res.end() -> finish route', () => {
+    const span = createSpan();
+    mockTracer(span);
+    const res = createResponse();
+    const infoSpy = jest.spyOn(logger, 'info');
+    const telemetry = createSseStreamTelemetry({
+      isResume: false,
+      req: createRequest(),
+      res: res as Response,
+      streamId: 'stream-2e',
+    });
+
+    telemetry.recordSystemAbort();
+    telemetry.recordFinalEventEmitted();
+    telemetry.recordWrite('event: message\ndata: {"final":true,"aborted":true}\n\n', {
+      final: true,
+    });
+    res.writableEnded = true;
+    res.emit('finish');
+
+    expect(span.setAttributes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'librechat.stream.completed': false,
+        'librechat.stream.end_reason': 'system_abort',
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      '[SseStreamTelemetry] SSE stream ended',
+      expect.objectContaining({ streamId: 'stream-2e', reason: 'system_abort' }),
+    );
+  });
+  // End [knauf]
+
+  it('attaches generation_id and a bounded correlation_id from request headers', () => {
+    const span = createSpan();
+    const startSpan = mockTracer(span);
+    const res = createResponse();
+
+    createSseStreamTelemetry({
+      isResume: false,
+      req: createRequest({ 'x-request-id': 'abc-123' }),
+      res: res as Response,
+      streamId: 'stream-2c',
+      generationId: 'gen-9',
+    });
+
+    // [knauf] KK20-338 — join keys for KK20-324 dashboards / ingress log correlation.
+    expect(startSpan).toHaveBeenCalledWith(
+      'librechat.sse.stream',
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          'librechat.stream.generation_id': 'gen-9',
+          'librechat.stream.correlation_id': 'abc-123',
+        }),
+      }),
+      context.active(),
+    );
+    // End [knauf]
+  });
+
+  it('drops correlation ids that do not match the bounded identifier shape', () => {
+    const span = createSpan();
+    const startSpan = mockTracer(span);
+    const res = createResponse();
+
+    createSseStreamTelemetry({
+      isResume: false,
+      // [knauf] KK20-338 — never let arbitrary header content (long strings,
+      // free text) leak into telemetry attributes/logs.
+      req: createRequest({ 'x-request-id': 'a'.repeat(200) }),
+      // End [knauf]
+      res: res as Response,
+      streamId: 'stream-2d',
+    });
+
+    const [, options] = startSpan.mock.calls[0];
+    expect(options.attributes).not.toHaveProperty('librechat.stream.correlation_id');
   });
 
   it('preserves subscribe_failed as the terminal reason when an error event is sent', () => {

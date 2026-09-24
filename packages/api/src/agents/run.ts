@@ -43,6 +43,14 @@ import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { resolveConfigHeaders } from '~/utils/headers';
 import { applyTestRunHook } from '~/agents/testHook';
 import { isUserProvided } from '~/utils/common';
+// [knauf] KK20-339 — enforce one observable Model Router retry and surface failed streams.
+import {
+  applyKnaufRetryFallback,
+  disableKnaufRetryFallback,
+  guardModelRouterResponsesStream,
+  preserveRetryForHttpStatus,
+} from '~/knauf/agents/modelRouterRetry';
+// End [knauf]
 
 // [knauf] Agent-level reasoning overrides (KK20-128). Knauf UI writes
 // `knauf_fast_mode` / `knauf_show_reasoning` into `agent.model_parameters`;
@@ -940,8 +948,8 @@ export function buildLangfuseConfig(
 }
 // End [knauf]
 
-// [knauf] NO-TICKET — keep Responses streaming final-answer-only while retaining
-// ordinary token streaming; also abort stalled Model Router response bodies.
+// [knauf] NO-TICKET, KK20-339 — keep Responses streaming final-answer-only,
+// abort stalled Model Router bodies, and reject failed post-200 streams.
 function filterResponsesCommentary(
   body: ReadableStream<Uint8Array>,
   bufferNativeSearchDrafts: boolean,
@@ -997,9 +1005,12 @@ function filterResponsesCommentary(
                 pendingMessageFrames.length = 0;
                 pendingMessageOutputIndex = null;
                 hasNativeWebSearchCall = true;
+              } else if (event.type === 'response.failed' || event.type === 'error') {
+                pendingMessageFrames.length = 0;
+                pendingMessageOutputIndex = null;
               } else if (
                 event.type === 'response.completed' ||
-                event.type === 'response.failed' ||
+                event.type === 'response.incomplete' ||
                 (event.type === 'response.output_item.added' &&
                   event.output_index !== pendingMessageOutputIndex)
               ) {
@@ -1053,7 +1064,8 @@ function filterResponsesCommentary(
       }
     },
     flush(controller) {
-      flushPendingMessage(controller);
+      pendingMessageFrames.length = 0;
+      pendingMessageOutputIndex = null;
       buffer += decoder.decode();
       if (buffer !== '') {
         controller.enqueue(encoder.encode(buffer));
@@ -1072,13 +1084,16 @@ export function applyKnaufOpenAIStreamControls(
   const timeout = cfg.timeout;
   const idleTimeout =
     model.includes('model-router') && typeof timeout === 'number' && timeout > 0 ? timeout : null;
+  const isModelRouter = model.includes('model-router');
   const filterCommentary = cfg.useResponsesApi === true;
+  const guardStreamingFailures = isModelRouter && filterCommentary && cfg.streaming !== false;
   if (idleTimeout == null && !filterCommentary) {
     return;
   }
 
   const sourceConfiguration = (cfg.configuration ?? {}) as Record<string, unknown>;
   const configuration = { ...sourceConfiguration };
+  let modelRouterHttpAttempt = 0;
   const baseFetch =
     typeof sourceConfiguration.fetch === 'function'
       ? (sourceConfiguration.fetch as typeof fetch)
@@ -1086,11 +1101,20 @@ export function applyKnaufOpenAIStreamControls(
 
   configuration.fetch = async (...args: Parameters<typeof fetch>): Promise<Response> => {
     const [input, init] = args;
+    if (isModelRouter) {
+      modelRouterHttpAttempt += 1;
+      logger.debug('[knauf:model-router-retry] HTTP attempt started', {
+        attempt: modelRouterHttpAttempt,
+      });
+    }
     const idleController = new AbortController();
     const signal = init?.signal
       ? AbortSignal.any([init.signal, idleController.signal])
       : idleController.signal;
     const response = await baseFetch(input, { ...init, signal });
+    if (isModelRouter) {
+      preserveRetryForHttpStatus(cfg, response.status);
+    }
     if (response.body == null) {
       return response;
     }
@@ -1129,14 +1153,28 @@ export function applyKnaufOpenAIStreamControls(
       },
     });
 
-    const wrappedResponse = new Response(
-      filterCommentary ? filterResponsesCommentary(body, bufferNativeSearchDrafts) : body,
-      {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      },
-    );
+    const filteredBody = filterCommentary
+      ? filterResponsesCommentary(body, bufferNativeSearchDrafts)
+      : body;
+    const responseBody =
+      guardStreamingFailures && response.ok
+        ? guardModelRouterResponsesStream(filteredBody, {
+            disableRetry: (decision) => {
+              logger.debug(
+                `[knauf:model-router-retry] fallback disabled: decision=${decision}, attempt=${modelRouterHttpAttempt}`,
+              );
+              disableKnaufRetryFallback(cfg);
+            },
+            isCallerAborted: () => init?.signal?.aborted === true,
+            isTransportTimedOut: () =>
+              idleController.signal.aborted === true && init?.signal?.aborted !== true,
+          })
+        : filteredBody;
+    const wrappedResponse = new Response(responseBody, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
     Object.defineProperties(wrappedResponse, {
       redirected: { value: response.redirected },
       type: { value: response.type },
@@ -1316,18 +1354,15 @@ export async function createRun({
       llmConfig.usage = true;
     }
 
-    // [knauf] KK20-194 — provide one same-provider fallback. A host callback
-    // turns Model Router's zero-usage refusal or an output-limit stop into an
-    // error, and the SDK retries only that model call without repeating tools.
-    if (!Array.isArray(llmConfig.fallbacks) || llmConfig.fallbacks.length === 0) {
-      const { provider: _provider, fallbacks: _fallbacks, ...retryClientOptions } = llmConfig;
-      llmConfig.fallbacks = [
-        {
-          provider,
-          clientOptions: retryClientOptions,
-        },
-      ];
-    }
+    // [knauf] KK20-194, KK20-339 — retain the same-provider fallback while
+    // making it the sole Model Router retry so every attempt is observable.
+    applyKnaufRetryFallback(llmConfig as Record<string, unknown>, provider);
+    logger.debug(
+      `[knauf:model-router-retry] fallback configured: enabled=${
+        typeof llmConfig.model === 'string' &&
+        llmConfig.model.toLowerCase().includes('model-router')
+      }, fallbackCount=${Array.isArray(llmConfig.fallbacks) ? llmConfig.fallbacks.length : 0}, provider=${provider}`,
+    );
     // End [knauf]
 
     /**

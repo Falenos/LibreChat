@@ -260,6 +260,10 @@ describe('[knauf] shipped deployment skills', () => {
     expect(translation?.body).toContain('translate_file');
     expect(translation?.body).toContain('translation_status');
     expect(translation?.body).toContain('source_locale');
+    expect(translation?.body).toMatch(
+      /KARL can detect\s+the source language before applying the managed\s+glossary/i,
+    );
+    expect(translation?.body).toMatch(/scanned PDF, PPTX,\s+raster image, IDML/i);
     expect(translation?.body).toContain('all_files: true');
     expect(translation?.body).toContain('preserve_terms');
     expect(translation?.body).toMatch(/spelling\s+and\s+casing/i);

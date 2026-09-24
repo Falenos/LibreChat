@@ -38,13 +38,15 @@ const ToolMermaidArtifact = memo(({ attachment, text }: ToolMermaidArtifactProps
     };
   }, [claimKey, setClaim]);
 
-  const { handleDownload } = useAttachmentLink({
+  // [knauf] KK20-366 — prevent generated-file downloads until the live response has finalized.
+  const { handleDownload, isDownloadDisabled } = useAttachmentLink({
     href: attachment.filepath ?? '',
     filename: attachment.filename ?? '',
     file_id: file.file_id,
     user: file.user,
     source: file.source,
   });
+  // End [knauf]
 
   if (claim != null && !isMyClaim) {
     return null;
@@ -68,12 +70,17 @@ const ToolMermaidArtifact = memo(({ attachment, text }: ToolMermaidArtifactProps
             <button
               type="button"
               onClick={handleDownload}
+              // [knauf] KK20-366 — storage can still be finalizing while the SSE response is live.
+              disabled={isDownloadDisabled}
+              // End [knauf]
               aria-label={`${localize('com_ui_download')} ${visibleFilename}`}
               title={localize('com_ui_download')}
               className={cn(
                 'inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs',
                 'text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy',
+                // [knauf] KK20-366 — make the stream-gated native control visually unavailable.
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy disabled:cursor-wait disabled:opacity-70',
+                // End [knauf]
               )}
             >
               <Download className="size-3" aria-hidden="true" />

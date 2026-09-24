@@ -53,7 +53,8 @@ type ChatHelpers = Pick<
 const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResData => {
   let text = 'Error connecting to server, try refreshing the page.';
   if (errorData?.error === 'file_indexing_not_ready') {
-    text = 'Some project files are still being indexed. Please wait until they are ready and try again.';
+    text =
+      'Some project files are still being indexed. Please wait until they are ready and try again.';
   } else if (errorData?.error === 'file_readiness_unavailable') {
     text = 'File readiness is temporarily unavailable. Please try again shortly.';
   } else if (errorData?.error === 'attachment_unavailable') {
@@ -63,7 +64,8 @@ const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResDat
     errorData?.error === 'provider_request_failed' ||
     errorData?.error === 'ERR_BAD_REQUEST'
   ) {
-    text = 'The model rejected this request before it could answer. Please try again; if it repeats, check the server logs for the provider bad-request details.';
+    text =
+      'The model rejected this request before it could answer. Please try again; if it repeats, check the server logs for the provider bad-request details.';
   } else if (errorData) {
     text = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData);
   }
@@ -911,7 +913,13 @@ export default function useResumableSSE(
             !createdStreamIdsRef.current.has(currentStreamId) &&
             optimisticStreamIdsRef.current.has(currentStreamId)
           ) {
+            // [knauf] Evicting is a guess either way: the client cannot tell "the server never
+            // persisted this" from "the frame that proves it did never arrived". Drop the
+            // optimistic row so a conversation the server cannot load does not linger, then
+            // re-sync from the server, which re-adds it if it really was persisted.
             removeConvoFromAllQueries(queryClient, currentStreamId);
+            queryClient.invalidateQueries({ queryKey: [QueryKeys.allConversations] });
+            // End [knauf]
           }
           setIsSubmitting(false);
           setShowStopButton(false);
@@ -957,7 +965,13 @@ export default function useResumableSSE(
             !createdStreamIdsRef.current.has(currentStreamId) &&
             optimisticStreamIdsRef.current.has(currentStreamId)
           ) {
+            // [knauf] Evicting is a guess either way: the client cannot tell "the server never
+            // persisted this" from "the frame that proves it did never arrived". Drop the
+            // optimistic row so a conversation the server cannot load does not linger, then
+            // re-sync from the server, which re-adds it if it really was persisted.
             removeConvoFromAllQueries(queryClient, currentStreamId);
+            queryClient.invalidateQueries({ queryKey: [QueryKeys.allConversations] });
+            // End [knauf]
           }
 
           try {
@@ -1009,7 +1023,10 @@ export default function useResumableSSE(
         // [knauf] Known pre-stream HTTP errors are terminal. Do not reconnect and
         // replace the readable error bubble with a silent "working" state.
         if (responseCode === 400 || responseCode === 409) {
-          console.log('[ResumableSSE] Terminal stream-start error:', { responseCode, data: e.data });
+          console.log('[ResumableSSE] Terminal stream-start error:', {
+            responseCode,
+            data: e.data,
+          });
           sse.close();
           removeActiveJob(currentStreamId);
           resetLive({ ...currentSubmission, userMessage });
@@ -1068,7 +1085,13 @@ export default function useResumableSSE(
             !createdStreamIdsRef.current.has(currentStreamId) &&
             optimisticStreamIdsRef.current.has(currentStreamId)
           ) {
+            // [knauf] Evicting is a guess either way: the client cannot tell "the server never
+            // persisted this" from "the frame that proves it did never arrived". Drop the
+            // optimistic row so a conversation the server cannot load does not linger, then
+            // re-sync from the server, which re-adds it if it really was persisted.
             removeConvoFromAllQueries(queryClient, currentStreamId);
+            queryClient.invalidateQueries({ queryKey: [QueryKeys.allConversations] });
+            // End [knauf]
           }
           setIsSubmitting(false);
           setShowStopButton(false);

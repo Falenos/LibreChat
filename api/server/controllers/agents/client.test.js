@@ -1170,8 +1170,8 @@ describe('AgentClient - titleConvo', () => {
     });
   });
 
-  // [knauf] KK20-199 — provider failures retain bounded diagnosis without leaking
-  // request bodies, signed URLs, identity, or stack data.
+  // [knauf] KK20-199 / KK20-353 — provider failures retain bounded diagnosis
+  // without leaking private data and distinguish incomplete visible responses.
   describe('chatCompletion provider failure logging', () => {
     it('logs only the bounded provider summary and persists a stable error', async () => {
       const { logger } = require('@librechat/data-schemas');
@@ -1208,6 +1208,77 @@ describe('AgentClient - titleConvo', () => {
         type: ContentTypes.ERROR,
         error: 'An error occurred while processing the request',
       });
+    });
+
+    it('preserves partial text and appends only the incomplete-response class', async () => {
+      const error = {
+        code: 'server_error',
+        error: {
+          message: 'private streamed provider detail',
+          knauf_retry_decision: 'unsafe_after_output',
+          knauf_output_state: 'answer_text',
+        },
+      };
+      mockCreateRun.mockResolvedValueOnce({
+        processStream: jest.fn().mockRejectedValue(error),
+        getCalibrationRatio: jest.fn(() => 0),
+      });
+      client.run = null;
+      client.contentParts = [{ type: ContentTypes.TEXT, text: 'Partial answer' }];
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(client.contentParts).toEqual([
+        { type: ContentTypes.TEXT, text: 'Partial answer' },
+        { type: ContentTypes.ERROR, error: '{"type":"incomplete_response"}' },
+      ]);
+      expect(JSON.stringify(client.contentParts)).not.toContain('private streamed provider detail');
+    });
+
+    it('does not classify earlier-phase text as an incomplete response', async () => {
+      const error = {
+        code: 'server_error',
+        error: {
+          knauf_retry_decision: 'unsafe_after_output',
+          knauf_output_state: 'activity_only',
+        },
+      };
+      mockCreateRun.mockResolvedValueOnce({
+        processStream: jest.fn().mockRejectedValue(error),
+        getCalibrationRatio: jest.fn(() => 0),
+      });
+      client.run = null;
+      client.contentParts = [{ type: ContentTypes.TEXT, text: 'Answer from an earlier phase' }];
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(client.contentParts).toEqual([
+        { type: ContentTypes.TEXT, text: 'Answer from an earlier phase' },
+        {
+          type: ContentTypes.ERROR,
+          error: 'An error occurred while processing the request',
+        },
+      ]);
+    });
+
+    it('does not append an error when the stream guard classified cancellation', async () => {
+      const error = {
+        code: 'server_error',
+        error: {
+          knauf_retry_decision: 'cancelled',
+          knauf_output_state: 'activity_only',
+        },
+      };
+      mockCreateRun.mockResolvedValueOnce({
+        processStream: jest.fn().mockRejectedValue(error),
+        getCalibrationRatio: jest.fn(() => 0),
+      });
+      client.run = null;
+      client.contentParts = [{ type: ContentTypes.TEXT, text: 'Earlier phase' }];
+
+      await client.chatCompletion({ payload: [], abortController: new AbortController() });
+
+      expect(client.contentParts).toEqual([{ type: ContentTypes.TEXT, text: 'Earlier phase' }]);
     });
 
     // KK20-260 — a persisted image is a successful tool outcome even when

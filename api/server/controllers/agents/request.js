@@ -371,6 +371,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // End [knauf]
     jobGenerationId = job.generationId;
     req._resumableStreamId = streamId;
+    // KK20-338 — the immutable owner token for this turn; propagated to Model
+    // Router telemetry so provider-call logs join to the same logical generation as
+    // GenerationJobManager's and the SSE stream's terminal-cause logs, instead of only
+    // sharing a reused streamId (== conversationId) or the inbound HTTP request ID.
+    req._resumableGenerationId = jobGenerationId;
     getMCPRequestContext(req, undefined, { cleanupOnResponse: false });
 
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
@@ -403,36 +408,52 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // Track if partial response was already saved to avoid duplicates
     let partialResponseSaved = false;
 
+    // [knauf] One partial-response writer per generation. Two paths ask for it: the cross-replica
+    // departure signal below, and a terminal provider failure, which saved nothing of its own and
+    // then clears the streamed content from Redis. Attempts are serialised and each re-checks the
+    // latch first, so a departure parked on its Redis lookup and an error path racing it write
+    // exactly once between them, while a failed attempt leaves the latch open for the next caller.
+    let partialSaveChain = Promise.resolve(false);
+
     /**
-     * Listen for all subscribers leaving to save partial response.
-     * This ensures the response is saved to DB even if all clients disconnect
-     * while generation continues.
-     *
-     * Note: The messageId used here falls back to `${userMessage.messageId}_` if the
-     * actual response messageId isn't available yet. The final response save will
-     * overwrite this with the complete response using the same messageId pattern.
+     * Save the partial response once. The departure signal passes the parts it observed; the
+     * error path passes nothing and the job's current parts are read instead.
+     * @param {unknown[] | undefined} aggregatedContent
+     * @param {string} reason - names the caller in the log line and the save context
+     * @returns {Promise<boolean>} whether this call wrote the row
      */
-    job.emitter.on('allSubscribersLeft', async (aggregatedContent) => {
-      if (partialResponseSaved || !aggregatedContent || aggregatedContent.length === 0) {
-        return;
-      }
-
-      const persistableContent = filterPersistableAbortContent(aggregatedContent);
-      if (persistableContent.length === 0) {
-        logger.debug('[ResumableAgentController] No persistable content to save partial response');
-        return;
-      }
-
-      const resumeState = await GenerationJobManager.getResumeState(streamId, jobGenerationId);
-      if (!resumeState?.userMessage) {
-        logger.debug('[ResumableAgentController] No user message to save partial response for');
-        return;
-      }
-
-      partialResponseSaved = true;
-      const responseConversationId = resumeState.conversationId || conversationId;
-
+    const savePartialResponseOnce = async (aggregatedContent, reason) => {
       try {
+        if (partialResponseSaved) {
+          return false;
+        }
+        let persistableContent = null;
+        if (aggregatedContent != null) {
+          persistableContent = filterPersistableAbortContent(aggregatedContent);
+          if (persistableContent.length === 0) {
+            logger.debug(
+              '[ResumableAgentController] No persistable content to save partial response',
+            );
+            return false;
+          }
+        }
+
+        const resumeState = await GenerationJobManager.getResumeState(streamId, jobGenerationId);
+        if (persistableContent == null) {
+          persistableContent = filterPersistableAbortContent(resumeState?.aggregatedContent ?? []);
+          if (persistableContent.length === 0) {
+            logger.debug(
+              '[ResumableAgentController] No persistable content to save partial response',
+            );
+            return false;
+          }
+        }
+        if (!resumeState?.userMessage) {
+          logger.debug('[ResumableAgentController] No user message to save partial response for');
+          return false;
+        }
+
+        const responseConversationId = resumeState.conversationId || conversationId;
         const partialMessage = {
           messageId: resumeState.responseMessageId || `${resumeState.userMessage.messageId}_`,
           conversationId: responseConversationId,
@@ -459,18 +480,43 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             interfaceConfig: req?.config?.interfaceConfig,
           },
           partialMessage,
-          { context: 'api/server/controllers/agents/request.js - partial response on disconnect' },
+          { context: `api/server/controllers/agents/request.js - partial response on ${reason}` },
         );
+        partialResponseSaved = true;
 
         logger.debug(
-          `[ResumableAgentController] Saved partial response for ${streamId}, content parts: ${persistableContent.length}`,
+          `[ResumableAgentController] Saved partial response for ${streamId} on ${reason}, content parts: ${persistableContent.length}`,
         );
+        return true;
       } catch (error) {
         logger.error('[ResumableAgentController] Error saving partial response:', error);
-        // Reset flag so we can try again if subscribers reconnect and leave again
-        partialResponseSaved = false;
+        // The latch stays open so a later departure, or the error path, can try again
+        return false;
       }
-    });
+    };
+
+    /** Queue one attempt behind any attempt already in flight. Never rejects. */
+    const persistPartialResponse = (aggregatedContent, reason) => {
+      const attempt = partialSaveChain.then(() =>
+        savePartialResponseOnce(aggregatedContent, reason),
+      );
+      partialSaveChain = attempt;
+      return attempt;
+    };
+    // End [knauf]
+
+    /**
+     * Listen for all subscribers leaving to save partial response.
+     * This ensures the response is saved to DB even if all clients disconnect
+     * while generation continues.
+     *
+     * Note: The messageId used here falls back to `${userMessage.messageId}_` if the
+     * actual response messageId isn't available yet. The final response save will
+     * overwrite this with the complete response using the same messageId pattern.
+     */
+    job.emitter.on('allSubscribersLeft', (aggregatedContent) =>
+      persistPartialResponse(aggregatedContent, 'disconnect'),
+    );
 
     /** @type {{ client: TAgentClient; userMCPAuthMap?: Record<string, Record<string, string>> }} */
     const result = await initializeClient({
@@ -487,6 +533,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         'Request aborted during initialization',
         jobGenerationId,
       );
+      await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
       await finishResumableRequest(req, userId);
       return;
     }
@@ -671,6 +718,40 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           delete userMessage.image_urls;
         }
 
+        // [knauf] KK20-338 — Redis status is the durable cancellation fence. A
+        // missed pub/sub abort must not let the owner save or finalize after a
+        // remote abort (notably while account deletion is purging user data).
+        const currentJob = await GenerationJobManager.getJob(streamId);
+        const jobNoLongerRunning =
+          !currentJob ||
+          currentJob.generationId !== jobGenerationId ||
+          currentJob.status !== 'running';
+
+        if (jobNoLongerRunning) {
+          logger.debug(`[ResumableAgentController] Skipping save/final emit - job no longer runs`, {
+            streamId,
+            originalGenerationId: jobGenerationId,
+            currentGenerationId: currentJob?.generationId,
+            currentStatus: currentJob?.status,
+          });
+          job.abortController.abort();
+          titleAbortController.abort();
+          titleDiscardController.abort();
+          job.abortController.signal.removeEventListener('abort', abortTitleOnJobAbort);
+          acceptsTitleEvents = false;
+          resolveConvoReady();
+          await immediateTitlePromise;
+          if (currentJob?.generationId === jobGenerationId && currentJob.status !== 'running') {
+            await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
+          }
+          await finishResumableRequest(req, userId);
+          if (client) {
+            disposeClient(client);
+          }
+          return;
+        }
+        // End [knauf]
+
         // Check abort state BEFORE calling completeJob (which triggers abort signal for cleanup)
         const wasAbortedBeforeComplete = job.abortController.signal.aborted;
         const shouldGenerateTitle =
@@ -702,39 +783,6 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             { ...response, user: userId, unfinished: wasAbortedBeforeComplete },
             { context: 'api/server/controllers/agents/request.js - resumable response end' },
           );
-        }
-
-        // Check if our job was replaced by a new request before emitting
-        // This prevents stale requests from emitting events to newer jobs
-        const currentJob = await GenerationJobManager.getJob(streamId);
-        const jobWasReplaced = !currentJob || currentJob.generationId !== jobGenerationId;
-
-        if (jobWasReplaced) {
-          logger.debug(`[ResumableAgentController] Skipping FINAL emit - job was replaced`, {
-            streamId,
-            originalGenerationId: jobGenerationId,
-            currentGenerationId: currentJob?.generationId,
-          });
-          // Discard the stale title from this replaced stream: cancel it and
-          // unblock its persistence wait without letting it save (the newer job
-          // owns the conversation now).
-          titleAbortController.abort();
-          titleDiscardController.abort();
-          job.abortController.signal.removeEventListener('abort', abortTitleOnJobAbort);
-          acceptsTitleEvents = false;
-          resolveConvoReady();
-          // Still decrement pending request since we incremented at start
-          await finishResumableRequest(req, userId);
-          if (immediateTitlePromise) {
-            immediateTitlePromise.finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-          } else if (client) {
-            disposeClient(client);
-          }
-          return;
         }
 
         // If the user stopped this turn, cancel the title BEFORE unblocking its
@@ -802,32 +850,20 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           // aborted it before `resolveConvoReady`. Defer disposal until it settles
           // so the run/req aren't torn down mid-generation.
           if (immediateTitlePromise) {
-            immediateTitlePromise.finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-          } else if (client) {
-            disposeClient(client);
+            await immediateTitlePromise;
           }
         } else if (shouldGenerateTitle) {
-          addTitle(req, {
+          await addTitle(req, {
             text,
             response: { ...response },
             client,
-          })
-            .catch((err) => {
-              logger.error('[ResumableAgentController] Error in title generation', err);
-            })
-            .finally(() => {
-              if (client) {
-                disposeClient(client);
-              }
-            });
-        } else {
-          if (client) {
-            disposeClient(client);
-          }
+          }).catch((err) => {
+            logger.error('[ResumableAgentController] Error in title generation', err);
+          });
+        }
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
+        if (client) {
+          disposeClient(client);
         }
       } catch (error) {
         // Any failure (user Stop, or a preflight/quota failure before the run is
@@ -855,20 +891,21 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           const publicError = getPublicGenerationError(errorSummary);
           // End [knauf]
           logger.error('[ResumableAgentController] Generation failed', errorSummary);
+          // [knauf] Persist what the user watched stream in before completeJob clears it from
+          // Redis. This path saved nothing of its own, and a remote viewer's departure whose
+          // Redis verification is still in flight lands on nothing once completeJob has run,
+          // so the save happens here, through the same latch as the departure path.
+          await persistPartialResponse(undefined, 'provider error');
+          // End [knauf]
           await GenerationJobManager.emitError(streamId, publicError, jobGenerationId);
           await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
         }
 
+        await immediateTitlePromise;
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
         await finishResumableRequest(req, userId);
 
-        // Defer disposal until any immediate title settles (it holds the run/req).
-        if (immediateTitlePromise) {
-          immediateTitlePromise.finally(() => {
-            if (client) {
-              disposeClient(client);
-            }
-          });
-        } else if (client) {
+        if (client) {
           disposeClient(client);
         }
 
@@ -885,7 +922,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         const errorSummary = summarizeProviderError(err, 'agent_generation_background');
         const publicError = errorSummary.code ?? 'provider_request_failed';
         logger.error('[ResumableAgentController] Background generation failed', errorSummary);
+        // [knauf] Same partial-before-completeJob rule as the generation catch above.
+        await persistPartialResponse(undefined, 'background failure');
+        // End [knauf]
         await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
+        await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
         await finishResumableRequest(req, userId);
       }),
     );
@@ -910,6 +951,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     }
     if (jobGenerationId) {
       await GenerationJobManager.completeJob(streamId, publicError, jobGenerationId);
+      await GenerationJobManager.acknowledgeTerminal?.(streamId, jobGenerationId);
     }
     await finishResumableRequest(req, userId);
     if (client) {
@@ -1075,6 +1117,10 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
     // [knauf] Account deletion can now safely enumerate and abort this admitted scheduler job.
     await releaseSchedulerAdmission(req);
+    // End [knauf]
+    // [knauf] KK20-338 — see the resumable controller's identical assignment above;
+    // this legacy path's client.chatCompletion() reads the same req field.
+    req._resumableGenerationId = job.generationId;
     // End [knauf]
 
     // Store endpoint metadata for abort handling

@@ -307,6 +307,10 @@ export const primeResources = async ({
       if (!file) {
         continue;
       }
+      // [knauf] KK20-367 — historical tool files may be primed below, but only
+      // files explicitly scoped to this request may reach the model payload.
+      const isRequestAttachment = !file.file_id || requestFileSet.has(file.file_id);
+      // End [knauf]
 
       categorizeFileForToolResources({
         file,
@@ -316,20 +320,26 @@ export const primeResources = async ({
       });
 
       if (file.file_id && attachmentFileIds.has(file.file_id)) {
-        if (!requestAttachmentFileIds.has(file.file_id)) {
+        // [knauf] KK20-367 — keep duplicate historical resources tool-only.
+        if (isRequestAttachment && !requestAttachmentFileIds.has(file.file_id)) {
           requestAttachments.push(file);
           requestAttachmentFileIds.add(file.file_id);
         }
+        // End [knauf]
         continue;
       }
 
       attachments.push(file);
-      if (!file.file_id || !requestAttachmentFileIds.has(file.file_id)) {
+      // [knauf] KK20-367 — requestAttachments is the model-facing boundary.
+      if (isRequestAttachment && (!file.file_id || !requestAttachmentFileIds.has(file.file_id))) {
         requestAttachments.push(file);
       }
+      if (isRequestAttachment && file.file_id) {
+        requestAttachmentFileIds.add(file.file_id);
+      }
+      // End [knauf]
       if (file.file_id) {
         attachmentFileIds.add(file.file_id);
-        requestAttachmentFileIds.add(file.file_id);
       }
     }
 

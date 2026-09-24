@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import type { TAttachment } from 'librechat-data-provider';
 import Attachment, { AttachmentGroup } from '../Attachment';
 
@@ -10,6 +10,7 @@ jest.mock('~/hooks', () => ({
       const translations: Record<string, string> = {
         com_ui_show_all: 'Show all',
         com_ui_collapse: 'Collapse',
+        com_files_downloading: 'Downloading Files',
       };
       return translations[key] ?? key;
     },
@@ -25,14 +26,57 @@ jest.mock('~/hooks', () => ({
 
 const mockHandleDownload = jest.fn();
 jest.mock('../LogLink', () => ({
-  useAttachmentLink: () => ({ handleDownload: mockHandleDownload }),
+  useAttachmentLink: () => {
+    const { useRef, useState } = require('react');
+    const [isDownloading, setIsDownloading] = useState(false);
+    const downloadingRef = useRef(false);
+    return {
+      isDownloading,
+      isDownloadDisabled: isDownloading,
+      handleDownload: async (...args: unknown[]) => {
+        if (downloadingRef.current) {
+          return;
+        }
+        downloadingRef.current = true;
+        setIsDownloading(true);
+        try {
+          await mockHandleDownload(...args);
+        } finally {
+          downloadingRef.current = false;
+          setIsDownloading(false);
+        }
+      },
+    };
+  },
 }));
 
 jest.mock('~/components/Chat/Input/Files/FileContainer', () => ({
   __esModule: true,
-  default: ({ file, onClick }: { file: { filename?: string }; onClick?: () => void }) => (
-    <button type="button" data-testid="file-container" onClick={onClick}>
+  default: ({
+    file,
+    onClick,
+    disabled,
+    busy,
+    action,
+    subtitle,
+  }: {
+    file: { filename?: string };
+    onClick?: () => void;
+    disabled?: boolean;
+    busy?: boolean;
+    action?: { label: string };
+    subtitle?: React.ReactNode;
+  }) => (
+    <button
+      type="button"
+      data-testid="file-container"
+      onClick={onClick}
+      disabled={disabled}
+      aria-busy={busy || undefined}
+      aria-label={action?.label}
+    >
       {file.filename ?? ''}
+      {subtitle}
     </button>
   ),
 }));
@@ -167,6 +211,34 @@ describe('TextAttachment (via Attachment default export)', () => {
     expect(container.querySelector('pre')).toBeNull();
     expect(screen.getByTestId('file-container')).toBeInTheDocument();
   });
+
+  // [knauf] KK20-366 — slow translated-file downloads must visibly lock after the first click.
+  it('prevents duplicate downloads while a generated file download is pending', async () => {
+    let resolveDownload: (() => void) | undefined;
+    mockHandleDownload.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDownload = resolve;
+        }),
+    );
+
+    render(<Attachment attachment={textAttachment({ text: undefined as unknown as string })} />);
+    const button = screen.getByTestId('file-container');
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('aria-busy', 'true');
+      expect(button).toHaveAccessibleName('Downloading Files output.json');
+    });
+    expect(mockHandleDownload).toHaveBeenCalledTimes(1);
+
+    resolveDownload?.();
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+  // End [knauf]
 });
 
 describe('AttachmentGroup', () => {

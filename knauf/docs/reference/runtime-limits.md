@@ -1,6 +1,6 @@
 # KARL Runtime Limits
 
-Last audited: 2026-08-26
+Last audited: 2026-09-16
 
 This reference inventories operational limits enforced by the `agentic-karl`
 repository: upload ceilings, model and agent budgets, Code Adapter guardrails,
@@ -125,8 +125,8 @@ the current `agk-deployment-configs` values and rendered ArgoCD manifest.
 | KARL context | 256,000 tokens | Committed policy, `librechat.yaml` | Fits every configured Model Router candidate with headroom. |
 | KARL output | 8,192 tokens | Committed policy, `librechat.yaml` | Cost and runaway-output fuse, including reasoning tokens. |
 | Prompt drafting output | 1,500 tokens | Committed policy, `librechat.yaml` | Keeps generated agent instructions concise. |
-| Model Router headers | 60 seconds | Committed policy, `librechat.yaml` | Bounds time to initial provider response. |
-| Model Router retry | 1 | Committed policy, `librechat.yaml` | Allows one transient recovery without multiplying latency. |
+| Model Router request / stream idle | 60 seconds | Committed policy, `librechat.yaml`; `packages/api/src/agents/run.ts` | Bounds time to initial provider response and the idle interval between streamed response chunks. |
+| Model Router retry | 1 logical retry | Committed policy, `librechat.yaml`; `packages/api/src/knauf/agents/modelRouterRetry.ts` | Disables nested SDK retries and uses one observable same-provider fallback. Retry is suppressed after visible output, provider-side tool activity, caller cancellation, or a deterministic failure. |
 | Stored memory context | 2,000 tokens | Committed policy | Prevents memory from consuming the main conversation budget. |
 | Memory message window | 5 messages | Committed policy | Bounds extraction input. |
 | Memory value | 10,000 characters | Committed policy | Bounds one stored memory. |
@@ -194,6 +194,28 @@ mean the limiter is active unless its corresponding enable flag is true.
 | Meilisearch persistent data | 20 GiB in dev; stage/prod gated | Deployment override in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-meilisearch` | The initial claim preserves a six-month capacity horizon at the measured September 2026 growth rate. Remeasure allocated size and 30-day growth before promotion; MongoDB remains the source of truth. |
 | Meilisearch termination grace | 120 seconds in dev | Deployment override in `agk-deployment-configs/agentic-karl/dev/services/agentic-karl-meilisearch/values.yaml` | Gives the single `Recreate` pod time to stop cleanly before the RWO claim is attached to its replacement. An absent or falsey value omits the field and Kubernetes uses its default; malformed or invalid values fail rendering or deployment validation. |
 
+## Conversation history normalization
+
+The KK20-385 command defaults to dry-run and changes data only with both
+`--apply` and an exact `--expected-count`. GitOps may lower these limits or
+increase the pause, but must not exceed the code ceilings without a reviewed
+code change.
+
+| Limit | Default / allowed | Authority/source | Rationale |
+| --- | ---: | --- | --- |
+| Documents per batch | 25 / 1-100 | Code default, `knauf/scripts/backfill-chat-project-id.js` | Bounds each raw MongoDB read and update while keeping the migration restartable. |
+| Inter-batch pause | 250 ms / 1-10,000 ms | Code default, same source | Reduces database pressure; zero, negative, non-integer, and over-limit values are rejected rather than treated as unlimited. |
+| Maximum matching documents | 1,000 / 1-10,000 | Code default, same source | Apply aborts before writing when the live missing-field count exceeds this ceiling. |
+| Per-operation MongoDB deadline | 30,000 ms / 1-120,000 ms | Code default, same source | Applies `maxTimeMS` to counts, reads, aggregation, and updates; invalid values fail before connecting. |
+| Maintenance Job wall-clock deadline | 900 seconds | Temporary GitOps deployment override, `agentic-karl/<env>/maintenance/kk20-385-chat-project-id-backfill/values.yaml` in `agk-deployment-configs` | Bounds the complete dry-run or apply pod. A deadline failure leaves already-normalized rows safe to rescan; it never authorizes an automatic retry. |
+| Expected document count | Required for apply; zero or greater | Reviewed run input, same source | Must exactly equal the live pre-write count. Zero is valid only for proving an idempotent no-op rerun; it does not disable a safety gate. |
+
+Dry-run reports only aggregate counts, including orphaned project references,
+and performs no writes. Apply preserves conversation timestamps and the
+Meilisearch marker, rechecks the missing-field predicate in every update, fails
+if rows remain, and is safe to rerun. Temporary GitOps values are deployment
+inputs, not repository defaults.
+
 ## File translation
 
 All values below are code defaults unless marked as a provider ceiling. GitOps
@@ -207,6 +229,7 @@ strictest applicable upload, application, provider, or deployment value.
 | IDML and structured text | 25 MiB | `tool.js` | Bounds ZIP/XML/JSON/Markdown parsing; also capped at 10,000 segments and 500,000 translated characters. |
 | Azure synchronous document | 10 MiB | application routing threshold | Larger eligible documents route to batch translation. |
 | Azure batch document / image | 40 MiB / 5 MiB | provider ceiling | Applied before starting the Azure batch operation. |
+| PDF output recompression | Ghostscript `/printer` preset, lossless by default; best-effort | `KNAUF_TRANSLATION_PDF_COMPRESSION_ENABLED`, `KNAUF_TRANSLATION_PDF_COMPRESSION_BIN` (default `gs`), `KNAUF_TRANSLATION_PDF_COMPRESSION_PRESET`, `KNAUF_TRANSLATION_PDF_COMPRESSION_QUALITY` (`lossy` opt-in), `KNAUF_TRANSLATION_PDF_COMPRESSION_TIMEOUT_MS` (default 30s; bounds only the Ghostscript run itself, not time spent waiting for a concurrency slot), `KNAUF_TRANSLATION_PDF_COMPRESSION_MAX_CONCURRENT` (default 1, per API process), `KNAUF_TRANSLATION_PDF_COMPRESSION_MAX_QUEUE_DEPTH` (default 8; callers arriving once the wait queue is this deep skip compression immediately instead of queueing further), `translation/pdfCompression.js` | Azure Document Translation rebuilds PDFs from scratch (full font embedding, re-encoded images), often multiplying output size several times over. Ghostscript recompresses the returned PDF before persistence; by default image resolution and pixel data are preserved (no downsampling, and unmodified JPEG/JPEG2000 streams are passed through where Ghostscript's own logic allows it). The output is a Ghostscript re-render (`pdfwrite`), not a patched copy of Azure's file — digital signatures, AcroForm fields, tagged/PDF-UA structure, and XMP metadata are not guaranteed to survive the round-trip. A missing binary, timeout, queue-saturation, non-improving result, or output that fails a basic `%PDF-`/`%%EOF` validity check silently falls back to the untouched Azure output; a cancelled translation job aborts the Ghostscript process (or, while queued, is dequeued) instead of falling back. The default concurrency of 1 is calibrated to the documented 1 GiB worker pod / 768 MiB Node heap ceiling (`file-translation-production-plan.md`) — `gs` can carry hundreds of MB of RSS per spawn, so raise `MAX_CONCURRENT` only where the pod's memory headroom has been confirmed to absorb that. |
 | Glossary payload | 900 KiB sync / 9 MiB batch | application safety margin below Azure limits | Required glossaries fail closed instead of truncating applicable terms. |
 | Request-level preserved terms | 100 terms; 200 characters each | `translate_file.preserve_terms` | Exact, case-sensitive user-supplied product, brand, or technical terms are merged over the deployed glossary; tabs and newlines are rejected, the combined glossary must fit the provider payload limit, and an IDML term split across translation segments fails instead of being reported as preserved. |
 | Active jobs | 3/user; 100/global | `KNAUF_TRANSLATION_MAX_ACTIVE_PER_USER`, `KNAUF_TRANSLATION_MAX_ACTIVE_GLOBAL` | Mongo partial-unique slots enforce admission across API replicas. Admission hash-spreads requests and probes the finite slot set; a full response is returned only after a fresh occupancy check. |
@@ -237,6 +260,7 @@ strictest applicable upload, application, provider, or deployment value.
 | Admission drain | 10 seconds, 25 ms polling | scheduler middleware | Lets admitted requests finish before deletion proceeds. |
 | Internal signature skew | 60 seconds | scheduler authentication | Replay-resistance window with clock-drift tolerance. |
 | Schedule jitter | 2 minutes | scheduler calculation | Spreads load around cadence boundaries. |
+| Conversation-integrity scan | At scheduler startup and every 24 hours per replica; 30-second MongoDB deadline | Scheduler code default | Counts conversations where `chatProjectId` is missing, updates continuously scraped missing-count and scan-health gauges, and never mutates data. A failed scan marks telemetry unhealthy while preserving the last successful count. |
 
 ## MCP
 

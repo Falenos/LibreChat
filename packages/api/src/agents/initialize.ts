@@ -357,6 +357,8 @@ export interface InitializeAgentParams {
   parentMessageId?: string | null;
   /** Request files */
   requestFiles?: IMongoFile[];
+  /** Owner-scoped files available to request-scoped tools but not attached to the current message. */
+  toolRequestFiles?: IMongoFile[];
   /** Function to load agent tools */
   loadTools?: (params: {
     req: ServerRequest;
@@ -594,6 +596,7 @@ export async function initializeAgent(
     agent,
     loadTools,
     requestFiles = [],
+    toolRequestFiles = requestFiles,
     conversationId,
     endpointOption,
     parentMessageId,
@@ -630,6 +633,7 @@ export async function initializeAgent(
   // from model input. Retain only the owner-checked request records for
   // request-scoped host tools before that filtering runs.
   let resolvedRequestFiles: IMongoFile[] = [];
+  let resolvedToolFiles: IMongoFile[] = [];
   // End [knauf]
 
   const _modelOptions = structuredClone(
@@ -731,7 +735,7 @@ export async function initializeAgent(
       }
     }
 
-    const allToolFiles = toolFiles.concat(codeGeneratedFiles, userCodeFiles);
+    const allToolFiles = toolRequestFiles.concat(toolFiles, codeGeneratedFiles, userCodeFiles);
     if (requestFiles.length || allToolFiles.length) {
       const requestUsageFiles =
         requestFiles.length && requestFileOwnerId
@@ -753,22 +757,36 @@ export async function initializeAgent(
         })) as IMongoFile[];
       }
       currentFiles = requestUsageFiles.concat(toolUsageFiles);
+      resolvedToolFiles = currentFiles;
     }
-  } else if (requestFiles.length) {
-    currentFiles = requestFileOwnerId
+  } else if (requestFiles.length || toolRequestFiles.length) {
+    const requestUsageFiles = requestFileOwnerId
       ? ((await db.updateFilesUsage(requestFiles, undefined, {
           user: requestFileOwnerId,
           tenantId: req.user?.tenantId,
         })) as IMongoFile[])
       : [];
-    resolvedRequestFiles = currentFiles;
+    const requestUsageFileIds = new Set(requestUsageFiles.map((file) => file.file_id));
+    const trustedToolFiles = toolRequestFiles.filter(
+      (file) => !requestUsageFileIds.has(file.file_id),
+    );
+    const toolUsageFiles =
+      trustedToolFiles.length > 0 && requestFileOwnerId
+        ? ((await db.updateFilesUsage(trustedToolFiles, undefined, {
+            user: requestFileOwnerId,
+            tenantId: req.user?.tenantId,
+          })) as IMongoFile[])
+        : [];
+    resolvedRequestFiles = requestUsageFiles;
+    resolvedToolFiles = requestUsageFiles.concat(toolUsageFiles);
+    currentFiles = resolvedToolFiles;
   }
 
   // [knauf] KK20-297 — execution must consume the same owner-validated
   // records used for request-scoped tool selection, not client file-id stubs.
   if (isInitialAgent) {
     (req as ServerRequest & { knaufToolFiles?: IMongoFile[] }).knaufToolFiles =
-      resolvedRequestFiles;
+      resolvedToolFiles;
   }
   // End [knauf]
 
@@ -936,7 +954,7 @@ export async function initializeAgent(
   // [knauf] KK20-297 — the early agent loader may see only client file IDs.
   // Reconcile against authorized, server-resolved request attachments before
   // loading tools so picker, drag/drop, retry, and direct API uploads agree.
-  const requestScopedFileTools = getRequestScopedFileTools(resolvedRequestFiles, req.originalUrl);
+  const requestScopedFileTools = getRequestScopedFileTools(resolvedToolFiles, req.originalUrl);
   // End [knauf]
   // [knauf] KK20-297 — a skill's `allowed-tools` declaration (e.g.
   // `karl-file-translation/SKILL.md` → `translate_file`) is skill-visibility

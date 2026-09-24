@@ -1,6 +1,29 @@
 {
   "groups": [
     {
+      "id": "2026-09-21",
+      "date": {
+        "en": "September 21, 2026",
+        "de": "21. September 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-348-2026-09-16-1",
+          "ticket": "KK20-348",
+          "date": "2026-09-16",
+          "en": "IDML translations now verify that source font and style references are preserved and fail explicitly if they change; plain-text and data formats no longer request irrelevant font review.",
+          "de": "IDML-Übersetzungen prüfen jetzt, dass die ursprünglichen Schrift- und Stilreferenzen erhalten bleiben, und schlagen bei Änderungen ausdrücklich fehl; bei reinen Text- und Datenformaten wird keine irrelevante Schriftprüfung mehr verlangt."
+        },
+        {
+          "id": "kk20-339-2026-09-16-2",
+          "ticket": "KK20-339",
+          "date": "2026-09-16",
+          "en": "Conversations can recover automatically from one transient Model Router interruption before any answer or tool action starts, without replaying work after output is visible or the provider has completed the response.",
+          "de": "Unterhaltungen können sich automatisch von einer vorübergehenden Unterbrechung des Model Routers erholen, bevor eine Antwort oder Tool-Aktion beginnt, ohne Arbeit nach sichtbarer Ausgabe oder nach Abschluss der Antwort durch den Anbieter erneut auszuführen."
+        }
+      ]
+    },
+    {
       "id": "2026-09-14",
       "date": {
         "en": "September 14, 2026",

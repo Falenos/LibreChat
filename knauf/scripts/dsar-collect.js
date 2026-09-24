@@ -630,9 +630,12 @@ stale inventory. The values above are already filled in for you.
    \`ragVectors\` the collector derives the expected total from phase one's own counts
    (Mongo messages+convos, enumerated blob keys, emitted vector ids) and **ignores any
    \`expected\` you supply** — \`collected\` must match what the collector computed.
-   \`langfuse\` and \`logPlatform\` are not derived from Mongo, so they have no such
-   expectation; they stay self-reported and the manifest records
-   \`expectationSource: "self-reported"\` so nobody mistakes it for a verified number.
+   \`langfuse\`, \`logPlatform\` and \`redis\` are not derived from Mongo, so no such
+   expectation exists. A \`complete\` result for them is still hashed, parsed and bound to
+   this run, but it is recorded as **\`manual-verification-required\`** — never
+   \`complete\` — with \`expectationSource: "artifact-parsed, total unverified"\`. That
+   status **keeps the bundle incomplete**: this tool cannot promote it; a service-specific
+   adapter or an approved attestation must (runbook §2.1).
 
 **The count comes from the artifact, not from you.** The collector parses the file
 (JSONL, a JSON array, or an envelope with \`data\`/\`hits\`/\`results\`/\`items\`) and counts the
@@ -657,7 +660,10 @@ node knauf/scripts/dsar-collect.js --out <this-bundle-dir> --finalize
 \`\`\`
 
 That is the only run that can set \`manifest.completeness.ok = true\`. It rewrites
-\`manifest.json\` atomically and touches nothing else.
+\`manifest.json\` atomically and touches nothing else. While any sink is
+\`manual-verification-required\` or \`limitation\` it will not: the log platform has no
+machine-checkable exemption, so in this version a bundle with the log platform in scope
+always finishes with exit 4 and an explicit list of what remains.
 `;
 }
 
@@ -839,10 +845,11 @@ function initialExternalSinkState() {
  *  - the RAG inventory is exactly the physical vector ids phase one emitted.
  *
  * Langfuse and the log platform are NOT derived from Mongo — they have their own
- * retention regimes, so no honest expectation can be computed for them. Those stay
- * self-reported and the manifest SAYS SO (`expectationSource`), rather than implying a
- * verification that did not happen. They must still ship a checksummed artifact, so the
- * number is at least bound to a real file.
+ * retention regimes, so no honest expectation can be computed for them. Those can never
+ * reach `complete` here: they stop at `manual-verification-required` and the manifest
+ * says why (`expectationSource`), rather than implying a verification that did not
+ * happen. They must still ship a checksummed artifact, so the number is at least bound
+ * to a real file.
  */
 function derivedExpectedTotals(manifest) {
   const sinks = manifest?.sinks ?? {};
@@ -859,7 +866,8 @@ function derivedExpectedTotals(manifest) {
   // Phase one now counts the indexable subset separately (`*Indexable`) using the same
   // predicate the indexer uses, and that is what Meilisearch is measured against.
   // Older bundles without those counts get `undefined` — no derived expectation, so the
-  // sink falls back to self-reported rather than being rejected on a stale number.
+  // sink stops at `manual-verification-required` rather than being rejected on a stale
+  // number (or, worse, trusted).
   const indexable =
     sinks.MessageIndexable === undefined && sinks.ConversationIndexable === undefined
       ? undefined
@@ -878,6 +886,8 @@ function derivedExpectedTotals(manifest) {
  * A result must (a) name an artifact whose sha256 matches its declared checksum, and
  * (b) report a `collected` total equal to the collector's own derived expectation where
  * one exists. An operator-supplied `expected` is IGNORED whenever we can compute it.
+ * Where no expectation can be derived at all, `complete` is unreachable: the sink stops
+ * at `manual-verification-required` (round-5 review).
  */
 function reconcileExternalResult(sinkKey, raw, opts = {}) {
   const { derivedExpected, verifyArtifact, bundleDir, manifest } = opts;
@@ -1020,15 +1030,24 @@ function reconcileExternalResult(sinkKey, raw, opts = {}) {
     };
   }
 
-  // No Mongo-derived expectation exists for this sink. The count is now at least parsed
-  // out of a hashed artifact bound to this run, but nothing independent corroborates the
-  // TOTAL — say so, rather than letting it read like the verified sinks.
+  // No Mongo-derived expectation exists for this sink. The count is parsed out of a
+  // hashed artifact bound to this run, but nothing independent corroborates the TOTAL.
+  // PR #349 review (round 5): a sink in that state must NOT become `complete` — that is
+  // the status that lets the bundle print "releasable", and an uncorroborated total is
+  // not a verified export. It stops at `manual-verification-required`: the evidence is
+  // kept (count, artifact, checksum) so a reviewer can weigh it, but the bundle stays
+  // incomplete. Promotion to `complete` needs a service-specific adapter that derives the
+  // expectation from the service itself, or an approved attestation — neither ships here.
   return {
     ...shared,
-    status: 'complete',
-    expected: observed,
+    status: 'manual-verification-required',
+    expected: null,
     expectationSource:
       'artifact-parsed, total unverified (no independent expectation exists for this sink)',
+    reason:
+      'the artifact is hashed and its record count parsed, but no independent total ' +
+      'corroborates it — a service-specific adapter or an approved attestation must ' +
+      'promote this sink before the bundle can be released',
   };
 }
 
@@ -1067,6 +1086,9 @@ function finalizeManifest(manifest, out, readJson, opts = {}) {
   // `limitation` is deliberately NOT releasable: an inaccessible sink is an unanswered
   // sink, however well documented (round-4 review). It is distinguished from `pending`
   // so the operator can see it was addressed and could not be satisfied.
+  // `manual-verification-required` is not releasable either (round-5 review): the export
+  // ran and its artifact is bound to this run, but nothing independent corroborates the
+  // total, so only a service adapter or an approved attestation may promote it.
   const unresolved = Object.entries(external).filter(
     ([, v]) => v.status !== 'complete' && v.status !== 'not-applicable',
   );
@@ -1081,6 +1103,29 @@ function finalizeManifest(manifest, out, readJson, opts = {}) {
   manifest.completeness.ok = manifest.completeness.warnings.length === 0;
   manifest.finalizedAt = new Date().toISOString();
   return manifest;
+}
+
+/**
+ * One line per status, so the operator can tell "work still to do" (pending / failed)
+ * from "nothing more this tool can verify" (manual-verification-required / limitation).
+ * Round-5 review: the latter keeps the bundle unreleasable, but the message must not
+ * read as if a re-run could fix it — only an adapter or an approved attestation can.
+ */
+function summarizeExternalSinks(external = {}) {
+  const byStatus = {};
+  for (const [key, v] of Object.entries(external)) {
+    (byStatus[v.status] ??= []).push(key);
+  }
+  const lines = Object.entries(byStatus).map(([status, keys]) => `  ${status}: ${keys.join(', ')}`);
+  const manual = byStatus['manual-verification-required'] ?? [];
+  if (manual.length) {
+    lines.push(
+      `  → ${manual.join(', ')}: artifact hashed and counted, total not independently ` +
+        'verified. This tool cannot promote these — a service-specific adapter or an ' +
+        'approved attestation must (runbook §2.1).',
+    );
+  }
+  return `External sinks by status:\n${lines.join('\n')}`;
 }
 
 /**
@@ -1689,8 +1734,9 @@ async function main() {
       process.exit(5);
     }
     if (!finalManifest.completeness.ok) {
+      console.error(`\n${summarizeExternalSinks(finalManifest.externalSinks)}`);
       console.error(
-        '\nIncomplete: external sinks are still unresolved (see manifest.externalSinks). ' +
+        '\nIncomplete: see manifest.externalSinks and manifest.completeness.warnings. ' +
           'This bundle is NOT releasable.',
       );
       process.exit(4);
@@ -1803,6 +1849,7 @@ module.exports = {
   buildVectorInventoryRequest,
   NOT_SUBJECT_SCOPED_RAW,
   EXTERNAL_SINKS,
+  summarizeExternalSinks,
   AUDIT_ACTOR_CONTEXT_FIELDS,
   AUDIT_CONTEXT_REDACTED,
   initialExternalSinkState,

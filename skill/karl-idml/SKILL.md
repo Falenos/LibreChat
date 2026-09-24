@@ -54,10 +54,13 @@ unchanged. Tell the user which edits were applied and link the returned file.
 
 Only story text is manipulated. Styles, swatches, links, images, text frames,
 geometry, and package metadata are not prompt-editable in this version. Non-story
-package entries remain byte-identical.
+package entries remain byte-identical. Successful translated IDML results also
+report `fontValidation: preserved` after KARL verifies the source font and style
+references against the rebuilt package.
 
 Translation or edited text can become longer or shorter. Final layout, overset
-text, fonts, and visual acceptance require a human check in Adobe InDesign.
+text, installed-font availability, glyph coverage, and visual acceptance require
+a human check in Adobe InDesign.
 
 For package details and the acceptance checklist, read:
 

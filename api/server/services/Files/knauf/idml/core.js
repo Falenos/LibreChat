@@ -18,6 +18,8 @@ const MAX_CONTENT_NODES = 50000;
 const MAX_STORY_XML_CHARACTERS = 20 * 1024 * 1024;
 const MAX_XML_ATTRIBUTES = 50000;
 const MAX_XML_ATTRIBUTE_CHARACTERS = 2 * 1024 * 1024;
+const FONT_STYLE_RESOURCE_RE = /^Resources\/(?:Fonts|Styles)\.xml$/i;
+const FONT_STYLE_ATTRIBUTE_RE = /(?:font|style)/i;
 
 class IdmlError extends Error {
   constructor(message, code, status = 422) {
@@ -113,6 +115,66 @@ function validateXmlStructure(
 }
 
 const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+function extractStoryFontStyleReferences(xml, label) {
+  const references = [];
+  let elementIndex = 0;
+  try {
+    const parser = new SaxesParser();
+    parser.on('error', (error) => {
+      throw error;
+    });
+    parser.on('opentag', (tag) => {
+      const currentElementIndex = elementIndex;
+      elementIndex += 1;
+      const attributes = Object.entries(tag.attributes)
+        .map(([key, attribute]) => ({
+          name: typeof attribute === 'object' && attribute != null ? (attribute.name ?? key) : key,
+          value:
+            typeof attribute === 'object' && attribute != null
+              ? String(attribute.value ?? '')
+              : String(attribute),
+        }))
+        .filter(({ name }) => FONT_STYLE_ATTRIBUTE_RE.test(name.split(':').at(-1)))
+        .sort((left, right) => left.name.localeCompare(right.name, 'en'));
+      for (const attribute of attributes) {
+        references.push({
+          elementIndex: currentElementIndex,
+          element: tag.name,
+          attribute: attribute.name,
+          value: attribute.value,
+        });
+      }
+    });
+    parser.write(xml).close();
+  } catch (error) {
+    if (error instanceof IdmlError) throw error;
+    throw new IdmlError(`${label} is malformed XML`, 'invalid_xml');
+  }
+  return references;
+}
+
+function createFontStyleManifest(stories, immutableHashes) {
+  return {
+    resources: Array.from(immutableHashes.entries())
+      .filter(([entryName]) => FONT_STYLE_RESOURCE_RE.test(entryName))
+      .map(([entryName, hash]) => ({ entryName, hash }))
+      .sort((left, right) => left.entryName.localeCompare(right.entryName, 'en')),
+    stories: stories.map((story) => ({
+      entryName: story.entryName,
+      references: story.fontStyleReferences,
+    })),
+  };
+}
+
+function assertFontStyleManifest(expected, actual) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new IdmlError(
+      'IDML font or style references changed during rebuild',
+      'font_fidelity_failed',
+    );
+  }
+}
 
 function assertIdmlLocalHeader(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 30 || buffer.length > MAX_IDML_BYTES) {
@@ -418,7 +480,14 @@ function extractStory(entryName, xml, storyIndex, budget) {
       });
     }
   }
-  return { entryName, xml, segments, contents, contentCount: contents.length };
+  return {
+    entryName,
+    xml,
+    segments,
+    contents,
+    contentCount: contents.length,
+    fontStyleReferences: extractStoryFontStyleReferences(xml, entryName),
+  };
 }
 
 async function parseIdml(buffer) {
@@ -489,6 +558,7 @@ async function parseIdml(buffer) {
     segments,
     sourceSha256: sha256(buffer),
     immutableHashes,
+    fontStyleManifest: createFontStyleManifest(stories, immutableHashes),
   };
 }
 
@@ -586,17 +656,41 @@ async function buildIdml(parsed, translations, options) {
   for (const [entryName, sourceHash] of parsed.immutableHashes) {
     const entry = verified.file(entryName);
     if (!entry || sha256(await entry.async('nodebuffer')) !== sourceHash) {
-      throw new IdmlError(`IDML changed non-story entry ${entryName}`, 'fidelity_check_failed');
+      const isFontStyleResource = FONT_STYLE_RESOURCE_RE.test(entryName);
+      throw new IdmlError(
+        isFontStyleResource
+          ? `IDML changed font/style resource ${entryName}`
+          : `IDML changed non-story entry ${entryName}`,
+        isFontStyleResource ? 'font_fidelity_failed' : 'fidelity_check_failed',
+      );
     }
   }
+  const verifiedStories = [];
   for (const story of parsed.stories) {
     const entry = verified.file(story.entryName);
     if (!entry) {
       throw new IdmlError(`IDML lost story ${story.entryName}`, 'fidelity_check_failed');
     }
-    parseXml(await entry.async('string'), story.entryName);
+    const xml = await entry.async('string');
+    parseXml(xml, story.entryName);
+    verifiedStories.push({
+      entryName: story.entryName,
+      fontStyleReferences: extractStoryFontStyleReferences(xml, story.entryName),
+    });
   }
-  return { buffer, sha256: sha256(buffer) };
+  const verifiedResourceHashes = new Map();
+  for (const resource of parsed.fontStyleManifest.resources) {
+    const entry = verified.file(resource.entryName);
+    verifiedResourceHashes.set(
+      resource.entryName,
+      entry ? sha256(await entry.async('nodebuffer')) : null,
+    );
+  }
+  assertFontStyleManifest(
+    parsed.fontStyleManifest,
+    createFontStyleManifest(verifiedStories, verifiedResourceHashes),
+  );
+  return { buffer, sha256: sha256(buffer), fontValidation: 'preserved' };
 }
 
 function normalizeLocale(value, field = 'locale') {

@@ -191,13 +191,15 @@ const ToolArtifactCard = memo(({ attachment, artifact }: ToolArtifactCardProps) 
     setVisible(true);
   }, [artifact.id, artifact.type, fileId, consumeJustResolved, setCurrentArtifactId, setVisible]);
 
-  const { handleDownload } = useAttachmentLink({
+  // [knauf] KK20-366 — prevent generated-file downloads until the live response has finalized.
+  const { handleDownload, isDownloadDisabled } = useAttachmentLink({
     href: attachment.filepath ?? '',
     filename: attachment.filename ?? '',
     file_id: file.file_id,
     user: file.user,
     source: file.source,
   });
+  // End [knauf]
 
   const handleOpen = () => {
     if (isSelected) {
@@ -256,12 +258,17 @@ const ToolArtifactCard = memo(({ attachment, artifact }: ToolArtifactCardProps) 
       <button
         type="button"
         onClick={handleDownload}
+        // [knauf] KK20-366 — storage can still be finalizing while the SSE response is live.
+        disabled={isDownloadDisabled}
+        // End [knauf]
         aria-label={`${localize('com_ui_download')} ${visibleFilename}`}
         title={localize('com_ui_download')}
         className={cn(
           'flex shrink-0 items-center justify-center px-3 transition-colors duration-200',
           'rounded-r-xl bg-surface-tertiary text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-          'border-l border-border-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy',
+          // [knauf] KK20-366 — make the stream-gated native control visually unavailable.
+          'border-l border-border-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy disabled:cursor-wait disabled:opacity-70',
+          // End [knauf]
         )}
       >
         <Download className="size-4" aria-hidden="true" />

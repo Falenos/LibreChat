@@ -121,14 +121,15 @@ export const groupConversationsByDate = (
   const yearMonthGroups = Array.from(groups.keys())
     .filter((group) => !dateGroupsSet.has(group))
     .sort((a, b) => {
-      const [yearA, yearB] = [parseInt(a.trim()), parseInt(b.trim())];
-      if (yearA !== yearB) {
-        return yearB - yearA;
-      }
-      const [monthA, monthB] = [dateKeysReverse[a], dateKeysReverse[b]];
-      const bOrder = monthOrderMap.get(monthB) ?? -1,
-        aOrder = monthOrderMap.get(monthA) ?? -1;
-      return bOrder - aOrder;
+      // [knauf] KK20-385 — narrow backport of LibreChat-AI/LibreChat#15842.
+      const getOrder = (group: string) => {
+        const month = dateKeysReverse[group];
+        return month
+          ? now.getFullYear() * 12 + (monthOrderMap.get(month) ?? 0)
+          : parseInt(group.trim(), 10) * 12;
+      };
+      return getOrder(b) - getOrder(a);
+      // End [knauf]
     });
   yearMonthGroups.forEach((group) => {
     sortedGroups.set(group, groups.get(group));
@@ -273,6 +274,36 @@ export function addConversationToAllConversationsQueries(
   }
 }
 
+// [knauf] Dropping an emptied page must drop its pageParams entry too. React Query pairs
+// pages[i] with pageParams[i] when it replays an infinite query, so filtering pages alone
+// leaves the arrays misaligned and the next fetchNextPage runs against the wrong cursor —
+// silently skipping or duplicating whole windows of the conversation list.
+function dropEmptyPages(
+  data: InfiniteData<ConversationCursorData>,
+  pages: ConversationCursorData[],
+): InfiniteData<ConversationCursorData> {
+  const keptPages: ConversationCursorData[] = [];
+  const keptParams: unknown[] = [];
+  pages.forEach((page, index) => {
+    if (page.conversations.length === 0) {
+      return;
+    }
+    keptPages.push(page);
+    keptParams.push(data.pageParams[index]);
+  });
+  /**
+   * If the leading page was dropped, the surviving first page still carries the cursor that
+   * fetched it. Replaying that cursor would re-fetch from the middle of the list and skip the
+   * top of the history for good, so reset it to the "start from the beginning" param the rest
+   * of this module uses.
+   */
+  if (keptParams.length > 0 && keptParams[0] !== data.pageParams[0]) {
+    keptParams[0] = undefined;
+  }
+  return { ...data, pages: keptPages, pageParams: keptParams };
+}
+// End [knauf]
+
 export function removeConvoFromInfinitePages(
   data: InfiniteData<ConversationCursorData> | undefined,
   conversationId: string,
@@ -280,15 +311,15 @@ export function removeConvoFromInfinitePages(
   if (!data) {
     return data;
   }
-  return {
-    ...data,
-    pages: data.pages
-      .map((page) => ({
-        ...page,
-        conversations: page.conversations.filter((c) => c.conversationId !== conversationId),
-      }))
-      .filter((page) => page.conversations.length > 0),
-  };
+  // [knauf] keep pages and pageParams in lockstep
+  return dropEmptyPages(
+    data,
+    data.pages.map((page) => ({
+      ...page,
+      conversations: page.conversations.filter((c) => c.conversationId !== conversationId),
+    })),
+  );
+  // End [knauf]
 }
 
 // Used for partial update (e.g., title, etc.), updating AND possibly bumping to front of visible convos
@@ -341,8 +372,9 @@ export function updateConvoFieldsInfinite(
 
     pages[0].conversations = [patched, ...pages[0].conversations];
 
-    const finalPages = pages.filter((page) => page.conversations.length > 0);
-    return { ...data, pages: finalPages };
+    // [knauf] keep pages and pageParams in lockstep
+    return dropEmptyPages(data, pages);
+    // End [knauf]
   }
 }
 
@@ -590,15 +622,15 @@ export function removeConvoFromAllQueries(queryClient: QueryClient, conversation
       if (!oldData) {
         return oldData;
       }
-      return {
-        ...oldData,
-        pages: oldData.pages
-          .map((page) => ({
-            ...page,
-            conversations: page.conversations.filter((c) => c.conversationId !== conversationId),
-          }))
-          .filter((page) => page.conversations.length > 0),
-      };
+      // [knauf] keep pages and pageParams in lockstep
+      return dropEmptyPages(
+        oldData,
+        oldData.pages.map((page) => ({
+          ...page,
+          conversations: page.conversations.filter((c) => c.conversationId !== conversationId),
+        })),
+      );
+      // End [knauf]
     });
   }
 }

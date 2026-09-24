@@ -38,6 +38,9 @@ const routedResult = {
             model_name: 'model-router',
             model: 'model-routergpt-5.5-2026-04-01',
             request_id: 'azure-request-1',
+            headers: {
+              'apim-request-id': 'azure-correlation-1',
+            },
           },
           usage_metadata: { input_tokens: 100, output_tokens: 25 },
         },
@@ -98,12 +101,15 @@ describe('[knauf] Model Router telemetry', () => {
         inputTokens: 100,
         outputTokens: 25,
         providerRequestId: 'azure-request-1',
+        providerCorrelationId: 'azure-correlation-1',
       }),
     );
     expect(logger.info).toHaveBeenCalledWith(
       '[FoundryRouterTelemetry] Generation lifecycle completed',
       expect.objectContaining({
         streamId: 'stream-1',
+        clientSurface: 'none',
+        clientOutputState: 'none',
         durationMs: 1_200,
         timeToFirstModelContentMs: 350,
         modelTelemetryScope: 'parent_graph',
@@ -162,6 +168,7 @@ describe('[knauf] Model Router telemetry', () => {
     });
     currentTime = 40;
     telemetry.handler.handleLLMEnd(routedResult, 'replacement');
+    telemetry.finalize();
 
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       1,
@@ -170,6 +177,33 @@ describe('[knauf] Model Router telemetry', () => {
     expect(recordFoundryModelCall).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ result: 'success', attempt: '2+' }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        modelRunId: 'first',
+        retryLineage: 'agent-node',
+        attemptNumber: 1,
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        modelRunId: 'replacement',
+        retryLineage: 'agent-node',
+        attemptNumber: 2,
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Retry lineage completed',
+      expect.objectContaining({
+        retryLineage: 'agent-node',
+        outcome: 'recovered',
+        attemptCount: 2,
+        initialResult: 'retry',
+        terminalResult: 'success',
+        retryReason: 'refusal',
+      }),
     );
   });
 
@@ -420,6 +454,11 @@ describe('[knauf] Model Router telemetry', () => {
       type: 'invalid_request_error',
       param: 'text.verbosity',
       requestID: 'azure-request-400',
+      headers: new Headers({
+        'x-request-id': 'azure-request-400',
+        'apim-request-id': 'azure-correlation-400',
+        authorization: 'Bearer provider-secret',
+      }),
       request: { body: { input: 'private prompt' } },
     });
 
@@ -440,11 +479,145 @@ describe('[knauf] Model Router telemetry', () => {
         providerParam: 'text.verbosity',
         errorName: 'Error',
         providerRequestId: 'azure-request-400',
+        providerCorrelationId: 'azure-correlation-400',
       }),
     );
     const event = logger.info.mock.calls.at(-1)[1];
     expect(JSON.stringify(event)).not.toContain('sensitive provider response');
     expect(JSON.stringify(event)).not.toContain('private prompt');
+    expect(JSON.stringify(event)).not.toContain('provider-secret');
+  });
+
+  it('records an unsafe post-output failure as not retried', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'unknown',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    const error = {
+      code: 'server_error',
+      headers: new Headers({
+        'x-request-id': 'azure-request-unsafe',
+        'apim-request-id': 'azure-correlation-unsafe',
+      }),
+      error: {
+        knauf_retry_decision: 'unsafe_after_output',
+        knauf_output_state: 'answer_text',
+        knauf_incomplete_reason: 'content_filter',
+      },
+    };
+
+    telemetry.handler.handleChatModelStart(
+      null,
+      [[]],
+      'model-run-1',
+      'logical-call-1',
+      undefined,
+      [],
+      { ls_model_name: 'model-router' },
+    );
+    telemetry.handler.handleLLMError(error, 'model-run-1');
+    telemetry.finalize({
+      failed: true,
+      clientSurface: 'incomplete_response',
+      clientOutputState: 'answer_text',
+      clientIncompleteReason: 'content_filter',
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({
+        retryLineage: 'logical-call-1',
+        providerRetryable: false,
+        retryDecision: 'unsafe_after_output',
+        outputState: 'answer_text',
+        incompleteReason: 'content_filter',
+        providerRequestId: 'azure-request-unsafe',
+        providerCorrelationId: 'azure-correlation-unsafe',
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Retry lineage completed',
+      expect.objectContaining({
+        retryLineage: 'logical-call-1',
+        outcome: 'unsafe_not_retried',
+        attemptCount: 1,
+        initialResult: 'provider_error',
+        initialOutputState: 'answer_text',
+        initialIncompleteReason: 'content_filter',
+        initialProviderCorrelationId: 'azure-correlation-unsafe',
+        terminalProviderCorrelationId: 'azure-correlation-unsafe',
+        terminalResult: 'provider_error',
+      }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
+      expect.objectContaining({
+        result: 'error',
+        clientSurface: 'incomplete_response',
+        clientOutputState: 'answer_text',
+        clientIncompleteReason: 'content_filter',
+      }),
+    );
+  });
+
+  it('bounds unknown client surfaces on the lifecycle event', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'unknown',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    telemetry.handler.handleLLMEnd(routedResult, 'model-run-1');
+
+    telemetry.finalize({
+      clientSurface: 'private-user-data',
+      clientOutputState: 'private-user-data',
+      clientIncompleteReason: 'private-user-data',
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Generation lifecycle completed',
+      expect.objectContaining({
+        clientSurface: 'none',
+        clientOutputState: 'none',
+      }),
+    );
+    const event = logger.info.mock.calls.at(-1)[1];
+    expect(event).not.toHaveProperty('clientIncompleteReason');
+  });
+
+  it('bounds incomplete reasons on model-call telemetry', () => {
+    const telemetry = createModelRouterTelemetry({
+      responseModelExtractor: () => 'model-router',
+      startedAtMs: 1_000,
+      now: () => 2_000,
+    });
+    const incompleteResult = {
+      generations: [
+        [
+          {
+            message: {
+              response_metadata: {
+                model: 'model-router',
+                incomplete_details: { reason: 'provider_extension' },
+              },
+            },
+          },
+        ],
+      ],
+    };
+    telemetry.handler.handleChatModelStart(null, [[]], 'model-run-1', undefined, undefined, [], {
+      ls_model_name: 'model-router',
+    });
+    telemetry.handler.handleLLMEnd(incompleteResult, 'model-run-1');
+
+    expect(logger.info).toHaveBeenCalledWith(
+      '[FoundryRouterTelemetry] Model call completed',
+      expect.objectContaining({ incompleteReason: 'other' }),
+    );
   });
 
   it('classifies the existing stream idle timeout distinctly', () => {

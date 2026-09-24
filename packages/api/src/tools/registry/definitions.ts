@@ -437,7 +437,7 @@ export const editArtifactSchema: ExtendedJsonSchema = {
 };
 // End [knauf]
 
-// [knauf] KK20-297 — translate supported current-message attachments.
+// [knauf] KK20-297, KK20-367 — translate supported current-message attachments.
 export const translateFileSchema: ExtendedJsonSchema = {
   type: 'object',
   properties: {
@@ -451,7 +451,8 @@ export const translateFileSchema: ExtendedJsonSchema = {
       type: 'string',
       minLength: 2,
       maxLength: 64,
-      description: 'Required source BCP-47 locale, for example en, de-DE, fr-FR, or ar-SA.',
+      description:
+        'Optional source BCP-47 locale, for example en, de-DE, fr-FR, or ar-SA. Omit it for machine-readable PDF, DOCX, XLSX, TXT, and CSV files so KARL can detect the language before applying the managed glossary. It is required for scanned PDFs, PPTX, raster images, IDML, JSON, Markdown, XML, SVG, and preserve_terms.',
     },
     filenames: {
       type: 'array',
@@ -460,7 +461,7 @@ export const translateFileSchema: ExtendedJsonSchema = {
       uniqueItems: true,
       items: { type: 'string', minLength: 1, maxLength: 255 },
       description:
-        'Exact available filenames to translate. Required when multiple files are available unless the user explicitly requested all files.',
+        'Exact available filenames to translate. Required for ambiguous requests; omit it to translate exactly one current-message file.',
     },
     preserve_terms: {
       type: 'array',
@@ -476,7 +477,7 @@ export const translateFileSchema: ExtendedJsonSchema = {
         'Set true only when the user explicitly requests translation of every available file.',
     },
   },
-  required: ['target_locale', 'source_locale'],
+  required: ['target_locale'],
   additionalProperties: false,
 };
 // End [knauf]

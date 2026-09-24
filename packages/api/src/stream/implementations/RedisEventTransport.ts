@@ -1,5 +1,6 @@
-import type { Redis, Cluster } from 'ioredis';
+import { randomUUID } from 'crypto';
 import { logger } from '@librechat/data-schemas';
+import type { Redis, Cluster } from 'ioredis';
 import type { GenerationRef, IEventTransport } from '~/stream/interfaces/IJobStore';
 
 /**
@@ -8,6 +9,8 @@ import type { GenerationRef, IEventTransport } from '~/stream/interfaces/IJobSto
 const CHANNELS = {
   /** Main event channel: stream:{streamId}:events (hash tag for cluster compatibility) */
   events: (streamId: string) => `stream:{${streamId}}:events`,
+  /** Shared heartbeat channel exercises the actual dedicated Pub/Sub socket. */
+  keepalive: 'stream:subscriber:keepalive',
 };
 
 /**
@@ -19,6 +22,25 @@ const KEYS = {
     generationId != null
       ? `stream:{${streamId}}:generation:${generationId}:seq`
       : `stream:{${streamId}}:seq`,
+  /**
+   * Which replicas currently hold a viewer for a generation: a ZSET with one member per replica,
+   * scored by the Redis server clock at that replica's last heartbeat. A dead replica stops
+   * heartbeating and is pruned by score; it never has to say goodbye. Renamed from the scalar
+   * `:subscribers` counter so a rolling deploy cannot hit WRONGTYPE on a shared key.
+   */
+  leases: (streamId: string, generationId?: string) =>
+    generationId != null
+      ? `stream:{${streamId}}:generation:${generationId}:leases`
+      : `stream:{${streamId}}:leases`,
+  /**
+   * Bumped each time membership revives from zero. Its presence is the evidence that a viewer once
+   * attached — Redis deletes an empty sorted set, so the set alone cannot distinguish "everyone
+   * left" from "nobody ever came" — and its value scopes "announce once" to one membership epoch.
+   */
+  leaseEpoch: (streamId: string, generationId?: string) =>
+    generationId != null
+      ? `stream:{${streamId}}:generation:${generationId}:leases:epoch`
+      : `stream:{${streamId}}:leases:epoch`,
   // End [knauf]
 };
 
@@ -30,6 +52,10 @@ const EventTypes = {
   DONE: 'done',
   ERROR: 'error',
   ABORT: 'abort',
+  // [knauf] A replica that dropped its last viewer asks the observer to re-check membership.
+  // Distinct from the retired 'all_subscribers_left' command so mixed-version pods ignore each other.
+  DEPARTURE_CHECK: 'departure_check',
+  // End [knauf]
 } as const;
 
 interface PubSubMessage {
@@ -79,6 +105,8 @@ interface StreamSubscribers {
     }
   >;
   allSubscribersLeftCallbacks: Array<() => void>;
+  /** Fired when NO replica has a viewer left, verified against Redis. Owner-registered. */
+  globalDepartureCallbacks: Array<() => void>;
   /** Abort callbacks - called when abort signal is received from any replica */
   abortCallbacks: Array<() => void>;
   /** Reorder buffer for handling out-of-order delivery in Redis Cluster */
@@ -115,8 +143,27 @@ export class RedisEventTransport implements IEventTransport {
   // End [knauf]
   /** Track channel subscription state: resolved promise = active, pending = in-flight */
   private channelSubscriptions = new Map<string, Promise<void>>();
+  // [knauf] KK20-338 — heartbeat traffic must traverse the Pub/Sub socket.
+  private keepaliveInterval: NodeJS.Timeout | null = null;
+  private destroyed = false;
+  // End [knauf]
   /** Counter for generating unique subscriber IDs */
   private subscriberIdCounter = 0;
+
+  // [knauf] Lease bookkeeping. `instanceId` is this replica's ZSET member. One timer per
+  // generation heartbeats a held lease and/or sweeps for a lapsed last viewer. `departureChecks`
+  // is the in-flight guard; `departureFiredEpoch` makes "announce once" mean once per epoch;
+  // `leaseGraceUntil` refuses to honour a zero right after a Redis gap, when every lease looks
+  // dead at once. See the lease section below for the two-signal contract.
+  private readonly instanceId = randomUUID();
+  private leaseTimers = new Map<string, NodeJS.Timeout>();
+  private departureChecks = new Set<string>();
+  private departureFiredEpoch = new Map<string, number>();
+  private leaseGraceUntil = 0;
+  private readonly leaseTtlMs: number;
+  private readonly leaseSweepMs: number;
+  private readonly leaseEvidenceTtlMs: number;
+  // End [knauf]
 
   /**
    * Create a new Redis event transport.
@@ -124,14 +171,62 @@ export class RedisEventTransport implements IEventTransport {
    * @param publisher - Redis client for publishing (can be shared)
    * @param subscriber - Redis client for subscribing (must be dedicated)
    */
-  constructor(publisher: Redis | Cluster, subscriber: Redis | Cluster) {
+  constructor(
+    publisher: Redis | Cluster,
+    subscriber: Redis | Cluster,
+    options?: {
+      keepaliveIntervalSeconds?: number;
+      /** How long a replica's lease survives without a heartbeat before it counts as dead. */
+      leaseTtlMs?: number;
+      /** Heartbeat and departure-sweep period. Must sit well inside leaseTtlMs; derived if omitted. */
+      leaseSweepMs?: number;
+      /** How long the "a viewer once attached" evidence outlives the leases themselves. */
+      leaseEvidenceTtlMs?: number;
+    },
+  ) {
     this.publisher = publisher;
     this.subscriber = subscriber;
+
+    // [knauf] Lease timings. The sweep is forced inside the TTL: a sweep at or past the TTL lets a
+    // live lease appear and lapse entirely between two ticks, which evicts a live viewer.
+    this.leaseTtlMs = options?.leaseTtlMs ?? RedisEventTransport.DEFAULT_LEASE_TTL_MS;
+    const requestedSweep = options?.leaseSweepMs ?? Math.floor(this.leaseTtlMs / 3);
+    if (requestedSweep >= this.leaseTtlMs) {
+      logger.warn(
+        `[RedisEventTransport] leaseSweepMs ${requestedSweep} must be below leaseTtlMs ${this.leaseTtlMs}; using a third of the TTL.`,
+      );
+    }
+    this.leaseSweepMs =
+      requestedSweep >= this.leaseTtlMs ? Math.floor(this.leaseTtlMs / 3) : requestedSweep;
+    this.leaseEvidenceTtlMs =
+      options?.leaseEvidenceTtlMs ?? RedisEventTransport.DEFAULT_LEASE_EVIDENCE_TTL_MS;
+    // End [knauf]
 
     // Set up message handler for all subscriptions
     this.subscriber.on('message', (channel: string, message: string) => {
       this.handleMessage(channel, message);
     });
+
+    const keepaliveIntervalSeconds = options?.keepaliveIntervalSeconds ?? 0;
+    if (keepaliveIntervalSeconds > 0) {
+      this.subscriber
+        .subscribe(CHANNELS.keepalive)
+        .then(() => {
+          if (this.destroyed) {
+            this.subscriber.unsubscribe(CHANNELS.keepalive).catch(() => {});
+            return;
+          }
+          this.keepaliveInterval = setInterval(() => {
+            this.publisher.publish(CHANNELS.keepalive, '1').catch((error) => {
+              logger.error('[RedisEventTransport] Subscriber heartbeat failed:', error);
+            });
+          }, keepaliveIntervalSeconds * 1000);
+          this.keepaliveInterval.unref?.();
+        })
+        .catch((error) => {
+          logger.error('[RedisEventTransport] Failed to subscribe to heartbeat channel:', error);
+        });
+    }
   }
 
   // [knauf] Allocate a sequence and its safety TTL in one Redis operation so a disconnect
@@ -170,6 +265,7 @@ return value
       count: 0,
       handlers: new Map(),
       allSubscribersLeftCallbacks: [],
+      globalDepartureCallbacks: [],
       abortCallbacks: [],
       reorderBuffer: {
         nextSeq: 0,
@@ -205,7 +301,13 @@ return value
     }
     for (const key of keys) {
       const state = this.generations.get(key);
-      if (state && (state.count > 0 || state.abortCallbacks.length > 0)) {
+      // A departure observer keeps the channel open: it hears re-check hints over it.
+      if (
+        state &&
+        (state.count > 0 ||
+          state.abortCallbacks.length > 0 ||
+          state.globalDepartureCallbacks.length > 0)
+      ) {
         return true;
       }
     }
@@ -264,6 +366,228 @@ return value
     // End [knauf]
     return val - 1;
   }
+
+  // [knauf] ---- leased replica membership ----------------------------------------------------
+  //
+  // Two signals leave this section, and they are deliberately different:
+  //
+  //   onAllSubscribersLeft — THIS replica's local viewer count hit zero. Fired synchronously in
+  //     unsubscribe(), exactly as the in-memory transport does. It drives per-replica reconnect
+  //     bookkeeping (hasSubscriber / syncSent) and must never wait on Redis: a browser reconnects
+  //     faster than a round-trip, and gating this on global membership skips syncReorderBuffer
+  //     and loses chunks.
+  //
+  //   onGlobalDeparture — NO replica has a viewer left, verified against Redis. It drives the
+  //     partial-response save, so it is registered by the generating replica, which is then the
+  //     observer whether or not it ever served a viewer itself. It is announced once per
+  //     membership epoch; a reconnect starts a new epoch.
+  //
+  // Membership is one ZSET member per replica, scored by the Redis server clock so pods with
+  // skewed clocks cannot evict each other. A live replica heartbeats its member; a dead one is
+  // pruned by score on the next check. The epoch key is bumped whenever membership revives from
+  // zero and is the evidence a viewer ever attached — Redis deletes an empty sorted set, so the
+  // set cannot carry that evidence itself. Neither key is deleted at zero; both expire.
+
+  /** Join or refresh this replica's lease. Idempotent. Bumps the epoch when reviving from zero. */
+  private static readonly TOUCH_LEASE_SCRIPT = `
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+local before = redis.call('ZCARD', KEYS[1])
+redis.call('ZADD', KEYS[1], now, ARGV[1])
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+if before == 0 then
+  redis.call('INCR', KEYS[2])
+end
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
+return {redis.call('ZCARD', KEYS[1]), tonumber(redis.call('GET', KEYS[2]) or '0')}
+`;
+
+  /** Release this replica's lease. Leaves the evidence and any peers' leases untouched. */
+  private static readonly LEAVE_LEASE_SCRIPT = `
+redis.call('ZREM', KEYS[1], ARGV[1])
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return {redis.call('ZCARD', KEYS[1])}
+`;
+
+  /**
+   * Prune lapsed leases and report {seen, remaining, epoch}. `seen` is 0 until a viewer has ever
+   * attached, so an observer armed before the first connection cannot fire on an empty world.
+   */
+  private static readonly CHECK_DEPARTURE_SCRIPT = `
+local epoch = tonumber(redis.call('GET', KEYS[2]) or '0')
+if epoch == 0 then
+  return {0, 0, 0}
+end
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2] / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - tonumber(ARGV[1]))
+return {1, redis.call('ZCARD', KEYS[1]), epoch}
+`;
+
+  /** A lease older than this is a dead replica. */
+  private static readonly DEFAULT_LEASE_TTL_MS = 30000;
+  /** Matches RedisJobStore's running-job failsafe, so the evidence outlives the generation. */
+  private static readonly DEFAULT_LEASE_EVIDENCE_TTL_MS = 1200000;
+
+  private async runLeaseScript(
+    script: string,
+    streamId: string,
+    generationId: string | undefined,
+    args: string[],
+  ): Promise<number[]> {
+    const raw = await this.publisher.eval(
+      script,
+      2,
+      KEYS.leases(streamId, generationId),
+      KEYS.leaseEpoch(streamId, generationId),
+      ...args,
+    );
+    return (raw as unknown[]).map(Number);
+  }
+
+  /** Any failed lease operation means Redis was unreachable and every lease may look dead. */
+  private enterLeaseGrace(): void {
+    this.leaseGraceUntil = Date.now() + this.leaseTtlMs;
+  }
+
+  /** Called when this replica gains its first local viewer, and on every heartbeat after. */
+  private touchLease(streamId: string, generationId?: string): void {
+    this.runLeaseScript(RedisEventTransport.TOUCH_LEASE_SCRIPT, streamId, generationId, [
+      this.instanceId,
+      String(this.leaseEvidenceTtlMs),
+    ]).catch((err) => {
+      logger.error(`[RedisEventTransport] Failed to heartbeat subscriber lease:`, err);
+      this.enterLeaseGrace();
+    });
+  }
+
+  /**
+   * Called when this replica loses its last local viewer. If that emptied the set, hint the
+   * observer so it checks now instead of on its next sweep — a latency optimisation only; the
+   * observer verifies for itself and its sweep catches a lost hint.
+   */
+  private leaveLease(streamId: string, generationId: string | undefined, announce: boolean): void {
+    this.runLeaseScript(RedisEventTransport.LEAVE_LEASE_SCRIPT, streamId, generationId, [
+      this.instanceId,
+      String(this.leaseEvidenceTtlMs),
+    ])
+      .then(([remaining]) => {
+        if (announce && remaining === 0) {
+          this.publishDepartureCheck(streamId, generationId);
+        }
+      })
+      .catch((err) => {
+        logger.error(`[RedisEventTransport] Failed to release subscriber lease:`, err);
+        this.enterLeaseGrace();
+      });
+  }
+
+  /**
+   * One timer per generation, shared by both roles: a replica holding a viewer heartbeats; a
+   * replica observing departures sweeps. Stops itself when neither role applies.
+   */
+  private ensureLeaseTimer(streamId: string, generationId?: string): void {
+    const key = this.generationKey(streamId, generationId);
+    if (this.leaseTimers.has(key)) {
+      return;
+    }
+    const timer = setInterval(() => {
+      const state = this.getGeneration(streamId, generationId);
+      const holdsLease = (state?.count ?? 0) > 0;
+      const observes = (state?.globalDepartureCallbacks.length ?? 0) > 0;
+      if (!holdsLease && !observes) {
+        this.clearLeaseTimer(key);
+        return;
+      }
+      if (holdsLease) {
+        this.touchLease(streamId, generationId);
+      }
+      if (observes) {
+        this.runDepartureCheck(streamId, generationId);
+      }
+    }, this.leaseSweepMs);
+    timer.unref?.();
+    this.leaseTimers.set(key, timer);
+  }
+
+  private clearLeaseTimer(key: string): void {
+    const timer = this.leaseTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.leaseTimers.delete(key);
+    }
+  }
+
+  /** The verified check. Used by the sweep tick and by an incoming hint alike. */
+  private runDepartureCheck(streamId: string, generationId?: string): void {
+    const key = this.generationKey(streamId, generationId);
+    if (!this.getGeneration(streamId, generationId)?.globalDepartureCallbacks.length) {
+      return;
+    }
+    if (this.departureChecks.has(key)) {
+      // A check is already in flight; the sweep re-checks within one period anyway.
+      return;
+    }
+    this.departureChecks.add(key);
+    this.runLeaseScript(RedisEventTransport.CHECK_DEPARTURE_SCRIPT, streamId, generationId, [
+      String(this.leaseTtlMs),
+    ])
+      .then(([seen, remaining, epoch]) => {
+        this.evaluateDeparture(streamId, generationId, seen === 1, remaining, epoch);
+      })
+      .catch((err) => {
+        // Fail closed: a save needs a verified zero. The next sweep tries again.
+        logger.error(`[RedisEventTransport] Subscriber departure check failed:`, err);
+        this.enterLeaseGrace();
+      })
+      .finally(() => {
+        this.departureChecks.delete(key);
+      });
+  }
+
+  /**
+   * Decide synchronously, with no await between test and claim, so two overlapping checks that
+   * both read zero cannot both fire. Fires once per epoch; a revived membership bumps the epoch
+   * and re-arms it.
+   */
+  private evaluateDeparture(
+    streamId: string,
+    generationId: string | undefined,
+    seen: boolean,
+    remaining: number,
+    epoch: number,
+  ): void {
+    if (!seen || remaining > 0) {
+      return;
+    }
+    const key = this.generationKey(streamId, generationId);
+    if (epoch <= (this.departureFiredEpoch.get(key) ?? 0)) {
+      return;
+    }
+    if (Date.now() < this.leaseGraceUntil) {
+      // Recovering from a Redis gap: live replicas have not had a chance to heartbeat yet.
+      return;
+    }
+    this.departureFiredEpoch.set(key, epoch);
+    const state = this.getGeneration(streamId, generationId);
+    for (const callback of state?.globalDepartureCallbacks ?? []) {
+      try {
+        callback();
+      } catch (err) {
+        logger.error(`[RedisEventTransport] Error in globalDeparture callback:`, err);
+      }
+    }
+  }
+
+  private publishDepartureCheck(streamId: string, generationId?: string): void {
+    const message: PubSubMessage = { type: EventTypes.DEPARTURE_CHECK, generationId };
+    this.publisher.publish(CHANNELS.events(streamId), JSON.stringify(message)).catch((err) => {
+      logger.error(`[RedisEventTransport] Failed to publish departure check:`, err);
+    });
+  }
+  // End [knauf]
 
   /** Reset subscriber reorder buffer state to initial values */
   private resetReorderBuffer(streamId: string, generationId?: string): void {
@@ -348,6 +672,9 @@ return value
    * Handle incoming pub/sub message with reordering support for Redis Cluster
    */
   private handleMessage(channel: string, message: string): void {
+    if (channel === CHANNELS.keepalive) {
+      return;
+    }
     const match = channel.match(/^stream:\{([^}]+)\}:events$/);
     if (!match) {
       return;
@@ -374,7 +701,12 @@ return value
       }
 
       // Abort-only listeners must not accumulate another pod's stream ordering state.
-      if (streamState.handlers.size === 0 && parsed.type !== EventTypes.ABORT) {
+      // DEPARTURE_CHECK is addressed precisely at an observer with no local handlers.
+      if (
+        streamState.handlers.size === 0 &&
+        parsed.type !== EventTypes.ABORT &&
+        parsed.type !== EventTypes.DEPARTURE_CHECK
+      ) {
         if (parsed.type === EventTypes.DONE || parsed.type === EventTypes.ERROR) {
           this.cleanup(streamId, streamState.generationId);
         }
@@ -541,6 +873,10 @@ return value
           break;
         case EventTypes.ABORT:
           break;
+        // [knauf]
+        case EventTypes.DEPARTURE_CHECK:
+          break;
+        // End [knauf]
       }
     }
 
@@ -553,6 +889,12 @@ return value
         }
       }
     }
+
+    // [knauf] A departure hint is a prompt to verify, never a command to fire.
+    if (message.type === EventTypes.DEPARTURE_CHECK) {
+      this.runDepartureCheck(streamState.streamId, streamState.generationId);
+    }
+    // End [knauf]
 
     // [knauf] A persisted final can recreate state on reconnect; terminal listeners cannot.
     if (message.type === EventTypes.DONE || message.type === EventTypes.ERROR) {
@@ -585,6 +927,9 @@ return value
     // attachment and must not inherit that prior generation's expected seq.
     if (streamState.count === 0) {
       this.resetReorderBuffer(streamId, generationId);
+      // This replica now holds a viewer for the generation: take its lease and keep it alive.
+      this.touchLease(streamId, generationId);
+      this.ensureLeaseTimer(streamId, generationId);
     }
     streamState.count++;
     streamState.handlers.set(subscriberId, handlers);
@@ -610,9 +955,9 @@ return value
            * the shared Redis sequence key has already been reset elsewhere.
            */
           this.resetReorderBuffer(streamId, generationId);
-          this.unsubscribeChannelIfUnused(streamId);
 
-          // Call all-subscribers-left callbacks
+          // Local signal, synchronous, identical to the in-memory transport: this replica has no
+          // viewer left. Drives reconnect bookkeeping and must not wait on Redis.
           for (const callback of state.allSubscribersLeftCallbacks) {
             try {
               callback();
@@ -620,6 +965,11 @@ return value
               logger.error(`[RedisEventTransport] Error in allSubscribersLeft callback:`, err);
             }
           }
+
+          // Global signal, asynchronous: release this replica's lease and hint the observer.
+          this.leaveLease(streamId, generationId, true);
+
+          this.unsubscribeChannelIfUnused(streamId);
           /**
            *  Preserve stream state (callbacks, abort handlers) for reconnection.
            *  Previously this deleted the entire state, which lost the
@@ -718,6 +1068,17 @@ return value
   onAllSubscribersLeft(streamId: string, callback: () => void, generationId?: string): void {
     this.getOrCreateGeneration(streamId, generationId).allSubscribersLeftCallbacks.push(callback);
   }
+
+  /**
+   * Register for the moment NO replica has a viewer left, verified against Redis. The generating
+   * replica registers here and thereby becomes the observer: it listens for re-check hints and
+   * sweeps for lapsed leases even if it never serves a viewer itself.
+   */
+  onGlobalDeparture(streamId: string, callback: () => void, generationId?: string): void {
+    this.getOrCreateGeneration(streamId, generationId).globalDepartureCallbacks.push(callback);
+    this.ensureChannelSubscription(streamId);
+    this.ensureLeaseTimer(streamId, generationId);
+  }
   // End [knauf]
 
   /**
@@ -726,13 +1087,16 @@ return value
    * the generating Replica A receives the signal and stops.
    */
   // [knauf] Abort only the generation named on the shared Redis channel.
-  emitAbort(streamId: string, generationId?: string): void {
+  async emitAbort(streamId: string, generationId?: string): Promise<void> {
     const channel = CHANNELS.events(streamId);
     const message: PubSubMessage = { type: EventTypes.ABORT, generationId };
 
-    this.publisher.publish(channel, JSON.stringify(message)).catch((err) => {
+    try {
+      await this.publisher.publish(channel, JSON.stringify(message));
+    } catch (err) {
       logger.error(`[RedisEventTransport] Failed to publish abort:`, err);
-    });
+      throw err;
+    }
   }
 
   /**
@@ -746,6 +1110,7 @@ return value
     this.getOrCreateGeneration(streamId, generationId).abortCallbacks.push(callback);
     this.ensureChannelSubscription(streamId);
   }
+
   // End [knauf]
 
   /**
@@ -769,11 +1134,20 @@ return value
    */
   // [knauf] Cleanup one generation only; sequence keys expire instead of racing a newer turn.
   cleanup(streamId: string, generationId?: string): void {
+    // Release only THIS replica's lease. Deleting the whole set would evict members other
+    // replicas still hold live and manufacture a spurious "everyone left" for the observer.
+    const key = this.generationKey(streamId, generationId);
+    this.clearLeaseTimer(key);
+    this.departureFiredEpoch.delete(key);
     const state = this.getGeneration(streamId, generationId);
+    if ((state?.count ?? 0) > 0) {
+      this.leaveLease(streamId, generationId, false);
+    }
 
     if (state) {
       state.handlers.clear();
       state.allSubscribersLeftCallbacks = [];
+      state.globalDepartureCallbacks = [];
       state.abortCallbacks = [];
     }
 
@@ -787,6 +1161,13 @@ return value
    * Destroy all resources.
    */
   destroy(): void {
+    this.destroyed = true;
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
+    this.subscriber.unsubscribe(CHANNELS.keepalive).catch(() => {});
+
     // Clear all flush timeouts and buffered messages.
     // Sequence keys are NOT deleted here — they are shared across replicas and
     // generation-scoped counters expire via their 24h safety-net TTL.
@@ -801,6 +1182,21 @@ return value
     for (const channel of this.channelSubscriptions.keys()) {
       this.subscriber.unsubscribe(channel).catch(() => {});
     }
+
+    // [knauf] A stopping replica must not keep heartbeating leases it can no longer honour, and
+    // should let go of them so the observer sees the departure now rather than at the TTL.
+    for (const timer of this.leaseTimers.values()) {
+      clearInterval(timer);
+    }
+    this.leaseTimers.clear();
+    for (const state of this.generations.values()) {
+      if (state.count > 0) {
+        this.leaveLease(state.streamId, state.generationId, true);
+      }
+    }
+    this.departureChecks.clear();
+    this.departureFiredEpoch.clear();
+    // End [knauf]
 
     this.channelSubscriptions.clear();
     this.generations.clear();

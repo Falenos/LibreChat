@@ -50,21 +50,10 @@
  */
 import React from 'react';
 import { extractContent } from '~/utils';
-
-/**
- * Artifact types whose body is handed to a compiler or parser, so a single source
- * file is the only valid content. Deliberately excludes `text/markdown` / `text/md`
- * (prose and multiple code samples are legitimate) and the tool-produced buckets,
- * which never come from a `:::artifact` directive.
- */
-const SINGLE_FILE_ARTIFACT_TYPES = new Set([
-  'application/vnd.react',
-  'application/vnd.ant.react',
-  'text/html',
-  'application/vnd.code-html',
-  'image/svg+xml',
-  'application/vnd.mermaid',
-]);
+/* [knauf] KK20-365 — the type set moved to its own module so
+ * `normalizeArtifactDirectives.ts` can share it. That module is a pure string transform and
+ * cannot import this one, which pulls in React. Membership is unchanged. */
+import { SINGLE_FILE_ARTIFACT_TYPES } from './artifactTypes';
 const FENCED_SOURCE_PATTERN =
   /(?:^|\r?\n)[ \t]*(`{3,}|~{3,})[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*(?=\r?\n|$)/;
 

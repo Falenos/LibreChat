@@ -291,7 +291,7 @@ describe('ChatProject methods', () => {
     expect(assigned?.projectId).toBe(projectId);
     expect(unassigned?.previousProjectId).toBe(projectId);
     expect(unassigned?.projectId).toBeNull();
-    expect(conversation?.chatProjectId).toBeUndefined();
+    expect(conversation?.chatProjectId).toBeNull();
     expect(refreshedProject?.conversationCount).toBe(0);
   });
   // End [knauf]

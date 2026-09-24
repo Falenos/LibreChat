@@ -17,6 +17,16 @@ RUN apk upgrade --no-cache
 # [knauf] Chromium plus a privilege drop for artifact PNG/PDF rendering. (NO-TICKET)
 RUN apk add --no-cache jemalloc chromium su-exec
 # End [knauf]
+# [knauf] Ghostscript recompresses translated PDFs (Azure Document Translation
+# re-embeds fonts/re-encodes images, multiplying output size). (KK20-297)
+# This adds a historically CVE-prone C parser fed with content derived from
+# user uploads; -dSAFER (default since gs 9.50) bounds its file-access
+# surface, but interpreter RCEs have shipped in gs before. Image rebuild
+# cadence — i.e. picking up the Alpine `ghostscript` package's own security
+# updates — is the patch mechanism for future gs CVEs, so it isn't optional
+# once this line ships.
+RUN apk add --no-cache ghostscript
+# End [knauf]
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 

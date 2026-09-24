@@ -1997,4 +1997,177 @@ describe('useResumableSSE - 404 error path', () => {
     );
     unmount();
   });
+  // [knauf] NO-TICKET — a resumed stream never receives `created`, so the optimistic guard that
+  // gates `removeConvoFromAllQueries` stays armed for the life of the page session and a
+  // server-persisted conversation is dropped from the sidebar on the next terminal error.
+  // `subscribeWithResume` passes `skipBufferReplay: true` and the cross-replica `created` re-emit
+  // is gated on `!options?.skipBufferReplay`, so the client gets a `sync` frame and never a
+  // `created` one. See knauf/docs/operations/chat-history-disappearing-investigation.md.
+  describe('[knauf] resumed stream never receives created', () => {
+    /** MAX_RETRIES = 5, backoff min(1000 * 2^(n-1), 30000). */
+    const BACKOFFS = [1000, 2000, 4000, 8000, 16000];
+
+    /** First message of a brand-new chat — the only shape that arms `optimisticStreamIdsRef`. */
+    const buildNewConvoSubmission = () =>
+      buildSubmission({
+        conversation: {},
+        userMessage: {
+          messageId: 'msg-1',
+          conversationId: null,
+          text: 'Hello',
+          isCreatedByUser: true,
+          sender: 'User',
+          parentMessageId: Constants.NO_PARENT,
+        },
+        initialResponse: {
+          messageId: 'msg-1_',
+          conversationId: null,
+          text: '',
+          isCreatedByUser: false,
+          sender: 'Assistant',
+        },
+      });
+
+    const countSidebarWrites = () =>
+      mockSetQueryData.mock.calls.filter(
+        ([queryKey]) => Array.isArray(queryKey) && queryKey[0] === QueryKeys.allConversations,
+      ).length;
+
+    /** Drives the five reconnects, leaving the hook one error away from the terminal branch. */
+    const exhaustReconnects = async (sseAt: () => MockSSEInstance) => {
+      for (const delay of BACKOFFS) {
+        await act(async () => {
+          sseAt()._emit('error');
+        });
+        await advanceRetryTimer(delay);
+      }
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      mockFindAll.mockReturnValue([{ queryKey: [QueryKeys.allConversations] }]);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('reconnects with resume=true, which is why created can never arrive', async () => {
+      const submission = buildNewConvoSubmission();
+      const chatHelpers = buildChatHelpers();
+      const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+      await flushMicrotasks();
+
+      await act(async () => {
+        getLastSSE()._emit('error');
+      });
+      await advanceRetryTimer(BACKOFFS[0]);
+
+      const { SSE } = jest.requireMock('sse.js');
+      const urls = (SSE as jest.Mock).mock.calls.map(([url]) => String(url));
+      expect(urls).toHaveLength(2);
+      expect(urls[0]).not.toContain('resume=true');
+      expect(urls[1]).toContain('resume=true');
+
+      unmount();
+    });
+
+    it('baseline: a created event disarms the removal guard', async () => {
+      const submission = buildNewConvoSubmission();
+      const chatHelpers = buildChatHelpers();
+      const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+      await flushMicrotasks();
+
+      await act(async () => {
+        getLastSSE()._emit('message', {
+          data: JSON.stringify({
+            created: true,
+            message: {
+              messageId: 'server-user',
+              parentMessageId: Constants.NO_PARENT,
+              conversationId: 'stream-123',
+              sender: 'User',
+              text: 'Hello',
+              isCreatedByUser: true,
+            },
+            streamId: 'stream-123',
+          }),
+        });
+      });
+
+      await exhaustReconnects(getLastSSE);
+      const before = countSidebarWrites();
+
+      await act(async () => {
+        getLastSSE()._emit('error');
+      });
+
+      expect(countSidebarWrites()).toBe(before);
+      unmount();
+    });
+
+    it('re-syncs the conversation list from the server when a resumed stream fails', async () => {
+      const submission = buildNewConvoSubmission();
+      const chatHelpers = buildChatHelpers();
+      const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+      await flushMicrotasks();
+
+      // Drop the connection before `created`, then reconnect. The reconnect is a resume, so the
+      // server answers with `sync` and `created` can never follow.
+      await act(async () => {
+        getLastSSE()._emit('error');
+      });
+      await advanceRetryTimer(BACKOFFS[0]);
+      await act(async () => {
+        getLastSSE()._emit('message', {
+          data: JSON.stringify({ sync: true, resumeState: { runSteps: [], replayEvents: [] } }),
+        });
+      });
+
+      for (const delay of BACKOFFS.slice(1)) {
+        await act(async () => {
+          getLastSSE()._emit('error');
+        });
+        await advanceRetryTimer(delay);
+      }
+      mockInvalidateQueries.mockClear();
+
+      await act(async () => {
+        getLastSSE()._emit('error');
+      });
+
+      /**
+       * A `sync` frame proves a Redis job exists, not that Mongo holds the conversation, so the
+       * client must not decide this alone. The optimistic row goes — otherwise a conversation the
+       * server cannot load lingers in the sidebar — and the list is re-synced so the server puts
+       * it back if it really was persisted.
+       */
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: [QueryKeys.allConversations],
+      });
+    });
+
+    it('re-syncs after a terminal failure that happens before anything is persisted', async () => {
+      const submission = buildNewConvoSubmission();
+      const chatHelpers = buildChatHelpers();
+      const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+      await flushMicrotasks();
+
+      // The job and its metadata exist before initializeClient runs, so a provider failure here
+      // leaves nothing in Mongo. The optimistic row must not survive as a ghost.
+      mockInvalidateQueries.mockClear();
+      const sidebarWritesBefore = countSidebarWrites();
+
+      await act(async () => {
+        getLastSSE()._emit('error', { responseCode: 404 });
+      });
+
+      expect(countSidebarWrites()).toBeGreaterThan(sidebarWritesBefore);
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: [QueryKeys.allConversations],
+      });
+      unmount();
+    });
+  });
+  // End [knauf]
 });

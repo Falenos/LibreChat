@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs').promises;
+const os = require('os');
 const path = require('path');
 const { v4 } = require('uuid');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
@@ -13,6 +15,7 @@ const {
   getToolDefinition,
   recordFileTranslationOutcome,
   sanitizeFilename,
+  parseDocument,
 } = require('@librechat/api');
 const { Constants, FileSources, isKnaufSourceCodeFile } = require('librechat-data-provider');
 const {
@@ -28,12 +31,19 @@ const {
 const {
   AZURE_BATCH_GLOSSARY_MAX_BYTES,
   AZURE_SYNC_GLOSSARY_MAX_BYTES,
+  detectSourceLanguageWithAzure,
   glossaryForRequest,
   mergePreservedTerms,
   translateBatchWithAzure,
   translateDocumentWithAzure,
   translateWithAzure,
 } = require('./providers/azure');
+const {
+  detectProtectedLogo,
+  maskRegionForTranslation,
+  restoreProtectedRegion,
+} = require('./logoProtection');
+const { compressTranslatedPdf } = require('./pdfCompression');
 const { getRetentionExpiry } = require('../../retention');
 const { getStrategyFunctions } = require('../../strategies');
 const {
@@ -64,6 +74,7 @@ const MAX_STRUCTURED_SEGMENTS = 10000;
 const MAX_STRUCTURED_CHARACTERS = 500000;
 const MAX_PRESERVE_TERMS = 100;
 const MAX_PRESERVE_TERM_CHARACTERS = 200;
+const LANGUAGE_DETECTION_MAX_CHARACTERS = 50000;
 
 const FORMATS = {
   idml: { mime: IDML_MIME, mode: 'idml' },
@@ -98,6 +109,7 @@ const MIME_FORMATS = new Map(
 MIME_FORMATS.set('application/csv', { ...FORMATS.csv, extension: 'csv' });
 MIME_FORMATS.set('text/xml', { ...FORMATS.xml, extension: 'xml' });
 MIME_FORMATS.set('image/svg', { ...FORMATS.svg, extension: 'svg' });
+const FONT_VALIDATION_NOT_APPLICABLE = new Set(['csv', 'txt', 'md', 'markdown', 'json', 'xml']);
 
 function formatForFile(file) {
   const filename = file?.filename ?? file?.name ?? '';
@@ -111,6 +123,9 @@ function formatForFile(file) {
 }
 
 const isTranslatableFile = (file) => formatForFile(file) != null;
+
+const fontValidationForFormat = (format) =>
+  FONT_VALIDATION_NOT_APPLICABLE.has(format.extension) ? 'not_applicable' : 'human_required';
 
 const isFileTranslationConfigured = () =>
   process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
@@ -151,7 +166,11 @@ async function resolveInputFiles(req, predicate = isTranslatableFile) {
   return fileIds.map((fileId) => byId.get(fileId));
 }
 
-async function resolveInputFileResults(req, predicate = isTranslatableFile) {
+async function resolveInputFileResults(
+  req,
+  predicate = isTranslatableFile,
+  { includeText = false } = {},
+) {
   const requested = requestToolFiles(req).filter(predicate);
   const fileIds = requestedFileIds(req, predicate);
   if (fileIds.length === 0) {
@@ -161,7 +180,7 @@ async function resolveInputFileResults(req, predicate = isTranslatableFile) {
   if (req.user.tenantId) {
     query.tenantId = req.user.tenantId;
   }
-  const files = await db.getFiles(query);
+  const files = await db.getFiles(query, null, includeText ? '+text' : undefined);
   const byId = new Map(files.filter(predicate).map((file) => [file.file_id, file]));
   const names = new Map(
     requested.map((file) => [file.file_id, file.filename ?? file.name ?? 'attached file']),
@@ -181,7 +200,7 @@ async function resolveInputFileResults(req, predicate = isTranslatableFile) {
   );
 }
 
-function selectTranslationFiles(files, args = {}) {
+function selectTranslationFiles(files, args = {}, currentMessageFileIds = []) {
   const filenames = args?.filenames;
   const allFiles = args?.all_files;
   if (
@@ -220,7 +239,12 @@ function selectTranslationFiles(files, args = {}) {
       return matches[0];
     });
   }
-  if (files.length > 1 && allFiles !== true) {
+  if (allFiles === true) {
+    return files;
+  }
+  const currentFileIdSet = new Set(currentMessageFileIds);
+  const currentCandidates = files.filter((file) => currentFileIdSet.has(file.file_id));
+  if (currentFileIdSet.size === 0) {
     throw new IdmlError(
       `Choose filenames or set all_files=true. Available files: ${files
         .map((file) => file.filename ?? file.name ?? 'attached file')
@@ -229,7 +253,31 @@ function selectTranslationFiles(files, args = {}) {
       409,
     );
   }
-  return files;
+  if (currentCandidates.length === 0) {
+    throw new IdmlError(
+      'No supported file is attached to the current message. Choose an explicit filename or attach a supported file.',
+      'translation_file_selection_required',
+      409,
+    );
+  }
+  const implicitCandidates = currentCandidates;
+  if (implicitCandidates.length > 1) {
+    throw new IdmlError(
+      `Choose filenames or set all_files=true. Available files: ${implicitCandidates
+        .map((file) => file.filename ?? file.name ?? 'attached file')
+        .join(', ')}`,
+      'translation_file_selection_required',
+      409,
+    );
+  }
+  return implicitCandidates;
+}
+
+function currentMessageTranslationFiles(req, files) {
+  const currentFileIds = Array.isArray(req?.knaufCurrentMessageFileIds)
+    ? req.knaufCurrentMessageFileIds
+    : [];
+  return files.filter((file) => currentFileIds.includes(file.file_id));
 }
 
 const cancellationError = () =>
@@ -991,13 +1039,7 @@ function dictionaryEntryCount(glossary) {
   );
 }
 
-function protectedOnlyGlossary({
-  baseStats,
-  preserveTerms,
-  segments,
-  filterToDocument,
-  maxBytes,
-}) {
+function protectedOnlyGlossary({ baseStats, preserveTerms, segments, filterToDocument, maxBytes }) {
   return mergePreservedTerms(
     { entries: [], stats: { ...baseStats, applied: 0, bytes: 0 } },
     preserveTerms,
@@ -1067,6 +1109,77 @@ async function translateWithOptionalGlossaryFallback({
   }
 }
 
+function managedGlossaryConfigured() {
+  return Boolean(
+    process.env.KNAUF_IDML_GLOSSARY_PATH ||
+      process.env.KNAUF_TRANSLATION_GLOSSARY_BLOB ||
+      process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED === 'true' ||
+      !['', 'none'].includes(process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION ?? 'none'),
+  );
+}
+
+async function sourceLanguageDetectionText(file, input, format, signal) {
+  let text = typeof file.text === 'string' ? file.text : '';
+  if (!text && ['txt', 'csv'].includes(format.extension)) {
+    text = input.toString('utf8');
+  }
+  if (!text && ['pdf', 'docx', 'xlsx'].includes(format.extension)) {
+    throwIfAborted(signal);
+    const temporaryPath = path.join(
+      os.tmpdir(),
+      `karl-source-detection-${v4()}${path.extname(file.filename)}`,
+    );
+    try {
+      await fs.writeFile(temporaryPath, input);
+      const parsed = await parseDocument({
+        file: {
+          path: temporaryPath,
+          size: input.length,
+          mimetype: format.mime,
+          originalname: file.filename,
+        },
+      });
+      text = parsed.text;
+    } catch (error) {
+      logger.warn('[translate_file] source text extraction failed', {
+        filename: file.filename,
+        error: error?.message,
+      });
+      throw new IdmlError(
+        `Source language could not be detected from ${file.filename}; provide source_locale`,
+        'source_locale_detection_failed',
+        400,
+      );
+    } finally {
+      await fs.unlink(temporaryPath).catch(() => undefined);
+    }
+  }
+  if (!text) {
+    throw new IdmlError(
+      `source_locale is required for ${file.filename}; automatic detection is limited to machine-readable PDF, DOCX, XLSX, TXT, and CSV files`,
+      'source_locale_required',
+      400,
+    );
+  }
+  if (file.textFormat === 'html') {
+    text = text
+      .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/giu, ' ')
+      .replace(/<[^>]+>/gu, ' ');
+  }
+  return text.replace(/\s+/gu, ' ').trim().slice(0, LANGUAGE_DETECTION_MAX_CHARACTERS);
+}
+
+async function sourceLocaleForFile({ sourceLocale, file, input, format, signal }) {
+  if (sourceLocale || !managedGlossaryConfigured()) {
+    return sourceLocale;
+  }
+  const detected = await detectSourceLanguageWithAzure(
+    await sourceLanguageDetectionText(file, input, format, signal),
+    signal,
+  );
+  return normalizeLocale(detected, 'detected source locale');
+}
+
 async function translateOneFile({
   req,
   file,
@@ -1078,12 +1191,23 @@ async function translateOneFile({
   throwIfAborted(signal);
   const format = formatForFile(file);
   const input = await readFileBuffer(req, file, signal);
+  const effectiveSourceLocale = await sourceLocaleForFile({
+    sourceLocale,
+    file,
+    input,
+    format,
+    signal,
+  });
+  if (effectiveSourceLocale && targetLocale.toLowerCase() === effectiveSourceLocale.toLowerCase()) {
+    throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
+  }
   const startedAt = Date.now();
   let result;
   let output;
   let segments = [];
   let glossary;
   let layoutValidation = 'human_required';
+  let fontValidation = fontValidationForFormat(format);
 
   if (format.mode === 'idml') {
     if (input.length > MAX_SEGMENTED_BYTES) {
@@ -1092,7 +1216,7 @@ async function translateOneFile({
     const parsed = await parseIdml(input);
     segments = parsed.segments;
     glossary = mergePreservedTerms(
-      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      await glossaryForRequest({ sourceLocale: effectiveSourceLocale, targetLocale, segments }),
       preserveTerms,
       segments,
     );
@@ -1101,7 +1225,7 @@ async function translateOneFile({
         translate: (requestGlossary) =>
           translateWithAzure({
             segments,
-            sourceLocale,
+            sourceLocale: effectiveSourceLocale,
             targetLocale,
             glossary: requestGlossary,
             signal,
@@ -1115,7 +1239,9 @@ async function translateOneFile({
     } else {
       result = { translations: new Map(), providerLocale: targetLocale, batches: 0 };
     }
-    output = (await buildIdml(parsed, result.translations)).buffer;
+    const built = await buildIdml(parsed, result.translations);
+    output = built.buffer;
+    fontValidation = built.fontValidation;
   } else if (['json', 'markdown', 'xml', 'svg'].includes(format.mode)) {
     if (input.length > MAX_SEGMENTED_BYTES) {
       throw new IdmlError(
@@ -1135,7 +1261,7 @@ async function translateOneFile({
     }
     segments = adapter.segments;
     glossary = mergePreservedTerms(
-      await glossaryForRequest({ sourceLocale, targetLocale, segments }),
+      await glossaryForRequest({ sourceLocale: effectiveSourceLocale, targetLocale, segments }),
       preserveTerms,
       segments,
     );
@@ -1144,7 +1270,7 @@ async function translateOneFile({
         translate: (requestGlossary) =>
           translateWithAzure({
             segments,
-            sourceLocale,
+            sourceLocale: effectiveSourceLocale,
             targetLocale,
             glossary: requestGlossary,
             signal,
@@ -1167,7 +1293,7 @@ async function translateOneFile({
     );
     glossary = mergePreservedTerms(
       await glossaryForRequest({
-        sourceLocale,
+        sourceLocale: effectiveSourceLocale,
         targetLocale,
         segments: [],
         filterToDocument: false,
@@ -1189,12 +1315,78 @@ async function translateOneFile({
         'invalid_size',
       );
     }
+    // [knauf] Protect known brand marks (e.g. the Knauf wordmark) from being
+    // OCR'd and redrawn by Azure's image translation. Detection failures are
+    // swallowed: an undetected logo just behaves as it did before this change.
+    let protectedLogoRegions = [];
+    let translationInput = input;
+    if (isImage) {
+      try {
+        protectedLogoRegions = await detectProtectedLogo(input, { signal });
+        if (protectedLogoRegions.length) {
+          let masked = await maskRegionForTranslation(input, protectedLogoRegions);
+          // Masking re-encodes the whole image and can grow it enough to
+          // blow past the size check we already passed above (measured up
+          // to ~1.3x at the default quality; more for an originally
+          // low-quality/high-compression source, since re-encoding at a
+          // flat high quality can nearly double it). Before giving up on
+          // protection outright, retry once at a lower re-encode quality —
+          // still comfortably above what Azure's OCR needs to key on, and
+          // far better than shipping the mark unprotected.
+          if (masked.length > limit) {
+            const retryQuality = 80;
+            const retried = await maskRegionForTranslation(input, protectedLogoRegions, {
+              quality: retryQuality,
+            });
+            if (retried.length <= limit) {
+              logger.warn(
+                '[translate_file] masked image exceeded Azure batch size limit; retried at lower quality',
+                {
+                  firstAttemptBytes: masked.length,
+                  retryQuality,
+                  retryBytes: retried.length,
+                  limit,
+                },
+              );
+              masked = retried;
+            } else {
+              logger.warn(
+                '[translate_file] masked image exceeds Azure batch size limit even at reduced quality; translating unprotected',
+                { firstAttemptBytes: masked.length, retryBytes: retried.length, limit },
+              );
+              protectedLogoRegions = [];
+            }
+          }
+          if (protectedLogoRegions.length) {
+            translationInput = masked;
+            logger.info('[translate_file] masking protected logo region(s) before translation', {
+              regions: protectedLogoRegions.map((region) => ({
+                name: region.name,
+                confidence: Number(region.confidence.toFixed(3)),
+              })),
+            });
+          }
+        }
+      } catch (error) {
+        // A cancelled translation must propagate as a cancellation, not be
+        // reinterpreted as "detection merely failed" and silently continue
+        // translating unprotected.
+        if (signal?.aborted) {
+          throw error;
+        }
+        logger.warn('[translate_file] logo protection detection failed; continuing unprotected', {
+          message: error?.message,
+        });
+        protectedLogoRegions = [];
+        translationInput = input;
+      }
+    }
     const translateDocument = (requestGlossary) =>
       (mustBatch ? translateBatchWithAzure : translateDocumentWithAzure)({
-        buffer: input,
+        buffer: translationInput,
         filename: file.filename,
         mimeType: format.mime,
-        sourceLocale,
+        sourceLocale: effectiveSourceLocale,
         targetLocale,
         glossary: requestGlossary,
         translateTextWithinImage,
@@ -1209,6 +1401,22 @@ async function translateOneFile({
       maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES,
     }));
     output = result.buffer;
+    if (isImage && protectedLogoRegions.length) {
+      try {
+        output = await restoreProtectedRegion(output, input, protectedLogoRegions);
+      } catch (error) {
+        logger.warn('[translate_file] logo restoration failed; output keeps Azure result', {
+          message: error?.message,
+        });
+      }
+    }
+    // [knauf] Azure Document Translation rebuilds PDFs from scratch (full font
+    // embedding, re-encoded images), which can multiply file size several
+    // times over. Recompress before persisting; best-effort, never fails the
+    // translation.
+    if (format.mime === 'application/pdf') {
+      output = await compressTranslatedPdf(output, { log: logger, signal });
+    }
   }
 
   throwIfAborted(signal);
@@ -1228,11 +1436,13 @@ async function translateOneFile({
       status: 'completed',
       provider: 'azure_translator',
       providerLocale: result.providerLocale,
+      sourceLocale: effectiveSourceLocale ?? 'auto',
       durationMs: Date.now() - startedAt,
       batches: result.batches,
       segments: segments.length,
       glossary: glossary.stats,
       layoutValidation,
+      fontValidation,
     },
   };
 }
@@ -1333,7 +1543,9 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
   if (sourceLocale && targetLocale.toLowerCase() === sourceLocale.toLowerCase()) {
     throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
   }
-  const inputFiles = await resolveInputFileResults(req);
+  const inputFiles = await resolveInputFileResults(req, isTranslatableFile, {
+    includeText: !sourceLocale && managedGlossaryConfigured(),
+  });
   let settled;
   try {
     settled = await mapLimited(
@@ -1396,7 +1608,7 @@ async function translateFiles({ req, args, signal, expectedGlossaryRevision }) {
     files,
     report: {
       status,
-      sourceLocale,
+      sourceLocale: sourceLocale ?? 'auto',
       targetLocale,
       files: reports,
       layoutValidation: 'human_required',
@@ -1420,10 +1632,10 @@ async function jobToolResult(req, job) {
     report: {
       jobId: job.job_id,
       status: job.status,
-      sourceLocale: job.source_locale ?? 'auto',
       targetLocale: job.target_locale,
       attemptCount: job.attempt_count,
       ...(job.report ?? {}),
+      sourceLocale: job.source_locale ?? 'auto',
       ...(job.last_error_code ? { code: job.last_error_code, error: job.last_error_detail } : {}),
       ...(job.protected_terms_required ? { protectedTermsRequired: true } : {}),
       ...(job.cancel_requested_at && job.status === 'processing'
@@ -1447,17 +1659,29 @@ async function waitForTranslationJob({ req, job, signal }) {
   return jobToolResult(req, current ?? job);
 }
 
+function sourceLocaleRequirement(files, preserveTerms = []) {
+  if (preserveTerms.length > 0) {
+    return 'source_locale is required when preserve_terms is used';
+  }
+  const formats = new Set();
+  for (const file of files) {
+    const format = formatForFile(file);
+    const mode = format?.mode;
+    if (['idml', 'json', 'markdown', 'xml', 'svg'].includes(mode)) {
+      formats.add(mode.toUpperCase());
+    }
+    if (managedGlossaryConfigured() && (mode === 'image' || format?.extension === 'pptx')) {
+      formats.add(format.extension.toUpperCase());
+    }
+  }
+  if (formats.size > 0) {
+    return `source_locale is required for ${Array.from(formats).join(', ')} translation`;
+  }
+  return null;
+}
+
 function sourceLocaleRequired(files, preserveTerms = []) {
-  const glossaryConfigured =
-    process.env.KNAUF_TRANSLATION_GLOSSARY_REQUIRED === 'true' ||
-    !['', 'none'].includes(process.env.KNAUF_TRANSLATION_GLOSSARY_REVISION ?? 'none');
-  return (
-    glossaryConfigured ||
-    preserveTerms.length > 0 ||
-    files.some((file) =>
-      ['idml', 'json', 'markdown', 'xml', 'svg'].includes(formatForFile(file)?.mode),
-    )
-  );
+  return sourceLocaleRequirement(files, preserveTerms) != null;
 }
 
 async function enqueueTranslationFiles({ req, args, signal }) {
@@ -1466,13 +1690,15 @@ async function enqueueTranslationFiles({ req, args, signal }) {
     ? normalizeLocale(args.source_locale, 'source_locale')
     : null;
   const preserveTerms = normalizePreserveTerms(args?.preserve_terms);
-  const files = selectTranslationFiles(await resolveInputFiles(req), args);
-  if (sourceLocaleRequired(files, preserveTerms) && !sourceLocale) {
-    throw new IdmlError(
-      'source_locale is required for structured text or glossary-backed translation',
-      'source_locale_required',
-      400,
-    );
+  const availableFiles = await resolveInputFiles(req);
+  const files = selectTranslationFiles(
+    availableFiles,
+    args,
+    currentMessageTranslationFiles(req, availableFiles).map((file) => file.file_id),
+  );
+  const sourceRequirement = sourceLocaleRequirement(files, preserveTerms);
+  if (sourceRequirement && !sourceLocale) {
+    throw new IdmlError(sourceRequirement, 'source_locale_required', 400);
   }
   if (sourceLocale && sourceLocale.toLowerCase() === targetLocale.toLowerCase()) {
     throw new IdmlError('Source and target locales must differ', 'same_locale', 400);
@@ -1533,9 +1759,21 @@ function buildFileToolContext(req) {
     return '';
   }
   const names = files.map((file) => file.filename ?? file.name ?? 'attached file');
+  const currentFiles = currentMessageTranslationFiles(req, files);
+  const selectionInstruction =
+    currentFiles.length === 1
+      ? `The current-message file ${currentFiles[0].filename ?? currentFiles[0].name ?? 'attached file'} is the default; omit filenames for a request to translate this file.`
+      : currentFiles.length > 1
+        ? `Do not call translate_file for an ambiguous request. Ask the user to choose the exact current-message filename from: ${currentFiles
+            .map((file) => file.filename ?? file.name ?? 'attached file')
+            .join(', ')}.`
+        : Array.isArray(req?.knaufCurrentMessageFileIds) &&
+            req.knaufCurrentMessageFileIds.length > 0
+          ? `No supported file is attached to the current message. Ask the user to attach a supported file or choose an exact historical filename from: ${names.join(', ')}.`
+          : `Do not call translate_file without an explicit filename. Ask the user to choose from the available historical files: ${names.join(', ')}.`;
   return [
     `File translation is available for: ${names.join(', ')}.`,
-    'Call translate_file with a BCP-47 target_locale. If multiple files are available, pass the exact requested filenames, or all_files=true only when the user explicitly requests every file. A single available file needs no selection. Also provide source_locale for IDML, JSON, Markdown, XML, SVG, and every glossary-backed request. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.',
+    `${selectionInstruction} Explicitly named files may include historical files. Use all_files=true only when the user explicitly requests every available file. For machine-readable PDF, DOCX, XLSX, TXT, and CSV files, omit source_locale when it is unknown so KARL can detect it before applying the managed glossary. Ask for source_locale before translating scanned PDFs, PPTX, raster images, IDML, JSON, Markdown, XML, or SVG files, or when preserve_terms is requested. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.`,
     'The call may finish inline or return a durable job_id. Use translation_status later to check or cancel that job.',
     'Azure Translator returns each completed downloadable file in its original format.',
     'Tell the user that final layout, overflow, and OCR acceptance remains a human review.',
@@ -1640,6 +1878,7 @@ module.exports = {
   resolveInputFileResults,
   resolveInputFiles,
   selectTranslationFiles,
+  sourceLocaleRequirement,
   sourceLocaleRequired,
   translationJobAction,
   svgAdapter,

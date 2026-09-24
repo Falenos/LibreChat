@@ -468,10 +468,12 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const previousProjectId = conversation.chatProjectId ?? null;
+    // [knauf] KK20-385 — unassigned chats use explicit null, never a missing project field.
     const update =
       normalizedProjectId == null
-        ? { $unset: { chatProjectId: '' } }
+        ? { $set: { chatProjectId: null } }
         : { $set: { chatProjectId: normalizedProjectId } };
+    // End [knauf]
     const updatedConversation = await Conversation.findOneAndUpdate(
       { user, conversationId },
       update,

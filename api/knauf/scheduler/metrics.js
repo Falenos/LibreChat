@@ -46,6 +46,16 @@ function createSchedulerMetrics() {
     help: 'Age of the oldest durable queued scheduler run',
     registers: [registry],
   });
+  const missingConversationProjectIds = new Gauge({
+    name: 'knauf_conversation_chat_project_id_missing',
+    help: 'Persisted conversations with no chatProjectId field',
+    registers: [registry],
+  });
+  const conversationIntegrityScanHealthy = new Gauge({
+    name: 'knauf_conversation_integrity_scan_healthy',
+    help: 'Whether the latest missing chatProjectId scan succeeded',
+    registers: [registry],
+  });
 
   const metrics = {
     recordDispatch: (outcome) => dispatches.inc({ outcome }),
@@ -56,6 +66,13 @@ function createSchedulerMetrics() {
       executionCapacity.set(capacity);
       queueDepth.set(queued);
       oldestQueueAge.set(oldestQueueAgeSeconds);
+    },
+    setConversationIntegrity: ({ missingChatProjectId, scanHealthy }) => {
+      missingConversationProjectIds.set(missingChatProjectId);
+      conversationIntegrityScanHealthy.set(scanHealthy ? 1 : 0);
+    },
+    setConversationIntegrityScanHealthy: (healthy) => {
+      conversationIntegrityScanHealthy.set(healthy ? 1 : 0);
     },
   };
 

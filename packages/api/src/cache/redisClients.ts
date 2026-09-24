@@ -24,8 +24,17 @@ const clearIoredisPingInterval = (client: Redis | Cluster): void => {
   ioredisPingIntervals.delete(client);
 };
 
-const attachIoredisPingInterval = (client: Redis | Cluster, clientName = 'ioredis'): void => {
-  if (cacheConfig.REDIS_PING_INTERVAL <= 0 || ioredisPingIntervals.has(client)) {
+const attachIoredisPingInterval = (
+  client: Redis | Cluster,
+  clientName = 'ioredis',
+  // [knauf] KK20-338 — lets dedicated subscriber connections (which send no
+  // commands while idle) opt into a keepalive cadence even when the general
+  // REDIS_PING_INTERVAL is left at its default of 0. See cacheConfig.ts.
+  intervalSecondsOverride?: number,
+  // End [knauf]
+): void => {
+  const intervalSeconds = intervalSecondsOverride ?? cacheConfig.REDIS_PING_INTERVAL;
+  if (intervalSeconds <= 0 || ioredisPingIntervals.has(client)) {
     return;
   }
 
@@ -35,7 +44,7 @@ const attachIoredisPingInterval = (client: Redis | Cluster, clientName = 'ioredi
         logger.error(`${clientName} ping failed:`, err);
       });
     }
-  }, cacheConfig.REDIS_PING_INTERVAL * 1000);
+  }, intervalSeconds * 1000);
   interval.unref?.();
 
   ioredisPingIntervals.set(client, interval);

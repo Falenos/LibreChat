@@ -9,6 +9,10 @@ describe('scheduler metrics', () => {
     metrics.recordDispatch('queued');
     metrics.recordExecution('completed');
     metrics.recordExecutionDuration(12);
+    metrics.setConversationIntegrity({
+      missingChatProjectId: 3,
+      scanHealthy: true,
+    });
     metrics.setState({
       active: 7,
       capacity: 25,
@@ -23,5 +27,7 @@ describe('scheduler metrics', () => {
     expect(output).toContain('knauf_scheduler_execution_capacity 25');
     expect(output).toContain('knauf_scheduler_queue_depth 42');
     expect(output).toContain('knauf_scheduler_oldest_queue_age_seconds 90');
+    expect(output).toContain('knauf_conversation_chat_project_id_missing 3');
+    expect(output).toContain('knauf_conversation_integrity_scan_healthy 1');
   });
 });

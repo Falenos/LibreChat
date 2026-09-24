@@ -11,6 +11,7 @@ import {
   type UsageMetadata,
   type IJobStore,
   type JobStatus,
+  type TerminalJobStatus,
 } from '~/stream/interfaces/IJobStore';
 
 // [knauf] Encode active-set/cache members with their owner while accepting legacy bare IDs.
@@ -88,6 +89,9 @@ export class InMemoryJobStore implements IJobStore {
    * inactivity (a hung generation) rather than age (a long but live stream).
    */
   private lastActivity = new Map<string, number>();
+  // [knauf] Deduplicate post-transition metrics without guarding job correctness.
+  private terminalEffects = new Set<string>();
+  // End [knauf]
 
   /** Time to keep completed jobs before cleanup (0 = immediate) */
   private ttlAfterComplete = 0;
@@ -219,12 +223,80 @@ export class InMemoryJobStore implements IJobStore {
 
     const safeUpdates = { ...updates };
     delete safeUpdates.generationId;
-    Object.assign(job, safeUpdates);
-    if (safeUpdates.status && ['complete', 'error', 'aborted'].includes(safeUpdates.status)) {
-      this.removeUserTracking(job);
+    if (safeUpdates.status && safeUpdates.status !== 'running') {
+      await this.transitionToTerminal(
+        streamId,
+        {
+          ...safeUpdates,
+          status: safeUpdates.status,
+          completedAt: safeUpdates.completedAt ?? Date.now(),
+          terminalId: safeUpdates.terminalId ?? randomUUID(),
+        },
+        generationId,
+      );
+      return;
     }
+    if (job.status !== 'running') {
+      return;
+    }
+    Object.assign(job, safeUpdates);
     // End [knauf]
   }
+
+  // [knauf] KK20-338 — single-threaded CAS mirrors the Redis transition script.
+  async transitionToTerminal(
+    streamId: string,
+    updates: Partial<SerializableJobData> & {
+      status: TerminalJobStatus;
+      completedAt: number;
+      terminalId: string;
+    },
+    generationId?: string,
+  ): Promise<boolean> {
+    const job = this.jobs.get(streamId);
+    if (!ownsGeneration(job, generationId) || job.status !== 'running') {
+      return false;
+    }
+
+    const safeUpdates = { ...updates };
+    delete safeUpdates.generationId;
+    Object.assign(job, safeUpdates);
+    return true;
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — claim effects only for the exact committed terminal token.
+  async claimTerminalEffects(
+    streamId: string,
+    terminalId: string,
+    generationId?: string,
+  ): Promise<boolean> {
+    const job = this.jobs.get(streamId);
+    if (
+      !ownsGeneration(job, generationId) ||
+      job.status === 'running' ||
+      job.terminalId !== terminalId
+    ) {
+      return false;
+    }
+    const key = generationKey(streamId, job.generationId);
+    if (this.terminalEffects.has(key)) {
+      return false;
+    }
+    this.terminalEffects.add(key);
+    return true;
+  }
+  // End [knauf]
+
+  // [knauf] KK20-338 — durable acknowledgement used by destructive lifecycle work.
+  async acknowledgeTerminal(streamId: string, generationId?: string): Promise<void> {
+    const job = this.jobs.get(streamId);
+    if (ownsGeneration(job, generationId) && job.status !== 'running') {
+      job.terminalAcknowledged = true;
+      this.removeUserTracking(job);
+    }
+  }
+  // End [knauf]
 
   async deleteJob(streamId: string, generationId?: string): Promise<void> {
     // [knauf] Delete only the owner captured by the caller.
@@ -238,6 +310,7 @@ export class InMemoryJobStore implements IJobStore {
     this.jobs.delete(streamId);
     this.contentState.delete(stateKey);
     this.lastActivity.delete(stateKey);
+    this.terminalEffects.delete(stateKey);
     // End [knauf]
     logger.debug(`[InMemoryJobStore] Deleted job: ${streamId}`);
   }
@@ -364,6 +437,7 @@ export class InMemoryJobStore implements IJobStore {
     this.userJobMap.clear();
     // [knauf] Activity is generation-scoped state too.
     this.lastActivity.clear();
+    this.terminalEffects.clear();
     // End [knauf]
     logger.debug('[InMemoryJobStore] Destroyed');
   }
@@ -387,7 +461,10 @@ export class InMemoryJobStore implements IJobStore {
       const ref = parseGenerationKey(trackedId);
       const job = this.jobs.get(ref.streamId);
       // Only include if job exists AND is still running
-      if (exactlyOwnsGeneration(job, ref.generationId) && job.status === 'running') {
+      if (
+        exactlyOwnsGeneration(job, ref.generationId) &&
+        (job.status === 'running' || !job.terminalAcknowledged)
+      ) {
         activeIds.add(ref.streamId);
       } else {
         // Self-healing: job completed/deleted but mapping wasn't cleaned - fix it now
@@ -545,8 +622,9 @@ export class InMemoryJobStore implements IJobStore {
   /**
    * No-op for in-memory - content available via graph reference.
    */
-  async appendChunk(_streamId: string, _event: unknown, _generationId?: string): Promise<void> {
-    // No-op: content available via graph reference
+  async appendChunk(streamId: string, _event: unknown, generationId?: string): Promise<boolean> {
+    const job = this.jobs.get(streamId);
+    return ownsGeneration(job, generationId) && job.status === 'running';
   }
 
   /**
