@@ -23,6 +23,7 @@ const { checkPermission } = require('~/server/services/PermissionService');
 const { createProbeApp } = require('~/server/services/Files/knauf/workerProbes');
 const { resolveSchedulableAgent } = require('./agentPolicy');
 const { createAgentExecutionAdapter } = require('./agentExecutionAdapter');
+const { createConversationIntegritySampler } = require('./conversationIntegrity');
 const { createSchedulerMetrics } = require('./metrics');
 const { getSchedulerReadiness, parsePositiveIntegerSetting } = require('./runtime');
 const { ensureSchedulerUserStateIndexes, isSchedulerUserDeleting } = require('./userLifecycle');
@@ -56,6 +57,11 @@ async function main() {
   const leaseMs = parsePositiveInteger(process.env.KNAUF_SCHEDULER_LEASE_MS, 10 * 60_000);
   const pollMs = parsePositiveInteger(process.env.KNAUF_SCHEDULER_POLL_MS, 5_000);
   const { metrics, metricsRouter } = createSchedulerMetrics();
+  const conversationIntegritySampler = createConversationIntegritySampler({
+    conversations: mongoose.connection.db.collection('conversations'),
+    metrics,
+    logger,
+  });
   const resolveAgent = (agentId, user) =>
     resolveSchedulableAgent({
       agentId,
@@ -145,6 +151,7 @@ async function main() {
     server.once('error', reject);
   });
 
+  void conversationIntegritySampler.start();
   logger.info(`[scheduler] worker ${workerId} started`);
   while (!stopping) {
     try {
@@ -157,6 +164,7 @@ async function main() {
     }
   }
   await worker.waitForIdle();
+  await conversationIntegritySampler.stop();
   await new Promise((resolve, reject) => {
     probeServer.close((error) => (error == null ? resolve() : reject(error)));
   });

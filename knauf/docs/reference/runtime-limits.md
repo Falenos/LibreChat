@@ -260,6 +260,7 @@ strictest applicable upload, application, provider, or deployment value.
 | Admission drain | 10 seconds, 25 ms polling | scheduler middleware | Lets admitted requests finish before deletion proceeds. |
 | Internal signature skew | 60 seconds | scheduler authentication | Replay-resistance window with clock-drift tolerance. |
 | Schedule jitter | 2 minutes | scheduler calculation | Spreads load around cadence boundaries. |
+| Conversation-integrity scan | At scheduler startup and every 24 hours per replica; 30-second MongoDB deadline | Scheduler code default | Counts conversations where `chatProjectId` is missing, updates continuously scraped missing-count and scan-health gauges, and never mutates data. A failed scan marks telemetry unhealthy while preserving the last successful count. |
 
 ## MCP
 

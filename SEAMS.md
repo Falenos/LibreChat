@@ -2260,6 +2260,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `knauf/scripts/backfill-chat-project-id.spec.js` | Subject under test; MongoDB driver and `mongodb-memory-server` | Low — test-only; proves safety gates, idempotence, concurrent assignment protection, invariant preservation, and real raw-collection dry-run/apply behavior | Self | KK20-385 |
 | `client/src/knauf/utils/convos.knauf.spec.ts` | `~/utils/convos` | Low — test-only; pins localized current-year month ordering without expanding the upstream utility spec seam | Self | KK20-385 |
 | `packages/data-schemas/src/knauf/methods/conversation.knauf.spec.ts` | Upstream conversation methods/models and Winston logger | Medium — test-only; exercises Mongo-backed save, query-hint, and cursor behavior while isolating incident coverage from upstream specs | Self | KK20-385 |
+| `api/knauf/scheduler/*.js` | MongoDB conversations collection; `prom-client`; existing scheduler worker lifecycle | Medium — samples the missing-`chatProjectId` count at startup and daily, exports continuously scraped count and scan-health gauges, logs only a bounded error class, and drains in-flight telemetry during shutdown | `api/knauf/scheduler/conversationIntegrity.spec.js`, `api/knauf/scheduler/metrics.spec.js` | KK20-385 |
 <!-- seams:new:end -->
 
 ## Static Assets
