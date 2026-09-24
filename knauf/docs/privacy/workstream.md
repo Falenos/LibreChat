@@ -118,8 +118,8 @@ Art. 17 cascade does not reach.
 happened by default rather than by decision, in production, with no retention period and no access
 review.** See §4.3 for the posture the industry has converged on and where KARL actually stands
 against it. In-repo levers are blunt (`enabled`, `toolOutputTracing`); the good lever — targeted
-field-level redaction — is **not currently reachable** in-app, and its two server-side fallbacks turned out to be
-Enterprise-only — see §4.3 for the three facts and the licence-free route that remains.
+field-level redaction — is **not currently reachable**, for two independent reasons recorded in
+§4.3.
 
 > **Trap:** `LANGFUSE_SAMPLE_RATE` is **not** a trace-volume control. It is read only by the
 > fork-local `feedback.ts:40`, where a value of `0` disables feedback scores. Do not let it be
@@ -272,41 +272,28 @@ the wrong one. Two independent sources converge on the same four-layer model:
 |---|---|---|
 | **1 · Structure always** | Span tree, timings, model, token counts, tool names, status | ✅ fine |
 | **2 · Payloads by decision** | Prompts, completions, tool outputs — on deliberately, scoped by environment | ⚠️ **on by accident**, prod included |
-| **3 · Targeted redaction** | Field-level masking inside payloads; keeps traces debuggable | ❌ **not reachable in-app**, and server-side masking is Enterprise-only. Licence-free route: an OpenTelemetry Collector in front of Langfuse (**P1-6**) — regex-class, not NER |
-| **4 · Retention + access** | Short retention as the blast-radius backstop; RBAC on who can read | ❌ **neither set — and retention policies are Enterprise-only too.** Retention must be *built* (a CronJob through the public delete API, P0-2), not configured |
+| **3 · Targeted redaction** | Field-level masking inside payloads; keeps traces debuggable | ❌ **not reachable** — see below |
+| **4 · Retention + access** | Short retention as the blast-radius backstop; RBAC on who can read | ❌ **neither set** |
 
-**Why layer 3 is blocked — three facts (2026-09-04), and the one route left:**
+**Why layer 3 is blocked — two independent reasons:**
 
-1. **In-app:** `LangfuseConfig` exposes no `mask` hook. `@langfuse/otel` *does* accept a
-   `MaskFunction` — and it is **async-capable** (`({data}) => any | Promise<any>`), so Presidio over
-   HTTP would work from it — but `@librechat/agents` constructs the span processor itself on a
-   `BasicTracerProvider` the app does not own, forwarding only `{publicKey, secretKey, baseUrl}`.
-   Reaching it needs an **upstream contribution** (KK20-327's open AC), never a `node_modules` patch.
-2. **Server-side masking is Enterprise-only.** Langfuse's ingestion masking callback
-   (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL`) requires a commercial licence; Knauf holds none.
-3. **Server-side retention is Enterprise-only as well.** "Data retention management" sits in the
-   Enterprise column of the self-host pricing page, and the maintainers' answer to a self-hoster
-   missing it is `LANGFUSE_EE_LICENSE_KEY` (discussion #13390). The docs page omits the gating,
-   which is how the earlier version of this plan got it wrong.
+1. **In-app:** `LangfuseConfig` exposes no `mask` hook. `@langfuse/otel` *does* accept a `mask`
+   function, but `@librechat/agents` constructs the span processor itself and forwards only
+   `{publicKey, secretKey, baseUrl}`. Reaching it needs an **upstream contribution**, not a local
+   change — and never a `node_modules` patch.
+2. **Server-side:** Langfuse self-hosted supports ingestion masking via an HTTP callback
+   (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL` on the worker), which would be an excellent fit for a
+   Presidio sidecar. But it is an **Enterprise Edition** feature and only covers the OTel ingestion
+   endpoint. Our rollout plan records no licence, so **confirm EE status before planning around
+   it** (this is an open question in §10, not an assumption).
 
-**The route that remains needs no licence and no app code.** Spans leave `@librechat/agents` as
-OTLP to `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces` with Basic auth, and `LANGFUSE_BASE_URL` is
-a plain env var — so an **OpenTelemetry Collector** with the `redaction` processor can sit between
-KARL and Langfuse and mask identifier-shaped values (email, IP, phone, IBAN — the P1-1 pattern
-class) in span attributes before forwarding. That is **P1-6**. It is regex, not NER: names still
-need fact 1's upstream hook.
-
-**Consequence for Phase 0 (revised):** layer 4 is still the achievable win, but *both* halves of it
-now have to be built rather than switched on — a **retention CronJob through the public
-`DELETE /api/public/traces` API** (not ClickHouse TTL, not direct SQL: both delete one side and
-orphan media in MinIO) and a reviewed, minimised read-access group. Until the job exists, **the
-Okta group is the only control** on a store of verbatim conversations, which raises P0-2's
-priority rather than lowering it. Blanket-disabling tool outputs remains the wrong move: it would
-trade a large, immediate debuggability loss for a small privacy gain and undercut
+**Consequence for Phase 0:** the achievable win is **layer 4, not layer 2**. Retention and access
+control need no code, no licence and no upstream PR, and they bound the blast radius of everything
+still captured. Blanket-disabling tool outputs would trade a large, immediate debuggability loss
+for a small privacy gain — and would directly undercut
 [`agent-retrieval-and-langgraph-reliability-plan.md`](../implementation-plans/agent-retrieval-and-langgraph-reliability-plan.md),
-whose Sprint 5 is literally *"Make Langfuse prove the fix"*.
-
----
+whose Sprint 5 is literally *"Make Langfuse prove the fix"* and whose validation method is Langfuse
+retrieval diagnostics.
 
 ### 4.4 What is actually mandatory — and what is convention
 
@@ -319,7 +306,7 @@ obligation is currently un-met, and this ticket is the cheapest documented way t
 | Class | Tickets | Basis |
 |---|---|---|
 | **Mandatory** | **P0-2** (a production store of prompts/completions with *no* retention period is a compelled Art. 5(1)(e) gap) · **P2-1** (defined periods per category — Art. 5(1)(e), 13(2)(a)) · **P2-3** (an LLM-written profiling store with no expiry, plausibly carrying Art. 9 content, is indefensible) · **P2-5** (Art. 17 + 5(2): erasure must demonstrably reach every copy) · **P2-7** (a period and an Art. 17(3) position for the audit log — §3.4) · **G-1** (Art. 35 DPIA — multiple WP248 criteria met) · **G-2** (BetrVG § 87(1) Nr. 6 co-determination) · **G-3** (AI Act Art. 4 live since 2025-02-02; Art. 50 since 2026-08-02) · **G-4** (Art. 30 record; the small-org exemption is unavailable) · **G-5** (Art. 13: the notice **affirmatively denies profiling** while memory performs it, names another product, and omits Langfuse and the auditLog — live processing *contrary to*, not just outside, the notice) · **P2-6a** (a documented, *tested* manual DSAR runbook — Art. 15 with the Art. 12(3) one-month clock; the endpoint itself stays convention) |
-| **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1) · **P1-6** (identifier redaction on the trace copy via an OTel Collector — 5(1)(c)/25 defence-in-depth; the *mandatory* outcome is P0-2's retention + access)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
+| **Industry standard** | **P0-1** (OTel GenAI payload-by-decision posture) · **P0-4**, **P0-5**, **P1-1** (ISO 27001 A.8.15-grade log hygiene; GDPR supplies the outcome, not the regex) · **P1-2** (Art. 28 due diligence on a third-party processor) · **P0-6** (verification underpinning the lawful-basis story — kept out of Mandatory deliberately: the obligation it feeds is discharged by G-1/G-4, and an unfavourable answer *creates* new mandatory work, which is exactly why it runs first) · **P1-5** (5(1)(c) at derived copies) · **P2-2** ("retain until user deletion" is a *defensible documented* policy — what is compelled is having one and enforcing it) · **P2-6** (the self-service endpoint half — the runbook half is P2-6a, mandatory) · **P2-8** (bounding a security log is A.8.15-grade hygiene; the mandatory outcome — *a* defined period — is discharged by P2-1's matrix) · **P0-7** (Art. 28 due diligence on the search hop) |
 | **Recommended** | **DOC-1** (Art. 5(2) evidence quality) · **P0-3** (defence-in-depth; USER role already restricted) · **P1-3**, **P1-4** · **P2-4** (link expiry; its P2-4a half was **closed by code reading** — the premise was wrong, see §2 row 4) · **P3-1…P3-4** (pseudonymisation is *named* in Art. 25/32 as an example measure, never compelled) |
 | **Optional** | **P4-1** (discretionary by design — double-gated, discharges no obligation on its own) |
 
@@ -661,41 +648,31 @@ a small follow-up. Seam tests: `api/server/routes/__tests__/messagesFeedback.kna
 boundary + wiring) and `packages/api/src/knauf/langfuse/feedbackEgress.spec.ts` (14 adversarial cases
 on the serialized outbound request).
 
-#### P0-2 · Langfuse platform controls — facts, read access, and a licence-free retention job *(cross-repo — `agk-deployment-configs`)*
+#### P0-2 · Langfuse platform retention & access *(cross-repo — `agk-deployment-configs`)*
 
-**Type:** Task · **Effort:** M *(was S — retention is now built, not configured)* · **Compliance:** Art. 5(1)(e), 17, 32
+**Type:** Task · **Effort:** S · **Compliance:** Art. 5(1)(e), 17, 32
 
-**Summary:** **⚠ rewritten 2026-09-04.** Both server-side controls this ticket leaned on are
-**Enterprise-only on self-hosted Langfuse, and Knauf holds no EE licence**: data-retention policies
-and ingestion masking (§4.3, facts 2–3). So until this lands, **the only control on a store of
-verbatim conversations is who is in the Okta group.** Three parts, in order.
+**Summary:** **This is the main Langfuse control, not the supporting one.** Because layer-3 masking
+is unreachable today (§4.3), retention and access are what actually bound the exposure — and they
+need no code, no licence and no upstream change. Short retention is also what makes *keeping*
+debuggable payloads defensible.
 
-**AC — part 1, facts and access (no licence, no code, this week):**
-- [ ] Documented: which environments send traces; whether prod is a separate instance from
-      `langfuse.agk.dev.knauf.digital`; **the Azure region** of the AKS cluster and its
-      ClickHouse/Postgres/MinIO — the EULA tells users data is stored "in the Netherlands" (G-5).
-- [ ] **Read access reviewed and minimised** to named platform/security roles; recorded in the
-      Art. 30 record (G-4) and the assessment's §7.2.
-- [ ] `LANGFUSE_TRACING_ENVIRONMENT` differs dev vs prod so prod can carry a shorter period.
+**AC:**
+- [ ] Documented: which environments send traces, whether prod uses a separate instance from
+      `langfuse.agk.dev.knauf.digital`, current retention, and which Okta group can read prod traces.
+- [ ] **Project data-retention period set** (from P2-1). This is the single highest-value action in
+      the Langfuse workstream.
+- [ ] ClickHouse / Postgres / MinIO lifecycle aligned with that period — retention that the object
+      store ignores is not retention.
+- [ ] `LANGFUSE_TRACING_ENVIRONMENT` differs dev vs prod, so prod can carry a shorter period than dev.
+- [ ] **Read access reviewed and recorded** — trace payloads are message content; the group that can
+      read them is effectively a group that can read user conversations.
+- [ ] **EE licence status confirmed**, since server-side ingestion masking is Enterprise-only and
+      determines whether a Presidio masking callback is even an option later (§4.3).
+- [ ] Sampling considered if prod volume warrants it — reduces exposure and cost together.
+- [ ] "Who can read Langfuse prod" added to the assessment's §7.2 Security questions.
 
-**AC — part 2, retention, built rather than configured:**
-- [ ] A **retention CronJob** in `agk-deployment-configs` (credentials via the existing
-      `kv-agntkarl-nonprod-001` ExternalSecret): page
-      `langfuse api traces list --to-timestamp <now − N days>` → `DELETE /api/public/traces` in
-      batches of ≤256 ids.
-- [ ] **Through the public API only — not ClickHouse TTL, not direct SQL.** Both delete one side
-      and orphan media assets in MinIO; the API path is what Langfuse's own (EE) job uses, so
-      ClickHouse and blob storage stay in sync.
-- [ ] Same safety shape as KK20-328: **inert until a period is set, dry-run by default**, counts
-      logged before deletion is enabled. Period from P2-1; interim proposal for the DPO: **90 days in
-      prod**, longer in dev.
-- [ ] Verified on dev that batch trace deletion cascades to observations, scores and media.
-- [ ] The **single-subject Art. 17 path** — `traces list --user-id <mongo-id>` → batch delete — is
-      the same script with a different filter and is **P2-5's Langfuse leg**. Build it once.
-- [ ] Sampling considered if prod volume warrants it.
-
-**Notes:** redaction is deliberately **not** here — it is P1-6 (collector) and, for names, KK20-327's
-upstream `mask` AC. Priority went **up** on 2026-09-04: this is now the only server-side bound.
+> **Do P0-2 first.** Its answers decide the shape of P0-1 and whether anything here is urgent.
 
 #### P0-3 · Phase 0 config baseline
 
@@ -878,29 +855,6 @@ dimension added to the assessment's §1.1 map via DOC-1 · [ ] noted: prior-turn
 re-sent to the model (`formatMessages.js:229-231`), so fixing these sinks fully accounts for the
 surface; and KARL defaults reasoning blocks **expanded** ([knauf] KK20-128), which raises the
 shoulder-surfing/screenshot exposure the sinks imply.
-
-#### P1-6 · OpenTelemetry Collector redaction in front of Langfuse
-
-**Type:** Task · **Effort:** M · **Compliance:** Art. 5(1)(c), 25 · **Industry standard**
-
-**Summary:** Langfuse's server-side masking is Enterprise-only and its client-side `mask` hook is
-unreachable from the app (§4.3). What the app *does* control is `LANGFUSE_BASE_URL`; spans go to
-`{baseUrl}/api/public/otel/v1/traces` with Basic auth. A Collector in between masks
-identifier-shaped values in span attributes — **no code change, no licence.** Regex-class, not NER.
-
-**AC:**
-- [ ] Collector Deployment in `agk-deployment-configs` (dev, then prod): `otlp` receiver with
-      `traces_url_path: /api/public/otel/v1/traces`; `redaction` processor, `allow_all_keys: true`,
-      `blocked_values` for email / IPv4+IPv6 / phone / IBAN plus P0-3's credential shapes;
-      `otlphttp` exporter → the real Langfuse `/api/public/otel` with the Key-Vault credentials.
-- [ ] KARL's `LANGFUSE_BASE_URL` → the collector.
-- [ ] Verified: a canary email in a prompt is **masked** in the trace; **tool outputs still
-      present** (the §4.3 decision holds); `toolOutputTracing` and the KK20-199 image guard are
-      unaffected — they run upstream of the exporter.
-- [ ] Trust-zone note: plaintext held transiently in memory, in-cluster — same zone as Langfuse;
-      in the Art. 30 record it is part of the Langfuse processing, not a new recipient.
-- [ ] Limitation stated: regex, not NER — names need the upstream `mask` hook; once that lands,
-      Presidio can be called from the async mask.
 
 ---
 
@@ -1258,8 +1212,8 @@ and *gated last* (nothing waits on a DPO number or an engine PoC if it doesn't h
 | Wave | When | What | Exit review — the wave is done when |
 |---|---|---|---|
 | **0 · Verify & decide** | This week; days, no code | **P0-6** (abuse-monitoring opt-out; if the subscription owner has not answered within ~5 business days, record *escalated-and-pending* and proceed — G-1 provisionally carries the 30-day Azure retention as a live fact) · **P0-7** (search-backend identity) · **P0-2's investigation half** (Langfuse deployment facts: environments, current retention, who reads prod) · ✅ **DOC-1's restore step done** (v1.2 back on `main`, so G-1 starts from a corrected input; the v1.3 delta stays in wave 2) · **G kickoff, all five**: G-1 DPIA opened (input: the restored v1.2), G-2 briefing scheduled **with the audit-log purge design explicitly on its agenda** (co-determination initiated before the change lands), G-3 posture memo and G-4 Art. 30 record opened, G-5 interim-notice drafting started · **P2-1 opened** — it is a DPO decision whose forum is G-2; it *starts* here so wave 3 can gate on its **output** | The facts everything leans on are on paper: DPA posture confirmed or escalated; Langfuse facts recorded; any past share exposure assessed either way; every governance ticket owned and moving |
-| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse facts + read access now; retention is **Enterprise-only**, so it is *built* — a CronJob through the public delete API) · 🔄 **P0-1** (**KK20-327** — built, in PR #340 **awaiting review**, not merged; two ACs still open: memory-agent review, upstream `mask` issue) · 🔄 **P2-7 core** (**KK20-328** — built, in PR #341 **awaiting review**, not merged; purge + checkpoint ledger + both entrypoints wired, inert by default. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0. The write-time IP/metadata decisions and the export-governance tail are the follow-up) · 🔄 **P2-6a** (**KK20-331** — runbook + read-only collector written; **rehearsal pending**; any pending or incoming DSAR promotes this to immediate) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
-| **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-6** (OTel Collector redaction — the licence-free layer 3) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
+| **1 · Mandatory containment** | Sprint 1 | **P0-2** (Langfuse retention + access set — the main control) · 🔄 **P0-1** (**KK20-327** — built, in PR #340 **awaiting review**, not merged; two ACs still open: memory-agent review, upstream `mask` issue) · 🔄 **P2-7 core** (**KK20-328** — built, in PR #341 **awaiting review**, not merged; purge + checkpoint ledger + both entrypoints wired, inert by default. Data-safe by construction: the collection shipped 2026-06-18, so a 12-month purge deletes nothing before mid-2027, and co-determination started in wave 0. The write-time IP/metadata decisions and the export-governance tail are the follow-up) · 🔄 **P2-6a** (**KK20-331** — runbook + read-only collector written; **rehearsal pending**; any pending or incoming DSAR promotes this to immediate) · **P2-5 first run** (pulled out of the P2-1 gate — nothing in it needs a retention number; at minimum the **in-window Langfuse Art. 17 deletion path**, which makes the runbook honest) · **G-5 interim notice ships** (decoupled from G-2 — an EULA addendum covering Langfuse, auditLog capture and memory is days of Legal work; the *consolidated* text still lands with the works agreement) | **Langfuse and the audit log — the two stores wave 3's DPO numbers do not cover — have bounded retention**; users have been told about every live sink; a DSAR arriving tomorrow has a rehearsed answer, including the Langfuse deletion path, inside Art. 12(3)'s month |
+| **2 · Config & derived-copy hygiene** | Sprint 2 | **P0-3** (config baseline + the client copy seam) · **Bundle C** (P0-4 + P1-1 — one upstream PR; moved here from wave 1 by its own §4.4 class: industry-standard log hygiene, not mandatory containment) · **P1-5** (reasoning out of Meili/TTS/public shares) · **Bundle D** (P0-5 + P1-2 + P1-4) · **P1-3** (with bundle C, or with the next upstream sync — whichever lands first) · **DOC-1's v1.3 delta** · **P2-7 tail** (export governance) | The assessment is true again; the logging-posture one-pager exists and feeds G-4; no derived copy carries content its purpose doesn't need |
 | **3 · Retention & rights** | Opens when **P2-1's numbers land** (P2-1 itself started in wave 0; G-2 is what produces it) | **P2-2** (own review — the one item that can cause an incident) · **P2-3** (inert → dev dry-run → DPO sign-off → enable; **lands last**) · **P2-4** (expiry half) · **P2-8** (waits deliberately: it needs *a* number, and setting one provisionally only to have P2-1 ratify a different one means bounding the same log twice) · **P2-5 full re-run** (after P2-2, as its AC specifies) · **P2-6** (self-service endpoint) | Nothing personal persists without a defined period; the erasure recipe runs green across all sinks including Langfuse; the three big gaps — 5(1)(e), Art. 15, Art. 35's input — are closed |
 | **4 · Engine** *(evidence-gated; start anytime capacity exists)* | Parallel to 2–3 | **P3-1** PoC → gate ENGINE → **P3-2** + **P3-3**. **P3-4** needs no engine — run it alongside wave 3 | Engine decision recorded on measured DE/EN data; the two persistence chokepoints protected with no user-visible utility loss |
 | **Parked** | Until gate MASK | **P4-1** | Only opens when a *named* high-risk flow exists and product accepts the utility loss in writing |
@@ -1283,7 +1237,6 @@ this folder's README exists to prevent.
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
 | 2026-09-04 | **P2-5** (KK20-TBD — ID pending) built: erasure runbook + `erasure-verify.js`; PR open, stacked on #349 | Reading the deletion paths showed `config/delete-user.js` **is not an erasure** (no Blob/vector/grant cleanup) and that the controller logs the erased email at `info`. The recipe tests the product path and pins both facts in its spec |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |
-| 2026-09-04 | **P0-2 rewritten; P1-6 added.** Langfuse data-retention policies are Enterprise-only (pricing page + discussion #13390), like server-side masking — and Knauf holds no licence | Both server-side Langfuse controls the plan leaned on are unavailable. Retention has to be *built* (CronJob via the public delete API — not ClickHouse TTL, which orphans MinIO media); redaction goes through an OTel Collector on `LANGFUSE_BASE_URL`. Until then the Okta group is the only control. The retention docs page omits the gating — verify features against the pricing page |
 | 2026-09-03 | **KK20-331** (P2-6a) — DSAR runbook + collector written; rehearsal pending | Two things the plan had not seen: the audit admin API cannot filter by subject *id*, and `rag_api` cannot read vectors back per subject. Both would have surfaced mid-DSAR with the clock running |
 
 ### 6.2 The bundles (grouping rationale)
@@ -1293,7 +1246,7 @@ this folder's README exists to prevent.
 | **A · Langfuse containment** | P0-1 + P0-2 | One workstream across two repos. P0-2's investigation gates P0-1's urgency; P0-1 alone reduces new writes but deletes nothing |
 | **B · Config baseline** | P0-3 alone | One PR, one reviewer, fully revertible. The client copy seam **must** ride along — splitting it ships a raw error code to users |
 | **C · Log identity hygiene** | P0-4 + P1-1 | Same subsystem, same reviewer, same test surface; both upstream-contribution candidates — open one upstream PR from the pair. **Strongest bundle in the set** |
-| **D · Observability review** | P0-5 + P1-2 + P1-4 + P1-6 | All four answer "what leaves the app and who reads it"; P0-5 is the write-up the others feed. P1-5 (reasoning sinks) lands beside them in wave 2 but is its own PR |
+| **D · Observability review** | P0-5 + P1-2 + P1-4 | All three answer "what leaves the app and who reads it"; P0-5 is the write-up the other two feed. P1-5 (reasoning sinks) lands beside them in wave 2 but is its own PR |
 | **E · Retention** | P2-1 → P2-2, P2-3, P2-4, P2-8 | P2-1 is a hard gate on all four. Sequence, do not parallelise. Land P2-3 **last** among the code items — it is the only one that deletes data |
 | **F · Data-subject rights** | P2-5 + P2-6 + P2-7 | Art. 15/17 as one story: P2-5 the erasure evidence, P2-6 the access half, P2-7 the documented exception. A single DSAR touches all three. **Deliberately split across waves**: the halves that need no DPO number (P2-7 core, P2-6a, P2-5's first run) go in wave 1; the re-run and the endpoint follow in wave 3 |
 | **G · Governance** | G-1 + G-2 + G-3 + G-4 + G-5 | DPO/Legal-led, parallel, no code dependency. **Start now** — G-2 unblocks E. G-5's **interim** notice ships on its own in wave 1 (a live Art. 13 gap must not wait for a works agreement); only the consolidated text rides with G-2 |
@@ -1489,11 +1442,10 @@ npm run test:api && npm run test:client
 - **Do Microsoft's terms for the Azure OpenAI hosted `web_search` grounding tool carry the same
   DPA / EU-Data-Boundary commitments as the completion itself?** (P0-7 — the mechanism is now
   identified; this is the residual terms question, and it is load-bearing for §3's thesis.)
-- ~~Is the Langfuse deployment Enterprise-licensed?~~ **Answered 2026-09-04: no.** Server-side
-  masking *and* retention policies are EE-only, so redaction arrives via the OTel Collector (P1-6)
-  or the upstream `@librechat/agents` `mask` contribution, and retention is a CronJob (P0-2).
-- Which Azure region do the Langfuse AKS cluster and its ClickHouse/Postgres/MinIO sit in? The EULA
-  says "the Netherlands" (G-5) — P0-2 part 1 answers it.
+- Is the Langfuse deployment **Enterprise-licensed**? Server-side ingestion masking
+  (`LANGFUSE_INGESTION_MASKING_CALLBACK_URL`) is EE-only, and it is the natural integration point
+  for a Presidio masking callback later — so the answer shapes whether layer-3 masking arrives via
+  the platform or via an upstream `@librechat/agents` contribution (§4.3).
 - **`config/delete-user.js` is not an erasure.** Found by P2-5 (2026-09-04): it raw-`deleteMany`s the
   collections and never calls `processDeleteRequest`, so Blob bytes and both vector sinks are orphaned
   and shared-link grants / the scheduler purge are skipped. Decide: route it through the controller's
