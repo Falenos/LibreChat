@@ -1,6 +1,6 @@
 # Erasure verification — proving an Art. 17 deletion, store by store
 
-**Ticket:** KK20-TBD (workstream item **P2-5**) · **Owner:** Eng + DPO · **Status:** written
+**Ticket:** KK20-350 (workstream item **P2-5**) · **Owner:** Eng + DPO · **Status:** written
 2026-09-04; reworked 2026-09-24 after the PR #350 review. **No evidence-grade run is possible yet.**
 The environment manifests still hold proposals and open platform facts (§5), and the RAG
 verification adapter has to be deployed first (§0). Getting both done, and then running the

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// [knauf] KK20-TBD — erasure verification: prove an Art. 17 deletion reached every
+// [knauf] KK20-350 — erasure verification: prove an Art. 17 deletion reached every
 // store the environment's sink manifest declares, or say exactly why it cannot.
 //
 // This script NEVER deletes application data. Deletion runs through the real product

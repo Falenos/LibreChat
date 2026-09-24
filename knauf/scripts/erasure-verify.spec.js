@@ -1,4 +1,4 @@
-// [knauf] KK20-TBD — pins the erasure verifier. Run with:
+// [knauf] KK20-350 — pins the erasure verifier. Run with:
 //   npm run test:erasure
 //
 // PR #350 review asked for adversarial tests proving that none of the false-CLEAN
