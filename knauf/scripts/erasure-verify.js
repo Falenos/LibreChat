@@ -56,6 +56,19 @@
 //      gone a surviving score vanishes from the list; a direct `GET /scores/{id}` does
 //      not need the parent.
 //
+// Final self-review before the round-2 re-review, same rule:
+//  11. The by-id lookups run at baseline too, and every listed id must answer 200 there,
+//      so a 404 at `after` can only mean "deleted", never "route not served".
+//  12. `langfuse-delete` refuses a baseline whose own Langfuse listing was not exact, a
+//      listing now that the baseline cannot anchor, and (evidence) a baseline that was
+//      NOT READY; `before` persists its readiness for that.
+//  13. `configured: false` cannot hide a store the verifier can see: Mongo collections
+//      cannot be declared absent, stores without an environment signal need an approval,
+//      and `before` checks the inventory (vector backends, translation jobs, code
+//      sessions, non-Blob pointers) against the manifest instead of leaving it to `after`.
+//  14. Evidence carries counts and digests, never object names: scratch names are other
+//      users' filenames, Blob names the subject's.
+//
 // Usage:
 //   node knauf/scripts/erasure-verify.js --phase before --env stage \
 //        --user <mongo _id> --tenant <tenantId|none> --out ./erasure-<date>/
@@ -140,10 +153,18 @@ const LANGFUSE_PAGE_SIZE = 100;
 const LANGFUSE_MAX_PAGES = 1000;
 /** Direct `GET /{traces,scores}/{id}` lookups per phase before the answer is inexact. */
 const LANGFUSE_MAX_LOOKUPS = 5000;
+const LANGFUSE_LOOKUP_CONCURRENCY = 8;
+/** Where both Langfuse writers send data when no base URL is configured (SDK default). */
+const LANGFUSE_CLOUD = 'https://cloud.langfuse.com';
 
 const RAG_ADAPTER = 'knauf-vector-verification';
 /** Version 2 reports the storage identity behind each backend (review round 2, item 8). */
 const RAG_ADAPTER_MIN_VERSION = 2;
+/** Fields a v2 storage identity must carry; an empty `{}` would bind nothing. */
+const RAG_STORAGE_FIELDS = {
+  pgvector: ['host', 'port', 'database', 'collection'],
+  azure_search: ['endpoint', 'index'],
+};
 const RAG_MAX_VALUES = 500;
 const RAG_PAGE_SIZE = 1000;
 const RAG_MAX_PAGES = 1000;
@@ -170,13 +191,15 @@ const CODE_STAGING_CONTAINER_DEFAULT = 'code-adapter-staging';
 /**
  * Azure batch translation stages `<uuid>/<name>` in these containers
  * (translation/providers/azure.js). The uuid is never persisted, so scratch cannot be
- * found per subject; the probe measures what outlived the lifecycle rule instead.
+ * found per subject; the probe measures what outlived the lifecycle rule instead. The
+ * rule's window is a manifest fact (`lifecycleWindow`), with no code default.
  */
 const TRANSLATION_SCRATCH_CONTAINERS = (env = process.env) => [
   env.AZURE_TRANSLATION_SOURCE_CONTAINER || 'translation-source',
   env.AZURE_TRANSLATION_TARGET_CONTAINER || 'translation-target',
 ];
-const TRANSLATION_LIFECYCLE_DEFAULT = 'P1D';
+/** A fallback code-output row keeps its session only in the download URL (Code/process.js). */
+const CODE_DOWNLOAD_RE = /\/files\/code\/download\/([^/?#]+)\/[^/?#]+/;
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const MANIFEST_DIR = path.join(REPO_ROOT, 'knauf', 'docs', 'privacy', 'erasure-sinks');
@@ -213,34 +236,42 @@ function probeGroupOf(key) {
   return prefix;
 }
 
+/** The app's `isEnabled()` rule (packages/api utils/common.ts): trimmed, case-insensitive. */
+const isOn = (v) =>
+  String(v ?? '')
+    .trim()
+    .toLowerCase() === 'true';
+
 /**
  * Environment facts the manifest can be checked against. A store the environment
  * shows as configured must never be declared `configured: false` (that would turn a
- * live copy into a silent not-applicable).
+ * live copy into a silent not-applicable). Stores with no signal here are covered by
+ * `structuralProblems` (Mongo), `entryBlocker` (approval) and `inventoryProblems`.
  */
 function environmentSignals(env = process.env) {
-  const on = (v) => String(v ?? '').toLowerCase() === 'true';
   return {
     meili: Boolean(env.MEILI_HOST) && String(env.SEARCH ?? 'true').toLowerCase() !== 'false',
     'vectors:pgvector': Boolean(env.RAG_API_URL),
-    'vectors:azureAiSearch': on(env.AZURE_SEARCH_ENABLED),
+    'vectors:azureAiSearch': isOn(env.AZURE_SEARCH_ENABLED),
     langfuse: Boolean(
       env.LANGFUSE_PUBLIC_KEY || env.LANGFUSE_BASE_URL || env.LANGFUSE_HOST || env.LANGFUSE_BASEURL,
     ),
-    'redis:keys': on(env.USE_REDIS),
+    'redis:keys': isOn(env.USE_REDIS),
     'logs:files': String(env.LOG_TO_FILE ?? '').toLowerCase() !== 'false',
     'blob:primary': Boolean(env.AZURE_STORAGE_CONNECTION_STRING || env.AZURE_STORAGE_ACCOUNT_NAME),
     // Review round 2: both features are live in dev, stage and prod (agk-deployment-configs)
     // and hold copies the manifest used to declare absent.
-    'translation:scratch': on(env.KNAUF_FILE_TRANSLATION_ENABLED),
-    'files:execute_code': on(env.KNAUF_CODE_EXECUTION_ENABLED),
-    'code:table': on(env.KNAUF_CODE_EXECUTION_ENABLED),
+    'translation:scratch': isOn(env.KNAUF_FILE_TRANSLATION_ENABLED),
+    'files:execute_code': isOn(env.KNAUF_CODE_EXECUTION_ENABLED),
+    'code:table': isOn(env.KNAUF_CODE_EXECUTION_ENABLED),
   };
 }
 
 function signalFor(key, signals = {}) {
   if (key.startsWith('meili:')) return signals.meili ?? null;
   if (key.startsWith('langfuse:')) return signals.langfuse ?? null;
+  // Every Redis namespace lives on the server the key-addressable ones do.
+  if (key.startsWith('redis:')) return signals['redis:keys'] ?? null;
   return signals[key] ?? null;
 }
 
@@ -370,6 +401,20 @@ function extractBlobPath(fileUrl, containerName = 'files') {
 }
 
 /**
+ * Whether a Blob URL addresses the container itself: its first path segment, or the
+ * second on a path-style Azurite URL (`:10000/<account>/<container>/…`).
+ */
+function inContainer(fileUrl, containerName) {
+  try {
+    const url = new URL(fileUrl);
+    const parts = url.pathname.split('/').filter(Boolean);
+    return parts[0] === containerName || (url.port === '10000' && parts[1] === containerName);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Where a stored file's bytes live, as far as the logical row can tell. Anything that is
  * not the primary Blob container becomes its own `files:<store>` sink, which the
  * manifest must then place — an unexpected store can never be silently ignored.
@@ -386,7 +431,12 @@ function classifyPointer(filepath, source, containerName) {
       /:10000\//.test(value);
     if (!isBlob) return { kind: 'store', store: 'external' };
     const blobPath = extractBlobPath(value, containerName);
-    return blobPath ? { kind: 'blob', path: blobPath } : { kind: 'store', store: 'unrecognised' };
+    if (!blobPath) return { kind: 'store', store: 'unrecognised' };
+    // The mirror strips the first segment when the container is not where it should be,
+    // as the delete path does — which is why bytes in another container survive it. Only
+    // the primary container is enumerated, so such a pointer is a store of its own.
+    if (!inContainer(value, containerName)) return { kind: 'store', store: 'other-container' };
+    return { kind: 'blob', path: blobPath };
   }
   if (value.startsWith('/')) return { kind: 'store', store: 'local' };
   return { kind: 'store', store: 'unrecognised' };
@@ -400,14 +450,44 @@ function buildLangfuseDeleteBatches(traceIds, size = LANGFUSE_DELETE_BATCH) {
   return batches;
 }
 
-/** Mirror of feedback.ts's base-URL resolution so the probe hits the same instance. */
+/**
+ * Where the app WRITES Langfuse data, so every phase probes that instance. Traces
+ * (@librechat/agents, and the translation worker's span processor) resolve
+ * `LANGFUSE_BASE_URL ?? LANGFUSE_BASEURL`, then the SDK default; scores (feedback.ts)
+ * resolve `LANGFUSE_BASE_URL ?? LANGFUSE_HOST ?? LANGFUSE_BASEURL ?? cloud`. They
+ * disagree when LANGFUSE_HOST is set without LANGFUSE_BASE_URL: traces and scores then
+ * land on different instances and one probe cannot cover both. That, and keys with no
+ * URL at all, is a `problem`, never a guess — the verifier does not send credentials to
+ * a default host nobody named. Empty values count as unset.
+ */
 function resolveLangfuseBaseUrl(env = process.env) {
-  const raw = env.LANGFUSE_BASE_URL || env.LANGFUSE_HOST || env.LANGFUSE_BASEURL || '';
-  return raw.replace(/\/+$/, '');
+  const clean = (v) =>
+    String(v ?? '')
+      .trim()
+      .replace(/\/+$/, '');
+  const traces = clean(env.LANGFUSE_BASE_URL) || clean(env.LANGFUSE_BASEURL);
+  const scores =
+    clean(env.LANGFUSE_BASE_URL) || clean(env.LANGFUSE_HOST) || clean(env.LANGFUSE_BASEURL);
+  if (!traces && !scores) {
+    return env.LANGFUSE_PUBLIC_KEY && env.LANGFUSE_SECRET_KEY
+      ? {
+          url: '',
+          problem: `no Langfuse base URL is set, so the app would write to ${LANGFUSE_CLOUD}; name it in LANGFUSE_BASE_URL to probe it`,
+        }
+      : { url: '' };
+  }
+  const t = traces || LANGFUSE_CLOUD;
+  const s = scores || LANGFUSE_CLOUD;
+  return t === s
+    ? { url: t }
+    : {
+        url: '',
+        problem: `the app's Langfuse writers disagree: traces go to ${t}, scores to ${s}; set LANGFUSE_BASE_URL`,
+      };
 }
 
 function langfuseAuth(env = process.env) {
-  const base = resolveLangfuseBaseUrl(env);
+  const base = resolveLangfuseBaseUrl(env).url;
   if (!base || !env.LANGFUSE_PUBLIC_KEY || !env.LANGFUSE_SECRET_KEY) return null;
   const token = Buffer.from(`${env.LANGFUSE_PUBLIC_KEY}:${env.LANGFUSE_SECRET_KEY}`).toString(
     'base64',
@@ -544,6 +624,12 @@ function structuralProblems(manifest, envName) {
     if (![true, false, 'unknown'].includes(entry.configured)) {
       add(key, 'configured must be true, false or "unknown"');
     }
+    if (entry.configured === false && /^(mongo|raw):/.test(key)) {
+      add(
+        key,
+        'a Mongo collection cannot be declared absent: the verifier reads this database (use a baseline exemption for a disabled feature)',
+      );
+    }
     if (!DISPOSITIONS.includes(entry.disposition)) {
       add(key, `disposition must be one of ${DISPOSITIONS.join(', ')}`);
       continue;
@@ -563,6 +649,14 @@ function structuralProblems(manifest, envName) {
         add(key, `baseline must be "required" or { exempt: ${BASELINE_EXEMPTIONS.join('|')} }`);
       } else if (typeof entry.baseline.note !== 'string' || !entry.baseline.note.trim()) {
         add(key, 'a baseline exemption needs a written note');
+      } else if (
+        entry.baseline.exempt === 'NOT_SUBJECT_ADDRESSABLE' &&
+        (entry.disposition !== 'eventually-deleted' || entry.lifecycleWindow === undefined)
+      ) {
+        add(
+          key,
+          'NOT_SUBJECT_ADDRESSABLE needs eventually-deleted and a lifecycleWindow: a store that cannot be searched per subject cannot be shown deleted',
+        );
       }
     }
     if (entry.lifecycleWindow !== undefined && parseDuration(entry.lifecycleWindow) === null) {
@@ -597,9 +691,17 @@ function entryBlocker(entry, signals) {
     return 'configured: "unknown" — record whether this store exists here';
   const signal = signalFor(entry.key, signals);
   if (entry.configured === false) {
-    return signal === true
-      ? 'manifest says not configured, but the environment shows it configured (drift)'
-      : null;
+    if (signal === true)
+      return 'manifest says not configured, but the environment shows it configured (drift)';
+    // Nothing here can contradict the claim (`files:*` stores are checked against the
+    // inventory instead), so it is a reviewed statement or nothing.
+    if (signal === null && !entry.key.startsWith('files:') && !isApproved(entry)) {
+      return 'configured: false on a store no environment signal can confirm needs approvedBy/approvedAt';
+    }
+    return null;
+  }
+  if (entry.baseline?.exempt === 'FEATURE_DISABLED_IN_ENVIRONMENT' && signal === true) {
+    return 'baseline exemption says the feature is disabled, but the environment shows it configured (drift)';
   }
   if (entry.disposition === 'not-probed') return `declared not probed — ${entry.reason}`;
   const needsApproval = ['eventually-deleted', 'retained', 'externally-controlled'].includes(
@@ -702,11 +804,15 @@ function buildInventory({
     // Review round 2: a code-execution file is persisted to Blob (`source: azure_blob`)
     // AND stays staged in the code adapter under `metadata.codeEnvRef`. The Blob copy
     // is a pointer like any other; the staged copy is a second store, keyed by session.
-    const session = f.metadata?.codeEnvRef?.storage_session_id;
-    const codeCopy = Boolean(session) || pointer?.store === 'execute_code';
+    // A fallback row (`source: execute_code`) names its session only in the URL.
+    const sessions = unique([
+      f.metadata?.codeEnvRef?.storage_session_id,
+      f.source === 'execute_code' ? CODE_DOWNLOAD_RE.exec(String(f.filepath ?? ''))?.[1] : null,
+    ]);
+    const codeCopy = sessions.length > 0 || pointer?.store === 'execute_code';
     if (pointer?.store !== 'execute_code') note(pointer);
     if (codeCopy) nonBlob.execute_code = (nonBlob.execute_code ?? 0) + 1;
-    if (session) codeSessions.push(String(session));
+    codeSessions.push(...sessions);
   }
   for (const a of assets) note(classifyPointer(a.blob?.path, a.blob?.source, containerName));
   if (avatar) note(classifyPointer(avatar, undefined, containerName));
@@ -802,6 +908,20 @@ async function probeMeili({ identity, env = process.env, fetchImpl = fetch }) {
   return out;
 }
 
+/** Why an adapter's storage identity cannot bind a baseline, or null. */
+function ragStorageProblem(backend, storage) {
+  if (!storage || typeof storage !== 'object' || Array.isArray(storage)) {
+    return 'adapter did not report the storage identity behind this backend';
+  }
+  if (storage.backend !== backend) {
+    return `adapter reported the storage of ${storage.backend ?? '(none)'}, not ${backend}`;
+  }
+  const missing = (RAG_STORAGE_FIELDS[backend] ?? []).filter(
+    (field) => !String(storage[field] ?? '').trim(),
+  );
+  return missing.length ? `adapter storage identity lacks ${missing.join(', ')}` : null;
+}
+
 /**
  * Page one exact scan through `POST /verification/vectors` to exhaustion. Anything that
  * is not a complete, exact, self-consistent answer returns `{ ok: false }` — the caller
@@ -865,13 +985,8 @@ async function ragScan({ fetchImpl, base, headers: headersFor, backend, key, val
       if (body.backend !== backend || body.key !== key) {
         return { ok: false, status: 'error', reason: 'adapter answered a different query' };
       }
-      if (!body.storage || typeof body.storage !== 'object') {
-        return {
-          ok: false,
-          status: 'not-probed',
-          reason: 'adapter did not report the storage identity behind this backend',
-        };
-      }
+      const storageProblem = ragStorageProblem(backend, body.storage);
+      if (storageProblem) return { ok: false, status: 'not-probed', reason: storageProblem };
       if (storage === null) storage = body.storage;
       else if (stableStringify(storage) !== stableStringify(body.storage)) {
         return {
@@ -983,11 +1098,63 @@ async function probeVectors({
   return ok(k, count, method, { scans, storage });
 }
 
+/**
+ * The service marks only the CURRENT version (`IsCurrentVersion: true`); a previous
+ * version carries no such element and the SDK leaves the field undefined.
+ */
 function classifyBlobItem(item) {
   if (item.deleted) return 'softDeleted';
   if (item.snapshot) return 'snapshots';
-  if (item.versionId && item.isCurrentVersion === false) return 'versions';
+  if (item.versionId && item.isCurrentVersion !== true) return 'versions';
   return 'current';
+}
+
+/** When a lifecycle-expiring copy started its own clock: its deletion, or its version. */
+function lifecycleStart(item, cls) {
+  let raw = null;
+  if (cls === 'softDeleted') raw = item.properties?.deletedOn ?? item.deletedOn;
+  else if (cls === 'versions') raw = item.versionId;
+  const at = raw instanceof Date ? raw.getTime() : Date.parse(raw ?? '');
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
+ * Counts per lifecycle class, plus the oldest and newest clock start of the expiring
+ * classes: a soft-deleted copy expires from its own `deletedOn`, not from the baseline.
+ * Names leave only as a count and a digest — the evidence bundle outlives the erasure
+ * and must not carry the subject's filenames.
+ */
+function tallyBlobItems(items) {
+  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
+  const starts = {};
+  const names = new Set();
+  for (const item of items) {
+    const cls = classifyBlobItem(item);
+    classes[cls] += 1;
+    names.add(item.name);
+    if (cls !== 'versions' && cls !== 'softDeleted') continue;
+    const at = lifecycleStart(item, cls);
+    const s = (starts[cls] ??= { oldest: null, newest: null, undated: 0 });
+    if (at === null) {
+      s.undated += 1;
+      continue;
+    }
+    s.oldest = s.oldest === null ? at : Math.min(s.oldest, at);
+    s.newest = s.newest === null ? at : Math.max(s.newest, at);
+  }
+  const iso = (t) => (t === null ? null : new Date(t).toISOString());
+  const lifecycleStarts = Object.fromEntries(
+    Object.entries(starts).map(([cls, s]) => [
+      cls,
+      { oldest: iso(s.oldest), newest: iso(s.newest), undated: s.undated },
+    ]),
+  );
+  return {
+    classes,
+    lifecycleStarts,
+    names,
+    digest: { objectCount: names.size, objectsSha256: sha256([...names].sort().join('\n')) },
+  };
 }
 
 async function listAll(containerClient, prefix) {
@@ -1012,32 +1179,24 @@ async function probeBlob({ identity, inventory, containerClient }) {
       method,
       reason: 'Azure Blob client not configured in the verifier environment',
     });
-  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
-  const names = new Set();
   const prefixes = BLOB_BASE_PATHS.map((b) => `${b}/${identity._id}/`);
   try {
-    for (const prefix of prefixes) {
-      for (const item of await listAll(containerClient, prefix)) {
-        classes[classifyBlobItem(item)] += 1;
-        names.add(item.name);
-      }
-    }
+    const items = [];
+    for (const prefix of prefixes) items.push(...(await listAll(containerClient, prefix)));
     const outside = inventory.blobPointers.filter(
       (p) => !prefixes.some((prefix) => p.startsWith(prefix)),
     );
     for (const p of outside) {
-      for (const item of await listAll(containerClient, p)) {
-        if (item.name !== p) continue;
-        classes[classifyBlobItem(item)] += 1;
-        names.add(item.name);
-      }
+      for (const item of await listAll(containerClient, p)) if (item.name === p) items.push(item);
     }
+    const { classes, lifecycleStarts, names, digest } = tallyBlobItems(items);
     const pointed = new Set(inventory.blobPointers);
     const detail = {
       container: inventory.containerName,
       prefixes,
       classes,
-      objects: [...names].sort(),
+      lifecycleStarts,
+      ...digest,
       withoutMongoPointer: [...names].filter((n) => !pointed.has(n)).length,
       pointersOutsideCanonicalLayout: outside.length,
     };
@@ -1071,24 +1230,21 @@ async function probeCodeStaging({ inventory, containerClient, containerName }) {
       reason: `Azure Blob client for ${containerName} not available in the verifier environment`,
     });
   const sessions = inventory?.codeSessions ?? [];
-  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
-  const names = new Set();
+  let tally;
   try {
-    for (const sid of sessions) {
-      for (const item of await listAll(containerClient, `${sid}/`)) {
-        classes[classifyBlobItem(item)] += 1;
-        names.add(item.name);
-      }
-    }
+    const items = [];
+    for (const sid of sessions) items.push(...(await listAll(containerClient, `${sid}/`)));
+    tally = tallyBlobItems(items);
   } catch (err) {
     return probeResult(k, 'error', { method, reason: err.message });
   }
-  const count = BLOB_CLASSES.reduce((n, c) => n + classes[c], 0);
+  const count = BLOB_CLASSES.reduce((n, c) => n + tally.classes[c], 0);
   return ok(k, count, method, {
     container: containerName,
     sessions,
-    classes,
-    objects: [...names].sort(),
+    classes: tally.classes,
+    lifecycleStarts: tally.lifecycleStarts,
+    ...tally.digest,
   });
 }
 
@@ -1097,8 +1253,10 @@ async function probeCodeStaging({ inventory, containerClient, containerName }) {
  * the probe checks the store's own promise instead: the app deletes scratch after each
  * batch, and a storage lifecycle rule removes what a lost or cancelled batch leaves. A
  * current object older than that window means the rule is not enforcing, and every
- * subject's scratch is then a residual. Soft-deleted and versioned copies are reported,
+ * subject's scratch is then a residual. Soft-deleted and versioned copies are listed,
  * not counted: they belong to the account's own retention, like `blob:primary`'s.
+ * Counts only, never names: a scratch name is the original filename of whichever user
+ * translated the file.
  */
 async function probeTranslationScratch({ clients = [], names = [], windowMs, now = Date.now() }) {
   const k = 'translation:scratch';
@@ -1110,32 +1268,40 @@ async function probeTranslationScratch({ clients = [], names = [], windowMs, now
       reason: `Azure Blob client for ${missing.join(', ') || 'the scratch containers'} not available in the verifier environment`,
     });
   const cutoff = now - windowMs;
-  const overdue = [];
-  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
+  const overdueByContainer = {};
+  let overdue = 0;
+  let oldest = null;
+  // Not `classes`: this sink's count is overdue objects, not the class total, so the
+  // verdict's lifecycle-class rule must never read it.
+  const listedByClass = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
   try {
     for (const [i, client] of clients.entries()) {
       for (const item of await listAll(client, '')) {
         const cls = classifyBlobItem(item);
-        classes[cls] += 1;
+        listedByClass[cls] += 1;
         if (cls !== 'current') continue;
         const raw = item.properties?.lastModified ?? item.lastModified;
         const modified = raw instanceof Date ? raw.getTime() : Date.parse(raw ?? '');
         if (!Number.isFinite(modified))
           return probeResult(k, 'inexact', {
             method,
-            reason: `${names[i]}/${item.name} carries no lastModified`,
+            reason: `an object in ${names[i]} carries no lastModified`,
           });
-        if (modified < cutoff) overdue.push(`${names[i]}/${item.name}`);
+        if (modified >= cutoff) continue;
+        overdue += 1;
+        overdueByContainer[names[i]] = (overdueByContainer[names[i]] ?? 0) + 1;
+        oldest = oldest === null ? modified : Math.min(oldest, modified);
       }
     }
   } catch (err) {
     return probeResult(k, 'error', { method, reason: err.message });
   }
-  return ok(k, overdue.length, method, {
+  return ok(k, overdue, method, {
     containers: names,
     olderThan: new Date(cutoff).toISOString(),
-    classes,
-    overdue: overdue.slice(0, 50),
+    listedByClass,
+    overdueByContainer,
+    oldestOverdue: oldest === null ? null : new Date(oldest).toISOString(),
   });
 }
 
@@ -1163,11 +1329,20 @@ async function resolveLangfuseProject({ auth, fetchImpl = fetch }) {
   return { ok: true, id: String(projects[0].id), name: projects[0].name ?? null };
 }
 
+/** Release a response body the caller only needs the status of (a 200 trace is large). */
+async function discardBody(res) {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // nothing to release
+  }
+}
+
 /**
- * Direct `GET /api/public/{route}/{id}` for every baseline id. The list routes filter
- * scores by userId through a join to the parent trace, so a score whose trace is gone
- * disappears from the list and from `totalItems`; a lookup by id does not need the
- * parent. 404 = gone; 200 = still there; anything else is not an answer.
+ * Direct `GET /api/public/{route}/{id}` for every given id, a few in flight. The list
+ * routes filter scores by userId through a join to the parent trace, so a score whose
+ * trace is gone disappears from the list and from `totalItems`; a lookup by id does not
+ * need the parent. 404 = gone; 200 = still there; anything else is not an answer.
  */
 async function lookupLangfuseIds({ auth, route, ids, fetchImpl = fetch }) {
   const wanted = unique(ids);
@@ -1175,35 +1350,52 @@ async function lookupLangfuseIds({ auth, route, ids, fetchImpl = fetch }) {
     return {
       ok: false,
       status: 'inexact',
-      reason: `${route}: ${wanted.length} baseline ids exceed the ${LANGFUSE_MAX_LOOKUPS} direct-lookup bound`,
+      reason: `${route}: ${wanted.length} ids exceed the ${LANGFUSE_MAX_LOOKUPS} direct-lookup bound`,
     };
   }
-  const present = [];
-  for (const id of wanted) {
-    let res;
-    try {
-      res = await fetchImpl(`${auth.base}/api/public/${route}/${encodeURIComponent(id)}`, {
-        headers: auth.headers,
-      });
-    } catch (err) {
-      return { ok: false, status: 'error', reason: `${route}/${id}: ${err.message}` };
+  const found = new Array(wanted.length);
+  let next = 0;
+  let failure = null;
+  const worker = async () => {
+    while (!failure && next < wanted.length) {
+      const i = next++;
+      const id = wanted[i];
+      let res;
+      try {
+        res = await fetchImpl(`${auth.base}/api/public/${route}/${encodeURIComponent(id)}`, {
+          headers: auth.headers,
+        });
+      } catch (err) {
+        failure ??= { ok: false, status: 'error', reason: `${route}/${id}: ${err.message}` };
+        return;
+      }
+      await discardBody(res);
+      if (res.status === 404) found[i] = false;
+      else if (res.ok) found[i] = true;
+      else {
+        failure ??= { ok: false, status: 'error', reason: `${route}/${id}: HTTP ${res.status}` };
+        return;
+      }
     }
-    if (res.status === 404) continue;
-    if (!res.ok)
-      return { ok: false, status: 'error', reason: `${route}/${id}: HTTP ${res.status}` };
-    present.push(id);
-  }
+  };
+  const workers = Math.min(LANGFUSE_LOOKUP_CONCURRENCY, wanted.length);
+  await Promise.all(Array.from({ length: workers }, worker));
+  if (failure) return failure;
+  const present = wanted.filter((_, i) => found[i]);
   return { ok: true, present, absent: wanted.length - present.length };
 }
 
 /**
  * Why `--phase langfuse-delete` must not run, or null. Pure, so the refusals are
- * testable: the same instance AND the same project as the baseline (rotated keys inside
- * the project are fine), an exact listing, and a listing that shares at least one id
- * with the baseline — the account is already deleted, so nothing new can be written for
- * this subject, and a disjoint listing is another scope, not new data.
+ * testable: one unambiguous Langfuse target; the same instance AND the same project as
+ * the baseline (rotated keys inside the project are fine); a baseline whose own listing
+ * was exact and, in evidence mode, a baseline that was READY; an exact listing now; and
+ * a listing the baseline anchors — it shares at least one captured id. The recipe runs
+ * this after the product deletion, so nothing new is written for the subject: a listing
+ * the baseline cannot anchor is another scope, not new data.
  */
-function langfuseDeleteRefusal({ before, auth, project, current }) {
+function langfuseDeleteRefusal({ before, auth, project, current, targetProblem = null }) {
+  if (targetProblem) return targetProblem;
   const recordedBase = before?.backends?.langfuse?.baseUrl;
   if (!auth || !recordedBase || auth.base !== recordedBase) {
     return `Langfuse here (${auth?.base ?? 'unset'}) is not the instance the baseline probed (${recordedBase ?? 'none'})`;
@@ -1212,12 +1404,22 @@ function langfuseDeleteRefusal({ before, auth, project, current }) {
   if (!project?.ok || !recordedProject || project.id !== recordedProject) {
     return `these credentials resolve to Langfuse project ${project?.ok ? project.id : `(${project?.reason ?? 'unresolved'})`}, the baseline was taken in ${recordedProject ?? '(none recorded)'}`;
   }
+  const baselineGap = probeGap(before?.sinks?.['langfuse:traces'], 'before');
+  if (baselineGap) {
+    return `the baseline's own Langfuse listing is not usable (${baselineGap}), so nothing anchors a deletion`;
+  }
+  if (before?.mode === 'evidence' && before?.readiness?.ready !== true) {
+    const n = before?.readiness?.gaps?.length;
+    return `the baseline is NOT READY (${Number.isInteger(n) ? `${n} gap(s)` : 'no readiness recorded'}) and this run can never be evidence. If the account still exists, take a new baseline into a fresh directory; if it is gone, delete its traces in Langfuse and record that on the DSAR register`;
+  }
   if (!current?.ok) {
     return `could not list the subject's traces exactly (${current?.reason ?? 'no listing'})`;
   }
-  const captured = new Set(before.sinks?.['langfuse:traces']?.detail?.traceIds ?? []);
-  if (captured.size && current.ids.length && !current.ids.some((id) => captured.has(id))) {
-    return `the ${current.ids.length} trace(s) listed now share no id with the ${captured.size} captured at baseline — wrong project, instance or subject`;
+  const captured = new Set(before.sinks['langfuse:traces'].detail?.traceIds ?? []);
+  if (current.ids.length && !current.ids.some((id) => captured.has(id))) {
+    return captured.size
+      ? `the ${current.ids.length} trace(s) listed now share no id with the ${captured.size} captured at baseline — wrong project, instance or subject`
+      : `${current.ids.length} trace(s) are listed now but the baseline captured none, so nothing ties them to this run`;
   }
   return null;
 }
@@ -1289,9 +1491,11 @@ async function listLangfuse({ auth, route, userId, fetchImpl }) {
 }
 
 /**
- * Langfuse `userId` IS the Mongo id (pinned by KK20-327). With `baseline` (the `after`
- * phase) every id captured at baseline is also looked up directly, and the count is the
- * union of what the list still returns and what the lookups still find.
+ * Langfuse `userId` IS the Mongo id (pinned by KK20-327). Without `baseline` (the
+ * `before` phase) every listed id is also looked up by id and must answer 200: the
+ * positive control that lets a 404 at `after` mean "deleted" rather than "route not
+ * served". With `baseline` every id the baseline verified is looked up again, and the
+ * count is the union of what the list still returns and what the lookups still find.
  */
 async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, baseline = null }) {
   const auth = langfuseAuth(env);
@@ -1299,7 +1503,7 @@ async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, b
   const idField = { traces: 'traceIds', scores: 'scoreIds' };
   const method = baseline
     ? 'GET /api/public/{traces,scores}?userId (paged, reconciled) ∪ GET /api/public/{traces,scores}/{id} for every baseline id'
-    : 'GET /api/public/{traces,scores}?userId (paged, reconciled to meta.totalItems)';
+    : 'GET /api/public/{traces,scores}?userId (paged, reconciled to meta.totalItems), each id confirmed by GET /{id}';
   const both = (status, reason, detail) =>
     Object.fromEntries(
       Object.values(keys).map((k) => [k, probeResult(k, status, { method, reason, detail })]),
@@ -1307,7 +1511,8 @@ async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, b
   if (!auth) {
     return both(
       'not-probed',
-      'LANGFUSE_BASE_URL/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY unset in the verifier environment',
+      resolveLangfuseBaseUrl(env).problem ??
+        'LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY unset in the verifier environment',
     );
   }
   const project = await resolveLangfuseProject({ auth, fetchImpl });
@@ -1319,31 +1524,50 @@ async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, b
   const bound = { baseUrl: auth.base, projectId: project.id, projectName: project.name };
   const out = {};
   for (const [route, k] of Object.entries(keys)) {
+    const field = idField[route];
+    const fail = (status, reason) => {
+      out[k] = probeResult(k, status, { method, reason, detail: bound });
+    };
     const r = await listLangfuse({ auth, route, userId: identity._id, fetchImpl });
     if (!r.ok) {
-      out[k] = probeResult(k, r.status, { method, reason: r.reason, detail: bound });
+      fail(r.status, r.reason);
       continue;
     }
-    const ids = new Set(r.ids);
-    let surviving = [];
-    if (baseline) {
-      const lookup = await lookupLangfuseIds({
-        auth,
-        route,
-        ids: baseline[idField[route]] ?? [],
-        fetchImpl,
-      });
-      if (!lookup.ok) {
-        out[k] = probeResult(k, lookup.status, { method, reason: lookup.reason, detail: bound });
-        continue;
-      }
-      surviving = lookup.present;
-      for (const id of surviving) ids.add(id);
+    if (!baseline) {
+      const control = await lookupLangfuseIds({ auth, route, ids: r.ids, fetchImpl });
+      if (!control.ok) fail(control.status, control.reason);
+      else if (control.absent) {
+        fail(
+          'error',
+          `${route}: ${control.absent} listed id(s) not found by GET /api/public/${route}/{id}, so a 404 there could not mean "deleted"`,
+        );
+      } else
+        out[k] = ok(k, r.ids.length, method, {
+          ...bound,
+          [field]: r.ids,
+          verifiedById: r.ids.length,
+        });
+      continue;
     }
+    const wanted = unique(baseline[field] ?? []);
+    if (baseline.verifiedById?.[route] !== wanted.length) {
+      fail(
+        'not-probed',
+        `${route}: the baseline did not confirm its ${wanted.length} id(s) by direct lookup, so a 404 now proves nothing`,
+      );
+      continue;
+    }
+    const lookup = await lookupLangfuseIds({ auth, route, ids: wanted, fetchImpl });
+    if (!lookup.ok) {
+      fail(lookup.status, lookup.reason);
+      continue;
+    }
+    const ids = new Set([...r.ids, ...lookup.present]);
     out[k] = ok(k, ids.size, method, {
       ...bound,
-      [idField[route]]: [...ids],
-      ...(baseline ? { listed: r.total, survivingBaselineIds: surviving } : {}),
+      [field]: [...ids],
+      listed: r.total,
+      survivingBaselineIds: lookup.present,
     });
   }
   return out;
@@ -1352,7 +1576,7 @@ async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, b
 async function deleteLangfuseTraces({ traceIds, env = process.env, fetchImpl = fetch, log }) {
   const auth = langfuseAuth(env);
   if (!auth)
-    throw new Error('LANGFUSE_BASE_URL/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are required');
+    throw new Error('Langfuse credentials and one unambiguous Langfuse base URL are required');
   const batches = buildLangfuseDeleteBatches(traceIds);
   const accepted = [];
   for (const [i, body] of batches.entries()) {
@@ -1530,6 +1754,10 @@ async function takeSnapshot({
         ? {
             traceIds: baselineSinks['langfuse:traces']?.detail?.traceIds ?? [],
             scoreIds: baselineSinks['langfuse:scores']?.detail?.scoreIds ?? [],
+            verifiedById: {
+              traces: baselineSinks['langfuse:traces']?.detail?.verifiedById,
+              scores: baselineSinks['langfuse:scores']?.detail?.verifiedById,
+            },
           }
         : null,
     }),
@@ -1539,15 +1767,18 @@ async function takeSnapshot({
   }));
   await run('logs', async () => ({ 'logs:files': probeLogs({ identity, env, logDir }) }));
   await run('translation', async () => {
-    const entry = entries.get('translation:scratch');
-    const windowMs =
-      parseDuration(entry?.lifecycleWindow) ?? parseDuration(TRANSLATION_LIFECYCLE_DEFAULT);
+    const windowMs = parseDuration(entries.get('translation:scratch')?.lifecycleWindow);
     return {
-      'translation:scratch': await probeTranslationScratch({
-        clients: containers.clients?.translation ?? [],
-        names: containers.names?.translation ?? TRANSLATION_SCRATCH_CONTAINERS(env),
-        windowMs,
-      }),
+      'translation:scratch':
+        windowMs === null
+          ? probeResult('translation:scratch', 'not-probed', {
+              reason: 'the manifest declares no lifecycleWindow for the scratch containers',
+            })
+          : await probeTranslationScratch({
+              clients: containers.clients?.translation ?? [],
+              names: containers.names?.translation ?? TRANSLATION_SCRATCH_CONTAINERS(env),
+              windowMs,
+            }),
     };
   });
   await run('code', async () => ({
@@ -1632,10 +1863,13 @@ function localBackends({ env = process.env, mongoose = null, containers = null }
       endpoint: `${rag.scheme}://${rag.hosts.join(',')}${rag.path ? `/${rag.path}` : ''}`,
     };
   }
-  const langfuse = resolveLangfuseBaseUrl(env);
+  const langfuse = resolveLangfuseBaseUrl(env).url;
   if (langfuse) b.langfuse = { baseUrl: langfuse };
-  const redis = stripCredentials(String(env.REDIS_URI || '').split(',')[0]);
-  if (redis) b.redis = { hosts: redis.hosts, db: redis.path || '0' };
+  const redisUri = String(env.REDIS_URI || '').split(',')[0];
+  const redis = stripCredentials(redisUri);
+  // ioredis takes the db from the path, else from `?db=` (stripped with the query).
+  const queryDb = /[?&]db=(\d+)/.exec(redisUri)?.[1];
+  if (redis) b.redis = { hosts: redis.hosts, db: redis.path || queryDb || '0' };
   const url = (client) => (client?.url ? String(client.url).split('?')[0] : null);
   const clients = containers?.clients ?? {};
   if (url(clients.primary)) b['container:primary'] = { url: url(clients.primary) };
@@ -1646,12 +1880,17 @@ function localBackends({ env = process.env, mongoose = null, containers = null }
   return b;
 }
 
-/** Local identities plus what the probes learned: the Langfuse project, the RAG storage. */
+/**
+ * Local identities plus what the probes learned: the Langfuse project, the RAG storage,
+ * and the log directory (`--log-dir` is a per-phase argument).
+ */
 function collectBackends({ local = {}, sinks = {} }) {
   const b = { ...local };
   const projectId =
     sinks['langfuse:traces']?.detail?.projectId ?? sinks['langfuse:scores']?.detail?.projectId;
   if (projectId) b.langfuse = { ...(b.langfuse ?? {}), projectId };
+  const logDir = sinks['logs:files']?.detail?.dir;
+  if (logDir) b.logs = { dir: path.resolve(logDir) };
   for (const [key, name] of [
     ['vectors:pgvector', 'pgvector'],
     ['vectors:azureAiSearch', 'azureAiSearch'],
@@ -1708,16 +1947,54 @@ function probeGap(result, phase) {
 }
 
 /**
- * Sinks the before-inventory proves are in play but no probe covers: files stored
- * outside the primary Blob container. Each needs its own manifest entry.
+ * What the before-inventory proves about stores the manifest must place: files stored
+ * outside the primary container, vector entries per backend, code sessions, translation
+ * jobs. Each proven store needs an entry that is not `configured: false`. Shared by
+ * `before` (NOT READY) and the verdict, so a run the verdict would block cannot cost the
+ * operator a deletion first.
  */
-function inventorySinkKeys(inventory) {
-  return Object.keys(inventory?.nonBlobPointers ?? {}).map((source) => `files:${source}`);
+function inventoryProblems(manifest, before) {
+  const inv = before?.inventory ?? {};
+  const proven = new Map();
+  for (const [store, n] of Object.entries(inv.nonBlobPointers ?? {})) {
+    proven.set(`files:${store}`, `${n} file(s) stored as "${store}"`);
+  }
+  for (const [backend, key] of [
+    ['pgvector', 'vectors:pgvector'],
+    ['azure_search', 'vectors:azureAiSearch'],
+  ]) {
+    const n = (inv.vectorEntries ?? []).filter((e) => e.backend === backend).length;
+    if (n) proven.set(key, `${n} vector entr${n === 1 ? 'y' : 'ies'} on ${backend}`);
+  }
+  if (inv.codeSessions?.length) {
+    proven.set('code:table', `${inv.codeSessions.length} code-execution session(s)`);
+  }
+  const jobs = before?.sinks?.['raw:knauf_translation_jobs'];
+  if (jobs?.status === 'ok' && jobs.count > 0) {
+    proven.set('translation:scratch', `${jobs.count} translation job(s)`);
+  }
+  const entries = new Map((manifest?.sinks || []).map((e) => [e?.key, e]));
+  const problems = [];
+  for (const [key, what] of proven) {
+    const entry = entries.get(key);
+    if (!entry) {
+      problems.push({
+        key,
+        text: `before-inventory holds ${what}, and the manifest has no entry for that store`,
+      });
+    } else if (entry.configured === false) {
+      problems.push({
+        key,
+        text: `before-inventory holds ${what}, but the manifest says configured: false`,
+      });
+    }
+  }
+  return problems;
 }
 
 /**
  * Which sinks lack a usable baseline — what the operator must seed before deleting.
- * Shared by `before` (fail fast) and the verdict.
+ * `before` uses it with `inventoryProblems` for READY; the verdict re-derives both.
  */
 function baselineGaps(manifest, before) {
   const gaps = [];
@@ -1739,6 +2016,22 @@ function baselineGaps(manifest, before) {
     }
   }
   return gaps;
+}
+
+/**
+ * READY, or why not. Decided before before.json exists and persisted in it, so
+ * `langfuse-delete` can refuse a baseline this phase told the operator not to use.
+ */
+function baselineReadiness(manifest, before, preflightProblems = []) {
+  const gaps = [
+    ...baselineGaps(manifest, before),
+    ...inventoryProblems(manifest, before).map((p) => ({ key: p.key, reason: p.text })),
+  ];
+  return {
+    ready: !preflightProblems.length && !gaps.length,
+    preflightProblems: preflightProblems.length,
+    gaps,
+  };
 }
 
 function deadlineFrom(startIso, duration) {
@@ -1821,15 +2114,11 @@ function evaluate({
   const probed = new Set(probedSinkKeys());
   const entries = [...(manifest?.sinks || [])];
   const declared = new Set(entries.map((e) => e?.key));
-  for (const key of inventorySinkKeys(before?.inventory)) {
-    if (!declared.has(key)) {
-      block(
-        key,
-        `before-inventory holds ${before.inventory.nonBlobPointers[key.slice(6)]} file(s) stored as "${key.slice(6)}", and the manifest has no entry for that store`,
-      );
-    }
+  const contradicted = new Map();
+  for (const p of inventoryProblems(manifest, before)) {
+    if (declared.has(p.key)) contradicted.set(p.key, p.text);
+    else block(p.key, p.text);
   }
-  const inventoryNeeds = new Set(inventorySinkKeys(before?.inventory));
 
   for (const entry of entries) {
     if (!entry?.key || !DISPOSITIONS.includes(entry.disposition)) continue;
@@ -1853,10 +2142,10 @@ function evaluate({
     const blocker = entryBlocker(entry, signals ?? {});
     if (entry.configured === false) {
       if (blocker) stop(`UNKNOWN — ${blocker}`, blocker);
-      else if (inventoryNeeds.has(key)) {
+      else if (contradicted.has(key)) {
         stop(
           'UNKNOWN — inventory holds data here but manifest says not configured',
-          'before-inventory contradicts configured: false',
+          contradicted.get(key),
         );
       } else row.status = 'NOT CONFIGURED';
       continue;
@@ -1880,7 +2169,8 @@ function evaluate({
     if (!probed.has(key)) {
       // eventually-deleted or retained with no probe: resolved by approval, stated as such.
       if (entry.disposition === 'eventually-deleted') {
-        const by = deadlineFrom(before?.generatedAt, entry.deadline);
+        // The deletion happened no later than `after`, so its copies are gone by then + deadline.
+        const by = deadlineFrom(after?.generatedAt ?? before?.generatedAt, entry.deadline);
         row.status = `EVENTUALLY DELETED — by ${by ? by.toISOString().slice(0, 10) : '?'} (not verified here)`;
         obligations.push({
           key,
@@ -1906,6 +2196,27 @@ function evaluate({
 
     // deleted / eventually-deleted: the before → after transition
     const exempt = entry.baseline && entry.baseline !== 'required' && isApproved(entry.baseline);
+    if (exempt && entry.baseline.exempt === 'NOT_SUBJECT_ADDRESSABLE') {
+      // The count measures the store's own guarantee (objects that outlived its lifecycle
+      // rule), not the subject's copies: any is a residual, and none still leaves the
+      // subject's own copies to that rule — an obligation, never N/A.
+      if (a.count > 0) {
+        row.status = 'RESIDUAL';
+        residuals.push({ key, count: a.count });
+        block(
+          key,
+          `RESIDUAL — ${a.count} object(s) outlived the ${entry.lifecycleWindow} lifecycle rule`,
+        );
+        continue;
+      }
+      const by = deadlineFrom(after?.generatedAt, entry.deadline);
+      row.status = `EVENTUALLY DELETED — not searchable per subject; nothing outlived the ${entry.lifecycleWindow} rule`;
+      obligations.push({
+        key,
+        text: `${entry.basis} — any copy of the subject's data is gone by ${by ? by.toISOString() : entry.deadline}`,
+      });
+      continue;
+    }
     if (b.count === 0 && !exempt) {
       stop(
         'NO BASELINE',
@@ -1945,17 +2256,26 @@ function evaluate({
         (n, c) => n + (classes[c] ?? 0),
         0,
       );
-      const overdue = expiring.filter(
-        (c) =>
-          (classes[c] ?? 0) > 0 &&
-          now > (deadlineFrom(before.generatedAt, entry.eventualClasses[c])?.getTime() ?? 0),
-      );
-      if (!hard && !overdue.length) {
-        const latest = expiring
-          .filter((c) => (classes[c] ?? 0) > 0)
-          .map((c) => deadlineFrom(before.generatedAt, entry.eventualClasses[c]))
-          .sort((x, y) => y - x)[0];
-        row.status = `EVENTUALLY DELETED — ${expiring.filter((c) => classes[c]).join('+')} expire by ${latest.toISOString().slice(0, 10)}`;
+      const present = expiring.filter((c) => (classes[c] ?? 0) > 0);
+      // Each copy expires from its OWN clock (deletedOn, version time), not the baseline's:
+      // a copy deleted weeks before the run is overdue now. Undated counts as overdue.
+      const expiry = (c, edge) => {
+        const starts = a.detail.lifecycleStarts?.[c];
+        const at = Date.parse(starts?.[edge]);
+        const ms = parseDuration(entry.eventualClasses[c]);
+        return starts && !starts.undated && Number.isFinite(at) && ms !== null ? at + ms : null;
+      };
+      const overdue = present.filter((c) => !(expiry(c, 'oldest') >= now));
+      if (overdue.length) {
+        // A copy past its own window is a residual, whatever the store's deadline says.
+        row.status = 'RESIDUAL';
+        residuals.push({ key, count: a.count });
+        block(key, `RESIDUAL — ${overdue.join('+')} copies outlived their lifecycle window`);
+        continue;
+      }
+      if (!hard && present.length) {
+        const latest = new Date(Math.max(...present.map((c) => expiry(c, 'newest'))));
+        row.status = `EVENTUALLY DELETED — ${present.join('+')} expire by ${latest.toISOString().slice(0, 10)}`;
         obligations.push({
           key,
           text: `lifecycle-expiring copies (${JSON.stringify(classes)}) — confirm gone after ${latest.toISOString()}`,
@@ -1964,10 +2284,24 @@ function evaluate({
       }
     }
     if (entry.disposition === 'eventually-deleted') {
+      // Past the deadline counted from the EARLIEST possible deletion, what is left is a
+      // residual; inside it, what is left must be gone by the deadline counted from the
+      // LATEST possible deletion (`after`).
       const by = deadlineFrom(before.generatedAt, entry.deadline);
       if (by && now <= by.getTime()) {
-        row.status = `EVENTUALLY DELETED — ${a.count} left, due by ${by.toISOString().slice(0, 10)}`;
-        obligations.push({ key, text: `${entry.basis} — re-check after ${by.toISOString()}` });
+        const due = deadlineFrom(after?.generatedAt, entry.deadline) ?? by;
+        const tail = entry.eventualClasses
+          ? `; its soft-deleted/versioned copies then expire within ${Object.entries(
+              entry.eventualClasses,
+            )
+              .map(([c, d]) => `${d} (${c})`)
+              .join(', ')}`
+          : '';
+        row.status = `EVENTUALLY DELETED — ${a.count} left, due by ${due.toISOString().slice(0, 10)}`;
+        obligations.push({
+          key,
+          text: `${entry.basis} — ${a.count} left at after; confirm gone after ${due.toISOString()}${tail}`,
+        });
         continue;
       }
     }
@@ -2171,12 +2505,13 @@ async function main() {
     const current = auth
       ? await listLangfuse({ auth, route: 'traces', userId: before.identity._id, fetchImpl: fetch })
       : null;
-    const refusal = langfuseDeleteRefusal({ before, auth, project, current });
+    const targetProblem = resolveLangfuseBaseUrl(env).problem;
+    const refusal = langfuseDeleteRefusal({ before, auth, project, current, targetProblem });
     if (refusal) {
       console.error(`Refusing: ${refusal}.`);
       process.exit(EXIT.REFUSED);
     }
-    const captured = new Set(before.sinks['langfuse:traces'].detail.traceIds ?? []);
+    const captured = new Set(before.sinks['langfuse:traces'].detail?.traceIds ?? []);
     const record = {
       kind: EVIDENCE_KIND,
       schemaVersion: SCHEMA_VERSION,
@@ -2225,11 +2560,7 @@ async function main() {
   const redisUrls = String(env.REDIS_URI || '')
     .split(',')
     .filter(Boolean);
-  if (
-    String(env.USE_REDIS).toLowerCase() === 'true' &&
-    redisUrls.length === 1 &&
-    String(env.USE_REDIS_CLUSTER).toLowerCase() !== 'true'
-  ) {
+  if (isOn(env.USE_REDIS) && redisUrls.length === 1 && !isOn(env.USE_REDIS_CLUSTER)) {
     const IoRedis = require('ioredis');
     const client = new IoRedis(redisUrls[0], {
       lazyConnect: true,
@@ -2280,7 +2611,9 @@ async function main() {
       let user;
       let resolvedBy;
       if (OBJECT_ID_RE.test(args.user)) {
-        user = await runAsSystem(() => models.User.findOne({ _id: args.user }).lean());
+        // Async on purpose: a sync callback returning a Mongoose thenable loses the
+        // system context before the query executes (tenantContext.ts).
+        user = await runAsSystem(async () => models.User.findOne({ _id: args.user }).lean());
         resolvedBy = 'canonical-id';
       } else {
         try {
@@ -2352,18 +2685,21 @@ async function main() {
         inventory,
         sinks,
       };
+      before.readiness = baselineReadiness(loaded.manifest, before, problems);
+      const { gaps } = before.readiness;
       writeBundleFile(dir, 'before.json', JSON.stringify(before, null, 2));
-      const gaps = baselineGaps(loaded.manifest, before);
       for (const [k, r] of Object.entries(sinks))
         console.log(`${k.padEnd(34)} ${fmtCount(r)}${r.reason ? `  (${r.reason})` : ''}`);
       if (gaps.length) {
         const fatal = args.mode === 'evidence';
         console.error(
-          `\n${fatal ? 'NOT READY' : 'Rehearsal gaps'} — ${gaps.length} sink(s) have no usable baseline${fatal ? '. Do NOT delete yet' : ''}:`,
+          `\n${fatal ? 'NOT READY' : 'Rehearsal gaps'} — ${gaps.length} store(s) the verdict would block on${fatal ? '. Do NOT delete yet' : ''}:`,
         );
         for (const g of gaps) console.error(`  - ${g.key}: ${g.reason}`);
         if (fatal) {
-          console.error('Seed them (runbook §0), then take a new baseline into a fresh directory.');
+          console.error(
+            'Seed the stores without a baseline (runbook §0) and place every store the inventory names in the manifest, then take a new baseline into a fresh directory.',
+          );
           exitCode = EXIT.INCOMPLETE;
           return;
         }
@@ -2466,6 +2802,7 @@ module.exports = {
   LANGFUSE_SETTLE_MS,
   MAX_BASELINE_AGE_MS,
   LANGFUSE_MAX_LOOKUPS,
+  LANGFUSE_LOOKUP_CONCURRENCY,
   RAG_ADAPTER,
   MANIFEST_DIR,
   CODE_STAGING_CONTAINER_DEFAULT,
@@ -2488,10 +2825,12 @@ module.exports = {
   entryBlocker,
   preflight,
   buildInventory,
+  inventoryProblems,
   probeResult,
   probeMeili,
   ragScan,
   probeVectors,
+  classifyBlobItem,
   probeBlob,
   probeCodeStaging,
   probeTranslationScratch,
@@ -2509,6 +2848,7 @@ module.exports = {
   collectBackends,
   backendMismatch,
   baselineGaps,
+  baselineReadiness,
   evaluate,
   exitCodeFor,
   renderReport,

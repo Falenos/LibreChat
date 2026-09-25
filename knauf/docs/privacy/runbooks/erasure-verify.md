@@ -20,10 +20,12 @@ resolves to exactly one disposition:
 | `externally-controlled` | Another controller or system holds it | The `controller` and the Art. 19 `notification` duty are recorded **and approved** |
 | `not-probed` | Nobody can show what happens to it yet | **Never.** It blocks every evidence run until a fact replaces it |
 
-`configured: "unknown"` also blocks. So does `configured: false` when the environment says
-otherwise, and so does any probed store the manifest leaves out. The verifier checks the
-manifest's `configured` flags against the same environment variables the app reads, so a live
-store cannot be declared absent.
+`configured: "unknown"` also blocks, and so does any probed store the manifest leaves out.
+`configured: false` is checked three ways. A Mongo collection can never be declared absent,
+because the verifier reads that database. A store with an environment signal (the flags in §0)
+is drift when the flag says it is on. And at `before`, the subject's own inventory (non-Blob
+file pointers, vector entries per backend, code-execution sessions, translation jobs) must not
+contradict it. Any other store declared absent needs an approval, like a disposition.
 
 > **The clock.** Art. 17(1): erase **without undue delay**. Art. 12(3) applies to the response:
 > within one month, extendable by two with notice. Art. 19: tell every recipient the data was
@@ -40,7 +42,7 @@ store cannot be declared absent.
 | **RAG verification adapter deployed**: an `agentic-karl-rag-api` image with `POST /verification/vectors` and `RAG_VERIFICATION_ENABLED=true` on the RAG service | Without it both vector stores are **NOT PROBED**, never zero (§4.1) |
 | The test subject has data in **every mandatory store** the manifest lists: a chat with a **file attachment** (→ pgvector, Blob, Meilisearch), an **agent with a knowledge file** (→ Azure AI Search, asset ledger, ACL entries), a **memory**, a **thumbs-down** (→ Langfuse score), a **shared link**, a **bookmark**, a **project**, a **prompt**, a **skill**, a **code-execution run that writes a file** (→ code-adapter staging), a **translated file** (→ translation jobs), a schedule if the scheduler is on | `before` exits **4 NOT READY** and names every store without a positive baseline, unless the manifest records an **approved**, reason-coded exemption (`FEATURE_DISABLED_IN_ENVIRONMENT`, `NOT_CREATABLE_BY_SUBJECT`, `NOT_SUBJECT_ADDRESSABLE`) |
 | `ALLOW_ACCOUNT_DELETION` not `false` on the API | `canDeleteAccount` gates `DELETE /api/user/delete` |
-| A shell with the environment's configuration: Mongo, `MEILI_HOST`/`MEILI_MASTER_KEY`, `RAG_API_URL` + `JWT_SECRET`, Azure Blob, `USE_REDIS`/`REDIS_URI`, `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`, plus the flags the manifest is checked against (`SEARCH`, `AZURE_SEARCH_ENABLED`, `LOG_TO_FILE`) | The verifier probes each store the way the app reaches it. A missing variable makes that store NOT PROBED, and a flag that contradicts the manifest blocks the run |
+| A shell with the environment's configuration: Mongo, `MEILI_HOST`/`MEILI_MASTER_KEY`, `RAG_API_URL` + `JWT_SECRET`, Azure Blob, `USE_REDIS`/`REDIS_URI`, `LANGFUSE_BASE_URL` (or the app's `LANGFUSE_BASEURL`)/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`, plus the flags the manifest is checked against (`SEARCH`, `AZURE_SEARCH_ENABLED`, `LOG_TO_FILE`, `KNAUF_FILE_TRANSLATION_ENABLED`, `KNAUF_CODE_EXECUTION_ENABLED`) | The verifier probes each store the way the app reaches it. A missing variable makes that store NOT PROBED, and a flag that contradicts the manifest blocks the run. A `LANGFUSE_HOST` that disagrees with the trace URL is refused (§4.4) |
 | **The same storage for every phase**: the same Mongo hosts and database, Meilisearch endpoint, RAG service and its pgvector/Azure AI Search behind it, Blob account and containers, Redis, and the same Langfuse **project** | Every phase records the non-secret identity of each store (§4.3) and `after` refuses to run against anything else. Deleting in one place and measuring in another would read as CLEAN |
 | The subject's **Mongo `users._id` and tenant** (or `none` in a single-tenant deployment) | Evidence runs accept nothing else. Email/OIDC identities are unique only per tenant, and the identity later authorizes the Langfuse deletion |
 
@@ -82,10 +84,12 @@ controller's cascade or delete it.
 
 ```bash
 # 1. Baseline, while the subject still exists. Refuses unless the manifest resolves every
-#    store (exit 6), and exits 4 NOT READY naming any mandatory store without data.
+#    store (exit 6), and exits 4 NOT READY naming any mandatory store without data and any
+#    store the subject's inventory proves the manifest omits or declares absent.
 #    Writes before.json: the verified identity tuple, the inventory the later phases need
-#    (physical vector ids, asset ids, authored agent ids, every Blob pointer, Langfuse trace
-#    ids), every probe result, the manifest it was taken under and the tool's own sha256.
+#    (physical vector ids, asset ids, authored agent ids, every Blob pointer, code sessions,
+#    Langfuse trace and score ids, each confirmed by id), every probe result, the readiness
+#    verdict, the manifest it was taken under and the tool's own sha256.
 node knauf/scripts/erasure-verify.js --phase before --env stage \
      --user <users._id> --tenant <tenantId|none> --out ./erasure-<date>/
 
@@ -97,8 +101,10 @@ node knauf/scripts/erasure-verify.js --phase before --env stage \
 
 # 4. Langfuse, which no product path reaches. Re-confirms the identity tuple, refuses a
 #    different Langfuse instance OR project than the baseline probed (rotated keys inside
-#    the project are fine), re-lists the subject's traces exactly, refuses a listing that
-#    shares no id with the baseline, and deletes those.
+#    the project are fine), refuses a baseline whose own Langfuse listing was not exact or
+#    (evidence) that step 1 called NOT READY, re-lists the subject's traces exactly,
+#    refuses a listing the baseline cannot anchor (no id in common, or a baseline that
+#    captured none), and deletes those.
 node knauf/scripts/erasure-verify.js --phase langfuse-delete --env stage \
      --user <users._id> --tenant <tenantId|none> --out ./erasure-<date>/ --confirm
 #    Deletion is ASYNCHRONOUS (Langfuse: "within 15 minutes") and cascades to observations and
@@ -106,7 +112,8 @@ node knauf/scripts/erasure-verify.js --phase langfuse-delete --env stage \
 
 # 5. Re-probe every store with the identifiers from step 1, at least 15 minutes after step 4
 #    and within 24 hours of step 1 (an older baseline is STALE), against the same storage
-#    (§4.3). Every trace and score id captured at step 1 is also looked up directly.
+#    (§4.3). Every trace and score id captured at step 1 is also looked up directly; step 1
+#    already proved that each one answers by id.
 node knauf/scripts/erasure-verify.js --phase after --env stage --out ./erasure-<date>/
 ```
 
@@ -117,9 +124,11 @@ and they are never overwritten: `after-<timestamp>.json`, `report-<timestamp>.md
 
 **Rehearsal mode.** Use `--mode rehearsal` to exercise the machinery before the manifest is
 complete. It accepts an email, username or OIDC id in `--user`, and it refuses an ambiguous
-match rather than guessing. It also allows `--skip <mongo,meili,vectors,blob,langfuse,redis,logs>`.
-A skipped store is recorded as `skipped`, never left out, and a rehearsal **never** prints
-CLEAN. `langfuse-delete` refuses a rehearsal identity.
+match rather than guessing. It also allows
+`--skip <mongo,meili,vectors,blob,langfuse,redis,logs,translation,code>`. A skipped store is
+recorded as `skipped`, never left out, and a rehearsal **never** prints CLEAN.
+`langfuse-delete` refuses a rehearsal identity (one not resolved by `_id` + `--tenant`). On a
+rehearsal baseline it still needs an exact Langfuse listing that the baseline anchors.
 
 ### Exit codes
 
@@ -145,10 +154,10 @@ email, which stays in `before.json`. It lists every manifest store:
 | `DELETED` | Positive baseline, exact zero after | no |
 | `N/A — <CODE> (approved)` | Zero before and after, with an approved exemption | no |
 | `RETAINED — <basis>; expiry <x>` | Approved retention, count shown | no |
-| `EVENTUALLY DELETED — …` | Approved deadline not yet passed, or approved lifecycle classes such as soft-deleted blobs; listed under *Obligations* | no |
+| `EVENTUALLY DELETED — …` | Approved deadline not yet passed; approved lifecycle classes such as soft-deleted blobs, each inside its own window; or a store that cannot be searched per subject whose lifecycle rule is holding. Listed under *Obligations* with the date by which every copy is gone | no |
 | `EXTERNALLY CONTROLLED — <controller>` | Approved; the notification duty is listed under *Obligations* | no |
 | `NOT CONFIGURED` | Absent in this environment, and the environment agrees | no |
-| `RESIDUAL` | Data survived where it should not, or survived past its deadline | **yes, exit 3** |
+| `RESIDUAL` | Data survived where it should not, past its deadline, or past its own lifecycle window | **yes, exit 3** |
 | `NO BASELINE` | Before count was 0: the probe never showed it can see this data | **yes** |
 | `NOT PROBED — …` | Skipped, absent, unreachable, erroring, inexact, adapter missing, or declared not-probed | **yes** |
 | `PENDING — …` | Langfuse inside its 15-minute settle window; re-run after the time shown | **yes** |
@@ -157,9 +166,10 @@ email, which stays in `before.json`. It lists every manifest store:
 Run-level blockers: a baseline older than 24 h, an `after` snapshot from another run, an
 environment flag that changed between phases, a store whose physical identity changed between
 phases (§4.3), a Langfuse deletion record for another run, identity or project, a
-non-evidence-grade identity. The inventory can also prove a store exists that the
-manifest omits, for example a File row pointing at local disk or at the code-execution
-environment. Each such store needs its own `files:<store>` entry.
+non-evidence-grade identity. The inventory can also prove a store exists that the manifest
+omits or declares absent: a File row pointing at local disk, at another Blob container
+(`files:other-container`) or at the code-execution environment, vector entries on a backend,
+code sessions, translation jobs. `before` already reports these as NOT READY.
 
 ---
 
@@ -170,12 +180,12 @@ environment. Each such store needs its own `files:<store>` entry.
 | Mongo, 33 model stores + `users` + 3 raw collections + `auditlogs` | `countDocuments` with the DSAR collector's `sinkFilter` (group membership by `idOnTheSource`, the email-keyed allowlist, `principalType: 'user'`, assets by the subject's own asset ids), pinned to the subject's tenant | the same filters Art. 15 disclosure uses |
 | Meilisearch `messages`, `convos` | `filter user = "<id>"` with `page`/`hitsPerPage` | `totalHits` is exhaustive; `estimatedTotalHits` is refused |
 | pgvector, Azure AI Search | `POST /verification/vectors` on the RAG service (§4.1) | filter-only scans, no ranking |
-| Blob (primary container) | `listBlobsFlat` over every `{images,uploads,avatars,documents,files}/<userId>/` prefix, paged, **including versions, snapshots and soft-deleted objects**, then reconciled against every Mongo pointer | enumerated from storage, so an object no row points at is still found |
-| Langfuse traces, scores | `GET /api/public/projects` binds the credentials to one project; `GET /api/public/{traces,scores}?userId=`, paged to `meta.totalPages`; at `after`, `GET /api/public/{traces,scores}/{id}` for every id captured at baseline (§4.4) | the collected ids must equal `meta.totalItems`; a baseline id answers 404 (gone) or 200 (present), anything else is not an answer |
+| Blob (primary container) | `listBlobsFlat` over every `{images,uploads,avatars,documents,files}/<userId>/` prefix, paged, **including versions, snapshots and soft-deleted objects**, then reconciled against every Mongo pointer. Object names leave the probe only as a count and a sha256 | enumerated from storage, so an object no row points at is still found |
+| Langfuse traces, scores | `GET /api/public/projects` binds the credentials to one project; `GET /api/public/{traces,scores}?userId=`, paged to `meta.totalPages`; every listed id is also fetched by id at baseline and must answer 200; at `after`, each of those ids is fetched again (§4.4) | the collected ids must equal `meta.totalItems`; a verified baseline id answers 404 (gone) or 200 (present), anything else is not an answer |
 | Redis | `SCAN MATCH *<id>*` (standalone) | exact for keys that embed the id; entries keyed by session/token ids are `redis:opaque` |
 | Log files | grep of `*.log`/`*.log.gz` | only where `LOG_TO_FILE` is on; AGK ships stdout to the log platform instead (`logs:platform`) |
-| Code-adapter staging (`files:execute_code`) | `listBlobsFlat` over `<sessionId>/` in the container the manifest names (`code-adapter-staging` on stage, `code-adapter-prod` on prod), for every session the subject's File rows referenced through `metadata.codeEnvRef` at baseline, all lifecycle classes | enumerated from storage by session; the adapter's reaper is what removes them (`FILE_TTL_HOURS`, 24 h sliding), so the manifest disposition is *eventually deleted* |
-| Translation scratch (`translation:scratch`) | `listBlobsFlat` over `translation-source` and `translation-target`; count **current** objects older than the manifest's `lifecycleWindow` (`P1D`) | scratch is `<uuid>/<name>` with the uuid never persisted, so it cannot be found per subject; the probe measures the store's own guarantee instead. Any overdue object means the lifecycle rule is not enforcing, and the store is a residual for every subject |
+| Code-adapter staging (`files:execute_code`) | `listBlobsFlat` over `<sessionId>/` in the container the manifest names (`code-adapter-staging` on stage, `code-adapter-prod` on prod), for every session the subject's File rows referenced at baseline (`metadata.codeEnvRef`, or a fallback row's download URL), all lifecycle classes. The container sits in the app's storage account (the approved shared-account design), so the app's Blob client reaches it | enumerated from storage by session; the adapter's reaper is what removes them (24 h after the last access, plus a grace hour, on an hourly sweep: about 26 h), so the manifest disposition is *eventually deleted*. A session a re-prime replaced, which no row references any more, is left to the reaper |
+| Translation scratch (`translation:scratch`) | `listBlobsFlat` over `translation-source` and `translation-target`; count **current** objects older than the manifest's `lifecycleWindow` (`P1D`, no code default). Counts only: a scratch name is another user's original filename | scratch is `<uuid>/<name>` with the uuid never persisted, so it cannot be found per subject; the probe measures the store's own guarantee instead. Any overdue object is a residual for every subject; none still leaves the subject's copies to the rule, so the report states the deadline as an obligation and never reads N/A |
 
 ### 4.1 Vectors: why the semantic probe was replaced
 
@@ -201,9 +211,13 @@ request that fails, is disabled or is inexact is **NOT PROBED**.
 
 A current object or a snapshot after deletion is always a **residual**. Soft-deleted copies (and
 old versions, if versioning is on) resolve as `EVENTUALLY DELETED` only under an **approved**
-`eventualClasses` policy on `blob:primary`, and only inside its window. The window is counted
-from the baseline, so the deadline errs early. Any Mongo pointer outside the canonical layout
-makes the store NOT PROBED, because objects under an unknown layout cannot be enumerated.
+`eventualClasses` policy, and only inside their window. Each copy's window runs from its own
+clock: `deletedOn` for a soft-deleted object, the version time for a previous version. A copy
+deleted weeks before the run is therefore overdue now, and a copy whose clock cannot be read
+counts as overdue. A previous version is any object with a version id that is not marked
+current; the service marks only the current one. Any Mongo pointer outside the canonical
+layout makes the store NOT PROBED, because objects under an unknown layout cannot be
+enumerated, and a pointer into another container is its own store (`files:other-container`).
 Expect the storage-side scan to surface objects the cascade never touched. **Avatars have no
 File row**, so a `images/<userId>/avatar-*` object that outlives the account deletion is a real
 residual.
@@ -217,10 +231,13 @@ instance between phases left the original untouched and read as CLEAN. Now every
 the **non-secret physical identity** of each store: Mongo hosts and database, the Meilisearch
 endpoint, the RAG service URL plus what the adapter reports as its storage (pgvector host,
 database, schema and collection, or the Azure AI Search endpoint and index), the Blob account
-and each container URL, the Redis host and database, the Langfuse base URL and **project id**.
-Credentials and SAS tokens are stripped before anything is written. `after` refuses to start
-against different storage; the identities the probes learn are compared in the verdict and any
-change is a blocker. The report's *Storage* line lists what was bound.
+and each container URL, the Redis host and database (from the path or `?db=`), the Langfuse
+base URL and **project id**, and the log directory where log files are probed. Credentials and
+SAS tokens are stripped before anything is written. The adapter's identity must name its
+backend and carry host, port, database and collection (pgvector) or endpoint and index (Azure
+AI Search); an empty or partial one is NOT PROBED. `after` refuses to start against different
+storage; the identities the probes learn are compared in the verdict and any change is a
+blocker. The report's *Storage* line lists what was bound.
 
 ### 4.4 Langfuse: project binding and direct lookups
 
@@ -237,18 +254,32 @@ each one up directly (`GET /api/public/{traces,scores}/{id}`), which needs no pa
 that answers 200 is counted, and after the settle window it is a RESIDUAL to file against
 Langfuse with its id.
 
+A 404 means *deleted* only if the route answers for ids that exist. An ingress that serves the
+list routes but not `/{id}`, or a Langfuse version without the route, would turn every lookup
+into "gone". So the baseline also fetches every listed id by id and requires 200 for each, and
+`after` trusts a 404 only for ids the baseline verified that way. Lookups run eight at a time
+and never download the body.
+
+The instance is the one the app **writes** to. Traces follow `LANGFUSE_BASE_URL`, then
+`LANGFUSE_BASEURL`, then the SDK default (Langfuse Cloud); scores (`feedback.ts`) also read
+`LANGFUSE_HOST` before `LANGFUSE_BASEURL`. When `LANGFUSE_HOST` is set without
+`LANGFUSE_BASE_URL` and points elsewhere, traces and scores land on different instances, and
+the verifier refuses rather than guess. It also refuses keys with no URL at all instead of
+sending them to the SDK default: name the instance, even if it is Langfuse Cloud. Translation spans (`translate-file`) carry no userId, so
+this leg cannot reach them; the manifest declares them as `langfuse:translationTraces`, not probed.
+
 ## 5. What must be resolved before the first evidence run
 
 `before --mode evidence` prints this list and refuses while it is non-empty. As shipped
-(revision `2026-09-25.1`) both `stage.json` and `prod.json` carry 26 preflight blockers of four
+(revision `2026-09-25.1`) both `stage.json` and `prod.json` carry 27 preflight blockers of four
 kinds:
 
 | Kind | Entries | Who resolves it |
 |---|---|---|
-| Proposed, awaiting approval | `mongo:auditlogs` (retained), `processor:azureOpenAI` (P30D), `processor:documentIntelligence` (P1D), `idp:entra` (externally controlled), `blob:primary` soft-delete window (P7D proposed), `files:execute_code` and `code:table` (eventually deleted by the code-adapter reaper, P1D proposed), `translation:scratch` (`NOT_SUBJECT_ADDRESSABLE`, measured against the one-day lifecycle rule), and baseline exemptions for `Balance`, `Preset`, `Assistant`, `Config`, `SystemGrant`, `MigrationAllowlist`, `SkillSyncCredential` | DPO + Eng. Check the stated fact, then fill `approvedBy`/`approvedAt` in a reviewed PR |
+| Proposed, awaiting approval | `mongo:auditlogs` (retained), `processor:azureOpenAI` (P30D), `processor:documentIntelligence` (P1D), `idp:entra` (externally controlled), `blob:primary` soft-delete window (P7D proposed), `files:execute_code` and `code:table` (eventually deleted by the code-adapter reaper, PT26H proposed; the staged copies' soft-deleted copies share `blob:primary`'s window), `translation:scratch` (eventually deleted within P8D proposed: the one-day lifecycle rule plus soft-delete retention; `NOT_SUBJECT_ADDRESSABLE`, measured against the rule), and baseline exemptions for `Balance`, `Preset`, `Assistant`, `Config`, `SystemGrant`, `MigrationAllowlist`, `SkillSyncCredential` | DPO + Eng. Check the stated fact, then fill `approvedBy`/`approvedAt` in a reviewed PR |
 | Langfuse secondary stores | `langfuse:eventStorage` (`events/`), `langfuse:mediaStorage` (`media/`), `langfuse:batchExports` (`exports/`, enabled) | Platform: does trace deletion remove the raw events and media? What is the lifecycle of exports? |
 | Backups | `langfuse:clickhouseBackups`, `backup:mongo`, `backup:blob`, `backup:pgvector`, `backup:meilisearch` | Platform: existence, retention, and a **no-restore-without-re-erasure** rule |
-| Other not-probed stores | `redis:opaque` (TTLs), `logs:platform` (Datadog retention; also carries the erased email, P0-4), `apm:datadog` | Eng / Platform |
+| Other not-probed stores | `redis:opaque` (TTLs), `logs:platform` (Datadog retention; also carries the erased email, P0-4), `apm:datadog`, `langfuse:translationTraces` (translation spans carry no userId: set it in the worker, or record a DPO disposition) | Eng / Platform / DPO |
 
 When a fact arrives, replace the entry with the matching disposition, cite its source in the
 entry, and bump `revision`. A run is always judged against the manifest embedded in its own

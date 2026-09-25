@@ -371,6 +371,14 @@
       "baseline": "required"
     },
     {
+      "key": "langfuse:translationTraces",
+      "label": "Langfuse translate-file spans (langfuse.agk.stage.knauf.digital) — job id, locales, counts, outcome; no userId",
+      "configured": true,
+      "disposition": "not-probed",
+      "owner": "Eng + DPO",
+      "reason": "The translation worker's spans carry no userId (translation/observability.js), so the subject's cannot be listed or deleted by the userId-keyed leg. Either set the trace userId from the job's user in the worker, or record a DPO-approved disposition for pseudonymous job metadata that expires with the Langfuse retention job"
+    },
+    {
       "key": "langfuse:eventStorage",
       "label": "Langfuse raw ingestion events — Blob agkblobstagewesteu, prefix events/",
       "configured": true,
@@ -487,8 +495,12 @@
       "configured": true,
       "container": "code-adapter-staging",
       "disposition": "eventually-deleted",
-      "deadline": "P1D",
-      "basis": "The account cascade deletes the Blob copy of a code-execution file but not the staged copy; the code adapter's reaper removes staged blobs (and their Table entities) once FILE_TTL_HOURS — 24, sliding on access — has passed (knauf/code-adapter store/reaper.ts). Probed by listing every session the subject's File rows referenced (metadata.codeEnvRef.storage_session_id).",
+      "deadline": "PT26H",
+      "basis": "The account cascade deletes the Blob copy of a code-execution file but not the staged copy. The code adapter's reaper removes a staged blob (and its Table entity) once the entity has expired — FILE_TTL_HOURS, 24, after the last access — and the blob is older than that TTL plus one hour, on an hourly sweep (knauf/code-adapter store/reaper.ts, REAPER_INTERVAL_MS): at most about 26 h after the account deletion. Probed by listing every session the subject's File rows referenced (metadata.codeEnvRef.storage_session_id, or the session in a fallback row's download URL). A session a re-prime replaced, which no row references any more, is left to the reaper and not probed.",
+      "eventualClasses": {
+        "softDeleted": "P7D"
+      },
+      "note": "PROPOSED: the reaper deletes into the shared storage account, so its soft-deleted copies follow the same delete-retention window as blob:primary. Platform to confirm with that entry.",
       "baseline": "required",
       "owner": "Eng",
       "approvedBy": null,
@@ -499,8 +511,8 @@
       "label": "Code-adapter Table metadata (codeAdapterFiles: filenames, hashes, owner id per staged file)",
       "configured": true,
       "disposition": "eventually-deleted",
-      "deadline": "P1D",
-      "basis": "Same reaper and TTL as files:execute_code — entities are deleted together with their blob (filesRepo.deleteExpired). Not probed from here: the verifier has no Table client; the blob probe covers the same sessions.",
+      "deadline": "PT26H",
+      "basis": "Same reaper as files:execute_code — an entity is deleted together with its blob (filesRepo.deleteExpired), so the same bound of about 26 h applies. Not probed from here: the verifier has no Table client; the blob probe covers the same sessions.",
       "owner": "Eng",
       "approvedBy": null,
       "approvedAt": null
@@ -516,11 +528,13 @@
       "key": "translation:scratch",
       "label": "Azure Translator batch scratch — Blob containers translation-source / translation-target (<uuid>/<name>)",
       "configured": true,
-      "disposition": "deleted",
+      "disposition": "eventually-deleted",
+      "deadline": "P8D",
       "lifecycleWindow": "P1D",
+      "basis": "Scratch holds a copy of the source and the translated document while a batch runs. The app deletes it after each batch; a lost or cancelled batch is left to the one-day storage lifecycle rule (Terraform, file-translation-production-plan); a deleted object then sits in the account's blob soft-delete retention (proposed P7D on blob:primary, Platform to confirm) before it is purged. The probe checks the rule itself: any current object older than lifecycleWindow is a residual.",
       "baseline": {
         "exempt": "NOT_SUBJECT_ADDRESSABLE",
-        "note": "Scratch objects carry no subject or job key (the uuid is never persisted), so they cannot be found per subject. The app deletes them after each batch; a lost or cancelled batch is left to the one-day storage lifecycle rule (Terraform, file-translation-production-plan). The probe counts current objects older than that window: any means the rule is not enforcing and every subject's scratch is a residual.",
+        "note": "Scratch objects carry no subject or job key (the uuid is never persisted), so they cannot be found per subject. The verdict states the deadline as an obligation rather than N/A.",
         "approvedBy": null,
         "approvedAt": null
       },

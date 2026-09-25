@@ -77,7 +77,9 @@ function resolvedManifest() {
       return {
         key,
         configured: true,
-        disposition: 'deleted',
+        disposition: 'eventually-deleted',
+        deadline: 'P8D',
+        basis: 'lifecycle rule + soft delete',
         lifecycleWindow: 'P1D',
         baseline: { exempt: 'NOT_SUBJECT_ADDRESSABLE', note: 'no subject key', ...APPROVED },
         ...APPROVED,
@@ -210,10 +212,12 @@ describe('the resolved fixture reaches CLEAN — so every failure below is meani
     assert.equal(status('logs:files'), 'NOT CONFIGURED');
     assert.match(status('backup:mongo'), /^EVENTUALLY DELETED — by 2026-10-29/);
     assert.match(status('idp:entra'), /^EXTERNALLY CONTROLLED — Knauf IAM/);
+    assert.match(status('translation:scratch'), /^EVENTUALLY DELETED — not searchable per subject/);
     assert.deepEqual(e.obligations.map((o) => o.key).sort(), [
       'backup:mongo',
       'code:table',
       'idp:entra',
+      'translation:scratch',
     ]);
   });
 });
@@ -347,11 +351,17 @@ describe('residuals', () => {
 /* ------------------------------------------------------------------ review point 5 (blob) */
 
 describe('Blob lifecycle classes', () => {
-  const blob = (classes) =>
+  /** Soft-deleted during the run: the product deletion at 10:10. */
+  const DELETED_IN_RUN = '2026-09-24T10:10:00.000Z';
+  const startsAt = (at) => ({ softDeleted: { oldest: at, newest: at, undated: 0 } });
+  const blob = (classes, lifecycleStarts = startsAt(DELETED_IN_RUN)) =>
     okResult(
       'blob:primary',
       Object.values(classes).reduce((a, b) => a + b, 0),
-      { classes: { current: 0, versions: 0, snapshots: 0, softDeleted: 0, ...classes } },
+      {
+        classes: { current: 0, versions: 0, snapshots: 0, softDeleted: 0, ...classes },
+        lifecycleStarts,
+      },
     );
 
   test('soft-deleted copies resolve only under an APPROVED eventualClasses policy and inside its window', () => {
@@ -369,12 +379,58 @@ describe('Blob lifecycle classes', () => {
       /^EVENTUALLY DELETED — softDeleted expire by 2026-10-01/,
     );
 
+    // Seven days after the copy's own deletion it is overdue.
     input.now = Date.parse('2026-10-02T00:00:00.000Z');
-    input.after.generatedAt = new Date(input.now - 1000).toISOString();
-    input.before.generatedAt = new Date(input.now - 2000).toISOString();
-    // Deadline is measured from the baseline; move the baseline back past it.
-    input.before.generatedAt = T0;
-    assertNotClean(input);
+    assertNotClean(input, 'RESIDUALS FOUND');
+  });
+
+  test('final review · a copy soft-deleted long before the run is overdue now, however fresh the baseline', () => {
+    const input = run();
+    Object.assign(entry(input.manifest, 'blob:primary'), {
+      eventualClasses: { softDeleted: 'P7D' },
+      ...APPROVED,
+    });
+    input.after.sinks['blob:primary'] = blob({ softDeleted: 1 }, startsAt('2026-09-04T10:00:00Z'));
+    const e = assertNotClean(input, 'RESIDUALS FOUND');
+    assert.match(
+      e.blockers.find((b) => b.key === 'blob:primary').text,
+      /outlived their lifecycle window/,
+    );
+    // A copy whose clock cannot be read is overdue too, alone or next to a dated one.
+    input.after.sinks['blob:primary'] = blob(
+      { softDeleted: 1 },
+      { softDeleted: { oldest: null, newest: null, undated: 1 } },
+    );
+    assertNotClean(input, 'RESIDUALS FOUND');
+    input.after.sinks['blob:primary'] = blob(
+      { softDeleted: 2 },
+      { softDeleted: { oldest: DELETED_IN_RUN, newest: DELETED_IN_RUN, undated: 1 } },
+    );
+    assertNotClean(input, 'RESIDUALS FOUND');
+    input.after.sinks['blob:primary'] = blob({ softDeleted: 1 }, {});
+    assertNotClean(input, 'RESIDUALS FOUND');
+  });
+
+  test('final review · an eventually-deleted store with an expiring class keeps its live copies to its own deadline', () => {
+    const input = run();
+    Object.assign(entry(input.manifest, 'files:execute_code'), {
+      deadline: 'PT26H',
+      eventualClasses: { softDeleted: 'P7D' },
+    });
+    input.after.sinks['files:execute_code'] = okResult('files:execute_code', 2, {
+      classes: { current: 1, versions: 0, snapshots: 0, softDeleted: 1 },
+      lifecycleStarts: startsAt(DELETED_IN_RUN),
+    });
+    const e = verdictOf(input);
+    assert.equal(e.verdict, 'CLEAN');
+    assert.match(
+      e.rows.find((r) => r.key === 'files:execute_code').status,
+      /^EVENTUALLY DELETED — 2 left, due by 2026-09-25/,
+    );
+    assert.match(
+      e.obligations.find((o) => o.key === 'files:execute_code').text,
+      /confirm gone after 2026-09-25T13:00:00\.000Z; its soft-deleted\/versioned copies then expire within P7D \(softDeleted\)/,
+    );
   });
 
   test('a live object or a snapshot is always a residual, whatever the policy', () => {
@@ -787,12 +843,17 @@ describe('Blob is enumerated from storage, not from Mongo pointers', () => {
 
   test('finds an orphan no Mongo row points at, and every lifecycle class', async () => {
     const calls = [];
+    // Shapes as the service emits them: only the CURRENT version is marked
+    // `isCurrentVersion: true`; a previous version carries no such field.
     const container = fakeContainer(
       {
-        [pointer]: {},
+        [pointer]: { versionId: '2026-09-02T00:00:00.0000000Z', isCurrentVersion: true },
         [`images/${SUBJECT}/avatar-1.png`]: {}, // avatar — no File row
-        [`uploads/${SUBJECT}/old.pdf`]: { versionId: 'v1', isCurrentVersion: false },
-        [`uploads/${SUBJECT}/gone.pdf`]: { deleted: true },
+        [`uploads/${SUBJECT}/old.pdf`]: { versionId: '2026-09-01T00:00:00.0000000Z' },
+        [`uploads/${SUBJECT}/gone.pdf`]: {
+          deleted: true,
+          properties: { deletedOn: new Date('2026-09-20T08:00:00Z') },
+        },
         [`documents/${SUBJECT}/x.docx`]: { snapshot: '2026-09-01' },
         [`uploads/someone-else/f.pdf`]: {},
       },
@@ -806,8 +867,26 @@ describe('Blob is enumerated from storage, not from Mongo pointers', () => {
     assert.equal(r.status, 'ok');
     assert.equal(r.count, 5);
     assert.deepEqual(r.detail.classes, { current: 2, versions: 1, snapshots: 1, softDeleted: 1 });
+    assert.deepEqual(r.detail.lifecycleStarts, {
+      versions: {
+        oldest: '2026-09-01T00:00:00.000Z',
+        newest: '2026-09-01T00:00:00.000Z',
+        undated: 0,
+      },
+      softDeleted: {
+        oldest: '2026-09-20T08:00:00.000Z',
+        newest: '2026-09-20T08:00:00.000Z',
+        undated: 0,
+      },
+    });
     assert.equal(r.detail.withoutMongoPointer, 4);
-    assert.ok(!r.detail.objects.some((n) => n.includes('someone-else')));
+    // Final review: a count and a digest, never the subject's filenames.
+    assert.equal(r.detail.objectCount, 5);
+    assert.match(r.detail.objectsSha256, /^[a-f0-9]{64}$/);
+    const serialised = JSON.stringify(r);
+    for (const name of ['report.pdf', 'avatar-1.png', 'old.pdf', 'someone-else']) {
+      assert.ok(!serialised.includes(name), name);
+    }
     assert.deepEqual(
       calls.map((c) => c.prefix),
       v.BLOB_BASE_PATHS.map((b) => `${b}/${SUBJECT}/`),
@@ -829,6 +908,15 @@ describe('Blob is enumerated from storage, not from Mongo pointers', () => {
     });
     assert.equal(r.status, 'not-probed');
     assert.equal(r.detail.classes.current, 1);
+  });
+
+  test('final review · a previous version is a version, whatever the SDK leaves unset', () => {
+    assert.equal(v.classifyBlobItem({ versionId: 'v1' }), 'versions');
+    assert.equal(v.classifyBlobItem({ versionId: 'v1', isCurrentVersion: false }), 'versions');
+    assert.equal(v.classifyBlobItem({ versionId: 'v2', isCurrentVersion: true }), 'current');
+    assert.equal(v.classifyBlobItem({}), 'current');
+    assert.equal(v.classifyBlobItem({ versionId: 'v1', deleted: true }), 'softDeleted');
+    assert.equal(v.classifyBlobItem({ snapshot: 's' }), 'snapshots');
   });
 
   test('no client ⇒ not-probed; a listing failure ⇒ error', async () => {
@@ -886,6 +974,48 @@ describe('blob pointer classification', () => {
       store: 'execute_code',
     });
     assert.equal(v.classifyPointer('', 'azure_blob', 'files'), null);
+  });
+
+  test('final review · a pointer into another container is its own store, not a path in this one', () => {
+    // The mirror above strips the first segment exactly as the delete path does, which
+    // deletes nothing in `files` and leaves the bytes in `files-old`.
+    assert.deepEqual(
+      v.classifyPointer(
+        `https://acct.blob.core.windows.net/files-old/uploads/${SUBJECT}/f1__x.pdf`,
+        'azure_blob',
+        'files',
+      ),
+      { kind: 'store', store: 'other-container' },
+    );
+    assert.deepEqual(
+      v.classifyPointer(
+        'https://acct.blob.core.windows.net/other/files/x.pdf',
+        'azure_blob',
+        'files',
+      ),
+      { kind: 'store', store: 'other-container' },
+    );
+    assert.deepEqual(
+      v.classifyPointer(
+        'http://127.0.0.1:10000/devstoreaccount1/files/uploads/u/f.pdf',
+        'azure_blob',
+        'files',
+      ),
+      { kind: 'blob', path: 'uploads/u/f.pdf' },
+    );
+    const input = run();
+    input.before.inventory = v.buildInventory({
+      files: [
+        {
+          file_id: 'f1',
+          filepath: `https://acct.blob.core.windows.net/files-old/uploads/${SUBJECT}/f1__x.pdf`,
+          source: 'azure_blob',
+        },
+      ],
+      containerName: 'files',
+    });
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.ok(e.blockers.some((b) => b.key === 'files:other-container'));
   });
 
   test('the inventory keeps the ids the after phase needs once the user is gone', () => {
@@ -1245,6 +1375,7 @@ describe('round 2 · the Langfuse leg is bound to the project, not the host', ()
       projectId,
       traceIds: ['t1', 't2', 't3'],
     });
+    before.readiness = { ready: true, preflightProblems: 0, gaps: [] };
     return before;
   };
   const auth = { base: 'https://lf', headers: { Authorization: 'Basic rotated-keys' } };
@@ -1323,6 +1454,76 @@ describe('round 2 · the Langfuse leg is bound to the project, not the host', ()
     assert.match(r, /none recorded/);
   });
 
+  test('final review · a baseline that cannot anchor the deletion refuses it', () => {
+    const project = { ok: true, id: 'proj-A' };
+    const refusal = (before, current = listing) =>
+      v.langfuseDeleteRefusal({ before, auth, project, current });
+    // The baseline's own listing was inexact: the project id was recorded, the ids not.
+    let before = baselineFor('proj-A');
+    before.sinks['langfuse:traces'] = v.probeResult('langfuse:traces', 'inexact', {
+      reason: 'traces: totalItems moved between pages',
+      detail: { baseUrl: 'https://lf', projectId: 'proj-A' },
+    });
+    assert.match(refusal(before, { ok: true, ids: ['t7', 't8'], total: 2 }), /not usable/);
+    // Skipped or not configured at baseline: a named refusal, not a crash.
+    for (const status of ['skipped', 'not-configured']) {
+      before = baselineFor('proj-A');
+      before.sinks['langfuse:traces'] = v.probeResult('langfuse:traces', status, {});
+      assert.match(refusal(before), /not usable/);
+    }
+    // An exact but EMPTY baseline anchors nothing that is listed now…
+    before = baselineFor('proj-A');
+    before.sinks['langfuse:traces'] = okResult('langfuse:traces', 0, {
+      projectId: 'proj-A',
+      traceIds: [],
+    });
+    assert.match(refusal(before, { ok: true, ids: ['t7'], total: 1 }), /baseline captured none/);
+    // …and an empty listing needs no anchor: there is nothing to delete.
+    assert.equal(refusal(before, { ok: true, ids: [], total: 0 }), null);
+  });
+
+  test('final review · an evidence baseline the before phase called NOT READY cannot be deleted from', () => {
+    const before = baselineFor('proj-A');
+    before.readiness = {
+      ready: false,
+      gaps: [{ key: 'blob:primary', reason: 'NO BASELINE' }],
+    };
+    const project = { ok: true, id: 'proj-A' };
+    assert.match(
+      v.langfuseDeleteRefusal({ before, auth, project, current: listing }),
+      /NOT READY \(1 gap\(s\)\)/,
+    );
+    delete before.readiness;
+    assert.match(
+      v.langfuseDeleteRefusal({ before, auth, project, current: listing }),
+      /no readiness recorded/,
+    );
+    // A rehearsal is never evidence, so readiness does not gate it — the anchor still does.
+    before.mode = 'rehearsal';
+    assert.equal(v.langfuseDeleteRefusal({ before, auth, project, current: listing }), null);
+    assert.match(
+      v.langfuseDeleteRefusal({ before, auth, project, current: { ok: true, ids: ['x'] } }),
+      /share no id/,
+    );
+  });
+
+  test('final review · writers that disagree on the Langfuse instance refuse the deletion', () => {
+    const { problem } = v.resolveLangfuseBaseUrl({
+      LANGFUSE_PUBLIC_KEY: 'pk',
+      LANGFUSE_SECRET_KEY: 'sk',
+      LANGFUSE_BASEURL: 'https://lf',
+      LANGFUSE_HOST: 'https://old',
+    });
+    const r = v.langfuseDeleteRefusal({
+      before: baselineFor('proj-A'),
+      auth,
+      project: { ok: true, id: 'proj-A' },
+      current: listing,
+      targetProblem: problem,
+    });
+    assert.match(r, /writers disagree: traces go to https:\/\/lf, scores to https:\/\/old/);
+  });
+
   test('resolveLangfuseProject accepts exactly one project', async () => {
     const one = await v.resolveLangfuseProject({
       auth,
@@ -1365,6 +1566,7 @@ describe('round 2 · the Langfuse leg is bound to the project, not the host', ()
     const r = await v.probeLangfuse({ identity: IDENTITY, env, fetchImpl });
     assert.equal(r['langfuse:traces'].detail.projectId, 'proj-A');
     assert.deepEqual(r['langfuse:scores'].detail.scoreIds, ['x1']);
+    assert.equal(r['langfuse:scores'].detail.verifiedById, 1);
     const none = await v.probeLangfuse({
       identity: IDENTITY,
       env,
@@ -1511,6 +1713,52 @@ describe('round 2 · physical backend identity is compared, not only configured/
     assert.deepEqual(good.detail.storage, STORAGE.pgvector);
   });
 
+  test('final review · an empty, partial or foreign storage identity binds nothing', async () => {
+    const env = { RAG_API_URL: 'http://rag' };
+    for (const [storage, reason] of [
+      [{}, /storage of \(none\)/],
+      [{ backend: 'pgvector', host: 'pg' }, /lacks port, database, collection/],
+      [{ ...STORAGE.pgvector, database: '  ' }, /lacks database/],
+      [STORAGE.azure_search, /storage of azure_search, not pgvector/],
+      [['pg'], /did not report/],
+    ]) {
+      const r = await v.probeVectors({
+        backend: 'pgvector',
+        identity: IDENTITY,
+        inventory: INVENTORY,
+        env,
+        fetchImpl: async (url, init) =>
+          fakeResponse(
+            200,
+            ragPage({ key: JSON.parse(init.body).key, total: 0, groups: [], storage }),
+          ),
+        mintToken: () => 't',
+      });
+      assert.equal(r.status, 'not-probed', JSON.stringify(storage));
+      assert.match(r.reason, reason);
+    }
+  });
+
+  test('final review · the Redis db in a query string and the log directory are identities too', () => {
+    assert.deepEqual(v.localBackends({ env: { REDIS_URI: 'redis://redis:6379?db=3' } }).redis, {
+      hosts: ['redis:6379'],
+      db: '3',
+    });
+    assert.deepEqual(v.localBackends({ env: { REDIS_URI: 'redis://redis:6379/2?db=3' } }).redis, {
+      hosts: ['redis:6379'],
+      db: '2',
+    });
+    const b = v.collectBackends({
+      local: {},
+      sinks: { 'logs:files': okResult('logs:files', 0, { dir: '/var/log/karl' }) },
+    });
+    assert.deepEqual(b.logs, { dir: '/var/log/karl' });
+    const input = run();
+    input.before.backends.logs = { dir: '/var/log/karl' };
+    input.after.backends.logs = { dir: '/tmp/empty' };
+    assertNotClean(input, 'INCOMPLETE');
+  });
+
   test('openContainers asks for the primary, the manifest-named code container and both scratch containers', async () => {
     const asked = [];
     const c = await v.openContainers({
@@ -1587,7 +1835,8 @@ describe('round 2 · translation and code execution are detected, not silently e
       containerName: 'files',
     });
     assert.equal(inv.nonBlobPointers.execute_code, 3);
-    assert.deepEqual(inv.codeSessions, ['sess-1']);
+    // Final review: the fallback row keeps its session only in the download URL.
+    assert.deepEqual(inv.codeSessions, ['sess-1', 'sess-2']);
     assert.deepEqual(inv.blobPointers.sort(), [
       'images/u/f1.png',
       'uploads/u/f2.pdf',
@@ -1612,7 +1861,8 @@ describe('round 2 · translation and code execution are detected, not silently e
       calls.map((c) => c.prefix),
       ['sess-1/'],
     );
-    assert.deepEqual(r.detail.objects, ['sess-1/cf1', 'sess-1/out-uuid']);
+    assert.equal(r.detail.objectCount, 2);
+    assert.equal(r.detail.objects, undefined);
     assert.deepEqual(r.detail.classes, { current: 1, versions: 0, snapshots: 0, softDeleted: 1 });
     const none = await v.probeCodeStaging({
       inventory: { codeSessions: ['s'] },
@@ -1641,18 +1891,23 @@ describe('round 2 · translation and code execution are detected, not silently e
     });
     assert.equal(r.status, 'ok');
     assert.equal(r.count, 2);
-    assert.deepEqual(r.detail.overdue, [
-      'translation-source/u2/b.pdf',
-      'translation-target/u2/b.pdf',
-    ]);
-    assert.equal(r.detail.classes.softDeleted, 1);
+    assert.deepEqual(r.detail.overdueByContainer, {
+      'translation-source': 1,
+      'translation-target': 1,
+    });
+    assert.equal(r.detail.oldestOverdue, new Date(now - 3 * day).toISOString());
+    assert.equal(r.detail.listedByClass.softDeleted, 1);
+    // Final review: scratch names are other users' filenames — never in the evidence.
+    assert.ok(!JSON.stringify(r).includes('b.pdf'));
+    assert.equal(r.detail.classes, undefined, 'the lifecycle-class rule must not read this sink');
     const noStamp = await v.probeTranslationScratch({
-      clients: [fakeContainer({ x: {} }), target],
+      clients: [fakeContainer({ 'u9/secret-name.pdf': {} }), target],
       names: ['s', 't'],
       windowMs: day,
       now,
     });
     assert.equal(noStamp.status, 'inexact');
+    assert.doesNotMatch(noStamp.reason, /secret-name/);
     const missing = await v.probeTranslationScratch({
       clients: [source, null],
       names: ['s', 't'],
@@ -1708,6 +1963,52 @@ describe('round 2 · translation and code execution are detected, not silently e
     assert.equal(sinks['translation:scratch'].status, 'ok');
     assert.equal(sinks['translation:scratch'].count, 0);
     assert.equal(scratchCalls.length, 2);
+
+    // Final review: the window is a manifest fact, with no code default behind it.
+    delete entry(manifest, 'translation:scratch').lifecycleWindow;
+    const noWindow = await v.takeSnapshot({
+      manifest,
+      identity: { _id: SUBJECT },
+      inventory: { assetIds: [], agentIds: [], vectorIds: [], blobPointers: [], codeSessions: [] },
+      deps: {
+        models,
+        mongoose: { connection: { db: { collection: () => ({ countDocuments: async () => 1 }) } } },
+        fetch: async () => {
+          throw new Error('offline');
+        },
+        redis: null,
+        containers,
+        mintToken: () => 't',
+        toObjectId: (id) => id,
+      },
+      env: {},
+    });
+    assert.equal(noWindow['translation:scratch'].status, 'not-probed');
+    assert.match(noWindow['translation:scratch'].reason, /lifecycleWindow/);
+  });
+
+  test('final review · scratch cannot be N/A: nothing overdue is an obligation, anything overdue a residual', () => {
+    const input = run();
+    let e = verdictOf(input);
+    assert.match(
+      e.rows.find((r) => r.key === 'translation:scratch').status,
+      /^EVENTUALLY DELETED — not searchable per subject; nothing outlived the P1D rule/,
+    );
+    assert.match(
+      e.obligations.find((o) => o.key === 'translation:scratch').text,
+      /gone by 2026-10-02T11:00:00\.000Z/,
+    );
+    input.after.sinks['translation:scratch'] = okResult('translation:scratch', 2);
+    e = assertNotClean(input, 'RESIDUALS FOUND');
+    assert.deepEqual(e.residuals, [{ key: 'translation:scratch', count: 2 }]);
+    // …and the exemption cannot be attached to a `deleted` claim at all.
+    const m = resolvedManifest();
+    entry(m, 'translation:scratch').disposition = 'deleted';
+    assert.ok(
+      v
+        .structuralProblems(m, 'test')
+        .some((p) => p.key === 'translation:scratch' && /NOT_SUBJECT_ADDRESSABLE/.test(p.problem)),
+    );
   });
 });
 
@@ -1732,7 +2033,7 @@ describe('round 2 · score ids are verified without their parent trace', () => {
       identity: IDENTITY,
       env,
       fetchImpl,
-      baseline: { traceIds: ['t1'], scoreIds: ['s1'] },
+      baseline: { traceIds: ['t1'], scoreIds: ['s1'], verifiedById: { traces: 1, scores: 1 } },
     });
     assert.equal(r['langfuse:traces'].count, 0);
     assert.equal(r['langfuse:scores'].count, 1);
@@ -1776,10 +2077,227 @@ describe('round 2 · score ids are verified without their parent trace', () => {
         if (url.includes('/scores/')) return fakeResponse(500, {});
         return emptyList();
       },
-      baseline: { traceIds: [], scoreIds: ['s1'] },
+      baseline: { traceIds: [], scoreIds: ['s1'], verifiedById: { traces: 0, scores: 1 } },
     });
     assert.equal(r['langfuse:scores'].status, 'error');
     assert.equal(r['langfuse:scores'].count, null);
+  });
+
+  test('final review · the baseline proves the by-id route answers, or a 404 later proves nothing', async () => {
+    const listed = (ids) =>
+      fakeResponse(200, {
+        data: ids.map((id) => ({ id, userId: SUBJECT })),
+        meta: { totalItems: ids.length, totalPages: 1 },
+      });
+    // An ingress that routes the lists but not /{id}: every lookup 404s.
+    const routeNotServed = async (url) => {
+      if (url.endsWith('/api/public/projects')) return project();
+      if (/\/api\/public\/(traces|scores)\/[^/?]+$/.test(url)) return fakeResponse(404, {});
+      return listed(url.includes('/traces?') ? ['t1'] : ['s1']);
+    };
+    const atBaseline = await v.probeLangfuse({
+      identity: IDENTITY,
+      env,
+      fetchImpl: routeNotServed,
+    });
+    for (const k of ['langfuse:traces', 'langfuse:scores']) {
+      assert.equal(atBaseline[k].status, 'error');
+      assert.match(atBaseline[k].reason, /could not mean "deleted"/);
+    }
+    // A baseline without that proof makes the after lookups not an answer.
+    const atAfter = await v.probeLangfuse({
+      identity: IDENTITY,
+      env,
+      fetchImpl: routeNotServed,
+      baseline: { traceIds: ['t1'], scoreIds: ['s1'] },
+    });
+    assert.equal(atAfter['langfuse:scores'].status, 'not-probed');
+    assert.match(atAfter['langfuse:scores'].reason, /did not confirm/);
+    // The snapshot carries the proof from the baseline sinks to the after probe.
+    const seen = [];
+    const sinks = await v.takeSnapshot({
+      manifest: resolvedManifest(),
+      identity: IDENTITY,
+      inventory: { assetIds: [], agentIds: [], vectorIds: [], blobPointers: [] },
+      skip: ['mongo', 'meili', 'vectors', 'blob', 'redis', 'logs', 'translation', 'code'],
+      deps: {
+        fetch: async (url) => {
+          seen.push(url);
+          if (url.endsWith('/api/public/projects')) return project();
+          if (/\/scores\/s1$/.test(url)) return fakeResponse(200, { id: 's1' });
+          if (/\/traces\/t1$/.test(url)) return fakeResponse(404, {});
+          return emptyList();
+        },
+        toObjectId: (id) => id,
+      },
+      env,
+      baselineSinks: {
+        'langfuse:traces': okResult('langfuse:traces', 1, { traceIds: ['t1'], verifiedById: 1 }),
+        'langfuse:scores': okResult('langfuse:scores', 1, { scoreIds: ['s1'], verifiedById: 1 }),
+      },
+    });
+    assert.equal(sinks['langfuse:scores'].count, 1);
+    assert.equal(sinks['langfuse:traces'].count, 0);
+    assert.ok(seen.some((u) => u.endsWith('/api/public/scores/s1')));
+  });
+
+  test('final review · lookups run a few at a time, never all at once and never one by one', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const r = await v.lookupLangfuseIds({
+      auth: { base: 'https://lf', headers: {} },
+      route: 'traces',
+      ids: Array.from({ length: 40 }, (_, i) => `t${i}`),
+      fetchImpl: async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setImmediate(resolve));
+        inFlight -= 1;
+        return fakeResponse(404, {});
+      },
+    });
+    assert.deepEqual(r, { ok: true, present: [], absent: 40 });
+    assert.equal(peak, v.LANGFUSE_LOOKUP_CONCURRENCY);
+  });
+});
+
+/* ------------------------------------------------------------------ final review */
+
+describe('final review · configured:false cannot hide a store the verifier can see', () => {
+  test('a Mongo collection cannot be declared absent', () => {
+    for (const key of ['mongo:Message', 'raw:knauf_translation_jobs', 'mongo:users']) {
+      const m = resolvedManifest();
+      entry(m, key).configured = false;
+      assert.ok(
+        v.structuralProblems(m, 'test').some((p) => p.key === key && /Mongo/.test(p.problem)),
+        key,
+      );
+      const input = run();
+      entry(input.manifest, key).configured = false;
+      assertNotClean(input, 'INCOMPLETE');
+    }
+  });
+
+  test('every Redis namespace follows USE_REDIS', () => {
+    const input = run();
+    input.manifest.sinks.push({
+      key: 'redis:opaque',
+      configured: false,
+      disposition: 'not-probed',
+      reason: 'x',
+    });
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.match(e.rows.find((r) => r.key === 'redis:opaque').status, /drift/);
+  });
+
+  test('a store no signal can confirm needs an approval to be declared absent', () => {
+    const input = run();
+    Object.assign(entry(input.manifest, 'backup:mongo'), {
+      configured: false,
+      approvedBy: null,
+      approvedAt: null,
+    });
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.match(e.rows.find((r) => r.key === 'backup:mongo').status, /needs approvedBy/);
+    Object.assign(entry(input.manifest, 'backup:mongo'), APPROVED);
+    assert.equal(verdictOf(input).verdict, 'CLEAN');
+    assert.equal(
+      verdictOf(input).rows.find((r) => r.key === 'backup:mongo').status,
+      'NOT CONFIGURED',
+    );
+  });
+
+  test('"feature disabled" is drift while the environment shows the feature on', () => {
+    const input = run();
+    input.before.sinks['files:execute_code'] = okResult('files:execute_code', 0);
+    entry(input.manifest, 'files:execute_code').baseline = {
+      exempt: 'FEATURE_DISABLED_IN_ENVIRONMENT',
+      note: 'written when code execution was off',
+      ...APPROVED,
+    };
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.match(e.rows.find((r) => r.key === 'files:execute_code').status, /drift/);
+    input.before.envSignals['files:execute_code'] = false;
+    input.after.envSignals['files:execute_code'] = false;
+    assert.equal(verdictOf(input).verdict, 'CLEAN');
+  });
+
+  test('the app trims boolean flags, so the signals do', () => {
+    const s = v.environmentSignals({ USE_REDIS: ' true ', KNAUF_CODE_EXECUTION_ENABLED: 'TRUE\n' });
+    assert.equal(s['redis:keys'], true);
+    assert.equal(s['files:execute_code'], true);
+  });
+
+  test('the inventory contradicts configured:false for vector backends, translation and code sessions', () => {
+    const cases = [
+      ['vectors:azureAiSearch', { vectorEntries: [{ vectorId: 'a1', backend: 'azure_search' }] }],
+      ['vectors:pgvector', { vectorEntries: [{ vectorId: 'f1', backend: 'pgvector' }] }],
+      ['code:table', { codeSessions: ['sess-1'] }],
+    ];
+    for (const [key, inventory] of cases) {
+      const input = run();
+      input.before.inventory = { nonBlobPointers: {}, ...inventory };
+      entry(input.manifest, key).configured = false;
+      // The operator's shell lacks the flag, so no signal contradicts the manifest…
+      input.before.envSignals[key] = false;
+      input.after.envSignals[key] = false;
+      input.before.sinks[key] = v.probeResult(key, 'not-configured', {});
+      input.after.sinks[key] = v.probeResult(key, 'not-configured', {});
+      // …but the subject's own rows do.
+      assert.deepEqual(
+        v.inventoryProblems(input.manifest, input.before).map((p) => p.key),
+        [key],
+      );
+      const e = assertNotClean(input, 'INCOMPLETE');
+      assert.match(e.rows.find((r) => r.key === key).status, /inventory holds data here/, key);
+    }
+    const input = run();
+    entry(input.manifest, 'translation:scratch').configured = false;
+    input.before.envSignals['translation:scratch'] = false;
+    input.after.envSignals['translation:scratch'] = false;
+    const e = assertNotClean(input, 'INCOMPLETE'); // raw:knauf_translation_jobs counted 3
+    assert.match(e.blockers.find((b) => b.key === 'translation:scratch').text, /translation job/);
+  });
+
+  test('before knows what the verdict will block: baseline gaps and inventory problems', () => {
+    const input = run();
+    assert.deepEqual(v.baselineGaps(input.manifest, input.before), []);
+    assert.deepEqual(v.inventoryProblems(input.manifest, input.before), []);
+    input.before.sinks['mongo:Message'] = okResult('mongo:Message', 0);
+    input.before.sinks['meili:convos'] = v.probeResult('meili:convos', 'error', { reason: 'x' });
+    input.before.inventory.nonBlobPointers = { external: 1 };
+    assert.deepEqual(
+      v
+        .baselineGaps(input.manifest, input.before)
+        .map((g) => g.key)
+        .sort(),
+      ['meili:convos', 'mongo:Message'],
+    );
+    assert.deepEqual(v.inventoryProblems(input.manifest, input.before), [
+      {
+        key: 'files:external',
+        text: 'before-inventory holds 1 file(s) stored as "external", and the manifest has no entry for that store',
+      },
+    ]);
+    const readiness = v.baselineReadiness(input.manifest, input.before);
+    assert.equal(readiness.ready, false);
+    assert.deepEqual(readiness.gaps.map((g) => g.key).sort(), [
+      'files:external',
+      'meili:convos',
+      'mongo:Message',
+    ]);
+  });
+
+  test('a baseline is READY only with no gap and no preflight problem', () => {
+    const { manifest, before } = run();
+    assert.deepEqual(v.baselineReadiness(manifest, before), {
+      ready: true,
+      preflightProblems: 0,
+      gaps: [],
+    });
+    const rehearsal = v.baselineReadiness(manifest, before, ['idp:entra: PROPOSED']);
+    assert.equal(rehearsal.ready, false);
+    assert.equal(rehearsal.preflightProblems, 1);
   });
 });
 
@@ -1823,11 +2341,19 @@ describe('shipped environment manifests', () => {
       const code = manifest.sinks.find((s) => s.key === 'files:execute_code');
       assert.equal(scratch.configured, true);
       assert.equal(scratch.baseline?.exempt, 'NOT_SUBJECT_ADDRESSABLE');
+      assert.equal(scratch.disposition, 'eventually-deleted');
       assert.equal(scratch.lifecycleWindow, 'P1D');
       assert.equal(code.configured, true);
       assert.equal(code.disposition, 'eventually-deleted');
       assert.match(code.container, /^code-adapter-/);
+      // The reaper deletes only after its 24 h TTL plus a grace hour, on an hourly sweep.
+      assert.ok(v.parseDuration(code.deadline) > 25 * 60 * 60 * 1000, code.deadline);
       assert.equal(manifest.sinks.find((s) => s.key === 'code:table').configured, true);
+      // Translation spans carry no userId, so they are declared rather than assumed covered.
+      assert.equal(
+        manifest.sinks.find((s) => s.key === 'langfuse:translationTraces')?.disposition,
+        'not-probed',
+      );
       assert.equal(
         manifest.sinks.find((s) => s.key === 'raw:knauf_translation_jobs').baseline,
         'required',
@@ -1933,13 +2459,45 @@ describe('helpers', () => {
     assert.equal(new Set(batches.flatMap((b) => b.traceIds)).size, 205);
   });
 
-  test('Langfuse base url resolution matches feedback.ts precedence', () => {
-    assert.equal(v.resolveLangfuseBaseUrl({ LANGFUSE_HOST: 'https://a/' }), 'https://a');
-    assert.equal(
-      v.resolveLangfuseBaseUrl({ LANGFUSE_BASE_URL: 'https://b', LANGFUSE_HOST: 'https://a' }),
-      'https://b',
+  test('final review · the Langfuse base url follows the writers, and a split between them is refused', () => {
+    const keys = { LANGFUSE_PUBLIC_KEY: 'pk', LANGFUSE_SECRET_KEY: 'sk' };
+    const resolve = (env) => v.resolveLangfuseBaseUrl({ ...keys, ...env });
+    assert.deepEqual(resolve({ LANGFUSE_BASE_URL: 'https://b/', LANGFUSE_HOST: 'https://a' }), {
+      url: 'https://b',
+    });
+    assert.deepEqual(resolve({ LANGFUSE_BASEURL: 'https://c' }), { url: 'https://c' });
+    // Traces never read LANGFUSE_HOST; scores prefer it over LANGFUSE_BASEURL.
+    const split = resolve({ LANGFUSE_BASEURL: 'https://c', LANGFUSE_HOST: 'https://a' });
+    assert.equal(split.url, '');
+    assert.match(split.problem, /traces go to https:\/\/c, scores to https:\/\/a/);
+    assert.match(
+      resolve({ LANGFUSE_HOST: 'https://a' }).problem,
+      /traces go to https:\/\/cloud\.langfuse\.com, scores to https:\/\/a/,
     );
-    assert.equal(v.resolveLangfuseBaseUrl({}), '');
+    // Keys without a URL: the app would fall back to Langfuse Cloud, but the verifier
+    // never sends credentials to a host nobody named.
+    const unnamed = resolve({});
+    assert.equal(unnamed.url, '');
+    assert.match(unnamed.problem, /no Langfuse base URL is set.*cloud\.langfuse\.com/);
+    assert.deepEqual(v.resolveLangfuseBaseUrl({}), { url: '' });
+  });
+
+  test('final review · a split or unnamed Langfuse target is NOT PROBED, and nothing is called', async () => {
+    const keys = { LANGFUSE_PUBLIC_KEY: 'pk', LANGFUSE_SECRET_KEY: 'sk' };
+    for (const [env, reason] of [
+      [{ ...keys, LANGFUSE_BASEURL: 'https://c', LANGFUSE_HOST: 'https://a' }, /writers disagree/],
+      [keys, /no Langfuse base URL is set/],
+    ]) {
+      const r = await v.probeLangfuse({
+        identity: IDENTITY,
+        env,
+        fetchImpl: async () => {
+          throw new Error('must not be called');
+        },
+      });
+      assert.equal(r['langfuse:traces'].status, 'not-probed');
+      assert.match(r['langfuse:traces'].reason, reason);
+    }
   });
 
   test('environment signals read the same variables the app does', () => {
