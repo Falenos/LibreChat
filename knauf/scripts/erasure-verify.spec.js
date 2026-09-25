@@ -28,7 +28,37 @@ const SIGNALS = {
   'redis:keys': true,
   'logs:files': false,
   'blob:primary': true,
+  'translation:scratch': true,
+  'files:execute_code': true,
+  'code:table': true,
 };
+/** What the RAG adapter (v2) reports as the storage behind each backend. */
+const STORAGE = {
+  pgvector: {
+    backend: 'pgvector',
+    host: 'pg',
+    port: '5432',
+    database: 'vectors',
+    schema: null,
+    collection: 'chunks',
+  },
+  azure_search: {
+    backend: 'azure_search',
+    endpoint: 'https://s.search.windows.net',
+    index: 'documents-index',
+  },
+};
+/** The non-secret storage identities a baseline records (review round 2). */
+const backendsFixture = () => ({
+  mongo: { hosts: ['mongo:27017'], database: 'LibreChat' },
+  meili: { endpoint: 'http://meili:7700' },
+  ragApi: { endpoint: 'http://rag:8000' },
+  langfuse: { baseUrl: 'https://lf', projectId: 'proj-A' },
+  redis: { hosts: ['redis:6379'], db: '0' },
+  'container:primary': { url: 'https://acct.blob.core.windows.net/files' },
+  'vectors:pgvector': { ...STORAGE.pgvector },
+  'vectors:azureAiSearch': { ...STORAGE.azure_search },
+});
 
 function resolvedManifest() {
   const sinks = v.probedSinkKeys().map((key) => {
@@ -43,9 +73,39 @@ function resolvedManifest() {
       };
     }
     if (key === 'logs:files') return { key, configured: false, disposition: 'deleted' };
+    if (key === 'translation:scratch') {
+      return {
+        key,
+        configured: true,
+        disposition: 'deleted',
+        lifecycleWindow: 'P1D',
+        baseline: { exempt: 'NOT_SUBJECT_ADDRESSABLE', note: 'no subject key', ...APPROVED },
+        ...APPROVED,
+      };
+    }
+    if (key === 'files:execute_code') {
+      return {
+        key,
+        configured: true,
+        container: 'code-adapter-test',
+        disposition: 'eventually-deleted',
+        deadline: 'P1D',
+        basis: 'adapter TTL',
+        baseline: 'required',
+        ...APPROVED,
+      };
+    }
     return { key, configured: true, disposition: 'deleted', baseline: 'required' };
   });
   sinks.push(
+    {
+      key: 'code:table',
+      configured: true,
+      disposition: 'eventually-deleted',
+      deadline: 'P1D',
+      basis: 'adapter TTL',
+      ...APPROVED,
+    },
     {
       key: 'backup:mongo',
       configured: true,
@@ -98,6 +158,7 @@ function run({ beforeCount = 3, afterCount = 0 } = {}) {
     environment: 'test',
     identity,
     envSignals: { ...SIGNALS },
+    backends: backendsFixture(),
     inventory: { nonBlobPointers: {} },
     sinks: sinksWith(beforeCount),
   };
@@ -110,11 +171,13 @@ function run({ beforeCount = 3, afterCount = 0 } = {}) {
     generatedAt: T1,
     environment: 'test',
     envSignals: { ...SIGNALS },
+    backends: backendsFixture(),
     sinks: sinksWith(afterCount),
   };
   const langfuseDelete = {
     runId: 'run-1',
     identityDigest: 'id-digest',
+    projectId: 'proj-A',
     requestedAt: '2026-09-24T10:10:00.000Z',
     traces: 3,
   };
@@ -147,7 +210,11 @@ describe('the resolved fixture reaches CLEAN — so every failure below is meani
     assert.equal(status('logs:files'), 'NOT CONFIGURED');
     assert.match(status('backup:mongo'), /^EVENTUALLY DELETED — by 2026-10-29/);
     assert.match(status('idp:entra'), /^EXTERNALLY CONTROLLED — Knauf IAM/);
-    assert.deepEqual(e.obligations.map((o) => o.key).sort(), ['backup:mongo', 'idp:entra']);
+    assert.deepEqual(e.obligations.map((o) => o.key).sort(), [
+      'backup:mongo',
+      'code:table',
+      'idp:entra',
+    ]);
   });
 });
 
@@ -496,16 +563,18 @@ function ragPage({
   next = null,
   exact = true,
   adapter = v.RAG_ADAPTER,
+  storage = STORAGE[backend],
 }) {
   return {
     adapter,
-    adapter_version: 1,
+    adapter_version: 2,
     backend,
     key,
     exact,
     inexact_reason: exact ? null : 'moved',
     total_chunks: total,
     groups,
+    storage,
     next_cursor: next,
   };
 }
@@ -981,7 +1050,14 @@ describe('every probed sink is materialised in every snapshot', () => {
       throw new Error('offline');
     },
     redis: null,
-    containerClient: null,
+    containers: {
+      names: {
+        primary: 'files',
+        codeStaging: 'code-adapter-staging',
+        translation: ['translation-source', 'translation-target'],
+      },
+      clients: { primary: null, codeStaging: null, translation: [null, null] },
+    },
     mintToken: () => 't',
     toObjectId: (id) => id,
     ...overrides,
@@ -1009,6 +1085,8 @@ describe('every probed sink is materialised in every snapshot', () => {
     assert.equal(sinks['vectors:pgvector'].status, 'error');
     assert.equal(sinks['blob:primary'].status, 'not-probed');
     assert.equal(sinks['logs:files'].status, 'not-configured');
+    assert.equal(sinks['translation:scratch'].status, 'not-probed');
+    assert.equal(sinks['files:execute_code'].status, 'not-probed');
   });
 
   test('--skip (rehearsal) marks a whole group skipped instead of leaving it out', async () => {
@@ -1156,6 +1234,555 @@ describe('evidence identity: canonical id + tenant, verified and bound', () => {
   });
 });
 
+/* ------------------------------------------------------------------ review round 2 */
+
+describe('round 2 · the Langfuse leg is bound to the project, not the host', () => {
+  const baselineFor = (projectId) => {
+    const before = run().before;
+    before.backends.langfuse = { baseUrl: 'https://lf', projectId };
+    before.sinks['langfuse:traces'] = okResult('langfuse:traces', 3, {
+      baseUrl: 'https://lf',
+      projectId,
+      traceIds: ['t1', 't2', 't3'],
+    });
+    return before;
+  };
+  const auth = { base: 'https://lf', headers: { Authorization: 'Basic rotated-keys' } };
+  const listing = { ok: true, ids: ['t1', 't2'], total: 2 };
+
+  test('same host, different project ⇒ refused', () => {
+    const r = v.langfuseDeleteRefusal({
+      before: baselineFor('proj-A'),
+      auth,
+      project: { ok: true, id: 'proj-B' },
+      current: listing,
+    });
+    assert.match(r, /project proj-B.*baseline was taken in proj-A/);
+  });
+
+  test('same project with rotated keys ⇒ allowed', () => {
+    const r = v.langfuseDeleteRefusal({
+      before: baselineFor('proj-A'),
+      auth,
+      project: { ok: true, id: 'proj-A' },
+      current: listing,
+    });
+    assert.equal(r, null);
+  });
+
+  test('another host, an unresolved project, an inexact listing or a disjoint listing ⇒ refused', () => {
+    const before = baselineFor('proj-A');
+    const ok = { ok: true, id: 'proj-A' };
+    assert.match(
+      v.langfuseDeleteRefusal({
+        before,
+        auth: { base: 'https://other' },
+        project: ok,
+        current: listing,
+      }),
+      /not the instance/,
+    );
+    assert.match(
+      v.langfuseDeleteRefusal({
+        before,
+        auth,
+        project: { ok: false, reason: 'HTTP 401' },
+        current: listing,
+      }),
+      /HTTP 401/,
+    );
+    assert.match(
+      v.langfuseDeleteRefusal({
+        before,
+        auth,
+        project: ok,
+        current: { ok: false, reason: 'moved' },
+      }),
+      /could not list/,
+    );
+    assert.match(
+      v.langfuseDeleteRefusal({
+        before,
+        auth,
+        project: ok,
+        current: { ok: true, ids: ['x1'], total: 1 },
+      }),
+      /share no id/,
+    );
+  });
+
+  test('a baseline that recorded no project can never authorise a deletion', () => {
+    const before = baselineFor('proj-A');
+    delete before.backends.langfuse.projectId;
+    const r = v.langfuseDeleteRefusal({
+      before,
+      auth,
+      project: { ok: true, id: 'proj-A' },
+      current: listing,
+    });
+    assert.match(r, /none recorded/);
+  });
+
+  test('resolveLangfuseProject accepts exactly one project', async () => {
+    const one = await v.resolveLangfuseProject({
+      auth,
+      fetchImpl: async () => fakeResponse(200, { data: [{ id: 'proj-A', name: 'karl' }] }),
+    });
+    assert.deepEqual(one, { ok: true, id: 'proj-A', name: 'karl' });
+    const two = await v.resolveLangfuseProject({
+      auth,
+      fetchImpl: async () => fakeResponse(200, { data: [{ id: 'a' }, { id: 'b' }] }),
+    });
+    assert.equal(two.ok, false);
+    const denied = await v.resolveLangfuseProject({
+      auth,
+      fetchImpl: async () => fakeResponse(401, {}),
+    });
+    assert.match(denied.reason, /401/);
+  });
+
+  test('the verdict blocks a deletion record from another project', () => {
+    const input = run();
+    input.langfuseDelete.projectId = 'proj-B';
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.ok(e.blockers.some((b) => /project proj-B/.test(b.text)));
+  });
+
+  test('the baseline probe records the project, and refuses when the credentials resolve to none', async () => {
+    const env = {
+      LANGFUSE_BASE_URL: 'https://lf',
+      LANGFUSE_PUBLIC_KEY: 'pk',
+      LANGFUSE_SECRET_KEY: 'sk',
+    };
+    const fetchImpl = async (url) => {
+      if (url.endsWith('/api/public/projects'))
+        return fakeResponse(200, { data: [{ id: 'proj-A', name: 'karl' }] });
+      return fakeResponse(200, {
+        data: [{ id: 'x1', userId: SUBJECT }],
+        meta: { totalItems: 1, totalPages: 1 },
+      });
+    };
+    const r = await v.probeLangfuse({ identity: IDENTITY, env, fetchImpl });
+    assert.equal(r['langfuse:traces'].detail.projectId, 'proj-A');
+    assert.deepEqual(r['langfuse:scores'].detail.scoreIds, ['x1']);
+    const none = await v.probeLangfuse({
+      identity: IDENTITY,
+      env,
+      fetchImpl: async () => fakeResponse(200, { data: [] }),
+    });
+    assert.equal(none['langfuse:traces'].status, 'not-probed');
+    assert.match(none['langfuse:traces'].reason, /project/);
+  });
+});
+
+describe('round 2 · physical backend identity is compared, not only configured/not', () => {
+  test('reviewer repro: MEILI_HOST switched to an empty instance between phases cannot be CLEAN', () => {
+    const input = run();
+    input.after.backends = {
+      ...input.after.backends,
+      meili: { endpoint: 'http://meili-empty:7700' },
+    };
+    const e = assertNotClean(input, 'INCOMPLETE');
+    assert.ok(e.blockers.some((b) => b.key === '(storage:meili)'));
+    assert.equal(e.backends.mismatches.length, 1);
+  });
+
+  test('swapped RAG storage behind the same RAG_API_URL blocks too', () => {
+    const input = run();
+    input.after.backends['vectors:pgvector'] = { ...STORAGE.pgvector, database: 'vectors-clone' };
+    assertNotClean(input, 'INCOMPLETE');
+  });
+
+  test('a baseline with no backend identities blocks', () => {
+    const input = run();
+    input.before.backends = {};
+    assertNotClean(input, 'INCOMPLETE');
+  });
+
+  test('backendMismatch compares field by field and ignores what one side does not know', () => {
+    const before = {
+      langfuse: { baseUrl: 'https://lf', projectId: 'proj-A' },
+      meili: { endpoint: 'http://m' },
+    };
+    assert.deepEqual(v.backendMismatch(before, { langfuse: { baseUrl: 'https://lf' } }), []);
+    assert.deepEqual(v.backendMismatch(before, { redis: { hosts: ['r:6379'] } }), []);
+    const drift = v.backendMismatch(before, {
+      meili: { endpoint: 'http://other' },
+      langfuse: { baseUrl: 'https://lf', projectId: 'proj-B' },
+    });
+    assert.deepEqual(drift.map((d) => `${d.key}.${d.field}`).sort(), [
+      'langfuse.projectId',
+      'meili.endpoint',
+    ]);
+  });
+
+  test('local identities carry hosts, databases and containers, never credentials', () => {
+    const containers = {
+      clients: {
+        primary: { url: 'https://acct.blob.core.windows.net/files?sv=1&sig=SECRETSIG' },
+        codeStaging: { url: 'https://acct.blob.core.windows.net/code-adapter-staging' },
+        translation: [{ url: 'https://acct.blob.core.windows.net/translation-source' }, null],
+      },
+    };
+    const b = v.localBackends({
+      env: {
+        MONGO_URI:
+          'mongodb+srv://user:p%40ss@c2.mongo.cosmos.azure.com,c1.mongo.cosmos.azure.com/LibreChat?ssl=true',
+        MEILI_HOST: 'http://meili:7700',
+        RAG_API_URL: 'http://rag:8000/',
+        LANGFUSE_BASE_URL: 'https://lf/',
+        REDIS_URI: 'redis://:secretpw@redis:6379/2',
+      },
+      containers,
+    });
+    assert.deepEqual(b.mongo, {
+      hosts: ['c1.mongo.cosmos.azure.com', 'c2.mongo.cosmos.azure.com'],
+      database: 'LibreChat',
+    });
+    assert.deepEqual(b.meili, { endpoint: 'http://meili:7700' });
+    assert.deepEqual(b.ragApi, { endpoint: 'http://rag:8000' });
+    assert.deepEqual(b.langfuse, { baseUrl: 'https://lf' });
+    assert.deepEqual(b.redis, { hosts: ['redis:6379'], db: '2' });
+    assert.deepEqual(b['container:primary'], { url: 'https://acct.blob.core.windows.net/files' });
+    assert.deepEqual(b['container:codeStaging'], {
+      url: 'https://acct.blob.core.windows.net/code-adapter-staging',
+    });
+    assert.equal(b['container:translation1'], undefined);
+    const serialised = JSON.stringify(b);
+    for (const secret of ['p%40ss', 'secretpw', 'sig=', 'user:', 'SECRETSIG']) {
+      assert.ok(!serialised.includes(secret), secret);
+    }
+  });
+
+  test('collectBackends folds in the Langfuse project and the RAG storage the probes reported', () => {
+    const sinks = {
+      'langfuse:traces': okResult('langfuse:traces', 0, { projectId: 'proj-A' }),
+      'vectors:pgvector': okResult('vectors:pgvector', 0, { storage: STORAGE.pgvector }),
+    };
+    const b = v.collectBackends({ local: { langfuse: { baseUrl: 'https://lf' } }, sinks });
+    assert.deepEqual(b.langfuse, { baseUrl: 'https://lf', projectId: 'proj-A' });
+    assert.deepEqual(b['vectors:pgvector'], STORAGE.pgvector);
+  });
+
+  test('an adapter that does not report its storage, or reports two, is not an answer', async () => {
+    const env = { RAG_API_URL: 'http://rag' };
+    const noStorage = await v.probeVectors({
+      backend: 'pgvector',
+      identity: IDENTITY,
+      inventory: INVENTORY,
+      env,
+      fetchImpl: async (url, init) =>
+        fakeResponse(
+          200,
+          ragPage({ key: JSON.parse(init.body).key, total: 0, groups: [], storage: null }),
+        ),
+      mintToken: () => 't',
+    });
+    assert.equal(noStorage.status, 'not-probed');
+    assert.equal(noStorage.count, null);
+    let n = 0;
+    const twoStorages = await v.probeVectors({
+      backend: 'pgvector',
+      identity: IDENTITY,
+      inventory: INVENTORY,
+      env,
+      fetchImpl: async (url, init) =>
+        fakeResponse(
+          200,
+          ragPage({
+            key: JSON.parse(init.body).key,
+            total: 0,
+            groups: [],
+            storage: { ...STORAGE.pgvector, host: `pg${n++}` },
+          }),
+        ),
+      mintToken: () => 't',
+    });
+    assert.equal(twoStorages.status, 'error');
+    const good = await v.probeVectors({
+      backend: 'pgvector',
+      identity: IDENTITY,
+      inventory: INVENTORY,
+      env,
+      fetchImpl: async (url, init) =>
+        fakeResponse(200, ragPage({ key: JSON.parse(init.body).key, total: 0, groups: [] })),
+      mintToken: () => 't',
+    });
+    assert.deepEqual(good.detail.storage, STORAGE.pgvector);
+  });
+
+  test('openContainers asks for the primary, the manifest-named code container and both scratch containers', async () => {
+    const asked = [];
+    const c = await v.openContainers({
+      manifest: resolvedManifest(),
+      env: { AZURE_CONTAINER_NAME: 'files', AZURE_TRANSLATION_TARGET_CONTAINER: 'tt' },
+      getAzureContainerClient: async (name) => {
+        asked.push(name);
+        return name === 'tt' ? null : { url: `https://a/${name}` };
+      },
+    });
+    assert.deepEqual(asked, ['files', 'code-adapter-test', 'translation-source', 'tt']);
+    assert.deepEqual(c.names.translation, ['translation-source', 'tt']);
+    assert.equal(c.clients.translation[1], null);
+    assert.equal(c.clients.codeStaging.url, 'https://a/code-adapter-test');
+  });
+});
+
+describe('round 2 · translation and code execution are detected, not silently excluded', () => {
+  test('the two feature flags are environment signals', () => {
+    const s = v.environmentSignals({
+      KNAUF_FILE_TRANSLATION_ENABLED: 'true',
+      KNAUF_CODE_EXECUTION_ENABLED: 'true',
+    });
+    assert.equal(s['translation:scratch'], true);
+    assert.equal(s['files:execute_code'], true);
+    assert.equal(s['code:table'], true);
+    assert.equal(v.environmentSignals({})['files:execute_code'], false);
+  });
+
+  test('reviewer repro: both stores declared configured:false while the flags are on cannot be CLEAN', () => {
+    const input = run();
+    for (const key of ['translation:scratch', 'files:execute_code']) {
+      entry(input.manifest, key).configured = false;
+      input.before.sinks[key] = v.probeResult(key, 'not-configured', {});
+      input.after.sinks[key] = v.probeResult(key, 'not-configured', {});
+    }
+    const problems = v.preflight(input.manifest, { envName: 'test', signals: SIGNALS });
+    assert.ok(problems.filter((p) => /drift/.test(p)).length >= 2);
+    const e = assertNotClean(input, 'INCOMPLETE');
+    for (const key of ['translation:scratch', 'files:execute_code']) {
+      assert.match(e.rows.find((r) => r.key === key).status, /drift/);
+    }
+  });
+
+  test('a code-execution file counts as a staged copy as well as a Blob object', () => {
+    const inv = v.buildInventory({
+      files: [
+        {
+          file_id: 'f1',
+          filepath: 'https://a.blob.core.windows.net/files/images/u/f1.png',
+          source: 'azure_blob',
+          context: 'execute_code',
+          metadata: {
+            codeEnvRef: { kind: 'user', id: SUBJECT, storage_session_id: 'sess-1', file_id: 'cf1' },
+          },
+        },
+        {
+          file_id: 'f2',
+          filepath: 'https://a.blob.core.windows.net/files/uploads/u/f2.pdf',
+          source: 'azure_blob',
+          metadata: { codeEnvRef: { storage_session_id: 'sess-1' } },
+        },
+        {
+          file_id: 'f3',
+          filepath: 'http://api/files/code/download/sess-2/cf3',
+          source: 'execute_code',
+        },
+        {
+          file_id: 'f4',
+          filepath: 'https://a.blob.core.windows.net/files/uploads/u/f4.pdf',
+          source: 'azure_blob',
+        },
+      ],
+      containerName: 'files',
+    });
+    assert.equal(inv.nonBlobPointers.execute_code, 3);
+    assert.deepEqual(inv.codeSessions, ['sess-1']);
+    assert.deepEqual(inv.blobPointers.sort(), [
+      'images/u/f1.png',
+      'uploads/u/f2.pdf',
+      'uploads/u/f4.pdf',
+    ]);
+  });
+
+  test('code staging is probed by the sessions the baseline inventory named', async () => {
+    const calls = [];
+    const container = fakeContainer(
+      { 'sess-1/cf1': {}, 'sess-1/out-uuid': { deleted: true }, 'sess-9/other': {} },
+      calls,
+    );
+    const r = await v.probeCodeStaging({
+      inventory: { codeSessions: ['sess-1'] },
+      containerClient: container,
+      containerName: 'code-adapter-staging',
+    });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.count, 2);
+    assert.deepEqual(
+      calls.map((c) => c.prefix),
+      ['sess-1/'],
+    );
+    assert.deepEqual(r.detail.objects, ['sess-1/cf1', 'sess-1/out-uuid']);
+    assert.deepEqual(r.detail.classes, { current: 1, versions: 0, snapshots: 0, softDeleted: 1 });
+    const none = await v.probeCodeStaging({
+      inventory: { codeSessions: ['s'] },
+      containerClient: null,
+      containerName: 'x',
+    });
+    assert.equal(none.status, 'not-probed');
+  });
+
+  test('translation scratch is measured against its lifecycle window', async () => {
+    const now = Date.parse('2026-09-25T12:00:00Z');
+    const day = 24 * 60 * 60 * 1000;
+    const fresh = { properties: { lastModified: new Date(now - day / 2) } };
+    const stale = { properties: { lastModified: new Date(now - 3 * day) } };
+    const source = fakeContainer({
+      'u1/a.pdf': fresh,
+      'u2/b.pdf': stale,
+      'u3/c.pdf': { ...stale, deleted: true },
+    });
+    const target = fakeContainer({ 'u2/b.pdf': stale });
+    const r = await v.probeTranslationScratch({
+      clients: [source, target],
+      names: ['translation-source', 'translation-target'],
+      windowMs: day,
+      now,
+    });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.count, 2);
+    assert.deepEqual(r.detail.overdue, [
+      'translation-source/u2/b.pdf',
+      'translation-target/u2/b.pdf',
+    ]);
+    assert.equal(r.detail.classes.softDeleted, 1);
+    const noStamp = await v.probeTranslationScratch({
+      clients: [fakeContainer({ x: {} }), target],
+      names: ['s', 't'],
+      windowMs: day,
+      now,
+    });
+    assert.equal(noStamp.status, 'inexact');
+    const missing = await v.probeTranslationScratch({
+      clients: [source, null],
+      names: ['s', 't'],
+      windowMs: day,
+      now,
+    });
+    assert.equal(missing.status, 'not-probed');
+  });
+
+  test('the snapshot probes code staging in the named container and scratch against the manifest window', async () => {
+    const codeCalls = [];
+    const scratchCalls = [];
+    const containers = {
+      names: { primary: 'files', codeStaging: 'code-adapter-test', translation: ['ts', 'tt'] },
+      clients: {
+        primary: null,
+        codeStaging: fakeContainer({ 'sess-1/f': {} }, codeCalls),
+        translation: [fakeContainer({}, scratchCalls), fakeContainer({}, scratchCalls)],
+      },
+    };
+    const manifest = resolvedManifest();
+    entry(manifest, 'translation:scratch').lifecycleWindow = 'PT1H';
+    const models = new Proxy({}, { get: () => ({ countDocuments: async () => 1 }) });
+    const sinks = await v.takeSnapshot({
+      manifest,
+      identity: { _id: SUBJECT },
+      inventory: {
+        assetIds: [],
+        agentIds: [],
+        vectorIds: [],
+        blobPointers: [],
+        codeSessions: ['sess-1'],
+      },
+      deps: {
+        models,
+        mongoose: { connection: { db: { collection: () => ({ countDocuments: async () => 1 }) } } },
+        fetch: async () => {
+          throw new Error('offline');
+        },
+        redis: null,
+        containers,
+        mintToken: () => 't',
+        toObjectId: (id) => id,
+      },
+      env: {},
+    });
+    assert.equal(sinks['files:execute_code'].count, 1);
+    assert.equal(sinks['files:execute_code'].detail.container, 'code-adapter-test');
+    assert.deepEqual(
+      codeCalls.map((c) => c.prefix),
+      ['sess-1/'],
+    );
+    assert.equal(sinks['translation:scratch'].status, 'ok');
+    assert.equal(sinks['translation:scratch'].count, 0);
+    assert.equal(scratchCalls.length, 2);
+  });
+});
+
+describe('round 2 · score ids are verified without their parent trace', () => {
+  const env = {
+    LANGFUSE_BASE_URL: 'https://lf',
+    LANGFUSE_PUBLIC_KEY: 'pk',
+    LANGFUSE_SECRET_KEY: 'sk',
+  };
+  const project = () => fakeResponse(200, { data: [{ id: 'proj-A', name: 'karl' }] });
+  const emptyList = () => fakeResponse(200, { data: [], meta: { totalItems: 0, totalPages: 1 } });
+
+  test('reviewer repro: trace gone, score row remains ⇒ the score is counted, and the run is not CLEAN', async () => {
+    const fetchImpl = async (url) => {
+      if (url.endsWith('/api/public/projects')) return project();
+      if (url.includes('/api/public/scores/s1'))
+        return fakeResponse(200, { id: 's1', comment: 'prose' });
+      if (url.includes('/api/public/traces/t1')) return fakeResponse(404, {});
+      return emptyList(); // both userId lists are empty: the score list joins the (deleted) trace
+    };
+    const r = await v.probeLangfuse({
+      identity: IDENTITY,
+      env,
+      fetchImpl,
+      baseline: { traceIds: ['t1'], scoreIds: ['s1'] },
+    });
+    assert.equal(r['langfuse:traces'].count, 0);
+    assert.equal(r['langfuse:scores'].count, 1);
+    assert.deepEqual(r['langfuse:scores'].detail.survivingBaselineIds, ['s1']);
+    assert.equal(r['langfuse:scores'].detail.listed, 0);
+    const input = run();
+    input.after.sinks['langfuse:scores'] = r['langfuse:scores'];
+    const e = assertNotClean(input, 'RESIDUALS FOUND');
+    assert.deepEqual(e.residuals, [{ key: 'langfuse:scores', count: 1 }]);
+  });
+
+  test('a lookup that cannot answer is never zero', async () => {
+    const auth = { base: 'https://lf', headers: {} };
+    const denied = await v.lookupLangfuseIds({
+      auth,
+      route: 'scores',
+      ids: ['s1'],
+      fetchImpl: async () => fakeResponse(500, {}),
+    });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.status, 'error');
+    const tooMany = await v.lookupLangfuseIds({
+      auth,
+      route: 'scores',
+      ids: Array.from({ length: v.LANGFUSE_MAX_LOOKUPS + 1 }, (_, i) => `s${i}`),
+      fetchImpl: async () => fakeResponse(404, {}),
+    });
+    assert.equal(tooMany.status, 'inexact');
+    const fine = await v.lookupLangfuseIds({
+      auth,
+      route: 'traces',
+      ids: ['t1', 't1', 't2'],
+      fetchImpl: async (url) => fakeResponse(url.endsWith('/t2') ? 200 : 404, {}),
+    });
+    assert.deepEqual(fine, { ok: true, present: ['t2'], absent: 1 });
+    const r = await v.probeLangfuse({
+      identity: IDENTITY,
+      env,
+      fetchImpl: async (url) => {
+        if (url.endsWith('/projects')) return project();
+        if (url.includes('/scores/')) return fakeResponse(500, {});
+        return emptyList();
+      },
+      baseline: { traceIds: [], scoreIds: ['s1'] },
+    });
+    assert.equal(r['langfuse:scores'].status, 'error');
+    assert.equal(r['langfuse:scores'].count, null);
+  });
+});
+
 /* ------------------------------------------------------------------ shipped manifests */
 
 describe('shipped environment manifests', () => {
@@ -1188,6 +1815,30 @@ describe('shipped environment manifests', () => {
           `${env} declares ${prefix}`,
         );
       }
+    });
+
+    test(`${env}: translation and code execution are configured, with a probe or a disposition`, () => {
+      const { manifest } = v.loadManifest(env);
+      const scratch = manifest.sinks.find((s) => s.key === 'translation:scratch');
+      const code = manifest.sinks.find((s) => s.key === 'files:execute_code');
+      assert.equal(scratch.configured, true);
+      assert.equal(scratch.baseline?.exempt, 'NOT_SUBJECT_ADDRESSABLE');
+      assert.equal(scratch.lifecycleWindow, 'P1D');
+      assert.equal(code.configured, true);
+      assert.equal(code.disposition, 'eventually-deleted');
+      assert.match(code.container, /^code-adapter-/);
+      assert.equal(manifest.sinks.find((s) => s.key === 'code:table').configured, true);
+      assert.equal(
+        manifest.sinks.find((s) => s.key === 'raw:knauf_translation_jobs').baseline,
+        'required',
+      );
+      // With both flags on and stdout logging, as deployed, nothing reads as drift.
+      const signals = v.environmentSignals({
+        KNAUF_FILE_TRANSLATION_ENABLED: 'true',
+        KNAUF_CODE_EXECUTION_ENABLED: 'true',
+        LOG_TO_FILE: 'false',
+      });
+      assert.ok(!v.preflight(manifest, { envName: env, signals }).some((p) => /drift/.test(p)));
     });
 
     test(`${env}: every unapproved or unknown entry is reported by preflight — nothing resolves by default`, () => {
@@ -1300,6 +1951,8 @@ describe('helpers', () => {
       AZURE_SEARCH_ENABLED: 'true',
       RAG_API_URL: 'r',
       LANGFUSE_PUBLIC_KEY: 'pk',
+      KNAUF_FILE_TRANSLATION_ENABLED: 'true',
+      KNAUF_CODE_EXECUTION_ENABLED: 'true',
     });
     assert.deepEqual(s, { ...SIGNALS, 'blob:primary': false });
     assert.equal(v.environmentSignals({ MEILI_HOST: 'h', SEARCH: 'false' }).meili, false);

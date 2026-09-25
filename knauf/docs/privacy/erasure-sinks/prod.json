@@ -1,10 +1,10 @@
 {
   "manifestVersion": 1,
   "environment": "prod",
-  "revision": "2026-09-24.1",
+  "revision": "2026-09-25.1",
   "owner": "Eng + DPO",
   "sources": [
-    "agk-deployment-configs agentic-karl/prod/services/*/values.yaml (USE_REDIS, MEILI_HOST, AZURE_SEARCH_ENABLED, LANGFUSE_*, LOG_TO_FILE, AZURE_CONTAINER_NAME, Datadog annotations)",
+    "agk-deployment-configs agentic-karl/prod/services/*/values.yaml @0829fc5c (USE_REDIS, MEILI_HOST, AZURE_SEARCH_ENABLED, LANGFUSE_*, LOG_TO_FILE, AZURE_CONTAINER_NAME, KNAUF_FILE_TRANSLATION_ENABLED, KNAUF_CODE_EXECUTION_ENABLED, code-adapter BLOB_CONTAINER/TABLE_NAME, Datadog annotations)",
     "librechat.yaml (fileStrategy, interface, endpoints)",
     "knauf/scripts/dsar-collect.js (MONGO_SINKS, RAW_COLLECTIONS)"
   ],
@@ -302,12 +302,8 @@
       "label": "File translation jobs (raw collection)",
       "configured": true,
       "disposition": "deleted",
-      "baseline": {
-        "exempt": "FEATURE_DISABLED_IN_ENVIRONMENT",
-        "note": "KNAUF_FILE_TRANSLATION_ENABLED is not set in this environment's GitOps values, so no translation job can be created. Remove this exemption when translation ships here.",
-        "approvedBy": null,
-        "approvedAt": null
-      }
+      "baseline": "required",
+      "note": "KNAUF_FILE_TRANSLATION_ENABLED is true in dev, stage and prod (agk-deployment-configs). Seed the subject with one translated file."
     },
     {
       "key": "mongo:auditlogs",
@@ -487,10 +483,27 @@
     },
     {
       "key": "files:execute_code",
-      "label": "Code-execution environment files",
-      "configured": false,
-      "disposition": "not-probed",
-      "reason": "no code-execution service is deployed in this environment"
+      "label": "Code-adapter staging — Blob container \"code-adapter-prod\" (inputs and outputs, keyed by session)",
+      "configured": true,
+      "container": "code-adapter-prod",
+      "disposition": "eventually-deleted",
+      "deadline": "P1D",
+      "basis": "The account cascade deletes the Blob copy of a code-execution file but not the staged copy; the code adapter's reaper removes staged blobs (and their Table entities) once FILE_TTL_HOURS — 24, sliding on access — has passed (knauf/code-adapter store/reaper.ts). Probed by listing every session the subject's File rows referenced (metadata.codeEnvRef.storage_session_id).",
+      "baseline": "required",
+      "owner": "Eng",
+      "approvedBy": null,
+      "approvedAt": null
+    },
+    {
+      "key": "code:table",
+      "label": "Code-adapter Table metadata (codeAdapterFiles: filenames, hashes, owner id per staged file)",
+      "configured": true,
+      "disposition": "eventually-deleted",
+      "deadline": "P1D",
+      "basis": "Same reaper and TTL as files:execute_code — entities are deleted together with their blob (filesRepo.deleteExpired). Not probed from here: the verifier has no Table client; the blob probe covers the same sessions.",
+      "owner": "Eng",
+      "approvedBy": null,
+      "approvedAt": null
     },
     {
       "key": "files:openai",
@@ -501,10 +514,19 @@
     },
     {
       "key": "translation:scratch",
-      "label": "Azure Translator batch scratch containers",
-      "configured": false,
-      "disposition": "not-probed",
-      "reason": "KNAUF_FILE_TRANSLATION_ENABLED is not set here"
+      "label": "Azure Translator batch scratch — Blob containers translation-source / translation-target (<uuid>/<name>)",
+      "configured": true,
+      "disposition": "deleted",
+      "lifecycleWindow": "P1D",
+      "baseline": {
+        "exempt": "NOT_SUBJECT_ADDRESSABLE",
+        "note": "Scratch objects carry no subject or job key (the uuid is never persisted), so they cannot be found per subject. The app deletes them after each batch; a lost or cancelled batch is left to the one-day storage lifecycle rule (Terraform, file-translation-production-plan). The probe counts current objects older than that window: any means the rule is not enforcing and every subject's scratch is a residual.",
+        "approvedBy": null,
+        "approvedAt": null
+      },
+      "owner": "Platform",
+      "approvedBy": null,
+      "approvedAt": null
     },
     {
       "key": "processor:azureOpenAI",

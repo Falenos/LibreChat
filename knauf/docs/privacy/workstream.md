@@ -927,8 +927,8 @@ served a 403 when auto-migration is disabled — an availability, not a confiden
 
 **Type:** Task · **Effort:** M · **Compliance:** **Art. 17 evidence**
 
-**Status:** **built 2026-09-04 (KK20-350); reworked 2026-09-24 after the PR #350
-review.** Runbook [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md), verifier
+**Status:** **built 2026-09-04 (KK20-350); reworked 2026-09-24 and 2026-09-25 after the two
+PR #350 review rounds.** Runbook [`runbooks/erasure-verify.md`](./runbooks/erasure-verify.md), verifier
 `knauf/scripts/erasure-verify.js`, and per-environment sink manifests
 [`erasure-sinks/<env>.json`](./erasure-sinks/). The review found paths to a false CLEAN, and each
 now fails closed. Vector counts come from the RAG service's exact, read-only
@@ -938,8 +938,13 @@ snapshot. A positive baseline is mandatory, so the before → after transition i
 evaluated. Evidence runs are bound to the canonical `_id` plus the tenant. Blob is enumerated
 from storage, including versions, snapshots and soft-deleted objects. And the "nine copies" claim
 is gone: every store resolves to deleted, eventually-deleted, retained, externally-controlled or
-not-probed. **No evidence run is possible yet.** The RAG adapter has to be deployed, and each
-manifest's 24 preflight blockers resolved: approvals, Langfuse secondary stores, backups, Redis
+not-probed. The second round closed four more false-CLEAN paths: the Langfuse leg is bound to
+the credentials' **project**, not the host; every store's physical identity is recorded and an
+`after` phase against other storage is refused; translation scratch and code-adapter staging
+(both features live in dev, stage and prod) are detected from the environment and probed; and
+baseline trace and score ids are looked up directly, because the score list joins the deleted
+trace. **No evidence run is possible yet.** The RAG adapter (v2) has to be deployed, and each
+manifest's 26 preflight blockers resolved: approvals, Langfuse secondary stores, backups, Redis
 TTLs and Datadog (runbook §5).
 
 **AC:** [x] a recipe that deletes an account **and** a conversation through the **real product
@@ -1252,6 +1257,7 @@ this folder's README exists to prevent.
 | 2026-09-04 | **KK20-328** third review (Falenos, at `f46d747e9`): terminal-recovery ambiguity, intent as HMAC oracle, lease-loss-only-warns — all addressed (tail-row witness, signed + generation-checked intents, fencing tokens + abort-before-delete) | Each blocker was a gap between what the design *said* (recoverable, signed, single-writer) and what it *enforced*. The fixes make the enforcement mechanical: the chain is the witness, the key is the authorization, the fence is the writer identity |
 | 2026-09-04 | **KK20-328** self-review pass before the third push (`/code-review`, 7 angles): root export gap that would have silently disabled the HMAC check in prod, missing `createIndexes`, activation-looks-like-tampering, verify blind to a pending intent, dry run not read-only, CronJob pod never exiting, 1 s lease floor — all fixed; the terminal/generation design replaced by **never emptying a chain** | Reviewing my own change with the same rigour as the human review found a production-disabling bug (root export) that every green test had missed, because the tests imported from the barrel, not the root. The spec now imports through the root |
 | 2026-09-02 | **KK20-328** (P2-7) built; code-review pass applied; PR #341 open, awaiting human review. Stacked on #340 — merge that first | Three AC statements were wrong: dry-run is *not* free from `confirm`; wiring only `experimental.js` never runs in prod; "persist the checkpoint" hid that **no store existed** and that an emptied chain must clear its boundary. All caught in review |
+| 2026-09-25 | **P2-5** second review round (AlexZahar, four HIGH findings, each with an offline repro) addressed: project-bound Langfuse deletion, physical backend identity per store, translation/code-execution stores detected and probed, direct trace/score id lookups | Every finding was a way for the environment to change under the verifier without the verifier noticing: another project on the same host, another instance behind the same variable name, a feature the manifest said was off, a list that silently excluded what it could not join. The fix pattern is the same each time: record an identity or a fact at baseline and compare it, instead of trusting a name |
 | 2026-09-24 | **P2-5** reworked after Falenos's review (CHANGES_REQUESTED 2026-09-04). Six false-CLEAN and scope findings addressed; the unrelated P0-2/P1-6 edits moved to #356 | A verifier whose failure modes read as "clean" is worse than none. The fix is structural rather than per probe: the verdict iterates the environment manifest, not the snapshot, so a store resolves only by measurement or by a reviewed, approved disposition. That is also why no evidence run is possible until the manifests' open facts are recorded |
 | 2026-09-04 | **P2-5** (KK20-350) built: erasure runbook + `erasure-verify.js`; PR open, stacked on #349 | Reading the deletion paths showed `config/delete-user.js` **is not an erasure** (no Blob/vector/grant cleanup) and that the controller logs the erased email at `info`. The recipe tests the product path and pins both facts in its spec |
 | 2026-09-03 | Jira drafts moved out of the repo; this doc and the tickets re-audited against the EULA text | The privacy notice **denies profiling** and names another product — G-5 is a Bug, not a gap |

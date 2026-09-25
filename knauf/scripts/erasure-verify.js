@@ -37,6 +37,25 @@
 //      (controller + notification duty) / not-probed. Anything unknown, unapproved or
 //      contradicted by the environment blocks CLEAN.
 //
+// PR #350 second round (AlexZahar, 2026-09-25), same rule — each finding is fail-closed:
+//   7. The Langfuse leg is bound to the PROJECT the credentials resolve to
+//      (`GET /api/public/projects`), not only to the host. Baseline, deletion and after
+//      must all resolve to the same project id; rotating keys inside a project is fine.
+//   8. Every store's physical identity (host/database/index/container/project, never a
+//      secret) is recorded at baseline and compared at `after`; a different backend is
+//      refused before anything is probed. `envSignals` alone could not see an endpoint
+//      swapped for an empty one.
+//   9. Translation (`KNAUF_FILE_TRANSLATION_ENABLED`) and code execution
+//      (`KNAUF_CODE_EXECUTION_ENABLED`) are detected from the environment and have their
+//      own stores: the code-adapter staging container is probed by the sessions the
+//      subject's File rows reference (`metadata.codeEnvRef`), and the translation scratch
+//      containers, which carry no subject key, are probed for objects that outlived the
+//      lifecycle rule the manifest declares.
+//  10. Baseline trace AND score ids are verified by direct lookup at `after`. The score
+//      list filters by userId through a join to the parent trace, so once the trace is
+//      gone a surviving score vanishes from the list; a direct `GET /scores/{id}` does
+//      not need the parent.
+//
 // Usage:
 //   node knauf/scripts/erasure-verify.js --phase before --env stage \
 //        --user <mongo _id> --tenant <tenantId|none> --out ./erasure-<date>/
@@ -73,7 +92,17 @@ const SCHEMA_VERSION = 2;
 const PHASES = ['before', 'langfuse-delete', 'after'];
 const MODES = ['evidence', 'rehearsal'];
 /** Probe groups `--skip` accepts — rehearsal mode only. */
-const PROBE_GROUPS = ['mongo', 'meili', 'vectors', 'blob', 'langfuse', 'redis', 'logs'];
+const PROBE_GROUPS = [
+  'mongo',
+  'meili',
+  'vectors',
+  'blob',
+  'langfuse',
+  'redis',
+  'logs',
+  'translation',
+  'code',
+];
 const DISPOSITIONS = [
   'deleted',
   'eventually-deleted',
@@ -81,7 +110,17 @@ const DISPOSITIONS = [
   'externally-controlled',
   'not-probed',
 ];
-const BASELINE_EXEMPTIONS = ['FEATURE_DISABLED_IN_ENVIRONMENT', 'NOT_CREATABLE_BY_SUBJECT'];
+/**
+ * Reason codes under which a mandatory store may lack a positive baseline:
+ * the feature is off here; the subject cannot create the data (admin-only surfaces); or
+ * the store carries no subject key at all, so the probe measures the store's own
+ * guarantee instead (translation scratch: objects that outlived the lifecycle rule).
+ */
+const BASELINE_EXEMPTIONS = [
+  'FEATURE_DISABLED_IN_ENVIRONMENT',
+  'NOT_CREATABLE_BY_SUBJECT',
+  'NOT_SUBJECT_ADDRESSABLE',
+];
 const EXIT = {
   CLEAN: 0,
   USAGE: 1,
@@ -99,9 +138,12 @@ const LANGFUSE_SETTLE_MS = 15 * 60 * 1000;
 const LANGFUSE_DELETE_BATCH = 100;
 const LANGFUSE_PAGE_SIZE = 100;
 const LANGFUSE_MAX_PAGES = 1000;
+/** Direct `GET /{traces,scores}/{id}` lookups per phase before the answer is inexact. */
+const LANGFUSE_MAX_LOOKUPS = 5000;
 
 const RAG_ADAPTER = 'knauf-vector-verification';
-const RAG_ADAPTER_MIN_VERSION = 1;
+/** Version 2 reports the storage identity behind each backend (review round 2, item 8). */
+const RAG_ADAPTER_MIN_VERSION = 2;
 const RAG_MAX_VALUES = 500;
 const RAG_PAGE_SIZE = 1000;
 const RAG_MAX_PAGES = 1000;
@@ -117,6 +159,24 @@ const REDIS_MAX_SCAN_ROUNDS = 100000;
  */
 const BLOB_BASE_PATHS = ['images', 'uploads', 'avatars', 'documents', 'files'];
 const BLOB_CLASSES = ['current', 'versions', 'snapshots', 'softDeleted'];
+
+/**
+ * The code adapter stages every input and output as `<container>/<sessionId>/<fileId>`
+ * (knauf/code-adapter, store/filesRepo.ts). The container name is a deployment fact and
+ * is read from the manifest entry (`files:execute_code`.container); this is the
+ * adapter's default.
+ */
+const CODE_STAGING_CONTAINER_DEFAULT = 'code-adapter-staging';
+/**
+ * Azure batch translation stages `<uuid>/<name>` in these containers
+ * (translation/providers/azure.js). The uuid is never persisted, so scratch cannot be
+ * found per subject; the probe measures what outlived the lifecycle rule instead.
+ */
+const TRANSLATION_SCRATCH_CONTAINERS = (env = process.env) => [
+  env.AZURE_TRANSLATION_SOURCE_CONTAINER || 'translation-source',
+  env.AZURE_TRANSLATION_TARGET_CONTAINER || 'translation-target',
+];
+const TRANSLATION_LIFECYCLE_DEFAULT = 'P1D';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const MANIFEST_DIR = path.join(REPO_ROOT, 'knauf', 'docs', 'privacy', 'erasure-sinks');
@@ -141,12 +201,16 @@ function probedSinkKeys() {
     'langfuse:scores',
     'redis:keys',
     'logs:files',
+    'translation:scratch',
+    'files:execute_code',
   ];
 }
 
 function probeGroupOf(key) {
   const prefix = key.split(':')[0];
-  return prefix === 'raw' ? 'mongo' : prefix;
+  if (prefix === 'raw') return 'mongo';
+  if (prefix === 'files') return 'code';
+  return prefix;
 }
 
 /**
@@ -166,6 +230,11 @@ function environmentSignals(env = process.env) {
     'redis:keys': on(env.USE_REDIS),
     'logs:files': String(env.LOG_TO_FILE ?? '').toLowerCase() !== 'false',
     'blob:primary': Boolean(env.AZURE_STORAGE_CONNECTION_STRING || env.AZURE_STORAGE_ACCOUNT_NAME),
+    // Review round 2: both features are live in dev, stage and prod (agk-deployment-configs)
+    // and hold copies the manifest used to declare absent.
+    'translation:scratch': on(env.KNAUF_FILE_TRANSLATION_ENABLED),
+    'files:execute_code': on(env.KNAUF_CODE_EXECUTION_ENABLED),
+    'code:table': on(env.KNAUF_CODE_EXECUTION_ENABLED),
   };
 }
 
@@ -496,6 +565,17 @@ function structuralProblems(manifest, envName) {
         add(key, 'a baseline exemption needs a written note');
       }
     }
+    if (entry.lifecycleWindow !== undefined && parseDuration(entry.lifecycleWindow) === null) {
+      add(key, `lifecycleWindow "${entry.lifecycleWindow}" is not a W/D/H/M duration`);
+    }
+    for (const field of ['container']) {
+      if (
+        entry[field] !== undefined &&
+        (typeof entry[field] !== 'string' || !entry[field].trim())
+      ) {
+        add(key, `${field} must be a non-empty string`);
+      }
+    }
     if (entry.eventualClasses !== undefined) {
       for (const [cls, duration] of Object.entries(entry.eventualClasses || {})) {
         if (!['versions', 'softDeleted'].includes(cls))
@@ -611,12 +691,23 @@ function buildInventory({
   const vectors = classifyVectorStores(files, assets);
   const blobPointers = [];
   const nonBlob = {};
+  const codeSessions = [];
   const note = (pointer) => {
     if (!pointer) return;
     if (pointer.kind === 'blob') blobPointers.push(pointer.path);
     else nonBlob[pointer.store] = (nonBlob[pointer.store] ?? 0) + 1;
   };
-  for (const f of files) note(classifyPointer(f.filepath || f.storageKey, f.source, containerName));
+  for (const f of files) {
+    const pointer = classifyPointer(f.filepath || f.storageKey, f.source, containerName);
+    // Review round 2: a code-execution file is persisted to Blob (`source: azure_blob`)
+    // AND stays staged in the code adapter under `metadata.codeEnvRef`. The Blob copy
+    // is a pointer like any other; the staged copy is a second store, keyed by session.
+    const session = f.metadata?.codeEnvRef?.storage_session_id;
+    const codeCopy = Boolean(session) || pointer?.store === 'execute_code';
+    if (pointer?.store !== 'execute_code') note(pointer);
+    if (codeCopy) nonBlob.execute_code = (nonBlob.execute_code ?? 0) + 1;
+    if (session) codeSessions.push(String(session));
+  }
   for (const a of assets) note(classifyPointer(a.blob?.path, a.blob?.source, containerName));
   if (avatar) note(classifyPointer(avatar, undefined, containerName));
   return {
@@ -624,6 +715,7 @@ function buildInventory({
     assets: assets.length,
     assetIds: unique([...files.map((f) => f.knauf_asset_id), ...assets.map((a) => a.asset_id)]),
     agentIds: unique(agents.map((a) => a.id)),
+    codeSessions: unique(codeSessions),
     vectorIds: unique([...vectors.pgvector, ...vectors.azureAiSearch, ...vectors.unverified]),
     vectorEntries: vectors.entries.map((e) => ({
       vectorId: e.vectorId,
@@ -643,7 +735,7 @@ async function inventorySubject({ models, view, containerName }) {
   const assetSink = MONGO_SINKS.find((s) => s.model === 'KnaufFileAsset');
   const files = models.File
     ? await models.File.find(sinkFilter(fileSink, view))
-        .select('file_id filepath storageKey source context embedded knauf_asset_id')
+        .select('file_id filepath storageKey source context embedded knauf_asset_id metadata')
         .lean()
     : [];
   const assetIds = unique(files.map((f) => f.knauf_asset_id));
@@ -718,6 +810,8 @@ async function probeMeili({ identity, env = process.env, fetchImpl = fetch }) {
 async function ragScan({ fetchImpl, base, headers: headersFor, backend, key, values }) {
   let total = 0;
   const groups = [];
+  /** The adapter's non-secret storage identity (v2) — must not change between pages. */
+  let storage = null;
   for (const slice of chunk(values, RAG_MAX_VALUES)) {
     let cursor = null;
     let firstTotal = null;
@@ -771,6 +865,21 @@ async function ragScan({ fetchImpl, base, headers: headersFor, backend, key, val
       if (body.backend !== backend || body.key !== key) {
         return { ok: false, status: 'error', reason: 'adapter answered a different query' };
       }
+      if (!body.storage || typeof body.storage !== 'object') {
+        return {
+          ok: false,
+          status: 'not-probed',
+          reason: 'adapter did not report the storage identity behind this backend',
+        };
+      }
+      if (storage === null) storage = body.storage;
+      else if (stableStringify(storage) !== stableStringify(body.storage)) {
+        return {
+          ok: false,
+          status: 'error',
+          reason: 'adapter reported a different storage identity between pages',
+        };
+      }
       if (body.exact !== true) {
         return {
           ok: false,
@@ -806,7 +915,7 @@ async function ragScan({ fetchImpl, base, headers: headersFor, backend, key, val
     }
     total += firstTotal;
   }
-  return { ok: true, total, groups };
+  return { ok: true, total, groups, storage };
 }
 
 /** Scans per backend. Values that do not exist in a backend simply count zero there. */
@@ -842,6 +951,7 @@ async function probeVectors({
   });
   const scans = [];
   let count = 0;
+  let storage = null;
   for (const [key, values] of vectorScans(backend, identity, inventory)) {
     if (!values.length) {
       scans.push({ key, values: 0, total: 0, note: 'no identifiers of this kind' });
@@ -849,6 +959,13 @@ async function probeVectors({
     }
     const r = await ragScan({ fetchImpl, base, headers, backend, key, values });
     if (!r.ok) return probeResult(k, r.status, { method, reason: `${key} scan: ${r.reason}` });
+    if (storage === null) storage = r.storage;
+    else if (stableStringify(storage) !== stableStringify(r.storage)) {
+      return probeResult(k, 'error', {
+        method,
+        reason: `${key} scan: adapter reported a different storage identity than the previous scan`,
+      });
+    }
     count += r.total;
     const byMatch = {};
     for (const g of r.groups) {
@@ -861,7 +978,9 @@ async function probeVectors({
   // Scans overlap (one chunk can match by asset id AND by owner), so `count` is a
   // sum of per-scan totals: zero exactly when every scan is zero, which is the
   // question erasure asks.
-  return ok(k, count, method, { scans });
+  // The `user_id` scan always carries the subject id, so a successful probe has always
+  // asked the adapter at least once and `storage` is recorded.
+  return ok(k, count, method, { scans, storage });
 }
 
 function classifyBlobItem(item) {
@@ -936,6 +1055,173 @@ async function probeBlob({ identity, inventory, containerClient }) {
   }
 }
 
+/**
+ * Code-adapter staging: every input and output the subject's File rows reference lives
+ * at `<container>/<sessionId>/…` until the adapter's TTL reaper removes it (review
+ * round 2). Listing the session prefixes finds staged copies whether or not a File row
+ * still points at them. Sessions come from the baseline inventory, because the rows are
+ * gone by `after`.
+ */
+async function probeCodeStaging({ inventory, containerClient, containerName }) {
+  const k = 'files:execute_code';
+  const method = `listBlobsFlat(<sessionId>/, versions+snapshots+deleted) in ${containerName}`;
+  if (!containerClient)
+    return probeResult(k, 'not-probed', {
+      method,
+      reason: `Azure Blob client for ${containerName} not available in the verifier environment`,
+    });
+  const sessions = inventory?.codeSessions ?? [];
+  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
+  const names = new Set();
+  try {
+    for (const sid of sessions) {
+      for (const item of await listAll(containerClient, `${sid}/`)) {
+        classes[classifyBlobItem(item)] += 1;
+        names.add(item.name);
+      }
+    }
+  } catch (err) {
+    return probeResult(k, 'error', { method, reason: err.message });
+  }
+  const count = BLOB_CLASSES.reduce((n, c) => n + classes[c], 0);
+  return ok(k, count, method, {
+    container: containerName,
+    sessions,
+    classes,
+    objects: [...names].sort(),
+  });
+}
+
+/**
+ * Translation scratch carries no subject key (`<uuid>/<name>`, uuid never persisted), so
+ * the probe checks the store's own promise instead: the app deletes scratch after each
+ * batch, and a storage lifecycle rule removes what a lost or cancelled batch leaves. A
+ * current object older than that window means the rule is not enforcing, and every
+ * subject's scratch is then a residual. Soft-deleted and versioned copies are reported,
+ * not counted: they belong to the account's own retention, like `blob:primary`'s.
+ */
+async function probeTranslationScratch({ clients = [], names = [], windowMs, now = Date.now() }) {
+  const k = 'translation:scratch';
+  const method = `listBlobsFlat('') in ${names.join(', ')}; current objects older than the lifecycle window`;
+  const missing = names.filter((_, i) => !clients[i]);
+  if (missing.length || !names.length)
+    return probeResult(k, 'not-probed', {
+      method,
+      reason: `Azure Blob client for ${missing.join(', ') || 'the scratch containers'} not available in the verifier environment`,
+    });
+  const cutoff = now - windowMs;
+  const overdue = [];
+  const classes = Object.fromEntries(BLOB_CLASSES.map((c) => [c, 0]));
+  try {
+    for (const [i, client] of clients.entries()) {
+      for (const item of await listAll(client, '')) {
+        const cls = classifyBlobItem(item);
+        classes[cls] += 1;
+        if (cls !== 'current') continue;
+        const raw = item.properties?.lastModified ?? item.lastModified;
+        const modified = raw instanceof Date ? raw.getTime() : Date.parse(raw ?? '');
+        if (!Number.isFinite(modified))
+          return probeResult(k, 'inexact', {
+            method,
+            reason: `${names[i]}/${item.name} carries no lastModified`,
+          });
+        if (modified < cutoff) overdue.push(`${names[i]}/${item.name}`);
+      }
+    }
+  } catch (err) {
+    return probeResult(k, 'error', { method, reason: err.message });
+  }
+  return ok(k, overdue.length, method, {
+    containers: names,
+    olderThan: new Date(cutoff).toISOString(),
+    classes,
+    overdue: overdue.slice(0, 50),
+  });
+}
+
+/**
+ * The project the credentials are scoped to (`GET /api/public/projects`). Review round
+ * 2: a host is not an identity — project B on the same host, reached with rotated
+ * credentials, must never be deleted from on the strength of a baseline taken in A.
+ */
+async function resolveLangfuseProject({ auth, fetchImpl = fetch }) {
+  let res;
+  try {
+    res = await fetchImpl(`${auth.base}/api/public/projects`, { headers: auth.headers });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  if (!res.ok) return { ok: false, reason: `HTTP ${res.status} from /api/public/projects` };
+  const body = await res.json();
+  const projects = Array.isArray(body?.data) ? body.data : [];
+  if (projects.length !== 1 || !projects[0]?.id) {
+    return {
+      ok: false,
+      reason: `credentials resolve to ${projects.length} project(s); expected exactly one`,
+    };
+  }
+  return { ok: true, id: String(projects[0].id), name: projects[0].name ?? null };
+}
+
+/**
+ * Direct `GET /api/public/{route}/{id}` for every baseline id. The list routes filter
+ * scores by userId through a join to the parent trace, so a score whose trace is gone
+ * disappears from the list and from `totalItems`; a lookup by id does not need the
+ * parent. 404 = gone; 200 = still there; anything else is not an answer.
+ */
+async function lookupLangfuseIds({ auth, route, ids, fetchImpl = fetch }) {
+  const wanted = unique(ids);
+  if (wanted.length > LANGFUSE_MAX_LOOKUPS) {
+    return {
+      ok: false,
+      status: 'inexact',
+      reason: `${route}: ${wanted.length} baseline ids exceed the ${LANGFUSE_MAX_LOOKUPS} direct-lookup bound`,
+    };
+  }
+  const present = [];
+  for (const id of wanted) {
+    let res;
+    try {
+      res = await fetchImpl(`${auth.base}/api/public/${route}/${encodeURIComponent(id)}`, {
+        headers: auth.headers,
+      });
+    } catch (err) {
+      return { ok: false, status: 'error', reason: `${route}/${id}: ${err.message}` };
+    }
+    if (res.status === 404) continue;
+    if (!res.ok)
+      return { ok: false, status: 'error', reason: `${route}/${id}: HTTP ${res.status}` };
+    present.push(id);
+  }
+  return { ok: true, present, absent: wanted.length - present.length };
+}
+
+/**
+ * Why `--phase langfuse-delete` must not run, or null. Pure, so the refusals are
+ * testable: the same instance AND the same project as the baseline (rotated keys inside
+ * the project are fine), an exact listing, and a listing that shares at least one id
+ * with the baseline — the account is already deleted, so nothing new can be written for
+ * this subject, and a disjoint listing is another scope, not new data.
+ */
+function langfuseDeleteRefusal({ before, auth, project, current }) {
+  const recordedBase = before?.backends?.langfuse?.baseUrl;
+  if (!auth || !recordedBase || auth.base !== recordedBase) {
+    return `Langfuse here (${auth?.base ?? 'unset'}) is not the instance the baseline probed (${recordedBase ?? 'none'})`;
+  }
+  const recordedProject = before?.backends?.langfuse?.projectId;
+  if (!project?.ok || !recordedProject || project.id !== recordedProject) {
+    return `these credentials resolve to Langfuse project ${project?.ok ? project.id : `(${project?.reason ?? 'unresolved'})`}, the baseline was taken in ${recordedProject ?? '(none recorded)'}`;
+  }
+  if (!current?.ok) {
+    return `could not list the subject's traces exactly (${current?.reason ?? 'no listing'})`;
+  }
+  const captured = new Set(before.sinks?.['langfuse:traces']?.detail?.traceIds ?? []);
+  if (captured.size && current.ids.length && !current.ids.some((id) => captured.has(id))) {
+    return `the ${current.ids.length} trace(s) listed now share no id with the ${captured.size} captured at baseline — wrong project, instance or subject`;
+  }
+  return null;
+}
+
 /** Page a Langfuse list route to exhaustion and reconcile against `meta.totalItems`. */
 async function listLangfuse({ auth, route, userId, fetchImpl }) {
   const ids = new Set();
@@ -1002,30 +1288,63 @@ async function listLangfuse({ auth, route, userId, fetchImpl }) {
   return { ok: true, ids: [...ids], total: totalItems };
 }
 
-/** Langfuse `userId` IS the Mongo id (pinned by KK20-327). */
-async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch }) {
+/**
+ * Langfuse `userId` IS the Mongo id (pinned by KK20-327). With `baseline` (the `after`
+ * phase) every id captured at baseline is also looked up directly, and the count is the
+ * union of what the list still returns and what the lookups still find.
+ */
+async function probeLangfuse({ identity, env = process.env, fetchImpl = fetch, baseline = null }) {
   const auth = langfuseAuth(env);
-  const method = 'GET /api/public/{traces,scores}?userId (paged, reconciled to meta.totalItems)';
+  const keys = { traces: 'langfuse:traces', scores: 'langfuse:scores' };
+  const idField = { traces: 'traceIds', scores: 'scoreIds' };
+  const method = baseline
+    ? 'GET /api/public/{traces,scores}?userId (paged, reconciled) ∪ GET /api/public/{traces,scores}/{id} for every baseline id'
+    : 'GET /api/public/{traces,scores}?userId (paged, reconciled to meta.totalItems)';
+  const both = (status, reason, detail) =>
+    Object.fromEntries(
+      Object.values(keys).map((k) => [k, probeResult(k, status, { method, reason, detail })]),
+    );
   if (!auth) {
-    const reason =
-      'LANGFUSE_BASE_URL/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY unset in the verifier environment';
-    return {
-      'langfuse:traces': probeResult('langfuse:traces', 'not-probed', { method, reason }),
-      'langfuse:scores': probeResult('langfuse:scores', 'not-probed', { method, reason }),
-    };
+    return both(
+      'not-probed',
+      'LANGFUSE_BASE_URL/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY unset in the verifier environment',
+    );
   }
+  const project = await resolveLangfuseProject({ auth, fetchImpl });
+  if (!project.ok) {
+    return both('not-probed', `cannot bind the credentials to a project: ${project.reason}`, {
+      baseUrl: auth.base,
+    });
+  }
+  const bound = { baseUrl: auth.base, projectId: project.id, projectName: project.name };
   const out = {};
-  for (const [route, k] of [
-    ['traces', 'langfuse:traces'],
-    ['scores', 'langfuse:scores'],
-  ]) {
+  for (const [route, k] of Object.entries(keys)) {
     const r = await listLangfuse({ auth, route, userId: identity._id, fetchImpl });
-    out[k] = r.ok
-      ? ok(k, r.total, method, {
-          baseUrl: auth.base,
-          ...(route === 'traces' ? { traceIds: r.ids } : {}),
-        })
-      : probeResult(k, r.status, { method, reason: r.reason, detail: { baseUrl: auth.base } });
+    if (!r.ok) {
+      out[k] = probeResult(k, r.status, { method, reason: r.reason, detail: bound });
+      continue;
+    }
+    const ids = new Set(r.ids);
+    let surviving = [];
+    if (baseline) {
+      const lookup = await lookupLangfuseIds({
+        auth,
+        route,
+        ids: baseline[idField[route]] ?? [],
+        fetchImpl,
+      });
+      if (!lookup.ok) {
+        out[k] = probeResult(k, lookup.status, { method, reason: lookup.reason, detail: bound });
+        continue;
+      }
+      surviving = lookup.present;
+      for (const id of surviving) ids.add(id);
+    }
+    out[k] = ok(k, ids.size, method, {
+      ...bound,
+      [idField[route]]: [...ids],
+      ...(baseline ? { listed: r.total, survivingBaselineIds: surviving } : {}),
+    });
   }
   return out;
 }
@@ -1133,6 +1452,8 @@ async function takeSnapshot({
   deps,
   env = process.env,
   logDir,
+  /** The `before` snapshot's sinks; present in the `after` phase for id lookups. */
+  baselineSinks = null,
 }) {
   const sinks = {};
   const entries = new Map((manifest.sinks || []).map((e) => [e.key, e]));
@@ -1192,15 +1513,180 @@ async function takeSnapshot({
     }
     return out;
   });
+  const containers = deps.containers ?? { clients: {}, names: {} };
   await run('blob', async () => ({
-    'blob:primary': await probeBlob({ identity, inventory, containerClient: deps.containerClient }),
+    'blob:primary': await probeBlob({
+      identity,
+      inventory,
+      containerClient: containers.clients?.primary ?? null,
+    }),
   }));
-  await run('langfuse', () => probeLangfuse({ identity, env, fetchImpl: deps.fetch }));
+  await run('langfuse', () =>
+    probeLangfuse({
+      identity,
+      env,
+      fetchImpl: deps.fetch,
+      baseline: baselineSinks
+        ? {
+            traceIds: baselineSinks['langfuse:traces']?.detail?.traceIds ?? [],
+            scoreIds: baselineSinks['langfuse:scores']?.detail?.scoreIds ?? [],
+          }
+        : null,
+    }),
+  );
   await run('redis', async () => ({
     'redis:keys': await probeRedis({ identity, client: deps.redis }),
   }));
   await run('logs', async () => ({ 'logs:files': probeLogs({ identity, env, logDir }) }));
+  await run('translation', async () => {
+    const entry = entries.get('translation:scratch');
+    const windowMs =
+      parseDuration(entry?.lifecycleWindow) ?? parseDuration(TRANSLATION_LIFECYCLE_DEFAULT);
+    return {
+      'translation:scratch': await probeTranslationScratch({
+        clients: containers.clients?.translation ?? [],
+        names: containers.names?.translation ?? TRANSLATION_SCRATCH_CONTAINERS(env),
+        windowMs,
+      }),
+    };
+  });
+  await run('code', async () => ({
+    'files:execute_code': await probeCodeStaging({
+      inventory,
+      containerClient: containers.clients?.codeStaging ?? null,
+      containerName: containers.names?.codeStaging ?? CODE_STAGING_CONTAINER_DEFAULT,
+    }),
+  }));
   return sinks;
+}
+
+/* ------------------------------------------------------------- backend identity */
+
+/** `scheme://[user:pass@]hosts/path` → the same without credentials or query. */
+function stripCredentials(uri) {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/?#]*@)?([^/?#]*)([^?#]*)?/i.exec(String(uri ?? ''));
+  if (!m) return null;
+  return {
+    scheme: m[1].toLowerCase(),
+    hosts: m[2]
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .sort(),
+    path: (m[3] || '').replace(/^\/+/, '').replace(/\/+$/, ''),
+  };
+}
+
+/**
+ * Container clients for every Blob store the probes read. Names are deployment facts:
+ * the primary container from the app's env, the code-adapter container from the
+ * manifest entry, the scratch containers from the translation env.
+ */
+async function openContainers({ manifest, env = process.env, getAzureContainerClient }) {
+  const names = {
+    primary: env.AZURE_CONTAINER_NAME || 'files',
+    codeStaging:
+      (manifest?.sinks || []).find((s) => s?.key === 'files:execute_code')?.container ||
+      CODE_STAGING_CONTAINER_DEFAULT,
+    translation: TRANSLATION_SCRATCH_CONTAINERS(env),
+  };
+  const open = async (name) => {
+    try {
+      return (await getAzureContainerClient(name)) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    names,
+    clients: {
+      primary: await open(names.primary),
+      codeStaging: await open(names.codeStaging),
+      translation: await Promise.all(names.translation.map(open)),
+    },
+  };
+}
+
+/**
+ * The non-secret physical identity of every store the verifier can name locally:
+ * hosts, database, endpoint, index, container URL. Review round 2: `envSignals` said
+ * only whether a store was configured, so an endpoint swapped for an empty instance
+ * between phases read as CLEAN.
+ */
+function localBackends({ env = process.env, mongoose = null, containers = null } = {}) {
+  const b = {};
+  const mongo = stripCredentials(env.MONGO_URI);
+  if (mongo) {
+    b.mongo = { hosts: mongo.hosts, database: mongo.path.split('/')[0] || null };
+  } else if (mongoose?.connection?.host) {
+    b.mongo = {
+      hosts: [`${mongoose.connection.host}:${mongoose.connection.port ?? ''}`],
+      database: mongoose.connection.name ?? null,
+    };
+  }
+  const meili = stripCredentials(env.MEILI_HOST);
+  if (meili) b.meili = { endpoint: `${meili.scheme}://${meili.hosts.join(',')}` };
+  const rag = stripCredentials(env.RAG_API_URL);
+  if (rag) {
+    b.ragApi = {
+      endpoint: `${rag.scheme}://${rag.hosts.join(',')}${rag.path ? `/${rag.path}` : ''}`,
+    };
+  }
+  const langfuse = resolveLangfuseBaseUrl(env);
+  if (langfuse) b.langfuse = { baseUrl: langfuse };
+  const redis = stripCredentials(String(env.REDIS_URI || '').split(',')[0]);
+  if (redis) b.redis = { hosts: redis.hosts, db: redis.path || '0' };
+  const url = (client) => (client?.url ? String(client.url).split('?')[0] : null);
+  const clients = containers?.clients ?? {};
+  if (url(clients.primary)) b['container:primary'] = { url: url(clients.primary) };
+  if (url(clients.codeStaging)) b['container:codeStaging'] = { url: url(clients.codeStaging) };
+  (clients.translation ?? []).forEach((c, i) => {
+    if (url(c)) b[`container:translation${i}`] = { url: url(c) };
+  });
+  return b;
+}
+
+/** Local identities plus what the probes learned: the Langfuse project, the RAG storage. */
+function collectBackends({ local = {}, sinks = {} }) {
+  const b = { ...local };
+  const projectId =
+    sinks['langfuse:traces']?.detail?.projectId ?? sinks['langfuse:scores']?.detail?.projectId;
+  if (projectId) b.langfuse = { ...(b.langfuse ?? {}), projectId };
+  for (const [key, name] of [
+    ['vectors:pgvector', 'pgvector'],
+    ['vectors:azureAiSearch', 'azureAiSearch'],
+  ]) {
+    const storage = sinks[key]?.detail?.storage;
+    if (storage) b[`vectors:${name}`] = storage;
+  }
+  return b;
+}
+
+/**
+ * Field-level comparison: every field the CURRENT side knows must equal what the
+ * baseline recorded for it. A field only the baseline knows (the Langfuse project id
+ * before the probes run) is not a mismatch; a field only the current side knows is new
+ * information, not drift.
+ */
+function backendMismatch(before = {}, current = {}) {
+  const out = [];
+  for (const [key, value] of Object.entries(current ?? {})) {
+    const recorded = before?.[key];
+    if (recorded === undefined || value === undefined) continue;
+    const fields = value && typeof value === 'object' ? Object.keys(value) : [];
+    if (!fields.length) {
+      if (stableStringify(recorded) !== stableStringify(value))
+        out.push({ key, field: null, before: recorded, after: value });
+      continue;
+    }
+    for (const field of fields) {
+      if (recorded?.[field] === undefined) continue;
+      if (stableStringify(recorded[field]) !== stableStringify(value[field])) {
+        out.push({ key, field, before: recorded[field], after: value[field] });
+      }
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------- verdict */
@@ -1305,12 +1791,31 @@ function evaluate({
       );
     }
   }
+  // Physical storage identity (review round 2): the same hosts, database, index,
+  // container and project on both sides, or the comparison is meaningless.
+  if (!before?.backends || !Object.keys(before.backends).length) {
+    block('(storage)', 'the baseline recorded no backend identities');
+  }
+  const drift = backendMismatch(before?.backends, after?.backends);
+  for (const d of drift) {
+    block(
+      `(storage:${d.key})`,
+      `backend changed between phases${d.field ? ` (${d.field})` : ''}: ${stableStringify(d.before)} → ${stableStringify(d.after)}`,
+    );
+  }
   if (
     langfuseDelete &&
     (langfuseDelete.runId !== before?.runId ||
       langfuseDelete.identityDigest !== before?.identity?.digest)
   ) {
     block('langfuse:traces', 'langfuse-delete record belongs to another run or identity');
+  }
+  const baselineProject = before?.backends?.langfuse?.projectId;
+  if (langfuseDelete && baselineProject && langfuseDelete.projectId !== baselineProject) {
+    block(
+      'langfuse:traces',
+      `langfuse-delete ran against Langfuse project ${langfuseDelete.projectId ?? '(unknown)'}, the baseline was taken in ${baselineProject}`,
+    );
   }
 
   const probed = new Set(probedSinkKeys());
@@ -1490,7 +1995,17 @@ function evaluate({
   else verdict = mode === 'evidence' ? 'CLEAN' : 'NOT EVIDENCE';
   if (mode !== 'evidence')
     notes.push('rehearsal mode — this run is never evidence, whatever it shows');
-  return { verdict, ok: verdict === 'CLEAN', mode, rows, blockers, residuals, obligations, notes };
+  return {
+    verdict,
+    ok: verdict === 'CLEAN',
+    mode,
+    rows,
+    blockers,
+    residuals,
+    obligations,
+    notes,
+    backends: { compared: Object.keys(before?.backends ?? {}).length, mismatches: drift },
+  };
 }
 
 function exitCodeFor(verdict) {
@@ -1521,6 +2036,11 @@ function renderReport({ before, after, evaluation, langfuseDelete, currentManife
     `| After | ${cell(after.generatedAt)} |`,
     `| Langfuse deletion | ${langfuseDelete ? `requested ${cell(langfuseDelete.requestedAt)}, ${langfuseDelete.traces} trace(s)` : 'not requested'} |`,
     `| Tool | \`knauf/scripts/erasure-verify.js\` sha256 \`${cell(after.tool?.sha256)}\` |`,
+    `| Storage | ${evaluation.backends?.compared ?? 0} backend identities bound at baseline (${
+      Object.keys(before.backends ?? {})
+        .sort()
+        .join(', ') || 'none'
+    }); ${evaluation.backends?.mismatches?.length ? `**${evaluation.backends.mismatches.length} changed**` : 'unchanged at after'} |`,
     '',
     '## Sinks',
     '',
@@ -1647,21 +2167,13 @@ async function main() {
       process.exit(EXIT.REFUSED);
     }
     const auth = langfuseAuth(env);
-    const recordedBase = before.sinks?.['langfuse:traces']?.detail?.baseUrl;
-    if (!auth || !recordedBase || auth.base !== recordedBase) {
-      console.error(
-        `Refusing: Langfuse here (${auth?.base ?? 'unset'}) is not the instance the baseline probed (${recordedBase ?? 'none'}).`,
-      );
-      process.exit(EXIT.REFUSED);
-    }
-    const current = await listLangfuse({
-      auth,
-      route: 'traces',
-      userId: before.identity._id,
-      fetchImpl: fetch,
-    });
-    if (!current.ok) {
-      console.error(`Refusing: could not list the subject's traces exactly (${current.reason}).`);
+    const project = auth ? await resolveLangfuseProject({ auth, fetchImpl: fetch }) : null;
+    const current = auth
+      ? await listLangfuse({ auth, route: 'traces', userId: before.identity._id, fetchImpl: fetch })
+      : null;
+    const refusal = langfuseDeleteRefusal({ before, auth, project, current });
+    if (refusal) {
+      console.error(`Refusing: ${refusal}.`);
       process.exit(EXIT.REFUSED);
     }
     const captured = new Set(before.sinks['langfuse:traces'].detail.traceIds ?? []);
@@ -1672,6 +2184,7 @@ async function main() {
       runId: before.runId,
       identityDigest: before.identity.digest,
       baseUrl: auth.base,
+      projectId: project.id,
       requestedAt: new Date().toISOString(),
       traces: current.ids.length,
       capturedAtBaseline: captured.size,
@@ -1739,9 +2252,8 @@ async function main() {
     fetch,
     redis,
     mintToken: generateShortLivedToken,
-    containerClient: await Promise.resolve(getAzureContainerClient(containerName)).catch(
-      () => null,
-    ),
+    // `containers` is attached per phase, once the manifest names the code container.
+    containers: null,
     toObjectId: (id) => new mongoose.Types.ObjectId(id),
   };
   const inScope = (tenantId, fn) =>
@@ -1798,6 +2310,12 @@ async function main() {
       }
       const identity = buildIdentity(user, { resolvedBy, tenantAsserted: args.tenant });
       const dir = prepareOutputDir(args.out);
+      deps.containers = await openContainers({
+        manifest: loaded.manifest,
+        env,
+        getAzureContainerClient,
+      });
+      const local = localBackends({ env, mongoose, containers: deps.containers });
       const view = { ...identity, _id: deps.toObjectId(identity._id) };
       const inventory = await inScope(identity.tenantId, () =>
         inventorySubject({ models, view: { ...view, avatar: user.avatar }, containerName }),
@@ -1830,6 +2348,7 @@ async function main() {
         tool: toolInfo(),
         identity,
         envSignals: signals,
+        backends: collectBackends({ local, sinks }),
         inventory,
         sinks,
       };
@@ -1876,6 +2395,22 @@ async function main() {
     } catch {
       currentManifestSha = 'unreadable';
     }
+    // Review round 2: refuse a different physical backend before probing anything. The
+    // identities the probes learn (Langfuse project, RAG storage) are compared in
+    // evaluate(); these are the ones the verifier can name from its own environment.
+    deps.containers = await openContainers({ manifest, env, getAzureContainerClient });
+    const local = localBackends({ env, mongoose, containers: deps.containers });
+    const drift = backendMismatch(before.backends, local);
+    if (drift.length) {
+      console.error('Refusing: this environment is not the storage the baseline was taken on:');
+      for (const d of drift) {
+        console.error(
+          `  - ${d.key}${d.field ? `.${d.field}` : ''}: ${stableStringify(d.before)} → ${stableStringify(d.after)}`,
+        );
+      }
+      exitCode = EXIT.REFUSED;
+      return;
+    }
     const skip = before.mode === 'rehearsal' ? args.skip : [];
     const sinks = await inScope(before.identity.tenantId, () =>
       takeSnapshot({
@@ -1886,6 +2421,7 @@ async function main() {
         deps,
         env,
         logDir: args.logDir,
+        baselineSinks: before.sinks,
       }),
     );
     const after = {
@@ -1898,6 +2434,7 @@ async function main() {
       environment: before.environment,
       tool: toolInfo(),
       envSignals: signals,
+      backends: collectBackends({ local, sinks }),
       sinks,
     };
     const langfuseDelete = latestLangfuseDelete(dir);
@@ -1928,8 +2465,11 @@ module.exports = {
   LANGFUSE_DELETE_BATCH,
   LANGFUSE_SETTLE_MS,
   MAX_BASELINE_AGE_MS,
+  LANGFUSE_MAX_LOOKUPS,
   RAG_ADAPTER,
   MANIFEST_DIR,
+  CODE_STAGING_CONTAINER_DEFAULT,
+  TRANSLATION_SCRATCH_CONTAINERS,
   probedSinkKeys,
   environmentSignals,
   parseArgs,
@@ -1953,11 +2493,21 @@ module.exports = {
   ragScan,
   probeVectors,
   probeBlob,
+  probeCodeStaging,
+  probeTranslationScratch,
+  resolveLangfuseProject,
+  lookupLangfuseIds,
+  langfuseDeleteRefusal,
   listLangfuse,
   probeLangfuse,
   deleteLangfuseTraces,
   probeRedis,
   takeSnapshot,
+  stripCredentials,
+  openContainers,
+  localBackends,
+  collectBackends,
+  backendMismatch,
   baselineGaps,
   evaluate,
   exitCodeFor,
