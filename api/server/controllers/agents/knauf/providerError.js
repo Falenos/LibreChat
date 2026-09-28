@@ -118,7 +118,6 @@ const getPublicGenerationError = (summary) => {
 // End [knauf]
 
 const GENERIC_GENERATION_ERROR = 'An error occurred while processing the request';
-const INCOMPLETE_RESPONSE_ERROR = JSON.stringify({ type: 'incomplete_response' });
 
 const hasVisibleText = (contentParts) =>
   Array.isArray(contentParts) &&
@@ -141,7 +140,7 @@ const getPersistedGenerationError = (summary, contentParts) => {
     summary?.outputState === 'answer_text' &&
     hasVisibleText(contentParts)
   ) {
-    return { content: INCOMPLETE_RESPONSE_ERROR, surface: 'incomplete_response' };
+    return null;
   }
   return { content: GENERIC_GENERATION_ERROR, surface: 'generic_error' };
 };

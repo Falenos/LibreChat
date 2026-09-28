@@ -163,6 +163,7 @@ const NOT_SUBJECT_SCOPED_RAW = {
   logs: 'keyv cache namespace (the instantiated store) — same as `keyv`',
   // Reached raw in places, but the SAME collections as model sinks above — the raw
   // access path is an implementation detail, not a second store.
+  conversations: 'collected as the Conversation model sink',
   sharedlinks: 'collected as the SharedLink model sink',
   prompts: 'collected as the Prompt model sink',
   // Legacy GLOBAL sharing registry: one row per project name holding agentIds/promptIds

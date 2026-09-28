@@ -1171,7 +1171,7 @@ describe('AgentClient - titleConvo', () => {
   });
 
   // [knauf] KK20-199 / KK20-353 — provider failures retain bounded diagnosis
-  // without leaking private data and distinguish incomplete visible responses.
+  // without leaking private data or adding alerts after partial visible responses.
   describe('chatCompletion provider failure logging', () => {
     it('logs only the bounded provider summary and persists a stable error', async () => {
       const { logger } = require('@librechat/data-schemas');
@@ -1210,7 +1210,7 @@ describe('AgentClient - titleConvo', () => {
       });
     });
 
-    it('preserves partial text and appends only the incomplete-response class', async () => {
+    it('preserves partial text without appending a user-facing error', async () => {
       const error = {
         code: 'server_error',
         error: {
@@ -1228,10 +1228,7 @@ describe('AgentClient - titleConvo', () => {
 
       await client.chatCompletion({ payload: [], abortController: new AbortController() });
 
-      expect(client.contentParts).toEqual([
-        { type: ContentTypes.TEXT, text: 'Partial answer' },
-        { type: ContentTypes.ERROR, error: '{"type":"incomplete_response"}' },
-      ]);
+      expect(client.contentParts).toEqual([{ type: ContentTypes.TEXT, text: 'Partial answer' }]);
       expect(JSON.stringify(client.contentParts)).not.toContain('private streamed provider detail');
     });
 
