@@ -1,6 +1,71 @@
 {
   "groups": [
     {
+      "id": "2026-09-28",
+      "date": {
+        "en": "September 28, 2026",
+        "de": "28. September 2026"
+      },
+      "items": [
+        {
+          "id": "kk20-385-2026-09-24-1",
+          "ticket": "KK20-385",
+          "date": "2026-09-24",
+          "en": "Recent conversations now appear reliably in the history, month groups are ordered newest-first, and browsing across history pages no longer skips conversations with identical timestamps.",
+          "de": "Aktuelle Unterhaltungen erscheinen jetzt zuverlässig im Verlauf, Monatsgruppen werden mit dem neuesten Monat zuerst sortiert, und beim Blättern durch den Verlauf werden Unterhaltungen mit identischen Zeitstempeln nicht mehr übersprungen."
+        },
+        {
+          "id": "kk20-368-2026-09-22-2",
+          "ticket": "KK20-368",
+          "date": "2026-09-22",
+          "en": "File translation can now detect the source language for machine-readable PDF, DOCX, XLSX, TXT, and CSV files before applying approved terminology; KARL asks for the language for scanned documents, presentations, images, or unreliable detection.",
+          "de": "Die Dateiübersetzung kann die Ausgangssprache für maschinenlesbare PDF-, DOCX-, XLSX-, TXT- und CSV-Dateien jetzt vor der Anwendung freigegebener Terminologie erkennen; bei gescannten Dokumenten, Präsentationen, Bildern oder unsicherer Erkennung fragt KARL nach der Sprache."
+        },
+        {
+          "id": "kk20-367-2026-09-21-3",
+          "ticket": "KK20-367",
+          "date": "2026-09-21",
+          "en": "File translation now defaults to one file attached to the current message; KARL asks users to choose when several current files could apply and uses historical files only when they are explicitly named or all files are requested.",
+          "de": "Die Dateiübersetzung verwendet jetzt standardmäßig eine an die aktuelle Nachricht angehängte Datei; wenn mehrere aktuelle Dateien infrage kommen, bittet KARL Nutzende um die Auswahl und verwendet frühere Dateien nur, wenn sie ausdrücklich benannt werden oder alle Dateien angefordert sind."
+        },
+        {
+          "id": "kk20-366-2026-09-21-4",
+          "ticket": "KK20-366",
+          "date": "2026-09-21",
+          "en": "Newly translated files now retry one brief storage-read miss automatically, so the first download click succeeds without needing a second click.",
+          "de": "Neu übersetzte Dateien wiederholen jetzt einen kurzen Speicherlesefehler automatisch, sodass der erste Download-Klick ohne einen zweiten Klick erfolgreich ist."
+        },
+        {
+          "id": "kk20-366-2026-09-21-5",
+          "ticket": "KK20-366",
+          "date": "2026-09-21",
+          "en": "Generated-file downloads remain unavailable until KARL has finished the response, preventing downloads before the file is ready.",
+          "de": "Downloads erzeugter Dateien bleiben deaktiviert, bis KARL die Antwort abgeschlossen hat, und verhindern so Downloads, bevor die Datei bereit ist."
+        },
+        {
+          "id": "kk20-339-2026-09-21-6",
+          "ticket": "KK20-339",
+          "date": "2026-09-21",
+          "en": "Conversations can recover automatically from up to two transient Model Router interruptions before any answer or tool action starts, without replaying work after output is visible or the provider has completed the response.",
+          "de": "Unterhaltungen können sich automatisch von bis zu zwei vorübergehenden Unterbrechungen des Model Routers erholen, bevor eine Antwort oder Tool-Aktion beginnt, ohne Arbeit nach sichtbarer Ausgabe oder nach Abschluss der Antwort durch den Anbieter erneut auszuführen."
+        },
+        {
+          "id": "kk20-353-2026-09-17-7",
+          "ticket": "KK20-353",
+          "date": "2026-09-17",
+          "en": "If the current streamed answer stops after answer text is visible, KARL keeps that text and marks it as potentially incomplete; tool-only and earlier-phase activity retain the normal error treatment.",
+          "de": "Wenn die aktuelle gestreamte Antwort nach sichtbarem Antworttext abbricht, behält KARL den Text bei und kennzeichnet ihn als möglicherweise unvollständig; reine Tool-Aktivität und frühere Phasen behalten die normale Fehlerbehandlung."
+        },
+        {
+          "id": "kk20-348-2026-09-16-8",
+          "ticket": "KK20-348",
+          "date": "2026-09-16",
+          "en": "IDML translations now verify that source font and style references are preserved and fail explicitly if they change; plain-text and data formats no longer request irrelevant font review.",
+          "de": "IDML-Übersetzungen prüfen jetzt, dass die ursprünglichen Schrift- und Stilreferenzen erhalten bleiben, und schlagen bei Änderungen ausdrücklich fehl; bei reinen Text- und Datenformaten wird keine irrelevante Schriftprüfung mehr verlangt."
+        }
+      ]
+    },
+    {
       "id": "2026-09-21",
       "date": {
         "en": "September 21, 2026",

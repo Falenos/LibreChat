@@ -180,7 +180,7 @@ describe('[knauf] provider error safety', () => {
     });
   });
 
-  it('persists only the incomplete-response class after visible streamed text', () => {
+  it('keeps partial streamed text without adding a user-facing error', () => {
     const persisted = getPersistedGenerationError(
       {
         retryDecision: 'unsafe_after_output',
@@ -191,13 +191,7 @@ describe('[knauf] provider error safety', () => {
       [{ type: 'text', text: 'Partial answer' }],
     );
 
-    expect(persisted).toEqual({
-      content: '{"type":"incomplete_response"}',
-      surface: 'incomplete_response',
-    });
-    expect(JSON.stringify(persisted)).not.toMatch(
-      /private_provider_code|private provider response/,
-    );
+    expect(persisted).toBeNull();
   });
 
   it.each([

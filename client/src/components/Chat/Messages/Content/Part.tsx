@@ -37,10 +37,8 @@ import ArtifactEditCall, {
   parseArtifactEditResult,
 } from '~/knauf/components/Artifacts/ArtifactEditCall';
 // End [knauf]
-// [knauf] KK20-353 — render a bounded post-output failure as a warning.
-import IncompleteResponseWarning, {
-  isIncompleteResponseError,
-} from '~/knauf/components/Messages/IncompleteResponseWarning';
+// [knauf] KK20-353 — suppress the retired incomplete-response alert payload.
+import { isIncompleteResponseError } from '~/knauf/components/Messages/IncompleteResponseWarning';
 // End [knauf]
 
 type PartProps = {
@@ -69,14 +67,14 @@ const Part = memo(function Part({
   }
 
   if (part.type === ContentTypes.ERROR) {
-    // [knauf] KK20-353 — partial streamed output remains useful and must not
-    // be presented as a fatal provider error.
+    // [knauf] KK20-353 — preserve useful partial output without an alert; operational
+    // diagnosis remains in bounded server telemetry.
     const errorText =
       part[ContentTypes.ERROR] ??
       (typeof part[ContentTypes.TEXT] === 'string' ? part[ContentTypes.TEXT] : part.text?.value) ??
       '';
     if (isIncompleteResponseError(errorText)) {
-      return <IncompleteResponseWarning />;
+      return null;
     }
     return <ErrorMessage text={errorText} className="my-2" />;
     // End [knauf]

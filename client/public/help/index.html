@@ -357,6 +357,19 @@
         <p>Available user-facing release notes appear here, with the newest entry first.</p>
         <!-- release-notes:en:begin -->
         <article class="release-group">
+          <h3>September 28, 2026</h3>
+          <ul>
+            <li>Recent conversations now appear reliably in the history, month groups are ordered newest-first, and browsing across history pages no longer skips conversations with identical timestamps.</li>
+            <li>File translation can now detect the source language for machine-readable PDF, DOCX, XLSX, TXT, and CSV files before applying approved terminology; KARL asks for the language for scanned documents, presentations, images, or unreliable detection.</li>
+            <li>File translation now defaults to one file attached to the current message; KARL asks users to choose when several current files could apply and uses historical files only when they are explicitly named or all files are requested.</li>
+            <li>Newly translated files now retry one brief storage-read miss automatically, so the first download click succeeds without needing a second click.</li>
+            <li>Generated-file downloads remain unavailable until KARL has finished the response, preventing downloads before the file is ready.</li>
+            <li>Conversations can recover automatically from up to two transient Model Router interruptions before any answer or tool action starts, without replaying work after output is visible or the provider has completed the response.</li>
+            <li>If the current streamed answer stops after answer text is visible, KARL keeps that text and marks it as potentially incomplete; tool-only and earlier-phase activity retain the normal error treatment.</li>
+            <li>IDML translations now verify that source font and style references are preserved and fail explicitly if they change; plain-text and data formats no longer request irrelevant font review.</li>
+          </ul>
+        </article>
+        <article class="release-group">
           <h3>September 21, 2026</h3>
           <ul>
             <li>IDML translations now verify that source font and style references are preserved and fail explicitly if they change; plain-text and data formats no longer request irrelevant font review.</li>
@@ -426,22 +439,22 @@
             <li>Code Execution lets supported Agents run code in isolated Azure sessions and return generated files to the conversation.</li>
           </ul>
         </article>
-        <article class="release-group">
-          <h3>July 2026</h3>
-          <ul>
-            <li>Project and Agent Knowledge gained clearer file lists, duplicate-content protection, cleanup, and more reliable retrieval.</li>
-            <li>File Search processing became asynchronous, with visible progress, bounded retries, duplicate skipping, and reliable recovery after worker restarts.</li>
-            <li>KARL uses native web search and can safely open supplied links while respecting the user&#39;s locale and request context.</li>
-            <li>Uploads remain available when queued during streaming, retry transient or rate-limited failures, and provide clearer guidance for partial limits.</li>
-            <li>Administrators can manage Agent groups, and prompt access and chat conflicts are handled more clearly.</li>
-            <li>Project chats persist correctly, and users can export generated code files from conversations.</li>
-            <li>Artifacts and Skills became available in KARL, including Knauf brand guidance, Mermaid recovery, SVG workflows, and safer sharing.</li>
-            <li>KARL gained a larger 256k context window, public usage guides, and default skills for common tasks.</li>
-          </ul>
-        </article>
         <details class="release-archive">
           <summary>Earlier releases</summary>
           <div class="release-archive-content">
+            <article class="release-group">
+              <h3>July 2026</h3>
+              <ul>
+                <li>Project and Agent Knowledge gained clearer file lists, duplicate-content protection, cleanup, and more reliable retrieval.</li>
+                <li>File Search processing became asynchronous, with visible progress, bounded retries, duplicate skipping, and reliable recovery after worker restarts.</li>
+                <li>KARL uses native web search and can safely open supplied links while respecting the user&#39;s locale and request context.</li>
+                <li>Uploads remain available when queued during streaming, retry transient or rate-limited failures, and provide clearer guidance for partial limits.</li>
+                <li>Administrators can manage Agent groups, and prompt access and chat conflicts are handled more clearly.</li>
+                <li>Project chats persist correctly, and users can export generated code files from conversations.</li>
+                <li>Artifacts and Skills became available in KARL, including Knauf brand guidance, Mermaid recovery, SVG workflows, and safer sharing.</li>
+                <li>KARL gained a larger 256k context window, public usage guides, and default skills for common tasks.</li>
+              </ul>
+            </article>
             <article class="release-group">
               <h3>June 2026</h3>
               <ul>
@@ -604,6 +617,19 @@
         <p>Verfügbare nutzerbezogene Versionshinweise stehen hier, neueste zuerst.</p>
         <!-- release-notes:de:begin -->
         <article class="release-group">
+          <h3>28. September 2026</h3>
+          <ul>
+            <li>Aktuelle Unterhaltungen erscheinen jetzt zuverlässig im Verlauf, Monatsgruppen werden mit dem neuesten Monat zuerst sortiert, und beim Blättern durch den Verlauf werden Unterhaltungen mit identischen Zeitstempeln nicht mehr übersprungen.</li>
+            <li>Die Dateiübersetzung kann die Ausgangssprache für maschinenlesbare PDF-, DOCX-, XLSX-, TXT- und CSV-Dateien jetzt vor der Anwendung freigegebener Terminologie erkennen; bei gescannten Dokumenten, Präsentationen, Bildern oder unsicherer Erkennung fragt KARL nach der Sprache.</li>
+            <li>Die Dateiübersetzung verwendet jetzt standardmäßig eine an die aktuelle Nachricht angehängte Datei; wenn mehrere aktuelle Dateien infrage kommen, bittet KARL Nutzende um die Auswahl und verwendet frühere Dateien nur, wenn sie ausdrücklich benannt werden oder alle Dateien angefordert sind.</li>
+            <li>Neu übersetzte Dateien wiederholen jetzt einen kurzen Speicherlesefehler automatisch, sodass der erste Download-Klick ohne einen zweiten Klick erfolgreich ist.</li>
+            <li>Downloads erzeugter Dateien bleiben deaktiviert, bis KARL die Antwort abgeschlossen hat, und verhindern so Downloads, bevor die Datei bereit ist.</li>
+            <li>Unterhaltungen können sich automatisch von bis zu zwei vorübergehenden Unterbrechungen des Model Routers erholen, bevor eine Antwort oder Tool-Aktion beginnt, ohne Arbeit nach sichtbarer Ausgabe oder nach Abschluss der Antwort durch den Anbieter erneut auszuführen.</li>
+            <li>Wenn die aktuelle gestreamte Antwort nach sichtbarem Antworttext abbricht, behält KARL den Text bei und kennzeichnet ihn als möglicherweise unvollständig; reine Tool-Aktivität und frühere Phasen behalten die normale Fehlerbehandlung.</li>
+            <li>IDML-Übersetzungen prüfen jetzt, dass die ursprünglichen Schrift- und Stilreferenzen erhalten bleiben, und schlagen bei Änderungen ausdrücklich fehl; bei reinen Text- und Datenformaten wird keine irrelevante Schriftprüfung mehr verlangt.</li>
+          </ul>
+        </article>
+        <article class="release-group">
           <h3>21. September 2026</h3>
           <ul>
             <li>IDML-Übersetzungen prüfen jetzt, dass die ursprünglichen Schrift- und Stilreferenzen erhalten bleiben, und schlagen bei Änderungen ausdrücklich fehl; bei reinen Text- und Datenformaten wird keine irrelevante Schriftprüfung mehr verlangt.</li>
@@ -673,22 +699,22 @@
             <li>Code Execution ermöglicht unterstützten Agenten, Code in isolierten Azure-Sitzungen auszuführen und erzeugte Dateien im Chat bereitzustellen.</li>
           </ul>
         </article>
-        <article class="release-group">
-          <h3>Juli 2026</h3>
-          <ul>
-            <li>Projekt- und Agentenwissen erhielt übersichtlichere Dateilisten, Schutz vor doppelten Inhalten, Bereinigung und zuverlässigere Suche.</li>
-            <li>Die Verarbeitung für File Search erfolgt asynchron, mit sichtbarem Fortschritt, begrenzten Wiederholungen, Überspringen von Duplikaten und zuverlässiger Wiederherstellung nach Worker-Neustarts.</li>
-            <li>KARL verwendet die native Websuche und kann bereitgestellte Links sicher öffnen, wobei Gebietsschema und Anfragekontext berücksichtigt werden.</li>
-            <li>Uploads bleiben erhalten, wenn sie während einer laufenden Antwort eingereiht werden, wiederholen vorübergehende oder ratenbegrenzte Fehler und erklären Teillimits verständlicher.</li>
-            <li>Administratoren können Agentengruppen verwalten; Prompt-Zugriffe und Chat-Konflikte werden verständlicher behandelt.</li>
-            <li>Projekt-Chats bleiben zuverlässig erhalten, und Nutzer können erzeugte Codedateien aus Unterhaltungen exportieren.</li>
-            <li>Artefakte und Skills wurden in KARL verfügbar, einschließlich Knauf-Markenvorgaben, Mermaid-Wiederherstellung, SVG-Abläufen und sichererem Teilen.</li>
-            <li>KARL erhielt ein größeres Kontextfenster mit 256.000 Tokens, öffentliche Nutzungshilfen und Standard-Skills für häufige Aufgaben.</li>
-          </ul>
-        </article>
         <details class="release-archive">
           <summary>Frühere Versionen</summary>
           <div class="release-archive-content">
+            <article class="release-group">
+              <h3>Juli 2026</h3>
+              <ul>
+                <li>Projekt- und Agentenwissen erhielt übersichtlichere Dateilisten, Schutz vor doppelten Inhalten, Bereinigung und zuverlässigere Suche.</li>
+                <li>Die Verarbeitung für File Search erfolgt asynchron, mit sichtbarem Fortschritt, begrenzten Wiederholungen, Überspringen von Duplikaten und zuverlässiger Wiederherstellung nach Worker-Neustarts.</li>
+                <li>KARL verwendet die native Websuche und kann bereitgestellte Links sicher öffnen, wobei Gebietsschema und Anfragekontext berücksichtigt werden.</li>
+                <li>Uploads bleiben erhalten, wenn sie während einer laufenden Antwort eingereiht werden, wiederholen vorübergehende oder ratenbegrenzte Fehler und erklären Teillimits verständlicher.</li>
+                <li>Administratoren können Agentengruppen verwalten; Prompt-Zugriffe und Chat-Konflikte werden verständlicher behandelt.</li>
+                <li>Projekt-Chats bleiben zuverlässig erhalten, und Nutzer können erzeugte Codedateien aus Unterhaltungen exportieren.</li>
+                <li>Artefakte und Skills wurden in KARL verfügbar, einschließlich Knauf-Markenvorgaben, Mermaid-Wiederherstellung, SVG-Abläufen und sichererem Teilen.</li>
+                <li>KARL erhielt ein größeres Kontextfenster mit 256.000 Tokens, öffentliche Nutzungshilfen und Standard-Skills für häufige Aufgaben.</li>
+              </ul>
+            </article>
             <article class="release-group">
               <h3>Juni 2026</h3>
               <ul>
