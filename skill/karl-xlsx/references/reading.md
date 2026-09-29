@@ -69,8 +69,9 @@ with literals.
 - `.xlsb` → `read_excel(..., engine='pyxlsb')`. Values only; formulas aren't
   exposed.
 - `.ods` → not supported directly. Convert first:
-  `soffice --headless --convert-to xlsx --outdir /mnt/data/conv /mnt/data/x.ods`,
-  then read the result.
+  `HOME=/tmp/lo-home soffice --headless --convert-to xlsx --outdir /tmp/conv /mnt/data/x.ods`,
+  then read `/tmp/conv/x.xlsx`. Converting into `/tmp` keeps the intermediate
+  file (and LibreOffice's lock and profile files) out of the user's downloads.
 
 ## Cleaning messy real-world layouts
 

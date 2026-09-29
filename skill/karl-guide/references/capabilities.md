@@ -66,4 +66,8 @@ These may be hidden or admin-managed for a user or environment:
 - Skill authoring and sharing; shipped deployment skills are read-only.
 - Public sharing and administrative controls.
 
-Code execution is disabled in the shipped Karl configuration because no sandbox is deployed. Do not promise it.
+## Code execution and files
+
+Karl runs Python in an isolated sandbox with no internet access. It uses it to analyse attached data files and to build downloadable files: spreadsheets (.xlsx), CSV, charts, and — when the user names the format — Word (.docx), PowerPoint (.pptx) and PDF files in the Knauf brand. It can also change a Word, PowerPoint, Excel or PDF file that the user attached with **Upload files to edit**, and returns the result as a new file. It does not produce archives, audio or video.
+
+Code execution depends on the deployment and on role permissions; the seeded Agent Builder role cannot run code. When the user does not name a file format, a report or presentation is built as a previewed artifact instead.

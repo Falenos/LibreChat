@@ -32,7 +32,10 @@ are not persisted as Skill documents in MongoDB.
 | `karl-xml` | Routes attached XML interpretation, translation, bounded text-node inspection, exact manipulation, safe export, and schema review. | model-invocable + `$karl-xml` | skill gates; XML tools require a current-message `.xml` attachment |
 | `web-research` | Uses model-native public-web search by default and the request-scoped `open_url` fetch only for an exact HTTPS link pasted in the current message; enforces source discipline. | model-invocable + `$web-research` | skill gates; live web calls also require `WEB_SEARCH.USE` |
 | `karl-data-analysis` | General "run code on data" sandbox workflow (CSV/JSON/logs, stats, matplotlib, `/mnt/data`). | model-invocable + `$karl-data-analysis` | `execute_code` environment gate |
-| `karl-xlsx` | Dedicated spreadsheet workflow (read/analyze/author `.xlsx`/`.xls`/`.xlsb`/csv; formulas, formatting, charts, and LibreOffice recalculation). | model-invocable + `$karl-xlsx` | `execute_code` environment gate |
+| `karl-xlsx` | Dedicated spreadsheet workflow (read/analyze/author `.xlsx`/`.xls`/`.xlsb`/csv; formulas, formatting, charts). Bundles `scripts/karl_xlsx.py`: recalculation with a formula-error scan, workbook inspection, Knauf cell and chart styles. | model-invocable + `$karl-xlsx` | `execute_code` environment gate |
+| `karl-docx` | Word files: branded documents from brand tokens; tracked changes, comments and edits on an uploaded `.docx`; Word → PDF. Bundles `scripts/karl_docx.py`. | model-invocable + `$karl-docx` | `execute_code` environment gate |
+| `karl-pptx` | PowerPoint files: branded decks with native charts and speaker notes; slide operations on an uploaded `.pptx`. Bundles `scripts/karl_pptx.py`. An unqualified "deck" stays a `karl-artifacts` slides artifact. | model-invocable + `$karl-pptx` | `execute_code` environment gate |
+| `karl-pdf` | PDF files: branded PDFs from HTML (WeasyPrint) or reportlab; merge, split, rotate, watermark, encrypt, form filling, table extraction. Bundles `scripts/karl_pdf.py`. | model-invocable + `$karl-pdf` | `execute_code` environment gate |
 
 The code-execution skills are shipped with `allowed-tools: [execute_code]`. They are omitted from
 catalogs, manual invocation, always-apply/model-spec resolution, and the Skills API whenever the
@@ -69,6 +72,24 @@ arriving there read as instructions to the model (see authoring rule 10).
   skill and drops every user's per-skill active-state.
 - A user who switches it off breaks those cross-skill reads. `karl-artifacts`
   carries a labelled quick-card mirror for that case.
+- **Its code-sandbox files** (`scripts/knauf_brand.py`, `assets/knauf-wordmark.svg`,
+  `sandbox/knauf-fonts.zip`) are what the four Office skills build with. The font
+  archive is not in the repository: ship it by zipping the `TTF/` files of
+  `knauf/brand/fonts/Knauf fonts.7z` (flat, `.ttf` only) into
+  `skill/karl-brand/sandbox/knauf-fonts.zip`, once the brand owner has confirmed that
+  the desktop licence covers embedding in generated documents. Without it every
+  helper falls back to Arial. `knauf_brand.py` transcribes the `KNAUF` const in
+  `SKILL.md`; the guard spec fails when the two differ.
+
+**`karl-docx`, `karl-pptx`, `karl-pdf`, `karl-xlsx`**
+
+- `scripts/office_qa.py` is the same file in all four (validate, render, contact
+  sheets). Symlinks are rejected, so it is copied; the guard spec fails when the
+  copies differ. Fix one, copy it to the other three.
+- Their helpers are tested only by `knauf/scripts/skillScripts.spec.js` (compile +
+  pure logic) and by hand in a sandbox; the libraries they use are listed in
+  `knauf/docs/code-execution/sandbox-inventory.md`. Re-run
+  `knauf/code-adapter/scripts/probe-doc-stack.mjs` after a session-pool image change.
 
 ## Authoring rules
 
@@ -127,3 +148,22 @@ Learned the hard way — each of these is a silent failure otherwise.
       the model calls `skill`, `formatAgentMessages` re-injects that body for the rest of the
       conversation. Two skills is a permanent ~4.9k-token tax. Size bodies accordingly and push
       detail into `references/`, which is read on demand instead.
+11. **Bundled files reach the code sandbox only when the skill is invoked with the `skill`
+    tool** (not by a `read_file` of its references), and only when code execution is
+    available. They are mounted read-only at `/mnt/data/<skill>/<relativePath>`. Scripts
+    run as `python3 -B` and write their outputs elsewhere. The guard spec checks that every
+    `/mnt/data/<skill>/…` path a skill names is a file that skill ships.
+12. **Everything in a skill is downloadable by every user except `sandbox/`.** The Skills
+    panel lists each file with a Download button. Files under `<skill>/sandbox/` are hidden
+    from the Skills API and refused as code outputs (KK20-397), so licensed material —
+    fonts above all — goes there and nowhere else; the guard spec fails on a font file
+    anywhere else. Such files are only ever embedded inside generated documents.
+13. **File names must match `^[a-zA-Z0-9._\-/]+$`**, or the backend does not boot. Binary
+    files load (they are pushed to the sandbox byte-for-byte) but are not cached for
+    `read_file`.
+14. **No colour value outside `karl-brand`, scripts included.** Helpers import
+    `knauf_brand` (`hex('ink.heading')`) instead of typing a hex; the hex guard reads every
+    text file of every skill.
+15. **Never commit `__pycache__`.** Importing a helper locally without `-B` writes one next
+    to it, and the image copies `skill/` whole. `skillScripts.spec.js` fails on committed
+    bytecode.

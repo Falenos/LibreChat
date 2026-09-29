@@ -3,15 +3,15 @@ name: karl-xlsx
 # Kept under the 250-char catalog cap (skill/README.md rule 3) — trigger words
 # only; depth lives in the body + references/.
 description: >-
-  Spreadsheets in KARL's code sandbox: read, analyze, clean, edit, or create
-  .xlsx/.xlsm/.xls/.xlsb/csv files — multi-sheet workbooks, formulas,
-  formatting, charts, pivots, conversion. Use whenever a spreadsheet is the
-  main input or output.
+  Spreadsheets in KARL's code sandbox: read, analyze, clean, edit or create
+  .xlsx/.xlsm/.xls/.xlsb/csv — multi-sheet workbooks, live formulas,
+  formatting, charts, pivots, conversion. Use when a spreadsheet is the main
+  input or output; not translation.
 argument-hint: "[spreadsheet task or file]"
 user-invocable: true
 allowed-tools:
   - execute_code
-version: "1.0.0"
+version: "1.1.0"
 ---
 
 # KARL spreadsheets (xlsx)
@@ -40,8 +40,10 @@ supported** (no `odfpy`) — convert it first with `soffice --headless
 | Read **both** formulas and their computed values | two `openpyxl.load_workbook` passes (see references/reading.md) |
 | Write data out fast (values only) | `pandas.to_excel` or `xlsxwriter` |
 | Author formatting, multiple sheets, charts | `xlsxwriter` (new files) / `openpyxl` (edit existing) |
-| Output must contain **live formulas** | `openpyxl` to write them, then **recalc with LibreOffice** |
-| Convert `.xls`/`.xlsb`/`.ods` → `.xlsx` | `soffice --headless --convert-to xlsx --outdir …` |
+| Output must contain **live formulas** | `openpyxl`/`xlsxwriter` to write them, then **`karl_xlsx.py recalc`** |
+| Knauf-styled header, numbers, charts | `brand_formats` / `brand_chart` / `style_header` in `karl_xlsx.py` (invoke `karl-brand` first) |
+| Before editing a user's workbook | `karl_xlsx.py inspect` (what an openpyxl save would lose) |
+| Convert `.xls`/`.xlsb`/`.ods` → `.xlsx` | `soffice --headless --convert-to xlsx --outdir /tmp/out …`, then copy the result to `/mnt/data` |
 
 ## Golden rules
 
@@ -51,10 +53,13 @@ supported** (no `odfpy`) — convert it first with `soffice --headless
 - **openpyxl reads formulas *or* values, not both at once** — a formula cell is
   `None` under `data_only=True` unless the file was last saved by an app that
   cached the result. Use the two-pass technique in `references/reading.md`.
-- **A formula written by openpyxl has no cached value until something
-  recalculates it.** If the deliverable must show computed results (not blanks
-  in some viewers), run the LibreOffice recalc step in
-  `references/authoring.md`. If the deliverable just needs the numbers, compute
+- **A formula written by openpyxl or xlsxwriter has no correct cached value**
+  (openpyxl stores none, xlsxwriter stores 0), so previews and some viewers show
+  blanks or zeros. Every workbook with formulas goes through
+  `python3 -B /mnt/data/karl-xlsx/scripts/karl_xlsx.py recalc FILE` before
+  delivery: it computes every formula, stores the results in the file itself and
+  exits 1 on any `#REF!`, `#DIV/0!`, `#NAME?` or other error. **Deliver only
+  with zero formula errors.** If the deliverable just needs the numbers, compute
   in pandas and write values — simpler and always correct.
 - **Prefer live formulas over hardcoded results only when the user wants an
   interactive model.** For a report of *answers*, computed values are better.
@@ -62,15 +67,27 @@ supported** (no `odfpy`) — convert it first with `soffice --headless
   headers, number formats, and which cells are inputs vs formulas. Don't
   reformat what you weren't asked to change.
 
+## The helper
+
+`/mnt/data/karl-xlsx/scripts/karl_xlsx.py` is mounted read-only with this skill;
+run it as `python3 -B`. `recalc FILE [--out OUT]` (above), `inspect FILE` (sheets,
+formulas, merged cells, charts, macros and what an openpyxl re-save would drop) and
+`qa FILE`, which renders the workbook to contact sheets under
+`/mnt/data/_karl_qa/` for a visual check with `read_file` (overflowing `###`
+cells, unreadable charts). `_karl_qa/` is never shown to the user.
+
+A workbook cannot embed fonts, so Knauf spreadsheets use Arial with the brand
+colours; `brand_formats` applies both. Translating a workbook belongs to
+`karl-file-translation`.
+
 ## References (read on demand)
 
 - `references/reading.md` — reading & analyzing: multi-sheet loading, the
   formula/value two-pass, `.xls`/`.xlsb` engines, cleaning messy layouts,
   encodings and dtype pitfalls, previewing with markitdown.
 - `references/authoring.md` — creating & editing: pandas vs xlsxwriter vs
-  openpyxl, formatting and number formats, charts, **live formulas + the
-  verified LibreOffice recalc workflow**, formula-compatibility limits, and
-  templates.
+  openpyxl, Knauf formatting and number formats, charts, **live formulas and
+  the `recalc` check**, formula-compatibility limits, and templates.
 
 Persist every output to `/mnt/data` with a real extension; it is delivered to
 the user automatically. Summarize the result in chat rather than pasting cells.

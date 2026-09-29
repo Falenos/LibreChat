@@ -27,6 +27,15 @@ original filename said nothing about what it was, and it is easily confused with
   brand owner. Until then, KARL's UI and every artifact template use the system/Arial
   stack — which is brand-compliant anyway: the official colour sheet sets its own type in
   `Arial, Helvetica, sans-serif`.
+- **Fonts inside generated documents (KK20-398).** The archive's `TTF/` folder holds
+  desktop builds of Knauf Screen (4 styles), Knauf Screen Head (2) and Knauf Screen
+  Narrow (3). Every one carries OS/2 `fsType` 0, *installable embedding*, the most
+  permissive embedding flag, so the files themselves allow embedding in PDFs and Office
+  documents. Whether the licence agreement covers that, and use on the server in KARL's
+  code sandbox, needs the brand owner's written confirmation before
+  `skill/karl-brand/sandbox/knauf-fonts.zip` is shipped (how to build it:
+  `skill/README.md`, karl-brand). Once shipped the fonts are sandbox-only: hidden from
+  the Skills API, refused as code outputs, and only ever embedded inside generated files.
 - Logos must not be recoloured outside the two sanctioned fills, stretched, rotated, or
   placed on insufficient-contrast backgrounds. See `guidelines/`.
 - The `KILogo_*` files are the **Knauf Insulation** sub-brand. Do not mix them with the

@@ -43,11 +43,18 @@ describe('[knauf] KNAUF_EXPECTED_DEPLOYMENT_SKILLS', () => {
       'karl-brand',
       // [knauf] KK20-257 — the code-execution skills ship now that the adapter does.
       'karl-data-analysis',
+      // [knauf] KK20-398 — the Word skill; karl-pdf and karl-pptx sort below.
+      'karl-docx',
+      // End [knauf]
       'karl-file-translation',
       'karl-guide',
       'karl-idml',
       'karl-image-generation',
       'karl-mermaid',
+      // [knauf] KK20-398 — the PDF and PowerPoint skills.
+      'karl-pdf',
+      'karl-pptx',
+      // End [knauf]
       'karl-xlsx',
       'karl-xml',
       // End [knauf]

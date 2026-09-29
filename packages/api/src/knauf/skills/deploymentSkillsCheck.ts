@@ -71,6 +71,13 @@ export const KNAUF_EXPECTED_DEPLOYMENT_SKILLS: readonly string[] = Object.freeze
   'karl-data-analysis',
   'karl-xlsx',
   // End [knauf]
+  // [knauf] KK20-398 — the Word, PowerPoint and PDF skills. Same gate as the two above:
+  // they run bundled helpers in the code sandbox, and the sandbox inventory
+  // (knauf/docs/code-execution/sandbox-inventory.md) confirms every library they use.
+  'karl-docx',
+  'karl-pdf',
+  'karl-pptx',
+  // End [knauf]
   'karl-mermaid',
   'web-research',
 ]);

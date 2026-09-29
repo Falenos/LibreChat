@@ -14,3 +14,7 @@ knauf/brand/**/*.eps -text -diff
 knauf/brand/**/*.pdf -text -diff
 knauf/brand/**/*.7z  -text -diff
 knauf/brand/**/*.png -text -diff
+
+# [knauf] KK20-398 — sandbox-only skill files (the licensed font archive). Binary, never
+# diffed or EOL-normalised; see skill/README.md rule 12.
+skill/**/sandbox/** -text -diff

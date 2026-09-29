@@ -547,6 +547,145 @@ describe('[knauf] shipped deployment skills', () => {
     });
   });
 
+  // [knauf] KK20-398 — the Office skills: routing, their bundled helpers, the licensed
+  // fonts' place in the tree, and the Python transcription of the brand tokens.
+  const OFFICE_SKILLS = ['karl-docx', 'karl-pdf', 'karl-pptx', 'karl-xlsx'];
+  /** Font files, and archives whose name says they carry fonts. */
+  const FONT_LIKE = /\.(ttf|otf|ttc|woff2?|eot|fntdata|odttf)$|font[^/]*\.(zip|7z|tar|tgz|gz)$/i;
+  /** A `/mnt/data/<skill>/<path>` mount path named in skill text. */
+  const MOUNT_REF_PATTERN = /\/mnt\/data\/([a-z0-9][a-z0-9-]*)\/([A-Za-z0-9._\-/]*[A-Za-z0-9_])/g;
+
+  it('ships the Office skills as code-execution skills that only fire on a named format', () => {
+    for (const name of OFFICE_SKILLS) {
+      const skill = byName.get(name);
+      expect(skill?.allowedTools).toEqual(['execute_code']);
+      expect(skill?.disableModelInvocation).not.toBe(true);
+      // Translation of an Office file is karl-file-translation's job, not a code job.
+      expect(skill?.description).toMatch(/translat/i);
+    }
+    for (const name of ['karl-docx', 'karl-pdf', 'karl-pptx']) {
+      expect(byName.get(name)?.description).toMatch(/Only when/);
+    }
+    // An unqualified deck stays a slides artifact; only a named .pptx comes here.
+    expect(byName.get('karl-pptx')?.description).toMatch(/a plain "deck" is an\s+artifact/);
+    expect(byName.get('karl-pdf')?.description).toMatch(
+      /not for answering questions about a\s+PDF/,
+    );
+  });
+
+  it('keeps one shared QA helper, byte-identical in every Office skill', () => {
+    // Symlinks are rejected at load (skill/README.md rule 7), so the helper is
+    // duplicated deliberately. A fix applied to one copy only would make the four
+    // skills disagree about what "valid" means.
+    const copies = OFFICE_SKILLS.map((name) =>
+      fs.readFileSync(path.join(SKILLS_DIR, name, 'scripts/office_qa.py'), 'utf8'),
+    );
+    for (const copy of copies.slice(1)) {
+      expect(copy).toBe(copies[0]);
+    }
+  });
+
+  it('keeps licensed font files under a sandbox/ folder, where the Skills API hides them', () => {
+    // KK20-397 hides `<skill>/sandbox/**` from the Skills panel and its download route
+    // and blocks those bytes as code outputs; anywhere else a font is downloadable by
+    // every user. Checked on disk, not the registry, so an unloadable file counts too.
+    const misplaced: string[] = [];
+    const walk = (dir: string, rel: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          walk(path.join(dir, entry.name), childRel);
+        } else if (FONT_LIKE.test(entry.name) && !/^[^/]+\/sandbox\//.test(childRel)) {
+          misplaced.push(childRel);
+        }
+      }
+    };
+    walk(SKILLS_DIR, '');
+    expect(misplaced).toEqual([]);
+  });
+
+  it('points every /mnt/data/<skill>/ path at a file that skill ships', () => {
+    // Bundled files are mounted at /mnt/data/<skill>/<relativePath> when the skill is
+    // invoked. A typo in one of these paths is a FileNotFoundError at runtime only.
+    const broken: string[] = [];
+    for (const skill of skills) {
+      const texts: Array<[string, string]> = [
+        ['SKILL.md', skill.body],
+        ...skill.files
+          .filter((file) => file.relativePath.endsWith('.md'))
+          .map((file): [string, string] => [file.relativePath, file.content ?? '']),
+      ];
+      for (const [label, text] of texts) {
+        for (const [, targetName, relativePath] of text.matchAll(MOUNT_REF_PATTERN)) {
+          const target = byName.get(targetName);
+          if (!target) {
+            continue; // `/mnt/data/<user file>` examples, `_karl_qa/`, …
+          }
+          const isDirectory = target.files.some((file) =>
+            file.relativePath.startsWith(`${relativePath}/`),
+          );
+          if (!isDirectory && !target.files.some((file) => file.relativePath === relativePath)) {
+            broken.push(`${skill.name}/${label} -> ${targetName}/${relativePath}`);
+          }
+        }
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it('keeps the Python brand tokens identical to the KNAUF const in karl-brand', () => {
+    // `knauf_brand.py` transcribes SKILL.md's tokens so sandbox code never types a hex.
+    // The hex guard above cannot catch a wrong value there: every hex in karl-brand's
+    // own files counts as a source hex. Compare the two transcriptions group by group.
+    const brand = byName.get(TOKEN_SOURCE_SKILL);
+    const tsBlock = /const KNAUF = \{([\s\S]*?)\n\};/.exec(brand?.body ?? '')?.[1] ?? '';
+    const pyFile = brand?.files.find((file) => file.relativePath === 'scripts/knauf_brand.py');
+    const pyBlock = /KNAUF = \{([\s\S]*?)\n\}/.exec(pyFile?.content ?? '')?.[1] ?? '';
+    const tokens = (block: string) => {
+      const result: Record<string, unknown> = {};
+      for (const group of ['brand', 'ink', 'surface', 'status']) {
+        const body = new RegExp(`['"]?${group}['"]?\\s*:\\s*\\{([^}]*)\\}`).exec(block)?.[1] ?? '';
+        result[group] = Object.fromEntries(
+          [...body.matchAll(/['"]?(\w+)['"]?\s*:\s*'(#[0-9A-Fa-f]{6})'/g)].map((m) => [
+            m[1],
+            m[2].toUpperCase(),
+          ]),
+        );
+      }
+      for (const ramp of [
+        'categorical',
+        'categoricalAllPairs',
+        'ordinalCerulean',
+        'sequentialCerulean',
+      ]) {
+        const body = new RegExp(`['"]?${ramp}['"]?\\s*:\\s*\\[([^\\]]*)\\]`).exec(block)?.[1] ?? '';
+        result[ramp] = (body.match(HEX_PATTERN) ?? []).map((hex) => hex.toUpperCase());
+      }
+      return result;
+    };
+    const fromSkill = tokens(tsBlock);
+    expect(Object.keys(fromSkill.brand as object).length).toBeGreaterThan(5);
+    expect((fromSkill.categorical as string[]).length).toBeGreaterThan(5);
+    expect(tokens(pyBlock)).toEqual(fromSkill);
+  });
+
+  it('keeps the bundled wordmark SVG identical to the committed brand SVG', () => {
+    // wordmark_png() rasterises this file into every Word, PowerPoint and PDF output.
+    const tokenize = (d: string) => d.match(/[MmLlHhVvCcSsQqTtAaZz]|-?\d*\.?\d+(?:e-?\d+)?/g) ?? [];
+    const pathOf = (svg: string) => /<path[^>]*\sd="(M[^"]+)"/.exec(svg)?.[1] ?? '';
+    const source = fs.readFileSync(
+      path.join(REPO_ROOT, 'knauf/brand/logos/KNAUFLogo2024sRGB.svg'),
+      'utf8',
+    );
+    const bundled = fs.readFileSync(
+      path.join(SKILLS_DIR, 'karl-brand/assets/knauf-wordmark.svg'),
+      'utf8',
+    );
+    expect(tokenize(pathOf(bundled)).length).toBeGreaterThan(100);
+    expect(tokenize(pathOf(bundled))).toEqual(tokenize(pathOf(source)));
+  });
+  // End [knauf]
+
   it('keeps YAML frontmatter out of reference files', () => {
     // Only SKILL.md is frontmatter-parsed. A leading `---` in a reference is a
     // stray horizontal rule today and a live trap if the file is ever promoted.

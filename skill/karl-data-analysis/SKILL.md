@@ -11,7 +11,7 @@ argument-hint: "[analysis task or file]"
 user-invocable: true
 allowed-tools:
   - execute_code
-version: "2.0.0"
+version: "2.1.0"
 ---
 
 # KARL data analysis: working the sandbox effectively
@@ -25,13 +25,15 @@ reading/authoring specifics, read `karl-xlsx`.
 ## Environment facts (verified)
 
 - **Python 3.12** with a full data stack preinstalled: `pandas`, `numpy`,
-  `scipy`, `scikit-learn`, `matplotlib`, `openpyxl`, `xlsxwriter`, `xlrd`,
-  `pyxlsb`, `Pillow`, `lxml`, `beautifulsoup4`, `tabulate`, `chardet`. Also on
+  `scipy`, `scikit-learn`, `matplotlib`, `seaborn`, `openpyxl`, `xlsxwriter`,
+  `xlrd`, `pyxlsb`, `Pillow`, `lxml`, `beautifulsoup4`, `tabulate`, `chardet`,
+  plus the office stack the `karl-docx`, `karl-pptx` and `karl-pdf` skills use
+  (python-docx, python-pptx, reportlab, pypdf, pdfplumber). Also on
   `PATH`: `bash` and standard GNU tools, `libreoffice`/`soffice`, `markitdown`,
   `pandoc`.
 - **No network egress and no installs.** There is no `pip`/`npm install`; a
-  package that isn't in the list above (e.g. `seaborn`, `plotly`) is
-  unavailable — solve it with what's present (matplotlib instead of seaborn).
+  package that isn't in the list above (e.g. `plotly`) is unavailable — solve
+  it with what's present (matplotlib or seaborn instead of plotly).
 - **Each call is a fresh process.** Variables, imports, and in-memory state do
   **not** carry over between calls. Only files under `/mnt/data` persist.
 - **Each call must finish within ~220 seconds** (hard platform limit). Split
@@ -107,9 +109,11 @@ reading/authoring specifics, read `karl-xlsx`.
   `wc -l`, `file`, `unzip -l`), format conversion (`soffice --headless
   --convert-to`, `pandoc`), and text munging where `sed`/`awk` beats pandas.
 - `read_file` → re-read a known text file (exact path from earlier output or
-  `/mnt/data`) without spending an execution; it also renders images/PDFs so you
-  can visually check a chart you generated, and reads skill references via
-  `skills/<name>/…` paths. It needs exact paths — don't use it to "explore".
+  `/mnt/data`) without spending an execution, and read skill references via
+  `skills/<name>/…` paths. Where visual checks are enabled it also shows a PNG
+  or JPEG you wrote to `/mnt/data`, so you can look at a chart before
+  delivering it; otherwise it cannot, and a chart is checked by its data and
+  labels. It needs exact paths — don't use it to "explore".
 
 ## Scope
 
