@@ -1858,6 +1858,10 @@ module.exports = {
   derivedExpectedTotals,
   finalizeManifest,
   assertSecureExistingDir,
+  // Reused by erasure-verify.js (P2-5) so its evidence directory gets the same
+  // no-symlink / owner / mode checks instead of a third hand-written copy.
+  assertNoSymlinkInPath,
+  readSecureJson,
   replaceManifestAtomically,
   verifyBundleArtifact,
   runFinalize,

@@ -302,6 +302,25 @@ capacity, database service tiers, and provider quota are intentionally absent
 from the table. Their current values belong to GitOps, Terraform, Azure, or
 ArgoCD and must be inspected there.
 
+## Erasure verifier
+
+Operator tooling, not request traffic: `knauf/scripts/erasure-verify.js`
+(runbook `knauf/docs/privacy/runbooks/erasure-verify.md`). Every value is a
+code default. A bound that is reached turns the store NOT PROBED or the run
+INCOMPLETE; it never reads as zero.
+
+| Limit | Value | Authority/source | Rationale and interaction |
+| --- | ---: | --- | --- |
+| Baseline age at `after` | 24 hours | `MAX_BASELINE_AGE_MS` | An older baseline is STALE. Eventual deletions with a longer deadline therefore end as obligations in the report, not as checks this tool can repeat. |
+| Langfuse settle window | 15 minutes | `LANGFUSE_SETTLE_MS` | Langfuse deletes asynchronously; data still listed inside the window is PENDING. |
+| Langfuse delete batch | 100 trace ids | `LANGFUSE_DELETE_BATCH` | Keeps each `DELETE /api/public/traces` body small; a failed batch leaves the record `partial`. |
+| Langfuse list paging | 100 per page, 1,000 pages | `LANGFUSE_PAGE_SIZE`, `LANGFUSE_MAX_PAGES` | Beyond 100,000 ids the listing is inexact. |
+| Langfuse lookups by id | 5,000 ids per route per phase, 8 in flight | `LANGFUSE_MAX_LOOKUPS`, `LANGFUSE_LOOKUP_CONCURRENCY` | Runs at `before` (positive control) and at `after`, so a subject with more than 5,000 traces or scores is NOT READY at baseline. |
+| RAG verification requests | 500 values per request, 1,000 groups per page, 1,000 pages | `RAG_MAX_VALUES`, `RAG_PAGE_SIZE`, `RAG_MAX_PAGES` | The first two are the `agentic-karl-rag-api` `/verification/vectors` maxima (`MAX_VALUES`, `MAX_PAGE_SIZE`); more pages is inexact. |
+| Redis `SCAN` | 100,000 rounds of `COUNT 1000`; 5-second connect, no retry | `REDIS_MAX_SCAN_ROUNDS`; `main()` client options | A scan that does not finish is inexact; an unreachable Redis is NOT PROBED rather than a reconnect loop. |
+| Blob listing page | 1,000 items | `listAll()` `maxPageSize` | Paged to exhaustion; the size only bounds memory per page. |
+| Translation scratch window | Manifest `lifecycleWindow` (`P1D` in stage and prod) | `knauf/docs/privacy/erasure-sinks/<env>.json` | No code default: without the manifest value the store is NOT PROBED. It mirrors the storage lifecycle rule that Terraform owns. |
+
 ## CI-only limits
 
 | Workflow | Limit | Rationale |
