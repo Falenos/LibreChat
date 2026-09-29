@@ -80,8 +80,10 @@ than disabling the limit.
 | Limit | Default | Source/key | Rationale |
 | --- | ---: | --- | --- |
 | Staging upload file | 128 MiB | `UPLOAD_MAX_BYTES` | Matches the practical ACA session-pool file API ceiling. |
-| Upload batch | 20 files | `CAPTURE_MAX_FILES` | Bounds ephemeral disk and transfer work. |
-| Execution input count | 20 files | `EXEC_INPUT_MAX_FILES` | Bounds per-request staging work. |
+| Upload batch | 32 files, 256 MiB | `UPLOAD_BATCH_MAX_FILES`, `UPLOAD_BATCH_MAX_TOTAL_BYTES` | Bounds ephemeral disk and transfer work; decoupled from the capture cap so a skill with many bundled files still primes (0.4.0). |
+| Execution inputs mounted | 32 files | `EXEC_INPUT_MAX_FILES` | Ranked selection (0.4.0): files the code names always mount, the newest of the rest fill the budget, and omissions are reported to the model. `EXEC_INPUT_SELECTION=strict` restores the old reject. |
+| Execution input refs | 256 per request | `EXEC_INPUT_MAX_REFS` | Hard ceiling on the file list one request may carry. |
+| Un-named execution inputs | 64 MiB, 30-second push budget | `EXEC_INPUT_OPTIONAL_MAX_BYTES`, `EXEC_INPUT_PUSH_BUDGET_MS` | Pushes are strictly sequential, so the optional tail is bounded in bytes and time. |
 | Execution input file | 128 MiB | `EXEC_INPUT_MAX_FILE_BYTES` | Matches the upload ceiling. |
 | Aggregate execution input | 256 MiB | `EXEC_INPUT_MAX_TOTAL_BYTES` | Bounds memory and transfer pressure for one execution. |
 | Active executions | 4 per process | `EXEC_MAX_ACTIVE_REQUESTS` | Rejects with HTTP 429 rather than building an unbounded in-process queue. |
@@ -91,6 +93,7 @@ than disabling the limit.
 | Identity/session fields | 4 KiB each | execution request validation | Bounds metadata and log exposure. |
 | Stdout/stderr | 64 KiB each | output limits | Bounds tool responses; the wrapper initially inlines smaller excerpts. |
 | Captured output count | 20 files | `CAPTURE_MAX_FILES` | Bounds sandbox scans and downloads. |
+| Post-exec manifest | 500 entries; dotfiles, `__pycache__/` and `*.pyc` skipped | `EXEC_MANIFEST_MAX_ENTRIES`, `CAPTURE_IGNORE_HIDDEN` | Tool litter (LibreOffice locks and profiles, bytecode) would otherwise be delivered and fill the manifest before real deliverables (0.4.0). |
 | Aggregate captured output | 256 MiB | `CAPTURE_MAX_TOTAL_BYTES` | Bounds Blob transfer and response construction. |
 | Capture phase | 60 seconds | `CAPTURE_MAX_TOTAL_MS` | Prevents sequential file operations extending a request for many minutes. |
 | Total adapter request | 300 seconds | `EXEC_TOTAL_TIMEOUT_MS` | End-to-end deadline across staging, execution, capture, and cleanup. |
