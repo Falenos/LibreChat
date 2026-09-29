@@ -26,6 +26,12 @@ import { parseFrontmatter } from '../skills/import';
 import { buildSkillPrimeMessage } from './skills';
 import { cleanCodeToolOutput } from './cleanup';
 import { primeSkillFiles } from './skillFiles';
+// [knauf] KK20-397 — tell the model where bundled skill files are in the sandbox.
+import { describeSkillSandboxMount, skillSandboxPath } from '~/knauf/skills/skillSandboxPaths';
+// End [knauf]
+// [knauf] KK20-397 — let the model see page/slide renders it produced (flagged).
+import { isKnaufModelOnlyArtifact, readKnaufSandboxImage } from '~/knauf/code/visualQa';
+// End [knauf]
 
 export interface ToolEndCallbackData {
   output: {
@@ -2521,6 +2527,14 @@ async function handleReadFileCall(
     };
   }
 
+  // [knauf] KK20-397 — a raster the run produced in the sandbox comes back as an image the
+  // model can see (visual QA), instead of the binary-file refusal below. Null = not ours.
+  const knaufImage = await readKnaufSandboxImage({ tc, path: args.path, mergedConfigurable, req });
+  if (knaufImage) {
+    return knaufImage;
+  }
+  // End [knauf]
+
   const codeEnvAvailable = mergedConfigurable?.codeEnvAvailable === true;
   let accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
 
@@ -2794,7 +2808,9 @@ async function handleReadFileCall(
       return {
         toolCallId: tc.id,
         status: 'success',
-        content: `Binary file (${file.mimeType}, ${file.bytes} bytes). Use bash to process: /mnt/data/${args.path}`,
+        // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+        content: `Binary file (${file.mimeType}, ${file.bytes} bytes). Use bash to process: ${skillSandboxPath(skillName, relativePath)}`,
+        // End [knauf]
       };
     }
   }
@@ -2814,14 +2830,18 @@ async function handleReadFileCall(
     return {
       toolCallId: tc.id,
       status: 'success',
-      content: `File "${args.path}" is too large to read directly (${file.bytes} bytes, limit: ${MAX_READABLE_BYTES}). Invoke the skill first, then use bash to read it at /mnt/data/${args.path}.`,
+      // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+      content: `File "${args.path}" is too large to read directly (${file.bytes} bytes, limit: ${MAX_READABLE_BYTES}). Invoke the skill first, then use bash to read it at ${skillSandboxPath(skillName, relativePath)}.`,
+      // End [knauf]
     };
   }
   if (isImage && file.bytes > MAX_BINARY_BYTES) {
     return {
       toolCallId: tc.id,
       status: 'success',
-      content: `File too large (${file.bytes} bytes, limit: ${MAX_BINARY_BYTES}). Use bash to process: /mnt/data/${args.path}`,
+      // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+      content: `File too large (${file.bytes} bytes, limit: ${MAX_BINARY_BYTES}). Use bash to process: ${skillSandboxPath(skillName, relativePath)}`,
+      // End [knauf]
     };
   }
 
@@ -2865,7 +2885,9 @@ async function handleReadFileCall(
         return {
           toolCallId: tc.id,
           status: 'success',
-          content: `File "${args.path}" exceeded streaming limit (${streamLimit} bytes). Invoke the skill first, then use bash to read it at /mnt/data/${args.path}.`,
+          // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+          content: `File "${args.path}" exceeded streaming limit (${streamLimit} bytes). Invoke the skill first, then use bash to read it at ${skillSandboxPath(skillName, relativePath)}.`,
+          // End [knauf]
         };
       }
       chunks.push(chunk);
@@ -2919,7 +2941,9 @@ async function handleReadFileCall(
       return {
         toolCallId: tc.id,
         status: 'success',
-        content: `Binary file (${file.mimeType}, ${buffer.length} bytes). Use bash to process: /mnt/data/${args.path}`,
+        // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+        content: `Binary file (${file.mimeType}, ${buffer.length} bytes). Use bash to process: ${skillSandboxPath(skillName, relativePath)}`,
+        // End [knauf]
       };
     }
 
@@ -2941,7 +2965,9 @@ async function handleReadFileCall(
       return {
         toolCallId: tc.id,
         status: 'success',
-        content: `File too large (${buffer.length} bytes, limit: ${MAX_READABLE_BYTES}). Use bash: cat /mnt/data/${args.path}`,
+        // [knauf] KK20-397 — the real mount path, not /mnt/data/skills/…
+        content: `File too large (${buffer.length} bytes, limit: ${MAX_READABLE_BYTES}). Use bash: cat ${skillSandboxPath(skillName, relativePath)}`,
+        // End [knauf]
       };
     }
 
@@ -3060,6 +3086,9 @@ async function handleSkillToolCall(
   // is enabled for this run. The flag is threaded via configurable upstream
   // so this gate cannot be bypassed.
   const codeEnvAvailable = mergedConfigurable?.codeEnvAvailable === true;
+  // [knauf] KK20-397 — names the files were mounted under; null = priming not attempted.
+  let knaufMountedNames: string[] | null = null;
+  // End [knauf]
   if (
     codeEnvAvailable &&
     skill.fileCount > 0 &&
@@ -3080,6 +3109,9 @@ async function handleSkillToolCall(
         checkIfActive,
         updateSkillFileCodeEnvIds,
       });
+      // [knauf] KK20-397 — record what priming mounted, for the tool-result location line.
+      knaufMountedNames = primeResult ? primeResult.files.map((f) => f.name) : [];
+      // End [knauf]
       if (primeResult) {
         /* `session_id` at the top of the artifact is the (representative)
          * execution session — ToolNode reads it for CodeSessionContext
@@ -3103,6 +3135,9 @@ async function handleSkillToolCall(
         };
       }
     } catch (error) {
+      // [knauf] KK20-397 — priming failed: tell the model nothing is mounted.
+      knaufMountedNames = [];
+      // End [knauf]
       logger.error(
         `[handleSkillToolCall] Failed to prime files for skill "${args.skillName}":`,
         error instanceof Error ? error.message : error,
@@ -3112,7 +3147,9 @@ async function handleSkillToolCall(
 
   return {
     toolCallId: tc.id,
-    content: contentText,
+    // [knauf] KK20-397 — say where the bundled files are, or that they are not there.
+    content: contentText + describeSkillSandboxMount(skill.name, knaufMountedNames),
+    // End [knauf]
     status: 'success',
     artifact,
     injectedMessages,
@@ -3265,7 +3302,14 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       mergeSandboxSessionArtifact(sandboxContext, handlerResult.artifact);
                     }
 
-                    if (toolEndCallback && handlerResult.artifact) {
+                    if (
+                      toolEndCallback &&
+                      handlerResult.artifact &&
+                      // [knauf] KK20-397 — a visual-QA image is for the model only; the
+                      // callback would save it again as a visible chat attachment.
+                      !isKnaufModelOnlyArtifact(handlerResult.artifact)
+                      // End [knauf]
+                    ) {
                       await toolEndCallback(
                         {
                           output: {

@@ -445,3 +445,126 @@ describe('primeSkillFiles — resource identity propagation', () => {
     ]);
   });
 });
+
+/* [knauf] KK20-397 — staging expiry is per object (KK20-316), and code-adapter 0.4.0
+ * only refreshes the files a run mounts, so one live sibling in a storage session does
+ * not prove the others are live. Both primers must probe every object. */
+describe('[knauf] skill-file cache probes every object', () => {
+  const ref = (fileId: string) => ({
+    kind: 'skill' as const,
+    id: SKILL_ID.toString(),
+    storage_session_id: 'session-shared',
+    file_id: fileId,
+    version: SKILL_VERSION,
+  });
+  const file = (name: string) => ({
+    relativePath: `references/${name}.md`,
+    filename: `${name}.md`,
+    filepath: `/storage/brand-guidelines/references/${name}.md`,
+    source: 's3',
+    bytes: 10,
+    codeEnvRef: ref(`file-${name}`),
+  });
+  const onlyFirstAlive = jest.fn(async (r: { file_id: string }) =>
+    r.file_id === 'file-a' ? '2026-09-30T00:00:00Z' : null,
+  );
+
+  beforeEach(() => {
+    onlyFirstAlive.mockClear();
+  });
+
+  it('primeSkillFiles re-uploads when one object in a shared session has expired', async () => {
+    const batchUploadCodeEnvFiles = jest.fn().mockResolvedValue({
+      storage_session_id: 'session-new',
+      files: [],
+    });
+    await primeSkillFiles({
+      skill: { _id: SKILL_ID, name: 'brand-guidelines', body: 'b', version: SKILL_VERSION },
+      skillFiles: [file('a'), file('b')],
+      req: { user: { id: 'user-1' } } as PrimeSkillFilesParams['req'],
+      getStrategyFunctions: jest.fn().mockReturnValue({
+        getDownloadStream: jest.fn().mockResolvedValue(Readable.from(Buffer.from(''))),
+      }),
+      batchUploadCodeEnvFiles,
+      getSessionInfo: onlyFirstAlive,
+      checkIfActive: () => true,
+    });
+    expect(onlyFirstAlive).toHaveBeenCalledTimes(2);
+    expect(batchUploadCodeEnvFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('primeInvokedSkills re-uploads when one object in a shared session has expired', async () => {
+    mockExtract.mockReturnValue(new Set(['brand-guidelines']));
+    const batchUploadCodeEnvFiles = jest.fn().mockResolvedValue({
+      storage_session_id: 'session-new',
+      files: [],
+    });
+    await primeInvokedSkills(
+      makeDeps({
+        listSkillFiles: jest.fn().mockResolvedValue([file('a'), file('b')]),
+        getStrategyFunctions: jest.fn().mockReturnValue({
+          getDownloadStream: jest.fn().mockResolvedValue(Readable.from(Buffer.from(''))),
+        }),
+        batchUploadCodeEnvFiles,
+        getSessionInfo: onlyFirstAlive,
+        checkIfActive: () => true,
+      }),
+    );
+    // Per session, only `file-a` (alive) would be probed and the stale cache reused.
+    // (The upstream fallback then re-probes through primeSkillFiles, hence not 2 calls.)
+    expect(onlyFirstAlive.mock.calls.map(([r]) => r.file_id)).toEqual(
+      expect.arrayContaining(['file-a', 'file-b']),
+    );
+    expect(batchUploadCodeEnvFiles).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* [knauf] KK20-397 — a skill primed THIS turn (manual `$name`, always-apply) has no
+ * `skill` call in history yet, so without `extraSkillNames` its bundled files were only
+ * mounted from the following turn. */
+describe('[knauf] primeInvokedSkills mounts files for skills primed this turn', () => {
+  it('uploads the files of a skill named only in extraSkillNames', async () => {
+    mockExtract.mockReturnValue(new Set());
+    const listSkillFiles = jest.fn().mockResolvedValue([
+      {
+        relativePath: 'scripts/karl_pptx.py',
+        filename: 'karl_pptx.py',
+        filepath: '/app/skill/karl-pptx/scripts/karl_pptx.py',
+        source: 'deployment',
+        bytes: 9,
+      },
+    ]);
+    const batchUploadCodeEnvFiles = jest.fn().mockResolvedValue({
+      storage_session_id: 'session-new',
+      files: [{ fileId: 'f-py', filename: 'karl-pptx/scripts/karl_pptx.py' }],
+    });
+    const result = await primeInvokedSkills(
+      makeDeps({
+        extraSkillNames: new Set(['karl-pptx']),
+        getSkillByName: jest.fn().mockResolvedValue({
+          _id: SKILL_ID,
+          name: 'karl-pptx',
+          body: 'pptx body',
+          version: 1,
+          fileCount: 1,
+        }),
+        listSkillFiles,
+        getStrategyFunctions: jest.fn().mockReturnValue({
+          getDownloadStream: jest.fn().mockResolvedValue(Readable.from(Buffer.from('print(1)'))),
+        }),
+        batchUploadCodeEnvFiles,
+      }),
+    );
+    expect(batchUploadCodeEnvFiles).toHaveBeenCalledTimes(1);
+    expect(result.initialSessions?.get('execute_code')?.files).toEqual([
+      expect.objectContaining({ name: 'karl-pptx/scripts/karl_pptx.py' }),
+    ]);
+  });
+
+  it('still returns early when there is neither history nor a skill primed this turn', async () => {
+    mockExtract.mockReturnValue(new Set());
+    const listSkillFiles = jest.fn();
+    await expect(primeInvokedSkills(makeDeps({ listSkillFiles }))).resolves.toEqual({});
+    expect(listSkillFiles).not.toHaveBeenCalled();
+  });
+});

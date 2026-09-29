@@ -104,6 +104,9 @@ export * from './knauf/skills/skillPrimeBody';
 // [knauf] KK20-257 — shared environment gate for legacy API runtime consumers.
 export * from './knauf/code/codeEnvGuard';
 // End [knauf]
+// [knauf] KK20-397 — skill-file cache freshness, consumed by api/.../agents/skillDeps.js.
+export * from './knauf/code/skillStagingFreshness';
+// End [knauf]
 // [knauf] KK20-297 — shared File Translation environment gate for legacy API runtime consumers.
 export * from './knauf/translation/translationEnvGuard';
 // End [knauf]

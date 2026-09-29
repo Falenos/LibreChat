@@ -20,6 +20,9 @@ const {
   createDeploymentSkillMethods,
   isDeploymentSkillFileSource,
   getDeploymentSkillDownloadStream,
+  // [knauf] KK20-397 — restores the skill-file cache freshness pair (see skillToolDeps).
+  knaufSkillCacheDeps,
+  // End [knauf]
 } = require('@librechat/api');
 const {
   Permissions,
@@ -386,6 +389,13 @@ const skillToolDeps = {
   batchUploadCodeEnvFiles,
   getSessionInfo,
   checkIfActive,
+  // [knauf] KK20-397 — `checkIfActive` above is imported from Files/Code/process.js, which
+  // stopped exporting it in KK20-316, so it is undefined and the skill-file cache never
+  // hits: every invocation re-uploads every file. When KNAUF_CODE_SKILL_FILE_CACHE=true
+  // this overrides both keys with a pair that maps `getSessionInfo`'s metadata record to
+  // its `expiresAt` and requires 1 h of staging life left; otherwise it adds nothing.
+  ...knaufSkillCacheDeps(getSessionInfo),
+  // End [knauf]
   updateSkillFileCodeEnvIds: deploymentSkillMethods.updateSkillFileCodeEnvIds,
   getSkillFileByPath: deploymentSkillMethods.getSkillFileByPath,
   updateSkillFileContent: deploymentSkillMethods.updateSkillFileContent,

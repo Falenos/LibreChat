@@ -1291,9 +1291,16 @@ class AgentClient extends BaseClient {
       const tokenCounter = createTokenCounter(this.getEncoding());
 
       /** Pre-resolve invoked skill bodies + re-prime files before formatting messages */
+      // [knauf] KK20-397 — a skill primed THIS turn (manual `$name`, always-apply) gets its
+      // body below but, without this, its bundled files only from the next turn on.
+      const knaufFreshPrimeNames = collectFreshSkillPrimeNames({
+        manualSkillPrimes: this.options.agent?.manualSkillPrimes,
+        alwaysApplySkillPrimes: this.options.agent?.alwaysApplySkillPrimes,
+      });
       const skillPrimeResult = this.options.primeInvokedSkills
-        ? await this.options.primeInvokedSkills(payload)
+        ? await this.options.primeInvokedSkills(payload, knaufFreshPrimeNames)
         : undefined;
+      // End [knauf]
 
       /**
        * Seed `Graph.sessions` with code-env files primed across every

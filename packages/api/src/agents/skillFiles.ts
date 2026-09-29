@@ -125,9 +125,14 @@ export async function primeSkillFiles(
       const refsBySession = new Map<string, CodeEnvRef>();
       for (const sf of skillFiles) {
         const ref = sf.codeEnvRef;
-        if (ref && !refsBySession.has(ref.storage_session_id)) {
-          refsBySession.set(ref.storage_session_id, ref);
+        // [knauf] KK20-397 — staging expiry is per object (KK20-316), and code-adapter
+        // 0.4.0 only refreshes the files a run actually mounts, so one live sibling no
+        // longer proves the rest are live. Probe every object, not one per session.
+        const probeKey = ref ? `${ref.storage_session_id}/${ref.file_id}` : '';
+        if (ref && !refsBySession.has(probeKey)) {
+          refsBySession.set(probeKey, ref);
         }
+        // End [knauf]
       }
 
       try {
@@ -320,6 +325,11 @@ export interface PrimeInvokedSkillsDeps {
    *  path is skipped entirely — skill bodies still reconstruct for history
    *  rebuilds, but no sandbox traffic is generated. */
   codeEnvAvailable: boolean;
+  // [knauf] KK20-397 — skills primed THIS turn (manual `$name`, always-apply). Their body is
+  // injected by `injectSkillPrimes`, but only history `skill` calls reached this function, so
+  // their bundled files were not mounted until the following turn.
+  extraSkillNames?: Iterable<string>;
+  // End [knauf]
   getSkillByName: (
     name: string,
     accessibleIds: Types.ObjectId[],
@@ -361,6 +371,11 @@ export async function primeInvokedSkills(
   }
 
   const invokedSkills = extractInvokedSkillsFromPayload(deps.payload);
+  // [knauf] KK20-397 — also mount the files of skills primed this turn.
+  for (const name of deps.extraSkillNames ?? []) {
+    invokedSkills.add(name);
+  }
+  // End [knauf]
   if (invokedSkills.size === 0) {
     return {};
   }
@@ -424,9 +439,12 @@ export async function primeInvokedSkills(
       if (resolvedWithRef.length > 0 && resolvedWithRef.length === allResolved.length) {
         const refsBySession = new Map<string, CodeEnvRef>();
         for (const { ref } of resolvedWithRef) {
-          if (ref && !refsBySession.has(ref.storage_session_id)) {
-            refsBySession.set(ref.storage_session_id, ref);
+          // [knauf] KK20-397 — probe every object, not one per session (see primeSkillFiles).
+          const probeKey = ref ? `${ref.storage_session_id}/${ref.file_id}` : '';
+          if (ref && !refsBySession.has(probeKey)) {
+            refsBySession.set(probeKey, ref);
           }
+          // End [knauf]
         }
 
         const checkResults = await Promise.all(
