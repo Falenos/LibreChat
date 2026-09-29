@@ -56,7 +56,7 @@ is the tripwire that fires when the response shape drifts.
 | `POST /internal/canary`                                          | Scheduled authenticated production canary                                                         | Ignores caller code, runs reviewed fixed Python, and verifies exact stdout plus generated-file capture.                                                                                            |
 | `POST /exec/programmatic`                                        | PTC (not enabled in KARL)                                                                         | **501 PTC_NOT_SUPPORTED**                                                                                                                                                                          |
 | `POST /upload`                                                   | crud.js `uploadCodeEnvFile`                                                                       | multipart `file` + `kind/id/version` → `{message:'success', storage_session_id, files:[{fileId, filename}]}`                                                                                       |
-| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`                                                                                                            |
+| `POST /upload/batch`                                             | crud.js `batchUploadCodeEnvFiles`                                                                 | adds `read_only`; per-file `{status, fileId?, filename, error?}` + `succeeded`/`failed`. Nested names (`<skill>/<path>`) are kept; traversal, absolute, `.karl_*` and >12-deep names fail per item. At most `UPLOAD_BATCH_MAX_FILES` files and `UPLOAD_BATCH_MAX_TOTAL_BYTES` per request (**413**). |
 | `GET /download/:sid/:fid?kind=&id=[&version=]`                   | crud.js (stream) + process.js (arraybuffer)                                                       | served from staging blob — outlives the ACA session                                                                                                                                                |
 | `GET /sessions/:sid/objects/:fid?…`                              | process.js `getSessionInfo` freshness probe                                                       | `{lastModified, size, …}`; a 404 routes LibreChat into its re-upload path (designed TTL recovery)                                                                                                  |
 | `DELETE /sessions/:sid/objects/:fid` / `DELETE /files/:sid/:fid` | crud.js primary + fallback                                                                        | same handler; terminal 404 = success for the caller                                                                                                                                                |
@@ -86,9 +86,20 @@ target this ESM service with SSI because it carries explicit instrumentation.
 2. **Staged inputs** — uploads land in Blob (`code-adapter-staging/<sid>/<fileId>`)
    plus three same-partition Table entities (file, hashed-filename index, Blob index)
    because LibreChat uploads before any session exists. At exec time they are pushed into the session
-   (nested paths pushed flat as `.karl_in_<n>`, moved into place by the wrapper). Metadata-backed
-   file/count/aggregate limits are checked before admission; Blob bodies stream sequentially into
-   ACA rather than being buffered in the Node heap.
+   (nested paths pushed flat as `.karl_in_<n>`, moved into place by the wrapper). Blob bodies stream
+   **strictly sequentially** into ACA (parallel uploads clobber each other) rather than being
+   buffered in the Node heap.
+   **Input selection** (`EXEC_INPUT_SELECTION=ranked`, default since 0.4.0): LibreChat re-sends
+   every file a thread has produced on every run, so the ref list is ranked instead of rejected
+   past a count. Files the code or args name (path or basename) are always mounted, or the run
+   fails with a split-the-work message; their top-level directory siblings (skill helpers, fonts)
+   come next; the rest fill `EXEC_INPUT_MAX_FILES` / `EXEC_INPUT_OPTIONAL_MAX_BYTES`, newest
+   writable files interleaved with read-only ones. Same-object duplicates and older same-path
+   copies collapse to one. Anything left out — including optional files skipped once
+   `EXEC_INPUT_PUSH_BUDGET_MS` is spent — is listed in a stderr note telling the model how to
+   get it mounted. An expired file the code names fails the run (`re-attach`); one it does not
+   name is skipped and noted. `EXEC_INPUT_MAX_REFS` is the hard request ceiling. `strict`
+   restores the pre-0.4 behaviour (reject above `EXEC_INPUT_MAX_FILES`, every ref must resolve).
 3. **Admission and deadline** — a process-wide controller rejects excess active requests or
    aggregate in-flight input bytes with HTTP 429; there is no queue. One request-scoped deadline
    and cancellation signal covers Table, Blob, ACA, retries, streams, and capture.
@@ -101,9 +112,13 @@ target this ESM service with SSI because it carries explicit instrumentation.
    files API, capped at `STDOUT_MAX_BYTES`). Sentinel missing → degraded mode:
    raw stdout + 0/1 synthesis + `wrapper_parse_failures_total` metric.
 5. **Capture** — on rc==0 the session's files are listed and diffed: unchanged
-   or read-only inputs are echoed `inherited:true`; new/changed writable files
-   are persisted to Blob + Table metadata under the exec session so `/download` works
-   after the session cooldown destroys the sandbox.
+   or read-only inputs are echoed `inherited:true` under the path the client asked for;
+   new/changed writable files are persisted to Blob + Table metadata under the exec session so
+   `/download` works after the session cooldown destroys the sandbox. Hidden path segments
+   (`.~lock.*#`, `.config/…`), `__pycache__/` and `*.pyc` are never captured
+   (`CAPTURE_IGNORE_HIDDEN`); the wrapper also points `HOME` away from `/mnt/data` and sets
+   `PYTHONDONTWRITEBYTECODE=1`. A new file whose name belongs to an active read-only, non-user or
+   foreign file in the same partition is refused and reported, never replaced in place.
 6. **Retries** — `SessionWithIdentifierNotFound` (cooldown expiry) → transparent
    one re-run with the same identifier + re-push (ACA allocates a fresh sandbox for a
    key with no live session). Pool 401/403 → single-flight token refresh +
@@ -145,7 +160,10 @@ See [`.env.example`](.env.example) for the full annotated surface. Required:
 push/download so an active conversation keeps its files available.
 `AZURE_TABLE_CONNECTION_STRING` is local-mode-only; deployed workloads never use a Table key.
 Generated-file capture streams up to `CAPTURE_MAX_TOTAL_BYTES` (default 256 MiB) to Blob storage.
-Input requests default to 20 files, 128 MiB per file, and 256 MiB aggregate. A process admits at
+One execution mounts up to 32 files (`EXEC_INPUT_MAX_FILES`), 128 MiB per file, and 256 MiB
+aggregate, of which files the code does not name may use 64 MiB; a request may carry at most 256
+refs. Uploads keep nested paths (`UPLOAD_PRESERVE_PATHS`) and a batch takes up to 32 files /
+256 MiB. The post-exec manifest walk records up to `EXEC_MANIFEST_MAX_ENTRIES` (500). A process admits at
 most four active executions and 512 MiB of aggregate staged input, with a 300-second total request
 deadline. Stateless ACA cleanup has its own 10-second budget. `/readyz` caches dependency checks
 for 30 seconds with a 10-second refresh timeout.

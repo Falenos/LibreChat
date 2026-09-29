@@ -142,4 +142,65 @@ describe('[knauf] a caller cannot reach another user’s sandbox', () => {
     const aliceAgain = await runAs('user-alice');
     expect(aliceAgain.body.session_id).toBe(alice.body.session_id);
   });
+  // [knauf] KK20-397 (A6). Captures land in the exec session's partition. When a caller
+  // reuses a session that also holds staged read-only files — a skill's staging session —
+  // a same-named output used to replace that doc in place, keeping its fileId, so every
+  // other user with a cached ref to the skill file read this user's bytes.
+  it('never lets a capture replace a read-only file in a reused session', async () => {
+    const config = testConfig();
+    const repo = new FakeFilesRepo();
+    const blob = new FakeBlobStore();
+    const app = createApp({
+      config,
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics: testMetrics(),
+    });
+    const sessionId = ownedSessionId(config);
+    const skillDoc = await repo.insertStaged({
+      sessionId,
+      filename: 'karl-docx/references/qa.md',
+      size: 8,
+      contentType: 'text/markdown',
+      origin: 'upload',
+      readOnly: true,
+      identity: { kind: 'skill', id: 'karl-docx', version: 1 },
+      userId: 'local',
+      tenantId: 'local',
+    });
+    await blob.put(skillDoc.blobPath, Buffer.from('original'), 'text/markdown');
+    aca.fileContents.set('karl-docx/references/qa.md', Buffer.from('tampered'));
+    aca.executeImpl = async (_sid, code) => {
+      aca.sessionFiles = [
+        {
+          name: 'karl-docx/references/qa.md',
+          type: 'File',
+          sizeInBytes: 8,
+          lastModifiedAt: '1787070000000000000',
+        },
+      ];
+      return sentinel(code, 0, 'ok');
+    };
+
+    const response = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'bash',
+        code: 'echo tampered > karl-docx/references/qa.md',
+        session_id: sessionId,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files).toEqual([]);
+    expect(response.body.stderr).toContain('belongs to a read-only file');
+    const after = await repo.find(sessionId, skillDoc.fileId);
+    expect(after?.blobPath).toBe(skillDoc.blobPath);
+    expect(after?.readOnly).toBe(true);
+    expect((await blob.getBuffer(skillDoc.blobPath)).toString()).toBe('original');
+    // The refused candidate Blob was cleaned up, leaving only the original.
+    expect([...blob.blobs.keys()]).toEqual([skillDoc.blobPath]);
+  });
 });

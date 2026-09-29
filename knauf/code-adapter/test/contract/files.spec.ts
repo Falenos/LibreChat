@@ -129,6 +129,99 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
     expect(docs.every((d) => d.identity.kind === 'skill' && d.identity.version === 3)).toBe(true);
   });
 
+  // [knauf] KK20-397 — LibreChat primes skill files as `<skill>/<relativePath>` (form-data
+  // `filepath`, packages/api/src/files/code/form.ts). Busboy used to strip that to the
+  // basename, so two skills' `references/reading.md` overwrote each other in /mnt/data.
+  describe('nested filenames (KK20-397)', () => {
+    const batch = (target: Express) =>
+      request(target)
+        .post('/v1/upload/batch')
+        .field('kind', 'skill')
+        .field('id', 'karl-xlsx')
+        .field('version', '1')
+        .field('read_only', 'true');
+
+    it('keeps the directory part of a nested skill filename', async () => {
+      const response = await batch(app)
+        .attach('file', Buffer.from('a'), { filepath: 'karl-xlsx/references/reading.md' })
+        .attach('file', Buffer.from('b'), { filepath: 'karl-docx/references/reading.md' });
+      expect(response.status).toBe(200);
+      expect(response.body.files.map((f: { filename: string }) => f.filename)).toEqual([
+        'karl-xlsx/references/reading.md',
+        'karl-docx/references/reading.md',
+      ]);
+    });
+
+    it('rejects traversal, reserved and over-deep names per item', async () => {
+      const response = await batch(app)
+        .attach('file', Buffer.from('a'), { filepath: '../escape.md' })
+        .attach('file', Buffer.from('b'), { filepath: '.karl_in_0/x.md' })
+        .attach('file', Buffer.from('c'), { filepath: `${'d/'.repeat(12)}deep.md` })
+        .attach('file', Buffer.from('d'), { filepath: 'karl-xlsx/ok.md' });
+      expect(response.status).toBe(200);
+      expect(response.body.succeeded).toBe(1);
+      expect(response.body.failed).toBe(3);
+      expect(response.body.files[3]).toMatchObject({
+        status: 'success',
+        filename: 'karl-xlsx/ok.md',
+      });
+    });
+
+    it('falls back to basenames when UPLOAD_PRESERVE_PATHS=false', async () => {
+      const flat = createApp({
+        config: testConfig({ UPLOAD_PRESERVE_PATHS: 'false' }),
+        logger: testLogger(),
+        aca: new FakeAcaClient(),
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics: testMetrics(),
+      });
+      const response = await batch(flat).attach('file', Buffer.from('a'), {
+        filepath: 'karl-xlsx/references/reading.md',
+      });
+      expect(response.body.files[0].filename).toBe('reading.md');
+    });
+
+    it('caps files per batch independently of the capture cap', async () => {
+      const capped = createApp({
+        config: testConfig({ UPLOAD_BATCH_MAX_FILES: '2', CAPTURE_MAX_FILES: '1' }),
+        logger: testLogger(),
+        aca: new FakeAcaClient(),
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics: testMetrics(),
+      });
+      const two = await batch(capped)
+        .attach('file', Buffer.from('a'), 'a.md')
+        .attach('file', Buffer.from('b'), 'b.md');
+      expect(two.status).toBe(200);
+      const three = await batch(capped)
+        .attach('file', Buffer.from('a'), 'a.md')
+        .attach('file', Buffer.from('b'), 'b.md')
+        .attach('file', Buffer.from('c'), 'c.md');
+      expect(three.status).toBe(413);
+    });
+
+    it('rejects a batch over the aggregate byte budget before staging anything', async () => {
+      const capped = createApp({
+        config: testConfig({ UPLOAD_BATCH_MAX_TOTAL_BYTES: '5' }),
+        logger: testLogger(),
+        aca: new FakeAcaClient(),
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics: testMetrics(),
+      });
+      const response = await batch(capped)
+        .attach('file', Buffer.from('abc'), 'a.md')
+        .attach('file', Buffer.from('def'), 'b.md');
+      expect(response.status).toBe(413);
+      expect(blob.blobs.size).toBe(0);
+    });
+  });
+
   it('does not log original filenames when a batch item fails', async () => {
     const logger = testLogger();
     const warn = vi.spyOn(logger, 'warn');
