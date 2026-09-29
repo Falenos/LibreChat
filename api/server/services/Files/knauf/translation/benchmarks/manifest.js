@@ -52,6 +52,21 @@ function collectFontDeclarations(source) {
   return Array.from(declarations).sort((left, right) => left.localeCompare(right, 'en'));
 }
 
+async function readPackageText(buffer) {
+  const zip = await JSZip.loadAsync(buffer, { checkCRC32: true, createFolders: false });
+  const text = [];
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || !/\.xml$/i.test(entry.name)) continue;
+    const source = await entry.async('string');
+    for (const match of source.matchAll(
+      /<(?:w:t|a:t|t|Content)(?:\s[^>]*)?>([\s\S]*?)<\/(?:w:t|a:t|t|Content)>/gi,
+    )) {
+      text.push(match[1].replace(/<[^>]+>/g, ' '));
+    }
+  }
+  return text.join(' ');
+}
+
 async function buildPackageManifest(buffer, extension) {
   const zip = await JSZip.loadAsync(buffer, { checkCRC32: true, createFolders: false });
   const categories = {
@@ -103,10 +118,13 @@ async function buildPackageManifest(buffer, extension) {
   return manifest;
 }
 
-function buildPdfManifest(buffer, { timeoutMs = 10_000, WorkerImpl = Worker } = {}) {
+function buildPdfManifest(
+  buffer,
+  { timeoutMs = 10_000, WorkerImpl = Worker, includeText = false } = {},
+) {
   return new Promise((resolve, reject) => {
     const worker = new WorkerImpl(path.join(__dirname, 'pdfManifest.worker.js'), {
-      workerData: { buffer },
+      workerData: { buffer, includeText },
     });
     let settled = false;
     const finish = (callback, value) => {
@@ -149,10 +167,23 @@ async function buildImageManifest(buffer) {
   };
 }
 
+async function extractBenchmarkText({ filename, buffer }) {
+  const extension = extensionFor(filename);
+  if (ZIP_FORMATS.has(extension)) return readPackageText(buffer);
+  if (extension === 'pdf') {
+    const manifest = await buildPdfManifest(buffer, { includeText: true });
+    return manifest.text ?? '';
+  }
+  throw new TypeError(
+    `Text extraction is unsupported for benchmark format: ${extension || 'unknown'}`,
+  );
+}
+
 async function buildBenchmarkManifest({ filename, buffer }) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     throw new TypeError('Benchmark input must be a non-empty Buffer');
   }
+
   const extension = extensionFor(filename);
   const manifest = {
     schemaVersion: 1,
@@ -276,4 +307,5 @@ function compareBenchmarkManifests(source, output, { maxSizeRatio = 2 } = {}) {
 module.exports = {
   buildBenchmarkManifest,
   compareBenchmarkManifests,
+  extractBenchmarkText,
 };

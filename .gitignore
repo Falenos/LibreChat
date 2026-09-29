@@ -199,3 +199,7 @@ mise.toml
 
 local/
 codedb.snapshot
+
+# [knauf] KK20-374 — local Azure baseline evidence; must never be committed
+# (may reference environment-specific output, never credentials/source content).
+api/server/services/Files/knauf/translation/benchmarks/.baseline-output/

@@ -7,7 +7,7 @@ const { createHash } = require('node:crypto');
 
 const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
 
-async function buildPdfManifest(buffer, { loadPdfjs } = {}) {
+async function buildPdfManifest(buffer, { loadPdfjs, includeText = false } = {}) {
   const loader =
     loadPdfjs ??
     (() => import(pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href));
@@ -25,6 +25,7 @@ async function buildPdfManifest(buffer, { loadPdfjs } = {}) {
   let textItemCount = 0;
   let textCharacterCount = 0;
   const textHashes = [];
+  const textValues = [];
   try {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber);
@@ -36,6 +37,7 @@ async function buildPdfManifest(buffer, { loadPdfjs } = {}) {
       }
       textItemCount += values.length;
       textCharacterCount += values.reduce((total, item) => total + item.str.length, 0);
+      if (includeText) textValues.push(...values.map((item) => item.str));
       textHashes.push(sha256(Buffer.from(values.map((item) => item.str).join('\u001f'))));
       pages.push({
         pageNumber,
@@ -50,7 +52,7 @@ async function buildPdfManifest(buffer, { loadPdfjs } = {}) {
     await document.destroy();
     await loadingTask.destroy();
   }
-  return {
+  const manifest = {
     pageCount: pages.length,
     pages,
     fonts: Array.from(fonts).sort((left, right) => left.localeCompare(right, 'en')),
@@ -58,10 +60,12 @@ async function buildPdfManifest(buffer, { loadPdfjs } = {}) {
     textCharacterCount,
     textSha256: sha256(Buffer.from(textHashes.join(':'))),
   };
+  if (includeText) manifest.text = textValues.join(' ');
+  return manifest;
 }
 
 if (!isMainThread) {
-  buildPdfManifest(Buffer.from(workerData.buffer))
+  buildPdfManifest(Buffer.from(workerData.buffer), { includeText: workerData.includeText })
     .then((manifest) => parentPort.postMessage({ manifest }))
     .catch((error) =>
       parentPort.postMessage({

@@ -3,12 +3,11 @@
 **Ticket:** KK20-374
 **Umbrella:** KK20-373
 
-**Status:** This PR delivers the deterministic fixture/manifest foundation only. KK20-374
-acceptance additionally requires approved linguistic references, Azure and Google output
-baselines, and reproducible automated quality/fidelity/size comparisons against those baselines.
-None of that exists yet — the suite never calls a provider and the linguistic references remain
-placeholders. Treat KK20-374 as still open until that provider-baseline evidence is added in a
-follow-up.
+**Status:** Azure AI Translator is the only translation provider we have credentials/access for.
+The Google reference path has been split out into **KK20-396** (blocked, pending GCP project and
+API credential provisioning) and is no longer part of this ticket's scope. KK20-374's remaining
+"Done when" work is: approved linguistic reference sign-off, and reproducible Azure baseline
+outputs/comparisons — the latter is now implemented (see "Running the Azure baseline" below).
 
 The benchmark foundation lives in
 `api/server/services/Files/knauf/translation/benchmarks/`. It provides:
@@ -19,7 +18,10 @@ The benchmark foundation lives in
   content runs, PDF page geometry/text/fonts, image geometry, and source/output size;
 - structural comparison results with stable failure codes, including a hard failure when
   translatable content is missing/empty and a warning when font declarations are lost or
-  substituted.
+  substituted;
+- an Azure baseline runner (`providerBaseline.js`) that translates DOCX/PPTX/XLSX/PDF fixtures via
+  the same synchronous/batch routes used by production and IDML fixtures via segment-based
+  translation, then builds and compares the resulting output manifest and approved reference text.
 
 Fixtures are generated during tests instead of storing opaque binary files in Git. This keeps them
 reviewable and reproducible while allowing later subtasks to extend the same builders with overflow,
@@ -29,9 +31,28 @@ Run the focused suite:
 
 ```bash
 cd api
-npm test -- --runInBand server/services/Files/knauf/translation/benchmarks/manifest.spec.js
+npm test -- --runInBand server/services/Files/knauf/translation/benchmarks/manifest.spec.js server/services/Files/knauf/translation/benchmarks/providerBaseline.spec.js
 ```
 
-The suite does not call Azure or Google. Provider runs should use these fixtures and persist their
-output manifests as environment-specific evidence. Credentials, source content, glossary terms, and
-signed URLs must not be written to test output or committed baseline files.
+The automated suite does not call Azure. `providerBaseline.spec.js` mocks Azure's HTTP layer (same
+pattern as `providers/azure.spec.js`) while exercising the real dispatch/manifest/comparison logic.
+
+## Running the Azure baseline
+
+To run fixtures through real Azure AI Translator and persist comparable baseline evidence:
+
+```bash
+cd api
+AZURE_TRANSLATOR_ENDPOINT=... AZURE_TRANSLATOR_KEY=... \
+  npm run knauf:translation-azure-baseline
+```
+
+This writes JSON results (manifests + comparison codes only — no buffers, credentials, source
+content, glossary terms, or signed URLs) to
+`api/server/services/Files/knauf/translation/benchmarks/.baseline-output/`, which is gitignored and
+must never be committed.
+
+**Known gap:** PNG/JPEG/WebP fixtures are not yet covered — they require the batch OCR pipeline
+(`translateBatchWithAzure`, which needs `AZURE_STORAGE_CONNECTION_STRING`). The runner records
+these fixtures as unsupported and exits unsuccessfully, so a successful run cannot be mistaken for
+complete coverage.

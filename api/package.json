@@ -14,7 +14,8 @@
     "create-user": "node ./create-user.js",
     "invite-user": "node ./invite-user.js",
     "ban-user": "node ./ban-user.js",
-    "delete-user": "node ./delete-user.js"
+    "delete-user": "node ./delete-user.js",
+    "knauf:translation-azure-baseline": "node server/services/Files/knauf/translation/benchmarks/runAzureBaseline.js"
   },
   "repository": {
     "type": "git",
