@@ -244,6 +244,9 @@ function createIndexingWorker({
       execution_token: claim.execution_token,
     };
     if (kind === 'permanent') {
+      logger.warn(
+        `[indexingWorker:${id}] ${claim.asset_id} permanent embed failure (${error?.code ?? 'unknown'}): ${error?.message ?? 'No error detail'}`,
+      );
       await db.failClaim({
         ...fenced,
         error_code: 'embed_permanent',

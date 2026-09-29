@@ -5,10 +5,10 @@ Documentation for the Knauf "Agentic Karl" fork of LibreChat. Docs are organized
 | Folder                                         | Purpose                                                                                                                                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [architecture/](architecture/)                 | **How the product works** — feature & subsystem reference (the running system, not the rollout)                                                                                                                                      |
-| [reference/](reference/)                       | **Cross-cutting operational reference** — system ownership and the repository-wide runtime-limit inventory                                                                                                                          |
+| [reference/](reference/)                       | **Cross-cutting operational reference** — system ownership and the repository-wide runtime-limit inventory                                                                                                                           |
 | [code-execution/](code-execution/)             | **Code execution (KK20-108)** — the whole story of how KARL runs Python/Bash via Azure Container Apps dynamic sessions + the `code-adapter` sidecar: how it works, the backend decision, and the sidecar-vs-in-process justification |
 | [contributing/](contributing/)                 | **How we work on this fork** — change protocol, git/merge workflow, seam testing, upstream sync, fork history                                                                                                                        |
-| [privacy/](privacy/) | **Privacy, PII & data protection** — the KK20-207 assessment, the executable workstream plan, the anonymization/pseudonymization design, and the GDPR / EU AI Act mapping (see the folder's own [README](privacy/README.md)) |
+| [privacy/](privacy/)                           | **Privacy, PII & data protection** — the KK20-207 assessment, the executable workstream plan, the anonymization/pseudonymization design, and the GDPR / EU AI Act mapping (see the folder's own [README](privacy/README.md))         |
 | [implementation-plans/](implementation-plans/) | **Work in flight** — time-bound, multi-PR workstreams (see the folder's own [README](implementation-plans/README.md) for the lifecycle)                                                                                              |
 | [upstream-releases/](upstream-releases/)       | **Per-version upstream sync notes** — what each merged LibreChat release means for the fork (features, security, seam interactions)                                                                                                  |
 | [proposals/](proposals/)                       | **Designs being decided** — not yet approved or implemented                                                                                                                                                                          |
@@ -29,16 +29,18 @@ When a doc graduates: an implementation plan that finishes is deleted, archived,
 | [architecture/files/async-indexing.md](architecture/files/async-indexing.md)                     | How File Search ingestion changed with KK20-195 — before/after diagrams, the `KnaufFileAsset` state machine, CAS + execution-token fencing, the dedicated worker + reconciler, feature flags and rollout modes |
 | [architecture/image-gen-toggle.md](architecture/image-gen-toggle.md)                             | How the image-generation toggle works on agent chats and the default Knauf model spec (admin opt-in + per-chat chip + visibility hook + backend gate) — sequence + flowchart + component map                   |
 | [architecture/code-interpreter-and-artifacts.md](architecture/code-interpreter-and-artifacts.md) | How **Artifacts** and **Skills** work — the per-capability gate stacks, the deployment-skill layout and authoring traps, and Sandpack/CDN egress. (Code execution now has its own folder — see below.)         |
-| [architecture/scheduled-chats.md](architecture/scheduled-chats.md)                           | How Scheduled Chats work end to end — project-scoped UX, API and worker flow, leases/fencing/replay, failure auto-disable, probes/metrics, operations, and future upstream migration                         |
+| [architecture/scheduled-chats.md](architecture/scheduled-chats.md)                               | How Scheduled Chats work end to end — project-scoped UX, API and worker flow, leases/fencing/replay, failure auto-disable, probes/metrics, operations, and future upstream migration                           |
 
 > The `files/` docs are a set: **overview** is the map; **storage**, **rag-search**, **processing**, and **async-indexing** are the domain deep-dives it links into.
 
 ## Reference — cross-cutting system facts
 
-| Doc                                                                            | When to read it                                                                                                                                        |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [reference/agentic-karl-architecture.md](reference/agentic-karl-architecture.md) | Full environment topology, repository ownership, service dependencies, data stores, observability, and release flows                                  |
-| [reference/runtime-limits.md](reference/runtime-limits.md)                     | Repository-wide operational limits, their rationale and interactions, authority level, source keys, zero semantics, and maintenance procedure          |
+| Doc                                                                                  | When to read it                                                                                                                               |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| [reference/agentic-karl-architecture.md](reference/agentic-karl-architecture.md)     | Full environment topology, repository ownership, service dependencies, data stores, observability, and release flows                          |
+| [reference/runtime-limits.md](reference/runtime-limits.md)                           | Repository-wide operational limits, their rationale and interactions, authority level, source keys, zero semantics, and maintenance procedure |
+| [translation-quality-fidelity-contract.md](translation-quality-fidelity-contract.md) | Supported file-translation routes, measurable quality/fidelity result fields, failure semantics, review gates, rollout, and rollback          |
+| [translation-fidelity-benchmarks.md](translation-fidelity-benchmarks.md)             | Reproducible Office/PDF/image/IDML fixtures and deterministic source/output manifests                                                         |
 
 ## Code execution — how KARL runs Python/Bash (KK20-108)
 
@@ -91,9 +93,9 @@ Per-version notes on each upstream LibreChat release merged into the fork — fe
 
 Designs under discussion — not approved, not implemented.
 
-| Doc                                                                                      | What it proposes                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md)       | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored)                                                                                                                                                                           |
+| Doc                                                                                | What it proposes                                                                                                  |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| [proposals/seams-yaml-source-of-truth.md](proposals/seams-yaml-source-of-truth.md) | Making a structured `seams.yaml` the authoritative source for `[knauf]` markers (today SEAMS.md is hand-authored) |
 
 > **Code Interpreter (KK20-108) is decided and built** — its design docs graduated out of `proposals/` into [`code-execution/`](code-execution/) (see the folder table above). The superseded ClickHouse-vs-ACA evaluation drafts were removed.
 

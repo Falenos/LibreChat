@@ -17,9 +17,8 @@ const {
   sanitizeFilename,
   parseDocument,
 } = require('@librechat/api');
-const { Constants, FileSources, isKnaufSourceCodeFile } = require('librechat-data-provider');
+const { Constants, FileSources } = require('librechat-data-provider');
 const {
-  IDML_MIME,
   IdmlError,
   assertValidXmlCharacters,
   buildIdml,
@@ -38,6 +37,12 @@ const {
   translateDocumentWithAzure,
   translateWithAzure,
 } = require('./providers/azure');
+const {
+  MAX_SEGMENTED_BYTES,
+  fontValidationForFormat,
+  formatForFile,
+  resolveProviderRoute,
+} = require('./contracts');
 const {
   detectProtectedLogo,
   maskRegionForTranslation,
@@ -60,10 +65,6 @@ const STATUS_TOOL_NAME = 'translation_status';
 const FILE_TRANSLATION_ARTIFACT_KEY = 'knauf_file_translation';
 const OUTPUT_CONTEXT = 'knauf_file_translation';
 const MAX_INPUT_BYTES = 50 * 1024 * 1024;
-const MAX_SEGMENTED_BYTES = 25 * 1024 * 1024;
-const AZURE_SYNC_INPUT_BYTES = 10 * 1024 * 1024;
-const AZURE_BATCH_DOCUMENT_BYTES = 40 * 1024 * 1024;
-const AZURE_BATCH_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_XML_NODES = 100000;
 const MAX_XML_SEGMENTS = 10000;
 const MAX_XML_CHARACTERS = 500000;
@@ -76,56 +77,7 @@ const MAX_PRESERVE_TERMS = 100;
 const MAX_PRESERVE_TERM_CHARACTERS = 200;
 const LANGUAGE_DETECTION_MAX_CHARACTERS = 50000;
 
-const FORMATS = {
-  idml: { mime: IDML_MIME, mode: 'idml' },
-  pdf: { mime: 'application/pdf', mode: 'batch' },
-  docx: {
-    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    mode: 'document',
-  },
-  pptx: {
-    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    mode: 'document',
-  },
-  xlsx: {
-    mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    mode: 'document',
-  },
-  csv: { mime: 'text/csv', mode: 'document' },
-  txt: { mime: 'text/plain', mode: 'document' },
-  md: { mime: 'text/markdown', mode: 'markdown' },
-  markdown: { mime: 'text/markdown', mode: 'markdown' },
-  json: { mime: 'application/json', mode: 'json' },
-  xml: { mime: 'application/xml', mode: 'xml' },
-  svg: { mime: 'image/svg+xml', mode: 'svg' },
-  png: { mime: 'image/png', mode: 'image' },
-  jpg: { mime: 'image/jpeg', mode: 'image' },
-  jpeg: { mime: 'image/jpeg', mode: 'image' },
-  webp: { mime: 'image/webp', mode: 'image' },
-};
-const MIME_FORMATS = new Map(
-  Object.entries(FORMATS).map(([extension, format]) => [format.mime, { ...format, extension }]),
-);
-MIME_FORMATS.set('application/csv', { ...FORMATS.csv, extension: 'csv' });
-MIME_FORMATS.set('text/xml', { ...FORMATS.xml, extension: 'xml' });
-MIME_FORMATS.set('image/svg', { ...FORMATS.svg, extension: 'svg' });
-const FONT_VALIDATION_NOT_APPLICABLE = new Set(['csv', 'txt', 'md', 'markdown', 'json', 'xml']);
-
-function formatForFile(file) {
-  const filename = file?.filename ?? file?.name ?? '';
-  if (isKnaufSourceCodeFile(filename, file?.type)) {
-    return null;
-  }
-  const extension = path.extname(filename).slice(1).toLowerCase();
-  return extension && FORMATS[extension]
-    ? { ...FORMATS[extension], extension }
-    : (MIME_FORMATS.get(file?.type) ?? null);
-}
-
 const isTranslatableFile = (file) => formatForFile(file) != null;
-
-const fontValidationForFormat = (format) =>
-  FONT_VALIDATION_NOT_APPLICABLE.has(format.extension) ? 'not_applicable' : 'human_required';
 
 const isFileTranslationConfigured = () =>
   process.env.KNAUF_FILE_TRANSLATION_ENABLED === 'true' &&
@@ -1206,7 +1158,7 @@ async function translateOneFile({
   let output;
   let segments = [];
   let glossary;
-  let layoutValidation = 'human_required';
+  const layoutValidation = format.layoutValidation;
   let fontValidation = fontValidationForFormat(format);
 
   if (format.mode === 'idml') {
@@ -1285,7 +1237,6 @@ async function translateOneFile({
       result = { translations: new Map(), providerLocale: targetLocale, batches: 0 };
     }
     output = adapter.build(result.translations);
-    layoutValidation = ['json', 'xml'].includes(format.mode) ? 'not_applicable' : 'human_required';
   } else {
     const isImage = format.mode === 'image';
     const translateTextWithinImage = ['docx', 'pptx'].includes(
@@ -1303,12 +1254,12 @@ async function translateOneFile({
       [],
       { filterToDocument: false, maxBytes: AZURE_BATCH_GLOSSARY_MAX_BYTES },
     );
-    const mustBatch =
-      isImage ||
-      format.mode === 'batch' ||
-      input.length > AZURE_SYNC_INPUT_BYTES ||
-      (glossary.stats.bytes ?? 0) > AZURE_SYNC_GLOSSARY_MAX_BYTES;
-    const limit = isImage ? AZURE_BATCH_IMAGE_BYTES : AZURE_BATCH_DOCUMENT_BYTES;
+    const providerRoute = resolveProviderRoute(format, {
+      inputBytes: input.length,
+      glossaryRequiresBatch: (glossary.stats.bytes ?? 0) > AZURE_SYNC_GLOSSARY_MAX_BYTES,
+    });
+    const mustBatch = providerRoute.route !== 'azure_sync_document';
+    const limit = providerRoute.maxInputBytes;
     if (mustBatch && input.length > limit) {
       throw new IdmlError(
         `${isImage ? 'Image' : 'Document'} exceeds Azure Translator's ${limit / 1024 / 1024} MB batch limit`,
@@ -1760,17 +1711,21 @@ function buildFileToolContext(req) {
   }
   const names = files.map((file) => file.filename ?? file.name ?? 'attached file');
   const currentFiles = currentMessageTranslationFiles(req, files);
-  const selectionInstruction =
-    currentFiles.length === 1
-      ? `The current-message file ${currentFiles[0].filename ?? currentFiles[0].name ?? 'attached file'} is the default; omit filenames for a request to translate this file.`
-      : currentFiles.length > 1
-        ? `Do not call translate_file for an ambiguous request. Ask the user to choose the exact current-message filename from: ${currentFiles
-            .map((file) => file.filename ?? file.name ?? 'attached file')
-            .join(', ')}.`
-        : Array.isArray(req?.knaufCurrentMessageFileIds) &&
-            req.knaufCurrentMessageFileIds.length > 0
-          ? `No supported file is attached to the current message. Ask the user to attach a supported file or choose an exact historical filename from: ${names.join(', ')}.`
-          : `Do not call translate_file without an explicit filename. Ask the user to choose from the available historical files: ${names.join(', ')}.`;
+  let selectionInstruction;
+  if (currentFiles.length === 1) {
+    selectionInstruction = `The current-message file ${currentFiles[0].filename ?? currentFiles[0].name ?? 'attached file'} is the default; omit filenames for a request to translate this file.`;
+  } else if (currentFiles.length > 1) {
+    selectionInstruction = `Do not call translate_file for an ambiguous request. Ask the user to choose the exact current-message filename from: ${currentFiles
+      .map((file) => file.filename ?? file.name ?? 'attached file')
+      .join(', ')}.`;
+  } else if (
+    Array.isArray(req?.knaufCurrentMessageFileIds) &&
+    req.knaufCurrentMessageFileIds.length > 0
+  ) {
+    selectionInstruction = `No supported file is attached to the current message. Ask the user to attach a supported file or choose an exact historical filename from: ${names.join(', ')}.`;
+  } else {
+    selectionInstruction = `Do not call translate_file without an explicit filename. Ask the user to choose from the available historical files: ${names.join(', ')}.`;
+  }
   return [
     `File translation is available for: ${names.join(', ')}.`,
     `${selectionInstruction} Explicitly named files may include historical files. Use all_files=true only when the user explicitly requests every available file. For machine-readable PDF, DOCX, XLSX, TXT, and CSV files, omit source_locale when it is unknown so KARL can detect it before applying the managed glossary. Ask for source_locale before translating scanned PDFs, PPTX, raster images, IDML, JSON, Markdown, XML, or SVG files, or when preserve_terms is requested. Pass product, brand, or technical names the user says not to translate in preserve_terms with their exact source-document spelling and casing.`,
