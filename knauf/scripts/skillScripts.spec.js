@@ -132,6 +132,19 @@ test('office_qa parses page ranges as the helpers document them', { skip }, () =
   assert.deepEqual(JSON.parse(out), [[1, 2, 3, 7], null, [2]]);
 });
 
+test('office_qa flags template leftovers, not the word "placeholder" in prose', { skip }, () => {
+  const out = python(
+    [
+      'import sys, json',
+      `sys.path.insert(0, ${JSON.stringify(path.join(SKILLS_DIR, 'karl-docx/scripts'))})`,
+      'import office_qa as q',
+      'texts = ["Lorem ipsum dolor", "[Placeholder] title", "TODO: fill", "sample text, not a placeholder", "Replace {placeholder}"]',
+      'print(json.dumps([bool(q.PLACEHOLDER_RE.search(t)) for t in texts]))',
+    ].join('\n'),
+  );
+  assert.deepEqual(JSON.parse(out), [true, true, true, false, true]);
+});
+
 test('no Python bytecode is committed under skill/', () => {
   // Neither .gitignore nor .dockerignore excludes __pycache__, and the image COPYs skill/
   // whole. A helper imported locally without -B writes its .pyc next to it; committed,

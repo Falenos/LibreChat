@@ -22,6 +22,10 @@ one to change. An unqualified "report" or "summary" is better as an artifact
 `karl-file-translation`; answering questions about an attached document needs no
 code at all.
 
+**When the user names the format, build the file in that reply.** Choose sensible defaults
+for anything left open (length, content, layout, branding) and mention them in one line
+afterwards. Do not ask first, and do not point the user to other tools or websites.
+
 ## Before the first call
 
 1. **Invoke `karl-brand` with the skill tool**, not `read_file`. Invoking it is what
@@ -89,6 +93,8 @@ and `text`. Exit code 1 means a problem: do not deliver until it is 0.
 
 - The deliverable is `/mnt/data/<descriptive-name>.docx`; a revision overwrites the
   same name. `_karl_qa/` is never shown to the user.
+- The file card under the tool call is the download. Never write a link to the file
+  (no `sandbox:` or `/mnt/data` links); name the file instead.
 - Summarise what the document contains in one or two sentences; do not paste it.
 - A PDF as well: `to-pdf FILE` (fonts embedded, exact layout).
 - Never copy font files or anything from `/mnt/data/karl-brand/` into an output.

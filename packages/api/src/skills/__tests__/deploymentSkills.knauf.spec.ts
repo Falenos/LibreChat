@@ -565,6 +565,13 @@ describe('[knauf] shipped deployment skills', () => {
     }
     for (const name of ['karl-docx', 'karl-pdf', 'karl-pptx']) {
       expect(byName.get(name)?.description).toMatch(/Only when/);
+      // A named format is a request to build now: no clarifying round, no third-party tools.
+      expect(byName.get(name)?.body).toMatch(/build the file in that reply/i);
+      expect(byName.get(name)?.body).toMatch(/do not point the user to other tools or websites/i);
+    }
+    for (const name of OFFICE_SKILLS) {
+      // The file card is the download; a written `sandbox:` link is dead in the UI.
+      expect(byName.get(name)?.body).toMatch(/never write a link to the file/i);
     }
     // An unqualified deck stays a slides artifact; only a named .pptx comes here.
     expect(byName.get('karl-pptx')?.description).toMatch(/a plain "deck" is an\s+artifact/);

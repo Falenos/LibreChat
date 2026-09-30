@@ -75,6 +75,8 @@ formulas, merged cells, charts, macros and what an openpyxl re-save would drop) 
 `qa FILE`, which renders the workbook to contact sheets under
 `/mnt/data/_karl_qa/` for a visual check with `read_file` (overflowing `###`
 cells, unreadable charts). `_karl_qa/` is never shown to the user.
+The file card under the tool call is the download: never write a link to the file
+(no `sandbox:` or `/mnt/data` links); name the file instead.
 
 A workbook cannot embed fonts, so Knauf spreadsheets use Arial with the brand
 colours; `brand_formats` applies both. Translating a workbook belongs to

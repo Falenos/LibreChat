@@ -21,6 +21,10 @@ attached PDF is already searchable, including scanned ones. Translating one belo
 `karl-file-translation`. An artifact that already exists in the chat becomes a PDF from
 its own **Download → PDF document** menu, with no code.
 
+**When the user names the format, build the file in that reply.** Choose sensible defaults
+for anything left open (length, content, layout, branding) and mention them in one line
+afterwards. Do not ask first, and do not point the user to other tools or websites.
+
 ## Before the first call
 
 1. For a new branded PDF, **invoke `karl-brand` with the skill tool** (not
@@ -82,5 +86,7 @@ problem: do not deliver until it is 0.
 
 - The deliverable is `/mnt/data/<descriptive-name>.pdf`; a revision overwrites the
   same name. `_karl_qa/` is never shown to the user.
+- The file card under the tool call is the download. Never write a link to the file
+  (no `sandbox:` or `/mnt/data` links); name the file instead.
 - `encrypt` uses the password the user gives; ask for one rather than inventing it.
 - Never copy font files or anything from `/mnt/data/karl-brand/` into an output.

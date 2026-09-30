@@ -21,6 +21,10 @@ attaches one to change. "A presentation" or "slides" without a format is the sli
 artifact (`karl-artifacts`), which previews and presents in chat, and it is not
 converted into a file unasked. Translating a deck belongs to `karl-file-translation`.
 
+**When the user names the format, build the file in that reply.** Choose sensible defaults
+for anything left open (length, content, layout, branding) and mention them in one line
+afterwards. Do not ask first, and do not point the user to other tools or websites.
+
 ## Before the first call
 
 1. **Invoke `karl-brand` with the skill tool**, not `read_file`. That mounts its fonts,
@@ -89,6 +93,8 @@ code 1 means a problem: do not deliver until it is 0.
 
 - The deliverable is `/mnt/data/<descriptive-name>.pptx`; a revision overwrites the
   same name. `_karl_qa/` is never shown to the user.
+- The file card under the tool call is the download. Never write a link to the file
+  (no `sandbox:` or `/mnt/data` links); name the file instead.
 - Say how many slides and what they cover; do not paste the slide text.
 - A PDF as well: `to-pdf FILE`, which embeds the fonts. The `.pptx` itself names
   Knauf Screen but cannot carry it, so a recipient without the font sees a substitute.

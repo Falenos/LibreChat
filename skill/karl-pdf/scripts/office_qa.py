@@ -32,7 +32,7 @@ PER_SHEET = 6
 SHEET_WIDTH = 1600
 
 PLACEHOLDER_RE = re.compile(
-    r'lorem ipsum|\bTODO\b|\bTBD\b|\[insert|\bxxx+\b|click to add|placeholder', re.IGNORECASE
+    r'lorem ipsum|\bTODO\b|\bTBD\b|\[insert|\bxxx+\b|click to add|[\[{<]placeholder', re.IGNORECASE
 )
 
 

@@ -288,6 +288,14 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
       expect(prompt).toMatch(/karl-docx, karl-pptx or karl-pdf/);
       expect(prompt).toMatch(/never offer, suggest or ask about one otherwise/i);
       expect(prompt).toMatch(/Download menu \(PDF document\)/);
+      // Observed locally: asked for "a dummy PDF", KARL listed third-party PDF sites and
+      // asked for a page count before building it, then ended with a dead
+      // `sandbox:/mnt/data/...` link under the real download card.
+      expect(prompt).toMatch(/build the file in that reply/i);
+      expect(prompt).toMatch(
+        /instead of asking first or pointing the user to other tools or websites/i,
+      );
+      expect(prompt).toMatch(/never write a link to a generated file/i);
       expect(prompt).toMatch(/If code execution is not available in this conversation/i);
       expect(prompt).toMatch(/cannot produce at all is a ZIP or other archive, audio, or video/i);
     }
