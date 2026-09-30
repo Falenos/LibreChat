@@ -142,6 +142,64 @@ function errorResult(tc: ToolCallRequest, message: string): ToolExecuteResult {
   return { toolCallId: tc.id, status: 'error', content: '', errorMessage: message };
 }
 
+/** The sandbox-relative path of a raster image `read_file` may show, or null to defer. */
+function inspectableRasterPath(
+  path: string,
+  mergedConfigurable?: Record<string, unknown>,
+): string | null {
+  if (path.startsWith('skills/') || mergedConfigurable?.codeEnvAvailable !== true) {
+    return null;
+  }
+  const rel = toSandboxRelativePath(path);
+  if (rel == null) {
+    return null;
+  }
+  return RASTER_EXTENSIONS.has(rel.slice(rel.lastIndexOf('.')).toLowerCase()) ? rel : null;
+}
+
+/** The user's staged copy of `rel` in this response's code session; the newest render wins. */
+function findStagedFile(
+  tc: ToolCallRequest,
+  rel: string,
+): { id: string; storage_session_id: string } | null {
+  const files = ((tc.codeSessionContext as { files?: SessionFileRef[] } | undefined)?.files ??
+    []) as SessionFileRef[];
+  let ref: { id: string; storage_session_id: string } | null = null;
+  for (const file of files) {
+    const storage = file.storage_session_id ?? file.session_id;
+    if (file.kind === 'user' && file.name === rel && file.id && storage) {
+      ref = { id: file.id, storage_session_id: storage };
+    }
+  }
+  return ref;
+}
+
+/** The model-only image result: the text says what it is, the artifact carries the pixels. */
+function imageResult(
+  tc: ToolCallRequest,
+  rel: string,
+  buffer: Buffer,
+  mime: string,
+): ToolExecuteResult {
+  return {
+    toolCallId: tc.id,
+    status: 'success',
+    content:
+      `Image: /mnt/data/${rel} (${buffer.length} bytes, ${mime}). It is shown to you once, for ` +
+      'this step only — note every defect you see now. If no image is visible to you, visual ' +
+      'inspection is unavailable here; use the text checks instead.',
+    artifact: {
+      knauf_model_only: true,
+      content: [
+        {
+          type: 'image_url',
+          image_url: { url: `data:${mime};base64,${buffer.toString('base64')}`, detail: 'high' },
+        },
+      ],
+    },
+  };
+}
+
 export async function readKnaufSandboxImage(params: {
   tc: ToolCallRequest;
   path: string;
@@ -152,12 +210,8 @@ export async function readKnaufSandboxImage(params: {
 }): Promise<ToolExecuteResult | null> {
   const { tc, req } = params;
   const env = params.env ?? process.env;
-  if (params.path.startsWith('skills/') || params.mergedConfigurable?.codeEnvAvailable !== true) {
-    return null;
-  }
-  const rel = toSandboxRelativePath(params.path);
-  const ext = rel == null ? '' : rel.slice(rel.lastIndexOf('.')).toLowerCase();
-  if (rel == null || !RASTER_EXTENSIONS.has(ext)) {
+  const rel = inspectableRasterPath(params.path, params.mergedConfigurable);
+  if (rel == null) {
     return null;
   }
   const isQaRender = rel.startsWith(KNAUF_VISUAL_QA_PREFIX);
@@ -173,15 +227,7 @@ export async function readKnaufSandboxImage(params: {
       : null;
   }
 
-  const files = ((tc.codeSessionContext as { files?: SessionFileRef[] } | undefined)?.files ??
-    []) as SessionFileRef[];
-  let ref: { id: string; storage_session_id: string } | null = null;
-  for (const file of files) {
-    const storage = file.storage_session_id ?? file.session_id;
-    if (file.kind === 'user' && file.name === rel && file.id && storage) {
-      ref = { id: file.id, storage_session_id: storage }; // last match wins: newest render
-    }
-  }
+  const ref = findStagedFile(tc, rel);
   if (ref == null) {
     return isQaRender
       ? errorResult(
@@ -203,6 +249,7 @@ export async function readKnaufSandboxImage(params: {
   }
   // Reserved synchronously: parallel read_file calls in one batch must not all pass.
   served.set(req, used + 1);
+  const release = () => served.set(req, (served.get(req) ?? 1) - 1);
 
   let buffer: Buffer;
   try {
@@ -212,7 +259,7 @@ export async function readKnaufSandboxImage(params: {
       maxBytes: KNAUF_VISUAL_QA_MAX_BYTES,
     });
   } catch {
-    served.set(req, (served.get(req) ?? 1) - 1);
+    release();
     return errorResult(
       tc,
       `Could not fetch /mnt/data/${rel} for inspection (larger than 4 MiB, expired, or the ` +
@@ -221,25 +268,8 @@ export async function readKnaufSandboxImage(params: {
   }
   const mime = sniffRasterMime(buffer);
   if (mime == null || buffer.length > KNAUF_VISUAL_QA_MAX_BYTES) {
-    served.set(req, (served.get(req) ?? 1) - 1);
+    release();
     return errorResult(tc, `/mnt/data/${rel} is not a PNG, JPEG, GIF or WebP image under 4 MiB.`);
   }
-
-  return {
-    toolCallId: tc.id,
-    status: 'success',
-    content:
-      `Image: /mnt/data/${rel} (${buffer.length} bytes, ${mime}). It is shown to you once, for ` +
-      'this step only — note every defect you see now. If no image is visible to you, visual ' +
-      'inspection is unavailable here; use the text checks instead.',
-    artifact: {
-      knauf_model_only: true,
-      content: [
-        {
-          type: 'image_url',
-          image_url: { url: `data:${mime};base64,${buffer.toString('base64')}`, detail: 'high' },
-        },
-      ],
-    },
-  };
+  return imageResult(tc, rel, buffer, mime);
 }
