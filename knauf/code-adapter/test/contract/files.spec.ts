@@ -204,6 +204,24 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
       expect(three.status).toBe(413);
     });
 
+    // Review of #386: the budget is file bytes; multipart framing must not eat into it.
+    it('accepts a batch whose files total exactly the aggregate byte budget', async () => {
+      const capped = createApp({
+        config: testConfig({ UPLOAD_BATCH_MAX_TOTAL_BYTES: '5' }),
+        logger: testLogger(),
+        aca: new FakeAcaClient(),
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics: testMetrics(),
+      });
+      const response = await batch(capped)
+        .attach('file', Buffer.from('abc'), 'a.md')
+        .attach('file', Buffer.from('de'), 'b.md');
+      expect(response.status).toBe(200);
+      expect(response.body.succeeded).toBe(2);
+    });
+
     it('rejects a batch over the aggregate byte budget before staging anything', async () => {
       const capped = createApp({
         config: testConfig({ UPLOAD_BATCH_MAX_TOTAL_BYTES: '5' }),

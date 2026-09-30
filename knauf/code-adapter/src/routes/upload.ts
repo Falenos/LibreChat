@@ -12,6 +12,10 @@ import type { Logger } from '../logger.js';
 import type { Metrics } from '../middleware/metrics.js';
 import type { Config } from '../config.js';
 
+/** Multipart framing tolerated on top of the file-byte budget by the declared-length check. */
+const MULTIPART_ALLOWANCE_BYTES = 64 * 1024;
+const MULTIPART_ALLOWANCE_PER_FILE = 8 * 1024;
+
 interface UploadDeps {
   config: Config;
   logger: Logger;
@@ -52,10 +56,17 @@ export function createUploadRouter(deps: UploadDeps): Router {
     limits: { fileSize: deps.config.uploadMaxBytes + 1, files: batchMaxFiles },
   });
 
-  /** Refuse a batch whose declared body already exceeds the aggregate budget, unparsed. */
+  // The budget is file bytes, and the spooled-total check below enforces it exactly. The
+  // declared length also carries multipart framing — a boundary and part headers per file
+  // (the filename may be a 12-segment path) plus the identity fields — so the early check
+  // allows for that, bounded by the file cap, instead of rejecting a batch exactly at budget.
+  const declaredLimit =
+    batchMaxTotalBytes + MULTIPART_ALLOWANCE_BYTES + MULTIPART_ALLOWANCE_PER_FILE * batchMaxFiles;
+
+  /** Refuse a batch whose declared body cannot fit the aggregate budget, unparsed. */
   const rejectDeclaredOversize = (req: Request, _res: Response, next: NextFunction) => {
     const declared = Number(req.headers['content-length']);
-    if (Number.isFinite(declared) && declared > batchMaxTotalBytes) {
+    if (Number.isFinite(declared) && declared > declaredLimit) {
       next(new ValidationError('upload batch exceeds the maximum total size', 413));
       return;
     }

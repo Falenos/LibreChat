@@ -122,6 +122,92 @@ describe('selectInputs', () => {
     expect(names(result.selected)).toEqual(['karl-xlsx/references/x.md']);
   });
 
+  // Review of #386: a basename fallback turned one exact nested path into every same-named file.
+  it('selects only the exact nested path when several skills ship a file of the same name', () => {
+    const files = [
+      candidate('karl-docx/scripts/office_qa.py'),
+      candidate('karl-pptx/scripts/office_qa.py'),
+      candidate('karl-pdf/scripts/office_qa.py'),
+      candidate('karl-docx/scripts/karl_docx.py'),
+    ];
+    const result = selectInputs(files, [], {
+      code: 'python3 -B /mnt/data/karl-docx/scripts/office_qa.py page /mnt/data/r.docx 1',
+      args: [],
+      config: config({ EXEC_INPUT_MAX_FILES: '2' }),
+    });
+    expect(names(result.selected)).toEqual([
+      'karl-docx/scripts/office_qa.py',
+      'karl-docx/scripts/karl_docx.py',
+    ]);
+    expect(result.mandatoryCount).toBe(2);
+  });
+
+  it('does not count 33 same-named references as referenced when the code names one', () => {
+    const files = Array.from({ length: 33 }, (_, i) =>
+      candidate(`skill-${i}/references/reading.md`),
+    );
+    expect(() =>
+      selectInputs(files, [], {
+        code: "open('/mnt/data/skill-7/references/reading.md').read()",
+        args: [],
+        config: config(),
+      }),
+    ).not.toThrow();
+  });
+
+  it('still finds a nested file named by its basename or a relative path when that name is unique', () => {
+    const files = [
+      candidate('karl-docx/scripts/karl_docx.py'),
+      candidate('karl-docx/scripts/office_qa.py'),
+    ];
+    for (const code of [
+      'cd /mnt/data/karl-docx/scripts && python3 -B karl_docx.py qa /mnt/data/r.docx',
+      'cd /mnt/data/karl-docx && python3 -B scripts/karl_docx.py qa /mnt/data/r.docx',
+    ]) {
+      const result = selectInputs(files, [], { code, args: [], config: config() });
+      expect(result.mandatoryCount).toBe(2);
+    }
+  });
+
+  it('picks no file by an ambiguous basename alone', () => {
+    const files = [candidate('a/reading.md'), candidate('b/reading.md'), candidate('c.csv')];
+    const result = selectInputs(files, [], {
+      code: "open('reading.md')",
+      args: [],
+      config: config(),
+    });
+    expect(result.mandatoryCount).toBe(0);
+  });
+
+  it('does not fail the run over an expired file that only shares the named file’s basename', () => {
+    const files = [candidate('karl-docx/references/reading.md')];
+    expect(() =>
+      selectInputs(files, [missingRef('karl-xlsx/references/reading.md')], {
+        code: 'cat /mnt/data/karl-docx/references/reading.md',
+        args: [],
+        config: config(),
+      }),
+    ).not.toThrow();
+  });
+
+  // Review of #386: collapsing aliases must not drop the one path the code actually opens.
+  it('keeps the flat alias of a staged object when the code opens that path', () => {
+    const flat = candidate('x.md', { fileId: '22222222-2222-4222-8222-222222222222' });
+    const nested = { ...flat, finalName: 'karl-xlsx/references/x.md', index: flat.index + 1 };
+    const flatUse = selectInputs([flat, nested], [], {
+      code: "open('/mnt/data/x.md')",
+      args: [],
+      config: config(),
+    });
+    expect(names(flatUse.selected)).toContain('x.md');
+    const nestedUse = selectInputs([flat, nested], [], {
+      code: "open('/mnt/data/karl-xlsx/references/x.md')",
+      args: [],
+      config: config(),
+    });
+    expect(names(nestedUse.selected)).toEqual(['karl-xlsx/references/x.md']);
+  });
+
   it('interleaves newest writable files with read-only ones when filling the budget', () => {
     const files = [
       candidate('w-old.csv', { modified: 1 }),

@@ -15,7 +15,7 @@ import type { Config } from '../config.js';
  * sequential (see stagePush.ts), so "mount everything" is not the answer either.
  *
  * So the adapter, which is the only place that sees the final per-exec list, ranks it:
- *   P0  files the code or args name (by path or basename)      — always mounted, or fail
+ *   P0  files the code or args name (exact path, or a unique basename) — always mounted, or fail
  *   P1  siblings under the same top-level directory as a P0    — skill helpers, fonts
  *   —   the rest, newest writable files interleaved with read-only ones, while budget lasts
  * and tells the model what it left out, so a file it needs is one exact path away.
@@ -109,24 +109,99 @@ function mentionsDir(hay: string, dir: string): boolean {
   }
 }
 
+/** Characters of a path token, for finding where the token around a match starts. */
+const PATH_CHAR = /[A-Za-z0-9_.\-/]/;
+
+/**
+ * How the code names `needle`: `exact` when some occurrence is the whole path — bare,
+ * `./`-relative or under `/mnt/data/` — and `suffix` when it only ends a longer path
+ * (`/mnt/data/karl-docx/references/reading.md` names `reading.md` only as a suffix).
+ */
+export function mentionStrength(hay: string, needle: string): 'exact' | 'suffix' | null {
+  if (needle.length < MIN_MENTION_LENGTH) {
+    return null;
+  }
+  let strength: 'suffix' | null = null;
+  for (let from = 0; ; ) {
+    const at = hay.indexOf(needle, from);
+    if (at < 0) {
+      return strength;
+    }
+    from = at + 1;
+    const before = at === 0 ? '' : hay[at - 1]!;
+    const after = hay[at + needle.length] ?? '';
+    if ((before !== '' && NAME_CHAR.test(before)) || (after !== '' && NAME_CHAR.test(after))) {
+      continue;
+    }
+    if (before !== '/') {
+      return 'exact';
+    }
+    let start = at;
+    while (start > 0 && PATH_CHAR.test(hay[start - 1]!)) {
+      start -= 1;
+    }
+    const prefix = hay.slice(start, at);
+    if (prefix === './' || prefix === '/mnt/data/' || prefix.endsWith('/mnt/data/')) {
+      return 'exact';
+    }
+    strength = 'suffix';
+  }
+}
+
 const basename = (name: string): string => name.slice(name.lastIndexOf('/') + 1);
+
+/**
+ * The names the code asks for. A name is referenced when the code contains that exact path.
+ * Failing that, it counts when the code names it only by a trailing part (`run.py` after a
+ * `cd`, `scripts/run.py`) and no other input has the same file name: otherwise naming one
+ * skill's `references/reading.md` would select every skill's `reading.md`, and through P1 all
+ * of their siblings too.
+ */
+function referencedNames(hay: string, all: string[]): Set<string> {
+  const unique = [...new Set(all)];
+  const exact = new Set(unique.filter((name) => mentionStrength(hay, name) === 'exact'));
+  const byBase = new Map<string, string[]>();
+  for (const name of unique) {
+    byBase.set(basename(name), [...(byBase.get(basename(name)) ?? []), name]);
+  }
+  const referenced = new Set(exact);
+  for (const [base, group] of byBase) {
+    const only = group.length === 1 ? group[0]! : null;
+    if (only != null && !exact.has(only) && mentionStrength(hay, base) != null) {
+      referenced.add(only);
+    }
+  }
+  return referenced;
+}
 const topDir = (name: string): string | null =>
   name.includes('/') ? name.slice(0, name.indexOf('/')) : null;
 
-/** Keep one candidate per staged object, preferring the nested (more specific) name. */
-function collapseDuplicates(found: InputCandidate[]): InputCandidate[] {
-  const byObject = new Map<string, InputCandidate>();
+/**
+ * One candidate per staged object sent under several names, preferring the nested (more
+ * specific) name — plus any other alias the code opens, so `/mnt/data/x.md` still exists when
+ * the same object also arrived as `karl-xlsx/references/x.md`.
+ */
+function collapseDuplicates(found: InputCandidate[], referenced: Set<string>): InputCandidate[] {
+  const byObject = new Map<string, InputCandidate[]>();
   for (const candidate of found) {
     const key = `${candidate.doc.sessionId}:${candidate.doc.fileId}`;
-    const existing = byObject.get(key);
-    if (
-      existing == null ||
-      (!existing.finalName.includes('/') && candidate.finalName.includes('/'))
-    ) {
-      byObject.set(key, candidate);
+    byObject.set(key, [...(byObject.get(key) ?? []), candidate]);
+  }
+  const kept: InputCandidate[] = [];
+  for (const aliases of byObject.values()) {
+    const preferred = aliases.find((c) => c.finalName.includes('/')) ?? aliases[0]!;
+    kept.push(preferred);
+    for (const alias of aliases) {
+      if (
+        alias !== preferred &&
+        alias.finalName !== preferred.finalName &&
+        referenced.has(alias.finalName)
+      ) {
+        kept.push(alias);
+      }
     }
   }
-  return [...byObject.values()].sort((a, b) => a.index - b.index);
+  return kept.sort((a, b) => a.index - b.index);
 }
 
 /** One candidate per path: the newest version wins, ties go to the later ref. */
@@ -182,19 +257,20 @@ export function selectInputs(
   const hay = [params.code, ...params.args].join('\n');
   const omitted: OmittedInput[] = [];
 
-  const named = (name: string) =>
-    mentions(hay, name) || (name.includes('/') && mentions(hay, basename(name)));
+  const missingNames = missing.map((ref) => ref.name);
+  const requested = referencedNames(hay, [...found.map((c) => c.finalName), ...missingNames]);
 
   for (const ref of missing) {
-    if (named(ref.name)) {
+    if (requested.has(ref.name)) {
       // The code needs this exact file and it is gone: the run cannot succeed.
       throw new StagedFileMissingError(ref.name);
     }
     omitted.push({ name: ref.name, reason: 'expired' });
   }
 
-  const candidates = supersede(collapseDuplicates(found), omitted);
-  const p0 = candidates.filter((c) => named(c.finalName));
+  const candidates = supersede(collapseDuplicates(found, requested), omitted);
+  const named = referencedNames(hay, [...candidates.map((c) => c.finalName), ...missingNames]);
+  const p0 = candidates.filter((c) => named.has(c.finalName));
   const p0Dirs = new Set(p0.map((c) => topDir(c.finalName)).filter((d): d is string => d != null));
   const p1 = candidates.filter((c) => {
     if (p0.includes(c)) {
