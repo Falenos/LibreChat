@@ -26,6 +26,9 @@ import { cn, getFileType } from '~/utils';
 import { useFilePreview } from '~/data-provider';
 import { useShareContext } from '~/Providers';
 // End [knauf]
+// [knauf] KK20-397 — collapse a rebuilt file's repeated attachments into one card.
+import { latestAttachmentPerFile } from '~/knauf/components/Chat/latestAttachmentPerFile';
+// End [knauf]
 
 const COLLAPSED_MAX_HEIGHT = 320;
 
@@ -611,7 +614,9 @@ export function AttachmentGroup({ attachments }: { attachments?: TAttachment[] }
   const panelRow: Array<{ attachment: TAttachment; type: ToolArtifactType | null }> = [];
   const mermaidArtifacts: TAttachment[] = [];
 
-  attachments.forEach((attachment) => {
+  // [knauf] KK20-397 — a file written by several code runs is one card, not one per run.
+  latestAttachmentPerFile(attachments).forEach((attachment) => {
+    // End [knauf]
     if (attachment.type === Tools.web_search) {
       return;
     }

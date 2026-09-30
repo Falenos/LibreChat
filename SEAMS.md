@@ -1167,6 +1167,7 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/index.ts` | knauf export block | 107–109 | Exports the skill-file cache freshness helpers consumed by `api/.../agents/skillDeps.js` | `api/server/services/Endpoints/agents/skillDeps.spec.js` | KK20-397 |
 | `packages/api/src/skills/deployment.ts` | `updateFileCodeEnvRefs`; `toSkillFileRow` | 20–25, 333–336, 952–960 | Keeps deployment-skill staging refs per tenant beside the process-wide registry and hands them back on listing when the cache is enabled, so a deployment skill is not re-uploaded on every invocation and no tenant sees another's ref | `packages/api/src/knauf/skills/deploymentSkillCodeEnvCache.knauf.spec.ts` | KK20-397 |
 | `packages/api/src/skills/handlers.ts` | `listFilesHandler`; `downloadFileHandler` | 44–46, 605–608, 658–662 | Deployment-skill `sandbox/` files (licensed fonts) are left out of the Skills file listing and a direct request gets the same 404 as a missing file; priming and model `read_file` are unaffected | `packages/api/src/knauf/skills/sandboxOnlySkillFiles.knauf.spec.ts` | KK20-397 |
+| `client/src/components/Chat/Messages/Content/Parts/Attachment.tsx` | `AttachmentGroup` latest-attachment-per-file seam | 29–31, 617–619 | Collapses the repeated attachments of a file that several code runs wrote (same `file_id`, record reused by `claimCodeFile`) into one card, keeping the newest, so a document skill's build-check-rebuild loop no longer shows identical cards | `client/src/knauf/components/Chat/latestAttachmentPerFile.knauf.spec.tsx` | KK20-397 |
 <!-- seams:auto:end -->
 
 ## Configuration
@@ -2299,6 +2300,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/api/src/knauf/skills/deploymentSkillCodeEnvCache*.ts` | `@librechat/data-schemas` (`getTenantId`, `tenantStorage` in spec), `~/knauf/code/skillStagingFreshness`, `~/skills/deployment` (spec) | Low — in-memory map beside the deployment registry | `packages/api/src/knauf/skills/deploymentSkillCodeEnvCache.knauf.spec.ts` | KK20-397 |
 | `packages/api/src/knauf/skills/sandboxOnlySkillFiles*.ts` | `~/skills/deployment` (`isDeploymentSkillFileSource`), `~/skills/handlers` (spec) | Low — keyed on the `sandbox/` folder convention and the deployment file source | `packages/api/src/knauf/skills/sandboxOnlySkillFiles.knauf.spec.ts` | KK20-397 |
 | `packages/api/src/knauf/skills/skillSandboxPaths*.ts` | None; `~/agents/handlers` in spec | Low — encodes the `/mnt/data/<skill>/<path>` mount layout of code-adapter 0.4.0 | `packages/api/src/knauf/skills/skillSandboxPaths.knauf.spec.ts` | KK20-397 |
+| `client/src/knauf/components/Chat/latestAttachmentPerFile.ts` | `librechat-data-provider` types only | Low — pure function over the attachment list; keyed on `file_id`, so it depends only on `processCodeOutput` reusing one record per generated filename | `client/src/knauf/components/Chat/latestAttachmentPerFile.knauf.spec.tsx` | KK20-397 |
+| `client/src/knauf/components/Chat/latestAttachmentPerFile.knauf.spec.tsx` | Upstream `AttachmentGroup` (rendered with its hooks, download link and file-card dependencies mocked) | Low — test-only; proves the helper and that `AttachmentGroup` renders one card for a file written by two runs | Self | KK20-397 |
 <!-- seams:new:end -->
 
 ## Static Assets
