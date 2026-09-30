@@ -331,16 +331,24 @@ describe('performSync() - syncThreshold logic', () => {
     jest.useRealTimers();
   });
 
+  test('skips startup coordination when indexing is disabled', async () => {
+    process.env.MEILI_NO_SYNC = 'true';
+
+    const indexSync = require('./indexSync');
+    await indexSync();
+
+    expect(mockWithMeiliSyncLock).not.toHaveBeenCalled();
+    expect(mockGetLogStores).not.toHaveBeenCalled();
+  });
+
   // Only the operation lease coordinator may inspect or rebuild shared indexes.
-  test('delegates startup synchronization to the waiting operation lease path', async () => {
+  test('delegates startup synchronization to the non-waiting operation lease path', async () => {
     mockWithMeiliSyncLock.mockResolvedValue(undefined);
 
     const indexSync = require('./indexSync');
     await indexSync();
 
-    expect(mockWithMeiliSyncLock).toHaveBeenCalledWith(expect.anything(), expect.any(Function), {
-      waitForLease: true,
-    });
+    expect(mockWithMeiliSyncLock).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
     expect(mockMeiliHealth).not.toHaveBeenCalled();
     expect(mockGetLogStores).not.toHaveBeenCalled();
   });

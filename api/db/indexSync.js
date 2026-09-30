@@ -517,11 +517,11 @@ async function runIndexSync() {
 
 // [knauf] Hold one renewable Mongo lease for every destructive reconciliation phase.
 async function indexSync() {
-  if (!searchEnabled) {
+  if (!searchEnabled || indexingDisabled) {
     return;
   }
 
-  return withMeiliSyncLock(mongoose, runIndexSync, { waitForLease: true });
+  return withMeiliSyncLock(mongoose, runIndexSync);
 }
 // End [knauf]
 

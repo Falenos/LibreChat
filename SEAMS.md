@@ -1153,6 +1153,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `packages/data-schemas/src/methods/conversation.ts` | `getConvosByCursor` stable cursor | 612–660, 707–713 | Narrowly backports the upstream `_id` tie-break and additive cursor id so equal timestamps paginate without gaps or duplicates across rolling versions | `packages/data-schemas/src/knauf/methods/conversation.knauf.spec.ts` | KK20-385 |
 | `packages/data-schemas/src/methods/conversation.ts` | `getConvosByCursor` unassigned-history query | 662–689 | Forces the retention index for a global mixed missing/null sort and retries only recognized bad-hint failures with a privacy-safe structured signal | `packages/data-schemas/src/knauf/methods/conversation.knauf.spec.ts` | KK20-385 |
 | `client/src/components/Chat/Messages/Content/Part.tsx` | `Part` retired incomplete-response payload branch | 40–42, 70–80 | Suppresses both newly generated and previously persisted incomplete-response alerts while leaving ordinary actionable errors unchanged | `client/src/knauf/components/Messages/IncompleteResponseWarning.knauf.spec.tsx` | KK20-353 |
+| `api/db/indexSync.js` | `indexSync` startup coordination | 518–526 | Returns before Mongo coordination when synchronization is disabled and makes startup lease acquisition non-waiting so replicas cannot queue behind a long rebuild | `api/db/indexSync.spec.js` | KK20-400 |
+| `api/db/indexSync.spec.js` | disabled and contended startup regressions | 334–354 | Proves the kill switch performs no lease work and a startup follower attempts the existing lease only once | Self | KK20-400 |
 <!-- seams:auto:end -->
 
 ## Configuration
