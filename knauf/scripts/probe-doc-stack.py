@@ -5,8 +5,8 @@ Runs INSIDE the ACA code-interpreter sandbox (it is sent as code, never imported
 a JSON report to /mnt/data/doc-stack-probe.json. It answers what the Office/PDF skills may
 rely on: which Python packages and binaries exist, which fonts fontconfig sees, whether
 LibreOffice converts and a rasteriser renders within budget, and whether any of that leaves
-litter in /mnt/data. Driven by probe-doc-stack.mjs; the report is committed as evidence under
-test/fixtures/aca/ and summarised in knauf/docs/code-execution/sandbox-inventory.md.
+litter in /mnt/data. Driven by probe-doc-stack.mjs; the report is committed as evidence next
+to knauf/docs/code-execution/sandbox-inventory.md, which summarises it.
 """
 import importlib.metadata as md
 import importlib.util

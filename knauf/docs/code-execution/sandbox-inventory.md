@@ -6,16 +6,15 @@ KARL environment routes `py` and `bash` to (see [how-it-works.md](how-it-works.m
 **Ticket:** KK20-398.
 
 **Evidence:**
-- raw report: [`sandbox-inventory-2026-09-29.json`](../../code-adapter/test/fixtures/aca/sandbox-inventory-2026-09-29.json)
-- script: [`probe-doc-stack.py`](../../code-adapter/scripts/probe-doc-stack.py), run by
-  [`probe-doc-stack.mjs`](../../code-adapter/scripts/probe-doc-stack.mjs)
+- raw report: [`sandbox-inventory-2026-09-29.json`](sandbox-inventory-2026-09-29.json)
+- script: [`probe-doc-stack.py`](../../scripts/probe-doc-stack.py), run by
+  [`probe-doc-stack.mjs`](../../scripts/probe-doc-stack.mjs)
 
 Microsoft updates this image without notice, so re-run the probe and diff the reports whenever
 a skill starts failing on an import:
 
 ```bash
-cd knauf/code-adapter
-ACA_POOL_ENDPOINT=<pool management endpoint> node scripts/probe-doc-stack.mjs > report.json
+ACA_POOL_ENDPOINT=<pool management endpoint> node knauf/scripts/probe-doc-stack.mjs > report.json
 ```
 
 ## Two Pythons — and `bash_tool` uses the second

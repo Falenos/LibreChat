@@ -12,7 +12,6 @@ asserts against them and is the tripwire for an api-version shape change.
 | `shell-s1.json`             | Shell  | `POST /executions` @ `2025-02-02-preview`   | **S1 gate**: the Shell image carries `python3` 3.10.12, `base64`, `head`, `wc`, `bash`              |
 | `shell-nonzero.json`        | Shell  | same                                        | native exit code: `status="7"`, real `stdout`/`stderr`                                              |
 | `shell-python-heredoc.json` | Shell  | same                                        | `python3 -c …` via `shellCommand` works (the `bash_tool` traffic pattern)                           |
-| `sandbox-inventory-2026-09-29.json` | Python | `probe-doc-stack.py` via `/code/execute` (KK20-398) | the document stack: packages, binaries, fonts, LibreOffice/rasteriser timings, `/mnt/data` hygiene — summarised in `knauf/docs/code-execution/sandbox-inventory.md` |
 
 To refresh (e.g. after an `ACA_API_VERSION_*` bump): re-run the exec calls
 against a pool, save the raw JSON here, and update `acaShape.spec.ts` in the

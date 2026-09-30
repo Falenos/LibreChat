@@ -117,9 +117,9 @@ cd knauf/code-adapter && npm test        # A1
 node knauf/scripts/seams.js check && node knauf/scripts/seams.js diff-check --base=$(git merge-base HEAD origin/main)
 ```
 
-Sandbox probe (after any session-pool image change): `node knauf/code-adapter/scripts/probe-doc-stack.mjs`
+Sandbox probe (after any session-pool image change): `node knauf/scripts/probe-doc-stack.mjs`
 with `ACA_POOL_ENDPOINT` or `ADAPTER_URL`, compared against
-`test/fixtures/aca/sandbox-inventory-2026-09-29.json`.
+`knauf/docs/code-execution/sandbox-inventory-2026-09-29.json`.
 
 End-to-end on dev, after A1 + A2 + B and both flags:
 
@@ -144,7 +144,7 @@ End-to-end on dev, after A1 + A2 + B and both flags:
 - Prompt: [`librechat.yaml`](../../../librechat.yaml) (`&karl_prompt`: Files, artifact routing, Data files, Branding).
 - Skills: [`skill/karl-docx/`](../../../skill/karl-docx/), [`skill/karl-pptx/`](../../../skill/karl-pptx/), [`skill/karl-pdf/`](../../../skill/karl-pdf/), [`skill/karl-xlsx/`](../../../skill/karl-xlsx/), [`skill/karl-brand/`](../../../skill/karl-brand/) (`scripts/`, `assets/`, `references/office.md`).
 - Guards: [`deploymentSkills.knauf.spec.ts`](../../../packages/api/src/skills/__tests__/deploymentSkills.knauf.spec.ts), [`deploymentSkillsCheck.ts`](../../../packages/api/src/knauf/skills/deploymentSkillsCheck.ts), [`skillScripts.spec.js`](../../scripts/skillScripts.spec.js).
-- Sandbox facts: [`sandbox-inventory.md`](../code-execution/sandbox-inventory.md), [`probe-doc-stack.py`](../../code-adapter/scripts/probe-doc-stack.py).
+- Sandbox facts: [`sandbox-inventory.md`](../code-execution/sandbox-inventory.md), [`probe-doc-stack.py`](../../scripts/probe-doc-stack.py).
 
 ## Open questions
 

@@ -89,7 +89,7 @@ arriving there read as instructions to the model (see authoring rule 10).
 - Their helpers are tested only by `knauf/scripts/skillScripts.spec.js` (compile +
   pure logic) and by hand in a sandbox; the libraries they use are listed in
   `knauf/docs/code-execution/sandbox-inventory.md`. Re-run
-  `knauf/code-adapter/scripts/probe-doc-stack.mjs` after a session-pool image change.
+  `knauf/scripts/probe-doc-stack.mjs` after a session-pool image change.
 
 ## Authoring rules
 

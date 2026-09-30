@@ -6,13 +6,15 @@
  *   Direct to a session pool (no adapter needed; uses your `az login`, which must hold the
  *   "Azure ContainerApps Session Executor" role on the pool):
  *     ACA_POOL_ENDPOINT=https://westeurope.dynamicsessions.io/subscriptions/…/sessionPools/<pool> \
- *       node scripts/probe-doc-stack.mjs > report.json
+ *       node knauf/scripts/probe-doc-stack.mjs > report.json
  *
- *   Through a running adapter (LOCAL_MODE, like smoke.mjs):
- *     ADAPTER_URL=http://localhost:3112 node scripts/probe-doc-stack.mjs > report.json
+ *   Through a running adapter (LOCAL_MODE, like knauf/code-adapter/scripts/smoke.mjs):
+ *     ADAPTER_URL=http://localhost:3112 node knauf/scripts/probe-doc-stack.mjs > report.json
  *
- * The committed evidence lives in test/fixtures/aca/sandbox-inventory-<date>.json and is
- * summarised in knauf/docs/code-execution/sandbox-inventory.md. Re-run after the pool image
+ * The committed evidence lives in knauf/docs/code-execution/sandbox-inventory-<date>.json and
+ * is summarised in knauf/docs/code-execution/sandbox-inventory.md. It sits outside
+ * knauf/code-adapter/ on purpose: it probes the sandbox image, not the adapter, and any change
+ * under the adapter folder demands a new adapter VERSION. Re-run after the pool image
  * changes (Microsoft updates PythonLTS without notice) and diff the reports.
  */
 import { execFileSync } from 'node:child_process';
