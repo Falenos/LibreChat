@@ -1810,6 +1810,38 @@ describe('useResumableSSE - 404 error path', () => {
     unmount();
   });
 
+  // [knauf] Output-limit failures are sent as a nested, structured callback error.
+  it('maps output-limit stream errors to actionable copy', async () => {
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const sse = getLastSSE();
+    await act(async () => {
+      sse._emit('error', {
+        data: JSON.stringify({
+          error: JSON.stringify({
+            type: 'output_truncated',
+            info: { reason: 'max_output_tokens', retryable: true },
+          }),
+        }),
+      });
+    });
+
+    expect(mockErrorHandler).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        text: 'The response was too long to complete. Please ask for a shorter answer or split your request into smaller parts.',
+      }),
+      submission: expect.objectContaining({ userMessage: expect.any(Object) }),
+    });
+    expect(sse.close).toHaveBeenCalled();
+    unmount();
+  });
+
   // [knauf] NO-TICKET — missing historical attachments remain actionable and sanitized.
   it('maps missing historical attachments to actionable copy', async () => {
     const submission = buildSubmission();

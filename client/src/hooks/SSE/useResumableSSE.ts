@@ -49,10 +49,26 @@ type ChatHelpers = Pick<
   'setMessages' | 'getMessages' | 'setConversation' | 'setIsSubmitting' | 'newConversation'
 >;
 
-// [knauf] surface structured stream-start errors as readable messages instead of raw JSON
+// [knauf] surface structured stream-start errors as readable messages instead of raw JSON.
+const OUTPUT_TRUNCATED_MESSAGE =
+  'The response was too long to complete. Please ask for a shorter answer or split your request into smaller parts.';
+
+const isOutputTruncatedError = (error: unknown): boolean => {
+  if (typeof error !== 'string') {
+    return false;
+  }
+  try {
+    return JSON.parse(error)?.type === 'output_truncated';
+  } catch {
+    return false;
+  }
+};
+
 const getStreamStartFailureData = (errorData?: Record<string, unknown>): TResData => {
   let text = 'Error connecting to server, try refreshing the page.';
-  if (errorData?.error === 'file_indexing_not_ready') {
+  if (isOutputTruncatedError(errorData?.error)) {
+    text = OUTPUT_TRUNCATED_MESSAGE;
+  } else if (errorData?.error === 'file_indexing_not_ready') {
     text =
       'Some project files are still being indexed. Please wait until they are ready and try again.';
   } else if (errorData?.error === 'file_readiness_unavailable') {

@@ -2277,6 +2277,8 @@ The `LibreChat tag` row is the upstream baseline used by [`upstream-release-watc
 | `api/server/controllers/agents/knauf/providerError.js` | None — pure bounded provider-error projection | Low — keeps partial streamed text without creating a client error surface while preserving generic errors and bounded operational classification | `api/server/controllers/agents/knauf/providerError.spec.js`; `api/server/controllers/agents/client.test.js` | KK20-353 |
 | `api/server/controllers/agents/knauf/providerError.spec.js` | `./providerError` | Low — test-only; proves post-output partial text remains visible without a user-facing alert | Self | KK20-353 |
 | `client/src/knauf/components/Messages/IncompleteResponseWarning.knauf.spec.tsx` | Upstream `Part.tsx` source contract; `./IncompleteResponseWarning` matcher | Low — test-only; proves the legacy exact payload remains bounded but is no longer rendered | Self | KK20-353 |
+| `client/src/hooks/SSE/useResumableSSE.ts` | `getStreamStartFailureData` output-limit mapping | Low — maps the bounded nested output-limit error to concise, actionable user guidance rather than exposing its serialized technical payload | `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | NO-TICKET |
+| `client/src/hooks/SSE/__tests__/useResumableSSE.spec.ts` | nested `output_truncated` stream-error regression | Low — test-only; proves output-limit errors display safe, actionable guidance | Self | NO-TICKET |
 <!-- seams:new:end -->
 
 ## Static Assets
