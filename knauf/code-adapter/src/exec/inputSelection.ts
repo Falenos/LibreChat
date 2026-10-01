@@ -16,7 +16,8 @@ import type { Config } from '../config.js';
  *
  * So the adapter, which is the only place that sees the final per-exec list, ranks it:
  *   P0  files the code or args name (exact path, or a unique basename) — always mounted, or fail
- *   P1  siblings under the same top-level directory as a P0    — skill helpers, fonts
+ *   P1  siblings under the same top-level directory as a P0    — skill helpers, fonts,
+ *       up to EXEC_INPUT_SIBLING_MAX_FILES / _BYTES; the overflow joins the optional pool
  *   —   the rest, newest writable files interleaved with read-only ones, while budget lasts
  * and tells the model what it left out, so a file it needs is one exact path away.
  */
@@ -243,6 +244,33 @@ function optionalOrder(rest: InputCandidate[]): InputCandidate[] {
   return ordered;
 }
 
+/**
+ * The siblings mounted unconditionally. They skip the optional byte cap and the push budget —
+ * a skill's helper must be there even when pushes are slow — so the group is bounded on its
+ * own, in request order; a sibling that does not fit is not dropped but competes as an
+ * optional input (first in line), and is named in the omitted note if it is left out.
+ */
+function boundSiblings(
+  p1: InputCandidate[],
+  config: Config['exec'],
+): { within: InputCandidate[]; overflow: InputCandidate[] } {
+  const within: InputCandidate[] = [];
+  const overflow: InputCandidate[] = [];
+  let bytes = 0;
+  for (const candidate of p1) {
+    if (
+      within.length < config.inputSiblingMaxFiles &&
+      bytes + candidate.doc.size <= config.inputSiblingMaxBytes
+    ) {
+      within.push(candidate);
+      bytes += candidate.doc.size;
+    } else {
+      overflow.push(candidate);
+    }
+  }
+  return { within, overflow };
+}
+
 /** `a` and `b` cannot both exist: one is a file where the other needs a directory. */
 function conflicts(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
@@ -279,7 +307,11 @@ export function selectInputs(
     const dir = topDir(c.finalName);
     return dir != null && (p0Dirs.has(dir) || mentionsDir(hay, dir));
   });
-  const rest = optionalOrder(candidates.filter((c) => !p0.includes(c) && !p1.includes(c)));
+  const { within: siblings, overflow } = boundSiblings(p1, config);
+  const rest = [
+    ...overflow,
+    ...optionalOrder(candidates.filter((c) => !p0.includes(c) && !p1.includes(c))),
+  ];
 
   if (p0.length > config.inputMaxFiles) {
     throw new ReferencedInputsOverBudgetError(p0.length, config.inputMaxFiles);
@@ -333,7 +365,7 @@ export function selectInputs(
       selected.push(candidate);
     }
   };
-  fill(p1, false);
+  fill(siblings, false);
   const mandatoryCount = selected.length;
   fill(rest, true);
 

@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
@@ -9,6 +10,7 @@ import {
   testLogger,
   testMetrics,
 } from '../helpers/fakes.js';
+import type { AddressInfo } from 'node:net';
 import type { Express } from 'express';
 
 /**
@@ -220,6 +222,55 @@ describe('file lifecycle contract (crud.js / process.js shapes)', () => {
         .attach('file', Buffer.from('de'), 'b.md');
       expect(response.status).toBe(200);
       expect(response.body.succeeded).toBe(2);
+    });
+
+    // Review of #386 (P1): form-data streams can omit Content-Length; the budget must still hold.
+    it('rejects an over-budget batch sent without Content-Length, staging nothing', async () => {
+      const capped = createApp({
+        config: testConfig({ UPLOAD_BATCH_MAX_TOTAL_BYTES: '1024' }),
+        logger: testLogger(),
+        aca: new FakeAcaClient(),
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics: testMetrics(),
+      });
+      const server = capped.listen(0);
+      try {
+        const { port } = server.address() as AddressInfo;
+        const boundary = 'karl-chunked-boundary';
+        const part = (name: string, body: string, filename?: string) =>
+          `--${boundary}\r\nContent-Disposition: form-data; name="${name}"` +
+          (filename ? `; filename="${filename}"\r\nContent-Type: text/plain` : '') +
+          `\r\n\r\n${body}\r\n`;
+        const status = await new Promise<number>((resolve, reject) => {
+          const req = http.request(
+            {
+              port,
+              method: 'POST',
+              path: '/v1/upload/batch',
+              headers: {
+                'content-type': `multipart/form-data; boundary=${boundary}`,
+                'transfer-encoding': 'chunked',
+              },
+            },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve(res.statusCode ?? 0));
+            },
+          );
+          req.on('error', reject);
+          req.write(part('kind', 'skill') + part('id', 'karl-xlsx') + part('version', '1'));
+          for (let i = 0; i < 4; i += 1) {
+            req.write(part('file', 'x'.repeat(600), `f${i}.md`));
+          }
+          req.end(`--${boundary}--\r\n`);
+        });
+        expect(status).toBe(413);
+        expect(blob.blobs.size).toBe(0);
+      } finally {
+        server.close();
+      }
     });
 
     it('rejects a batch over the aggregate byte budget before staging anything', async () => {

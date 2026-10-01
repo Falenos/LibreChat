@@ -92,7 +92,8 @@ target this ESM service with SSI because it carries explicit instrumentation.
    **Input selection** (`EXEC_INPUT_SELECTION=ranked`, default since 0.4.0): LibreChat re-sends
    every file a thread has produced on every run, so the ref list is ranked instead of rejected
    past a count. Files the code or args name (exact path, unique basename) are always mounted, or the run
-   fails with a split-the-work message; their top-level directory siblings (skill helpers, fonts)
+   fails with a split-the-work message; their top-level directory siblings (skill helpers, fonts;
+   up to `EXEC_INPUT_SIBLING_MAX_FILES` / `_BYTES`, the overflow competing as optional)
    come next; the rest fill `EXEC_INPUT_MAX_FILES` / `EXEC_INPUT_OPTIONAL_MAX_BYTES`, newest
    writable files interleaved with read-only ones. Same-object duplicates and older same-path
    copies collapse to one. Anything left out — including optional files skipped once

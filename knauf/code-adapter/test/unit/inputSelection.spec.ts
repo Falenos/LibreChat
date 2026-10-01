@@ -208,6 +208,43 @@ describe('selectInputs', () => {
     expect(names(nestedUse.selected)).toEqual(['karl-xlsx/references/x.md']);
   });
 
+  // Review of #386 (P1): one directory must not force an unbounded serial push before user code.
+  it('mounts directory siblings unconditionally only up to the sibling byte budget', () => {
+    const MiB = 1024 * 1024;
+    const files = [
+      candidate('data/input.csv', { size: MiB }),
+      ...Array.from({ length: 6 }, (_, i) =>
+        candidate(`data/part-${i}.parquet`, { size: 10 * MiB }),
+      ),
+    ];
+    const result = selectInputs(files, [], {
+      code: "pd.read_csv('/mnt/data/data/input.csv')",
+      args: [],
+      config: config({
+        EXEC_INPUT_SIBLING_MAX_BYTES: String(32 * MiB),
+        EXEC_INPUT_OPTIONAL_MAX_BYTES: String(10 * MiB),
+      }),
+    });
+    // The named file and three 10 MiB siblings; one more fits as optional, two are reported.
+    expect(result.mandatoryCount).toBe(4);
+    expect(result.selected).toHaveLength(5);
+    expect(result.omitted.filter((o) => o.reason === 'budget')).toHaveLength(2);
+  });
+
+  it('caps how many directory siblings are mounted unconditionally', () => {
+    const files = [
+      candidate('karl-x/run.py'),
+      ...Array.from({ length: 20 }, (_, i) => candidate(`karl-x/f${i}.md`)),
+    ];
+    const result = selectInputs(files, [], {
+      code: 'python3 -B /mnt/data/karl-x/run.py',
+      args: [],
+      config: config({ EXEC_INPUT_SIBLING_MAX_FILES: '16' }),
+    });
+    expect(result.mandatoryCount).toBe(17);
+    expect(result.selected).toHaveLength(21);
+  });
+
   it('interleaves newest writable files with read-only ones when filling the budget', () => {
     const files = [
       candidate('w-old.csv', { modified: 1 }),

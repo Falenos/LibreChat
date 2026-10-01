@@ -160,6 +160,8 @@ describe('loadConfig', () => {
     expect(config.exec.inputMaxRefs).toBe(256);
     expect(config.exec.inputOptionalMaxBytes).toBe(67_108_864);
     expect(config.exec.inputPushBudgetMs).toBe(30_000);
+    expect(config.exec.inputSiblingMaxFiles).toBe(16);
+    expect(config.exec.inputSiblingMaxBytes).toBe(33_554_432);
     expect(config.exec.captureIgnoreHidden).toBe(true);
     expect(config.exec.manifestMaxEntries).toBe(500);
     expect(config.upload).toEqual({

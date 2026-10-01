@@ -83,6 +83,9 @@ export interface Config {
     inputOptionalMaxBytes: number;
     /** Wall-clock budget for pushing inputs the code does not name. */
     inputPushBudgetMs: number;
+    /** Directory siblings of a named file mounted unconditionally; the rest are optional. */
+    inputSiblingMaxFiles: number;
+    inputSiblingMaxBytes: number;
     inputMaxFileBytes: number;
     inputMaxTotalBytes: number;
     maxActiveRequests: number;
@@ -306,6 +309,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       inputOptionalMaxBytes: int('EXEC_INPUT_OPTIONAL_MAX_BYTES', 67_108_864),
       // Push + the 220s platform exec + capture must fit EXEC_TOTAL_TIMEOUT_MS (300s).
       inputPushBudgetMs: int('EXEC_INPUT_PUSH_BUDGET_MS', 30_000),
+      // Siblings are exempt from the optional cap and the push budget, so they get their own
+      // bound: one directory must not force a long serial push before user code starts.
+      inputSiblingMaxFiles: int('EXEC_INPUT_SIBLING_MAX_FILES', 16),
+      inputSiblingMaxBytes: int('EXEC_INPUT_SIBLING_MAX_BYTES', 33_554_432),
       inputMaxFileBytes: int('EXEC_INPUT_MAX_FILE_BYTES', 134_217_728),
       inputMaxTotalBytes: int('EXEC_INPUT_MAX_TOTAL_BYTES', 268_435_456),
       maxActiveRequests: int('EXEC_MAX_ACTIVE_REQUESTS', 4),

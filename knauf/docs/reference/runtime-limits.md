@@ -80,10 +80,11 @@ than disabling the limit.
 | Limit | Default | Source/key | Rationale |
 | --- | ---: | --- | --- |
 | Staging upload file | 128 MiB | `UPLOAD_MAX_BYTES` | Matches the practical ACA session-pool file API ceiling. |
-| Upload batch | 32 files, 256 MiB of file bytes | `UPLOAD_BATCH_MAX_FILES`, `UPLOAD_BATCH_MAX_TOTAL_BYTES` | Bounds ephemeral disk and transfer work; decoupled from the capture cap so a skill with many bundled files still primes (0.4.0). The early declared-length check allows 64 KiB plus 8 KiB per file of multipart framing on top; the spooled file total is checked exactly. |
+| Upload batch | 32 files, 256 MiB of file bytes | `UPLOAD_BATCH_MAX_FILES`, `UPLOAD_BATCH_MAX_TOTAL_BYTES` | Bounds ephemeral disk and transfer work; decoupled from the capture cap so a skill with many bundled files still primes (0.4.0). Enforced while the body is parsed, so a chunked request without Content-Length stops at the budget instead of spooling every file to disk; the early declared-length check allows 64 KiB plus 8 KiB per file of multipart framing on top. |
 | Execution inputs mounted | 32 files | `EXEC_INPUT_MAX_FILES` | Ranked selection (0.4.0): files the code names always mount, the newest of the rest fill the budget, and omissions are reported to the model. `EXEC_INPUT_SELECTION=strict` restores the old reject. |
 | Execution input refs | 256 per request | `EXEC_INPUT_MAX_REFS` | Hard ceiling on the file list one request may carry. |
 | Un-named execution inputs | 64 MiB, 30-second push budget | `EXEC_INPUT_OPTIONAL_MAX_BYTES`, `EXEC_INPUT_PUSH_BUDGET_MS` | Pushes are strictly sequential, so the optional tail is bounded in bytes and time. |
+| Directory siblings mounted unconditionally | 16 files, 32 MiB | `EXEC_INPUT_SIBLING_MAX_FILES`, `EXEC_INPUT_SIBLING_MAX_BYTES` | Siblings of a file the code names (skill helpers, fonts) skip the optional cap and the push budget, so they are bounded on their own; the overflow competes as optional input and is reported if left out (0.4.0). |
 | Execution input file | 128 MiB | `EXEC_INPUT_MAX_FILE_BYTES` | Matches the upload ceiling. |
 | Aggregate execution input | 256 MiB | `EXEC_INPUT_MAX_TOTAL_BYTES` | Bounds memory and transfer pressure for one execution. |
 | Active executions | 4 per process | `EXEC_MAX_ACTIVE_REQUESTS` | Rejects with HTTP 429 rather than building an unbounded in-process queue. |

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { Router } from 'express';
 import multer from 'multer';
 import { mintSessionId, parseIdentity, sanitizeFilename, ValidationError } from '../validate.js';
+import { budgetedDiskStorage } from './budgetedDiskStorage.js';
 import type { NextFunction, Request, Response } from 'express';
 import type { AuthContext, BatchUploadFileResult, CodeEnvIdentity } from '../types/contract.js';
 import type { BlobStore } from '../azure/blobStore.js';
@@ -37,7 +38,9 @@ export function createUploadRouter(deps: UploadDeps): Router {
   const router = Router();
   const { batchMaxFiles, batchMaxTotalBytes, preservePaths } = deps.config.upload;
   const upload = multer({
-    dest: process.env.UPLOAD_TMP_DIR ?? tmpdir(),
+    // Disk spooling with the batch's aggregate byte budget enforced while parsing: a chunked
+    // body has no Content-Length, so the declared-length check below cannot see it.
+    storage: budgetedDiskStorage(process.env.UPLOAD_TMP_DIR ?? tmpdir(), batchMaxTotalBytes),
     // Busboy strips the directory part of a multipart filename unless told otherwise, so a
     // skill's `karl-xlsx/references/reading.md` arrived as `reading.md` and collided with
     // every other skill's file of that name. `sanitizeFilename` below still rejects
@@ -48,8 +51,8 @@ export function createUploadRouter(deps: UploadDeps): Router {
     // request can exhaust ephemeral storage (which has no request/limit in the GitOps values).
     // It is its own knob: tying it to CAPTURE_MAX_FILES made a skill with 20+ bundled files
     // fail to prime at all (413, and LibreChat then uploads nothing). The worst-case spool is
-    // batchMaxFiles × uploadMaxBytes; the declared-length and spooled-total checks below
-    // bound the realistic case to batchMaxTotalBytes.
+    // batchMaxFiles × uploadMaxBytes without an aggregate cap; the storage engine above bounds
+    // it to batchMaxTotalBytes while parsing, whatever the request declares.
     // Busboy raises LIMIT_FILE_SIZE when the configured byte count is reached, so the
     // parser limit must be one byte beyond the documented inclusive application limit.
     // Files larger than uploadMaxBytes still reach the sentinel and are rejected.
@@ -163,8 +166,8 @@ export function createUploadRouter(deps: UploadDeps): Router {
           res.status(400).json({ error: 'at least one file is required' });
           return;
         }
-        // Chunked bodies (form-data streams have no known length) skip the header check,
-        // so the spooled total is checked too, before anything reaches Blob or Table.
+        // The storage engine already enforced this while parsing; kept as the backstop that
+        // runs before anything reaches Blob or Table.
         if (files.reduce((sum, f) => sum + f.size, 0) > batchMaxTotalBytes) {
           throw new ValidationError('upload batch exceeds the maximum total size', 413);
         }
