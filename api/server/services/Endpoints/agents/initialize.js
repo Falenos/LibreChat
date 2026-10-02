@@ -1003,16 +1003,17 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
    *  in any active agent's scope; the ACL check is the security gate.
    *  `codeEnvAvailable` comes from `primaryConfig` — @see
    *  `InitializedAgent.codeEnvAvailable` for the per-agent narrowing. */
-  // [knauf] KK20-397 — `extraSkillNames`: skills primed THIS turn (see client.js), so their
-  // bundled files are mounted on the turn they are invoked, not the one after.
+  // [knauf] KK20-397 — `extraSkills`: skills primed THIS turn with the `_id` each resolved to
+  // (see client.js), so their bundled files are mounted on the turn they are invoked, not the
+  // one after, and are the files of that exact skill.
   const handlePrimeInvokedSkills = skillsCapabilityEnabled
-    ? (payload, extraSkillNames) =>
+    ? (payload, extraSkills) =>
         primeInvokedSkills({
           req,
           payload,
           accessibleSkillIds,
           codeEnvAvailable: primaryConfig.codeEnvAvailable === true,
-          extraSkillNames,
+          extraSkills,
           ...getSkillToolDeps(),
         })
     : undefined;

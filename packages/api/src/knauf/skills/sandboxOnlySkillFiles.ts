@@ -11,9 +11,14 @@
  *
  * Convention: a deployment skill's `sandbox/` folder holds such files. The Skills API does
  * not list them and answers a direct request with the same 404 as a missing file (no
- * existence oracle); priming and the model's `read_file` are unaffected. Delivering them back
- * out of the sandbox is stopped separately, by the code-output policy on the api side
+ * existence oracle); priming and the model's `read_file` are unaffected. Verbatim copies
+ * back out of the sandbox are refused separately, by the code-output policy on the api side
  * (api/server/services/Files/knauf/codeOutputPolicy.js).
+ *
+ * What this does and does not protect: the Skills panel and its download route no longer
+ * hand the files to every user. The sandbox still does — code the user can steer reads the
+ * mounted bytes and can re-encode them past any output filter — so a file belongs here only
+ * if users may be able to obtain it. It is not a place for secrets.
  */
 import { isDeploymentSkillFileSource } from '~/skills/deployment';
 

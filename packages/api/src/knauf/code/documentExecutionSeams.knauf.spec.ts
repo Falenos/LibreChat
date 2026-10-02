@@ -43,13 +43,16 @@ describe('[knauf] KK20-397 document-execution seams', () => {
 
   it('mounts the files of skills primed this turn', () => {
     expect(source('api/server/controllers/agents/client.js')).toContain(
-      'primeInvokedSkills(payload, knaufFreshPrimeNames)',
+      'primeInvokedSkills(payload, knaufFreshPrimes)',
     );
     expect(source('api/server/services/Endpoints/agents/initialize.js')).toMatch(
-      /\(payload, extraSkillNames\) =>[\s\S]{0,300}extraSkillNames,/,
+      /\(payload, extraSkills\) =>[\s\S]{0,300}extraSkills,/,
     );
     expect(source('packages/api/src/agents/skillFiles.ts')).toContain(
-      'for (const name of deps.extraSkillNames ?? [])',
+      'knaufPinnedSkillIds(deps.extraSkills, deps.accessibleSkillIds)',
+    );
+    expect(source('packages/api/src/agents/skillFiles.ts')).toContain(
+      'pinned ? [pinned] : deps.accessibleSkillIds',
     );
   });
 

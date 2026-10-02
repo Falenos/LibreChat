@@ -107,6 +107,9 @@ export * from './knauf/code/codeEnvGuard';
 // [knauf] KK20-397 — skill-file cache freshness, consumed by api/.../agents/skillDeps.js.
 export * from './knauf/code/skillStagingFreshness';
 // End [knauf]
+// [knauf] KK20-397 — this turn's skill primes with their exact ids, consumed by client.js.
+export * from './knauf/skills/freshSkillPrimes';
+// End [knauf]
 // [knauf] KK20-297 — shared File Translation environment gate for legacy API runtime consumers.
 export * from './knauf/translation/translationEnvGuard';
 // End [knauf]

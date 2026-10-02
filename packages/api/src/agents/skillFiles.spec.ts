@@ -520,10 +520,10 @@ describe('[knauf] skill-file cache probes every object', () => {
 });
 
 /* [knauf] KK20-397 — a skill primed THIS turn (manual `$name`, always-apply) has no
- * `skill` call in history yet, so without `extraSkillNames` its bundled files were only
- * mounted from the following turn. */
+ * `skill` call in history yet, so without `extraSkills` its bundled files were only
+ * mounted from the following turn. Each carries the `_id` the resolver picked. */
 describe('[knauf] primeInvokedSkills mounts files for skills primed this turn', () => {
-  it('uploads the files of a skill named only in extraSkillNames', async () => {
+  it('uploads the files of a skill primed only this turn', async () => {
     mockExtract.mockReturnValue(new Set());
     const listSkillFiles = jest.fn().mockResolvedValue([
       {
@@ -540,7 +540,7 @@ describe('[knauf] primeInvokedSkills mounts files for skills primed this turn', 
     });
     const result = await primeInvokedSkills(
       makeDeps({
-        extraSkillNames: new Set(['karl-pptx']),
+        extraSkills: [{ name: 'karl-pptx', _id: SKILL_ID }],
         getSkillByName: jest.fn().mockResolvedValue({
           _id: SKILL_ID,
           name: 'karl-pptx',
@@ -559,6 +559,59 @@ describe('[knauf] primeInvokedSkills mounts files for skills primed this turn', 
     expect(result.initialSessions?.get('execute_code')?.files).toEqual([
       expect.objectContaining({ name: 'karl-pptx/scripts/karl_pptx.py' }),
     ]);
+  });
+
+  // Review of #387: re-resolving by name could return a newer same-name skill, so the user
+  // would see skill A's instructions while /mnt/data/<name>/ held skill B's helpers.
+  it("pins this turn's prime to the exact doc the resolver picked", async () => {
+    mockExtract.mockReturnValue(new Set());
+    const other = new Types.ObjectId();
+    const getSkillByName = jest.fn().mockResolvedValue({
+      _id: SKILL_ID,
+      name: 'karl-pptx',
+      body: 'pptx body',
+      version: 1,
+      fileCount: 0,
+    });
+    await primeInvokedSkills(
+      makeDeps({
+        accessibleSkillIds: [other, SKILL_ID],
+        extraSkills: [{ name: 'karl-pptx', _id: SKILL_ID }],
+        getSkillByName,
+      }),
+    );
+    expect(getSkillByName).toHaveBeenCalledTimes(1);
+    const [name, ids] = getSkillByName.mock.calls[0];
+    expect(name).toBe('karl-pptx');
+    expect(ids.map(String)).toEqual([String(SKILL_ID)]);
+  });
+
+  it('pins a skill that is both in history and primed this turn to the primed doc', async () => {
+    mockExtract.mockReturnValue(new Set(['karl-pptx']));
+    const getSkillByName = jest.fn().mockResolvedValue(null);
+    await primeInvokedSkills(
+      makeDeps({
+        accessibleSkillIds: [new Types.ObjectId(), SKILL_ID],
+        extraSkills: [{ name: 'karl-pptx', _id: SKILL_ID }],
+        getSkillByName,
+      }),
+    );
+    expect(getSkillByName).toHaveBeenCalledTimes(1);
+    expect(getSkillByName.mock.calls[0][1].map(String)).toEqual([String(SKILL_ID)]);
+  });
+
+  it('ignores a prime whose id the user cannot access', async () => {
+    mockExtract.mockReturnValue(new Set());
+    const getSkillByName = jest.fn();
+    await expect(
+      primeInvokedSkills(
+        makeDeps({
+          extraSkills: [{ name: 'karl-pptx', _id: new Types.ObjectId() }],
+          getSkillByName,
+        }),
+      ),
+    ).resolves.toEqual({});
+    expect(getSkillByName).not.toHaveBeenCalled();
   });
 
   it('still returns early when there is neither history nor a skill primed this turn', async () => {

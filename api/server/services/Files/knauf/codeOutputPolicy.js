@@ -7,10 +7,18 @@
 //     under `/mnt/data/_karl_qa/` so the model can look at them (packages/api
 //     knauf/code/visualQa.ts). They are working material: attaching them would clutter the
 //     chat, and every attachment is re-sent into every later run of the conversation.
-//  2. Font files. The licensed Knauf fonts ship only in a deployment skill's `sandbox/`
-//     folder, hidden from the Skills API (packages/api knauf/skills/sandboxOnlySkillFiles.ts).
-//     Without this, "copy the font to /mnt/data" would hand them to any user. Fonts
-//     EMBEDDED in a generated PDF or DOCX are untouched — that is the licensed use.
+//  2. Verbatim copies of sandbox-only skill files and plain font files. The Knauf fonts ship
+//     in a deployment skill's `sandbox/` folder, hidden from the Skills API (packages/api
+//     knauf/skills/sandboxOnlySkillFiles.ts), and this stops the casual route back out:
+//     "copy the font to /mnt/data", or a zip of it. Fonts EMBEDDED in a generated PDF or
+//     DOCX are untouched — that is the intended use.
+//
+// THIS IS NOT A CONFIDENTIALITY BOUNDARY. Anything mounted in the sandbox is readable by
+// code the user can steer, and that code can re-encode it (an archive under another name,
+// tar or gzip, base64 in a text file) past any output filter. Only put in a `sandbox/`
+// folder what users may be able to obtain: the Knauf fonts ship there only once the licence
+// is confirmed to allow that (knauf/brand/README.md). Bytes that must stay secret cannot be
+// mounted for user code at all.
 //
 // Deliberately dependency-free (no `@librechat/api`): several process.js specs mock that
 // package with a fixed key list, and a new key would be undefined there.
