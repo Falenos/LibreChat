@@ -63,10 +63,15 @@ are dropped by A2's code-output policy and never reach the user.
 | `.xlsx` | Arial | workbooks cannot embed; the brand rule for non-embedding formats |
 
 The fonts ship as `skill/karl-brand/sandbox/knauf-fonts.zip`. `sandbox/` is hidden from the
-Skills API and download route and refused as a code output (A2). The TTFs in
-`knauf/brand/fonts/Knauf fonts.7z` carry `fsType` 0 (installable embedding), but the licence
-still needs the brand owner's confirmation ([`knauf/brand/README.md`](../../brand/README.md)).
-Without the archive, every helper falls back to Arial and still works.
+Skills API and download route, and verbatim copies are refused as code outputs (A2). That
+stops casual copies only: code the user steers in the sandbox can read the mounted fonts and
+re-encode them past any filter, so **`sandbox/` is not a confidentiality boundary** (review of
+#387). The TTFs in `knauf/brand/fonts/Knauf fonts.7z` carry `fsType` 0 (installable
+embedding), but the licence still needs the brand owner's confirmation, and it must cover
+users being able to obtain the files ([`knauf/brand/README.md`](../../brand/README.md)). If it
+does not, the fonts cannot be mounted for user code; a trusted render step outside the user's
+sandbox is the follow-up. Without the archive, every helper falls back to Arial and still
+works.
 
 ### Two sandbox traps found on the way
 
@@ -94,15 +99,19 @@ Without the archive, every helper falls back to Arial and still works.
 4. **Visual QA stays off in stage/prod** until privacy signs off. Images added mid-run bypass
    the KK20-199 Langfuse image guard (KK20-207 workstream).
 5. **Fonts**: brand-owner confirmation that the desktop licence covers embedding in generated
-   documents and server-side use, then build and commit the zip (recipe in
-   [`skill/README.md`](../../../skill/README.md), karl-brand section).
+   documents, server-side use, and users being able to obtain the files (they can, from the
+   sandbox), then build and commit the zip (recipe in
+   [`skill/README.md`](../../../skill/README.md), karl-brand section). Without that last
+   point, do not ship the zip; see follow-up 7.
 6. **`business-case-writeup`** still says "Do not promise a downloadable document file".
    That is compatible with the routing rule (unnamed format → artifact), but a user who asks
    for the business case "as Word" now gets one. Its owners should decide whether the skill
    should mention it.
 7. Follow-ups outside v1: DOCX font embedding (obfuscated `.odttf` parts, verified in Word on
    Windows and Mac), a PDF preview card for code outputs, PDF pages in `read_file`, official
-   Office templates if the brand team supplies them.
+   Office templates if the brand team supplies them, and — only if the font licence does not
+   let users obtain the files — a trusted render step that embeds the fonts outside
+   user-controlled code.
 
 ## Verification
 

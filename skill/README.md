@@ -77,7 +77,9 @@ arriving there read as instructions to the model (see authoring rule 10).
   archive is not in the repository: ship it by zipping the `TTF/` files of
   `knauf/brand/fonts/Knauf fonts.7z` (flat, `.ttf` only) into
   `skill/karl-brand/sandbox/knauf-fonts.zip`, once the brand owner has confirmed that
-  the desktop licence covers embedding in generated documents. Without it every
+  the desktop licence covers embedding in generated documents *and* KARL users being able
+  to obtain the files, since code they steer in the sandbox can read them (rule 12).
+  Without it every
   helper falls back to Arial. `knauf_brand.py` transcribes the `KNAUF` const in
   `SKILL.md`; the guard spec fails when the two differ.
 
@@ -153,11 +155,14 @@ Learned the hard way — each of these is a silent failure otherwise.
     available. They are mounted read-only at `/mnt/data/<skill>/<relativePath>`. Scripts
     run as `python3 -B` and write their outputs elsewhere. The guard spec checks that every
     `/mnt/data/<skill>/…` path a skill names is a file that skill ships.
-12. **Everything in a skill is downloadable by every user except `sandbox/`.** The Skills
+12. **Every file in a skill can reach every user; `sandbox/` only changes how.** The Skills
     panel lists each file with a Download button. Files under `<skill>/sandbox/` are hidden
-    from the Skills API and refused as code outputs (KK20-397), so licensed material —
-    fonts above all — goes there and nowhere else; the guard spec fails on a font file
-    anywhere else. Such files are only ever embedded inside generated documents.
+    from the Skills API and verbatim copies are refused as code outputs (KK20-397), so the
+    panel does not hand them out and "copy the font to /mnt/data" does not work. They are
+    still mounted for code the user can steer, which can read them and re-encode them past
+    any filter: **`sandbox/` is not a confidentiality boundary.** Put a file there only if
+    users may be able to obtain it; bytes that must stay secret cannot be mounted for user
+    code at all. The guard spec fails on a font file anywhere but `sandbox/`.
 13. **File names must match `^[a-zA-Z0-9._\-/]+$`**, or the backend does not boot. Binary
     files load (they are pushed to the sandbox byte-for-byte) but are not cached for
     `read_file`.
