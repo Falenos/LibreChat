@@ -4,7 +4,8 @@ Commands (`python3 -B /mnt/data/karl-xlsx/scripts/karl_xlsx.py <command> …`):
 
     recalc FILE [--out OUT]   compute every formula with LibreOffice, store the results in the
                               file itself (formatting and charts untouched), report errors as JSON.
-                              Replaces FILE unless --out is given; exit 1 on any formula error.
+                              Replaces FILE (or writes OUT) only when the check is clean; on any
+                              formula error it exits 1 and leaves the workbook unchanged.
     inspect FILE              sheets, sizes, formulas, merged cells, charts, macros, and what an
                               openpyxl re-save would lose — run before editing a user's workbook
     qa FILE [--pages 1-4]     render to contact sheets under /mnt/data/_karl_qa/ and report problems
@@ -109,7 +110,34 @@ def _prefix(formula):
     return ''.join(pieces)
 
 
-def _cell_value(cell, value):
+def _workbook_epoch(package):
+    """The workbook's date system: 1904 when `workbookPr` says so, else 1900."""
+    from openpyxl.utils.datetime import CALENDAR_MAC_1904, CALENDAR_WINDOWS_1900
+
+    properties = _xml(package.read('xl/workbook.xml')).find(f'{{{MAIN}}}workbookPr')
+    flag = (properties.get('date1904') if properties is not None else None) or ''
+    return CALENDAR_MAC_1904 if flag.strip().lower() in ('1', 'true') else CALENDAR_WINDOWS_1900
+
+
+def replace_atomically(source, target):
+    """Put `source` at `target` in one step: a hidden temp file beside it, then a rename.
+
+    The temp name starts with a dot, so the code adapter never captures it even if the
+    process dies between the copy and the rename.
+    """
+    directory = os.path.dirname(os.path.abspath(target))
+    handle, temp = tempfile.mkstemp(prefix='.karl-recalc-', suffix='.tmp', dir=directory)
+    os.close(handle)
+    try:
+        shutil.copyfile(source, temp)
+        os.replace(temp, target)
+    except BaseException:
+        if os.path.exists(temp):
+            os.remove(temp)
+        raise
+
+
+def _cell_value(cell, value, epoch=None):
     """Store `value` as the formula's cached result, in schema order (f, v, is, extLst)."""
     from lxml import etree
 
@@ -121,9 +149,11 @@ def _cell_value(cell, value):
     if isinstance(value, bool):
         kind, text = 'b', '1' if value else '0'
     elif isinstance(value, (dt.datetime, dt.date, dt.time, dt.timedelta)):
-        from openpyxl.utils.datetime import to_excel
+        from openpyxl.utils.datetime import CALENDAR_WINDOWS_1900, to_excel
 
-        kind, text = None, format(to_excel(value), '.17g')
+        # A date serial depends on the workbook's date system: 2026-01-01 is 46023 in the
+        # 1900 system and 44561 in the 1904 one.
+        kind, text = None, format(to_excel(value, epoch or CALENDAR_WINDOWS_1900), '.17g')
     elif isinstance(value, (int, float)):
         kind, text = None, format(value, '.17g') if isinstance(value, float) else str(value)
     elif isinstance(value, str) and value in ERRORS:
@@ -147,6 +177,7 @@ def recalc(path, out=None):
     job = tempfile.mkdtemp(dir=_work())
     report = {'file': out, 'formulas': 0, 'errors': {}, 'error_count': 0, 'prefixed': [], 'unsupported': [], 'empty_results': 0}
     with zipfile.ZipFile(path) as package:
+        epoch = _workbook_epoch(package)
         sheets = _sheet_parts(package)
         roots, cells = {}, {}
         for name, part in sheets:
@@ -171,7 +202,7 @@ def recalc(path, out=None):
             sheet = computed[name] if name in computed.sheetnames else None
             for cell, _ in entries:
                 value = sheet[cell.get('r')].value if sheet is not None else None
-                _cell_value(cell, value)
+                _cell_value(cell, value, epoch)
                 if value is None:
                     report['empty_results'] += 1
                 elif isinstance(value, str) and value in ERRORS:
@@ -181,12 +212,18 @@ def recalc(path, out=None):
             final = os.path.join(job, 'final.xlsx')
             _rewrite(package, final, {p: etree.tostring(r, xml_declaration=True, encoding='UTF-8', standalone=True) for p, r in roots.items()})
         staged = final
-    shutil.move(staged, out)
+    report['ok'] = not report['error_count'] and not report['unsupported']
+    # Only a clean result replaces anything: a failed check leaves the workbook (and its
+    # earlier cached values) exactly as it was, so the next attempt starts from the original.
+    if report['ok']:
+        replace_atomically(staged, out)
+    else:
+        report['note'] = f'{out} was not changed. Fix the formulas listed here and run recalc again.'
+    report['written'] = report['ok']
     shutil.rmtree(job, ignore_errors=True)
     report['errors'] = {k: v[:10] + ([f'… {len(v) - 10} more'] if len(v) > 10 else []) for k, v in report['errors'].items()}
     report['prefixed'] = report['prefixed'][:20]
     report['unsupported'] = report['unsupported'][:20]
-    report['ok'] = not report['error_count'] and not report['unsupported']
     if report['unsupported']:
         report['hint'] = 'dynamic-array functions do not compute here: precompute in pandas or use INDEX/MATCH'
     return report

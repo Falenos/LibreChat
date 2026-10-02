@@ -43,9 +43,12 @@ It works on a copy in `/tmp`: LibreOffice computes every formula (with
 "always recalculate" forced, since LibreOffice otherwise trusts the zeros
 xlsxwriter caches), and the results are written back into **the original file**
 as its cached values. Formatting, charts and defined names are untouched, and
-there is only ever one workbook. `--out OTHER.xlsx` writes a copy instead.
+there is only ever one workbook. `--out OTHER.xlsx` writes a copy instead. Dates
+follow the workbook's own date system (1900 or 1904).
 
-It prints JSON and exits 1 when anything needs fixing:
+The file is replaced only when the check is clean. It prints JSON and exits 1
+when anything needs fixing, and then **leaves the workbook exactly as it was**
+(`"written": false`): fix the formulas and run `recalc` again.
 
 - `errors` — cells showing `#REF!`, `#DIV/0!`, `#NAME?`, `#VALUE!`, `#N/A`…, by
   type, with sheet and cell. **Deliver only with zero errors**: fix the formula

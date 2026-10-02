@@ -55,7 +55,10 @@ the contact sheet shows the filled values.
 - `tables FILE [--pages 2-4] --out /mnt/data/tables.xlsx` finds ruled tables with
   pdfplumber and writes one sheet per table, named `p<page>_t<n>`; `--out x.csv`
   writes them one after another. Values come out as text, so convert numbers
-  (`1,240` → 1240) before calculating, and check a table against the page render:
+  (`1,240` → 1240) before calculating. A cell that starts like a formula (`=`, `@`,
+  `+`/`-` not followed by a number) stays text: a quoted cell in the workbook, a
+  leading `'` in a CSV, because a PDF's content is data. Check a table against the
+  page render:
   tables without lines, or that span pages, are often missed or split.
 - For deeper work: `pdfplumber` (words with positions, `page.crop(bbox)`), `pypdf`
   (outline, annotations, attachments), `pypdfium2` (rendering). `pdfimages -list` shows

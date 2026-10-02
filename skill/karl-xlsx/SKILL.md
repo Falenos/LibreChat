@@ -58,8 +58,8 @@ supported** (no `odfpy`) — convert it first with `soffice --headless
   blanks or zeros. Every workbook with formulas goes through
   `python3 -B /mnt/data/karl-xlsx/scripts/karl_xlsx.py recalc FILE` before
   delivery: it computes every formula, stores the results in the file itself and
-  exits 1 on any `#REF!`, `#DIV/0!`, `#NAME?` or other error. **Deliver only
-  with zero formula errors.** If the deliverable just needs the numbers, compute
+  exits 1 on any `#REF!`, `#DIV/0!`, `#NAME?` or other error, leaving the file
+  unchanged. **Deliver only with zero formula errors.** If the deliverable just needs the numbers, compute
   in pandas and write values — simpler and always correct.
 - **Prefer live formulas over hardcoded results only when the user wants an
   interactive model.** For a report of *answers*, computed values are better.

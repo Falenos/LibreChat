@@ -116,6 +116,54 @@ def text(path, pages=None, layout=False):
     return '\n'.join(f'--- page {n} ---\n{reader.pages[n - 1].extract_text() or ""}' for n in selected)
 
 
+# A cell that starts with one of these is read as a formula (or a DDE command) by Excel and
+# LibreOffice. Text taken out of a PDF is data, whoever wrote the PDF: `=WEBSERVICE(...)` in a
+# crafted table must not become a live formula in the workbook we hand back.
+FORMULA_PREFIXES = ('=', '+', '-', '@', '\t', '\r')
+SIGNED_NUMBER = re.compile(r'[+-]?\s*(\d[\d.,\s]*%?)?')
+
+
+def spreadsheet_text(text):
+    """`text` safe to open as a spreadsheet cell: formula-leading text gets a leading `'`.
+
+    Signed numbers ('-12', '+11%') and a lone dash stay as they are.
+    """
+    if text and text[0] in FORMULA_PREFIXES and not SIGNED_NUMBER.fullmatch(text):
+        return "'" + text
+    return text
+
+
+def write_tables(found, out):
+    """Write `[(name, rows)]` as CSV (one block per table) or XLSX (one sheet per table).
+
+    Every cell is text. In a CSV, formula-leading cells are prefixed with `'`; in an XLSX they
+    are stored as strings with Excel's quote prefix, so they stay text even when edited.
+    """
+    if out.lower().endswith('.csv'):
+        import csv
+
+        with open(out, 'w', newline='', encoding='utf-8') as handle:
+            writer = csv.writer(handle)
+            for name, rows in found:
+                writer.writerow([f'# {name}'])
+                writer.writerows([[spreadsheet_text(cell) for cell in row] for row in rows])
+                writer.writerow([])
+        return
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for name, rows in found:
+        sheet = workbook.create_sheet(name[:31])
+        for r, row in enumerate(rows, start=1):
+            for c, value in enumerate(row, start=1):
+                cell = sheet.cell(row=r, column=c, value=value)
+                cell.data_type = 's'  # openpyxl would otherwise store '=…' as a formula
+                if spreadsheet_text(value) != value:
+                    cell.quotePrefix = True  # stays text even when someone edits the cell
+    workbook.save(out)
+
+
 def tables(path, out, pages=None):
     """Every table pdfplumber finds, one sheet (or CSV block) per table, with its page."""
     import pdfplumber
@@ -130,25 +178,7 @@ def tables(path, out, pages=None):
     if not found:
         print('no tables found (tables drawn as images, or without ruling lines, may not be detected)')
         return 1
-    if out.lower().endswith('.csv'):
-        import csv
-
-        with open(out, 'w', newline='', encoding='utf-8') as handle:
-            writer = csv.writer(handle)
-            for name, rows in found:
-                writer.writerow([f'# {name}'])
-                writer.writerows(rows)
-                writer.writerow([])
-    else:
-        from openpyxl import Workbook
-
-        workbook = Workbook()
-        workbook.remove(workbook.active)
-        for name, rows in found:
-            sheet = workbook.create_sheet(name[:31])
-            for row in rows:
-                sheet.append(row)
-        workbook.save(out)
+    write_tables(found, out)
     print(f'wrote {out} ({len(found)} table(s))')
     return 0
 

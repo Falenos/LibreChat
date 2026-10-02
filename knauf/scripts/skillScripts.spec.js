@@ -14,8 +14,18 @@ const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const SKILLS_DIR = path.join(REPO_ROOT, 'skill');
-const hasPython = spawnSync('python3', ['--version']).status === 0;
-const skip = hasPython ? false : 'python3 is not on PATH';
+// KARL_SKILL_PYTHON points the office-stack tests at an interpreter that has the sandbox's
+// libraries (openpyxl, lxml); without them those tests skip and say why.
+const PYTHON = process.env.KARL_SKILL_PYTHON || 'python3';
+const hasPython = spawnSync(PYTHON, ['--version']).status === 0;
+const skip = hasPython ? false : `${PYTHON} is not on PATH`;
+const hasModules = (...names) =>
+  hasPython &&
+  spawnSync(PYTHON, ['-B', '-c', names.map((name) => `import ${name}`).join('; ')]).status === 0;
+const hasSoffice = spawnSync('soffice', ['--version']).status === 0;
+const officeSkip = hasModules('openpyxl', 'lxml')
+  ? false
+  : 'openpyxl and lxml are not installed for this interpreter (set KARL_SKILL_PYTHON)';
 
 function helperScripts() {
   return fs
@@ -34,7 +44,7 @@ function helperScripts() {
 
 /** Run Python with -B so no __pycache__ lands in skill/ (it would ship in the image). */
 function python(code, env = {}) {
-  const result = spawnSync('python3', ['-B', '-c', code], {
+  const result = spawnSync(PYTHON, ['-B', '-c', code], {
     encoding: 'utf8',
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', ...env },
   });
@@ -58,7 +68,7 @@ test('finds the Office helpers', () => {
 test('every bundled helper compiles', { skip }, () => {
   const files = helperScripts();
   const result = spawnSync(
-    'python3',
+    PYTHON,
     [
       '-B',
       '-c',
@@ -143,6 +153,134 @@ test('office_qa flags template leftovers, not the word "placeholder" in prose', 
     ].join('\n'),
   );
   assert.deepEqual(JSON.parse(out), [true, true, true, false, true]);
+});
+
+// Review of #388: text from a PDF is data — a crafted table cell must not become a formula.
+test('karl_pdf neutralises formula-leading table text, keeps signed numbers', { skip }, () => {
+  const out = python(
+    [
+      'import sys, json',
+      `sys.path.insert(0, ${JSON.stringify(path.join(SKILLS_DIR, 'karl-pdf/scripts'))})`,
+      'import karl_pdf as k',
+      'cells = ["=WEBSERVICE(\\"http://x\\")", "@SUM(1)", "+cmd|x", "-12", "+11%", "-", "Item", ""]',
+      'print(json.dumps([k.spreadsheet_text(c) for c in cells]))',
+    ].join('\n'),
+  );
+  assert.deepEqual(JSON.parse(out), [
+    '\'=WEBSERVICE("http://x")',
+    "'@SUM(1)",
+    "'+cmd|x",
+    '-12',
+    '+11%',
+    '-',
+    'Item',
+    '',
+  ]);
+});
+
+test(
+  'karl_pdf writes extracted XLSX cells as text, never as formulas',
+  { skip: officeSkip },
+  () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'karl-tables-'));
+    const out = python(
+      [
+        'import sys, json, openpyxl',
+        `sys.path.insert(0, ${JSON.stringify(path.join(SKILLS_DIR, 'karl-pdf/scripts'))})`,
+        'import karl_pdf as k',
+        `target = ${JSON.stringify(path.join(dir, 't.xlsx'))}`,
+        'k.write_tables([("p1_t1", [["=1+1", "-12"]])], target)',
+        'ws = openpyxl.load_workbook(target).active',
+        'print(json.dumps([[c.value, c.data_type, bool(c.quotePrefix)] for c in ws[1]]))',
+      ].join('\n'),
+    );
+    assert.deepEqual(JSON.parse(out), [
+      ['=1+1', 's', true],
+      ['-12', 's', false],
+    ]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  },
+);
+
+// Review of #388: a failed recalc must not have replaced the workbook already.
+test('karl_xlsx replaces a workbook atomically and leaves no temp file', { skip }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'karl-recalc-'));
+  const target = path.join(dir, 'model.xlsx');
+  const source = path.join(dir, 'new.bin');
+  fs.writeFileSync(target, 'original');
+  fs.writeFileSync(source, 'validated');
+  python(
+    [
+      'import sys',
+      `sys.path.insert(0, ${JSON.stringify(path.join(SKILLS_DIR, 'karl-xlsx/scripts'))})`,
+      'import karl_xlsx as k',
+      `k.replace_atomically(${JSON.stringify(source)}, ${JSON.stringify(target)})`,
+      'try:',
+      `    k.replace_atomically(${JSON.stringify(path.join(dir, 'missing.bin'))}, ${JSON.stringify(target)})`,
+      'except FileNotFoundError:',
+      '    pass',
+    ].join('\n'),
+  );
+  assert.equal(fs.readFileSync(target, 'utf8'), 'validated');
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((name) => name.startsWith('.karl-recalc-')),
+    [],
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test(
+  'karl_xlsx recalc leaves a workbook with formula errors untouched',
+  { skip: officeSkip || (hasSoffice ? false : 'LibreOffice (soffice) is not on PATH') },
+  () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'karl-recalc-e2e-'));
+    const book = path.join(dir, 'model.xlsx');
+    python(
+      [
+        'import openpyxl',
+        'wb = openpyxl.Workbook(); ws = wb.active',
+        "ws['A1'] = 2; ws['B1'] = '=A1*3'; ws['B2'] = '=1/0'",
+        `wb.save(${JSON.stringify(book)})`,
+      ].join('\n'),
+    );
+    const before = fs.readFileSync(book);
+    const run = spawnSync(
+      PYTHON,
+      ['-B', path.join(SKILLS_DIR, 'karl-xlsx/scripts/karl_xlsx.py'), 'recalc', book],
+      { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } },
+    );
+    assert.equal(run.status, 1, run.stderr);
+    const report = JSON.parse(run.stdout);
+    assert.equal(report.written, false);
+    assert.deepEqual(report.errors['#DIV/0!'], ["'Sheet'!B2"]);
+    assert.ok(fs.readFileSync(book).equals(before), 'the workbook must not change');
+    assert.deepEqual(fs.readdirSync(dir), ['model.xlsx']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  },
+);
+
+// Review of #388: date results follow the workbook's date system (1904 vs 1900).
+test('karl_xlsx serialises date results in the workbook epoch', { skip: officeSkip }, () => {
+  const out = python(
+    [
+      'import sys, json, datetime, io, zipfile',
+      'from lxml import etree',
+      `sys.path.insert(0, ${JSON.stringify(path.join(SKILLS_DIR, 'karl-xlsx/scripts'))})`,
+      'import karl_xlsx as k',
+      'def epoch(flag):',
+      '    buf = io.BytesIO()',
+      '    with zipfile.ZipFile(buf, "w") as z:',
+      `        z.writestr("xl/workbook.xml", f'<workbook xmlns="{k.MAIN}"><workbookPr{flag}/></workbook>')`,
+      '    return k._workbook_epoch(zipfile.ZipFile(buf))',
+      'serials = []',
+      'for flag in (\' date1904="1"\', "", \' date1904="false"\'):',
+      `    cell = etree.fromstring(f'<c xmlns="{k.MAIN}" r="A1"><f>DATE(2026,1,1)</f></c>')`,
+      '    k._cell_value(cell, datetime.datetime(2026, 1, 1), epoch(flag))',
+      '    serials.append(cell.find(f"{{{k.MAIN}}}v").text)',
+      'print(json.dumps(serials))',
+    ].join('\n'),
+  );
+  assert.deepEqual(JSON.parse(out), ['44561', '46023', '46023']);
 });
 
 test('no Python bytecode is committed under skill/', () => {
