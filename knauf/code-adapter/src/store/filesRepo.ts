@@ -15,6 +15,18 @@ import type {
 export const FILE_SCHEMA_VERSION = 1;
 export const MAX_WRITE_ATTEMPTS = 5;
 
+/**
+ * A capture tried to replace a file it has no authority over: a read-only input (skill
+ * files), a non-user object, or another user's file. Not retryable — the output must be
+ * saved under a different name.
+ */
+export class CapturedOverwriteForbiddenError extends Error {
+  constructor(public readonly filename: string) {
+    super(`captured output may not replace protected file: ${filename}`);
+    this.name = 'CapturedOverwriteForbiddenError';
+  }
+}
+
 const FILE_ROW_PREFIX = 'f:';
 const FILE_ROW_UPPER = 'f;';
 const FILENAME_ROW_PREFIX = 'n:';
@@ -651,6 +663,20 @@ export class FilesRepo {
           }
           throw error;
         }
+      }
+
+      // A capture lands in the exec session's partition, which is normally fresh. When a
+      // caller reuses a session that also holds staged read-only files — a skill's staging
+      // session, for instance — the filename index points at that doc, and replacing it in
+      // place would keep its fileId: every other user holding a cached ref to the skill
+      // file would then read this user's bytes. Refuse instead.
+      if (
+        this.isActive(existing.doc) &&
+        (existing.doc.readOnly ||
+          existing.doc.identity.kind !== 'user' ||
+          existing.doc.userId !== input.userId)
+      ) {
+        throw new CapturedOverwriteForbiddenError(input.filename);
       }
 
       obsoleteBlobPaths.add(existing.doc.blobPath);

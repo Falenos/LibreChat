@@ -5,6 +5,8 @@ export interface Metrics {
   execTotal: Counter<'lang' | 'outcome'>;
   execDuration: Histogram<'lang' | 'outcome'>;
   execInputBytes: Histogram<string>;
+  execInputRefs: Histogram<string>;
+  execInputsOmitted: Counter<'reason'>;
   admissionActive: Gauge<string>;
   admissionInputBytes: Gauge<string>;
   admissionRejected: Counter<'reason'>;
@@ -56,6 +58,18 @@ export function createMetrics(): Metrics {
       name: 'code_adapter_exec_input_bytes',
       help: 'Aggregate staged input bytes accepted by /exec',
       buckets: [0, 1024, 65_536, 1_048_576, 16_777_216, 67_108_864, 134_217_728, 268_435_456],
+      registers: [registry],
+    }),
+    execInputRefs: new Histogram({
+      name: 'code_adapter_exec_input_refs',
+      help: 'File refs carried by one /exec request, before input selection',
+      buckets: [0, 1, 5, 10, 20, 32, 64, 128, 256],
+      registers: [registry],
+    }),
+    execInputsOmitted: new Counter({
+      name: 'code_adapter_exec_inputs_omitted_total',
+      help: 'File refs not mounted for an execution, by reason',
+      labelNames: ['reason'],
       registers: [registry],
     }),
     admissionActive: new Gauge({

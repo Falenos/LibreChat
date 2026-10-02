@@ -56,7 +56,6 @@ export interface AcaClient {
 
 const SESSION_NOT_FOUND_RE = /SessionWithIdentifierNotFound/i;
 const FILE_MANIFEST_MAX_BYTES = 1_048_576;
-const FILE_MANIFEST_MAX_ENTRIES = 100;
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -68,7 +67,7 @@ function isSessionNotFound(statusCode: number, bodyText: string): boolean {
   return statusCode === 404 && SESSION_NOT_FOUND_RE.test(bodyText);
 }
 
-function parseFileManifest(body: Buffer): AcaSessionFile[] {
+function parseFileManifest(body: Buffer, maxEntries: number): AcaSessionFile[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body.toString('utf8'));
@@ -85,7 +84,8 @@ function parseFileManifest(body: Buffer): AcaSessionFile[] {
     throw new AcaError('pool returned invalid file manifest shape', 502);
   }
   const manifest = parsed as AcaFileManifest;
-  if (manifest.files.length > FILE_MANIFEST_MAX_ENTRIES) {
+  // Must match the wrapper's walk cap (both read EXEC_MANIFEST_MAX_ENTRIES).
+  if (manifest.files.length > maxEntries) {
     throw new AcaError('pool file manifest exceeded its bounded scan', 502);
   }
   const files = (manifest.files as unknown[]).map((raw) => {
@@ -476,7 +476,7 @@ export function createAcaClient(
         FILE_MANIFEST_MAX_BYTES,
         signal,
       );
-      return parseFileManifest(manifest);
+      return parseFileManifest(manifest, config.exec.manifestMaxEntries);
     } catch (error) {
       if (error instanceof AcaError) {
         throw error;
