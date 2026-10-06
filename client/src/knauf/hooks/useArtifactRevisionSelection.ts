@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRecoilValue, useSetRecoilState } from 'recoil';
 import type { Artifact } from '~/common';
 import { getArtifactRevision } from '~/knauf/data-provider/data-service';
@@ -27,35 +27,7 @@ export default function useArtifactRevisionSelection({
   const setArtifacts = useSetRecoilState(store.artifactsState);
   const setVisibleArtifacts = useSetRecoilState(store.visibleArtifacts);
   const currentArtifact = currentArtifactId != null ? artifacts?.[currentArtifactId] : null;
-  const artifactVersions = useMemo(() => {
-    const revision = currentArtifact?.knaufRevision;
-    if (!revision || !currentArtifact?.messageId) {
-      return [];
-    }
-    if (currentArtifact.knaufRevisionHistory != null) {
-      return currentArtifact.knaufRevisionHistory;
-    }
-    const availableVersions = Object.values(artifacts ?? {})
-      .filter(
-        (artifact): artifact is NonNullable<typeof artifact> =>
-          artifact != null &&
-          artifact.messageId === currentArtifact.messageId &&
-          artifact.knaufRevision?.identifier === revision.identifier,
-      )
-      .sort(
-        (left, right) => (left.knaufRevision?.version ?? 0) - (right.knaufRevision?.version ?? 0),
-      )
-      .map((artifact) => ({
-        id: artifact.id,
-        version: artifact.knaufRevision?.version ?? 0,
-        available: true,
-      }));
-    const versions = new Map<number, { id: string | null; version: number; available: boolean }>();
-    for (const available of availableVersions) {
-      versions.set(available.version, available);
-    }
-    return [...versions.values()].sort((left, right) => left.version - right.version);
-  }, [artifacts, currentArtifact]);
+  const artifactVersions = currentArtifact?.knaufRevisionHistory ?? [];
   const currentIndex = artifactVersions.findIndex(({ id }) => id === currentArtifactId);
   const [isArtifactVersionLoading, setIsArtifactVersionLoading] = useState(false);
   const [artifactVersionError, setArtifactVersionError] = useState(false);

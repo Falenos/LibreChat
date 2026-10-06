@@ -566,31 +566,25 @@ describe('useArtifacts', () => {
 
   describe('currentIndex calculation', () => {
     // [knauf] KK20-410 — version traversal follows persisted lineage, not timestamps or other artifacts.
-    it('scopes and orders versions by immutable artifact revision metadata', () => {
+    it('uses the selected artifact server history without scanning unrelated artifacts', () => {
+      const history = [
+        { id: 'dashboard-v1', version: 1, available: true },
+        { id: 'dashboard-v2', version: 2, available: true },
+        { id: 'dashboard-v3', version: 3, available: true },
+      ];
       const artifacts = {
-        'dashboard-v3': createArtifact({
-          id: 'dashboard-v3',
-          title: 'Executive dashboard',
-          lastUpdateTime: 1000,
-          knaufRevision: { identifier: 'dashboard', version: 3 },
-        }),
         'other-v1': createArtifact({
           id: 'other-v1',
           messageId: 'msg-2',
           lastUpdateTime: 2000,
           knaufRevision: { identifier: 'other', version: 1 },
         }),
-        'dashboard-v1': createArtifact({
-          id: 'dashboard-v1',
-          title: 'Sales dashboard',
-          lastUpdateTime: 3000,
-          knaufRevision: { identifier: 'dashboard', version: 1 },
-        }),
         'dashboard-v2': createArtifact({
           id: 'dashboard-v2',
           title: 'Revenue dashboard',
           lastUpdateTime: 4000,
           knaufRevision: { identifier: 'dashboard', version: 2 },
+          knaufRevisionHistory: history,
         }),
       };
 
@@ -600,11 +594,7 @@ describe('useArtifacts', () => {
       const { result } = renderHook(() => useArtifacts());
 
       expect(result.current.currentIndex).toBe(1);
-      expect(result.current.artifactVersions).toEqual([
-        { id: 'dashboard-v1', version: 1, available: true },
-        { id: 'dashboard-v2', version: 2, available: true },
-        { id: 'dashboard-v3', version: 3, available: true },
-      ]);
+      expect(result.current.artifactVersions).toEqual(history);
     });
 
     it('loads an uncached selected revision without hydrating every snapshot', async () => {

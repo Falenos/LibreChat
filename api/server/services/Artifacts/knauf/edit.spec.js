@@ -17,6 +17,37 @@ ${source}
 \`\`\`
 :::`;
 
+const revisionMessage = ({
+  version,
+  base,
+  content,
+  inversePatches,
+  title = 'Demo',
+  identifier = 'dashboard',
+  sourceMessageId = 'assistant-1',
+  messageId = `assistant-${version}`,
+}) => ({
+  messageId,
+  content: [
+    {
+      type: 'tool_call',
+      tool_call: {
+        name: 'edit_artifact',
+        output: JSON.stringify({
+          status: 'updated',
+          identifier,
+          messageId: sourceMessageId,
+          title,
+          version,
+          base_sha256: sha256(base),
+          content_sha256: sha256(content),
+          inverse_patches: inversePatches,
+        }),
+      },
+    },
+  ],
+});
+
 // [knauf] NO-TICKET — native SVG revisions use the same artifact edit seam.
 const svgArtifact = (source) => `:::artifact{identifier="mark" type="image/svg+xml" title="Mark"}
 \`\`\`svg
@@ -232,46 +263,18 @@ export default function Dashboard() {
         messageId: 'assistant-1',
         text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="4"'),
       },
-      {
-        messageId: 'assistant-3',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                version: 3,
-                base_sha256: sha256('The theme colour is green.'),
-                content_sha256: sha256('The theme colour is pink.'),
-                inverse_patches: [{ start: colourStart, old: 'green', new_length: 'pink'.length }],
-              }),
-            },
-          },
-        ],
-      },
-      {
-        messageId: 'assistant-4',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                version: 4,
-                base_sha256: sha256('The theme colour is pink.'),
-                content_sha256: sha256(source),
-                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: 3,
+        base: 'The theme colour is green.',
+        content: 'The theme colour is pink.',
+        inversePatches: [{ start: colourStart, old: 'green', new_length: 'pink'.length }],
+      }),
+      revisionMessage({
+        version: 4,
+        base: 'The theme colour is pink.',
+        content: source,
+        inversePatches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+      }),
     ];
 
     expect(
@@ -296,26 +299,12 @@ export default function Dashboard() {
         messageId: 'assistant-1',
         text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="4"'),
       },
-      {
-        messageId: 'assistant-4',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                version: 4,
-                base_sha256: sha256('The theme colour is pink.'),
-                content_sha256: sha256(source),
-                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: 4,
+        base: 'The theme colour is pink.',
+        content: source,
+        inversePatches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+      }),
     ];
 
     expect(
@@ -356,48 +345,20 @@ export default function Dashboard() {
           .replace('title="Demo"', 'title="Latest title"')
           .replace('title="Latest title"', 'title="Latest title" version="3"'),
       },
-      {
-        messageId: 'assistant-2',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Original title',
-                version: 2,
-                base_sha256: sha256(original),
-                content_sha256: sha256(second),
-                inverse_patches: [{ start: colourStart, old: 'blue', new_length: 'pink'.length }],
-              }),
-            },
-          },
-        ],
-      },
-      {
-        messageId: 'assistant-3',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Renamed dashboard',
-                version: 3,
-                base_sha256: sha256(second),
-                content_sha256: sha256(current),
-                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: 2,
+        base: original,
+        content: second,
+        title: 'Original title',
+        inversePatches: [{ start: colourStart, old: 'blue', new_length: 'pink'.length }],
+      }),
+      revisionMessage({
+        version: 3,
+        base: second,
+        content: current,
+        title: 'Renamed dashboard',
+        inversePatches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+      }),
     ];
 
     const history = getArtifactRevisionHistory(messages, {
@@ -424,29 +385,14 @@ export default function Dashboard() {
   test('keeps legitimate histories above 250 versions readable', () => {
     const revisions = Array.from({ length: 250 }, (_, index) => {
       const version = index + 2;
-      return {
-        messageId: `assistant-${version}`,
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Demo',
-                version,
-                base_sha256: sha256(`version ${version - 1}`),
-                content_sha256: sha256(`version ${version}`),
-                inverse_patches: [
-                  { start: 8, old: String(version - 1), new_length: String(version).length },
-                ],
-              }),
-            },
-          },
+      return revisionMessage({
+        version,
+        base: `version ${version - 1}`,
+        content: `version ${version}`,
+        inversePatches: [
+          { start: 8, old: String(version - 1), new_length: String(version).length },
         ],
-      };
+      });
     });
     const history = getArtifactRevisionHistory(
       [
@@ -480,27 +426,12 @@ export default function Dashboard() {
           `title="Demo" version="${Number.MAX_SAFE_INTEGER}"`,
         ),
       },
-      {
-        messageId: 'assistant-2',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Demo',
-                version: Number.MAX_SAFE_INTEGER,
-                base_sha256: sha256('legacy previous source'),
-                content_sha256: sha256(source),
-                inverse_patches: [],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: Number.MAX_SAFE_INTEGER,
+        base: 'legacy previous source',
+        content: source,
+        inversePatches: [],
+      }),
     ];
 
     expect(() =>
@@ -520,27 +451,12 @@ export default function Dashboard() {
           'title="Demo" version="2"',
         ),
       },
-      {
-        messageId: 'assistant-2',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Demo',
-                version: 2,
-                base_sha256: sha256('version 1'),
-                content_sha256: sha256('version 2'),
-                inverse_patches: [{ start: 9999, old: '1', new_length: 1 }],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: 2,
+        base: 'version 1',
+        content: 'version 2',
+        inversePatches: [{ start: 9999, old: '1', new_length: 1 }],
+      }),
     ];
 
     expect(
@@ -571,27 +487,12 @@ export default function Dashboard() {
         messageId: 'assistant-1',
         text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="3"'),
       },
-      {
-        messageId: 'assistant-3',
-        content: [
-          {
-            type: 'tool_call',
-            tool_call: {
-              name: 'edit_artifact',
-              output: JSON.stringify({
-                status: 'updated',
-                identifier: 'dashboard',
-                messageId: 'assistant-1',
-                title: 'Demo',
-                version: 3,
-                base_sha256: sha256('pink'),
-                content_sha256: sha256(source),
-                inverse_patches: [{ start: 0, old: 'pink', new_length: source.length }],
-              }),
-            },
-          },
-        ],
-      },
+      revisionMessage({
+        version: 3,
+        base: 'pink',
+        content: source,
+        inversePatches: [{ start: 0, old: 'pink', new_length: source.length }],
+      }),
     ];
 
     expect(() =>

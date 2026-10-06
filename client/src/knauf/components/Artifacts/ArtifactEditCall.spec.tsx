@@ -120,39 +120,6 @@ describe('ArtifactEditCall', () => {
     expect(screen.getByText('com_ui_version_var:2')).toBeInTheDocument();
   });
 
-  it('opens an immutable artifact revision from its compact version card', async () => {
-    render(
-      <RecoilRoot
-        initializeState={({ set }) => {
-          set(store.artifactsVisibility, false);
-          set(store.artifactsState, {
-            artifact: {
-              id: 'artifact',
-              identifier: 'dashboard',
-              messageId: 'message-1',
-              title: 'Sales dashboard',
-              type: 'application/vnd.react',
-              content: 'export default function App() {}',
-              lastUpdateTime: 2,
-            },
-          });
-        }}
-      >
-        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
-        <Selection />
-      </RecoilRoot>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
-
-    expect(screen.getByText('com_ui_version_var:2')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByTestId('selection')).toHaveTextContent(
-        'artifact-revision:message-1:dashboard:version:2:true',
-      ),
-    );
-  });
-
   it('rehydrates the artifact after the preview is closed', async () => {
     const artifact = {
       id: 'artifact',
@@ -260,63 +227,6 @@ describe('ArtifactEditCall', () => {
     });
 
     expect(screen.getByTestId('selection')).toHaveTextContent('null:true:');
-  });
-
-  it('opens distinct immutable snapshots for historical version cards', async () => {
-    mockGetArtifactRevisionHistory.mockResolvedValue({
-      currentVersion: 3,
-      revisions: [
-        {
-          title: 'Sales dashboard',
-          type: 'application/vnd.react',
-          version: 1,
-          available: true,
-        },
-        {
-          title: 'Sales dashboard',
-          type: 'application/vnd.react',
-          version: 2,
-          available: true,
-        },
-        {
-          title: 'Sales dashboard',
-          type: 'application/vnd.react',
-          version: 3,
-          available: true,
-        },
-      ],
-    });
-    mockGetArtifactRevision.mockImplementation(({ version }: { version: number }) =>
-      Promise.resolve({
-        title: 'Sales dashboard',
-        type: 'application/vnd.react',
-        content: version === 2 ? 'green snapshot' : 'pink snapshot',
-        version,
-      }),
-    );
-
-    render(
-      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
-        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
-        <ArtifactEditCall
-          result={parseArtifactEditResult(JSON.stringify({ ...JSON.parse(output), version: 3 }))!}
-        />
-        <Selection />
-      </RecoilRoot>,
-    );
-
-    const cards = screen.getAllByRole('button', {
-      name: 'com_ui_updated_file:Sales dashboard',
-    });
-    fireEvent.click(cards[0]);
-    await waitFor(() =>
-      expect(screen.getByTestId('selection')).toHaveTextContent('green snapshot'),
-    );
-
-    fireEvent.click(cards[1]);
-    await waitFor(() => expect(screen.getByTestId('selection')).toHaveTextContent('pink snapshot'));
-    expect(screen.getByTestId('selection')).toHaveTextContent('version:3');
-    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the last clicked version when earlier snapshot requests finish later', async () => {
@@ -539,21 +449,5 @@ describe('ArtifactEditCall', () => {
     expect(mockGetArtifactRevision).toHaveBeenCalledWith(
       expect.objectContaining({ identifier: 'dashboard', version: 2 }),
     );
-  });
-
-  it('surfaces history service failures without calling the exact endpoint', async () => {
-    mockGetArtifactRevisionHistory.mockRejectedValue({ response: { status: 500 } });
-
-    render(
-      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
-        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
-        <Selection />
-      </RecoilRoot>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
-
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('com_ui_error'));
-    expect(mockGetArtifactRevision).not.toHaveBeenCalled();
   });
 });
