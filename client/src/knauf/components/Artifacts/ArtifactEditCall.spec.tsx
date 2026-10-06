@@ -506,14 +506,8 @@ describe('ArtifactEditCall', () => {
     expect(screen.getByTestId('selection')).toHaveTextContent('null:false:');
   });
 
-  it('falls back to the exact revision endpoint during a rolling API deployment', async () => {
+  it('surfaces an unavailable history endpoint without calling the exact endpoint', async () => {
     mockGetArtifactRevisionHistory.mockRejectedValue({ response: { status: 404 } });
-    mockGetArtifactRevision.mockResolvedValue({
-      title: 'Sales dashboard',
-      type: 'application/vnd.react',
-      content: 'legacy exact snapshot',
-      version: 2,
-    });
 
     render(
       <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
@@ -521,15 +515,13 @@ describe('ArtifactEditCall', () => {
         <Selection />
       </RecoilRoot>,
     );
-
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
 
-    await waitFor(() =>
-      expect(screen.getByTestId('selection')).toHaveTextContent('legacy exact snapshot'),
-    );
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('com_ui_error'));
+    expect(mockGetArtifactRevision).not.toHaveBeenCalled();
   });
 
-  it('does not treat an exact snapshot 404 as a missing history route', async () => {
+  it('surfaces an exact snapshot 404 after history succeeds', async () => {
     mockGetArtifactRevision.mockRejectedValue({ response: { status: 404 } });
 
     render(
@@ -549,7 +541,7 @@ describe('ArtifactEditCall', () => {
     );
   });
 
-  it('does not mask history service failures with the legacy endpoint', async () => {
+  it('surfaces history service failures without calling the exact endpoint', async () => {
     mockGetArtifactRevisionHistory.mockRejectedValue({ response: { status: 500 } });
 
     render(

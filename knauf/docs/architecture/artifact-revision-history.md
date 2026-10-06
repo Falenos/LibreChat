@@ -14,6 +14,7 @@ KK20-410 applies to generated `:::artifact` directives stored in chat messages. 
 
 - The latest source remains in the original assistant message.
 - Each successful edit stores compact inverse patches plus base/content SHA-256 hashes in its tool output.
+- The source-message compare-and-swap and the framework's later tool-output persistence are separate writes. This scope accepts the narrow crash window between them; eliminating it requires a transactional revision store with its own retention and deletion lifecycle.
 - The history endpoint returns lightweight version, title, type, language, and availability metadata. It validates continuity between persisted hashes and does not reconstruct every source snapshot.
 - Fully persisted histories are not version-capped. Inferred gaps are bounded so a legacy model-authored outlier cannot force dense allocation up to an arbitrary stored version.
 - The exact revision endpoint reconstructs only the selected version and validates every applied inverse patch and hash before returning source.
@@ -27,7 +28,7 @@ KK20-410 applies to generated `:::artifact` directives stored in chat messages. 
 - Request owners invalidate their in-flight generation on unmount, so navigation cannot repopulate global artifact state from a departed conversation even while Preview is closed.
 - Closing Preview or changing conversation scope invalidates the current generation, so a late response cannot reopen a panel the user closed.
 - Historical timestamps are anchored so the latest source remains the newest entry in global artifact ordering.
-- During a rolling deployment, the legacy exact endpoint is used only when the history request itself returns 404. Failures from an exact snapshot request remain visible.
+- History and exact-snapshot failures remain explicit. The client does not retain a permanent mixed-version rollout fallback; users can refresh after the short deployment window if a request reaches an old pod.
 
 ## Persistence boundaries
 

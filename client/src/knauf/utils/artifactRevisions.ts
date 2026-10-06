@@ -31,14 +31,6 @@ export const artifactRevisionId = ({
   version: number;
 }) => `artifact-revision:${messageId}:${identifier}:version:${version}`;
 
-export const isArtifactRevisionHistoryUnavailable = (error: unknown) => {
-  const candidate = error as
-    | { status?: unknown; response?: { status?: unknown } }
-    | null
-    | undefined;
-  return candidate?.status === 404 || candidate?.response?.status === 404;
-};
-
 let nextOpenRequestId = 0;
 let activeOpenRequestId: number | null = null;
 

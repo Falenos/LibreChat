@@ -8,7 +8,6 @@ import {
 } from '~/knauf/data-provider/data-service';
 import {
   artifactRevisionId,
-  isArtifactRevisionHistoryUnavailable,
   mergeArtifactRevisionRegistry,
   projectArtifactRevisionHistory,
   projectArtifactRevisionSnapshot,
@@ -16,11 +15,145 @@ import {
 import { artifactsState, visibleArtifacts } from '~/store/artifacts';
 
 interface ArtifactRevisionHydration {
-  artifactKey: string;
   currentArtifact: Artifact;
   directiveVersion: number;
   now: number;
 }
+
+type ArtifactLineage = { messageId: string; identifier: string };
+type RegisterArtifacts = (additions: Artifact[], history: ArtifactRevisionEntry[]) => void;
+
+const latestHistoryVersion = (history: ArtifactRevisionEntry[]) =>
+  history.reduce((latest, revision) => Math.max(latest, revision.version), 1);
+
+const resolveLatestArtifact = async ({
+  currentArtifact,
+  directiveVersion,
+  authoritativeVersion,
+  lineage,
+  rootRevisionTime,
+  history,
+}: {
+  currentArtifact: Artifact;
+  directiveVersion: number;
+  authoritativeVersion: number;
+  lineage: ArtifactLineage;
+  rootRevisionTime: number;
+  history: ArtifactRevisionEntry[];
+}): Promise<Artifact> => {
+  if (directiveVersion !== authoritativeVersion) {
+    return projectArtifactRevisionSnapshot({
+      snapshot: await getArtifactRevision({
+        ...lineage,
+        version: authoritativeVersion,
+      }),
+      base: currentArtifact,
+      rootTime: rootRevisionTime,
+      history,
+    });
+  }
+  const metadata = history.find(
+    (revision) => revision.available && revision.version === authoritativeVersion,
+  );
+  return {
+    ...currentArtifact,
+    id: metadata?.id ?? artifactRevisionId({ ...lineage, version: authoritativeVersion }),
+    knaufRevision: { identifier: lineage.identifier, version: authoritativeVersion },
+    knaufRevisionHistory: history,
+  };
+};
+
+const hydrateFromServer = async ({
+  currentArtifact,
+  directiveVersion,
+  lineage,
+  historyKey,
+  isCurrent,
+  rootRevisionTimeFor,
+  rememberHistory,
+  register,
+  registerFallback,
+  setArtifact,
+}: {
+  currentArtifact: Artifact;
+  directiveVersion: number;
+  lineage: ArtifactLineage;
+  historyKey: string;
+  isCurrent: () => boolean;
+  rootRevisionTimeFor: (version: number) => number;
+  rememberHistory: (key: string, history: ArtifactRevisionEntry[]) => void;
+  register: RegisterArtifacts;
+  registerFallback: () => void;
+  setArtifact: Dispatch<SetStateAction<Artifact | null>>;
+}) => {
+  let history;
+  try {
+    history = await getArtifactRevisionHistory(lineage);
+  } catch {
+    if (isCurrent()) {
+      registerFallback();
+    }
+    return;
+  }
+  if (!isCurrent()) {
+    return;
+  }
+
+  const authoritativeVersion = history.currentVersion;
+  let revisionHistory: ArtifactRevisionEntry[];
+  let rootRevisionTime: number;
+  let latest: Artifact;
+  try {
+    revisionHistory = projectArtifactRevisionHistory({ history, ...lineage });
+    rootRevisionTime = rootRevisionTimeFor(authoritativeVersion);
+    latest = await resolveLatestArtifact({
+      currentArtifact,
+      directiveVersion,
+      authoritativeVersion,
+      lineage,
+      rootRevisionTime,
+      history: revisionHistory,
+    });
+  } catch {
+    if (isCurrent()) {
+      registerFallback();
+    }
+    return;
+  }
+  if (!isCurrent()) {
+    return;
+  }
+  if (authoritativeVersion === 1) {
+    rememberHistory(historyKey, revisionHistory);
+    register([latest], revisionHistory);
+    setArtifact(latest);
+    return;
+  }
+
+  let original: Artifact | null = null;
+  if (revisionHistory.some((revision) => revision.available && revision.version === 1)) {
+    try {
+      original = projectArtifactRevisionSnapshot({
+        snapshot: await getArtifactRevision({ ...lineage, version: 1 }),
+        base: currentArtifact,
+        rootTime: rootRevisionTime,
+        history: revisionHistory,
+      });
+    } catch {
+      if (isCurrent()) {
+        register([latest], revisionHistory);
+        setArtifact(latest);
+      }
+      return;
+    }
+  }
+  if (!isCurrent()) {
+    return;
+  }
+  rememberHistory(historyKey, revisionHistory);
+  register(original ? [latest, original] : [latest], revisionHistory);
+  setArtifact(original ?? latest);
+};
 
 export default function useArtifactRevisionHydration({
   isArtifactPage,
@@ -49,7 +182,7 @@ export default function useArtifactRevisionHydration({
   }, [messageId]);
 
   return useCallback(
-    ({ artifactKey, currentArtifact, directiveVersion, now }: ArtifactRevisionHydration) => {
+    ({ currentArtifact, directiveVersion, now }: ArtifactRevisionHydration) => {
       if (directiveVersion <= 1 || !isArtifactPage) {
         historyRequestRef.current += 1;
         loadedHistoryRef.current = null;
@@ -60,11 +193,16 @@ export default function useArtifactRevisionHydration({
       const lineage = { messageId, identifier };
       const lineageKey = `${messageId}:${identifier}`;
       const historyKey = `${lineageKey}:${directiveVersion}:${currentArtifact.title}:${currentArtifact.type}`;
+      const fallbackArtifact: Artifact = {
+        ...currentArtifact,
+        id:
+          directiveVersion === 1
+            ? currentArtifact.id
+            : artifactRevisionId({ ...lineage, version: directiveVersion }),
+        knaufRevision: { identifier, version: directiveVersion },
+      };
 
-      const register = (additions: Artifact[], history: Artifact['knaufRevisionHistory']) => {
-        if (!history) {
-          return;
-        }
+      const register: RegisterArtifacts = (additions, history) => {
         const update = (artifacts: Record<string, Artifact | undefined> | null) =>
           mergeArtifactRevisionRegistry({
             current: artifacts,
@@ -75,154 +213,61 @@ export default function useArtifactRevisionHydration({
         setArtifacts(update);
         setVisibleArtifacts(update);
       };
+      const registerFallback = () => {
+        const update = (artifacts: Record<string, Artifact | undefined> | null) => ({
+          ...artifacts,
+          [fallbackArtifact.id]: fallbackArtifact,
+        });
+        setArtifacts(update);
+        setVisibleArtifacts(update);
+        setArtifact(fallbackArtifact);
+      };
 
       if (loadedHistoryRef.current?.key === historyKey) {
         const revisionHistory = loadedHistoryRef.current.history;
-        const authoritativeVersion = revisionHistory.reduce(
-          (latest, revision) => Math.max(latest, revision.version),
-          1,
-        );
-        const latestMetadata = revisionHistory.find(
-          (revision) => revision.available && revision.version === authoritativeVersion,
-        );
-        register(
-          [
-            {
-              ...currentArtifact,
-              id:
-                latestMetadata?.id ??
-                artifactRevisionId({ ...lineage, version: authoritativeVersion }),
-              knaufRevision: { identifier, version: authoritativeVersion },
-              knaufRevisionHistory: revisionHistory,
-            },
-          ],
-          revisionHistory,
-        );
+        const authoritativeVersion = latestHistoryVersion(revisionHistory);
+        if (directiveVersion !== authoritativeVersion) {
+          register([], revisionHistory);
+          return true;
+        }
+        const latest = {
+          ...currentArtifact,
+          id:
+            revisionHistory.find(
+              (revision) => revision.available && revision.version === authoritativeVersion,
+            )?.id ?? artifactRevisionId({ ...lineage, version: authoritativeVersion }),
+          knaufRevision: { identifier, version: authoritativeVersion },
+          knaufRevisionHistory: revisionHistory,
+        };
+        register([latest], revisionHistory);
+        if (authoritativeVersion === 1) {
+          setArtifact(latest);
+        }
         return true;
       }
       const requestId = ++historyRequestRef.current;
-
-      void (async () => {
-        let history;
-        try {
-          history = await getArtifactRevisionHistory(lineage);
-        } catch (error) {
-          if (requestId !== historyRequestRef.current) {
-            return;
-          }
-          const legacyRevisionId = artifactRevisionId({
-            ...lineage,
-            version: directiveVersion,
-          });
-          const legacyLatest = {
-            ...currentArtifact,
-            id: legacyRevisionId,
-            knaufRevision: { identifier, version: directiveVersion },
-          };
-          if (!isArtifactRevisionHistoryUnavailable(error)) {
-            setArtifact(legacyLatest);
-            return;
-          }
-          try {
-            const snapshot = await getArtifactRevision({ ...lineage, version: 1 });
-            if (requestId !== historyRequestRef.current) {
-              return;
-            }
-            const fallbackHistory = [
-              {
-                id: artifactKey,
-                version: 1,
-                available: true,
-                title: snapshot.title,
-                type: snapshot.type,
-                language: snapshot.language,
-              },
-              {
-                id: legacyRevisionId,
-                version: directiveVersion,
-                available: true,
-                title: currentArtifact.title,
-                type: currentArtifact.type,
-                language: currentArtifact.language,
-              },
-            ];
-            const original = projectArtifactRevisionSnapshot({
-              snapshot,
-              base: currentArtifact,
-              rootTime: now - directiveVersion + 1,
-              history: fallbackHistory,
-            });
-            const latestWithHistory = {
-              ...legacyLatest,
-              knaufRevisionHistory: fallbackHistory,
-            };
-            loadedHistoryRef.current = { key: historyKey, history: fallbackHistory };
-            register([latestWithHistory, original], fallbackHistory);
-            setArtifact(original);
-          } catch {
-            if (requestId === historyRequestRef.current) {
-              setArtifact(legacyLatest);
-            }
-          }
-          return;
-        }
-
-        try {
-          if (requestId !== historyRequestRef.current) {
-            return;
-          }
-          const authoritativeVersion = history.currentVersion;
-          const revisionHistory = projectArtifactRevisionHistory({
-            history,
-            ...lineage,
-          });
-          const latestMetadata = revisionHistory.find(
-            (revision) => revision.available && revision.version === authoritativeVersion,
-          );
-          const latest: Artifact = {
-            ...currentArtifact,
-            id:
-              latestMetadata?.id ??
-              artifactRevisionId({ ...lineage, version: authoritativeVersion }),
-            knaufRevision: { identifier, version: authoritativeVersion },
-            knaufRevisionHistory: revisionHistory,
-          };
-          if (authoritativeVersion === 1) {
-            loadedHistoryRef.current = { key: historyKey, history: revisionHistory };
-            register([latest], revisionHistory);
-            setArtifact(latest);
-            return;
-          }
-
+      void hydrateFromServer({
+        currentArtifact,
+        directiveVersion,
+        lineage,
+        historyKey,
+        isCurrent: () => requestId === historyRequestRef.current,
+        rootRevisionTimeFor: (authoritativeVersion) => {
           const previousRoot = rootRevisionTimeRef.current;
           const rootRevisionTime =
             previousRoot?.lineageKey === lineageKey
               ? previousRoot.time
               : now - authoritativeVersion + 1;
           rootRevisionTimeRef.current = { lineageKey, time: rootRevisionTime };
-          const rootRevision = revisionHistory.find(
-            (revision) => revision.available && revision.version === 1,
-          );
-          const original = rootRevision
-            ? projectArtifactRevisionSnapshot({
-                snapshot: await getArtifactRevision({ ...lineage, version: 1 }),
-                base: currentArtifact,
-                rootTime: rootRevisionTime,
-                history: revisionHistory,
-              })
-            : null;
-          if (requestId !== historyRequestRef.current) {
-            return;
-          }
-          loadedHistoryRef.current = { key: historyKey, history: revisionHistory };
-          register(original ? [latest, original] : [latest], revisionHistory);
-          setArtifact(original ?? latest);
-        } catch {
-          if (requestId === historyRequestRef.current) {
-            setArtifact(currentArtifact);
-          }
-        }
-      })();
+          return rootRevisionTime;
+        },
+        rememberHistory: (key, history) => {
+          loadedHistoryRef.current = { key, history };
+        },
+        register,
+        registerFallback,
+        setArtifact,
+      });
       return true;
     },
     [isArtifactPage, messageId, setArtifact, setArtifacts, setVisibleArtifacts],

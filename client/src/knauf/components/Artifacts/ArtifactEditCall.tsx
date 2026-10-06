@@ -10,10 +10,8 @@ import {
 import {
   artifactRevisionId,
   beginArtifactRevisionOpen,
-  cancelArtifactRevisionOpen,
   finishArtifactRevisionOpen,
   isCurrentArtifactRevisionOpen,
-  isArtifactRevisionHistoryUnavailable,
   mergeArtifactRevisionRegistry,
   projectArtifactRevisionHistory,
   projectArtifactRevisionSnapshot,
@@ -62,14 +60,12 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   const setArtifactsVisible = useSetRecoilState(store.artifactsVisibility);
   const revisionId = artifactRevisionId(result);
   const activeRequestRef = useRef<number | null>(null);
-  const requestGenerationRef = useRef(0);
 
   useEffect(() => {
     return () => {
-      requestGenerationRef.current += 1;
       const requestId = activeRequestRef.current;
-      if (requestId != null && isCurrentArtifactRevisionOpen(requestId)) {
-        cancelArtifactRevisionOpen();
+      if (requestId != null) {
+        finishArtifactRevisionOpen(requestId);
       }
       activeRequestRef.current = null;
     };
@@ -78,54 +74,11 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   const handleOpen = async () => {
     const lineage = { messageId: result.messageId, identifier: result.identifier };
     const requestId = beginArtifactRevisionOpen();
-    const requestGeneration = ++requestGenerationRef.current;
     activeRequestRef.current = requestId;
     setFailed(false);
     setIsLoading(true);
     try {
-      let history;
-      try {
-        history = await getArtifactRevisionHistory(result);
-      } catch (error) {
-        if (!isCurrentArtifactRevisionOpen(requestId)) {
-          return;
-        }
-        if (!isArtifactRevisionHistoryUnavailable(error)) {
-          throw error;
-        }
-        const snapshot = await getArtifactRevision(result);
-        if (!isCurrentArtifactRevisionOpen(requestId)) {
-          return;
-        }
-        const fallbackHistory = [
-          {
-            id: revisionId,
-            version: result.version,
-            available: true,
-            title: snapshot.title,
-            type: snapshot.type,
-            language: snapshot.language,
-          },
-        ];
-        const selected = projectArtifactRevisionSnapshot({
-          snapshot,
-          base: lineage,
-          rootTime: Date.now() - result.version + 1,
-          history: fallbackHistory,
-        });
-        const register = (current: Record<string, Artifact | undefined> | null) =>
-          mergeArtifactRevisionRegistry({
-            current,
-            additions: [selected],
-            ...lineage,
-            history: fallbackHistory,
-          });
-        setArtifacts(register);
-        setVisibleArtifacts(register);
-        setCurrentArtifactId(selected.id);
-        setArtifactsVisible(true);
-        return;
-      }
+      const history = await getArtifactRevisionHistory(result);
       if (!isCurrentArtifactRevisionOpen(requestId)) {
         return;
       }
@@ -175,10 +128,8 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
         setFailed(true);
       }
     } finally {
-      if (requestGeneration === requestGenerationRef.current) {
-        setIsLoading(false);
-      }
       if (activeRequestRef.current === requestId) {
+        setIsLoading(false);
         activeRequestRef.current = null;
       }
       finishArtifactRevisionOpen(requestId);

@@ -125,7 +125,6 @@ export function Artifact({
       // [knauf] KK20-410 — fork-owned hydration handles persisted revision lineages.
       if (
         hydrateArtifactRevision({
-          artifactKey,
           currentArtifact,
           directiveVersion: version,
           now,

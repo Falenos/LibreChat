@@ -59,7 +59,7 @@ export default function useArtifactRevisionSelection({
   const currentIndex = artifactVersions.findIndex(({ id }) => id === currentArtifactId);
   const [isArtifactVersionLoading, setIsArtifactVersionLoading] = useState(false);
   const [artifactVersionError, setArtifactVersionError] = useState(false);
-  const versionSelectionRequestRef = useRef(0);
+  const activeRequestRef = useRef<number | null>(null);
 
   useEffect(() => {
     setArtifactVersionError(false);
@@ -68,12 +68,15 @@ export default function useArtifactRevisionSelection({
 
   useEffect(() => {
     cancelArtifactRevisionOpen();
-    versionSelectionRequestRef.current += 1;
+    activeRequestRef.current = null;
     setArtifactVersionError(false);
     setIsArtifactVersionLoading(false);
     return () => {
-      cancelArtifactRevisionOpen();
-      versionSelectionRequestRef.current += 1;
+      const requestId = activeRequestRef.current;
+      if (requestId != null) {
+        finishArtifactRevisionOpen(requestId);
+      }
+      activeRequestRef.current = null;
     };
   }, [scopeKey]);
 
@@ -87,7 +90,7 @@ export default function useArtifactRevisionSelection({
       }
       const lineage = { messageId, identifier: revision.identifier };
       const requestId = beginArtifactRevisionOpen();
-      const localRequestId = ++versionSelectionRequestRef.current;
+      activeRequestRef.current = requestId;
       setArtifactVersionError(false);
       setIsArtifactVersionLoading(true);
       try {
@@ -128,8 +131,9 @@ export default function useArtifactRevisionSelection({
           setArtifactVersionError(true);
         }
       } finally {
-        if (localRequestId === versionSelectionRequestRef.current) {
+        if (activeRequestRef.current === requestId) {
           setIsArtifactVersionLoading(false);
+          activeRequestRef.current = null;
         }
         finishArtifactRevisionOpen(requestId);
       }
