@@ -176,7 +176,6 @@ export default function useArtifactRevisionHydration({
             history,
             ...lineage,
           });
-          loadedHistoryRef.current = { key: historyKey, history: revisionHistory };
           const latestMetadata = revisionHistory.find(
             (revision) => revision.available && revision.version === authoritativeVersion,
           );
@@ -189,6 +188,7 @@ export default function useArtifactRevisionHydration({
             knaufRevisionHistory: revisionHistory,
           };
           if (authoritativeVersion === 1) {
+            loadedHistoryRef.current = { key: historyKey, history: revisionHistory };
             register([latest], revisionHistory);
             setArtifact(latest);
             return;
@@ -214,6 +214,7 @@ export default function useArtifactRevisionHydration({
           if (requestId !== historyRequestRef.current) {
             return;
           }
+          loadedHistoryRef.current = { key: historyKey, history: revisionHistory };
           register(original ? [latest, original] : [latest], revisionHistory);
           setArtifact(original ?? latest);
         } catch {

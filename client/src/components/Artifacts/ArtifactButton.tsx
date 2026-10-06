@@ -60,7 +60,9 @@ const ArtifactButton = ({ artifact }: { artifact: Artifact | null }) => {
     <div className="group relative my-4 rounded-xl text-sm text-text-primary">
       {(() => {
         const handleClick = () => {
+          // [knauf] KK20-410 — every card selection supersedes pending revision opens.
           cancelArtifactRevisionOpen();
+          // End [knauf]
           if (isSelected) {
             resetCurrentArtifactId();
             setVisible(false);

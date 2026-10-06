@@ -357,6 +357,95 @@ describe('Artifact root revision binding', () => {
     expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let an older root hydration overwrite a same-version source rerender', async () => {
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 2,
+      revisions: [
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 2,
+          available: true,
+        },
+      ],
+    });
+    let resolveFirstRoot!: (value: {
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }) => void;
+    const firstRoot = new Promise<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>((resolve) => {
+      resolveFirstRoot = resolve;
+    });
+    mockGetArtifactRevision
+      .mockImplementationOnce(() => firstRoot)
+      .mockResolvedValue({
+        title: 'Versioning Probe',
+        type: 'application/vnd.react',
+        content: 'ROOT VERSION ONE',
+        version: 1,
+      });
+    mockArtifactBody = 'STALE VERSION TWO';
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '2',
+      children: <code>{'STALE VERSION TWO'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    const { rerender } = render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+
+    mockArtifactBody = 'FRESH VERSION TWO';
+    rerender(
+      <RecoilRoot>
+        <Artifact {...props}>
+          <code>{'FRESH VERSION TWO'}</code>
+        </Artifact>
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() => expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId('artifact-registry')).toHaveTextContent('FRESH VERSION TWO'),
+    );
+
+    await act(async () => {
+      resolveFirstRoot({
+        title: 'Versioning Probe',
+        type: 'application/vnd.react',
+        content: 'ROOT VERSION ONE',
+        version: 1,
+      });
+      await firstRoot;
+    });
+
+    expect(screen.getByTestId('artifact-registry')).toHaveTextContent('FRESH VERSION TWO');
+    expect(screen.getByTestId('artifact-registry')).not.toHaveTextContent('STALE VERSION TWO');
+  });
+
   it('ignores history responses from a previous message scope', async () => {
     let resolveFirstHistory!: (value: {
       currentVersion: number;

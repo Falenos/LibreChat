@@ -1,6 +1,6 @@
 # KARL Runtime Limits
 
-Last audited: 2026-09-16
+Last audited: 2026-10-06
 
 This reference inventories operational limits enforced by the `agentic-karl`
 repository: upload ceilings, model and agent budgets, Code Adapter guardrails,
@@ -144,6 +144,7 @@ the current `agk-deployment-configs` values and rendered ArgoCD manifest.
 | HTML DOM parse | 2 MiB | HTML extraction code | Larger pages use lighter extraction to avoid expensive DOM construction. |
 | PDF access probe | 10 seconds; first 1,024 bytes | PDF file processing | Detects inaccessible or encrypted PDFs without downloading indefinitely. |
 | Mermaid PNG | 8,192 px/dimension; 16 million pixels | `client/src/knauf/components/Mermaid/KnaufMermaidControls.tsx` | Prevents browser canvas memory failures. |
+| Artifact revision inferred gap | 1,000 missing versions | Code default, `api/server/services/Artifacts/knauf/edit.js` `MAX_INFERRED_MISSING_REVISIONS` | Rejects untrusted legacy version outliers with `invalid_revision` before dense history traversal or allocation. Fully persisted revisions do not count toward this ceiling and remain uncapped. |
 
 ## Authentication, rate limiting, and abuse prevention
 
